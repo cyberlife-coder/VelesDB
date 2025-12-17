@@ -8,10 +8,6 @@ Complete REST API documentation for VelesDB.
 http://localhost:8080
 ```
 
-## Authentication
-
-VelesDB Core does not require authentication. VelesDB Premium supports API key authentication.
-
 ---
 
 ## Health Check
@@ -48,6 +44,7 @@ List all collections.
 Create a new collection.
 
 **Request Body:**
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | name | string | Yes | Unique collection name |
@@ -106,6 +103,7 @@ Delete a collection and all its data.
 Insert or update points (upsert).
 
 **Request Body:**
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | points | array | Yes | Array of points to upsert |
@@ -121,11 +119,6 @@ Insert or update points (upsert).
       "id": 1,
       "vector": [0.1, 0.2, 0.3, ...],
       "payload": {"title": "Hello World", "category": "greeting"}
-    },
-    {
-      "id": 2,
-      "vector": [0.4, 0.5, 0.6, ...],
-      "payload": {"title": "Goodbye", "category": "farewell"}
     }
   ]
 }
@@ -135,7 +128,7 @@ Insert or update points (upsert).
 ```json
 {
   "message": "Points upserted",
-  "count": 2
+  "count": 1
 }
 ```
 
@@ -173,6 +166,7 @@ Delete a point by ID.
 Search for similar vectors.
 
 **Request Body:**
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | vector | array[float] | Yes | Query vector |
@@ -194,11 +188,6 @@ Search for similar vectors.
       "id": 1,
       "score": 0.98,
       "payload": {"title": "Hello World"}
-    },
-    {
-      "id": 2,
-      "score": 0.85,
-      "payload": {"title": "Goodbye"}
     }
   ]
 }
@@ -225,19 +214,3 @@ All errors return a JSON object with an `error` field:
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
 | 500 | Internal Server Error |
-
----
-
-## Premium Features (VelesDB Premium)
-
-The following endpoints are available with VelesDB Premium:
-
-### POST /collections/:name/search/hybrid
-
-Hybrid search combining vector similarity and full-text search.
-
-### POST /collections/:name/search (with filters)
-
-Advanced filtering with boolean expressions.
-
-See [Premium Documentation](premium.md) for details.

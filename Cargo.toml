@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/velesdb-core",
     "crates/velesdb-server",
-    "crates/velesdb-premium",
 ]
 
 [workspace.package]
@@ -11,7 +10,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-repository = "https://github.com/YOUR_USERNAME/velesdb"
+repository = "https://github.com/cyberlife-coder/velesdb"
 homepage = "https://velesdb.io"
 documentation = "https://docs.velesdb.io"
 keywords = ["vector-database", "search", "embeddings", "ann", "hnsw"]
@@ -44,9 +43,6 @@ tonic = "0.11"
 prost = "0.12"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
-
-# Full-text search (Premium)
-tantivy = "0.22"
 
 # Testing
 criterion = "0.5"
