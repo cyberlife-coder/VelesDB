@@ -1,0 +1,40 @@
+[package]
+name = "velesdb-core"
+description = "High-performance vector database engine written in Rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+memmap2 = { workspace = true }
+bincode = { workspace = true }
+hnsw_rs = { workspace = true }
+simsimd = { workspace = true }
+roaring = { workspace = true }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+bytes = "1.5"
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
+tokio-test = "0.4"
+
+[[bench]]
+name = "search_benchmark"
+harness = false

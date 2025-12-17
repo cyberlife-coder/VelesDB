@@ -1,0 +1,55 @@
+# Build stage
+FROM rust:1.75-slim-bookworm AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy manifests
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+# Build the application
+RUN cargo build --release --bin velesdb-server
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -r -s /bin/false velesdb
+
+# Copy binary from builder
+COPY --from=builder /app/target/release/velesdb-server /usr/local/bin/
+
+# Create data directory
+RUN mkdir -p /data && chown velesdb:velesdb /data
+
+# Switch to non-root user
+USER velesdb
+
+# Expose port
+EXPOSE 8080
+
+# Set environment variables
+ENV VELESDB_DATA_DIR=/data
+ENV VELESDB_HOST=0.0.0.0
+ENV VELESDB_PORT=8080
+ENV RUST_LOG=info
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run the server
+ENTRYPOINT ["velesdb-server"]

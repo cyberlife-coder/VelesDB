@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  velesdb:
+    build: .
+    image: velesdb/velesdb:latest
+    container_name: velesdb
+    ports:
+      - "8080:8080"
+    volumes:
+      - velesdb_data:/data
+    environment:
+      - RUST_LOG=info
+      - VELESDB_DATA_DIR=/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  velesdb_data:
+    driver: local

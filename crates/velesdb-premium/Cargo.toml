@@ -1,0 +1,32 @@
+[package]
+name = "velesdb-premium"
+description = "Premium features for VelesDB (hybrid search, encryption, advanced filtering)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Commercial"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[dependencies]
+velesdb-core = { path = "../velesdb-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+# Full-text search
+tantivy = { workspace = true }
+
+# Encryption
+aes-gcm = "0.10"
+argon2 = "0.5"
+
+[dev-dependencies]
+tempfile = { workspace = true }
