@@ -43,6 +43,8 @@ pub mod index;
 pub mod point;
 pub mod storage;
 
+pub use index::{HnswIndex, VectorIndex};
+
 pub use collection::Collection;
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
