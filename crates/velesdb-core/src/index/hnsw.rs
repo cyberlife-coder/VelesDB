@@ -5,6 +5,8 @@
 
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
+use hnsw_rs::api::AnnT;
+use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -95,6 +97,117 @@ impl HnswIndex {
             idx_to_id: RwLock::new(HashMap::new()),
             next_idx: RwLock::new(0),
         }
+    }
+
+    /// Saves the HNSW index and ID mappings to the specified directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if saving fails.
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
+        let path = path.as_ref();
+        std::fs::create_dir_all(path)?;
+
+        let basename = "hnsw_index";
+
+        // 1. Save HNSW graph
+        let inner = self.inner.read();
+        match &*inner {
+            HnswInner::Cosine(hnsw) => {
+                hnsw.file_dump(path, basename)
+                    .map_err(std::io::Error::other)?;
+            }
+            HnswInner::Euclidean(hnsw) => {
+                hnsw.file_dump(path, basename)
+                    .map_err(std::io::Error::other)?;
+            }
+            HnswInner::DotProduct(hnsw) => {
+                hnsw.file_dump(path, basename)
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+
+        // 2. Save Mappings
+        let mappings_path = path.join("id_mappings.bin");
+        let file = std::fs::File::create(mappings_path)?;
+        let writer = std::io::BufWriter::new(file);
+
+        let id_to_idx = self.id_to_idx.read();
+        let idx_to_id = self.idx_to_id.read();
+        let next_idx = *self.next_idx.read();
+
+        // Serialize as a tuple of references to avoid copying
+        bincode::serialize_into(writer, &(&*id_to_idx, &*idx_to_id, next_idx))
+            .map_err(std::io::Error::other)?;
+
+        Ok(())
+    }
+
+    /// Loads the HNSW index and ID mappings from the specified directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading fails.
+    pub fn load<P: AsRef<std::path::Path>>(
+        path: P,
+        dimension: usize,
+        metric: DistanceMetric,
+    ) -> std::io::Result<Self> {
+        let path = path.as_ref();
+        let basename = "hnsw_index";
+
+        // Check mappings file (hnsw files checked by loader)
+        let mappings_path = path.join("id_mappings.bin");
+        if !mappings_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "ID mappings file not found",
+            ));
+        }
+
+        // 1. Load HNSW graph
+        // We box and leak the loader to satisfy the 'static lifetime requirement of HnswIndex.
+        // HnswIo holds the mmap if used (we don't use it yet), but even without mmap,
+        // the load_hnsw signature enforces borrowing from the loader.
+        let io = Box::new(HnswIo::new(path, basename));
+        let io_ref: &'static mut HnswIo = Box::leak(io);
+
+        let inner = match metric {
+            DistanceMetric::Cosine => {
+                let hnsw = io_ref
+                    .load_hnsw::<f32, DistCosine>()
+                    .map_err(std::io::Error::other)?;
+                HnswInner::Cosine(hnsw)
+            }
+            DistanceMetric::Euclidean => {
+                let hnsw = io_ref
+                    .load_hnsw::<f32, DistL2>()
+                    .map_err(std::io::Error::other)?;
+                HnswInner::Euclidean(hnsw)
+            }
+            DistanceMetric::DotProduct => {
+                let hnsw = io_ref
+                    .load_hnsw::<f32, DistDot>()
+                    .map_err(std::io::Error::other)?;
+                HnswInner::DotProduct(hnsw)
+            }
+        };
+
+        // 2. Load Mappings
+        let file = std::fs::File::open(mappings_path)?;
+        let reader = std::io::BufReader::new(file);
+        let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
+            bincode::deserialize_from(reader)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        Ok(Self {
+            dimension,
+            metric,
+            inner: RwLock::new(inner),
+            id_to_idx: RwLock::new(id_to_idx),
+            idx_to_id: RwLock::new(idx_to_id),
+            next_idx: RwLock::new(next_idx),
+        })
     }
 }
 
@@ -423,5 +536,32 @@ mod tests {
 
         // Assert
         assert_eq!(index.len(), 10);
+    }
+
+    #[test]
+    fn test_hnsw_persistence() {
+        use tempfile::tempdir;
+
+        // Arrange
+        let dir = tempdir().unwrap();
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        index.insert(1, &[1.0, 0.0, 0.0]);
+        index.insert(2, &[0.0, 1.0, 0.0]);
+
+        // Act - Save
+        index.save(dir.path()).unwrap();
+
+        // Act - Load
+        let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+
+        // Assert
+        assert_eq!(loaded_index.len(), 2);
+        assert_eq!(loaded_index.dimension(), 3);
+        assert_eq!(loaded_index.metric(), DistanceMetric::Cosine);
+
+        // Verify search works on loaded index
+        let results = loaded_index.search(&[1.0, 0.0, 0.0], 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
     }
 }
