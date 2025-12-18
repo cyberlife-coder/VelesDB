@@ -1,8 +1,8 @@
-//! # VelesDB Core
+//! # `VelesDB` Core
 //!
 //! High-performance vector database engine written in Rust.
 //!
-//! VelesDB is a local-first vector database designed for semantic search,
+//! `VelesDB` is a local-first vector database designed for semantic search,
 //! recommendation systems, and RAG (Retrieval-Augmented Generation) applications.
 //!
 //! ## Features

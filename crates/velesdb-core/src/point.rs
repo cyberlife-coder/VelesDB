@@ -77,11 +77,7 @@ mod tests {
 
     #[test]
     fn test_point_creation() {
-        let point = Point::new(
-            1,
-            vec![0.1, 0.2, 0.3],
-            Some(json!({"title": "Test"})),
-        );
+        let point = Point::new(1, vec![0.1, 0.2, 0.3], Some(json!({"title": "Test"})));
 
         assert_eq!(point.id, 1);
         assert_eq!(point.dimension(), 3);

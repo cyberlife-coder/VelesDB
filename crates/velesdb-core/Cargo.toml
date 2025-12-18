@@ -22,7 +22,6 @@ tracing = { workspace = true }
 memmap2 = { workspace = true }
 bincode = { workspace = true }
 hnsw_rs = { workspace = true }
-simsimd = { workspace = true }
 roaring = { workspace = true }
 uuid = { version = "1.7", features = ["v4", "serde"] }
 parking_lot = "0.12"

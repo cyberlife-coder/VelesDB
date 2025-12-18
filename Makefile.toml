@@ -1,0 +1,29 @@
+# VelesDB-Core - Cargo Make Tasks
+# Usage: cargo make <task>
+
+[tasks.check]
+description = "Run all checks"
+dependencies = ["fmt-check", "clippy", "test"]
+
+[tasks.fmt]
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.fmt-check]
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.clippy]
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+[tasks.test]
+command = "cargo"
+args = ["test", "--all-features"]
+
+[tasks.audit]
+command = "cargo"
+args = ["audit"]
+
+[tasks.ci]
+dependencies = ["fmt-check", "clippy", "test", "audit"]

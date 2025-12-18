@@ -1,4 +1,4 @@
-//! Collection management for VelesDB.
+//! Collection management for `VelesDB`.
 
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -41,6 +41,10 @@ pub struct Collection {
 
 impl Collection {
     /// Creates a new collection at the specified path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
     pub fn create(path: PathBuf, dimension: usize, metric: DistanceMetric) -> Result<Self> {
         std::fs::create_dir_all(&path)?;
 
@@ -69,11 +73,15 @@ impl Collection {
     }
 
     /// Opens an existing collection from the specified path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file cannot be read or parsed.
     pub fn open(path: PathBuf) -> Result<Self> {
         let config_path = path.join("config.json");
         let config_data = std::fs::read_to_string(&config_path)?;
-        let config: CollectionConfig = serde_json::from_str(&config_data)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let config: CollectionConfig =
+            serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))?;
 
         Ok(Self {
             path,
@@ -89,6 +97,10 @@ impl Collection {
     }
 
     /// Inserts or updates points in the collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point has a mismatched dimension.
     pub fn upsert(&self, points: Vec<Point>) -> Result<()> {
         let config = self.config.read();
         let dimension = config.dimension;
@@ -118,12 +130,17 @@ impl Collection {
     }
 
     /// Retrieves points by their IDs.
+    #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
         let storage = self.points.read();
         ids.iter().map(|id| storage.get(id).cloned()).collect()
     }
 
     /// Deletes points by their IDs.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible, but may return errors in future implementations.
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
         let mut storage = self.points.write();
         for id in ids {
@@ -137,6 +154,10 @@ impl Collection {
     }
 
     /// Searches for the k nearest neighbors of the query vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
 
@@ -171,7 +192,9 @@ impl Collection {
             .into_iter()
             .take(k)
             .filter_map(|(id, score)| {
-                storage.get(&id).map(|point| SearchResult::new(point.clone(), score))
+                storage
+                    .get(&id)
+                    .map(|point| SearchResult::new(point.clone(), score))
             })
             .collect();
 

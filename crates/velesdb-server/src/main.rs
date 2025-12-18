@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use clap::Parser;
@@ -62,13 +62,19 @@ async fn main() -> anyhow::Result<()> {
     // Build router
     let app = Router::new()
         .route("/health", get(health_check))
-        .route("/collections", get(list_collections).post(create_collection))
+        .route(
+            "/collections",
+            get(list_collections).post(create_collection),
+        )
         .route(
             "/collections/:name",
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/:name/points", post(upsert_points))
-        .route("/collections/:name/points/:id", get(get_point).delete(delete_point))
+        .route(
+            "/collections/:name/points/:id",
+            get(get_point).delete(delete_point),
+        )
         .route("/collections/:name/search", post(search))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -173,19 +179,33 @@ async fn create_collection(
         "cosine" => DistanceMetric::Cosine,
         "euclidean" | "l2" => DistanceMetric::Euclidean,
         "dot" | "dotproduct" | "ip" => DistanceMetric::DotProduct,
-        _ => return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-            error: format!("Invalid metric: {}", req.metric),
-        })).into_response(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid metric: {}", req.metric),
+                }),
+            )
+                .into_response()
+        }
     };
 
     match state.db.create_collection(&req.name, req.dimension, metric) {
-        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({
-            "message": "Collection created",
-            "name": req.name
-        }))).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-            error: e.to_string(),
-        })).into_response(),
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "message": "Collection created",
+                "name": req.name
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -201,11 +221,16 @@ async fn get_collection(
                 dimension: config.dimension,
                 metric: format!("{:?}", config.metric).to_lowercase(),
                 point_count: config.point_count,
-            }).into_response()
+            })
+            .into_response()
         }
-        None => (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Collection '{}' not found", name),
-        })).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{}' not found", name),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -217,10 +242,15 @@ async fn delete_collection(
         Ok(()) => Json(serde_json::json!({
             "message": "Collection deleted",
             "name": name
-        })).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: e.to_string(),
-        })).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -231,9 +261,15 @@ async fn upsert_points(
 ) -> impl IntoResponse {
     let collection = match state.db.get_collection(&name) {
         Some(c) => c,
-        None => return (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Collection '{}' not found", name),
-        })).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
     };
 
     let points: Vec<Point> = req
@@ -248,10 +284,15 @@ async fn upsert_points(
         Ok(()) => Json(serde_json::json!({
             "message": "Points upserted",
             "count": count
-        })).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-            error: e.to_string(),
-        })).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -261,9 +302,15 @@ async fn get_point(
 ) -> impl IntoResponse {
     let collection = match state.db.get_collection(&name) {
         Some(c) => c,
-        None => return (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Collection '{}' not found", name),
-        })).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
     };
 
     let points = collection.get(&[id]);
@@ -273,10 +320,15 @@ async fn get_point(
             "id": point.id,
             "vector": point.vector,
             "payload": point.payload
-        })).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Point {} not found", id),
-        })).into_response(),
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Point {} not found", id),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -286,19 +338,30 @@ async fn delete_point(
 ) -> impl IntoResponse {
     let collection = match state.db.get_collection(&name) {
         Some(c) => c,
-        None => return (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Collection '{}' not found", name),
-        })).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
     };
 
     match collection.delete(&[id]) {
         Ok(()) => Json(serde_json::json!({
             "message": "Point deleted",
             "id": id
-        })).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-            error: e.to_string(),
-        })).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -309,9 +372,15 @@ async fn search(
 ) -> impl IntoResponse {
     let collection = match state.db.get_collection(&name) {
         Some(c) => c,
-        None => return (StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Collection '{}' not found", name),
-        })).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
     };
 
     match collection.search(&req.vector, req.top_k) {
@@ -328,8 +397,12 @@ async fn search(
             };
             Json(response).into_response()
         }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-            error: e.to_string(),
-        })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }

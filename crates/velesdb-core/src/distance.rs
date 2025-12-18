@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Distance metric for vector similarity calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DistanceMetric {
-    /// Cosine similarity (1 - cosine_distance).
+    /// Cosine similarity (1 - `cosine_distance`).
     /// Best for normalized vectors, commonly used with text embeddings.
     Cosine,
 

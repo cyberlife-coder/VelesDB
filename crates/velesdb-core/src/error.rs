@@ -1,11 +1,11 @@
-//! Error types for VelesDB.
+//! Error types for `VelesDB`.
 
 use thiserror::Error;
 
-/// Result type alias for VelesDB operations.
+/// Result type alias for `VelesDB` operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Errors that can occur in VelesDB operations.
+/// Errors that can occur in `VelesDB` operations.
 #[derive(Error, Debug)]
 pub enum Error {
     /// Collection already exists.
