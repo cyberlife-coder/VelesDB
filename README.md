@@ -29,6 +29,12 @@ VelesDB is a **high-performance vector database** written entirely in Rust. It e
 
 Built with performance and simplicity in mind, VelesDB provides an easy-to-use REST API for storing and querying vector embeddings.
 
+### 🐺 Why "Veles"?
+
+**Veles** (Велес) is a major Slavic deity — the god of earth, waters, forests, and the underworld. In Slavic mythology, he is associated with **wisdom, magic, and knowledge**. As the guardian of sacred knowledge and keeper of memories, Veles perfectly embodies what a vector database does: storing, organizing, and retrieving the essence of information.
+
+Just as Veles bridges the earthly and mystical realms, VelesDB bridges the gap between raw data and meaningful AI-powered insights.
+
 ---
 
 ## ✨ Features
