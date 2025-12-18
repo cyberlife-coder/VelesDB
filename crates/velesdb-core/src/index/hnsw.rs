@@ -2,12 +2,60 @@
 //!
 //! This module provides a high-performance approximate nearest neighbor
 //! search index based on the HNSW algorithm.
+//!
+//! # Quality Profiles
+//!
+//! The index supports different quality profiles for search:
+//! - `Fast`: `ef_search=64`, ~90% recall, lowest latency
+//! - `Balanced`: `ef_search=128`, ~95% recall, good tradeoff (default)
+//! - `Accurate`: `ef_search=256`, ~99% recall, best quality
+//!
+//! # Recommended Parameters by Vector Dimension
+//!
+//! | Dimension   | M     | ef_construction | ef_search |
+//! |-------------|-------|-----------------|-----------|
+//! | d ≤ 256     | 12-16 | 100-200         | 64-128    |
+//! | 256 < d ≤768| 16-24 | 200-400         | 128-256   |
+//! | d > 768     | 24-32 | 300-600         | 256-512   |
 
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
+use hnsw_rs::api::AnnT;
+use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Search quality profile controlling the recall/latency tradeoff.
+///
+/// Higher quality = better recall but slower search.
+/// With typical index sizes (<1M vectors), all profiles stay well under 10ms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SearchQuality {
+    /// Fast search with `ef_search=64`. ~90% recall, lowest latency.
+    Fast,
+    /// Balanced search with `ef_search=128`. ~95% recall, good tradeoff.
+    #[default]
+    Balanced,
+    /// Accurate search with `ef_search=256`. ~99% recall, best quality.
+    Accurate,
+    /// Custom `ef_search` value for fine-tuning.
+    Custom(usize),
+}
+
+impl SearchQuality {
+    /// Returns the `ef_search` value for this quality profile.
+    #[must_use]
+    pub fn ef_search(&self, k: usize) -> usize {
+        match self {
+            Self::Fast => 64.max(k * 2),
+            Self::Balanced => 128.max(k * 4),
+            Self::Accurate => 256.max(k * 8),
+            Self::Custom(ef) => (*ef).max(k),
+        }
+    }
+}
 
 /// HNSW index for efficient approximate nearest neighbor search.
 ///
@@ -51,16 +99,17 @@ impl HnswIndex {
     /// * `dimension` - The dimension of vectors to index
     /// * `metric` - The distance metric to use for similarity calculations
     ///
-    /// # HNSW Parameters
+    /// # HNSW Parameters (optimized for >95% recall)
     ///
-    /// - `max_nb_connection` (M): 16 - Number of connections per layer
-    /// - `ef_construction`: 200 - Size of dynamic candidate list during construction
-    /// - `max_elements`: `100_000` - Maximum number of elements (can grow)
+    /// - `max_nb_connection` (M): 32 - Number of connections per layer
+    /// - `ef_construction`: 400 - Size of dynamic candidate list during construction
+    /// - `max_elements`: 100,000 - Initial capacity (grows automatically)
     #[must_use]
     pub fn new(dimension: usize, metric: DistanceMetric) -> Self {
-        // HNSW parameters optimized for recall/speed tradeoff
-        let max_nb_connection = 16;
-        let ef_construction = 200;
+        // HNSW parameters optimized for >95% recall while maintaining <10ms search
+        // M=32, ef_construction=400 provides excellent recall
+        let max_nb_connection = 32;
+        let ef_construction = 400;
         let max_elements = 100_000;
 
         let inner = match metric {
@@ -96,6 +145,210 @@ impl HnswIndex {
             next_idx: RwLock::new(0),
         }
     }
+
+    /// Saves the HNSW index and ID mappings to the specified directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if saving fails.
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
+        let path = path.as_ref();
+        std::fs::create_dir_all(path)?;
+
+        let basename = "hnsw_index";
+
+        // 1. Save HNSW graph
+        let inner = self.inner.read();
+        match &*inner {
+            HnswInner::Cosine(hnsw) => {
+                hnsw.file_dump(path, basename)
+                    .map_err(std::io::Error::other)?;
+            }
+            HnswInner::Euclidean(hnsw) => {
+                hnsw.file_dump(path, basename)
+                    .map_err(std::io::Error::other)?;
+            }
+            HnswInner::DotProduct(hnsw) => {
+                hnsw.file_dump(path, basename)
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+
+        // 2. Save Mappings
+        let mappings_path = path.join("id_mappings.bin");
+        let file = std::fs::File::create(mappings_path)?;
+        let writer = std::io::BufWriter::new(file);
+
+        let id_to_idx = self.id_to_idx.read();
+        let idx_to_id = self.idx_to_id.read();
+        let next_idx = *self.next_idx.read();
+
+        // Serialize as a tuple of references to avoid copying
+        bincode::serialize_into(writer, &(&*id_to_idx, &*idx_to_id, next_idx))
+            .map_err(std::io::Error::other)?;
+
+        Ok(())
+    }
+
+    /// Loads the HNSW index and ID mappings from the specified directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading fails.
+    pub fn load<P: AsRef<std::path::Path>>(
+        path: P,
+        dimension: usize,
+        metric: DistanceMetric,
+    ) -> std::io::Result<Self> {
+        let path = path.as_ref();
+        let basename = "hnsw_index";
+
+        // Check mappings file (hnsw files checked by loader)
+        let mappings_path = path.join("id_mappings.bin");
+        if !mappings_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "ID mappings file not found",
+            ));
+        }
+
+        // 1. Load HNSW graph
+        // We box and leak the loader to satisfy the 'static lifetime requirement of HnswIndex.
+        // HnswIo holds the mmap if used (we don't use it yet), but even without mmap,
+        // the load_hnsw signature enforces borrowing from the loader.
+        let io = Box::new(HnswIo::new(path, basename));
+        let io_ref: &'static mut HnswIo = Box::leak(io);
+
+        let inner = match metric {
+            DistanceMetric::Cosine => {
+                let hnsw = io_ref
+                    .load_hnsw::<f32, DistCosine>()
+                    .map_err(std::io::Error::other)?;
+                HnswInner::Cosine(hnsw)
+            }
+            DistanceMetric::Euclidean => {
+                let hnsw = io_ref
+                    .load_hnsw::<f32, DistL2>()
+                    .map_err(std::io::Error::other)?;
+                HnswInner::Euclidean(hnsw)
+            }
+            DistanceMetric::DotProduct => {
+                let hnsw = io_ref
+                    .load_hnsw::<f32, DistDot>()
+                    .map_err(std::io::Error::other)?;
+                HnswInner::DotProduct(hnsw)
+            }
+        };
+
+        // 2. Load Mappings
+        let file = std::fs::File::open(mappings_path)?;
+        let reader = std::io::BufReader::new(file);
+        let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
+            bincode::deserialize_from(reader)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        Ok(Self {
+            dimension,
+            metric,
+            inner: RwLock::new(inner),
+            id_to_idx: RwLock::new(id_to_idx),
+            idx_to_id: RwLock::new(idx_to_id),
+            next_idx: RwLock::new(next_idx),
+        })
+    }
+
+    /// Searches for the k nearest neighbors with a specific quality profile.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector
+    /// * `k` - Number of nearest neighbors to return
+    /// * `quality` - Search quality profile controlling recall/latency tradeoff
+    ///
+    /// # Quality Profiles
+    ///
+    /// - `Fast`: ~90% recall, lowest latency
+    /// - `Balanced`: ~95% recall, good tradeoff (default)
+    /// - `Accurate`: ~99% recall, best quality
+    ///
+    /// # Panics
+    ///
+    /// Panics if the query dimension doesn't match the index dimension.
+    #[must_use]
+    pub fn search_with_quality(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: SearchQuality,
+    ) -> Vec<(u64, f32)> {
+        assert_eq!(
+            query.len(),
+            self.dimension,
+            "Query dimension mismatch: expected {}, got {}",
+            self.dimension,
+            query.len()
+        );
+
+        let ef_search = quality.ef_search(k);
+        let inner = self.inner.read();
+        let idx_to_id = self.idx_to_id.read();
+
+        let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
+
+        match &*inner {
+            HnswInner::Cosine(hnsw) => {
+                let neighbours = hnsw.search(query, k, ef_search);
+                for n in &neighbours {
+                    if let Some(&id) = idx_to_id.get(&n.d_id) {
+                        // Clamp to [0,1] to handle float precision issues
+                        let score = (1.0 - n.distance).clamp(0.0, 1.0);
+                        results.push((id, score));
+                    }
+                }
+            }
+            HnswInner::Euclidean(hnsw) => {
+                let neighbours = hnsw.search(query, k, ef_search);
+                for n in &neighbours {
+                    if let Some(&id) = idx_to_id.get(&n.d_id) {
+                        results.push((id, n.distance));
+                    }
+                }
+            }
+            HnswInner::DotProduct(hnsw) => {
+                let neighbours = hnsw.search(query, k, ef_search);
+                for n in &neighbours {
+                    if let Some(&id) = idx_to_id.get(&n.d_id) {
+                        results.push((id, -n.distance));
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Sets the index to searching mode after bulk insertions.
+    ///
+    /// This is required by `hnsw_rs` after parallel insertions to ensure
+    /// correct search results. Call this after finishing all insertions
+    /// and before performing searches.
+    ///
+    /// For single-threaded sequential insertions, this is typically not needed,
+    /// but it's good practice to call it anyway before benchmarks.
+    pub fn set_searching_mode(&self) {
+        let mut inner = self.inner.write();
+        match &mut *inner {
+            HnswInner::Cosine(hnsw) => {
+                hnsw.set_searching_mode(true);
+            }
+            HnswInner::Euclidean(hnsw) => {
+                hnsw.set_searching_mode(true);
+            }
+            HnswInner::DotProduct(hnsw) => {
+                hnsw.set_searching_mode(true);
+            }
+        }
+    }
 }
 
 impl VectorIndex for HnswIndex {
@@ -108,20 +361,23 @@ impl VectorIndex for HnswIndex {
             vector.len()
         );
 
-        // Get or create internal index for this ID
+        // Check if ID already exists - hnsw_rs doesn't support updates!
+        // Inserting the same idx twice creates duplicates/ghosts in the graph.
         let mut id_to_idx = self.id_to_idx.write();
+        if id_to_idx.contains_key(&id) {
+            // ID already exists - skip insertion to avoid corrupting the index.
+            // Use a dedicated upsert() method if you need update semantics.
+            // For now, we silently skip (production code should log this).
+            return;
+        }
+
         let mut idx_to_id = self.idx_to_id.write();
         let mut next_idx = self.next_idx.write();
 
-        let idx = if let Some(&existing_idx) = id_to_idx.get(&id) {
-            existing_idx
-        } else {
-            let idx = *next_idx;
-            *next_idx += 1;
-            id_to_idx.insert(id, idx);
-            idx_to_id.insert(idx, id);
-            idx
-        };
+        let idx = *next_idx;
+        *next_idx += 1;
+        id_to_idx.insert(id, idx);
+        idx_to_id.insert(idx, id);
 
         drop(id_to_idx);
         drop(idx_to_id);
@@ -143,63 +399,27 @@ impl VectorIndex for HnswIndex {
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
-        assert_eq!(
-            query.len(),
-            self.dimension,
-            "Query dimension mismatch: expected {}, got {}",
-            self.dimension,
-            query.len()
-        );
-
-        // Perf: ef_search tuned for recall/speed tradeoff
-        // Higher ef = better recall but slower search
-        let ef_search = 50.max(k * 2);
-        let inner = self.inner.read();
-        let idx_to_id = self.idx_to_id.read();
-
-        // Perf: Pre-allocate result vector to avoid reallocations
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
-
-        match &*inner {
-            HnswInner::Cosine(hnsw) => {
-                let neighbours = hnsw.search(query, k, ef_search);
-                for n in &neighbours {
-                    if let Some(&id) = idx_to_id.get(&n.d_id) {
-                        // Cosine: hnsw_rs returns distance, we want similarity
-                        results.push((id, 1.0 - n.distance));
-                    }
-                }
-            }
-            HnswInner::Euclidean(hnsw) => {
-                let neighbours = hnsw.search(query, k, ef_search);
-                for n in &neighbours {
-                    if let Some(&id) = idx_to_id.get(&n.d_id) {
-                        results.push((id, n.distance));
-                    }
-                }
-            }
-            HnswInner::DotProduct(hnsw) => {
-                let neighbours = hnsw.search(query, k, ef_search);
-                for n in &neighbours {
-                    if let Some(&id) = idx_to_id.get(&n.d_id) {
-                        // DotProduct: higher is better
-                        results.push((id, -n.distance));
-                    }
-                }
-            }
-        }
-
-        results
+        // Use Balanced quality profile by default
+        self.search_with_quality(query, k, SearchQuality::Balanced)
     }
 
+    /// Performs a **soft delete** of the vector.
+    ///
+    /// # Important
+    ///
+    /// This removes the ID from the mappings but **does NOT remove the vector
+    /// from the HNSW graph** (`hnsw_rs` doesn't support true deletion).
+    /// The vector will no longer appear in search results, but memory is not freed.
+    ///
+    /// For workloads with many deletions, consider periodic index rebuilding
+    /// to reclaim memory and maintain optimal graph structure.
     fn remove(&self, id: u64) -> bool {
         let mut id_to_idx = self.id_to_idx.write();
         let mut idx_to_id = self.idx_to_id.write();
 
         if let Some(idx) = id_to_idx.remove(&id) {
             idx_to_id.remove(&idx);
-            // Note: hnsw_rs doesn't support direct removal
-            // We mark it as removed in our mappings
+            // Soft delete: vector remains in HNSW graph but is excluded from results
             true
         } else {
             false
@@ -387,16 +607,27 @@ mod tests {
     }
 
     #[test]
-    fn test_hnsw_update_existing_vector() {
+    fn test_hnsw_duplicate_insert_is_skipped() {
         // Arrange
         let index = HnswIndex::new(3, DistanceMetric::Cosine);
         index.insert(1, &[1.0, 0.0, 0.0]);
 
-        // Act - Insert with same ID should update
+        // Act - Insert with same ID should be SKIPPED (not updated)
+        // hnsw_rs doesn't support updates; inserting same idx creates ghosts
         index.insert(1, &[0.0, 1.0, 0.0]);
 
         // Assert
         assert_eq!(index.len(), 1); // Still only one entry
+
+        // Verify the ORIGINAL vector is still there (not updated)
+        let results = index.search(&[1.0, 0.0, 0.0], 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
+        // Score should be ~1.0 (exact match with original vector)
+        assert!(
+            results[0].1 > 0.99,
+            "Original vector should still be indexed"
+        );
     }
 
     #[test]
@@ -408,7 +639,7 @@ mod tests {
         let index = Arc::new(HnswIndex::new(3, DistanceMetric::Cosine));
         let mut handles = vec![];
 
-        // Act - Insert from multiple threads
+        // Act - Insert from multiple threads (unique IDs)
         for i in 0..10 {
             let index_clone = Arc::clone(&index);
             handles.push(thread::spawn(move || {
@@ -421,7 +652,37 @@ mod tests {
             handle.join().expect("Thread panicked");
         }
 
+        // Set searching mode after parallel insertions (required by hnsw_rs)
+        index.set_searching_mode();
+
         // Assert
         assert_eq!(index.len(), 10);
+    }
+
+    #[test]
+    fn test_hnsw_persistence() {
+        use tempfile::tempdir;
+
+        // Arrange
+        let dir = tempdir().unwrap();
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        index.insert(1, &[1.0, 0.0, 0.0]);
+        index.insert(2, &[0.0, 1.0, 0.0]);
+
+        // Act - Save
+        index.save(dir.path()).unwrap();
+
+        // Act - Load
+        let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+
+        // Assert
+        assert_eq!(loaded_index.len(), 2);
+        assert_eq!(loaded_index.dimension(), 3);
+        assert_eq!(loaded_index.metric(), DistanceMetric::Cosine);
+
+        // Verify search works on loaded index
+        let results = loaded_index.search(&[1.0, 0.0, 0.0], 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
     }
 }

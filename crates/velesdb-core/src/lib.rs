@@ -43,7 +43,7 @@ pub mod index;
 pub mod point;
 pub mod storage;
 
-pub use index::{HnswIndex, VectorIndex};
+pub use index::{HnswIndex, SearchQuality, VectorIndex};
 
 pub use collection::Collection;
 pub use distance::DistanceMetric;

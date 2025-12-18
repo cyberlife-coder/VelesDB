@@ -46,3 +46,11 @@ harness = false
 [[bench]]
 name = "scalability_benchmark"
 harness = false
+
+[[bench]]
+name = "wis1_validation"
+harness = false
+
+[[bench]]
+name = "hnsw_tuning"
+harness = false

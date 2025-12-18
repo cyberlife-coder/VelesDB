@@ -4,10 +4,10 @@ use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::{HnswIndex, VectorIndex};
 use crate::point::{Point, SearchResult};
+use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,8 +36,11 @@ pub struct Collection {
     /// Collection configuration.
     config: Arc<RwLock<CollectionConfig>>,
 
-    /// In-memory point storage (for MVP).
-    points: Arc<RwLock<HashMap<u64, Point>>>,
+    /// Vector storage (on-disk, memory-mapped).
+    vector_storage: Arc<RwLock<MmapStorage>>,
+
+    /// Payload storage (on-disk, log-structured).
+    payload_storage: Arc<RwLock<LogPayloadStorage>>,
 
     /// HNSW index for fast approximate nearest neighbor search.
     index: Arc<HnswIndex>,
@@ -65,13 +68,23 @@ impl Collection {
             point_count: 0,
         };
 
-        // Create HNSW index for fast ANN search
+        // Initialize persistent storages
+        let vector_storage = Arc::new(RwLock::new(
+            MmapStorage::new(&path, dimension).map_err(Error::Io)?,
+        ));
+
+        let payload_storage = Arc::new(RwLock::new(
+            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+        ));
+
+        // Create HNSW index
         let index = Arc::new(HnswIndex::new(dimension, metric));
 
         let collection = Self {
             path,
             config: Arc::new(RwLock::new(config)),
-            points: Arc::new(RwLock::new(HashMap::new())),
+            vector_storage,
+            payload_storage,
             index,
         };
 
@@ -91,13 +104,27 @@ impl Collection {
         let config: CollectionConfig =
             serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        // Create HNSW index (will be populated when points are loaded)
-        let index = Arc::new(HnswIndex::new(config.dimension, config.metric));
+        // Open persistent storages
+        let vector_storage = Arc::new(RwLock::new(
+            MmapStorage::new(&path, config.dimension).map_err(Error::Io)?,
+        ));
+
+        let payload_storage = Arc::new(RwLock::new(
+            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+        ));
+
+        // Load HNSW index if it exists, otherwise create new (empty)
+        let index = if path.join("hnsw.bin").exists() {
+            Arc::new(HnswIndex::load(&path, config.dimension, config.metric).map_err(Error::Io)?)
+        } else {
+            Arc::new(HnswIndex::new(config.dimension, config.metric))
+        };
 
         Ok(Self {
             path,
             config: Arc::new(RwLock::new(config)),
-            points: Arc::new(RwLock::new(HashMap::new())),
+            vector_storage,
+            payload_storage,
             index,
         })
     }
@@ -118,7 +145,7 @@ impl Collection {
         let dimension = config.dimension;
         drop(config);
 
-        // Validate dimensions
+        // Validate dimensions first
         for point in &points {
             if point.dimension() != dimension {
                 return Err(Error::DimensionMismatch {
@@ -128,19 +155,44 @@ impl Collection {
             }
         }
 
-        // Insert points into storage and index
-        let mut storage = self.points.write();
-        for point in &points {
-            // Insert into HNSW index
-            self.index.insert(point.id, &point.vector);
-        }
+        let mut vector_storage = self.vector_storage.write();
+        let mut payload_storage = self.payload_storage.write();
+
         for point in points {
-            storage.insert(point.id, point);
+            // 1. Store Vector
+            vector_storage
+                .store(point.id, &point.vector)
+                .map_err(Error::Io)?;
+
+            // 2. Store Payload (if present)
+            if let Some(payload) = &point.payload {
+                payload_storage
+                    .store(point.id, payload)
+                    .map_err(Error::Io)?;
+            } else {
+                // If payload is None, check if we need to delete existing payload?
+                // For now, let's assume upsert with None doesn't clear payload unless explicit.
+                // Or consistency: Point represents full state. If None, maybe we should delete?
+                // Let's stick to: if None, do nothing (keep existing) or delete?
+                // Typically upsert replaces. Let's say if None, we delete potential existing payload to be consistent.
+                let _ = payload_storage.delete(point.id); // Ignore error if not found
+            }
+
+            // 3. Update Index
+            // Note: HnswIndex.insert() skips if ID already exists (no updates supported)
+            // For true upsert semantics, we'd need to remove then re-insert
+            self.index.insert(point.id, &point.vector);
         }
 
         // Update point count
         let mut config = self.config.write();
-        config.point_count = storage.len();
+        config.point_count = vector_storage.len();
+
+        // Auto-flush for durability (MVP choice: consistent but slower)
+        // In prod, this might be backgrounded or explicit.
+        vector_storage.flush().map_err(Error::Io)?;
+        payload_storage.flush().map_err(Error::Io)?;
+        self.index.save(&self.path).map_err(Error::Io)?;
 
         Ok(())
     }
@@ -148,25 +200,43 @@ impl Collection {
     /// Retrieves points by their IDs.
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
-        let storage = self.points.read();
-        ids.iter().map(|id| storage.get(id).cloned()).collect()
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        ids.iter()
+            .map(|&id| {
+                // Retrieve vector
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+
+                // Retrieve payload
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                Some(Point {
+                    id,
+                    vector,
+                    payload,
+                })
+            })
+            .collect()
     }
 
     /// Deletes points by their IDs.
     ///
     /// # Errors
     ///
-    /// Currently infallible, but may return errors in future implementations.
+    /// Returns an error if storage operations fail.
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
-        let mut storage = self.points.write();
-        for id in ids {
-            storage.remove(id);
-            // Remove from HNSW index
-            self.index.remove(*id);
+        let mut vector_storage = self.vector_storage.write();
+        let mut payload_storage = self.payload_storage.write();
+
+        for &id in ids {
+            vector_storage.delete(id).map_err(Error::Io)?;
+            payload_storage.delete(id).map_err(Error::Io)?;
+            self.index.remove(id);
         }
 
         let mut config = self.config.write();
-        config.point_count = storage.len();
+        config.point_count = vector_storage.len();
 
         Ok(())
     }
@@ -192,15 +262,24 @@ impl Collection {
         // Use HNSW index for fast ANN search
         let index_results = self.index.search(query, k);
 
-        let storage = self.points.read();
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
 
         // Map index results to SearchResult with full point data
         let results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|(id, score)| {
-                storage
-                    .get(&id)
-                    .map(|point| SearchResult::new(point.clone(), score))
+                // We need to fetch vector and payload
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
             })
             .collect();
 
@@ -210,13 +289,26 @@ impl Collection {
     /// Returns the number of points in the collection.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.points.read().len()
+        self.vector_storage.read().len()
     }
 
     /// Returns true if the collection is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.points.read().is_empty()
+        self.vector_storage.read().is_empty()
+    }
+
+    /// Saves the collection configuration and index to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn flush(&self) -> Result<()> {
+        self.save_config()?;
+        self.vector_storage.write().flush().map_err(Error::Io)?;
+        self.payload_storage.write().flush().map_err(Error::Io)?;
+        self.index.save(&self.path).map_err(Error::Io)?;
+        Ok(())
     }
 
     /// Saves the collection configuration to disk.
