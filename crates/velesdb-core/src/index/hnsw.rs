@@ -324,6 +324,29 @@ impl HnswIndex {
 
         results
     }
+
+    /// Sets the index to searching mode after bulk insertions.
+    ///
+    /// This is required by `hnsw_rs` after parallel insertions to ensure
+    /// correct search results. Call this after finishing all insertions
+    /// and before performing searches.
+    ///
+    /// For single-threaded sequential insertions, this is typically not needed,
+    /// but it's good practice to call it anyway before benchmarks.
+    pub fn set_searching_mode(&self) {
+        let mut inner = self.inner.write();
+        match &mut *inner {
+            HnswInner::Cosine(hnsw) => {
+                hnsw.set_searching_mode(true);
+            }
+            HnswInner::Euclidean(hnsw) => {
+                hnsw.set_searching_mode(true);
+            }
+            HnswInner::DotProduct(hnsw) => {
+                hnsw.set_searching_mode(true);
+            }
+        }
+    }
 }
 
 impl VectorIndex for HnswIndex {
@@ -336,20 +359,23 @@ impl VectorIndex for HnswIndex {
             vector.len()
         );
 
-        // Get or create internal index for this ID
+        // Check if ID already exists - hnsw_rs doesn't support updates!
+        // Inserting the same idx twice creates duplicates/ghosts in the graph.
         let mut id_to_idx = self.id_to_idx.write();
+        if id_to_idx.contains_key(&id) {
+            // ID already exists - skip insertion to avoid corrupting the index.
+            // Use a dedicated upsert() method if you need update semantics.
+            // For now, we silently skip (production code should log this).
+            return;
+        }
+
         let mut idx_to_id = self.idx_to_id.write();
         let mut next_idx = self.next_idx.write();
 
-        let idx = if let Some(&existing_idx) = id_to_idx.get(&id) {
-            existing_idx
-        } else {
-            let idx = *next_idx;
-            *next_idx += 1;
-            id_to_idx.insert(id, idx);
-            idx_to_id.insert(idx, id);
-            idx
-        };
+        let idx = *next_idx;
+        *next_idx += 1;
+        id_to_idx.insert(id, idx);
+        idx_to_id.insert(idx, id);
 
         drop(id_to_idx);
         drop(idx_to_id);
@@ -570,16 +596,27 @@ mod tests {
     }
 
     #[test]
-    fn test_hnsw_update_existing_vector() {
+    fn test_hnsw_duplicate_insert_is_skipped() {
         // Arrange
         let index = HnswIndex::new(3, DistanceMetric::Cosine);
         index.insert(1, &[1.0, 0.0, 0.0]);
 
-        // Act - Insert with same ID should update
+        // Act - Insert with same ID should be SKIPPED (not updated)
+        // hnsw_rs doesn't support updates; inserting same idx creates ghosts
         index.insert(1, &[0.0, 1.0, 0.0]);
 
         // Assert
         assert_eq!(index.len(), 1); // Still only one entry
+
+        // Verify the ORIGINAL vector is still there (not updated)
+        let results = index.search(&[1.0, 0.0, 0.0], 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
+        // Score should be ~1.0 (exact match with original vector)
+        assert!(
+            results[0].1 > 0.99,
+            "Original vector should still be indexed"
+        );
     }
 
     #[test]
@@ -591,7 +628,7 @@ mod tests {
         let index = Arc::new(HnswIndex::new(3, DistanceMetric::Cosine));
         let mut handles = vec![];
 
-        // Act - Insert from multiple threads
+        // Act - Insert from multiple threads (unique IDs)
         for i in 0..10 {
             let index_clone = Arc::clone(&index);
             handles.push(thread::spawn(move || {
@@ -603,6 +640,9 @@ mod tests {
         for handle in handles {
             handle.join().expect("Thread panicked");
         }
+
+        // Set searching mode after parallel insertions (required by hnsw_rs)
+        index.set_searching_mode();
 
         // Assert
         assert_eq!(index.len(), 10);
