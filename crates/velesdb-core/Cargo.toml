@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "hnsw_benchmark"
 harness = false
+
+[[bench]]
+name = "scalability_benchmark"
+harness = false
