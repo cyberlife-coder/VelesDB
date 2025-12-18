@@ -128,19 +128,15 @@ fn bench_collection_search(c: &mut Criterion) {
 }
 
 /// Compare different distance metrics.
+/// Note: DotProduct excluded as hnsw_rs DistDot requires non-negative dot products
 fn bench_distance_metrics(c: &mut Criterion) {
     let mut group = c.benchmark_group("distance_metrics");
 
     let dim = 768;
     let query = generate_vector(dim, 0);
 
-    for metric in [
-        DistanceMetric::Cosine,
-        DistanceMetric::Euclidean,
-        DistanceMetric::DotProduct,
-    ]
-    .iter()
-    {
+    // Only Cosine and Euclidean - DotProduct requires special vector constraints
+    for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean].iter() {
         let index = HnswIndex::new(dim, *metric);
 
         // Populate
