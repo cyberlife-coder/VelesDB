@@ -5,6 +5,12 @@
 //! - Recall > 95% on standard benchmarks
 //!
 //! Run with: `cargo bench --bench wis1_validation`
+//!
+//! ## Optimizations
+//!
+//! - Uses `select_nth_unstable_by` for O(n) k-NN instead of O(n log n) sort
+//! - Uses `total_cmp` for NaN-safe float comparisons
+//! - Tests multiple dimensions (128, 256, 512, 768)
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::collections::HashSet;
@@ -47,6 +53,9 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
 }
 
 /// Brute-force exact k-NN search for recall calculation.
+///
+/// Optimized with `select_nth_unstable_by` for O(n) complexity instead of O(n log n) sort.
+/// Uses `total_cmp` for NaN-safe float comparisons.
 fn brute_force_knn(
     vectors: &[(u64, Vec<f32>)],
     query: &[f32],
@@ -77,8 +86,18 @@ fn brute_force_knn(
         })
         .collect();
 
-    distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-    distances.into_iter().take(k).map(|(id, _)| id).collect()
+    // O(n) selection instead of O(n log n) sort - much faster for large datasets
+    // Uses total_cmp for NaN-safe comparison (NaN sorts to end)
+    if distances.len() > k {
+        distances.select_nth_unstable_by(k, |a, b| a.1.total_cmp(&b.1));
+        distances.truncate(k);
+        // Sort only the k elements we need
+        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
+    } else {
+        distances.sort_by(|a, b| a.1.total_cmp(&b.1));
+    }
+
+    distances.into_iter().map(|(id, _)| id).collect()
 }
 
 /// Calculate recall: proportion of true nearest neighbors found.
@@ -246,10 +265,101 @@ fn bench_all_metrics(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark recall on 100k vectors (validates HNSW params at scale).
+/// Note: This test is slower due to brute-force ground truth computation.
+fn bench_recall_100k(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wis1_recall_100k");
+    group.sample_size(10);
+
+    let dim = 128;
+    let num_vectors = 100_000;
+    let k = 10;
+    let num_queries = 20; // Fewer queries due to slow brute-force on 100k
+
+    println!(
+        "\n=== bench_recall_100k ===\n📊 Measuring recall on {} vectors (may take a while)...",
+        num_vectors
+    );
+
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
+
+    for i in 0..num_vectors {
+        let vector = generate_vector(dim, i as u64);
+        index.insert(i as u64, &vector);
+        vectors.push((i as u64, vector));
+    }
+
+    index.set_searching_mode();
+    println!("✅ Index built with {} vectors", index.len());
+
+    // Measure recall
+    let mut total_recall = 0.0;
+    for q in 0..num_queries {
+        let query = generate_vector(dim, (num_vectors + q) as u64);
+        let hnsw_results = index.search(&query, k);
+        let ground_truth = brute_force_knn(&vectors, &query, k, DistanceMetric::Cosine);
+        total_recall += calculate_recall(&hnsw_results, &ground_truth);
+    }
+
+    let avg_recall = total_recall / num_queries as f64;
+    println!(
+        "\n🎯 Recall@{} on 100k vectors: {:.2}%",
+        k,
+        avg_recall * 100.0
+    );
+    println!(
+        "   {} WIS-1 Criterion: Recall > 95%\n",
+        if avg_recall >= 0.95 { "✅" } else { "❌" }
+    );
+
+    group.bench_function("search_100k_recall_test", |b| {
+        let query = generate_vector(dim, 999_999);
+        b.iter(|| black_box(index.search(&query, k)))
+    });
+
+    group.finish();
+}
+
+/// Benchmark performance across different vector dimensions.
+/// Tests if performance degrades significantly at higher dimensions.
+fn bench_dimensions(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wis1_dimensions");
+    group.sample_size(10);
+
+    let num_vectors = 10_000;
+    let k = 10;
+
+    println!("\n=== bench_dimensions ===\n📊 Testing performance across dimensions...\n");
+
+    for dim in [128, 256, 512, 768] {
+        let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+
+        for i in 0..num_vectors {
+            let vector = generate_vector(dim, i as u64);
+            index.insert(i as u64, &vector);
+        }
+
+        index.set_searching_mode();
+
+        let query = generate_vector(dim, 999_999);
+
+        group.bench_with_input(
+            BenchmarkId::new("search_10k", format!("dim_{}", dim)),
+            &dim,
+            |b, _| b.iter(|| black_box(index.search(&query, k))),
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_recall_measurement,
     bench_100k_search_latency,
-    bench_all_metrics
+    bench_all_metrics,
+    bench_recall_100k,
+    bench_dimensions
 );
 criterion_main!(benches);
