@@ -37,3 +37,7 @@ tokio-test = "0.4"
 [[bench]]
 name = "search_benchmark"
 harness = false
+
+[[bench]]
+name = "hnsw_benchmark"
+harness = false
