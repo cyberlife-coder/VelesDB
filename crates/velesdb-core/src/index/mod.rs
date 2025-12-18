@@ -5,7 +5,7 @@
 
 mod hnsw;
 
-pub use hnsw::HnswIndex;
+pub use hnsw::{HnswIndex, SearchQuality};
 
 use crate::distance::DistanceMetric;
 
