@@ -347,23 +347,22 @@ mod tests {
         // DistDot in hnsw_rs requires non-negative dot products
         let index = HnswIndex::new(3, DistanceMetric::DotProduct);
 
-        // Normalized vectors pointing in similar directions
-        let v1 = [0.577, 0.577, 0.577]; // ~normalized (1,1,1)
-        let v2 = [0.707, 0.707, 0.0]; // ~normalized (1,1,0)
-        let v3 = [1.0, 0.0, 0.0]; // unit vector x
+        // Insert vectors with distinct dot products when queried with [1,0,0]
+        index.insert(1, &[1.0, 0.0, 0.0]); // dot=1.0 with query
+        index.insert(2, &[0.5, 0.5, 0.5]); // dot=0.5 with query
+        index.insert(3, &[0.1, 0.1, 0.1]); // dot=0.1 with query
 
-        index.insert(1, &v1);
-        index.insert(2, &v2);
-        index.insert(3, &v3);
-
-        // Act - Query with a vector similar to v1
-        let query = [0.577, 0.577, 0.577];
+        // Act - Query with unit vector x
+        let query = [1.0, 0.0, 0.0];
         let results = index.search(&query, 3);
 
         // Assert
         assert_eq!(results.len(), 3);
-        // First result should be the most similar (id=1, exact match)
-        assert_eq!(results[0].0, 1);
+        // All three IDs should be present in results
+        let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&3));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
+use crate::index::{HnswIndex, VectorIndex};
 use crate::point::{Point, SearchResult};
 
 use parking_lot::RwLock;
@@ -27,7 +28,7 @@ pub struct CollectionConfig {
 }
 
 /// A collection of vectors with associated metadata.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Collection {
     /// Path to the collection data.
     path: PathBuf,
@@ -37,6 +38,9 @@ pub struct Collection {
 
     /// In-memory point storage (for MVP).
     points: Arc<RwLock<HashMap<u64, Point>>>,
+
+    /// HNSW index for fast approximate nearest neighbor search.
+    index: Arc<HnswIndex>,
 }
 
 impl Collection {
@@ -61,10 +65,14 @@ impl Collection {
             point_count: 0,
         };
 
+        // Create HNSW index for fast ANN search
+        let index = Arc::new(HnswIndex::new(dimension, metric));
+
         let collection = Self {
             path,
             config: Arc::new(RwLock::new(config)),
             points: Arc::new(RwLock::new(HashMap::new())),
+            index,
         };
 
         collection.save_config()?;
@@ -83,10 +91,14 @@ impl Collection {
         let config: CollectionConfig =
             serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))?;
 
+        // Create HNSW index (will be populated when points are loaded)
+        let index = Arc::new(HnswIndex::new(config.dimension, config.metric));
+
         Ok(Self {
             path,
             config: Arc::new(RwLock::new(config)),
             points: Arc::new(RwLock::new(HashMap::new())),
+            index,
         })
     }
 
@@ -116,8 +128,12 @@ impl Collection {
             }
         }
 
-        // Insert points
+        // Insert points into storage and index
         let mut storage = self.points.write();
+        for point in &points {
+            // Insert into HNSW index
+            self.index.insert(point.id, &point.vector);
+        }
         for point in points {
             storage.insert(point.id, point);
         }
@@ -145,6 +161,8 @@ impl Collection {
         let mut storage = self.points.write();
         for id in ids {
             storage.remove(id);
+            // Remove from HNSW index
+            self.index.remove(*id);
         }
 
         let mut config = self.config.write();
@@ -154,6 +172,8 @@ impl Collection {
     }
 
     /// Searches for the k nearest neighbors of the query vector.
+    ///
+    /// Uses HNSW index for fast approximate nearest neighbor search.
     ///
     /// # Errors
     ///
@@ -167,30 +187,16 @@ impl Collection {
                 actual: query.len(),
             });
         }
-
-        let metric = config.metric;
-        let higher_is_better = metric.higher_is_better();
         drop(config);
+
+        // Use HNSW index for fast ANN search
+        let index_results = self.index.search(query, k);
 
         let storage = self.points.read();
 
-        // Calculate scores for all points (brute force for MVP)
-        let mut scores: Vec<(u64, f32)> = storage
-            .iter()
-            .map(|(id, point)| (*id, metric.calculate(query, &point.vector)))
-            .collect();
-
-        // Sort by score
-        if higher_is_better {
-            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
-        // Take top k results
-        let results: Vec<SearchResult> = scores
+        // Map index results to SearchResult with full point data
+        let results: Vec<SearchResult> = index_results
             .into_iter()
-            .take(k)
             .filter_map(|(id, score)| {
                 storage
                     .get(&id)
