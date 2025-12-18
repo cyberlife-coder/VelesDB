@@ -300,7 +300,9 @@ impl HnswIndex {
                 let neighbours = hnsw.search(query, k, ef_search);
                 for n in &neighbours {
                     if let Some(&id) = idx_to_id.get(&n.d_id) {
-                        results.push((id, 1.0 - n.distance));
+                        // Clamp to [0,1] to handle float precision issues
+                        let score = (1.0 - n.distance).clamp(0.0, 1.0);
+                        results.push((id, score));
                     }
                 }
             }
@@ -401,14 +403,23 @@ impl VectorIndex for HnswIndex {
         self.search_with_quality(query, k, SearchQuality::Balanced)
     }
 
+    /// Performs a **soft delete** of the vector.
+    ///
+    /// # Important
+    ///
+    /// This removes the ID from the mappings but **does NOT remove the vector
+    /// from the HNSW graph** (`hnsw_rs` doesn't support true deletion).
+    /// The vector will no longer appear in search results, but memory is not freed.
+    ///
+    /// For workloads with many deletions, consider periodic index rebuilding
+    /// to reclaim memory and maintain optimal graph structure.
     fn remove(&self, id: u64) -> bool {
         let mut id_to_idx = self.id_to_idx.write();
         let mut idx_to_id = self.idx_to_id.write();
 
         if let Some(idx) = id_to_idx.remove(&id) {
             idx_to_id.remove(&idx);
-            // Note: hnsw_rs doesn't support direct removal
-            // We mark it as removed in our mappings
+            // Soft delete: vector remains in HNSW graph but is excluded from results
             true
         } else {
             false
