@@ -44,7 +44,7 @@ pub mod point;
 pub mod simd;
 pub mod storage;
 
-pub use index::{HnswIndex, SearchQuality, VectorIndex};
+pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 pub use collection::Collection;
 pub use distance::DistanceMetric;

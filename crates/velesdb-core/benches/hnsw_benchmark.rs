@@ -192,6 +192,80 @@ fn bench_distance_metrics(c: &mut Criterion) {
     group.finish();
 }
 
+/// Validate recall ≥95% at different dimensions (WIS-12 acceptance criteria).
+///
+/// Recall = |HNSW results ∩ Brute-force results| / k
+fn bench_recall_validation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("recall_validation");
+    group.sample_size(10); // Fewer samples since we're measuring recall, not time
+
+    for &dim in &[128_usize, 384, 768, 1536] {
+        let n_vectors = 5000_u64;
+        let k = 10_usize;
+
+        // Build index with auto-tuned params
+        let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+        let vectors: Vec<Vec<f32>> = (0..n_vectors).map(|i| generate_vector(dim, i)).collect();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i as u64, v);
+        }
+
+        // Generate test queries
+        let n_queries = 100_usize;
+        let queries: Vec<Vec<f32>> = (0..n_queries)
+            .map(|i| generate_vector(dim, n_vectors + i as u64))
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("recall", format!("{dim}d")),
+            &dim,
+            |b, _| {
+                b.iter(|| {
+                    let mut total_recall = 0.0_f64;
+
+                    for query in &queries {
+                        // HNSW search
+                        let hnsw_results: Vec<u64> =
+                            index.search(query, k).iter().map(|(id, _)| *id).collect();
+
+                        // Brute-force ground truth
+                        let mut distances: Vec<(u64, f32)> = vectors
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                let dist =
+                                    1.0 - velesdb_core::simd::cosine_similarity_fast(query, v);
+                                (i as u64, dist)
+                            })
+                            .collect();
+                        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                        let ground_truth: Vec<u64> =
+                            distances.iter().take(k).map(|(id, _)| *id).collect();
+
+                        // Calculate recall
+                        let hits = hnsw_results
+                            .iter()
+                            .filter(|id| ground_truth.contains(id))
+                            .count();
+                        total_recall += hits as f64 / k as f64;
+                    }
+
+                    let avg_recall = total_recall / n_queries as f64;
+                    // Assert recall ≥ 95%
+                    assert!(
+                        avg_recall >= 0.95,
+                        "Recall {avg_recall:.2}% < 95% for dim={dim}"
+                    );
+                    black_box(avg_recall)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_hnsw_insert,
@@ -199,6 +273,7 @@ criterion_group!(
     bench_hnsw_search_latency,
     bench_hnsw_search_throughput,
     bench_collection_search,
-    bench_distance_metrics
+    bench_distance_metrics,
+    bench_recall_validation
 );
 criterion_main!(benches);

@@ -27,6 +27,100 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// HNSW index parameters for tuning performance and recall.
+///
+/// Use [`HnswParams::auto`] for automatic tuning based on vector dimension,
+/// or create custom parameters for specific workloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HnswParams {
+    /// Number of bi-directional links per node (M parameter).
+    /// Higher = better recall, more memory, slower insert.
+    pub max_connections: usize,
+    /// Size of dynamic candidate list during construction.
+    /// Higher = better recall, slower indexing.
+    pub ef_construction: usize,
+    /// Initial capacity (grows automatically if exceeded).
+    pub max_elements: usize,
+}
+
+impl Default for HnswParams {
+    fn default() -> Self {
+        Self::auto(768) // Default for common embedding dimension
+    }
+}
+
+impl HnswParams {
+    /// Creates optimized parameters based on vector dimension.
+    ///
+    /// # Recommendations
+    ///
+    /// | Dimension   | M     | ef_construction | Recall Target |
+    /// |-------------|-------|-----------------|---------------|
+    /// | d ≤ 256     | 16    | 200             | ≥95%          |
+    /// | 256 < d ≤768| 24    | 400             | ≥95%          |
+    /// | d > 768     | 32    | 500             | ≥95%          |
+    #[must_use]
+    pub fn auto(dimension: usize) -> Self {
+        match dimension {
+            0..=256 => Self {
+                max_connections: 16,
+                ef_construction: 200,
+                max_elements: 100_000,
+            },
+            257..=768 => Self {
+                max_connections: 24,
+                ef_construction: 400,
+                max_elements: 100_000,
+            },
+            _ => Self {
+                max_connections: 32,
+                ef_construction: 500,
+                max_elements: 100_000,
+            },
+        }
+    }
+
+    /// Creates parameters optimized for high recall (≥99%).
+    ///
+    /// Uses higher M and `ef_construction` at the cost of more memory and slower indexing.
+    #[must_use]
+    pub fn high_recall(dimension: usize) -> Self {
+        let base = Self::auto(dimension);
+        Self {
+            max_connections: base.max_connections + 8,
+            ef_construction: base.ef_construction + 200,
+            ..base
+        }
+    }
+
+    /// Creates parameters optimized for fast indexing.
+    ///
+    /// Uses lower M and `ef_construction` for faster inserts, with slightly lower recall.
+    #[must_use]
+    pub fn fast_indexing(dimension: usize) -> Self {
+        let base = Self::auto(dimension);
+        Self {
+            max_connections: (base.max_connections / 2).max(8),
+            ef_construction: base.ef_construction / 2,
+            ..base
+        }
+    }
+
+    /// Creates custom parameters.
+    #[must_use]
+    pub const fn custom(
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+    ) -> Self {
+        Self {
+            max_connections,
+            ef_construction,
+            max_elements,
+        }
+    }
+}
+
 /// Search quality profile controlling the recall/latency tradeoff.
 ///
 /// Higher quality = better recall but slower search.
@@ -92,46 +186,69 @@ enum HnswInner {
 }
 
 impl HnswIndex {
-    /// Creates a new HNSW index with the specified dimension and metric.
+    /// Creates a new HNSW index with auto-tuned parameters based on dimension.
     ///
     /// # Arguments
     ///
     /// * `dimension` - The dimension of vectors to index
     /// * `metric` - The distance metric to use for similarity calculations
     ///
-    /// # HNSW Parameters (optimized for >95% recall)
+    /// # Auto-tuning
     ///
-    /// - `max_nb_connection` (M): 32 - Number of connections per layer
-    /// - `ef_construction`: 400 - Size of dynamic candidate list during construction
-    /// - `max_elements`: 100,000 - Initial capacity (grows automatically)
+    /// Parameters are automatically optimized for the given dimension:
+    /// - d ≤ 256: `M=16`, `ef_construction=200`
+    /// - 256 < d ≤ 768: `M=24`, `ef_construction=400`
+    /// - d > 768: `M=32`, `ef_construction=500`
+    ///
+    /// Use [`HnswIndex::with_params`] for manual control.
     #[must_use]
     pub fn new(dimension: usize, metric: DistanceMetric) -> Self {
-        // HNSW parameters optimized for >95% recall while maintaining <10ms search
-        // M=32, ef_construction=400 provides excellent recall
-        let max_nb_connection = 32;
-        let ef_construction = 400;
-        let max_elements = 100_000;
+        Self::with_params(dimension, metric, HnswParams::auto(dimension))
+    }
 
+    /// Creates a new HNSW index with custom parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `dimension` - The dimension of vectors to index
+    /// * `metric` - The distance metric to use for similarity calculations
+    /// * `params` - Custom HNSW parameters
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use velesdb_core::{HnswIndex, HnswParams, DistanceMetric};
+    ///
+    /// // High recall configuration
+    /// let params = HnswParams::high_recall(768);
+    /// let index = HnswIndex::with_params(768, DistanceMetric::Cosine, params);
+    ///
+    /// // Custom configuration
+    /// let params = HnswParams::custom(48, 600, 1_000_000);
+    /// let index = HnswIndex::with_params(1536, DistanceMetric::Cosine, params);
+    /// ```
+    #[must_use]
+    pub fn with_params(dimension: usize, metric: DistanceMetric, params: HnswParams) -> Self {
         let inner = match metric {
             DistanceMetric::Cosine => HnswInner::Cosine(Hnsw::new(
-                max_nb_connection,
-                max_elements,
+                params.max_connections,
+                params.max_elements,
                 16,
-                ef_construction,
+                params.ef_construction,
                 DistCosine,
             )),
             DistanceMetric::Euclidean => HnswInner::Euclidean(Hnsw::new(
-                max_nb_connection,
-                max_elements,
+                params.max_connections,
+                params.max_elements,
                 16,
-                ef_construction,
+                params.ef_construction,
                 DistL2,
             )),
             DistanceMetric::DotProduct => HnswInner::DotProduct(Hnsw::new(
-                max_nb_connection,
-                max_elements,
+                params.max_connections,
+                params.max_elements,
                 16,
-                ef_construction,
+                params.ef_construction,
                 DistDot,
             )),
         };
@@ -820,5 +937,75 @@ mod tests {
         // Assert - Only 1 new vector should be inserted
         assert_eq!(inserted, 1);
         assert_eq!(index.len(), 2);
+    }
+
+    // =========================================================================
+    // HnswParams Auto-tuning Tests (WIS-12)
+    // =========================================================================
+
+    #[test]
+    fn test_hnsw_params_auto_small_dimension() {
+        let params = HnswParams::auto(128);
+        assert_eq!(params.max_connections, 16);
+        assert_eq!(params.ef_construction, 200);
+    }
+
+    #[test]
+    fn test_hnsw_params_auto_medium_dimension() {
+        let params = HnswParams::auto(768);
+        assert_eq!(params.max_connections, 24);
+        assert_eq!(params.ef_construction, 400);
+    }
+
+    #[test]
+    fn test_hnsw_params_auto_large_dimension() {
+        let params = HnswParams::auto(1536);
+        assert_eq!(params.max_connections, 32);
+        assert_eq!(params.ef_construction, 500);
+    }
+
+    #[test]
+    fn test_hnsw_params_high_recall() {
+        let params = HnswParams::high_recall(768);
+        let base = HnswParams::auto(768);
+        assert_eq!(params.max_connections, base.max_connections + 8);
+        assert_eq!(params.ef_construction, base.ef_construction + 200);
+    }
+
+    #[test]
+    fn test_hnsw_params_fast_indexing() {
+        let params = HnswParams::fast_indexing(768);
+        let base = HnswParams::auto(768);
+        assert_eq!(params.max_connections, base.max_connections / 2);
+        assert_eq!(params.ef_construction, base.ef_construction / 2);
+    }
+
+    #[test]
+    fn test_hnsw_with_params() {
+        let params = HnswParams::custom(48, 600, 500_000);
+        let index = HnswIndex::with_params(1536, DistanceMetric::Cosine, params);
+
+        assert_eq!(index.dimension(), 1536);
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn test_hnsw_params_boundary_256() {
+        // Test boundary at 256
+        let params_256 = HnswParams::auto(256);
+        let params_257 = HnswParams::auto(257);
+
+        assert_eq!(params_256.max_connections, 16);
+        assert_eq!(params_257.max_connections, 24);
+    }
+
+    #[test]
+    fn test_hnsw_params_boundary_768() {
+        // Test boundary at 768
+        let params_768 = HnswParams::auto(768);
+        let params_769 = HnswParams::auto(769);
+
+        assert_eq!(params_768.max_connections, 24);
+        assert_eq!(params_769.max_connections, 32);
     }
 }
