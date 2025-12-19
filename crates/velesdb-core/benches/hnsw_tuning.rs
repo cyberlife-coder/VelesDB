@@ -70,8 +70,8 @@ fn calculate_recall(hnsw_results: &[(u64, f32)], ground_truth: &[u64]) -> f64 {
     }
 }
 
-/// Benchmark ef_search parameter sweep.
-/// Tests recall and latency at different ef_search values.
+/// Benchmark `ef_search` parameter sweep.
+/// Tests recall and latency at different `ef_search` values.
 fn bench_ef_search_sweep(c: &mut Criterion) {
     let mut group = c.benchmark_group("ef_search_sweep");
     group.sample_size(20);
@@ -85,7 +85,7 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
     let index = HnswIndex::new(dim, DistanceMetric::Cosine);
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
-    println!("\n📊 Building index: {} vectors, dim={}", num_vectors, dim);
+    println!("\n📊 Building index: {num_vectors} vectors, dim={dim}");
 
     #[allow(clippy::cast_sign_loss)]
     for i in 0..num_vectors {
