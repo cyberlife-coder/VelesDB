@@ -114,10 +114,10 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 
 | Operation | Time (768d vectors) | Throughput |
 |-----------|---------------------|------------|
-| Cosine Similarity | 324 ns | **3M ops/sec** |
-| Euclidean Distance | 139 ns | **7M ops/sec** |
-| Dot Product | 125 ns | **8M ops/sec** |
-| Metadata Filter | 14 µs/1k items | **72M ops/sec** |
+| Cosine Similarity | ~325 ns | **3M ops/sec** |
+| Euclidean Distance | ~155 ns | **6.5M ops/sec** |
+| Dot Product | ~140 ns | **7M ops/sec** |
+| Metadata Filter | ~13 µs/1k items | **77k batches/sec** |
 
 ### Memory Efficiency with SQ8
 
