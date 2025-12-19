@@ -327,6 +327,94 @@ impl HnswIndex {
         results
     }
 
+    /// Inserts multiple vectors in parallel using rayon.
+    ///
+    /// This method is optimized for bulk insertions and can significantly
+    /// reduce indexing time on multi-core systems.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Iterator of (id, vector) pairs to insert
+    ///
+    /// # Returns
+    ///
+    /// Number of vectors successfully inserted (duplicates are skipped).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any vector has a dimension different from the index dimension.
+    ///
+    /// # Important
+    ///
+    /// After calling this method, you **must** call `set_searching_mode()`
+    /// before performing any searches to ensure correct results.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let vectors: Vec<(u64, Vec<f32>)> = generate_vectors(10_000);
+    /// let inserted = index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
+    /// index.set_searching_mode();
+    /// ```
+    pub fn insert_batch_parallel<I>(&self, vectors: I) -> usize
+    where
+        I: IntoIterator<Item = (u64, Vec<f32>)>,
+    {
+        // Collect vectors and pre-allocate indices
+        let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
+
+        // Pre-register all IDs and get their indices (sequential, fast)
+        let mut registered: Vec<(Vec<f32>, usize)> = Vec::with_capacity(vectors.len());
+        {
+            let mut id_to_idx = self.id_to_idx.write();
+            let mut idx_to_id = self.idx_to_id.write();
+            let mut next_idx = self.next_idx.write();
+
+            for (id, vector) in vectors {
+                assert_eq!(
+                    vector.len(),
+                    self.dimension,
+                    "Vector dimension mismatch: expected {}, got {}",
+                    self.dimension,
+                    vector.len()
+                );
+
+                // Skip duplicates
+                if id_to_idx.contains_key(&id) {
+                    continue;
+                }
+
+                let idx = *next_idx;
+                *next_idx += 1;
+                id_to_idx.insert(id, idx);
+                idx_to_id.insert(idx, id);
+                registered.push((vector, idx));
+            }
+        }
+
+        let count = registered.len();
+
+        // Prepare data for hnsw_rs parallel_insert_data: &[(&Vec<T>, usize)]
+        let data_refs: Vec<(&Vec<f32>, usize)> =
+            registered.iter().map(|(v, idx)| (v, *idx)).collect();
+
+        // Parallel insertion into HNSW graph using hnsw_rs native parallel insert
+        let inner = self.inner.read();
+        match &*inner {
+            HnswInner::Cosine(hnsw) => {
+                hnsw.parallel_insert(&data_refs);
+            }
+            HnswInner::Euclidean(hnsw) => {
+                hnsw.parallel_insert(&data_refs);
+            }
+            HnswInner::DotProduct(hnsw) => {
+                hnsw.parallel_insert(&data_refs);
+            }
+        }
+
+        count
+    }
+
     /// Sets the index to searching mode after bulk insertions.
     ///
     /// This is required by `hnsw_rs` after parallel insertions to ensure
@@ -684,5 +772,53 @@ mod tests {
         let results = loaded_index.search(&[1.0, 0.0, 0.0], 1);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, 1);
+    }
+
+    #[test]
+    fn test_hnsw_insert_batch_parallel() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        let vectors: Vec<(u64, Vec<f32>)> = vec![
+            (1, vec![1.0, 0.0, 0.0]),
+            (2, vec![0.0, 1.0, 0.0]),
+            (3, vec![0.0, 0.0, 1.0]),
+            (4, vec![0.5, 0.5, 0.0]),
+            (5, vec![0.5, 0.0, 0.5]),
+        ];
+
+        // Act
+        let inserted = index.insert_batch_parallel(vectors);
+        index.set_searching_mode();
+
+        // Assert
+        assert_eq!(inserted, 5);
+        assert_eq!(index.len(), 5);
+
+        // Verify search works
+        let results = index.search(&[1.0, 0.0, 0.0], 3);
+        assert_eq!(results.len(), 3);
+        // ID 1 should be the closest match
+        assert_eq!(results[0].0, 1);
+    }
+
+    #[test]
+    fn test_hnsw_insert_batch_parallel_skips_duplicates() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+
+        // Insert one vector first
+        index.insert(1, &[1.0, 0.0, 0.0]);
+
+        // Act - Try to insert batch with duplicate ID
+        let vectors: Vec<(u64, Vec<f32>)> = vec![
+            (1, vec![0.0, 1.0, 0.0]), // Duplicate ID
+            (2, vec![0.0, 0.0, 1.0]), // New
+        ];
+        let inserted = index.insert_batch_parallel(vectors);
+        index.set_searching_mode();
+
+        // Assert - Only 1 new vector should be inserted
+        assert_eq!(inserted, 1);
+        assert_eq!(index.len(), 2);
     }
 }
