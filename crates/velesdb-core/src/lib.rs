@@ -41,6 +41,7 @@ pub mod distance;
 pub mod error;
 pub mod index;
 pub mod point;
+pub mod quantization;
 pub mod simd;
 pub mod storage;
 
@@ -50,6 +51,7 @@ pub use collection::Collection;
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use point::Point;
+pub use quantization::{QuantizedVector, StorageMode};
 
 /// Database instance managing collections and storage.
 pub struct Database {
