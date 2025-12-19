@@ -31,6 +31,38 @@ use std::sync::Arc;
 
 use velesdb_core::{Database as CoreDatabase, DistanceMetric, Point};
 
+/// Extracts a vector from a PyObject, supporting both Python lists and NumPy arrays.
+///
+/// # Arguments
+/// * `py` - Python GIL token
+/// * `obj` - The Python object (list or numpy.ndarray)
+///
+/// # Returns
+/// A Vec<f32> containing the vector data
+///
+/// # Errors
+/// Returns an error if the object is neither a list nor a numpy array
+fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
+    // Try numpy array first (most common in ML workflows)
+    if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f32>>(py) {
+        return Ok(array.as_slice()?.to_vec());
+    }
+
+    // Try numpy float64 array and convert
+    if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f64>>(py) {
+        return Ok(array.as_slice()?.iter().map(|&x| x as f32).collect());
+    }
+
+    // Fall back to Python list
+    if let Ok(list) = obj.extract::<Vec<f32>>(py) {
+        return Ok(list);
+    }
+
+    Err(PyValueError::new_err(
+        "Vector must be a Python list or numpy array of floats",
+    ))
+}
+
 /// VelesDB Database - the main entry point for interacting with VelesDB.
 ///
 /// Example:
@@ -203,10 +235,10 @@ impl Collection {
                     .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
                     .extract(py)?;
 
-                let vector: Vec<f32> = point_dict
+                let vector_obj = point_dict
                     .get("vector")
-                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?
-                    .extract(py)?;
+                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
+                let vector = extract_vector(py, vector_obj)?;
 
                 let payload: Option<serde_json::Value> = match point_dict.get("payload") {
                     Some(p) => {
@@ -248,7 +280,7 @@ impl Collection {
     /// Search for similar vectors.
     ///
     /// Args:
-    ///     vector: Query vector
+    ///     vector: Query vector (Python list or numpy array)
     ///     top_k: Number of results to return (default: 10)
     ///
     /// Returns:
@@ -256,14 +288,17 @@ impl Collection {
     ///
     /// Example:
     ///     >>> results = collection.search([0.1, 0.2, 0.3], top_k=5)
+    ///     >>> # Or with numpy:
+    ///     >>> results = collection.search(np.array([0.1, 0.2, 0.3]), top_k=5)
     ///     >>> for r in results:
     ///     ...     print(f"ID: {r['id']}, Score: {r['score']}")
     #[pyo3(signature = (vector, top_k = 10))]
-    fn search(&self, vector: Vec<f32>, top_k: usize) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    fn search(&self, vector: PyObject, top_k: usize) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
+            let query_vector = extract_vector(py, &vector)?;
             let results = self
                 .inner
-                .search(&vector, top_k)
+                .search(&query_vector, top_k)
                 .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {}", e)))?;
 
             let py_results: Vec<HashMap<String, PyObject>> = results

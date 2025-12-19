@@ -231,6 +231,73 @@ class TestCollection:
         collection.flush()  # Should not raise
 
 
+class TestNumpySupport:
+    """Tests for NumPy array support (WIS-23)."""
+
+    def test_upsert_with_numpy_vector(self, temp_db_path):
+        """Test upserting points with numpy array vectors."""
+        import numpy as np
+        
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("numpy_test", dimension=4, metric="cosine")
+        
+        # Upsert with numpy array
+        vector = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        count = collection.upsert([
+            {"id": 1, "vector": vector, "payload": {"title": "NumPy Doc"}}
+        ])
+        
+        assert count == 1
+        assert not collection.is_empty()
+
+    def test_upsert_with_numpy_float64(self, temp_db_path):
+        """Test upserting with float64 numpy arrays (should auto-convert)."""
+        import numpy as np
+        
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("numpy_f64", dimension=4)
+        
+        # float64 should be converted to float32
+        vector = np.array([0.5, 0.5, 0.0, 0.0], dtype=np.float64)
+        count = collection.upsert([{"id": 1, "vector": vector}])
+        
+        assert count == 1
+
+    def test_search_with_numpy_vector(self, temp_db_path):
+        """Test searching with numpy array query vector."""
+        import numpy as np
+        
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("numpy_search", dimension=4, metric="cosine")
+        
+        # Insert with regular list
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"title": "Doc 1"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"title": "Doc 2"}},
+        ])
+        
+        # Search with numpy array
+        query = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        results = collection.search(query, top_k=2)
+        
+        assert len(results) == 2
+        assert results[0]["id"] == 1  # Exact match should be first
+
+    def test_mixed_numpy_and_list_upsert(self, temp_db_path):
+        """Test upserting with mix of numpy arrays and Python lists."""
+        import numpy as np
+        
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mixed_vectors", dimension=4)
+        
+        count = collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},  # Python list
+            {"id": 2, "vector": np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)},  # NumPy
+        ])
+        
+        assert count == 2
+
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
