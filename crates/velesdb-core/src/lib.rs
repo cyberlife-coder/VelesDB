@@ -45,6 +45,7 @@ pub mod point;
 pub mod quantization;
 pub mod simd;
 pub mod storage;
+pub mod velesql;
 
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
