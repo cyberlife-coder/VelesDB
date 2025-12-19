@@ -4,6 +4,7 @@ members = [
     "crates/velesdb-core",
     "crates/velesdb-server",
     "crates/velesdb-python",
+    "crates/velesdb-cli",
 ]
 
 [workspace.package]

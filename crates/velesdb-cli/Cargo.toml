@@ -1,0 +1,45 @@
+[package]
+name = "velesdb-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+description = "Interactive CLI and REPL for VelesDB with VelesQL support"
+keywords = ["vector-database", "cli", "repl", "sql"]
+categories = ["command-line-utilities", "database"]
+
+[[bin]]
+name = "velesdb"
+path = "src/main.rs"
+
+[dependencies]
+velesdb-core = { path = "../velesdb-core" }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# REPL
+rustyline = { version = "14.0", features = ["derive"] }
+
+# Table formatting
+comfy-table = "7.1"
+
+# Colors
+colored = "2.1"
+
+# Serialization
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Time measurement
+instant = "0.1"
+
+# Directories
+dirs = "5.0"
