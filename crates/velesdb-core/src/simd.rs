@@ -10,6 +10,13 @@
 //!
 //! Uses portable SIMD via manual loop unrolling and compiler auto-vectorization hints.
 //! For explicit SIMD, consider `std::simd` (nightly) or `packed_simd2` crate.
+//!
+//! # Note on `hnsw_rs` Integration
+//!
+//! Custom `Distance` trait implementations for `hnsw_rs` are NOT supported due to
+//! undocumented internal invariants in the library. The SIMD functions in this module
+//! are used by `DistanceMetric::calculate()` for direct distance computations outside
+//! of the HNSW index.
 
 /// Computes cosine similarity using a single-pass fused algorithm.
 ///

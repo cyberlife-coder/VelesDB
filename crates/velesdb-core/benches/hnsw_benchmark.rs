@@ -2,6 +2,8 @@
 //!
 //! Run with: `cargo bench --bench hnsw_benchmark`
 
+#![allow(clippy::cast_precision_loss)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use velesdb_core::{Collection, DistanceMetric, HnswIndex, Point, VectorIndex};
 
@@ -12,25 +14,54 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
         .collect()
 }
 
-/// Benchmark HNSW index insertion performance.
+/// Benchmark HNSW index insertion performance (sequential).
 fn bench_hnsw_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_insert");
 
-    for count in [1000, 10_000].iter() {
+    for &count in &[1000_u64, 10_000_u64] {
         let dim = 768;
-        group.throughput(Throughput::Elements(*count as u64));
+        group.throughput(Throughput::Elements(count));
 
         group.bench_with_input(
-            BenchmarkId::new("vectors", format!("{}x{}d", count, dim)),
-            count,
+            BenchmarkId::new("sequential", format!("{count}x{dim}d")),
+            &count,
             |b, &count| {
                 b.iter(|| {
                     let index = HnswIndex::new(dim, DistanceMetric::Cosine);
                     for i in 0..count {
-                        let vector = generate_vector(dim, i as u64);
-                        index.insert(i as u64, &vector);
+                        let vector = generate_vector(dim, i);
+                        index.insert(i, &vector);
                     }
                     black_box(index.len())
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark HNSW index parallel insertion performance.
+fn bench_hnsw_insert_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hnsw_insert_parallel");
+
+    for &count in &[1000_u64, 10_000_u64] {
+        let dim = 768;
+        group.throughput(Throughput::Elements(count));
+
+        group.bench_with_input(
+            BenchmarkId::new("parallel", format!("{count}x{dim}d")),
+            &count,
+            |b, &count| {
+                // Pre-generate vectors outside the benchmark loop
+                let vectors: Vec<(u64, Vec<f32>)> =
+                    (0..count).map(|i| (i, generate_vector(dim, i))).collect();
+
+                b.iter(|| {
+                    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                    let inserted = index.insert_batch_parallel(vectors.clone());
+                    index.set_searching_mode();
+                    black_box(inserted)
                 });
             },
         );
@@ -54,8 +85,8 @@ fn bench_hnsw_search_latency(c: &mut Criterion) {
 
     let query = generate_vector(dim, 99999);
 
-    for k in [10, 50, 100].iter() {
-        group.bench_with_input(BenchmarkId::new("top_k", k), k, |b, &k| {
+    for &k in &[10_usize, 50, 100] {
+        group.bench_with_input(BenchmarkId::new("top_k", k), &k, |b, &k| {
             b.iter(|| {
                 let results = index.search(&query, k);
                 black_box(results)
@@ -128,7 +159,8 @@ fn bench_collection_search(c: &mut Criterion) {
 }
 
 /// Compare different distance metrics.
-/// Note: DotProduct excluded as hnsw_rs DistDot requires non-negative dot products
+///
+/// Note: `DotProduct` excluded as `hnsw_rs` `DistDot` requires non-negative dot products.
 fn bench_distance_metrics(c: &mut Criterion) {
     let mut group = c.benchmark_group("distance_metrics");
 
@@ -136,18 +168,18 @@ fn bench_distance_metrics(c: &mut Criterion) {
     let query = generate_vector(dim, 0);
 
     // Only Cosine and Euclidean - DotProduct requires special vector constraints
-    for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean].iter() {
-        let index = HnswIndex::new(dim, *metric);
+    for &metric in &[DistanceMetric::Cosine, DistanceMetric::Euclidean] {
+        let index = HnswIndex::new(dim, metric);
 
         // Populate
-        for i in 0..5000 {
+        for i in 0_u64..5000 {
             let vector = generate_vector(dim, i);
             index.insert(i, &vector);
         }
 
         group.bench_with_input(
-            BenchmarkId::new("search", format!("{:?}", metric)),
-            metric,
+            BenchmarkId::new("search", format!("{metric:?}")),
+            &metric,
             |b, _| {
                 b.iter(|| {
                     let results = index.search(&query, 10);
@@ -163,6 +195,7 @@ fn bench_distance_metrics(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_hnsw_insert,
+    bench_hnsw_insert_parallel,
     bench_hnsw_search_latency,
     bench_hnsw_search_throughput,
     bench_collection_search,
