@@ -39,6 +39,7 @@
 pub mod collection;
 pub mod distance;
 pub mod error;
+pub mod filter;
 pub mod index;
 pub mod point;
 pub mod simd;
@@ -49,6 +50,7 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 pub use collection::Collection;
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
+pub use filter::{Condition, Filter};
 pub use point::Point;
 
 /// Database instance managing collections and storage.
