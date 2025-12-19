@@ -1,4 +1,10 @@
-//! Scalability Benchmarks for VelesDB HNSW Index
+//! Scalability Benchmarks for `VelesDB` HNSW Index
+//!
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 //!
 //! This benchmark is NOT included in CI due to long execution times.
 //! Run manually with: `cargo bench --bench scalability_benchmark`
@@ -21,7 +27,7 @@ use velesdb_core::{DistanceMetric, HnswIndex, VectorIndex};
 // Configuration
 // ============================================================================
 
-/// Vector dimension (typical for embeddings like OpenAI, Cohere, etc.)
+/// Vector dimension (typical for embeddings like `OpenAI`, Cohere, etc.)
 const DIMENSION: usize = 768;
 
 /// Dataset sizes to benchmark
@@ -125,8 +131,7 @@ fn get_memory_usage() -> usize {
             let parts: Vec<&str> = s.split_whitespace().collect();
             parts.get(1).and_then(|p| p.parse::<usize>().ok())
         })
-        .map(|pages| pages * 4096) // Page size typically 4KB
-        .unwrap_or(0)
+        .map_or(0, |pages| pages * 4096) // Page size typically 4KB
 }
 
 #[cfg(target_os = "macos")]
@@ -170,7 +175,7 @@ fn format_bytes(bytes: usize) -> String {
     } else if bytes >= 1024 {
         format!("{:.2} KB", bytes as f64 / 1024.0)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 

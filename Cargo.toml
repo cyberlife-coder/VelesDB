@@ -38,7 +38,7 @@ memmap2 = "0.9"
 bincode = "1.3"
 
 # Indexing
-hnsw_rs = "0.3"
+hnsw_rs = { version = "0.3", features = ["simdeez_f"] }
 roaring = "0.10"
 
 # API
