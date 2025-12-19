@@ -41,6 +41,7 @@ pub mod distance;
 pub mod error;
 pub mod index;
 pub mod point;
+pub mod simd;
 pub mod storage;
 
 pub use index::{HnswIndex, SearchQuality, VectorIndex};
