@@ -2632,6 +2632,8 @@ dependencies = [
  "hnsw_rs",
  "memmap2",
  "parking_lot",
+ "pest",
+ "pest_derive",
  "proptest",
  "rayon",
  "roaring",

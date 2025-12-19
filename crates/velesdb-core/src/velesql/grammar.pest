@@ -1,0 +1,86 @@
+// VelesQL Grammar - SQL-like query language for VelesDB
+// Version 0.1.0 MVP
+
+// Whitespace and comments
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
+
+// Main entry point
+query = { SOI ~ select_stmt ~ ";"? ~ EOI }
+
+// SELECT statement
+select_stmt = { 
+    ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
+    where_clause? ~ limit_clause? ~ offset_clause?
+}
+
+// Select list: * or column list
+select_list = { "*" | column_list }
+column_list = { column ~ ("," ~ column)* }
+column = { column_name ~ (^"AS" ~ identifier)? }
+column_name = @{ identifier ~ ("." ~ identifier)? }
+
+// WHERE clause
+where_clause = { ^"WHERE" ~ or_expr }
+
+// Conditions with precedence (OR < AND < primary)
+or_expr = { and_expr ~ (^"OR" ~ and_expr)* }
+and_expr = { primary_expr ~ (^"AND" ~ primary_expr)* }
+
+primary_expr = {
+    "(" ~ or_expr ~ ")" |
+    vector_search |
+    match_expr |
+    in_expr |
+    between_expr |
+    like_expr |
+    is_null_expr |
+    compare_expr
+}
+
+// Vector search: vector NEAR [metric] vector_value
+vector_search = { 
+    ^"vector" ~ ^"NEAR" ~ metric? ~ vector_value 
+}
+metric = { ^"COSINE" | ^"EUCLIDEAN" | ^"DOT" }
+vector_value = { vector_literal | parameter }
+vector_literal = { "[" ~ float ~ ("," ~ float)* ~ "]" }
+
+// Full-text search: column MATCH 'query'
+match_expr = { identifier ~ ^"MATCH" ~ string }
+
+// IN expression: column IN (value, ...)
+in_expr = { identifier ~ ^"IN" ~ "(" ~ value_list ~ ")" }
+value_list = { value ~ ("," ~ value)* }
+
+// BETWEEN expression: column BETWEEN value AND value
+between_expr = { identifier ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
+
+// LIKE expression: column LIKE 'pattern'
+like_expr = { identifier ~ ^"LIKE" ~ string }
+
+// IS NULL / IS NOT NULL
+is_null_expr = { identifier ~ ^"IS" ~ not_kw? ~ ^"NULL" }
+not_kw = { ^"NOT" }
+
+// Comparison: column op value
+compare_expr = { identifier ~ compare_op ~ value }
+compare_op = { ">=" | "<=" | "<>" | "!=" | "=" | ">" | "<" }
+
+// LIMIT and OFFSET
+limit_clause = { ^"LIMIT" ~ integer }
+offset_clause = { ^"OFFSET" ~ integer }
+
+// Values
+value = { float | integer | string | boolean | null_value | parameter }
+parameter = @{ "$" ~ identifier }
+null_value = { ^"NULL" }
+boolean = { ^"TRUE" | ^"FALSE" }
+
+// Literals
+string = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }
+integer = @{ "-"? ~ ASCII_DIGIT+ }
+float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+
+// Identifiers
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

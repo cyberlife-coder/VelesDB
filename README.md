@@ -144,6 +144,44 @@ Supported operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `i
 
 ---
 
+## 📝 VelesQL Query Language
+
+VelesQL is a SQL-like query language designed for vector search operations.
+
+### Syntax
+
+```sql
+SELECT * FROM documents 
+WHERE vector NEAR $query_vector
+  AND category = 'tech'
+  AND price > 100
+LIMIT 10;
+```
+
+### Supported Features
+
+| Feature | Example |
+|---------|---------|
+| Vector search | `vector NEAR $v` |
+| Distance metrics | `vector NEAR COSINE $v`, `EUCLIDEAN`, `DOT` |
+| Comparisons | `=`, `!=`, `>`, `<`, `>=`, `<=` |
+| IN clause | `category IN ('tech', 'science')` |
+| BETWEEN | `price BETWEEN 10 AND 100` |
+| LIKE | `title LIKE '%rust%'` |
+| NULL checks | `deleted_at IS NULL`, `IS NOT NULL` |
+| Logical ops | `AND`, `OR` with precedence |
+| Parameters | `$param_name` for bound values |
+
+### Parser Performance
+
+| Query Type | Time | Throughput |
+|------------|------|------------|
+| Simple SELECT | ~755 ns | **1.3M queries/sec** |
+| Vector search | ~1.2 µs | **800K queries/sec** |
+| Complex (multi-filter) | ~4.8 µs | **200K queries/sec** |
+
+---
+
 ## 🏗️ Use Cases
 
 - **Semantic Search** — Build search experiences that understand meaning
