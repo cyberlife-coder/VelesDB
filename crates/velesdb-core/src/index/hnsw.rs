@@ -26,6 +26,7 @@ use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 
 /// HNSW index parameters for tuning performance and recall.
 ///
@@ -169,7 +170,8 @@ pub struct HnswIndex {
     /// Distance metric
     metric: DistanceMetric,
     /// Internal HNSW index (type-erased for flexibility)
-    inner: RwLock<HnswInner>,
+    /// Wrapped in `ManuallyDrop` to control drop order - must be dropped BEFORE `io_holder`
+    inner: RwLock<ManuallyDrop<HnswInner>>,
     /// Mapping from external IDs to internal indices
     id_to_idx: RwLock<HashMap<u64, usize>>,
     /// Mapping from internal indices to external IDs
@@ -178,6 +180,12 @@ pub struct HnswIndex {
     next_idx: RwLock<usize>,
     /// Vector storage for SIMD re-ranking (idx -> vector)
     vectors: RwLock<HashMap<usize, Vec<f32>>>,
+    /// Holds the `HnswIo` for loaded indices to prevent memory leak.
+    /// The Hnsw borrows from this, so it must be dropped AFTER inner.
+    /// Only Some when index was loaded from disk.
+    /// Note: This field is intentionally not read - it exists purely for lifetime management.
+    #[allow(dead_code)]
+    io_holder: Option<Box<HnswIo>>,
 }
 
 /// Internal HNSW index wrapper to handle different distance metrics.
@@ -258,11 +266,12 @@ impl HnswIndex {
         Self {
             dimension,
             metric,
-            inner: RwLock::new(inner),
+            inner: RwLock::new(ManuallyDrop::new(inner)),
             id_to_idx: RwLock::new(HashMap::new()),
             idx_to_id: RwLock::new(HashMap::new()),
             next_idx: RwLock::new(0),
             vectors: RwLock::new(HashMap::new()),
+            io_holder: None, // No io_holder for newly created indices
         }
     }
 
@@ -279,7 +288,7 @@ impl HnswIndex {
 
         // 1. Save HNSW graph
         let inner = self.inner.read();
-        match &*inner {
+        match &**inner {
             HnswInner::Cosine(hnsw) => {
                 hnsw.file_dump(path, basename)
                     .map_err(std::io::Error::other)?;
@@ -333,11 +342,18 @@ impl HnswIndex {
         }
 
         // 1. Load HNSW graph
-        // We box and leak the loader to satisfy the 'static lifetime requirement of HnswIndex.
-        // HnswIo holds the mmap if used (we don't use it yet), but even without mmap,
-        // the load_hnsw signature enforces borrowing from the loader.
-        let io = Box::new(HnswIo::new(path, basename));
-        let io_ref: &'static mut HnswIo = Box::leak(io);
+        // Store HnswIo in a Box that we'll keep in the struct.
+        // We use unsafe to extend the lifetime to 'static because:
+        // - The HnswIo will live as long as the HnswIndex
+        // - We implement Drop to ensure proper cleanup order
+        let mut io_holder = Box::new(HnswIo::new(path, basename));
+
+        // SAFETY: We're extending the lifetime to 'static, but we guarantee that:
+        // 1. io_holder lives in the struct alongside the Hnsw
+        // 2. Drop impl ensures inner (which borrows from io_holder) is dropped first
+        // 3. io_holder is dropped after inner in the Drop impl
+        let io_ref: &'static mut HnswIo =
+            unsafe { &mut *std::ptr::from_mut::<HnswIo>(io_holder.as_mut()) };
 
         let inner = match metric {
             DistanceMetric::Cosine => {
@@ -370,11 +386,12 @@ impl HnswIndex {
         Ok(Self {
             dimension,
             metric,
-            inner: RwLock::new(inner),
+            inner: RwLock::new(ManuallyDrop::new(inner)),
             id_to_idx: RwLock::new(id_to_idx),
             idx_to_id: RwLock::new(idx_to_id),
             next_idx: RwLock::new(next_idx),
             vectors: RwLock::new(HashMap::new()), // Note: vectors not restored from disk
+            io_holder: Some(io_holder),           // Store to prevent memory leak
         })
     }
 
@@ -416,7 +433,7 @@ impl HnswIndex {
 
         let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
 
-        match &*inner {
+        match &**inner {
             HnswInner::Cosine(hnsw) => {
                 let neighbours = hnsw.search(query, k, ef_search);
                 for n in &neighbours {
@@ -616,7 +633,7 @@ impl HnswIndex {
 
         // Parallel insertion into HNSW graph using hnsw_rs native parallel insert
         let inner = self.inner.read();
-        match &*inner {
+        match &**inner {
             HnswInner::Cosine(hnsw) => {
                 hnsw.parallel_insert(&data_refs);
             }
@@ -641,7 +658,7 @@ impl HnswIndex {
     /// but it's good practice to call it anyway before benchmarks.
     pub fn set_searching_mode(&self) {
         let mut inner = self.inner.write();
-        match &mut *inner {
+        match &mut **inner {
             HnswInner::Cosine(hnsw) => {
                 hnsw.set_searching_mode(true);
             }
@@ -652,6 +669,26 @@ impl HnswIndex {
                 hnsw.set_searching_mode(true);
             }
         }
+    }
+}
+
+impl Drop for HnswIndex {
+    fn drop(&mut self) {
+        // SAFETY: We must drop inner BEFORE io_holder because inner (Hnsw)
+        // borrows from io_holder (HnswIo). ManuallyDrop lets us control this order.
+        //
+        // For indices created with new()/with_params(), io_holder is None,
+        // so this is just a normal drop of the Hnsw.
+        //
+        // For indices loaded from disk, we drop the Hnsw first, then io_holder
+        // is automatically dropped when Self is dropped (after this fn returns).
+        //
+        // SAFETY: ManuallyDrop::drop is unsafe because calling it twice is UB.
+        // We only call it once here, and Rust won't call it again after Drop::drop.
+        unsafe {
+            ManuallyDrop::drop(&mut *self.inner.write());
+        }
+        // io_holder will be dropped automatically after this function returns
     }
 }
 
@@ -694,7 +731,7 @@ impl VectorIndex for HnswIndex {
 
         // Insert into HNSW index
         let inner = self.inner.write();
-        match &*inner {
+        match &**inner {
             HnswInner::Cosine(hnsw) => {
                 hnsw.insert((vector, idx));
             }
