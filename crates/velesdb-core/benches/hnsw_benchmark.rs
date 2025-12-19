@@ -12,7 +12,7 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
         .collect()
 }
 
-/// Benchmark HNSW index insertion performance.
+/// Benchmark HNSW index insertion performance (sequential).
 fn bench_hnsw_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_insert");
 
@@ -21,7 +21,7 @@ fn bench_hnsw_insert(c: &mut Criterion) {
         group.throughput(Throughput::Elements(*count as u64));
 
         group.bench_with_input(
-            BenchmarkId::new("vectors", format!("{}x{}d", count, dim)),
+            BenchmarkId::new("sequential", format!("{}x{}d", count, dim)),
             count,
             |b, &count| {
                 b.iter(|| {
@@ -31,6 +31,36 @@ fn bench_hnsw_insert(c: &mut Criterion) {
                         index.insert(i as u64, &vector);
                     }
                     black_box(index.len())
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark HNSW index parallel insertion performance.
+fn bench_hnsw_insert_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hnsw_insert_parallel");
+
+    for count in [1000, 10_000].iter() {
+        let dim = 768;
+        group.throughput(Throughput::Elements(*count as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("parallel", format!("{}x{}d", count, dim)),
+            count,
+            |b, &count| {
+                // Pre-generate vectors outside the benchmark loop
+                let vectors: Vec<(u64, Vec<f32>)> = (0..count)
+                    .map(|i| (i as u64, generate_vector(dim, i as u64)))
+                    .collect();
+
+                b.iter(|| {
+                    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                    let inserted = index.insert_batch_parallel(vectors.clone());
+                    index.set_searching_mode();
+                    black_box(inserted)
                 });
             },
         );
@@ -163,6 +193,7 @@ fn bench_distance_metrics(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_hnsw_insert,
+    bench_hnsw_insert_parallel,
     bench_hnsw_search_latency,
     bench_hnsw_search_throughput,
     bench_collection_search,
