@@ -176,6 +176,8 @@ pub struct HnswIndex {
     idx_to_id: RwLock<HashMap<usize, u64>>,
     /// Next available internal index
     next_idx: RwLock<usize>,
+    /// Vector storage for SIMD re-ranking (idx -> vector)
+    vectors: RwLock<HashMap<usize, Vec<f32>>>,
 }
 
 /// Internal HNSW index wrapper to handle different distance metrics.
@@ -260,6 +262,7 @@ impl HnswIndex {
             id_to_idx: RwLock::new(HashMap::new()),
             idx_to_id: RwLock::new(HashMap::new()),
             next_idx: RwLock::new(0),
+            vectors: RwLock::new(HashMap::new()),
         }
     }
 
@@ -371,6 +374,7 @@ impl HnswIndex {
             id_to_idx: RwLock::new(id_to_idx),
             idx_to_id: RwLock::new(idx_to_id),
             next_idx: RwLock::new(next_idx),
+            vectors: RwLock::new(HashMap::new()), // Note: vectors not restored from disk
         })
     }
 
@@ -444,6 +448,93 @@ impl HnswIndex {
         results
     }
 
+    /// Searches with SIMD-based re-ranking for improved precision.
+    ///
+    /// This method first retrieves `rerank_k` candidates using the HNSW index,
+    /// then re-ranks them using our SIMD-optimized distance functions for
+    /// exact distance computation, returning the top `k` results.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector
+    /// * `k` - Number of nearest neighbors to return
+    /// * `rerank_k` - Number of candidates to retrieve before re-ranking (should be > k)
+    ///
+    /// # Returns
+    ///
+    /// Vector of (id, distance) tuples, sorted by similarity.
+    /// For Cosine/DotProduct: higher is better (descending order).
+    /// For Euclidean: lower is better (ascending order).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the query dimension doesn't match the index dimension.
+    #[must_use]
+    pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_k: usize) -> Vec<(u64, f32)> {
+        assert_eq!(
+            query.len(),
+            self.dimension,
+            "Query dimension mismatch: expected {}, got {}",
+            self.dimension,
+            query.len()
+        );
+
+        // 1. Get candidates from HNSW (fast approximate search)
+        let candidates = self.search_with_quality(query, rerank_k, SearchQuality::Accurate);
+
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        // 2. Re-rank using SIMD-optimized exact distance computation
+        let inner = self.inner.read();
+        let mut reranked: Vec<(u64, f32)> = candidates
+            .into_iter()
+            .map(|(id, _)| {
+                // Get the vector for this ID and compute exact distance
+                let exact_dist = self.compute_exact_distance_inner(&inner, id, query);
+                (id, exact_dist)
+            })
+            .collect();
+
+        // 3. Sort by distance (metric-dependent ordering)
+        match self.metric {
+            DistanceMetric::Cosine | DistanceMetric::DotProduct => {
+                // Higher is better - sort descending
+                reranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            DistanceMetric::Euclidean => {
+                // Lower is better - sort ascending
+                reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            }
+        }
+
+        // 4. Return top k
+        reranked.truncate(k);
+        reranked
+    }
+
+    /// Computes exact distance using SIMD-optimized functions.
+    fn compute_exact_distance_inner(&self, _inner: &HnswInner, id: u64, query: &[f32]) -> f32 {
+        let id_to_idx = self.id_to_idx.read();
+        let Some(&idx) = id_to_idx.get(&id) else {
+            return f32::MAX;
+        };
+
+        // Get vector from our storage
+        let vectors = self.vectors.read();
+        let Some(v) = vectors.get(&idx) else {
+            return f32::MAX;
+        };
+
+        // Use our SIMD-optimized distance functions based on metric
+        match self.metric {
+            DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
+            DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
+            DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
+        }
+    }
+
     /// Inserts multiple vectors in parallel using rayon.
     ///
     /// This method is optimized for bulk insertions and can significantly
@@ -510,6 +601,14 @@ impl HnswIndex {
         }
 
         let count = registered.len();
+
+        // Store vectors for SIMD re-ranking
+        {
+            let mut vectors = self.vectors.write();
+            for (v, idx) in &registered {
+                vectors.insert(*idx, v.clone());
+            }
+        }
 
         // Prepare data for hnsw_rs parallel_insert_data: &[(&Vec<T>, usize)]
         let data_refs: Vec<(&Vec<f32>, usize)> =
@@ -584,9 +683,14 @@ impl VectorIndex for HnswIndex {
         id_to_idx.insert(id, idx);
         idx_to_id.insert(idx, id);
 
+        // Store vector for SIMD re-ranking
+        let mut vectors = self.vectors.write();
+        vectors.insert(idx, vector.to_vec());
+
         drop(id_to_idx);
         drop(idx_to_id);
         drop(next_idx);
+        drop(vectors);
 
         // Insert into HNSW index
         let inner = self.inner.write();
@@ -1007,5 +1111,126 @@ mod tests {
 
         assert_eq!(params_768.max_connections, 24);
         assert_eq!(params_769.max_connections, 32);
+    }
+
+    // =========================================================================
+    // SIMD Re-ranking Tests (TDD - RED phase)
+    // =========================================================================
+
+    #[test]
+    fn test_search_with_rerank_returns_k_results() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        index.insert(1, &[1.0, 0.0, 0.0]);
+        index.insert(2, &[0.9, 0.1, 0.0]);
+        index.insert(3, &[0.8, 0.2, 0.0]);
+        index.insert(4, &[0.0, 1.0, 0.0]);
+        index.insert(5, &[0.0, 0.0, 1.0]);
+
+        // Act
+        let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 3, 5);
+
+        // Assert
+        assert_eq!(results.len(), 3, "Should return exactly k results");
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn test_search_with_rerank_improves_ranking() {
+        // Arrange - vectors with subtle differences
+        let index = HnswIndex::new(128, DistanceMetric::Cosine);
+
+        // Create vectors with known similarity ordering
+        let base: Vec<f32> = (0..128).map(|i| (i as f32 * 0.01).sin()).collect();
+
+        // Slightly modified versions
+        let mut v1 = base.clone();
+        v1[0] += 0.001; // Very similar
+
+        let mut v2 = base.clone();
+        v2[0] += 0.01; // Less similar
+
+        let mut v3 = base.clone();
+        v3[0] += 0.1; // Even less similar
+
+        index.insert(1, &v1);
+        index.insert(2, &v2);
+        index.insert(3, &v3);
+
+        // Act
+        let results = index.search_with_rerank(&base, 3, 3);
+
+        // Assert - ID 1 should be closest (highest similarity)
+        assert_eq!(results[0].0, 1, "Most similar vector should be first");
+    }
+
+    #[test]
+    fn test_search_with_rerank_handles_rerank_k_greater_than_index_size() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        index.insert(1, &[1.0, 0.0, 0.0]);
+        index.insert(2, &[0.0, 1.0, 0.0]);
+
+        // Act - rerank_k > index size
+        let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 2, 100);
+
+        // Assert
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    fn test_search_with_rerank_uses_simd_distances() {
+        // Arrange
+        let index = HnswIndex::new(768, DistanceMetric::Cosine);
+
+        // Insert 100 vectors
+        for i in 0..100_u64 {
+            let v: Vec<f32> = (0..768)
+                .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+                .collect();
+            index.insert(i, &v);
+        }
+
+        let query: Vec<f32> = (0..768).map(|j| (j as f32 * 0.01).sin()).collect();
+
+        // Act
+        let results = index.search_with_rerank(&query, 10, 50);
+
+        // Assert - results should have valid distances (SIMD computed)
+        assert_eq!(results.len(), 10);
+        for (_, dist) in &results {
+            assert!(*dist >= -1.0 && *dist <= 1.0, "Cosine should be in [-1, 1]");
+        }
+
+        // Results should be sorted by similarity (descending for cosine)
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].1 >= results[i].1,
+                "Results should be sorted by similarity descending"
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_with_rerank_euclidean_metric() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Euclidean);
+        index.insert(1, &[0.0, 0.0, 0.0]);
+        index.insert(2, &[1.0, 0.0, 0.0]);
+        index.insert(3, &[2.0, 0.0, 0.0]);
+
+        // Act
+        let results = index.search_with_rerank(&[0.0, 0.0, 0.0], 3, 3);
+
+        // Assert - ID 1 should be closest (smallest distance)
+        assert_eq!(results[0].0, 1, "Origin should be closest to itself");
+        // For euclidean, smaller is better - results sorted ascending
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].1 <= results[i].1,
+                "Euclidean results should be sorted ascending"
+            );
+        }
     }
 }
