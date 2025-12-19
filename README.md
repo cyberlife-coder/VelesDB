@@ -40,8 +40,10 @@ Just as Veles bridges the earthly and mystical realms, VelesDB bridges the gap b
 ## ✨ Features
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
-- ⚡ **Blazing Fast Search** — Optimized vector similarity algorithms
-- 💾 **Persistent Storage** — Your data survives restarts
+- ⚡ **Blazing Fast Search** — SIMD-optimized similarity (2.3x faster than baseline)
+- 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
+- 🔍 **Metadata Filtering** — Filter results by payload (eq, gt, lt, in, contains...)
+- 💾 **Persistent Storage** — HNSW index with WAL for durability
 - 🔌 **Simple REST API** — Easy integration with any language
 - 📦 **Single Binary** — No dependencies, easy deployment
 - 🐳 **Docker Ready** — Run anywhere in seconds
@@ -103,6 +105,42 @@ curl -X POST http://localhost:8080/collections/documents/search \
 | [Getting Started Guide](docs/getting-started.md) | Step-by-step tutorial |
 | [API Reference](docs/api-reference.md) | Complete REST API documentation |
 | [Configuration](docs/configuration.md) | Server configuration options |
+
+---
+
+## ⚡ Performance
+
+VelesDB is built for speed. All critical paths are SIMD-optimized.
+
+| Operation | Time (768d vectors) | Throughput |
+|-----------|---------------------|------------|
+| Cosine Similarity | 324 ns | **3M ops/sec** |
+| Euclidean Distance | 139 ns | **7M ops/sec** |
+| Dot Product | 125 ns | **8M ops/sec** |
+| Metadata Filter | 14 µs/1k items | **72M ops/sec** |
+
+### Memory Efficiency with SQ8
+
+| Configuration | RAM per 1M vectors (768d) |
+|---------------|---------------------------|
+| Full Precision (f32) | **3 GB** |
+| SQ8 Quantized (u8) | **0.75 GB** (4x reduction) |
+
+---
+
+## 🔍 Metadata Filtering
+
+Filter search results by payload attributes:
+
+```rust
+// Filter: category = "tech" AND price > 100
+let filter = Filter::new(Condition::and(vec![
+    Condition::eq("category", "tech"),
+    Condition::gt("price", 100),
+]));
+```
+
+Supported operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `is_null`, `and`, `or`, `not`
 
 ---
 
