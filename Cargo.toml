@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/velesdb-core",
     "crates/velesdb-server",
+    "crates/velesdb-python",
 ]
 
 [workspace.package]

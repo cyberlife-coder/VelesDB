@@ -1,0 +1,50 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "velesdb"
+version = "0.1.0"
+description = "A high-performance vector database for AI applications"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "VelesDB Team", email = "contact@velesdb.io" }
+]
+keywords = ["vector-database", "embeddings", "similarity-search", "ai", "machine-learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+numpy = ["numpy>=1.20"]
+dev = [
+    "pytest>=7.0",
+    "numpy>=1.20",
+    "maturin>=1.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/cyberlife-coder/VelesDB"
+Documentation = "https://github.com/cyberlife-coder/VelesDB#readme"
+Repository = "https://github.com/cyberlife-coder/VelesDB"
+Issues = "https://github.com/cyberlife-coder/VelesDB/issues"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "velesdb"
