@@ -28,12 +28,13 @@ impl SimpleRng {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn next_f32(&mut self) -> f32 {
         // LCG parameters from Numerical Recipes
         self.state = self
             .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         // Convert to [0, 1) range
         (self.state >> 33) as f32 / (1u64 << 31) as f32
     }
@@ -47,7 +48,9 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     // Normalize for cosine similarity
     let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
-        vec.iter_mut().for_each(|x| *x /= norm);
+        for x in &mut vec {
+            *x /= norm;
+        }
     }
     vec
 }
@@ -106,7 +109,10 @@ fn calculate_recall(hnsw_results: &[(u64, f32)], ground_truth: &[u64]) -> f64 {
     let truth_ids: HashSet<u64> = ground_truth.iter().copied().collect();
 
     let intersection = hnsw_ids.intersection(&truth_ids).count();
-    intersection as f64 / ground_truth.len() as f64
+    #[allow(clippy::cast_precision_loss)]
+    {
+        intersection as f64 / ground_truth.len() as f64
+    }
 }
 
 /// WIS-1 Criterion 1: Performance < 10ms for 100k vectors search
@@ -119,16 +125,15 @@ fn bench_100k_search_latency(c: &mut Criterion) {
     let num_queries = 256; // Pool of queries for stable measurements
 
     println!(
-        "\n=== bench_100k_search_latency ===\n📊 Building index with {} vectors (dim={})...",
-        num_vectors, dim
+        "\n=== bench_100k_search_latency ===\n📊 Building index with {num_vectors} vectors (dim={dim})..."
     );
 
     let index = HnswIndex::new(dim, DistanceMetric::Cosine);
 
     // Insert 100k vectors (unique IDs only)
     for i in 0..num_vectors {
-        let vector = generate_vector(dim, i as u64);
-        index.insert(i as u64, &vector);
+        let vector = generate_vector(dim, i);
+        index.insert(i, &vector);
     }
 
     // Set searching mode after bulk insertion (required by hnsw_rs)
@@ -138,13 +143,13 @@ fn bench_100k_search_latency(c: &mut Criterion) {
 
     // Pre-generate query pool for stable measurements
     let queries: Vec<Vec<f32>> = (0..num_queries)
-        .map(|i| generate_vector(dim, (num_vectors + i) as u64))
+        .map(|i| generate_vector(dim, num_vectors + i))
         .collect();
 
-    for k in [10, 50].iter() {
+    for k in &[10, 50] {
         let mut query_idx = 0usize;
         group.bench_with_input(
-            BenchmarkId::new("search_100k", format!("top_{}", k)),
+            BenchmarkId::new("search_100k", format!("top_{k}")),
             k,
             |b, &k| {
                 b.iter(|| {
@@ -172,18 +177,19 @@ fn bench_recall_measurement(c: &mut Criterion) {
     let num_queries = 100;
 
     println!(
-        "\n=== bench_recall_measurement ===\n📊 Measuring recall with {} vectors...",
-        num_vectors
+        "\n=== bench_recall_measurement ===\n📊 Measuring recall with {num_vectors} vectors..."
     );
 
     // Build index
     let index = HnswIndex::new(dim, DistanceMetric::Cosine);
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
+    #[allow(clippy::cast_sign_loss)]
     for i in 0..num_vectors {
-        let vector = generate_vector(dim, i as u64);
-        index.insert(i as u64, &vector);
-        vectors.push((i as u64, vector));
+        let id = i as u64;
+        let vector = generate_vector(dim, id);
+        index.insert(id, &vector);
+        vectors.push((id, vector));
     }
 
     // Set searching mode after bulk insertion
@@ -192,6 +198,7 @@ fn bench_recall_measurement(c: &mut Criterion) {
     // Generate queries and measure recall
     let mut total_recall = 0.0;
 
+    #[allow(clippy::cast_sign_loss)]
     for q in 0..num_queries {
         let query = generate_vector(dim, (num_vectors + q) as u64);
 
@@ -206,8 +213,9 @@ fn bench_recall_measurement(c: &mut Criterion) {
         total_recall += recall;
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let avg_recall = total_recall / num_queries as f64;
-    println!("\n🎯 Average Recall@{}: {:.2}%", k, avg_recall * 100.0);
+    println!("\n🎯 Average Recall@{k}: {:.2}%", avg_recall * 100.0);
     println!(
         "   {} WIS-1 Criterion: Recall > 95%\n",
         if avg_recall >= 0.95 { "✅" } else { "❌" }
@@ -226,7 +234,7 @@ fn bench_recall_measurement(c: &mut Criterion) {
 }
 
 /// Combined validation for Cosine and Euclidean metrics.
-/// Note: DotProduct excluded due to hnsw_rs constraint (requires non-negative dot products)
+/// Note: `DotProduct` excluded due to `hnsw_rs` constraint (requires non-negative dot products)
 fn bench_all_metrics(c: &mut Criterion) {
     let mut group = c.benchmark_group("wis1_all_metrics");
     group.sample_size(20);
@@ -237,12 +245,14 @@ fn bench_all_metrics(c: &mut Criterion) {
     println!("\n=== bench_all_metrics ===");
 
     // DotProduct excluded - hnsw_rs DistDot requires non-negative dot products
-    for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean].iter() {
+    for metric in &[DistanceMetric::Cosine, DistanceMetric::Euclidean] {
         let index = HnswIndex::new(dim, *metric);
 
+        #[allow(clippy::cast_sign_loss)]
         for i in 0..num_vectors {
-            let vector = generate_vector(dim, i as u64);
-            index.insert(i as u64, &vector);
+            let id = i as u64;
+            let vector = generate_vector(dim, id);
+            index.insert(id, &vector);
         }
 
         // Set searching mode after bulk insertion
@@ -251,7 +261,7 @@ fn bench_all_metrics(c: &mut Criterion) {
         let query = generate_vector(dim, 999_999);
 
         group.bench_with_input(
-            BenchmarkId::new("search_50k", format!("{:?}", metric)),
+            BenchmarkId::new("search_50k", format!("{metric:?}")),
             metric,
             |b, _| {
                 b.iter(|| {
@@ -277,17 +287,18 @@ fn bench_recall_100k(c: &mut Criterion) {
     let num_queries = 20; // Fewer queries due to slow brute-force on 100k
 
     println!(
-        "\n=== bench_recall_100k ===\n📊 Measuring recall on {} vectors (may take a while)...",
-        num_vectors
+        "\n=== bench_recall_100k ===\n📊 Measuring recall on {num_vectors} vectors (may take a while)..."
     );
 
     let index = HnswIndex::new(dim, DistanceMetric::Cosine);
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
+    #[allow(clippy::cast_sign_loss)]
     for i in 0..num_vectors {
-        let vector = generate_vector(dim, i as u64);
-        index.insert(i as u64, &vector);
-        vectors.push((i as u64, vector));
+        let id = i as u64;
+        let vector = generate_vector(dim, id);
+        index.insert(id, &vector);
+        vectors.push((id, vector));
     }
 
     index.set_searching_mode();
@@ -295,6 +306,7 @@ fn bench_recall_100k(c: &mut Criterion) {
 
     // Measure recall
     let mut total_recall = 0.0;
+    #[allow(clippy::cast_sign_loss)]
     for q in 0..num_queries {
         let query = generate_vector(dim, (num_vectors + q) as u64);
         let hnsw_results = index.search(&query, k);
@@ -302,10 +314,10 @@ fn bench_recall_100k(c: &mut Criterion) {
         total_recall += calculate_recall(&hnsw_results, &ground_truth);
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let avg_recall = total_recall / num_queries as f64;
     println!(
-        "\n🎯 Recall@{} on 100k vectors: {:.2}%",
-        k,
+        "\n🎯 Recall@{k} on 100k vectors: {:.2}%",
         avg_recall * 100.0
     );
     println!(
@@ -315,7 +327,7 @@ fn bench_recall_100k(c: &mut Criterion) {
 
     group.bench_function("search_100k_recall_test", |b| {
         let query = generate_vector(dim, 999_999);
-        b.iter(|| black_box(index.search(&query, k)))
+        b.iter(|| black_box(index.search(&query, k)));
     });
 
     group.finish();
@@ -335,9 +347,11 @@ fn bench_dimensions(c: &mut Criterion) {
     for dim in [128, 256, 512, 768] {
         let index = HnswIndex::new(dim, DistanceMetric::Cosine);
 
+        #[allow(clippy::cast_sign_loss)]
         for i in 0..num_vectors {
-            let vector = generate_vector(dim, i as u64);
-            index.insert(i as u64, &vector);
+            let id = i as u64;
+            let vector = generate_vector(dim, id);
+            index.insert(id, &vector);
         }
 
         index.set_searching_mode();
@@ -345,7 +359,7 @@ fn bench_dimensions(c: &mut Criterion) {
         let query = generate_vector(dim, 999_999);
 
         group.bench_with_input(
-            BenchmarkId::new("search_10k", format!("dim_{}", dim)),
+            BenchmarkId::new("search_10k", format!("dim_{dim}")),
             &dim,
             |b, _| b.iter(|| black_box(index.search(&query, k))),
         );

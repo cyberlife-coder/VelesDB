@@ -8,6 +8,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use velesdb_core::simd;
 
 fn generate_random_vector(dim: usize) -> Vec<f32> {
+    #[allow(clippy::cast_precision_loss)]
     (0..dim).map(|i| (i as f32 * 0.1).sin()).collect()
 }
 
