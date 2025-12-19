@@ -21,11 +21,12 @@ impl SimpleRng {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn next_f32(&mut self) -> f32 {
         self.state = self
             .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (self.state >> 33) as f32 / (1u64 << 31) as f32
     }
 }
@@ -37,7 +38,9 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
 
     let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
-        vec.iter_mut().for_each(|x| *x /= norm);
+        for x in &mut vec {
+            *x /= norm;
+        }
     }
     vec
 }
@@ -61,7 +64,10 @@ fn calculate_recall(hnsw_results: &[(u64, f32)], ground_truth: &[u64]) -> f64 {
     let hnsw_ids: HashSet<u64> = hnsw_results.iter().map(|(id, _)| *id).collect();
     let truth_ids: HashSet<u64> = ground_truth.iter().copied().collect();
     let intersection = hnsw_ids.intersection(&truth_ids).count();
-    intersection as f64 / ground_truth.len() as f64
+    #[allow(clippy::cast_precision_loss)]
+    {
+        intersection as f64 / ground_truth.len() as f64
+    }
 }
 
 /// Benchmark ef_search parameter sweep.
@@ -81,16 +87,19 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
 
     println!("\n📊 Building index: {} vectors, dim={}", num_vectors, dim);
 
+    #[allow(clippy::cast_sign_loss)]
     for i in 0..num_vectors {
-        let vector = generate_vector(dim, i as u64);
-        index.insert(i as u64, &vector);
-        vectors.push((i as u64, vector));
+        let id = i as u64;
+        let vector = generate_vector(dim, id);
+        index.insert(id, &vector);
+        vectors.push((id, vector));
     }
 
     // Set searching mode after bulk insertion
     index.set_searching_mode();
 
     // Generate queries and ground truth
+    #[allow(clippy::cast_sign_loss)]
     let queries: Vec<Vec<f32>> = (0..num_queries)
         .map(|i| generate_vector(dim, (num_vectors + i) as u64))
         .collect();
@@ -111,8 +120,9 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
         let results = index.search(query, k);
         total_recall += calculate_recall(&results, truth);
     }
+    #[allow(clippy::cast_precision_loss)]
     let avg_recall = total_recall / num_queries as f64;
-    println!("   Recall@{}: {:.2}%", k, avg_recall * 100.0);
+    println!("   Recall@{k}: {:.2}%", avg_recall * 100.0);
 
     // Benchmark latency
     group.bench_function(BenchmarkId::new("current_ef200", "latency"), |b| {
@@ -151,15 +161,18 @@ fn bench_recall_at_k(c: &mut Criterion) {
     let index = HnswIndex::new(dim, DistanceMetric::Cosine);
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
+    #[allow(clippy::cast_sign_loss)]
     for i in 0..num_vectors {
-        let vector = generate_vector(dim, i as u64);
-        index.insert(i as u64, &vector);
-        vectors.push((i as u64, vector));
+        let id = i as u64;
+        let vector = generate_vector(dim, id);
+        index.insert(id, &vector);
+        vectors.push((id, vector));
     }
 
     // Set searching mode after bulk insertion
     index.set_searching_mode();
 
+    #[allow(clippy::cast_sign_loss)]
     let queries: Vec<Vec<f32>> = (0..num_queries)
         .map(|i| generate_vector(dim, (num_vectors + i) as u64))
         .collect();
@@ -177,10 +190,11 @@ fn bench_recall_at_k(c: &mut Criterion) {
             let results = index.search(query, k);
             total_recall += calculate_recall(&results, truth);
         }
+        #[allow(clippy::cast_precision_loss)]
         let avg_recall = total_recall / num_queries as f64;
-        println!("   Recall@{}: {:.2}%", k, avg_recall * 100.0);
+        println!("   Recall@{k}: {:.2}%", avg_recall * 100.0);
 
-        group.bench_function(BenchmarkId::new("search", format!("top_{}", k)), |b| {
+        group.bench_function(BenchmarkId::new("search", format!("top_{k}")), |b| {
             b.iter(|| {
                 let results = index.search(&queries[0], k);
                 criterion::black_box(results)
@@ -204,9 +218,11 @@ fn bench_scalability(c: &mut Criterion) {
     for num_vectors in [10_000, 50_000, 100_000] {
         let index = HnswIndex::new(dim, DistanceMetric::Cosine);
 
+        #[allow(clippy::cast_sign_loss)]
         for i in 0..num_vectors {
-            let vector = generate_vector(dim, i as u64);
-            index.insert(i as u64, &vector);
+            let id = i as u64;
+            let vector = generate_vector(dim, id);
+            index.insert(id, &vector);
         }
 
         // Set searching mode after bulk insertion

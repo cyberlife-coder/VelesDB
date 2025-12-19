@@ -39,10 +39,11 @@ const QUERIES_PER_THREAD: usize = 100;
 
 /// Generates a deterministic pseudo-random vector for benchmarking.
 /// Uses a simple hash-based approach for reproducibility.
+#[allow(clippy::cast_precision_loss)]
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     (0..dim)
         .map(|i| {
-            let x = seed.wrapping_mul(2654435761) ^ (i as u64).wrapping_mul(2246822519);
+            let x = seed.wrapping_mul(2_654_435_761) ^ (i as u64).wrapping_mul(2_246_822_519);
             let normalized = (x as f32) / (u64::MAX as f32);
             normalized * 2.0 - 1.0 // Range [-1, 1]
         })
@@ -53,7 +54,9 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
 fn normalize(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
-        v.iter_mut().for_each(|x| *x /= norm);
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
     }
 }
 
@@ -118,8 +121,10 @@ fn get_memory_usage() -> usize {
     use std::fs;
     fs::read_to_string("/proc/self/statm")
         .ok()
-        .and_then(|s| s.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<usize>().ok())
+        .and_then(|s| {
+            let parts: Vec<&str> = s.split_whitespace().collect();
+            parts.get(1).and_then(|p| p.parse::<usize>().ok())
+        })
         .map(|pages| pages * 4096) // Page size typically 4KB
         .unwrap_or(0)
 }
