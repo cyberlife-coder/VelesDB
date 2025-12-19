@@ -12,6 +12,10 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lib]
+name = "velesdb_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "velesdb-server"
 path = "src/main.rs"
@@ -34,3 +38,5 @@ config = "0.14"
 [dev-dependencies]
 reqwest = { version = "0.11", features = ["json"] }
 tokio-test = "0.4"
+tempfile = { workspace = true }
+tower = { workspace = true }
