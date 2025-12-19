@@ -1,0 +1,26 @@
+"""LangChain integration for VelesDB vector database.
+
+This package provides a LangChain VectorStore implementation for VelesDB,
+enabling seamless integration with LangChain's retrieval and RAG pipelines.
+
+Example:
+    >>> from langchain_velesdb import VelesDBVectorStore
+    >>> from langchain_openai import OpenAIEmbeddings
+    >>>
+    >>> vectorstore = VelesDBVectorStore(
+    ...     path="./my_data",
+    ...     collection_name="documents",
+    ...     embedding=OpenAIEmbeddings()
+    ... )
+    >>>
+    >>> # Add documents
+    >>> vectorstore.add_texts(["Hello world", "VelesDB is fast"])
+    >>>
+    >>> # Search
+    >>> results = vectorstore.similarity_search("greeting", k=1)
+"""
+
+from langchain_velesdb.vectorstore import VelesDBVectorStore
+
+__all__ = ["VelesDBVectorStore"]
+__version__ = "0.1.0"
