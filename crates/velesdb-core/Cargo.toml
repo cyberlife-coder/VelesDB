@@ -1,6 +1,7 @@
 [package]
 name = "velesdb-core"
 description = "High-performance vector database engine written in Rust"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

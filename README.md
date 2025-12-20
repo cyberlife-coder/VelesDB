@@ -10,9 +10,10 @@
 </p>
 
 <p align="center">
+  <a href="https://crates.io/crates/velesdb-core"><img src="https://img.shields.io/crates/v/velesdb-core.svg?style=flat-square" alt="Crates.io"></a>
+  <a href="https://docs.rs/velesdb-core"><img src="https://img.shields.io/docsrs/velesdb-core?style=flat-square" alt="docs.rs"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB/actions"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&style=flat-square" alt="Build Status"></a>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases"><img src="https://img.shields.io/github/v/release/cyberlife-coder/VelesDB?style=flat-square&color=green" alt="Release"></a>
-  <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square" alt="License"></a>
+  <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/velesdb-core?style=flat-square" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="GitHub Stars"></a>
 </p>
 
