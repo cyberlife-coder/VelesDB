@@ -127,11 +127,13 @@ jobs:
     needs: [lint, test]
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: [stable, beta]
         exclude:
           - os: windows-latest
             rust: beta
+        # Note: macOS excluded - anndists crate uses AVX2 (x86 only)
+        # TODO: Re-enable when upstream fixes ARM support
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
