@@ -146,8 +146,110 @@ Erreurs communes :
 - **"Hardened Runtime"** : Ajouter `--options runtime` à codesign
 - **"Unsigned code"** : Toutes les libs dynamiques doivent être signées
 
+## 6. Gestion des certificats
+
+### Durée de vie et renouvellement
+
+| Type | Durée | Renouvellement |
+|------|-------|----------------|
+| OV Windows | 1-3 ans | 30 jours avant expiration |
+| EV Windows | 1-3 ans | Nécessite nouveau hardware token |
+| Apple Developer ID | 5 ans | Automatique si compte actif |
+
+### Checklist de renouvellement
+
+- [ ] Recevoir notification d'expiration (60 jours avant)
+- [ ] Commander nouveau certificat
+- [ ] Mettre à jour le secret `*_CERT_BASE64` dans GitHub
+- [ ] Tester avec un dry run
+- [ ] Archiver l'ancien certificat (ne pas supprimer immédiatement)
+
+### Stockage sécurisé des certificats
+
+**⚠️ Ne JAMAIS :**
+- Commiter les certificats dans le repo
+- Partager les mots de passe par email/Slack
+- Utiliser le même certificat pour dev et prod
+
+**✅ Bonnes pratiques :**
+- Stocker les originaux dans un password manager (1Password, Bitwarden)
+- Utiliser des secrets GitHub avec accès restreint
+- Documenter qui a accès aux certificats
+- Rotation des mots de passe lors du départ d'un employé
+
+### Révocation d'urgence
+
+Si un certificat est compromis :
+
+1. **Windows** : Contacter le fournisseur (DigiCert, Sectigo) pour révocation
+2. **macOS** : Dans le portail Apple Developer, révoquer le certificat
+3. **GitHub** : Supprimer immédiatement les secrets compromis
+4. **Communication** : Informer les utilisateurs de re-télécharger
+
+---
+
+## 7. Linux - Analyse
+
+### Signature de code sur Linux
+
+Linux n'a **pas de système de signature centralisé** comme Windows/macOS. Les options sont :
+
+| Méthode | Usage | Recommandé pour VelesDB |
+|---------|-------|-------------------------|
+| **GPG signing** | Signer les binaires/tarballs | ✅ Oui |
+| **Package signing** | .deb (apt), .rpm (yum) | ✅ Si distribution packages |
+| **AppImage signing** | Applications desktop | ❌ Non (VelesDB = serveur) |
+
+### Recommandation pour VelesDB
+
+**→ GPG signing des releases** : Simple, gratuit, standard dans l'écosystème Linux.
+
+Les utilisateurs Linux :
+- Sont habitués à vérifier les signatures GPG
+- Font confiance aux checksums SHA256
+- Utilisent souvent des package managers (qui ont leur propre signing)
+
+### Implémentation GPG (optionnel)
+
+Si tu veux ajouter GPG signing :
+
+```yaml
+# Dans release.yml
+- name: Sign with GPG
+  run: |
+    echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
+    gpg --detach-sign --armor velesdb-linux-x86_64.tar.gz
+```
+
+Secrets requis :
+- `GPG_PRIVATE_KEY` : Clé GPG privée (armored)
+- `GPG_PASSPHRASE` : Passphrase de la clé
+
+---
+
+## 8. Priorité de signature recommandée
+
+| Priorité | Plateforme | Raison |
+|----------|------------|--------|
+| 🥇 **1** | Windows | SmartScreen bloque les .exe non signés |
+| 🥈 **2** | macOS | Gatekeeper bloque les apps non notarisées |
+| 🥉 **3** | Linux | GPG optionnel, checksums suffisants |
+
+### Coût total estimé (année 1)
+
+| Élément | Coût |
+|---------|------|
+| Certificat OV Windows | ~$300 |
+| Apple Developer Program | $99 |
+| GPG | Gratuit |
+| **Total** | **~$400/an** |
+
+---
+
 ## Références
 
 - [Microsoft SignTool](https://docs.microsoft.com/en-us/windows/win32/seccrypto/signtool)
 - [Apple Code Signing](https://developer.apple.com/documentation/security/code_signing_services)
 - [Apple Notarization](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)
+- [GPG Signing](https://www.gnupg.org/gph/en/manual/x135.html)
+- [Linux Package Signing](https://wiki.debian.org/SecureApt)
