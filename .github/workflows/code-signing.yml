@@ -1,0 +1,326 @@
+# =============================================================================
+# VelesDB Core - Code Signing Workflow
+# =============================================================================
+# Ce workflow signe les exécutables Windows et macOS pour les releases.
+# 
+# ⚠️  DÉSACTIVÉ PAR DÉFAUT - Nécessite configuration des certificats
+#
+# Pour activer:
+# 1. Obtenir un certificat OV (Organization Validation) 
+# 2. Configurer les secrets GitHub (voir section SECRETS ci-dessous)
+# 3. Changer CODE_SIGNING_ENABLED à 'true'
+# =============================================================================
+#
+# SECRETS REQUIS:
+# ---------------
+# Windows (SignTool):
+#   - WINDOWS_SIGNING_CERT_BASE64: Certificat .pfx encodé en base64
+#   - WINDOWS_SIGNING_CERT_PASSWORD: Mot de passe du certificat
+#   - WINDOWS_SIGNING_TIMESTAMP_URL: URL du serveur timestamp (ex: http://timestamp.digicert.com)
+#
+# macOS (codesign + notarize):
+#   - APPLE_DEVELOPER_ID_APPLICATION: "Developer ID Application: Your Company (TEAMID)"
+#   - APPLE_CERTIFICATE_BASE64: Certificat .p12 encodé en base64
+#   - APPLE_CERTIFICATE_PASSWORD: Mot de passe du certificat
+#   - APPLE_ID: Email du compte Apple Developer
+#   - APPLE_ID_PASSWORD: App-specific password (pas le mdp du compte!)
+#   - APPLE_TEAM_ID: Team ID Apple Developer
+#
+# =============================================================================
+
+name: Code Signing
+
+# ⚠️ WORKFLOW DÉSACTIVÉ - Décommenter pour activer
+# on:
+#   workflow_call:
+#     inputs:
+#       version:
+#         required: true
+#         type: string
+#     secrets:
+#       WINDOWS_SIGNING_CERT_BASE64:
+#         required: false
+#       WINDOWS_SIGNING_CERT_PASSWORD:
+#         required: false
+#       APPLE_CERTIFICATE_BASE64:
+#         required: false
+#       APPLE_CERTIFICATE_PASSWORD:
+#         required: false
+#       APPLE_ID:
+#         required: false
+#       APPLE_ID_PASSWORD:
+#         required: false
+#       APPLE_TEAM_ID:
+#         required: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no actual signing)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  CARGO_TERM_COLOR: always
+  # ⚠️ Changer à 'true' quand les certificats sont configurés
+  CODE_SIGNING_ENABLED: 'false'
+
+jobs:
+  # ===========================================================================
+  # Vérification de la configuration
+  # ===========================================================================
+  check-config:
+    name: Check Signing Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      windows_ready: ${{ steps.check.outputs.windows_ready }}
+      macos_ready: ${{ steps.check.outputs.macos_ready }}
+    steps:
+      - name: Check secrets availability
+        id: check
+        run: |
+          # Vérifier Windows
+          if [ -n "${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}" ] && \
+             [ -n "${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}" ]; then
+            echo "windows_ready=true" >> $GITHUB_OUTPUT
+            echo "✅ Windows signing secrets configured"
+          else
+            echo "windows_ready=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Windows signing secrets NOT configured"
+          fi
+          
+          # Vérifier macOS
+          if [ -n "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" ] && \
+             [ -n "${{ secrets.APPLE_ID }}" ] && \
+             [ -n "${{ secrets.APPLE_TEAM_ID }}" ]; then
+            echo "macos_ready=true" >> $GITHUB_OUTPUT
+            echo "✅ macOS signing secrets configured"
+          else
+            echo "macos_ready=false" >> $GITHUB_OUTPUT
+            echo "⚠️ macOS signing secrets NOT configured"
+          fi
+
+      - name: Check if signing is enabled
+        run: |
+          if [ "${{ env.CODE_SIGNING_ENABLED }}" != "true" ]; then
+            echo "⚠️ Code signing is DISABLED"
+            echo "Set CODE_SIGNING_ENABLED=true to enable"
+          fi
+
+  # ===========================================================================
+  # Signature Windows (SignTool)
+  # ===========================================================================
+  sign-windows:
+    name: Sign Windows Executables
+    runs-on: windows-latest
+    needs: check-config
+    if: |
+      needs.check-config.outputs.windows_ready == 'true' && 
+      github.event.inputs.dry_run != 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: velesdb-windows-x86_64
+          path: artifacts/
+
+      - name: Extract artifacts
+        run: |
+          Expand-Archive -Path artifacts/*.zip -DestinationPath unsigned/
+
+      - name: Import code signing certificate
+        run: |
+          # Décoder et importer le certificat
+          $certBytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}")
+          $certPath = "signing-cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          
+          # Importer dans le store
+          $password = ConvertTo-SecureString -String "${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}" -AsPlainText -Force
+          Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          
+          # Nettoyer
+          Remove-Item $certPath
+
+      - name: Sign executables
+        run: |
+          $timestampUrl = "${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}"
+          if (-not $timestampUrl) {
+            $timestampUrl = "http://timestamp.digicert.com"
+          }
+          
+          Get-ChildItem -Path unsigned -Filter *.exe -Recurse | ForEach-Object {
+            Write-Host "Signing: $($_.FullName)"
+            & signtool sign /tr $timestampUrl /td sha256 /fd sha256 /a $_.FullName
+            
+            # Vérifier la signature
+            & signtool verify /pa $_.FullName
+          }
+
+      - name: Repackage signed artifacts
+        run: |
+          mkdir signed
+          Copy-Item unsigned/*.exe signed/
+          Copy-Item unsigned/*.dll signed/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path signed/* -DestinationPath velesdb-windows-x86_64-signed.zip
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: velesdb-windows-x86_64-signed
+          path: velesdb-windows-x86_64-signed.zip
+
+  # ===========================================================================
+  # Signature macOS (codesign + notarization)
+  # ===========================================================================
+  sign-macos:
+    name: Sign macOS Executables
+    runs-on: macos-latest
+    needs: check-config
+    if: |
+      needs.check-config.outputs.macos_ready == 'true' && 
+      github.event.inputs.dry_run != 'true'
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: velesdb-macos-${{ matrix.arch }}
+          path: artifacts/
+
+      - name: Extract artifacts
+        run: |
+          mkdir -p unsigned
+          tar -xzf artifacts/*.tar.gz -C unsigned/
+
+      - name: Import code signing certificate
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Créer un keychain temporaire
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          # Décoder et importer le certificat
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          security import certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -k $KEYCHAIN_PATH -T /usr/bin/codesign
+          
+          # Autoriser codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          # Ajouter au search path
+          security list-keychains -d user -s $KEYCHAIN_PATH
+          
+          # Nettoyer
+          rm certificate.p12
+          
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+
+      - name: Sign executables
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+        run: |
+          find unsigned -type f -perm +111 | while read file; do
+            echo "Signing: $file"
+            codesign --force --options runtime \
+              --sign "$APPLE_DEVELOPER_ID" \
+              --timestamp \
+              "$file"
+            
+            # Vérifier la signature
+            codesign --verify --verbose "$file"
+          done
+
+      - name: Create DMG for notarization
+        run: |
+          mkdir -p signed
+          cp unsigned/* signed/
+          hdiutil create -volname "VelesDB" -srcfolder signed \
+            -ov -format UDZO velesdb-macos-${{ matrix.arch }}.dmg
+
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Soumettre pour notarization
+          xcrun notarytool submit velesdb-macos-${{ matrix.arch }}.dmg \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          
+          # Stapler le ticket
+          xcrun stapler staple velesdb-macos-${{ matrix.arch }}.dmg
+
+      - name: Repackage signed artifacts
+        run: |
+          # Créer aussi un tar.gz signé
+          tar -czvf velesdb-macos-${{ matrix.arch }}-signed.tar.gz -C signed .
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: velesdb-macos-${{ matrix.arch }}-signed
+          path: |
+            velesdb-macos-${{ matrix.arch }}-signed.tar.gz
+            velesdb-macos-${{ matrix.arch }}.dmg
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $KEYCHAIN_PATH 2>/dev/null || true
+
+  # ===========================================================================
+  # Résumé
+  # ===========================================================================
+  summary:
+    name: Signing Summary
+    runs-on: ubuntu-latest
+    needs: [check-config, sign-windows, sign-macos]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🔏 Code Signing Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.sign-windows.result }}" == "success" ]; then
+            echo "| Windows | ✅ Signed |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.check-config.outputs.windows_ready }}" != "true" ]; then
+            echo "| Windows | ⚠️ Not configured |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Windows | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.sign-macos.result }}" == "success" ]; then
+            echo "| macOS | ✅ Signed + Notarized |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.check-config.outputs.macos_ready }}" != "true" ]; then
+            echo "| macOS | ⚠️ Not configured |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| macOS | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
