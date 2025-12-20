@@ -76,30 +76,84 @@ Aller dans : **Settings > Secrets and variables > Actions**
 4. Nommer le password (ex: "GitHub Actions")
 5. Copier et stocker dans le secret `APPLE_ID_PASSWORD`
 
-## 3. Activer le workflow
+## 3. État actuel
 
-Une fois les secrets configurés :
+> ⚠️ **SIGNATURES DÉSACTIVÉES** - Les workflows sont prêts mais non actifs.
 
-1. Ouvrir `.github/workflows/code-signing.yml`
-2. Changer `CODE_SIGNING_ENABLED: 'false'` → `CODE_SIGNING_ENABLED: 'true'`
-3. Décommenter la section `on: workflow_call:` pour l'intégration avec release.yml
+| Fichier | État | Action requise |
+|---------|------|----------------|
+| `code-signing.yml` | ✅ Prêt | Configurer secrets |
+| `release.yml` | ✅ Intégré | Changer `if: false` → `if: true` |
 
-## 4. Intégrer au workflow de release
+---
 
-Modifier `.github/workflows/release.yml` pour appeler le workflow de signature après le build :
+## 4. Activer les signatures
+
+### Étape 1 : Configurer les secrets GitHub
+
+Aller dans : **Repository → Settings → Secrets and variables → Actions**
+
+#### Windows (OV Certificate ~$300/an)
+
+| Secret | Description | Exemple |
+|--------|-------------|---------|
+| `WINDOWS_SIGNING_CERT_BASE64` | Certificat .pfx encodé base64 | `MIIJ...` |
+| `WINDOWS_SIGNING_CERT_PASSWORD` | Mot de passe du .pfx | `MySecretPass123` |
+| `WINDOWS_SIGNING_TIMESTAMP_URL` | (Optionnel) URL timestamp | `http://timestamp.digicert.com` |
+
+#### macOS (Apple Developer $99/an)
+
+| Secret | Description | Exemple |
+|--------|-------------|---------|
+| `APPLE_DEVELOPER_ID_APPLICATION` | Identity complète | `Developer ID Application: VelesDB Inc (ABCD1234)` |
+| `APPLE_CERTIFICATE_BASE64` | Certificat .p12 encodé base64 | `MIIKrA...` |
+| `APPLE_CERTIFICATE_PASSWORD` | Mot de passe du .p12 | `MyP12Pass` |
+| `APPLE_ID` | Email Apple Developer | `developer@velesdb.com` |
+| `APPLE_ID_PASSWORD` | **App-specific password** | `xxxx-xxxx-xxxx-xxxx` |
+| `APPLE_TEAM_ID` | Team ID (10 caractères) | `ABCD1234EF` |
+
+### Étape 2 : Activer dans release.yml
 
 ```yaml
-  # Après build-release
-  sign-release:
-    name: Sign Release
-    needs: [validate, build-release]
-    uses: ./.github/workflows/code-signing.yml
-    with:
-      version: ${{ needs.validate.outputs.version }}
-    secrets: inherit
+# .github/workflows/release.yml - Ligne ~171
+sign-release:
+  name: Sign Release Binaries
+  needs: [validate, build-release]
+  if: true  # ← Changer false → true
+  uses: ./.github/workflows/code-signing.yml
 ```
 
-## 5. Vérifier les signatures
+### Étape 3 : Mettre à jour les dépendances
+
+```yaml
+# .github/workflows/release.yml - Ligne ~183
+create-release:
+  name: Create GitHub Release
+  runs-on: ubuntu-latest
+  needs: [validate, build-release, sign-release]  # ← Ajouter sign-release
+```
+
+### Étape 4 : Activer dans code-signing.yml
+
+```yaml
+# .github/workflows/code-signing.yml - Ligne ~71
+env:
+  CODE_SIGNING_ENABLED: 'true'  # ← Changer false → true
+```
+
+---
+
+## 5. Test manuel
+
+Avant d'activer en production, tester manuellement :
+
+1. Aller dans **Actions → Code Signing → Run workflow**
+2. Sélectionner `dry_run: false`
+3. Vérifier les logs
+
+---
+
+## 6. Vérifier les signatures
 
 ### Windows
 
