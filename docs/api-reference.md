@@ -49,14 +49,42 @@ Create a new collection.
 |-------|------|----------|-------------|
 | name | string | Yes | Unique collection name |
 | dimension | integer | Yes | Vector dimension (e.g., 768) |
-| metric | string | No | Distance metric: `cosine` (default), `euclidean`, `dotproduct` |
+| metric | string | No | Distance metric (see table below) |
 
-**Example:**
+**Distance Metrics:**
+
+| Metric | Description | Best For |
+|--------|-------------|----------|
+| `cosine` | Cosine similarity (default) | Text embeddings, semantic search |
+| `euclidean` | L2 distance | Spatial data, image features |
+| `dotproduct` | Inner product (MIPS) | Recommendations, ranking |
+| `hamming` | Bit difference count | Binary embeddings, fingerprints |
+| `jaccard` | Set intersection/union | Tags, preferences, document similarity |
+
+**Example (standard embeddings):**
 ```json
 {
   "name": "documents",
   "dimension": 768,
   "metric": "cosine"
+}
+```
+
+**Example (binary vectors with Hamming):**
+```json
+{
+  "name": "image_hashes",
+  "dimension": 64,
+  "metric": "hamming"
+}
+```
+
+**Example (set similarity with Jaccard):**
+```json
+{
+  "name": "user_preferences",
+  "dimension": 100,
+  "metric": "jaccard"
 }
 ```
 

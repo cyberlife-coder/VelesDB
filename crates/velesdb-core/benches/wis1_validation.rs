@@ -84,6 +84,30 @@ fn brute_force_knn(
                     .zip(vec.iter())
                     .map(|(a, b)| a * b)
                     .sum::<f32>(),
+                #[allow(clippy::cast_precision_loss)]
+                DistanceMetric::Hamming => query
+                    .iter()
+                    .zip(vec.iter())
+                    .filter(|(a, b)| (**a > 0.5) != (**b > 0.5))
+                    .count() as f32,
+                #[allow(clippy::cast_precision_loss)]
+                DistanceMetric::Jaccard => {
+                    let intersection = query
+                        .iter()
+                        .zip(vec.iter())
+                        .filter(|(a, b)| **a > 0.5 && **b > 0.5)
+                        .count();
+                    let union = query
+                        .iter()
+                        .zip(vec.iter())
+                        .filter(|(a, b)| **a > 0.5 || **b > 0.5)
+                        .count();
+                    if union == 0 {
+                        0.0 // For sorting: lower = more similar
+                    } else {
+                        1.0 - (intersection as f32 / union as f32)
+                    }
+                }
             };
             (*id, dist)
         })

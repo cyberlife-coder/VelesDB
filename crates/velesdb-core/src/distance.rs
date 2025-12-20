@@ -24,6 +24,16 @@ pub enum DistanceMetric {
     /// Dot product (inner product).
     /// Best for maximum inner product search (MIPS).
     DotProduct,
+
+    /// Hamming distance for binary vectors.
+    /// Counts the number of positions where bits differ.
+    /// Best for binary embeddings and locality-sensitive hashing.
+    Hamming,
+
+    /// Jaccard similarity for set-like vectors.
+    /// Measures intersection over union of non-zero elements.
+    /// Best for sparse vectors, tags, and set membership.
+    Jaccard,
 }
 
 impl DistanceMetric {
@@ -55,6 +65,8 @@ impl DistanceMetric {
             Self::Cosine => simd::cosine_similarity_fast(a, b),
             Self::Euclidean => simd::euclidean_distance_fast(a, b),
             Self::DotProduct => simd::dot_product_fast(a, b),
+            Self::Hamming => simd::hamming_distance_fast(a, b),
+            Self::Jaccard => simd::jaccard_similarity_fast(a, b),
         }
     }
 
@@ -62,8 +74,8 @@ impl DistanceMetric {
     #[must_use]
     pub const fn higher_is_better(&self) -> bool {
         match self {
-            Self::Cosine | Self::DotProduct => true,
-            Self::Euclidean => false,
+            Self::Cosine | Self::DotProduct | Self::Jaccard => true,
+            Self::Euclidean | Self::Hamming => false,
         }
     }
 }
@@ -129,5 +141,116 @@ mod tests {
         let json = serde_json::to_string(&metric).unwrap();
         let deserialized: DistanceMetric = serde_json::from_str(&json).unwrap();
         assert_eq!(metric, deserialized);
+
+        let metric = DistanceMetric::Hamming;
+        let json = serde_json::to_string(&metric).unwrap();
+        let deserialized: DistanceMetric = serde_json::from_str(&json).unwrap();
+        assert_eq!(metric, deserialized);
+
+        let metric = DistanceMetric::Jaccard;
+        let json = serde_json::to_string(&metric).unwrap();
+        let deserialized: DistanceMetric = serde_json::from_str(&json).unwrap();
+        assert_eq!(metric, deserialized);
+    }
+
+    // =========================================================================
+    // TDD Tests for Hamming Distance (WIS-33)
+    // =========================================================================
+
+    #[test]
+    fn test_hamming_distance_identical() {
+        // Identical binary vectors should have distance 0
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![1.0, 0.0, 1.0, 0.0];
+        let distance = DistanceMetric::Hamming.calculate(&a, &b);
+        assert!(
+            (distance - 0.0).abs() < 1e-6,
+            "Identical vectors: distance = 0"
+        );
+    }
+
+    #[test]
+    fn test_hamming_distance_completely_different() {
+        // Completely different binary vectors
+        let a = vec![1.0, 1.0, 1.0, 1.0];
+        let b = vec![0.0, 0.0, 0.0, 0.0];
+        let distance = DistanceMetric::Hamming.calculate(&a, &b);
+        assert!(
+            (distance - 4.0).abs() < 1e-6,
+            "All bits differ: distance = 4"
+        );
+    }
+
+    #[test]
+    fn test_hamming_distance_partial() {
+        // Some bits differ
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![1.0, 1.0, 0.0, 0.0];
+        let distance = DistanceMetric::Hamming.calculate(&a, &b);
+        assert!((distance - 2.0).abs() < 1e-6, "2 bits differ: distance = 2");
+    }
+
+    #[test]
+    fn test_hamming_higher_is_better() {
+        // Hamming: lower distance = more similar
+        assert!(!DistanceMetric::Hamming.higher_is_better());
+    }
+
+    // =========================================================================
+    // TDD Tests for Jaccard Similarity (WIS-33)
+    // =========================================================================
+
+    #[test]
+    fn test_jaccard_similarity_identical() {
+        // Identical sets should have similarity 1.0
+        let a = vec![1.0, 0.0, 1.0, 1.0];
+        let b = vec![1.0, 0.0, 1.0, 1.0];
+        let similarity = DistanceMetric::Jaccard.calculate(&a, &b);
+        assert!(
+            (similarity - 1.0).abs() < 1e-6,
+            "Identical sets: similarity = 1.0"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_similarity_disjoint() {
+        // Disjoint sets should have similarity 0.0
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 1.0, 1.0];
+        let similarity = DistanceMetric::Jaccard.calculate(&a, &b);
+        assert!(
+            (similarity - 0.0).abs() < 1e-6,
+            "Disjoint sets: similarity = 0.0"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_similarity_partial_overlap() {
+        // Partial overlap: intersection=2, union=4, similarity=0.5
+        let a = vec![1.0, 1.0, 1.0, 0.0];
+        let b = vec![1.0, 1.0, 0.0, 1.0];
+        let similarity = DistanceMetric::Jaccard.calculate(&a, &b);
+        assert!(
+            (similarity - 0.5).abs() < 1e-6,
+            "Partial overlap: similarity = 0.5"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_similarity_empty_sets() {
+        // Both empty sets - defined as 1.0 (identical)
+        let a = vec![0.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 0.0, 0.0];
+        let similarity = DistanceMetric::Jaccard.calculate(&a, &b);
+        assert!(
+            (similarity - 1.0).abs() < 1e-6,
+            "Empty sets: similarity = 1.0"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_higher_is_better() {
+        // Jaccard: higher similarity = more similar
+        assert!(DistanceMetric::Jaccard.higher_is_better());
     }
 }

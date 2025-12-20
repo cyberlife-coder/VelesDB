@@ -53,12 +53,56 @@ Just as Veles bridges the earthly and mystical realms, VelesDB bridges raw data 
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
 - ⚡ **Blazing Fast Search** — SIMD-optimized similarity (2.3x faster than baseline)
+- 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
 - 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
 - 🔍 **Metadata Filtering** — Filter results by payload (eq, gt, lt, in, contains...)
 - 💾 **Persistent Storage** — HNSW index with WAL for durability
 - 🔌 **Simple REST API** — Easy integration with any language
 - 📦 **Single Binary** — No dependencies, easy deployment
 - 🐳 **Docker Ready** — Run anywhere in seconds
+
+### 📐 Distance Metrics
+
+VelesDB supports **5 distance metrics** for different use cases:
+
+| Metric | Best For | Use Case |
+|--------|----------|----------|
+| **Cosine** | Text embeddings | Semantic search, RAG pipelines |
+| **Euclidean** | Spatial data | Geolocation, image features |
+| **Dot Product** | MIPS | Recommendation systems |
+| **Hamming** | Binary vectors | Image hashing, fingerprints, duplicate detection |
+| **Jaccard** | Sets/Tags | Recommendations, document similarity |
+
+#### 🔥 Binary Embeddings with Hamming
+
+For **ultra-fast similarity search** on binary data:
+
+```bash
+# Create collection with Hamming metric
+curl -X POST http://localhost:8080/collections \
+  -d '{"name": "fingerprints", "dimension": 64, "metric": "hamming"}'
+
+# Insert binary vectors (values > 0.5 = 1, else = 0)
+curl -X POST http://localhost:8080/collections/fingerprints/points \
+  -d '{"points": [{"id": 1, "vector": [1, 0, 1, 0, ...]}]}'
+```
+
+**Why Hamming?** Compare 64 bits in a single CPU operation (XOR + popcount) — orders of magnitude faster than floating-point comparisons.
+
+#### 🏷️ Set Similarity with Jaccard
+
+For **recommendation systems** based on shared attributes:
+
+```bash
+# Create collection with Jaccard metric  
+curl -X POST http://localhost:8080/collections \
+  -d '{"name": "user_tags", "dimension": 100, "metric": "jaccard"}'
+
+# Insert user preferences as binary vectors
+# [1,1,0,0,...] = user likes categories 0,1 but not 2,3
+```
+
+**Why Jaccard?** Measures overlap between sets — perfect for "users who liked X also liked Y".
 
 ---
 

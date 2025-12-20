@@ -1,8 +1,10 @@
-//! VelesDB CLI - Interactive REPL for VelesQL queries
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+//! `VelesDB` CLI - Interactive REPL for `VelesQL` queries
 //!
 //! Usage:
-//!   velesdb repl ./my_database
-//!   velesdb query ./my_database "SELECT * FROM docs LIMIT 10"
+//!   `velesdb repl ./my_database`
+//!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 
 mod repl;
 
@@ -36,7 +38,7 @@ enum Commands {
         /// Path to database directory
         path: PathBuf,
 
-        /// VelesQL query to execute
+        /// `VelesQL` query to execute
         query: String,
 
         /// Output format (table, json)

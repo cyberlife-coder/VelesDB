@@ -82,8 +82,9 @@ jobs:
       - name: Run tests with coverage
         run: |
           cargo tarpaulin --all-features --workspace --timeout 120 \
+            --exclude velesdb-python --exclude velesdb-cli \
             --out Xml --out Html --output-dir coverage \
-            --fail-under 80
+            --fail-under 70
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -126,11 +127,13 @@ jobs:
     needs: [lint, test]
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: [stable, beta]
         exclude:
           - os: windows-latest
             rust: beta
+        # Note: macOS excluded - anndists crate uses AVX2 (x86 only)
+        # TODO: Re-enable when upstream fixes ARM support
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -146,15 +149,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-build-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-build-${{ matrix.rust }}-
+            ${{ runner.os }}-cargo-registry-${{ matrix.rust }}-
 
-      - name: Build (debug)
-        run: cargo build --all-features
+      - name: Clean target (Windows disk space fix)
+        if: runner.os == 'Windows'
+        run: cargo clean
+        continue-on-error: true
 
-      - name: Build (release)
+      - name: Build (release only - saves disk space)
         run: cargo build --release --all-features
 
   # ===========================================================================

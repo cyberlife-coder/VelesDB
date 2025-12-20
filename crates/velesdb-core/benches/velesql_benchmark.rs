@@ -1,4 +1,4 @@
-//! Benchmark for VelesQL parser performance.
+//! Benchmark for `VelesQL` parser performance.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use velesdb_core::velesql::Parser;
@@ -10,7 +10,7 @@ const SIMPLE_QUERY: &str = "SELECT * FROM documents LIMIT 10";
 const VECTOR_QUERY: &str = "SELECT * FROM documents WHERE vector NEAR $v LIMIT 10";
 
 /// Complex query with filters
-const COMPLEX_QUERY: &str = r#"
+const COMPLEX_QUERY: &str = r"
 SELECT id, payload.title, score 
 FROM documents 
 WHERE vector NEAR COSINE $query_vector
@@ -18,17 +18,17 @@ WHERE vector NEAR COSINE $query_vector
   AND price > 100
   AND tags IN ('rust', 'performance', 'database')
 LIMIT 20 OFFSET 5
-"#;
+";
 
 /// Query with multiple conditions
-const MULTI_CONDITION_QUERY: &str = r#"
+const MULTI_CONDITION_QUERY: &str = r"
 SELECT * FROM docs 
 WHERE category = 'tech' 
   AND price BETWEEN 10 AND 1000 
   AND title LIKE '%rust%'
   AND deleted_at IS NULL
 LIMIT 50
-"#;
+";
 
 fn bench_parse_simple(c: &mut Criterion) {
     c.bench_function("velesql_parse_simple", |b| {

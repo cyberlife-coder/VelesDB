@@ -114,6 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `as_retriever()` for RAG pipelines
   - Full test suite (9 tests)
 
+#### Additional Distance Metrics (WIS-33)
+- **Hamming Distance**: For binary vectors and locality-sensitive hashing
+  - Ultra-fast bit comparison (XOR + popcount)
+  - Ideal for: image hashing, fingerprints, duplicate detection
+  - Values > 0.5 treated as 1, else 0
+
+- **Jaccard Similarity**: For set-like vectors
+  - Measures intersection over union of non-zero elements
+  - Ideal for: recommendations, tags, document similarity
+  - Returns 1.0 for identical sets, 0.0 for disjoint sets
+
+- **SIMD-Optimized**: Loop unrolling (4x) for auto-vectorization
+
 ### Performance
 
 | Operation | Metric | Value |

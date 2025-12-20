@@ -1,4 +1,5 @@
-//! Integration tests for VelesDB REST API.
+#![allow(clippy::doc_markdown)]
+//! Integration tests for `VelesDB` REST API.
 
 use axum::{
     body::Body,

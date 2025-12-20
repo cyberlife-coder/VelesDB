@@ -1,6 +1,16 @@
-//! VelesDB Server - REST API library for the VelesDB vector database.
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::ref_option)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::trivially_copy_pass_by_ref)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::enum_glob_use)]
+#![allow(clippy::unused_async)]
+//! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
-//! This module provides the HTTP handlers and types for the VelesDB REST API.
+//! This module provides the HTTP handlers and types for the `VelesDB` REST API.
 
 use axum::{
     extract::{Path, State},
@@ -20,7 +30,7 @@ use velesdb_core::{Database, DistanceMetric, Point};
 
 /// Application state shared across handlers.
 pub struct AppState {
-    /// The VelesDB database instance.
+    /// The `VelesDB` database instance.
     pub db: Database,
 }
 
@@ -130,10 +140,10 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-/// Request for VelesQL query execution.
+/// Request for `VelesQL` query execution.
 #[derive(Debug, Deserialize)]
 pub struct QueryRequest {
-    /// The VelesQL query string.
+    /// The `VelesQL` query string.
     pub query: String,
     /// Named parameters for the query.
     #[serde(default)]
@@ -357,6 +367,7 @@ pub async fn get_point(
 }
 
 /// Delete a point by ID.
+#[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn delete_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
@@ -391,6 +402,7 @@ pub async fn delete_point(
 }
 
 /// Search for similar vectors.
+#[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -434,6 +446,7 @@ pub async fn search(
 }
 
 /// Batch search for multiple vectors.
+#[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn batch_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -500,6 +513,7 @@ pub async fn batch_search(
 ///   "params": { "v": [0.1, 0.2, ...] }
 /// }
 /// ```
+#[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,

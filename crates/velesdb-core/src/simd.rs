@@ -245,6 +245,118 @@ pub fn dot_product_fast(a: &[f32], b: &[f32]) -> f32 {
     sum0 + sum1 + sum2 + sum3
 }
 
+/// Computes Hamming distance for binary vectors.
+///
+/// Counts the number of positions where values differ (treating values > 0.5 as 1, else 0).
+///
+/// # Arguments
+///
+/// * `a` - First binary vector (values > 0.5 treated as 1)
+/// * `b` - Second binary vector (values > 0.5 treated as 1)
+///
+/// # Returns
+///
+/// Number of positions where bits differ.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
+#[inline]
+#[must_use]
+pub fn hamming_distance_fast(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+
+    let chunks = a.len() / 4;
+    let remainder = a.len() % 4;
+
+    let mut count0 = 0u32;
+    let mut count1 = 0u32;
+    let mut count2 = 0u32;
+    let mut count3 = 0u32;
+
+    for i in 0..chunks {
+        let base = i * 4;
+        // Convert to binary: > 0.5 = 1, else 0
+        let a0 = a[base] > 0.5;
+        let a1 = a[base + 1] > 0.5;
+        let a2 = a[base + 2] > 0.5;
+        let a3 = a[base + 3] > 0.5;
+
+        let b0 = b[base] > 0.5;
+        let b1 = b[base + 1] > 0.5;
+        let b2 = b[base + 2] > 0.5;
+        let b3 = b[base + 3] > 0.5;
+
+        // XOR to find differences
+        count0 += u32::from(a0 != b0);
+        count1 += u32::from(a1 != b1);
+        count2 += u32::from(a2 != b2);
+        count3 += u32::from(a3 != b3);
+    }
+
+    // Handle remainder
+    let base = chunks * 4;
+    for i in 0..remainder {
+        let ai = a[base + i] > 0.5;
+        let bi = b[base + i] > 0.5;
+        count0 += u32::from(ai != bi);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    // Intentional: hamming distance won't exceed 2^23 in practice
+    {
+        (count0 + count1 + count2 + count3) as f32
+    }
+}
+
+/// Computes Jaccard similarity for set-like vectors.
+///
+/// Measures intersection over union of non-zero elements.
+/// Values > 0.5 are considered "in the set".
+///
+/// # Arguments
+///
+/// * `a` - First set vector (values > 0.5 treated as set members)
+/// * `b` - Second set vector (values > 0.5 treated as set members)
+///
+/// # Returns
+///
+/// Jaccard similarity in range [0.0, 1.0]. Returns 1.0 for two empty sets.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
+#[inline]
+#[must_use]
+pub fn jaccard_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+
+    let mut intersection = 0u32;
+    let mut union = 0u32;
+
+    for i in 0..a.len() {
+        let in_a = a[i] > 0.5;
+        let in_b = b[i] > 0.5;
+
+        if in_a && in_b {
+            intersection += 1;
+        }
+        if in_a || in_b {
+            union += 1;
+        }
+    }
+
+    // Empty sets are defined as identical (similarity = 1.0)
+    if union == 0 {
+        return 1.0;
+    }
+
+    #[allow(clippy::cast_precision_loss)] // Intentional: set size won't exceed 2^23 in practice
+    {
+        intersection as f32 / union as f32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
