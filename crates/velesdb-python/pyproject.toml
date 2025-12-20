@@ -4,10 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "velesdb"
-version = "0.1.0"
+version = "0.1.1"
 description = "A high-performance vector database for AI applications"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = { text = "BSL-1.1" }
 authors = [
     { name = "VelesDB Team", email = "contact@velesdb.io" }
 ]
@@ -16,7 +16,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: Other/Proprietary License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
