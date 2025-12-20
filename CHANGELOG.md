@@ -83,13 +83,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2025-12-20
+
+### Added
+
+#### Python Bindings (PyO3)
+- **Native Python API**: Full-featured Python bindings for VelesDB
+  - `velesdb.Database` - Database management
+  - `velesdb.Collection` - Collection operations (upsert, search, delete)
+  - Support for Python lists and NumPy arrays
+  - Automatic `float64` → `float32` conversion
+
+- **NumPy Integration** (WIS-23):
+  - Direct support for `numpy.ndarray` in `upsert()` and `search()`
+  - Zero-copy when possible for performance
+  - Mixed Python list / NumPy array in same batch
+
+#### VelesQL CLI/REPL (WIS-19)
+- **Interactive REPL**: `velesdb-cli repl`
+  - Syntax highlighting
+  - Command history
+  - Tab completion
+- **Single Query Mode**: `velesdb-cli query "SELECT ..."`
+- **Database Info**: `velesdb-cli info ./data`
+
+#### LangChain Integration (WIS-30)
+- **`langchain-velesdb` package**: LangChain VectorStore adapter
+  - `VelesDBVectorStore` class
+  - `add_texts()`, `similarity_search()`, `delete()`
+  - `as_retriever()` for RAG pipelines
+  - Full test suite (9 tests)
+
+### Performance
+
+| Operation | Metric | Value |
+|-----------|--------|-------|
+| Python upsert (1000 vectors) | Throughput | ~50K vec/sec |
+| Python search (768d) | Latency | < 2ms |
+| VelesQL CLI parse | Throughput | 1.3M queries/sec |
+
+---
+
 ## [Unreleased]
 
 ### Planned
-- Python bindings (PyO3)
-- VelesQL CLI/REPL
+- LlamaIndex integration
+- OpenAPI/Swagger documentation
+- Publish to crates.io & PyPI
 - EXPLAIN query plans
-- Hybrid search (BM25 + vector)
 
+[0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.2.0...HEAD

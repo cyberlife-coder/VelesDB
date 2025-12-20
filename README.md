@@ -498,6 +498,98 @@ fn main() -> anyhow::Result<()> {
 
 ---
 
+## 🐍 Python Bindings
+
+VelesDB provides native Python bindings via PyO3.
+
+### Installation
+
+```bash
+# From source (requires Rust)
+cd crates/velesdb-python
+pip install maturin
+maturin develop --release
+```
+
+### Basic Usage
+
+```python
+import velesdb
+import numpy as np
+
+# Open database
+db = velesdb.Database("./my_data")
+
+# Create collection
+collection = db.create_collection("documents", dimension=768, metric="cosine")
+
+# Insert with NumPy arrays
+vectors = np.random.rand(100, 768).astype(np.float32)
+points = [{"id": i, "vector": vectors[i], "payload": {"title": f"Doc {i}"}} for i in range(100)]
+collection.upsert(points)
+
+# Search
+query = np.random.rand(768).astype(np.float32)
+results = collection.search(query, top_k=10)
+```
+
+### LangChain Integration
+
+```python
+from langchain_velesdb import VelesDBVectorStore
+from langchain_openai import OpenAIEmbeddings
+
+# Create vector store
+vectorstore = VelesDBVectorStore(
+    path="./my_data",
+    collection_name="documents",
+    embedding=OpenAIEmbeddings()
+)
+
+# Add documents
+vectorstore.add_texts(["Hello world", "VelesDB is fast"])
+
+# Search
+results = vectorstore.similarity_search("greeting", k=2)
+
+# Use as retriever for RAG
+retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+```
+
+---
+
+## 💻 VelesQL CLI
+
+Interactive command-line interface for VelesQL queries.
+
+```bash
+# Start REPL
+velesdb-cli repl
+
+# Execute single query
+velesdb-cli query "SELECT * FROM documents LIMIT 10"
+
+# Show database info
+velesdb-cli info ./data
+```
+
+**REPL Session:**
+```
+VelesQL REPL v0.2.0
+Type 'help' for commands, 'quit' to exit.
+
+velesql> SELECT * FROM documents WHERE category = 'tech' LIMIT 5;
+┌────┬───────────────────┬──────────┐
+│ id │ title             │ category │
+├────┼───────────────────┼──────────┤
+│ 1  │ AI Introduction   │ tech     │
+│ 2  │ ML Basics         │ tech     │
+└────┴───────────────────┴──────────┘
+2 rows (1.23 ms)
+```
+
+---
+
 ## 🤝 Contributing
 
 We welcome contributions! Here's how to get started:
@@ -545,21 +637,29 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v0.1.0 ✅ (Current)
+### v0.1.0 ✅ (Released)
 - [x] HNSW vector index
 - [x] REST API (11 endpoints)
 - [x] VelesQL query language
 - [x] SIMD-optimized distance calculations
 - [x] SQ8 quantization
+- [x] Metadata filtering
 
-### v0.2.0 (Planned)
-- [ ] Python bindings (PyO3)
-- [ ] CLI / REPL for VelesQL
+### v0.2.0 ✅ (Current)
+- [x] Python bindings (PyO3) with NumPy support
+- [x] CLI / REPL for VelesQL
+- [x] LangChain integration (`langchain-velesdb`)
 - [ ] OpenAPI/Swagger docs
 - [ ] Additional distance metrics (Hamming, Jaccard)
 
-### v0.3.0 (Future)
-- [ ] WebSocket subscriptions for real-time updates
+### v0.3.0 (Planned)
+- [ ] LlamaIndex integration
+- [ ] Publish to crates.io & PyPI
+- [ ] WASM support for browser
+- [ ] WebSocket subscriptions
+
+### v1.0.0 (Future)
+- [ ] Production-ready stability
 - [ ] HNSW parameters auto-tuning
 - [ ] Sparse vector support
 

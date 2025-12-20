@@ -214,3 +214,126 @@ All errors return a JSON object with an `error` field:
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
 | 500 | Internal Server Error |
+
+---
+
+## Batch Search
+
+### POST /collections/:name/search/batch
+
+Execute multiple searches in a single request.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| searches | array | Yes | Array of search requests |
+| searches[].vector | array[float] | Yes | Query vector |
+| searches[].top_k | integer | No | Results per query (default: 10) |
+
+**Example:**
+```json
+{
+  "searches": [
+    {"vector": [0.1, 0.2, 0.3, ...], "top_k": 5},
+    {"vector": [0.4, 0.5, 0.6, ...], "top_k": 5}
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"results": [{"id": 1, "score": 0.98, "payload": {...}}]},
+    {"results": [{"id": 2, "score": 0.95, "payload": {...}}]}
+  ],
+  "timing_ms": 2.34
+}
+```
+
+---
+
+## VelesQL Query
+
+### POST /query
+
+Execute a VelesQL query.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| query | string | Yes | VelesQL query string |
+| params | object | No | Bound parameters (e.g., vectors) |
+
+**Example:**
+```json
+{
+  "query": "SELECT * FROM documents WHERE vector NEAR $v AND category = 'tech' LIMIT 10",
+  "params": {"v": [0.1, 0.2, 0.3, ...]}
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": 1, "score": 0.98, "payload": {"title": "AI Guide", "category": "tech"}}
+  ],
+  "timing_ms": 1.56,
+  "rows_returned": 1
+}
+```
+
+### VelesQL Syntax Reference
+
+| Feature | Syntax | Example |
+|---------|--------|---------|
+| Vector search | `vector NEAR $param` | `WHERE vector NEAR $query` |
+| Distance metric | `vector NEAR COSINE $param` | `COSINE`, `EUCLIDEAN`, `DOT` |
+| Equality | `field = value` | `category = 'tech'` |
+| Comparison | `field > value` | `price > 100` |
+| IN clause | `field IN (...)` | `status IN ('active', 'pending')` |
+| BETWEEN | `field BETWEEN a AND b` | `price BETWEEN 10 AND 100` |
+| LIKE | `field LIKE pattern` | `title LIKE '%rust%'` |
+| NULL check | `field IS NULL` | `deleted_at IS NULL` |
+| Logical | `AND`, `OR` | `a = 1 AND b = 2` |
+| Limit | `LIMIT n` | `LIMIT 10` |
+
+---
+
+## Python API
+
+### Installation
+
+```bash
+cd crates/velesdb-python
+pip install maturin
+maturin develop --release
+```
+
+### Quick Reference
+
+```python
+import velesdb
+import numpy as np
+
+# Database
+db = velesdb.Database("./data")
+
+# Collection
+collection = db.create_collection("docs", dimension=768, metric="cosine")
+collection = db.get_collection("docs")
+db.delete_collection("docs")
+collections = db.list_collections()
+
+# Points
+collection.upsert([{"id": 1, "vector": [...], "payload": {...}}])
+point = collection.get(1)
+collection.delete([1, 2, 3])
+
+# Search (supports numpy arrays)
+results = collection.search(query_vector, top_k=10)
+results = collection.search(np.array([...], dtype=np.float32), top_k=10)
+```

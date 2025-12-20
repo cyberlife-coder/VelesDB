@@ -22,23 +22,53 @@ velesdb-core/
 ├── .githooks/
 │   └── pre-commit             # Hook pré-commit
 │
-├── .gitattributes             # LF pour scripts
+├── .windsurf/
+│   └── workflows/             # Workflows AI assistants
+│       ├── rust-feature.md
+│       ├── rust-debug.md
+│       └── ...
 │
 ├── crates/
 │   ├── velesdb-core/          # Lib principale (moteur vectoriel)
 │   │   ├── Cargo.toml
 │   │   ├── src/
-│   │   │   └── lib.rs
+│   │   │   ├── lib.rs
+│   │   │   ├── collection/    # Gestion collections
+│   │   │   ├── index/         # HNSW index
+│   │   │   ├── storage/       # Persistence
+│   │   │   ├── velesql/       # Query language parser
+│   │   │   └── simd/          # SIMD optimizations
 │   │   └── benches/
-│   │       └── search_benchmark.rs
 │   │
-│   └── velesdb-server/        # API HTTP/gRPC
+│   ├── velesdb-server/        # API REST (Axum)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │
+│   ├── velesdb-cli/           # CLI / REPL VelesQL
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── main.rs
+│   │
+│   └── velesdb-python/        # Python bindings (PyO3)
 │       ├── Cargo.toml
-│       └── src/
+│       ├── src/
+│       │   └── lib.rs
+│       └── tests/
+│           └── test_velesdb.py
+│
+├── integrations/
+│   └── langchain-velesdb/     # LangChain VectorStore
+│       ├── pyproject.toml
+│       ├── README.md
+│       ├── src/langchain_velesdb/
+│       │   ├── __init__.py
+│       │   └── vectorstore.py
+│       └── tests/
 │
 ├── docs/
 │   ├── PROJECT_STRUCTURE.md   # Ce fichier
 │   ├── CODING_RULES.md        # Règles de développement
+│   ├── TDD_RULES.md           # Test-Driven Development
 │   ├── api-reference.md
 │   └── getting-started.md
 │
@@ -86,6 +116,45 @@ edition.workspace = true
 [dependencies]
 tokio = { workspace = true }  # ← hérite de workspace.dependencies
 ```
+
+---
+
+## Crates
+
+### `velesdb-core`
+Moteur vectoriel principal. Contient :
+- **HNSW Index** : Recherche approximative des plus proches voisins
+- **SIMD** : Calculs de distance optimisés (AVX2/SSE)
+- **VelesQL** : Parser du langage de requête SQL-like
+- **Storage** : Persistence avec WAL
+
+### `velesdb-server`
+Serveur REST API (Axum). Expose :
+- Endpoints CRUD collections/points
+- Endpoint `/search` et `/search/batch`
+- Endpoint `/query` pour VelesQL
+
+### `velesdb-cli`
+Interface ligne de commande :
+- `repl` : Mode interactif VelesQL
+- `query` : Exécution requête unique
+- `info` : Informations sur une base
+
+### `velesdb-python`
+Bindings Python via PyO3 :
+- `velesdb.Database` / `velesdb.Collection`
+- Support NumPy arrays (float32, float64)
+- Tests pytest complets
+
+---
+
+## Integrations
+
+### `langchain-velesdb`
+Package Python pour LangChain :
+- `VelesDBVectorStore` compatible LangChain
+- Méthodes : `add_texts`, `similarity_search`, `as_retriever`
+- Installation : `pip install langchain-velesdb`
 
 ### `rust-toolchain.toml`
 
