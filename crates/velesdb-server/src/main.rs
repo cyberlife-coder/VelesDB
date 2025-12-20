@@ -1,4 +1,5 @@
-//! VelesDB Server - REST API for the VelesDB vector database.
+#![allow(clippy::doc_markdown)]
+//! `VelesDB` Server - REST API for the `VelesDB` vector database.
 
 use axum::{
     routing::{get, post},

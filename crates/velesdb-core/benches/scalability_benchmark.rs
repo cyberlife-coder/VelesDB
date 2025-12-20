@@ -109,6 +109,7 @@ fn get_memory_usage() -> usize {
     unsafe {
         let mut pmc = MaybeUninit::<ProcessMemoryCounters>::zeroed().assume_init();
         pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+        #[allow(clippy::borrow_as_ptr)]
         if GetProcessMemoryInfo(
             GetCurrentProcess(),
             &mut pmc,

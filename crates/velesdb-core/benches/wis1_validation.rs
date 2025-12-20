@@ -84,11 +84,13 @@ fn brute_force_knn(
                     .zip(vec.iter())
                     .map(|(a, b)| a * b)
                     .sum::<f32>(),
+                #[allow(clippy::cast_precision_loss)]
                 DistanceMetric::Hamming => query
                     .iter()
                     .zip(vec.iter())
                     .filter(|(a, b)| (**a > 0.5) != (**b > 0.5))
                     .count() as f32,
+                #[allow(clippy::cast_precision_loss)]
                 DistanceMetric::Jaccard => {
                     let intersection = query
                         .iter()

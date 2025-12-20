@@ -1,4 +1,6 @@
-//! REPL (Read-Eval-Print-Loop) for VelesQL queries
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+//! REPL (Read-Eval-Print-Loop) for `VelesQL` queries
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -46,10 +48,11 @@ pub struct QueryResult {
 struct ReplHelper;
 
 /// Run the interactive REPL
+#[allow(clippy::needless_pass_by_value)] // PathBuf ownership required for Database::open
 pub fn run(path: PathBuf) -> Result<()> {
     println!(
         "\n{}",
-        format!("VelesDB v{} - VelesQL REPL", VERSION).bold().cyan()
+        format!("VelesDB v{VERSION} - VelesQL REPL").bold().cyan()
     );
     println!("Database: {}", path.display().to_string().green());
     println!(
@@ -83,7 +86,7 @@ pub fn run(path: PathBuf) -> Result<()> {
 
                 if line.starts_with('.') {
                     match handle_command(&db, line, &mut config) {
-                        CommandResult::Continue => continue,
+                        CommandResult::Continue => (),
                         CommandResult::Quit => break,
                         CommandResult::Error(e) => {
                             println!("{} {}", "Error:".red().bold(), e);
@@ -173,7 +176,7 @@ fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Command
                     println!();
                 }
                 None => {
-                    return CommandResult::Error(format!("Collection '{}' not found", name));
+                    return CommandResult::Error(format!("Collection '{name}' not found"));
                 }
             }
             CommandResult::Continue
@@ -228,7 +231,7 @@ fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Command
             CommandResult::Continue
         }
 
-        _ => CommandResult::Error(format!("Unknown command: {}", cmd)),
+        _ => CommandResult::Error(format!("Unknown command: {cmd}")),
     }
 }
 
@@ -261,7 +264,7 @@ fn print_help() {
     println!();
 }
 
-/// Execute a VelesQL query and return results
+/// Execute a `VelesQL` query and return results
 pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
     let start = Instant::now();
 
@@ -274,9 +277,10 @@ pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
     // Get the collection
     let collection = db
         .get_collection(collection_name)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection_name))?;
+        .ok_or_else(|| anyhow::anyhow!("Collection '{collection_name}' not found"))?;
 
     // For now, simple implementation - just list points with limit
+    #[allow(clippy::cast_possible_truncation)]
     let limit = parsed.select.limit.unwrap_or(10) as usize;
 
     // Get all point IDs (simplified - in production would use index)
