@@ -35,6 +35,10 @@ tower-http = { workspace = true }
 clap = { version = "4.4", features = ["derive", "env"] }
 config = "0.14"
 
+# OpenAPI/Swagger documentation
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
 [dev-dependencies]
 reqwest = { version = "0.11", features = ["json"] }
 tokio-test = "0.4"

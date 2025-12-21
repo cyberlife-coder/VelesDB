@@ -11,10 +11,12 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
     batch_search, create_collection, delete_collection, delete_point, get_collection, get_point,
-    health_check, list_collections, query, search, upsert_points, AppState,
+    health_check, list_collections, query, search, upsert_points, ApiDoc, AppState,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -55,8 +57,8 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::open(&args.data_dir)?;
     let state = Arc::new(AppState { db });
 
-    // Build router
-    let app = Router::new()
+    // Build API router with state
+    let api_router = Router::new()
         .route("/health", get(health_check))
         .route(
             "/collections",
@@ -74,9 +76,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/query", post(query))
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
         .with_state(state);
+
+    // Swagger UI (stateless router)
+    let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+
+    // Build main app with Swagger UI
+    let app = api_router
+        .merge(Router::<()>::new().merge(swagger_ui))
+        .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http());
 
     // Start server
     let addr = format!("{}:{}", args.host, args.port);

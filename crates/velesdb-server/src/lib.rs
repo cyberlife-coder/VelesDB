@@ -11,6 +11,12 @@
 //! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
 //! This module provides the HTTP handlers and types for the `VelesDB` REST API.
+//!
+//! ## OpenAPI Documentation
+//!
+//! The API is documented using OpenAPI 3.0. Access the interactive documentation at:
+//! - Swagger UI: `GET /swagger-ui`
+//! - OpenAPI JSON: `GET /api-docs/openapi.json`
 
 use axum::{
     extract::{Path, State},
@@ -20,9 +26,71 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::{OpenApi, ToSchema};
 
 use velesdb_core::velesql::{self, Condition, VectorExpr};
 use velesdb_core::{Database, DistanceMetric, Point};
+
+// ============================================================================
+// OpenAPI Documentation
+// ============================================================================
+
+/// VelesDB API Documentation
+///
+/// High-performance vector database for AI applications.
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "VelesDB API",
+        version = "0.1.1",
+        description = "High-performance vector database for AI applications. \
+            Supports semantic search, HNSW indexing, and multiple distance metrics.",
+        license(name = "BSL-1.1", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
+        contact(name = "VelesDB Team", url = "https://github.com/cyberlife-coder/VelesDB")
+    ),
+    servers(
+        (url = "/", description = "Local server")
+    ),
+    tags(
+        (name = "health", description = "Health check endpoints"),
+        (name = "collections", description = "Collection management"),
+        (name = "points", description = "Vector point operations"),
+        (name = "search", description = "Vector similarity search"),
+        (name = "query", description = "VelesQL query execution")
+    ),
+    paths(
+        health_check,
+        list_collections,
+        create_collection,
+        get_collection,
+        delete_collection,
+        upsert_points,
+        get_point,
+        delete_point,
+        search,
+        batch_search,
+        query
+    ),
+    components(
+        schemas(
+            CreateCollectionRequest,
+            CollectionResponse,
+            UpsertPointsRequest,
+            PointRequest,
+            SearchRequest,
+            BatchSearchRequest,
+            SearchResponse,
+            BatchSearchResponse,
+            SearchResultResponse,
+            ErrorResponse,
+            QueryRequest,
+            QueryResponse,
+            QueryErrorResponse,
+            QueryErrorDetail
+        )
+    )
+)]
+pub struct ApiDoc;
 
 // ============================================================================
 // Application State
@@ -39,14 +107,17 @@ pub struct AppState {
 // ============================================================================
 
 /// Request to create a new collection.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateCollectionRequest {
     /// Collection name.
+    #[schema(example = "documents")]
     pub name: String,
     /// Vector dimension.
+    #[schema(example = 768)]
     pub dimension: usize,
     /// Distance metric (cosine, euclidean, dot).
     #[serde(default = "default_metric")]
+    #[schema(example = "cosine")]
     pub metric: String,
 }
 
@@ -55,7 +126,7 @@ fn default_metric() -> String {
 }
 
 /// Response with collection information.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CollectionResponse {
     /// Collection name.
     pub name: String,
@@ -68,14 +139,14 @@ pub struct CollectionResponse {
 }
 
 /// Request to upsert points.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertPointsRequest {
     /// Points to upsert.
     pub points: Vec<PointRequest>,
 }
 
 /// A point in an upsert request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct PointRequest {
     /// Point ID.
     pub id: u64,
@@ -86,7 +157,7 @@ pub struct PointRequest {
 }
 
 /// Request for vector search.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SearchRequest {
     /// Query vector.
     pub vector: Vec<f32>,
@@ -96,7 +167,7 @@ pub struct SearchRequest {
 }
 
 /// Request for batch vector search.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct BatchSearchRequest {
     /// List of search requests.
     pub searches: Vec<SearchRequest>,
@@ -107,14 +178,14 @@ fn default_top_k() -> usize {
 }
 
 /// Response from vector search.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResponse {
     /// Search results.
     pub results: Vec<SearchResultResponse>,
 }
 
 /// Response from batch search.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BatchSearchResponse {
     /// Results for each search query.
     pub results: Vec<SearchResponse>,
@@ -123,7 +194,7 @@ pub struct BatchSearchResponse {
 }
 
 /// A single search result.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResultResponse {
     /// Point ID.
     pub id: u64,
@@ -134,14 +205,14 @@ pub struct SearchResultResponse {
 }
 
 /// Error response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorResponse {
     /// Error message.
     pub error: String,
 }
 
 /// Request for `VelesQL` query execution.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct QueryRequest {
     /// The `VelesQL` query string.
     pub query: String,
@@ -151,7 +222,7 @@ pub struct QueryRequest {
 }
 
 /// Response from VelesQL query execution.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QueryResponse {
     /// Query results.
     pub results: Vec<SearchResultResponse>,
@@ -162,14 +233,14 @@ pub struct QueryResponse {
 }
 
 /// VelesQL query error response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QueryErrorResponse {
     /// Error details.
     pub error: QueryErrorDetail,
 }
 
 /// VelesQL query error detail.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QueryErrorDetail {
     /// Error type.
     #[serde(rename = "type")]
@@ -187,6 +258,14 @@ pub struct QueryErrorDetail {
 // ============================================================================
 
 /// Health check endpoint.
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "Server is healthy", body = Object)
+    )
+)]
 pub async fn health_check() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "healthy",
@@ -195,12 +274,30 @@ pub async fn health_check() -> impl IntoResponse {
 }
 
 /// List all collections.
+#[utoipa::path(
+    get,
+    path = "/collections",
+    tag = "collections",
+    responses(
+        (status = 200, description = "List of collections", body = Object)
+    )
+)]
 pub async fn list_collections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let collections = state.db.list_collections();
     Json(serde_json::json!({ "collections": collections }))
 }
 
 /// Create a new collection.
+#[utoipa::path(
+    post,
+    path = "/collections",
+    tag = "collections",
+    request_body = CreateCollectionRequest,
+    responses(
+        (status = 201, description = "Collection created", body = Object),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
 pub async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
@@ -240,6 +337,18 @@ pub async fn create_collection(
 }
 
 /// Get collection information.
+#[utoipa::path(
+    get,
+    path = "/collections/{name}",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Collection details", body = CollectionResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
 pub async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -266,6 +375,18 @@ pub async fn get_collection(
 }
 
 /// Delete a collection.
+#[utoipa::path(
+    delete,
+    path = "/collections/{name}",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Collection deleted", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
 pub async fn delete_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -287,6 +408,20 @@ pub async fn delete_collection(
 }
 
 /// Upsert points into a collection.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/points",
+    tag = "points",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = UpsertPointsRequest,
+    responses(
+        (status = 200, description = "Points upserted", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
 pub async fn upsert_points(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -330,6 +465,19 @@ pub async fn upsert_points(
 }
 
 /// Get a point by ID.
+#[utoipa::path(
+    get,
+    path = "/collections/{name}/points/{id}",
+    tag = "points",
+    params(
+        ("name" = String, Path, description = "Collection name"),
+        ("id" = u64, Path, description = "Point ID")
+    ),
+    responses(
+        (status = 200, description = "Point found", body = Object),
+        (status = 404, description = "Point or collection not found", body = ErrorResponse)
+    )
+)]
 pub async fn get_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
@@ -367,6 +515,19 @@ pub async fn get_point(
 }
 
 /// Delete a point by ID.
+#[utoipa::path(
+    delete,
+    path = "/collections/{name}/points/{id}",
+    tag = "points",
+    params(
+        ("name" = String, Path, description = "Collection name"),
+        ("id" = u64, Path, description = "Point ID")
+    ),
+    responses(
+        (status = 200, description = "Point deleted", body = Object),
+        (status = 404, description = "Point or collection not found", body = ErrorResponse)
+    )
+)]
 #[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn delete_point(
     State(state): State<Arc<AppState>>,
@@ -402,6 +563,20 @@ pub async fn delete_point(
 }
 
 /// Search for similar vectors.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = SearchRequest,
+    responses(
+        (status = 200, description = "Search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
 #[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn search(
     State(state): State<Arc<AppState>>,
@@ -446,6 +621,20 @@ pub async fn search(
 }
 
 /// Batch search for multiple vectors.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/batch",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = BatchSearchRequest,
+    responses(
+        (status = 200, description = "Batch search results", body = BatchSearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
 #[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn batch_search(
     State(state): State<Arc<AppState>>,
@@ -513,6 +702,17 @@ pub async fn batch_search(
 ///   "params": { "v": [0.1, 0.2, ...] }
 /// }
 /// ```
+#[utoipa::path(
+    post,
+    path = "/query",
+    tag = "query",
+    request_body = QueryRequest,
+    responses(
+        (status = 200, description = "Query results", body = QueryResponse),
+        (status = 400, description = "Query syntax error", body = QueryErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
 #[allow(clippy::unused_async)] // Axum handler requires async
 pub async fn query(
     State(state): State<Arc<AppState>>,
@@ -774,5 +974,125 @@ fn values_equal(field: &serde_json::Value, value: &velesql::Value) -> bool {
             .unwrap_or(false),
         (serde_json::Value::Bool(f), velesql::Value::Boolean(v)) => f == v,
         _ => false,
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use utoipa::OpenApi;
+
+    #[test]
+    fn test_openapi_spec_generation() {
+        // Arrange & Act
+        let openapi = ApiDoc::openapi();
+        let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+
+        // Assert
+        assert!(!json.is_empty(), "OpenAPI spec should not be empty");
+        assert!(json.contains("VelesDB API"), "Should contain API title");
+        assert!(json.contains("0.1.1"), "Should contain version");
+    }
+
+    #[test]
+    fn test_openapi_has_all_endpoints() {
+        // Arrange
+        let openapi = ApiDoc::openapi();
+        let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+
+        // Assert - all endpoints are documented
+        assert!(json.contains("/health"), "Should document /health");
+        assert!(
+            json.contains("/collections"),
+            "Should document /collections"
+        );
+        assert!(
+            json.contains(r"/collections/{name}"),
+            "Should document collections by name"
+        );
+        assert!(json.contains("/points"), "Should document points endpoint");
+        assert!(json.contains("/search"), "Should document search endpoint");
+        assert!(json.contains("/query"), "Should document /query");
+    }
+
+    #[test]
+    fn test_openapi_has_all_tags() {
+        // Arrange
+        let openapi = ApiDoc::openapi();
+        let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+
+        // Assert - all tags are present
+        assert!(json.contains("\"health\""), "Should have health tag");
+        assert!(
+            json.contains("\"collections\""),
+            "Should have collections tag"
+        );
+        assert!(json.contains("\"points\""), "Should have points tag");
+        assert!(json.contains("\"search\""), "Should have search tag");
+        assert!(json.contains("\"query\""), "Should have query tag");
+    }
+
+    #[test]
+    fn test_openapi_has_schemas() {
+        // Arrange
+        let openapi = ApiDoc::openapi();
+        let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+
+        // Assert - schemas are defined
+        assert!(
+            json.contains("CreateCollectionRequest"),
+            "Should have CreateCollectionRequest schema"
+        );
+        assert!(
+            json.contains("CollectionResponse"),
+            "Should have CollectionResponse schema"
+        );
+        assert!(
+            json.contains("SearchRequest"),
+            "Should have SearchRequest schema"
+        );
+        assert!(
+            json.contains("SearchResponse"),
+            "Should have SearchResponse schema"
+        );
+        assert!(
+            json.contains("ErrorResponse"),
+            "Should have ErrorResponse schema"
+        );
+    }
+
+    #[test]
+    fn test_openapi_has_license() {
+        // Arrange
+        let openapi = ApiDoc::openapi();
+        let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+
+        // Assert - license is specified
+        assert!(json.contains("BSL-1.1"), "Should have BSL-1.1 license");
+    }
+
+    #[test]
+    fn test_openapi_pretty_json() {
+        // Arrange
+        let openapi = ApiDoc::openapi();
+
+        // Act
+        let pretty_json = openapi
+            .to_pretty_json()
+            .expect("Failed to serialize pretty JSON");
+
+        // Assert
+        assert!(
+            pretty_json.contains('\n'),
+            "Pretty JSON should have newlines"
+        );
+        assert!(
+            pretty_json.len() > 1000,
+            "OpenAPI spec should be substantial"
+        );
     }
 }
