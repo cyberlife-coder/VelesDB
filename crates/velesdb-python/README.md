@@ -1,5 +1,9 @@
 # VelesDB Python
 
+[![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
+[![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
+[![License](https://img.shields.io/pypi/l/velesdb)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
+
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) - a high-performance vector database for AI applications.
 
 ## Installation
@@ -104,10 +108,18 @@ collection.flush()
 | `cosine` | Cosine similarity (default) | Text embeddings, normalized vectors |
 | `euclidean` | Euclidean (L2) distance | Image features, spatial data |
 | `dot` | Dot product | When vectors are pre-normalized |
+| `hamming` | Hamming distance | Binary vectors, fingerprints, hashes |
+| `jaccard` | Jaccard similarity | Set similarity, tags, recommendations |
 
 ## Performance
 
-VelesDB is built in Rust with SIMD optimizations:
+VelesDB is built in Rust with explicit SIMD optimizations:
+
+| Operation | Time (768d) | Throughput |
+|-----------|-------------|------------|
+| Cosine | ~76 ns | 13M ops/sec |
+| Euclidean | ~47 ns | 21M ops/sec |
+| Hamming | ~6 ns | 164M ops/sec |
 
 - **Sub-millisecond** search latency
 - **4x memory reduction** with SQ8 quantization

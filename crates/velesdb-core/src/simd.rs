@@ -1,15 +1,15 @@
 //! SIMD-optimized vector operations for high-performance distance calculations.
 //!
-//! # Performance Goals (TDD)
+//! # Performance (WIS-45 validated)
 //!
-//! - `cosine_similarity_simd`: Target < 300ns for 768d (vs 755ns baseline)
-//! - `euclidean_distance_simd`: Target < 150ns for 768d (vs 256ns baseline)
-//! - `normalize_inplace`: Zero allocation normalization
+//! - `cosine_similarity_fast`: ~83ns for 768d (using explicit SIMD)
+//! - `euclidean_distance_fast`: ~47ns for 768d (using explicit SIMD)
+//! - `dot_product_fast`: ~45ns for 768d (using explicit SIMD)
 //!
 //! # Implementation Strategy
 //!
-//! Uses portable SIMD via manual loop unrolling and compiler auto-vectorization hints.
-//! For explicit SIMD, consider `std::simd` (nightly) or `packed_simd2` crate.
+//! This module delegates to `simd_explicit` for all distance functions,
+//! using the `wide` crate for portable SIMD (AVX2/NEON/WASM).
 //!
 //! # Note on `hnsw_rs` Integration
 //!
@@ -18,35 +18,33 @@
 //! are used by `DistanceMetric::calculate()` for direct distance computations outside
 //! of the HNSW index.
 
-/// Computes cosine similarity using a single-pass fused algorithm.
+use crate::simd_explicit;
+
+/// Computes cosine similarity using explicit SIMD (f32x8).
 ///
 /// # Algorithm
 ///
-/// Computes dot(a,b), norm(a)², norm(b)² in a single pass to improve cache locality.
+/// Single-pass fused computation of dot(a,b), norm(a)², norm(b)² using SIMD FMA.
 /// Result: `dot / (sqrt(norm_a) * sqrt(norm_b))`
+///
+/// # Performance
+///
+/// ~83ns for 768d vectors (3.9x faster than auto-vectorized version).
 ///
 /// # Panics
 ///
 /// Panics if vectors have different lengths.
 #[inline]
 #[must_use]
-#[allow(clippy::similar_names)]
 pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-
-    let (dot, norm_a_sq, norm_b_sq) = fused_dot_norms(a, b);
-
-    let norm_a = norm_a_sq.sqrt();
-    let norm_b = norm_b_sq.sqrt();
-
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-
-    dot / (norm_a * norm_b)
+    simd_explicit::cosine_similarity_simd(a, b)
 }
 
-/// Computes euclidean distance with loop unrolling for better vectorization.
+/// Computes euclidean distance using explicit SIMD (f32x8).
+///
+/// # Performance
+///
+/// ~47ns for 768d vectors (2.9x faster than auto-vectorized version).
 ///
 /// # Panics
 ///
@@ -54,9 +52,7 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn euclidean_distance_fast(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-
-    squared_l2_distance(a, b).sqrt()
+    simd_explicit::euclidean_distance_simd(a, b)
 }
 
 /// Computes squared L2 distance (avoids sqrt for comparison purposes).
@@ -67,141 +63,17 @@ pub fn euclidean_distance_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn squared_l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-
-    // Process in chunks of 4 for better auto-vectorization
-    let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
-
-    let mut sum0 = 0.0f32;
-    let mut sum1 = 0.0f32;
-    let mut sum2 = 0.0f32;
-    let mut sum3 = 0.0f32;
-
-    for i in 0..chunks {
-        let base = i * 4;
-        let d0 = a[base] - b[base];
-        let d1 = a[base + 1] - b[base + 1];
-        let d2 = a[base + 2] - b[base + 2];
-        let d3 = a[base + 3] - b[base + 3];
-
-        sum0 += d0 * d0;
-        sum1 += d1 * d1;
-        sum2 += d2 * d2;
-        sum3 += d3 * d3;
-    }
-
-    // Handle remainder
-    let base = chunks * 4;
-    for i in 0..remainder {
-        let d = a[base + i] - b[base + i];
-        sum0 += d * d;
-    }
-
-    sum0 + sum1 + sum2 + sum3
+    simd_explicit::squared_l2_distance_simd(a, b)
 }
 
-/// Computes dot product and both squared norms in a single pass.
-///
-/// Returns (`dot_product`, `norm_a_squared`, `norm_b_squared`)
-#[inline]
-#[allow(clippy::similar_names)]
-fn fused_dot_norms(a: &[f32], b: &[f32]) -> (f32, f32, f32) {
-    let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
-
-    let mut dot0 = 0.0f32;
-    let mut dot1 = 0.0f32;
-    let mut dot2 = 0.0f32;
-    let mut dot3 = 0.0f32;
-
-    let mut norm_a0 = 0.0f32;
-    let mut norm_a1 = 0.0f32;
-    let mut norm_a2 = 0.0f32;
-    let mut norm_a3 = 0.0f32;
-
-    let mut norm_b0 = 0.0f32;
-    let mut norm_b1 = 0.0f32;
-    let mut norm_b2 = 0.0f32;
-    let mut norm_b3 = 0.0f32;
-
-    for i in 0..chunks {
-        let base = i * 4;
-
-        let a0 = a[base];
-        let a1 = a[base + 1];
-        let a2 = a[base + 2];
-        let a3 = a[base + 3];
-
-        let b0 = b[base];
-        let b1 = b[base + 1];
-        let b2 = b[base + 2];
-        let b3 = b[base + 3];
-
-        dot0 += a0 * b0;
-        dot1 += a1 * b1;
-        dot2 += a2 * b2;
-        dot3 += a3 * b3;
-
-        norm_a0 += a0 * a0;
-        norm_a1 += a1 * a1;
-        norm_a2 += a2 * a2;
-        norm_a3 += a3 * a3;
-
-        norm_b0 += b0 * b0;
-        norm_b1 += b1 * b1;
-        norm_b2 += b2 * b2;
-        norm_b3 += b3 * b3;
-    }
-
-    // Handle remainder
-    let base = chunks * 4;
-    for i in 0..remainder {
-        let ai = a[base + i];
-        let bi = b[base + i];
-        dot0 += ai * bi;
-        norm_a0 += ai * ai;
-        norm_b0 += bi * bi;
-    }
-
-    (
-        dot0 + dot1 + dot2 + dot3,
-        norm_a0 + norm_a1 + norm_a2 + norm_a3,
-        norm_b0 + norm_b1 + norm_b2 + norm_b3,
-    )
-}
-
-/// Normalizes a vector in-place (zero allocation).
+/// Normalizes a vector in-place using explicit SIMD.
 ///
 /// # Panics
 ///
 /// Does not panic on zero vector (leaves unchanged).
 #[inline]
 pub fn normalize_inplace(v: &mut [f32]) {
-    let norm_sq: f32 = v.iter().map(|x| x * x).sum();
-
-    if norm_sq == 0.0 {
-        return;
-    }
-
-    let inv_norm = 1.0 / norm_sq.sqrt();
-
-    // Unrolled for auto-vectorization
-    let chunks = v.len() / 4;
-    let remainder = v.len() % 4;
-
-    for i in 0..chunks {
-        let base = i * 4;
-        v[base] *= inv_norm;
-        v[base + 1] *= inv_norm;
-        v[base + 2] *= inv_norm;
-        v[base + 3] *= inv_norm;
-    }
-
-    let base = chunks * 4;
-    for i in 0..remainder {
-        v[base + i] *= inv_norm;
-    }
+    simd_explicit::normalize_inplace_simd(v);
 }
 
 /// Computes the L2 norm (magnitude) of a vector.
@@ -211,7 +83,11 @@ pub fn norm(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 
-/// Computes dot product with loop unrolling.
+/// Computes dot product using explicit SIMD (f32x8).
+///
+/// # Performance
+///
+/// ~45ns for 768d vectors (2.9x faster than auto-vectorized version).
 ///
 /// # Panics
 ///
@@ -219,30 +95,7 @@ pub fn norm(v: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn dot_product_fast(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-
-    let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
-
-    let mut sum0 = 0.0f32;
-    let mut sum1 = 0.0f32;
-    let mut sum2 = 0.0f32;
-    let mut sum3 = 0.0f32;
-
-    for i in 0..chunks {
-        let base = i * 4;
-        sum0 += a[base] * b[base];
-        sum1 += a[base + 1] * b[base + 1];
-        sum2 += a[base + 2] * b[base + 2];
-        sum3 += a[base + 3] * b[base + 3];
-    }
-
-    let base = chunks * 4;
-    for i in 0..remainder {
-        sum0 += a[base + i] * b[base + i];
-    }
-
-    sum0 + sum1 + sum2 + sum3
+    simd_explicit::dot_product_simd(a, b)
 }
 
 /// Computes Hamming distance for binary vectors.

@@ -100,13 +100,16 @@ impl Database {
     /// Args:
     ///     name: Collection name
     ///     dimension: Vector dimension (e.g., 768 for BERT embeddings)
-    ///     metric: Distance metric - "cosine", "euclidean", or "dot" (default: "cosine")
+    ///     metric: Distance metric - "cosine", "euclidean", "dot", "hamming", or "jaccard"
+    ///             (default: "cosine")
     ///
     /// Returns:
     ///     Collection instance
     ///
     /// Example:
     ///     >>> collection = db.create_collection("documents", dimension=768, metric="cosine")
+    ///     >>> # For binary vectors:
+    ///     >>> fingerprints = db.create_collection("hashes", dimension=256, metric="hamming")
     #[pyo3(signature = (name, dimension, metric = "cosine"))]
     fn create_collection(
         &self,
@@ -407,8 +410,10 @@ fn parse_metric(metric: &str) -> PyResult<DistanceMetric> {
         "cosine" => Ok(DistanceMetric::Cosine),
         "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
         "dot" | "dotproduct" | "ip" => Ok(DistanceMetric::DotProduct),
+        "hamming" => Ok(DistanceMetric::Hamming),
+        "jaccard" => Ok(DistanceMetric::Jaccard),
         _ => Err(PyValueError::new_err(format!(
-            "Invalid metric '{}'. Use 'cosine', 'euclidean', or 'dot'",
+            "Invalid metric '{}'. Use 'cosine', 'euclidean', 'dot', 'hamming', or 'jaccard'",
             metric
         ))),
     }

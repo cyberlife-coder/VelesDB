@@ -71,3 +71,11 @@ harness = false
 [[bench]]
 name = "simd_benchmark"
 harness = false
+
+[[bench]]
+name = "overhead_benchmark"
+harness = false
+
+[[bench]]
+name = "column_filter_benchmark"
+harness = false

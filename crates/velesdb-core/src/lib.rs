@@ -37,6 +37,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod collection;
+pub mod column_store;
 pub mod distance;
 pub mod error;
 pub mod filter;
@@ -56,6 +57,8 @@ pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use point::Point;
 pub use quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
+
+pub use column_store::{ColumnStore, ColumnType, ColumnValue, StringId, StringTable, TypedColumn};
 
 /// Database instance managing collections and storage.
 pub struct Database {
