@@ -55,6 +55,10 @@ version = "2.0"
 [dependencies.wide]
 version = "0.7"
 
+[dependencies.half]
+version = "2.4"
+features = ["std", "serde"]
+
 [dependencies.pest]
 version = "2.7"
 
