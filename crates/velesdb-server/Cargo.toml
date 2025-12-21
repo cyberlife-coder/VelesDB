@@ -21,7 +21,7 @@ name = "velesdb-server"
 path = "src/main.rs"
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core", version = "0.1.3" }
+velesdb-core = { path = "../velesdb-core", version = "0.1.4" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
