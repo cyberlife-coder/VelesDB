@@ -646,3 +646,173 @@ async fn test_text_search_collection_not_found() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// =============================================================================
+// VelesQL MATCH clause tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_velesql_match_only() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "articles",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points with text
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/articles/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"title": "Rust programming", "content": "Learn Rust"}},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"title": "Python tutorial", "content": "Learn Python"}},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"title": "Rust performance", "content": "Fast code"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // VelesQL query with MATCH only
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT * FROM articles WHERE content MATCH 'rust' LIMIT 10",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["results"].is_array());
+    let results = json["results"].as_array().expect("Not an array");
+    assert_eq!(results.len(), 2); // Docs 1 and 3 contain "rust"
+}
+
+#[tokio::test]
+async fn test_velesql_hybrid_near_and_match() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "docs",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/docs/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"content": "Rust programming"}},
+                            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"content": "Python programming"}},
+                            {"id": 3, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"content": "Rust performance"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // VelesQL with NEAR + MATCH (hybrid)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'rust' LIMIT 10",
+                        "params": {"v": [1.0, 0.0, 0.0, 0.0]}
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Request failed");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["results"].is_array());
+    let results = json["results"].as_array().expect("Not an array");
+    assert!(!results.is_empty());
+    // Doc 1 should rank highest (matches both vector and text)
+    assert_eq!(results[0]["id"], 1);
+}

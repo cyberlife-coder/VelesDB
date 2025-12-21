@@ -901,59 +901,102 @@ pub async fn query(
         }
     };
 
-    // Extract vector search from WHERE clause
+    // Extract vector search and MATCH from WHERE clause
     let vector_search = extract_vector_search(&select.where_clause);
+    let match_condition_opt = extract_match_condition(&select.where_clause);
 
-    // Extract vector from params if needed
-    let query_vector = match vector_search {
-        Some(vs) => match &vs.vector {
-            VectorExpr::Literal(v) => v.clone(),
-            VectorExpr::Parameter(param_name) => match req.params.get(param_name) {
-                Some(serde_json::Value::Array(arr)) => arr
-                    .iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect(),
-                _ => {
+    // Determine limit
+    let limit = select.limit.unwrap_or(10) as usize;
+
+    // Execute appropriate search based on conditions
+    let results = match (vector_search, match_condition_opt) {
+        // Hybrid search: NEAR + MATCH
+        (Some(vs), Some(match_cond)) => {
+            let query_vector = match &vs.vector {
+                VectorExpr::Literal(v) => v.clone(),
+                VectorExpr::Parameter(param_name) => match req.params.get(param_name) {
+                    Some(serde_json::Value::Array(arr)) => arr
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                    _ => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                error: format!("Missing or invalid parameter: ${}", param_name),
+                            }),
+                        )
+                            .into_response()
+                    }
+                },
+            };
+
+            match collection.hybrid_search(&query_vector, &match_cond.query, limit, Some(0.5)) {
+                Ok(r) => r,
+                Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: format!("Missing or invalid parameter: ${}", param_name),
+                            error: e.to_string(),
                         }),
                     )
                         .into_response()
                 }
-            },
-        },
-        None => {
-            // No vector search, return error for now
+            }
+        }
+
+        // Vector search only: NEAR
+        (Some(vs), None) => {
+            let query_vector = match &vs.vector {
+                VectorExpr::Literal(v) => v.clone(),
+                VectorExpr::Parameter(param_name) => match req.params.get(param_name) {
+                    Some(serde_json::Value::Array(arr)) => arr
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                    _ => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                error: format!("Missing or invalid parameter: ${}", param_name),
+                            }),
+                        )
+                            .into_response()
+                    }
+                },
+            };
+
+            match collection.search(&query_vector, limit) {
+                Ok(r) => r,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: e.to_string(),
+                        }),
+                    )
+                        .into_response()
+                }
+            }
+        }
+
+        // Text search only: MATCH
+        (None, Some(match_cond)) => collection.text_search(&match_cond.query, limit),
+
+        // No search condition
+        (None, None) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
-                    error: "VelesQL queries require a vector search (NEAR clause)".to_string(),
+                    error: "VelesQL queries require a search condition (NEAR or MATCH clause)"
+                        .to_string(),
                 }),
             )
                 .into_response();
         }
     };
 
-    // Determine limit
-    let limit = select.limit.unwrap_or(10) as usize;
-
-    // Execute search
-    let results = match collection.search(&query_vector, limit) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    // Apply filters if present (post-filtering)
+    // Apply additional filters if present (post-filtering for non-search conditions)
     let filtered_results: Vec<_> = if select.where_clause.is_some() {
         results
             .into_iter()
@@ -999,6 +1042,28 @@ fn extract_vector_search_inner(condition: &Condition) -> Option<&velesql::Vector
             extract_vector_search_inner(left).or_else(|| extract_vector_search_inner(right))
         }
         Condition::Group(inner) => extract_vector_search_inner(inner),
+        _ => None,
+    }
+}
+
+/// Extract MATCH condition from a condition tree.
+fn extract_match_condition(condition: &Option<Condition>) -> Option<&velesql::MatchCondition> {
+    match condition {
+        None => None,
+        Some(cond) => extract_match_inner(cond),
+    }
+}
+
+fn extract_match_inner(condition: &Condition) -> Option<&velesql::MatchCondition> {
+    match condition {
+        Condition::Match(m) => Some(m),
+        Condition::And(left, right) => {
+            extract_match_inner(left).or_else(|| extract_match_inner(right))
+        }
+        Condition::Or(left, right) => {
+            extract_match_inner(left).or_else(|| extract_match_inner(right))
+        }
+        Condition::Group(inner) => extract_match_inner(inner),
         _ => None,
     }
 }
