@@ -38,6 +38,9 @@ lcov.info
 # Documentation build
 /docs/build/
 
+# Internal documents (private/confidential)
+/docs/internal/
+
 # Temporary files
 *.tmp
 *.temp
