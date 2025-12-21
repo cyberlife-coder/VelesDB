@@ -127,9 +127,22 @@ impl Collection {
             Arc::new(HnswIndex::new(config.dimension, config.metric))
         };
 
-        // Create BM25 index
-        // Note: BM25 index is in-memory only for now, rebuilt on upsert
+        // Create and rebuild BM25 index from existing payloads
         let text_index = Arc::new(Bm25Index::new());
+
+        // Rebuild BM25 index from persisted payloads
+        {
+            let storage = payload_storage.read();
+            let ids = storage.ids();
+            for id in ids {
+                if let Ok(Some(payload)) = storage.retrieve(id) {
+                    let text = Self::extract_text_from_payload(&payload);
+                    if !text.is_empty() {
+                        text_index.add_document(id, &text);
+                    }
+                }
+            }
+        }
 
         Ok(Self {
             path,
@@ -987,6 +1000,53 @@ mod tests {
         // All results should have IDs divisible by 10
         for result in &results {
             assert_eq!(result.point.id % 10, 0);
+        }
+    }
+
+    #[test]
+    fn test_bm25_persistence_on_reopen() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        // Create collection and add documents
+        {
+            let collection = Collection::create(path.clone(), 4, DistanceMetric::Cosine).unwrap();
+
+            let points = vec![
+                Point::new(
+                    1,
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    Some(json!({"content": "Rust programming language"})),
+                ),
+                Point::new(
+                    2,
+                    vec![0.0, 1.0, 0.0, 0.0],
+                    Some(json!({"content": "Python tutorial"})),
+                ),
+                Point::new(
+                    3,
+                    vec![0.0, 0.0, 1.0, 0.0],
+                    Some(json!({"content": "Rust is fast and safe"})),
+                ),
+            ];
+            collection.upsert(points).unwrap();
+
+            // Verify search works before closing
+            let results = collection.text_search("rust", 10);
+            assert_eq!(results.len(), 2);
+        }
+
+        // Reopen collection and verify BM25 index is rebuilt
+        {
+            let collection = Collection::open(path).unwrap();
+
+            // BM25 should be rebuilt from persisted payloads
+            let results = collection.text_search("rust", 10);
+            assert_eq!(results.len(), 2);
+
+            let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+            assert!(ids.contains(&1));
+            assert!(ids.contains(&3));
         }
     }
 }

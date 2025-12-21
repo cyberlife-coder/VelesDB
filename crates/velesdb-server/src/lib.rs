@@ -70,6 +70,8 @@ use velesdb_core::{Database, DistanceMetric, Point};
         delete_point,
         search,
         batch_search,
+        text_search,
+        hybrid_search,
         query
     ),
     components(
@@ -80,6 +82,8 @@ use velesdb_core::{Database, DistanceMetric, Point};
             PointRequest,
             SearchRequest,
             BatchSearchRequest,
+            TextSearchRequest,
+            HybridSearchRequest,
             SearchResponse,
             BatchSearchResponse,
             SearchResultResponse,
@@ -210,6 +214,40 @@ pub struct SearchResultResponse {
 pub struct ErrorResponse {
     /// Error message.
     pub error: String,
+}
+
+/// Request for BM25 text search.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TextSearchRequest {
+    /// Text query for full-text search.
+    #[schema(example = "rust programming")]
+    pub query: String,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    #[schema(example = 10)]
+    pub top_k: usize,
+}
+
+/// Request for hybrid search (vector + text).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct HybridSearchRequest {
+    /// Query vector for similarity search.
+    pub vector: Vec<f32>,
+    /// Text query for BM25 search.
+    #[schema(example = "rust programming")]
+    pub query: String,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    #[schema(example = 10)]
+    pub top_k: usize,
+    /// Weight for vector similarity (0.0-1.0). Text weight = 1 - vector_weight.
+    #[serde(default = "default_vector_weight")]
+    #[schema(example = 0.5)]
+    pub vector_weight: f32,
+}
+
+fn default_vector_weight() -> f32 {
+    0.5
 }
 
 /// Request for `VelesQL` query execution.
@@ -694,6 +732,113 @@ pub async fn batch_search(
     .into_response()
 }
 
+/// Search using BM25 full-text search.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/text",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = TextSearchRequest,
+    responses(
+        (status = 200, description = "Text search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn text_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<TextSearchRequest>,
+) -> impl IntoResponse {
+    let collection = match state.db.get_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let results = collection.text_search(&req.query, req.top_k);
+
+    let response = SearchResponse {
+        results: results
+            .into_iter()
+            .map(|r| SearchResultResponse {
+                id: r.point.id,
+                score: r.score,
+                payload: r.point.payload,
+            })
+            .collect(),
+    };
+
+    Json(response).into_response()
+}
+
+/// Hybrid search combining vector similarity and BM25 text search.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/hybrid",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = HybridSearchRequest,
+    responses(
+        (status = 200, description = "Hybrid search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn hybrid_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<HybridSearchRequest>,
+) -> impl IntoResponse {
+    let collection = match state.db.get_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    match collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight)) {
+        Ok(results) => {
+            let response = SearchResponse {
+                results: results
+                    .into_iter()
+                    .map(|r| SearchResultResponse {
+                        id: r.point.id,
+                        score: r.score,
+                        payload: r.point.payload,
+                    })
+                    .collect(),
+            };
+            Json(response).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 /// Execute a VelesQL query.
 ///
 /// POST /query
@@ -756,59 +901,102 @@ pub async fn query(
         }
     };
 
-    // Extract vector search from WHERE clause
+    // Extract vector search and MATCH from WHERE clause
     let vector_search = extract_vector_search(&select.where_clause);
+    let match_condition_opt = extract_match_condition(&select.where_clause);
 
-    // Extract vector from params if needed
-    let query_vector = match vector_search {
-        Some(vs) => match &vs.vector {
-            VectorExpr::Literal(v) => v.clone(),
-            VectorExpr::Parameter(param_name) => match req.params.get(param_name) {
-                Some(serde_json::Value::Array(arr)) => arr
-                    .iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect(),
-                _ => {
+    // Determine limit
+    let limit = select.limit.unwrap_or(10) as usize;
+
+    // Execute appropriate search based on conditions
+    let results = match (vector_search, match_condition_opt) {
+        // Hybrid search: NEAR + MATCH
+        (Some(vs), Some(match_cond)) => {
+            let query_vector = match &vs.vector {
+                VectorExpr::Literal(v) => v.clone(),
+                VectorExpr::Parameter(param_name) => match req.params.get(param_name) {
+                    Some(serde_json::Value::Array(arr)) => arr
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                    _ => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                error: format!("Missing or invalid parameter: ${}", param_name),
+                            }),
+                        )
+                            .into_response()
+                    }
+                },
+            };
+
+            match collection.hybrid_search(&query_vector, &match_cond.query, limit, Some(0.5)) {
+                Ok(r) => r,
+                Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
-                            error: format!("Missing or invalid parameter: ${}", param_name),
+                            error: e.to_string(),
                         }),
                     )
                         .into_response()
                 }
-            },
-        },
-        None => {
-            // No vector search, return error for now
+            }
+        }
+
+        // Vector search only: NEAR
+        (Some(vs), None) => {
+            let query_vector = match &vs.vector {
+                VectorExpr::Literal(v) => v.clone(),
+                VectorExpr::Parameter(param_name) => match req.params.get(param_name) {
+                    Some(serde_json::Value::Array(arr)) => arr
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                    _ => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                error: format!("Missing or invalid parameter: ${}", param_name),
+                            }),
+                        )
+                            .into_response()
+                    }
+                },
+            };
+
+            match collection.search(&query_vector, limit) {
+                Ok(r) => r,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: e.to_string(),
+                        }),
+                    )
+                        .into_response()
+                }
+            }
+        }
+
+        // Text search only: MATCH
+        (None, Some(match_cond)) => collection.text_search(&match_cond.query, limit),
+
+        // No search condition
+        (None, None) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
-                    error: "VelesQL queries require a vector search (NEAR clause)".to_string(),
+                    error: "VelesQL queries require a search condition (NEAR or MATCH clause)"
+                        .to_string(),
                 }),
             )
                 .into_response();
         }
     };
 
-    // Determine limit
-    let limit = select.limit.unwrap_or(10) as usize;
-
-    // Execute search
-    let results = match collection.search(&query_vector, limit) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    // Apply filters if present (post-filtering)
+    // Apply additional filters if present (post-filtering for non-search conditions)
     let filtered_results: Vec<_> = if select.where_clause.is_some() {
         results
             .into_iter()
@@ -854,6 +1042,28 @@ fn extract_vector_search_inner(condition: &Condition) -> Option<&velesql::Vector
             extract_vector_search_inner(left).or_else(|| extract_vector_search_inner(right))
         }
         Condition::Group(inner) => extract_vector_search_inner(inner),
+        _ => None,
+    }
+}
+
+/// Extract MATCH condition from a condition tree.
+fn extract_match_condition(condition: &Option<Condition>) -> Option<&velesql::MatchCondition> {
+    match condition {
+        None => None,
+        Some(cond) => extract_match_inner(cond),
+    }
+}
+
+fn extract_match_inner(condition: &Condition) -> Option<&velesql::MatchCondition> {
+    match condition {
+        Condition::Match(m) => Some(m),
+        Condition::And(left, right) => {
+            extract_match_inner(left).or_else(|| extract_match_inner(right))
+        }
+        Condition::Or(left, right) => {
+            extract_match_inner(left).or_else(|| extract_match_inner(right))
+        }
+        Condition::Group(inner) => extract_match_inner(inner),
         _ => None,
     }
 }
