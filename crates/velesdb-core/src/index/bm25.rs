@@ -126,16 +126,16 @@ impl Bm25Index {
         #[allow(clippy::cast_possible_truncation)] // Document length won't exceed u32::MAX
         let doc_length = tokens.len() as u32;
 
-        // Create document
+        // Create document (move term_freqs, avoid clone)
         let doc = Document {
-            term_freqs: term_freqs.clone(),
+            term_freqs,
             length: doc_length,
         };
 
-        // Update inverted index
+        // Update inverted index (use doc.term_freqs since we moved it)
         {
             let mut inv_idx = self.inverted_index.write();
-            for term in term_freqs.keys() {
+            for term in doc.term_freqs.keys() {
                 inv_idx.entry(term.clone()).or_default().insert(id);
             }
         }
@@ -202,22 +202,6 @@ impl Bm25Index {
         }
     }
 
-    /// Calculates the IDF (Inverse Document Frequency) for a term.
-    #[allow(clippy::cast_precision_loss)] // IDF formula uses f32 approximations
-    fn idf(&self, term: &str, doc_count: usize) -> f32 {
-        let inv_idx = self.inverted_index.read();
-        let df = inv_idx.get(term).map_or(0, HashSet::len);
-
-        if df == 0 || doc_count == 0 {
-            return 0.0;
-        }
-
-        // IDF formula: ln((N - df + 0.5) / (df + 0.5) + 1)
-        let n = doc_count as f32;
-        let df = df as f32;
-        ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
-    }
-
     /// Searches the index for documents matching the query.
     ///
     /// # Arguments
@@ -228,6 +212,7 @@ impl Bm25Index {
     /// # Returns
     ///
     /// Vector of (`document_id`, score) tuples, sorted by score descending.
+    #[allow(clippy::cast_precision_loss)]
     pub fn search(&self, query: &str, k: usize) -> Vec<(u64, f32)> {
         let query_terms = Self::tokenize(query);
         if query_terms.is_empty() {
@@ -240,8 +225,27 @@ impl Bm25Index {
         }
 
         let total_length = *self.total_doc_length.read();
-        #[allow(clippy::cast_precision_loss)]
         let avgdl = total_length as f32 / doc_count as f32;
+
+        // Perf: Pre-compute IDF values for all query terms (single lock acquisition)
+        // This avoids repeated lock acquisitions in the scoring loop.
+        let idf_cache: FxHashMap<&str, f32> = {
+            let inv_idx = self.inverted_index.read();
+            let n = doc_count as f32;
+            query_terms
+                .iter()
+                .map(|term| {
+                    let df = inv_idx.get(term).map_or(0, HashSet::len);
+                    let idf = if df == 0 {
+                        0.0
+                    } else {
+                        let df_f = df as f32;
+                        ((n - df_f + 0.5) / (df_f + 0.5) + 1.0).ln()
+                    };
+                    (term.as_str(), idf)
+                })
+                .collect()
+        };
 
         // Find candidate documents (documents containing at least one query term)
         let candidates: HashSet<u64> = {
@@ -253,44 +257,54 @@ impl Bm25Index {
                 .collect()
         };
 
-        // Score each candidate
-        let mut scores: Vec<(u64, f32)> = {
+        // Perf: Pre-allocate scores vector with estimated capacity
+        let mut scores: Vec<(u64, f32)> = Vec::with_capacity(candidates.len().min(k * 2));
+
+        // Score each candidate using cached IDF values
+        {
             let docs = self.documents.read();
+            let k1 = self.params.k1;
+            let b = self.params.b;
 
-            candidates
-                .into_iter()
-                .filter_map(|doc_id| {
-                    let doc = docs.get(&doc_id)?;
-                    let score = self.score_document(doc, &query_terms, doc_count, avgdl);
+            for doc_id in candidates {
+                if let Some(doc) = docs.get(&doc_id) {
+                    let score =
+                        Self::score_document_fast(doc, &query_terms, &idf_cache, k1, b, avgdl);
                     if score > 0.0 {
-                        Some((doc_id, score))
-                    } else {
-                        None
+                        scores.push((doc_id, score));
                     }
-                })
-                .collect()
-        };
+                }
+            }
+        }
 
-        // Sort by score descending
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Perf: Use partial_sort for top-k instead of full sort
+        if scores.len() > k {
+            scores.select_nth_unstable_by(k, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scores.truncate(k);
+            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
 
-        // Return top k
-        scores.truncate(k);
         scores
     }
 
-    /// Calculates BM25 score for a document given query terms.
-    #[allow(clippy::cast_precision_loss)] // BM25 uses f32 approximations
-    fn score_document(
-        &self,
+    /// Fast BM25 scoring with pre-computed IDF cache.
+    ///
+    /// Perf: Avoids lock acquisition per term by using cached IDF values.
+    #[allow(clippy::cast_precision_loss)]
+    fn score_document_fast(
         doc: &Document,
         query_terms: &[String],
-        doc_count: usize,
+        idf_cache: &FxHashMap<&str, f32>,
+        k1: f32,
+        b: f32,
         avgdl: f32,
     ) -> f32 {
-        let k1 = self.params.k1;
-        let b = self.params.b;
         let doc_len = doc.length as f32;
+        let len_norm = 1.0 - b + b * doc_len / avgdl;
 
         query_terms
             .iter()
@@ -300,11 +314,11 @@ impl Bm25Index {
                     return 0.0;
                 }
 
-                let idf = self.idf(term, doc_count);
+                let idf = idf_cache.get(term.as_str()).copied().unwrap_or(0.0);
 
-                // BM25 term score
+                // BM25 term score (optimized: len_norm pre-computed)
                 let numerator = tf * (k1 + 1.0);
-                let denominator = tf + k1 * (1.0 - b + b * doc_len / avgdl);
+                let denominator = tf + k1 * len_norm;
 
                 idf * numerator / denominator
             })
