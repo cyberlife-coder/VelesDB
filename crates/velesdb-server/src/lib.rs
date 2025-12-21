@@ -70,6 +70,8 @@ use velesdb_core::{Database, DistanceMetric, Point};
         delete_point,
         search,
         batch_search,
+        text_search,
+        hybrid_search,
         query
     ),
     components(
@@ -80,6 +82,8 @@ use velesdb_core::{Database, DistanceMetric, Point};
             PointRequest,
             SearchRequest,
             BatchSearchRequest,
+            TextSearchRequest,
+            HybridSearchRequest,
             SearchResponse,
             BatchSearchResponse,
             SearchResultResponse,
@@ -210,6 +214,40 @@ pub struct SearchResultResponse {
 pub struct ErrorResponse {
     /// Error message.
     pub error: String,
+}
+
+/// Request for BM25 text search.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TextSearchRequest {
+    /// Text query for full-text search.
+    #[schema(example = "rust programming")]
+    pub query: String,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    #[schema(example = 10)]
+    pub top_k: usize,
+}
+
+/// Request for hybrid search (vector + text).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct HybridSearchRequest {
+    /// Query vector for similarity search.
+    pub vector: Vec<f32>,
+    /// Text query for BM25 search.
+    #[schema(example = "rust programming")]
+    pub query: String,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    #[schema(example = 10)]
+    pub top_k: usize,
+    /// Weight for vector similarity (0.0-1.0). Text weight = 1 - vector_weight.
+    #[serde(default = "default_vector_weight")]
+    #[schema(example = 0.5)]
+    pub vector_weight: f32,
+}
+
+fn default_vector_weight() -> f32 {
+    0.5
 }
 
 /// Request for `VelesQL` query execution.
@@ -692,6 +730,113 @@ pub async fn batch_search(
         timing_ms,
     })
     .into_response()
+}
+
+/// Search using BM25 full-text search.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/text",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = TextSearchRequest,
+    responses(
+        (status = 200, description = "Text search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn text_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<TextSearchRequest>,
+) -> impl IntoResponse {
+    let collection = match state.db.get_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let results = collection.text_search(&req.query, req.top_k);
+
+    let response = SearchResponse {
+        results: results
+            .into_iter()
+            .map(|r| SearchResultResponse {
+                id: r.point.id,
+                score: r.score,
+                payload: r.point.payload,
+            })
+            .collect(),
+    };
+
+    Json(response).into_response()
+}
+
+/// Hybrid search combining vector similarity and BM25 text search.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/hybrid",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = HybridSearchRequest,
+    responses(
+        (status = 200, description = "Hybrid search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn hybrid_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<HybridSearchRequest>,
+) -> impl IntoResponse {
+    let collection = match state.db.get_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    match collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight)) {
+        Ok(results) => {
+            let response = SearchResponse {
+                results: results
+                    .into_iter()
+                    .map(|r| SearchResultResponse {
+                        id: r.point.id,
+                        score: r.score,
+                        payload: r.point.payload,
+                    })
+                    .collect(),
+            };
+            Json(response).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Execute a VelesQL query.

@@ -15,7 +15,8 @@ use tower::ServiceExt;
 use velesdb_core::Database;
 use velesdb_server::{
     batch_search, create_collection, delete_collection, delete_point, get_collection, get_point,
-    health_check, list_collections, query, search, upsert_points, AppState,
+    health_check, hybrid_search, list_collections, query, search, text_search, upsert_points,
+    AppState,
 };
 
 /// Helper to create test app with all routes
@@ -40,6 +41,8 @@ fn create_test_app(temp_dir: &TempDir) -> Router {
         )
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
+        .route("/collections/{name}/search/text", post(text_search))
+        .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/query", post(query))
         .with_state(state)
 }
@@ -444,4 +447,202 @@ async fn test_velesql_query_syntax_error() {
         .expect("Request failed");
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// =============================================================================
+// BM25 Text Search Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_text_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "docs",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points with text payloads
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/docs/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"content": "Rust programming language"}},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"content": "Python is great"}},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"content": "Rust is fast"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Text search for "rust"
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/docs/search/text")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "rust",
+                        "top_k": 10
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["results"].is_array());
+    let results = json["results"].as_array().expect("Not an array");
+    assert_eq!(results.len(), 2); // Should find docs 1 and 3
+}
+
+#[tokio::test]
+async fn test_hybrid_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "docs",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/docs/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"content": "Rust programming"}},
+                            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"content": "Python programming"}},
+                            {"id": 3, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"content": "Rust performance"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Hybrid search: vector similar to [1,0,0,0] AND text "rust"
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/docs/search/hybrid")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "query": "rust",
+                        "top_k": 10,
+                        "vector_weight": 0.5
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["results"].is_array());
+    let results = json["results"].as_array().expect("Not an array");
+    assert!(!results.is_empty());
+    // Doc 1 should rank high (matches both vector and text)
+    assert_eq!(results[0]["id"], 1);
+}
+
+#[tokio::test]
+async fn test_text_search_collection_not_found() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/nonexistent/search/text")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "test",
+                        "top_k": 10
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
