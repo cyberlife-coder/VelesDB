@@ -355,19 +355,44 @@ curl -X POST http://localhost:8080/query \
 
 VelesDB is built for speed. All critical paths are SIMD-optimized.
 
-| Operation | Time (768d vectors) | Throughput |
-|-----------|---------------------|------------|
-| Cosine Similarity | ~325 ns | **3M ops/sec** |
-| Euclidean Distance | ~155 ns | **6.5M ops/sec** |
-| Dot Product | ~140 ns | **7M ops/sec** |
-| Metadata Filter | ~13 µs/1k items | **77k batches/sec** |
+### Core Vector Operations (768d)
 
-### Memory Efficiency with SQ8
+| Operation | Time | Throughput | Implementation |
+|-----------|------|------------|----------------|
+| **Hamming (Binary)** | **~13 ns** | **76.9M ops/sec** | POPCNT + Unroll |
+| **Euclidean** | **~135 ns** | **7.4M ops/sec** | AVX2 Fused |
+| **Dot Product** | **~140 ns** | **7.1M ops/sec** | AVX2 FMA |
+| **Cosine** | **~325 ns** | **3.0M ops/sec** | Single-pass Fused |
 
-| Configuration | RAM per 1M vectors (768d) |
-|---------------|---------------------------|
-| Full Precision (f32) | **3 GB** |
-| SQ8 Quantized (u8) | **0.75 GB** (4x reduction) |
+### Query Performance
+
+- **Metadata Filtering**: ~55M items/sec (Equality scan)
+- **VelesQL Parsing**: ~1.3M queries/sec
+- **Index Latency**: Sub-millisecond (p95) for <1M vectors
+
+> See full results in [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
+
+---
+
+## 🆚 Comparison vs Competitors
+
+| Feature | 🐺 VelesDB | 🦀 Qdrant | 🐿️ Pinecone | 🐘 pgvector |
+|---------|-----------|-----------|-------------|-------------|
+| **Core Language** | **Rust** | Rust | C++/Go (Proprietary) | C |
+| **Deployment** | **Single Binary** | Docker/Cloud | SaaS Only | PostgreSQL Extension |
+| **Vector Types** | **Float32, Binary, Set** | Float32, Binary | Float32 | Float32, Float16 |
+| **Query Language** | **SQL-like (VelesQL)** | JSON DSL | JSON/SDK | SQL |
+| **Full Text Search** | ❌ (Coming in Premium) | ✅ | ❌ | ✅ (via Postgres) |
+| **Quantization** | **SQ8 (Scalar)** | Binary/SQ | Proprietary | IVFFlat/HNSW |
+| **License** | **Apache 2.0** | Apache 2.0 | Closed | PostgreSQL |
+| **Best For** | **Embedded / Edge / Speed** | Scale / Cloud | Managed SaaS | Relational + Vector |
+
+### Key Differentiators
+
+1.  **VelesQL**: Write queries in SQL, not complex JSON objects.
+2.  **Specialized Metrics**: Native optimization for Hamming (Binary) and Jaccard (Sets) distances.
+3.  **Simplicity**: Zero dependencies, single binary, runs anywhere (Edge, Server, Docker).
+
 
 ---
 
@@ -695,8 +720,8 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 - [x] Python bindings (PyO3) with NumPy support
 - [x] CLI / REPL for VelesQL
 - [x] LangChain integration (`langchain-velesdb`)
+- [x] **New Metrics**: Hamming (Binary) & Jaccard (Sets)
 - [ ] OpenAPI/Swagger docs
-- [ ] Additional distance metrics (Hamming, Jaccard)
 
 ### v0.3.0 (Planned)
 - [ ] LlamaIndex integration
