@@ -51,12 +51,13 @@ pub fn dot_product_simd(a: &[f32], b: &[f32]) -> f32 {
 
     let mut sum = f32x8::ZERO;
 
-    // Process 8 elements at a time
+    // Process 8 elements at a time using FMA (fused multiply-add)
+    // FMA provides better precision and can be faster on modern CPUs
     for i in 0..simd_len {
         let offset = i * 8;
         let va = f32x8::from(&a[offset..offset + 8]);
         let vb = f32x8::from(&b[offset..offset + 8]);
-        sum += va * vb;
+        sum = va.mul_add(vb, sum); // FMA: sum = (va * vb) + sum
     }
 
     // Horizontal sum of SIMD lanes
@@ -109,7 +110,7 @@ pub fn squared_l2_distance_simd(a: &[f32], b: &[f32]) -> f32 {
         let va = f32x8::from(&a[offset..offset + 8]);
         let vb = f32x8::from(&b[offset..offset + 8]);
         let diff = va - vb;
-        sum += diff * diff;
+        sum = diff.mul_add(diff, sum); // FMA: sum = (diff * diff) + sum
     }
 
     let mut result = sum.reduce_add();
@@ -147,14 +148,15 @@ pub fn cosine_similarity_simd(a: &[f32], b: &[f32]) -> f32 {
     let mut norm_a_sum = f32x8::ZERO;
     let mut norm_b_sum = f32x8::ZERO;
 
+    // FMA for all three accumulations - better precision and potentially faster
     for i in 0..simd_len {
         let offset = i * 8;
         let va = f32x8::from(&a[offset..offset + 8]);
         let vb = f32x8::from(&b[offset..offset + 8]);
 
-        dot_sum += va * vb;
-        norm_a_sum += va * va;
-        norm_b_sum += vb * vb;
+        dot_sum = va.mul_add(vb, dot_sum);
+        norm_a_sum = va.mul_add(va, norm_a_sum);
+        norm_b_sum = vb.mul_add(vb, norm_b_sum);
     }
 
     let mut dot = dot_sum.reduce_add();
@@ -194,7 +196,7 @@ pub fn norm_simd(v: &[f32]) -> f32 {
     for i in 0..simd_len {
         let offset = i * 8;
         let vv = f32x8::from(&v[offset..offset + 8]);
-        sum += vv * vv;
+        sum = vv.mul_add(vv, sum); // FMA: sum = (vv * vv) + sum
     }
 
     let mut result = sum.reduce_add();
