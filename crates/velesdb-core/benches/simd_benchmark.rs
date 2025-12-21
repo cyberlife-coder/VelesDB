@@ -8,7 +8,7 @@ use velesdb_core::simd::{
 };
 use velesdb_core::simd_explicit::{
     cosine_similarity_simd, dot_product_simd, euclidean_distance_simd, hamming_distance_binary,
-    hamming_distance_simd,
+    hamming_distance_binary_fast, hamming_distance_simd,
 };
 
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -128,6 +128,14 @@ fn bench_hamming_binary(c: &mut Criterion) {
             f32_dim,
             |bencher, _| {
                 bencher.iter(|| hamming_distance_binary(black_box(&a_u64), black_box(&b_u64)));
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("u64_popcnt_fast", f32_dim),
+            f32_dim,
+            |bencher, _| {
+                bencher.iter(|| hamming_distance_binary_fast(black_box(&a_u64), black_box(&b_u64)));
             },
         );
     }

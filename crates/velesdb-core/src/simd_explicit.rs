@@ -277,28 +277,55 @@ pub fn hamming_distance_simd(a: &[f32], b: &[f32]) -> f32 {
 pub fn hamming_distance_binary(a: &[u64], b: &[u64]) -> u32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
 
-    let mut count = 0u32;
+    // Use iterator for better optimization - compiler can vectorize this
+    a.iter()
+        .zip(b.iter())
+        .map(|(&x, &y)| (x ^ y).count_ones())
+        .sum()
+}
 
-    // Process in chunks of 4 for better pipelining
-    let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
+/// Computes Hamming distance for packed binary vectors with 8-wide unrolling.
+///
+/// Optimized version with explicit 8-wide loop unrolling for maximum throughput.
+/// Use this for large vectors (>= 64 u64 elements).
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
+#[inline]
+#[must_use]
+pub fn hamming_distance_binary_fast(a: &[u64], b: &[u64]) -> u32 {
+    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+
+    let len = a.len();
+    let chunks = len / 8;
+    let remainder = len % 8;
+
+    // Use multiple accumulators to exploit instruction-level parallelism
+    let mut c0 = 0u32;
+    let mut c1 = 0u32;
+    let mut c2 = 0u32;
+    let mut c3 = 0u32;
 
     for i in 0..chunks {
-        let base = i * 4;
-        // XOR to find differing bits, then POPCNT
-        count += (a[base] ^ b[base]).count_ones();
-        count += (a[base + 1] ^ b[base + 1]).count_ones();
-        count += (a[base + 2] ^ b[base + 2]).count_ones();
-        count += (a[base + 3] ^ b[base + 3]).count_ones();
+        let base = i * 8;
+        c0 += (a[base] ^ b[base]).count_ones();
+        c1 += (a[base + 1] ^ b[base + 1]).count_ones();
+        c0 += (a[base + 2] ^ b[base + 2]).count_ones();
+        c1 += (a[base + 3] ^ b[base + 3]).count_ones();
+        c2 += (a[base + 4] ^ b[base + 4]).count_ones();
+        c3 += (a[base + 5] ^ b[base + 5]).count_ones();
+        c2 += (a[base + 6] ^ b[base + 6]).count_ones();
+        c3 += (a[base + 7] ^ b[base + 7]).count_ones();
     }
 
     // Handle remainder
-    let base = chunks * 4;
+    let base = chunks * 8;
     for i in 0..remainder {
-        count += (a[base + i] ^ b[base + i]).count_ones();
+        c0 += (a[base + i] ^ b[base + i]).count_ones();
     }
 
-    count
+    c0 + c1 + c2 + c3
 }
 
 /// Computes Jaccard similarity for f32 binary vectors with loop unrolling.
@@ -626,6 +653,32 @@ mod tests {
         let b = vec![0b0101_0101u64];
         let result = hamming_distance_binary(&a, &b);
         assert_eq!(result, 8, "8 bits different in low byte");
+    }
+
+    #[test]
+    fn test_hamming_distance_binary_fast_identical() {
+        let a = vec![0xFFFF_FFFF_FFFF_FFFFu64; 16];
+        let result = hamming_distance_binary_fast(&a, &a);
+        assert_eq!(result, 0, "Identical should be 0");
+    }
+
+    #[test]
+    fn test_hamming_distance_binary_fast_all_different() {
+        let a = vec![0u64; 16];
+        let b = vec![0xFFFF_FFFF_FFFF_FFFFu64; 16];
+        let result = hamming_distance_binary_fast(&a, &b);
+        assert_eq!(result, 64 * 16, "All bits different");
+    }
+
+    #[test]
+    fn test_hamming_distance_binary_fast_consistency() {
+        let a: Vec<u64> = (0..24).map(|i| i * 0x1234_5678).collect();
+        let b: Vec<u64> = (0..24).map(|i| i * 0x8765_4321).collect();
+
+        let standard = hamming_distance_binary(&a, &b);
+        let fast = hamming_distance_binary_fast(&a, &b);
+
+        assert_eq!(standard, fast, "Fast should match standard");
     }
 
     // =========================================================================
