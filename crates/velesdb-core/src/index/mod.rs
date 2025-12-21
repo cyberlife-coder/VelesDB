@@ -1,10 +1,12 @@
 //! Index implementations for efficient vector search.
 //!
 //! This module provides various index implementations for approximate
-//! nearest neighbor (ANN) search.
+//! nearest neighbor (ANN) search and full-text search.
 
+mod bm25;
 mod hnsw;
 
+pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};
 
 use crate::distance::DistanceMetric;
