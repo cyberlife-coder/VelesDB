@@ -55,7 +55,7 @@ pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use point::Point;
-pub use quantization::{QuantizedVector, StorageMode};
+pub use quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
 
 /// Database instance managing collections and storage.
 pub struct Database {
