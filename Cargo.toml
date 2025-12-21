@@ -40,7 +40,8 @@ memmap2 = "0.9"
 bincode = "1.3"
 
 # Indexing
-hnsw_rs = { version = "0.3", features = ["simdeez_f"] }
+# Note: hnsw_rs is defined per-crate with target-specific features
+# (simdeez_f on x86_64 only). See crates/velesdb-core/Cargo.toml
 roaring = "0.10"
 
 # API

@@ -22,17 +22,44 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 memmap2 = { workspace = true }
 bincode = { workspace = true }
-hnsw_rs = { workspace = true }
 roaring = { workspace = true }
-uuid = { version = "1.7", features = ["v4", "serde"] }
-parking_lot = "0.12"
-crossbeam-channel = "0.5"
-rayon = "1.10"
-bytes = "1.5"
-rustc-hash = "2.0"  # Fast FxHashMap for performance
-wide = "0.7"  # Portable SIMD for explicit vectorization
-pest = "2.7"
-pest_derive = "2.7"
+
+# HNSW index - use simdeez_f SIMD only on x86_64
+# On ARM (Apple Silicon), scalar fallback is used for HNSW internal ops,
+# but VelesDB's own SIMD (wide crate) handles search reranking with NEON.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+hnsw_rs = { version = "0.3", features = ["simdeez_f"] }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+hnsw_rs = { version = "0.3", default-features = false }
+
+[dependencies.uuid]
+version = "1.7"
+features = ["v4", "serde"]
+
+[dependencies.parking_lot]
+version = "0.12"
+
+[dependencies.crossbeam-channel]
+version = "0.5"
+
+[dependencies.rayon]
+version = "1.10"
+
+[dependencies.bytes]
+version = "1.5"
+
+[dependencies.rustc-hash]
+version = "2.0"
+
+[dependencies.wide]
+version = "0.7"
+
+[dependencies.pest]
+version = "2.7"
+
+[dependencies.pest_derive]
+version = "2.7"
 
 [dev-dependencies]
 criterion = { workspace = true }
