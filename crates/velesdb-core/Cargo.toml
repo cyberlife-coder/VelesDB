@@ -110,3 +110,7 @@ harness = false
 [[bench]]
 name = "column_filter_benchmark"
 harness = false
+
+[[bench]]
+name = "bm25_benchmark"
+harness = false
