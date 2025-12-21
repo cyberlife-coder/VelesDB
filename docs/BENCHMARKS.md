@@ -4,6 +4,8 @@
 
 This document details the performance benchmarks for VelesDB v0.1.1. Tests were conducted on a standard workstation (8-core CPU, AVX2 support).
 
+> 📈 **See also**: [Performance Optimization Roadmap](./PERFORMANCE_ROADMAP.md) for planned improvements.
+
 ## 🚀 Summary
 
 | Operation | Metric | Time (768d) | Throughput | Speedup vs Baseline |
