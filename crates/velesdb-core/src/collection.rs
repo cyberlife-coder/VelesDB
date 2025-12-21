@@ -2,7 +2,7 @@
 
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
-use crate::index::{HnswIndex, VectorIndex};
+use crate::index::{Bm25Index, HnswIndex, VectorIndex};
 use crate::point::{Point, SearchResult};
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 
@@ -44,6 +44,9 @@ pub struct Collection {
 
     /// HNSW index for fast approximate nearest neighbor search.
     index: Arc<HnswIndex>,
+
+    /// BM25 index for full-text search.
+    text_index: Arc<Bm25Index>,
 }
 
 impl Collection {
@@ -80,12 +83,16 @@ impl Collection {
         // Create HNSW index
         let index = Arc::new(HnswIndex::new(dimension, metric));
 
+        // Create BM25 index for full-text search
+        let text_index = Arc::new(Bm25Index::new());
+
         let collection = Self {
             path,
             config: Arc::new(RwLock::new(config)),
             vector_storage,
             payload_storage,
             index,
+            text_index,
         };
 
         collection.save_config()?;
@@ -120,12 +127,17 @@ impl Collection {
             Arc::new(HnswIndex::new(config.dimension, config.metric))
         };
 
+        // Create BM25 index
+        // Note: BM25 index is in-memory only for now, rebuilt on upsert
+        let text_index = Arc::new(Bm25Index::new());
+
         Ok(Self {
             path,
             config: Arc::new(RwLock::new(config)),
             vector_storage,
             payload_storage,
             index,
+            text_index,
         })
     }
 
@@ -178,10 +190,21 @@ impl Collection {
                 let _ = payload_storage.delete(point.id); // Ignore error if not found
             }
 
-            // 3. Update Index
+            // 3. Update Vector Index
             // Note: HnswIndex.insert() skips if ID already exists (no updates supported)
             // For true upsert semantics, we'd need to remove then re-insert
             self.index.insert(point.id, &point.vector);
+
+            // 4. Update BM25 Text Index
+            if let Some(payload) = &point.payload {
+                let text = Self::extract_text_from_payload(payload);
+                if !text.is_empty() {
+                    self.text_index.add_document(point.id, &text);
+                }
+            } else {
+                // Remove from text index if payload was cleared
+                self.text_index.remove_document(point.id);
+            }
         }
 
         // Update point count
@@ -319,6 +342,157 @@ impl Collection {
             .map_err(|e| Error::Serialization(e.to_string()))?;
         std::fs::write(config_path, config_data)?;
         Ok(())
+    }
+
+    /// Performs full-text search using BM25.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Text query to search for
+    /// * `k` - Maximum number of results to return
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results sorted by BM25 score (descending).
+    #[must_use]
+    pub fn text_search(&self, query: &str, k: usize) -> Vec<SearchResult> {
+        let bm25_results = self.text_index.search(query, k);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        bm25_results
+            .into_iter()
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .collect()
+    }
+
+    /// Performs hybrid search combining vector similarity and full-text search.
+    ///
+    /// Uses Reciprocal Rank Fusion (RRF) to combine results from both searches.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector_query` - Query vector for similarity search
+    /// * `text_query` - Text query for BM25 search
+    /// * `k` - Maximum number of results to return
+    /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub fn hybrid_search(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        k: usize,
+        vector_weight: Option<f32>,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        if vector_query.len() != config.dimension {
+            return Err(Error::DimensionMismatch {
+                expected: config.dimension,
+                actual: vector_query.len(),
+            });
+        }
+        drop(config);
+
+        let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+        let text_weight = 1.0 - weight;
+
+        // Get vector search results (more than k to allow for fusion)
+        let vector_results = self.index.search(vector_query, k * 2);
+
+        // Get BM25 text search results
+        let text_results = self.text_index.search(text_query, k * 2);
+
+        // Perf: Apply RRF (Reciprocal Rank Fusion) with FxHashMap for faster hashing
+        // RRF score = 1 / (rank + 60) - the constant 60 is standard
+        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+
+        // Add vector scores with RRF
+        #[allow(clippy::cast_precision_loss)]
+        for (rank, (id, _)) in vector_results.iter().enumerate() {
+            let rrf_score = weight / (rank as f32 + 60.0);
+            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+        }
+
+        // Add text scores with RRF
+        #[allow(clippy::cast_precision_loss)]
+        for (rank, (id, _)) in text_results.iter().enumerate() {
+            let rrf_score = text_weight / (rank as f32 + 60.0);
+            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+        }
+
+        // Perf: Use partial sort for top-k instead of full sort
+        let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
+        if scored_ids.len() > k {
+            scored_ids.select_nth_unstable_by(k, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored_ids.truncate(k);
+            scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // Fetch full point data
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let results: Vec<SearchResult> = scored_ids
+            .into_iter()
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Extracts all string values from a JSON payload for text indexing.
+    fn extract_text_from_payload(payload: &serde_json::Value) -> String {
+        let mut texts = Vec::new();
+        Self::collect_strings(payload, &mut texts);
+        texts.join(" ")
+    }
+
+    /// Recursively collects all string values from a JSON value.
+    fn collect_strings(value: &serde_json::Value, texts: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(s) => texts.push(s.clone()),
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    Self::collect_strings(item, texts);
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                for v in obj.values() {
+                    Self::collect_strings(v, texts);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -559,5 +733,260 @@ mod tests {
 
         // Point 1 (0,0,0) and Point 2 (1,0,0) should be closest to query (0.5,0,0)
         assert!(results[0].point.id == 1 || results[0].point.id == 2);
+    }
+
+    #[test]
+    fn test_collection_text_search() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        let points = vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0, 0.0],
+                Some(json!({"title": "Rust Programming", "content": "Learn Rust language"})),
+            ),
+            Point::new(
+                2,
+                vec![0.0, 1.0, 0.0],
+                Some(json!({"title": "Python Tutorial", "content": "Python is great"})),
+            ),
+            Point::new(
+                3,
+                vec![0.0, 0.0, 1.0],
+                Some(json!({"title": "Rust Performance", "content": "Rust is fast"})),
+            ),
+        ];
+        collection.upsert(points).unwrap();
+
+        // Search for "rust" - should match docs 1 and 3
+        let results = collection.text_search("rust", 10);
+        assert_eq!(results.len(), 2);
+
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&3));
+    }
+
+    #[test]
+    fn test_collection_hybrid_search() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        let points = vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0, 0.0],
+                Some(json!({"title": "Rust Programming"})),
+            ),
+            Point::new(
+                2,
+                vec![0.9, 0.1, 0.0], // Similar vector to query
+                Some(json!({"title": "Python Programming"})),
+            ),
+            Point::new(
+                3,
+                vec![0.0, 1.0, 0.0],
+                Some(json!({"title": "Rust Performance"})),
+            ),
+        ];
+        collection.upsert(points).unwrap();
+
+        // Hybrid search: vector close to [1,0,0], text "rust"
+        // Doc 1 matches both (vector + text)
+        // Doc 2 matches vector only
+        // Doc 3 matches text only
+        let query = vec![1.0, 0.0, 0.0];
+        let results = collection
+            .hybrid_search(&query, "rust", 3, Some(0.5))
+            .unwrap();
+
+        assert!(!results.is_empty());
+        // Doc 1 should rank high (matches both)
+        assert_eq!(results[0].point.id, 1);
+    }
+
+    #[test]
+    fn test_extract_text_from_payload() {
+        // Test nested payload extraction
+        let payload = json!({
+            "title": "Hello",
+            "meta": {
+                "author": "World",
+                "tags": ["rust", "fast"]
+            }
+        });
+
+        let text = Collection::extract_text_from_payload(&payload);
+        assert!(text.contains("Hello"));
+        assert!(text.contains("World"));
+        assert!(text.contains("rust"));
+        assert!(text.contains("fast"));
+    }
+
+    #[test]
+    fn test_text_search_empty_query() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        let points = vec![Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"content": "test document"})),
+        )];
+        collection.upsert(points).unwrap();
+
+        // Empty query should return empty results
+        let results = collection.text_search("", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_text_search_no_payload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        // Points without payload
+        let points = vec![
+            Point::new(1, vec![1.0, 0.0, 0.0], None),
+            Point::new(2, vec![0.0, 1.0, 0.0], None),
+        ];
+        collection.upsert(points).unwrap();
+
+        // Text search should return empty (no text indexed)
+        let results = collection.text_search("test", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_hybrid_search_text_weight_zero() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        let points = vec![
+            Point::new(1, vec![1.0, 0.0, 0.0], Some(json!({"title": "Rust"}))),
+            Point::new(2, vec![0.9, 0.1, 0.0], Some(json!({"title": "Python"}))),
+        ];
+        collection.upsert(points).unwrap();
+
+        // vector_weight=1.0 means text_weight=0.0 (pure vector search)
+        let query = vec![0.9, 0.1, 0.0];
+        let results = collection
+            .hybrid_search(&query, "rust", 2, Some(1.0))
+            .unwrap();
+
+        // Doc 2 should be first (closest vector) even though "rust" matches doc 1
+        assert_eq!(results[0].point.id, 2);
+    }
+
+    #[test]
+    fn test_hybrid_search_vector_weight_zero() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        let points = vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0, 0.0],
+                Some(json!({"title": "Rust programming language"})),
+            ),
+            Point::new(
+                2,
+                vec![0.99, 0.01, 0.0], // Very close to query vector
+                Some(json!({"title": "Python programming"})),
+            ),
+        ];
+        collection.upsert(points).unwrap();
+
+        // vector_weight=0.0 means text_weight=1.0 (pure text search)
+        let query = vec![0.99, 0.01, 0.0];
+        let results = collection
+            .hybrid_search(&query, "rust", 2, Some(0.0))
+            .unwrap();
+
+        // Doc 1 should be first (matches "rust") even though doc 2 has closer vector
+        assert_eq!(results[0].point.id, 1);
+    }
+
+    #[test]
+    fn test_bm25_update_document() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+        // Insert initial document
+        let points = vec![Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"content": "rust programming"})),
+        )];
+        collection.upsert(points).unwrap();
+
+        // Verify it's indexed
+        let results = collection.text_search("rust", 10);
+        assert_eq!(results.len(), 1);
+
+        // Update document with different text
+        let points = vec![Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"content": "python programming"})),
+        )];
+        collection.upsert(points).unwrap();
+
+        // Should no longer match "rust"
+        let results = collection.text_search("rust", 10);
+        assert!(results.is_empty());
+
+        // Should now match "python"
+        let results = collection.text_search("python", 10);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_bm25_large_dataset() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 4, DistanceMetric::Cosine).unwrap();
+
+        // Insert 100 documents
+        let points: Vec<Point> = (0..100)
+            .map(|i| {
+                let content = if i % 10 == 0 {
+                    format!("rust document number {i}")
+                } else {
+                    format!("other document number {i}")
+                };
+                Point::new(
+                    i,
+                    vec![0.1, 0.2, 0.3, 0.4],
+                    Some(json!({"content": content})),
+                )
+            })
+            .collect();
+        collection.upsert(points).unwrap();
+
+        // Search for "rust" - should find 10 documents (0, 10, 20, ..., 90)
+        let results = collection.text_search("rust", 100);
+        assert_eq!(results.len(), 10);
+
+        // All results should have IDs divisible by 10
+        for result in &results {
+            assert_eq!(result.point.id % 10, 0);
+        }
     }
 }
