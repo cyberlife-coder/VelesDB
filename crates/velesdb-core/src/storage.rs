@@ -327,6 +327,9 @@ pub trait PayloadStorage: Send + Sync {
     ///
     /// Returns an error if the flush operation fails.
     fn flush(&mut self) -> io::Result<()>;
+
+    /// Returns all stored IDs.
+    fn ids(&self) -> Vec<u64>;
 }
 
 /// Log-structured payload storage.
@@ -490,6 +493,10 @@ impl PayloadStorage for LogPayloadStorage {
 
     fn flush(&mut self) -> io::Result<()> {
         self.wal.write().flush()
+    }
+
+    fn ids(&self) -> Vec<u64> {
+        self.index.read().keys().copied().collect()
     }
 }
 
