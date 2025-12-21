@@ -137,12 +137,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] - 2025-12-21
+
+### Added
+
+#### Performance Optimizations (WIS-44)
+- **Explicit SIMD** (WIS-47): 4.2x faster cosine similarity using `wide` crate
+  - Cosine: 320ns → **76ns** (4.2x speedup)
+  - Euclidean: 138ns → **47ns** (2.9x speedup)
+  - Dot Product: 130ns → **45ns** (2.9x speedup)
+
+- **ColumnStore Filtering** (WIS-46): 122x faster metadata filtering
+  - Columnar storage for typed metadata (i64, f64, string, bool)
+  - String interning for efficient string comparisons
+  - RoaringBitmap for combining filters (AND/OR)
+
+- **Binary Hamming Distance**: ~6ns per operation (164M ops/sec)
+
+#### Developer Experience
+- **One-liner Installers**: 
+  - Linux/macOS: `curl -fsSL .../install.sh | bash`
+  - Windows: `irm .../install.ps1 | iex`
+
+- **OpenAPI/Swagger** (WIS-34): Full API documentation
+  - Swagger UI at `/swagger-ui`
+  - OpenAPI spec at `/api-docs/openapi.json`
+
+- **Python Bindings**: Hamming & Jaccard metric support
+
+#### Documentation
+- Updated all README files with new performance metrics
+- Added BENCHMARKING_GUIDE.md for reproducible benchmarks
+- Added PERFORMANCE_ROADMAP.md
+
+### Performance
+
+| Operation | Time (768d) | Throughput |
+|-----------|-------------|------------|
+| Cosine Similarity | **76 ns** | 13M ops/sec |
+| Euclidean Distance | **47 ns** | 21M ops/sec |
+| Hamming (Binary) | **6 ns** | 164M ops/sec |
+| ColumnStore Filter | **27 µs** | 122x vs JSON |
+
+---
+
 ## [Unreleased]
 
 ### Planned
 - LlamaIndex integration
-- OpenAPI/Swagger documentation
-- Publish to crates.io & PyPI
+- Prometheus /metrics endpoint (WIS-49)
 - EXPLAIN query plans
 
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
