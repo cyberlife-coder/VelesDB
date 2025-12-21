@@ -3200,7 +3200,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -3216,7 +3216,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3245,7 +3245,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "numpy",
  "pyo3",
@@ -3256,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "axum",
