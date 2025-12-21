@@ -112,16 +112,22 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
+          cp target/${{ matrix.target }}/release/velesdb dist/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/velesdb-server dist/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/libvelesdb_core.* dist/ 2>/dev/null || true
+          cp README.md dist/
+          cp LICENSE dist/
           tar -czvf ${{ matrix.artifact_name }}.tar.gz -C dist .
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         run: |
           mkdir dist
-          Copy-Item target/${{ matrix.target }}/release/*.exe dist/ -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/velesdb.exe dist/ -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/velesdb-server.exe dist/ -ErrorAction SilentlyContinue
           Copy-Item target/${{ matrix.target }}/release/*.dll dist/ -ErrorAction SilentlyContinue
+          Copy-Item README.md dist/
+          Copy-Item LICENSE dist/
           Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact_name }}.zip
 
       - name: Upload artifact
@@ -159,6 +165,75 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           cargo publish -p velesdb-server || echo "velesdb-server already published"
+          sleep 30
+
+      - name: Publish velesdb-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p velesdb-cli || echo "velesdb-cli already published"
+
+  # ===========================================================================
+  # Publication sur PyPI
+  # ===========================================================================
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ${{ matrix.os }}
+    needs: [validate, regression-tests]
+    if: needs.validate.outputs.is_prerelease == 'false'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+        exclude:
+          # Reduce matrix size for faster builds
+          - os: windows-latest
+            python-version: '3.9'
+          - os: macos-latest
+            python-version: '3.9'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheels
+        working-directory: crates/velesdb-python
+        run: maturin build --release
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: crates/velesdb-python/target/wheels/*.whl
+
+  publish-pypi-upload:
+    name: Upload to PyPI
+    runs-on: ubuntu-latest
+    needs: [validate, publish-pypi]
+    if: needs.validate.outputs.is_prerelease == 'false'
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels/
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   # ===========================================================================
   # Signature des binaires (désactivé par défaut)

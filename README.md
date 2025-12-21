@@ -111,56 +111,64 @@ curl -X POST http://localhost:8080/collections \
 
 ## 🚀 Quick Start
 
-### Option 1: Pre-built Binary (Recommended)
+### Option 1: One-liner Install (Recommended)
 
+**Linux / macOS:**
 ```bash
-# Download latest release
-curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-server-linux-amd64 -o velesdb-server
-chmod +x velesdb-server
-
-# Run the server
-./velesdb-server --data-dir ./data --port 8080
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install.sh | bash
 ```
 
-### Option 2: Using Cargo
-
-```bash
-# Install from source
-cargo install --git https://github.com/cyberlife-coder/VelesDB velesdb-server
-
-# Run the server
-velesdb-server --data-dir ./data --port 8080
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install.ps1 | iex
 ```
 
-### Option 3: Build from Source
+Then start using VelesDB:
+```bash
+# Start the server
+velesdb-server
+
+# Or use the interactive CLI
+velesdb
+```
+
+### Option 2: Python (pip)
 
 ```bash
-# Clone the repository
-git clone https://github.com/cyberlife-coder/VelesDB.git
-cd VelesDB
+pip install velesdb
+```
 
-# Build in release mode
-cargo build --release --package velesdb-server
+```python
+import velesdb
 
-# Run
-./target/release/velesdb-server --data-dir ./data --port 8080
+db = velesdb.Database("./my_vectors")
+collection = db.create_collection("docs", dimension=768, metric="cosine")
+collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
+results = collection.search([...], top_k=10)
+```
+
+### Option 3: Rust (cargo)
+
+```bash
+# Add to Cargo.toml
+cargo add velesdb-core
+
+# Or install CLI/Server
+cargo install velesdb-cli
+cargo install velesdb-server
 ```
 
 ### Option 4: Docker
 
 ```bash
-# Run with Docker
 docker run -d -p 8080:8080 -v velesdb_data:/data ghcr.io/cyberlife-coder/velesdb:latest
-
-# Test the connection
-curl http://localhost:8080/health
 ```
 
 ### Verify Installation
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.1.0"}
+# {"status":"healthy","version":"0.1.1"}
 ```
 
 ---
