@@ -45,6 +45,7 @@ pub mod index;
 pub mod point;
 pub mod quantization;
 pub mod simd;
+pub mod simd_avx512;
 pub mod simd_explicit;
 pub mod storage;
 pub mod velesql;
