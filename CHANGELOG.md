@@ -181,6 +181,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.4] - 2025-12-21
+
+### Added
+
+#### Half-Precision Support (WIS-61)
+- **f16/bf16 vectors**: 50% memory reduction
+  - `VectorPrecision` enum: F32, F16, BF16
+  - `VectorData` with automatic conversions
+  - SIMD-optimized distance calculations
+  - 24 TDD tests
+
+| Dimension | f32 Size | f16 Size | Savings |
+|-----------|----------|----------|---------|
+| 768 (BERT)| 3.0 KB   | 1.5 KB   | 50%     |
+| 1536 (GPT)| 6.0 KB   | 3.0 KB   | 50%     |
+
+#### WASM Support (WIS-60)
+- **`velesdb-wasm` crate**: Vector search in the browser
+  - `VectorStore` with insert/search/remove
+  - Cosine, Euclidean, Dot Product metrics
+  - WASM SIMD128 optimizations via `wide` crate
+  - JavaScript API via wasm-bindgen
+
+#### AVX-512 Optimizations (WIS-59)
+- **wide32 processing**: 4x f32x8 accumulators for maximum ILP
+  - 40-50% improvement on HNSW recall benchmarks
+  - Automatic CPU feature detection
+
+### Performance
+
+| Operation | Time (768d) | Speedup |
+|-----------|-------------|---------|
+| Dot Product | **42 ns** | 6.8x vs baseline |
+| Normalize | **209 ns** | 2x vs baseline |
+| HNSW Recall | **115 ms** | 45% faster |
+
+---
+
 ## [Unreleased]
 
 ### Planned
@@ -188,6 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prometheus /metrics endpoint (WIS-49)
 - EXPLAIN query plans
 
+[0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
+[0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.1.4...HEAD

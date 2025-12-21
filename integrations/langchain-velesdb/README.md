@@ -93,4 +93,6 @@ VelesDBVectorStore(
 
 ## License
 
-Apache 2.0
+Business Source License 1.1 (BSL-1.1)
+
+See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.

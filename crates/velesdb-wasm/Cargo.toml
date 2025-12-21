@@ -1,9 +1,9 @@
 [package]
 name = "velesdb-wasm"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2021"
 description = "VelesDB for WebAssembly - Vector search in the browser"
-license = "Apache-2.0"
+license = "BSL-1.1"
 repository = "https://github.com/cyberlife-coder/VelesDB"
 
 [lib]
