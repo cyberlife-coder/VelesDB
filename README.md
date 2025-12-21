@@ -393,7 +393,7 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 | **Query Language** | **SQL-like (VelesQL)** | JSON DSL | JSON/SDK | SQL |
 | **Full Text Search** | ❌ (Coming in Premium) | ✅ | ❌ | ✅ (via Postgres) |
 | **Quantization** | **SQ8 (Scalar)** | Binary/SQ | Proprietary | IVFFlat/HNSW |
-| **License** | **Apache 2.0** | Apache 2.0 | Closed | PostgreSQL |
+| **License** | **BSL-1.1** | Apache 2.0 | Closed | PostgreSQL |
 | **Best For** | **Embedded / Edge / Speed** | Scale / Cloud | Managed SaaS | Relational + Vector |
 
 ### Key Differentiators
@@ -764,7 +764,9 @@ Need enterprise features? **VelesDB Premium** extends Core with:
 
 ## 📜 License
 
-VelesDB is licensed under the [Apache License 2.0](LICENSE).
+VelesDB is licensed under the [Business Source License 1.1 (BSL-1.1)](LICENSE).
+
+The BSL is a source-available license that converts to Apache 2.0 after 4 years.
 
 ---
 

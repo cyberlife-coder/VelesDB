@@ -5,13 +5,14 @@ members = [
     "crates/velesdb-server",
     "crates/velesdb-python",
     "crates/velesdb-cli",
+    "crates/velesdb-wasm",
 ]
 
 [workspace.package]
 version = "0.1.4"
 edition = "2021"
 rust-version = "1.83"
-license = "BSL-1.0"
+license = "BSL-1.1"
 repository = "https://github.com/cyberlife-coder/velesdb"
 homepage = "https://velesdb.com"
 documentation = "https://docs.velesdb.com"
