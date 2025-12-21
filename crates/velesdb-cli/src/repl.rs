@@ -451,7 +451,7 @@ mod tests {
             duration_ms: 0.0,
         };
         assert!(result.rows.is_empty());
-        assert_eq!(result.duration_ms, 0.0);
+        assert!((result.duration_ms - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -467,7 +467,7 @@ mod tests {
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].get("id"), Some(&json!(1)));
-        assert_eq!(result.duration_ms, 1.5);
+        assert!((result.duration_ms - 1.5).abs() < f64::EPSILON);
     }
 
     // =========================================================================
