@@ -41,6 +41,7 @@ pub mod column_store;
 pub mod distance;
 pub mod error;
 pub mod filter;
+pub mod half_precision;
 pub mod index;
 pub mod point;
 pub mod quantization;
