@@ -1,3 +1,14 @@
+# =============================================================================
+# VelesDB Python - PyPI Publishing Workflow
+# =============================================================================
+# This workflow builds and publishes Python wheels to PyPI.
+# It triggers on GitHub Release creation or manual dispatch.
+#
+# NOTE: macOS wheels are disabled due to simdeez/anndists using AVX2/SSE2
+# which is x86-only. ARM (Apple Silicon) builds will fail until upstream
+# adds NEON support.
+# =============================================================================
+
 name: PyPI Publish
 
 on:
@@ -16,7 +27,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  MATURIN_VERSION: '1.4'
+  MATURIN_VERSION: '1.7'
 
 jobs:
   # ===========================================================================

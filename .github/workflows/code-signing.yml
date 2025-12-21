@@ -184,6 +184,9 @@ jobs:
   # ===========================================================================
   # Signature macOS (codesign + notarization)
   # ===========================================================================
+  # NOTE: macOS builds are currently disabled in release.yml due to
+  # simdeez/anndists using AVX2/SSE2 which is x86-only.
+  # This job will be skipped until macOS builds are re-enabled.
   sign-macos:
     name: Sign macOS Executables
     runs-on: macos-latest
@@ -193,7 +196,9 @@ jobs:
       github.event.inputs.dry_run != 'true'
     strategy:
       matrix:
-        arch: [x86_64, aarch64]
+        # Only x86_64 when macOS builds are re-enabled
+        # ARM builds require NEON support in upstream dependencies
+        arch: [x86_64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
