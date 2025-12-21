@@ -3,14 +3,16 @@
 [![Crates.io](https://img.shields.io/crates/v/velesdb-core.svg)](https://crates.io/crates/velesdb-core)
 [![Documentation](https://docs.rs/velesdb-core/badge.svg)](https://docs.rs/velesdb-core)
 [![License](https://img.shields.io/crates/l/velesdb-core.svg)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
 
 High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: HNSW index with SIMD-optimized distance calculations
+- **Blazing Fast**: HNSW index with explicit SIMD (4x faster than auto-vectorized)
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
+- **ColumnStore Filtering**: 122x faster than JSON filtering at scale
 - **Metadata Filtering**: Filter search results by payload attributes
 - **VelesQL**: SQL-like query language for vector operations
 
@@ -63,9 +65,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Performance
 
+| Operation | Time (768d) | Throughput |
+|-----------|-------------|------------|
+| Cosine Similarity | **~76 ns** | 13M ops/sec |
+| Euclidean Distance | **~47 ns** | 21M ops/sec |
+| Dot Product | **~45 ns** | 22M ops/sec |
+| Hamming (Binary) | **~6 ns** | 164M ops/sec |
+
 - Search latency: **< 1ms** for 100k vectors
-- Insert throughput: **> 50k vectors/sec**
-- Memory efficient with quantization support
+- ColumnStore filtering: **122x faster** than JSON at 100k items
+- Memory efficient with SQ8 quantization (4x reduction)
 
 ## License
 

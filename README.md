@@ -54,8 +54,9 @@ Just as Veles bridges the earthly and mystical realms, VelesDB bridges raw data 
 ## ✨ Features
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
-- ⚡ **Blazing Fast Search** — SIMD-optimized similarity (2.3x faster than baseline)
+- ⚡ **Blazing Fast Search** — SIMD-optimized similarity (4x faster with explicit SIMD)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
+- 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale
 - 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
 - 🔍 **Metadata Filtering** — Filter results by payload (eq, gt, lt, in, contains...)
 - 💾 **Persistent Storage** — HNSW index with WAL for durability
@@ -359,15 +360,15 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 
 | Operation | Time | Throughput | Implementation |
 |-----------|------|------------|----------------|
-| **Hamming (Binary)** | **~13 ns** | **76.9M ops/sec** | POPCNT + Unroll |
-| **Euclidean** | **~135 ns** | **7.4M ops/sec** | AVX2 Fused |
-| **Dot Product** | **~140 ns** | **7.1M ops/sec** | AVX2 FMA |
-| **Cosine** | **~325 ns** | **3.0M ops/sec** | Single-pass Fused |
+| **Hamming (Binary)** | **~6 ns** | **164M ops/sec** | POPCNT + SIMD |
+| **Euclidean** | **~47 ns** | **21M ops/sec** | AVX2 f32x8 FMA |
+| **Dot Product** | **~45 ns** | **22M ops/sec** | AVX2 f32x8 FMA |
+| **Cosine** | **~76 ns** | **13M ops/sec** | Single-pass SIMD Fused |
 
 ### Query Performance
 
-- **Metadata Filtering**: ~55M items/sec (Equality scan)
-- **VelesQL Parsing**: ~1.3M queries/sec
+- **Metadata Filtering (ColumnStore)**: ~122x faster than JSON at 100k items
+- **VelesQL Parsing**: ~1.9M queries/sec
 - **Index Latency**: Sub-millisecond (p95) for <1M vectors
 
 > See full results in [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
