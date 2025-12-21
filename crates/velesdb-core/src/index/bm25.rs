@@ -31,8 +31,7 @@
 //! ```
 
 use parking_lot::RwLock;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// BM25 tuning parameters.
 #[derive(Debug, Clone, Copy)]
@@ -65,8 +64,8 @@ struct Document {
 pub struct Bm25Index {
     /// BM25 parameters
     params: Bm25Params,
-    /// Inverted index: term -> set of document IDs
-    inverted_index: RwLock<FxHashMap<String, HashSet<u64>>>,
+    /// Inverted index: term -> set of document IDs (`FxHashSet` for faster lookup)
+    inverted_index: RwLock<FxHashMap<String, FxHashSet<u64>>>,
     /// Document storage: id -> Document
     documents: RwLock<FxHashMap<u64, Document>>,
     /// Total number of documents
@@ -227,55 +226,52 @@ impl Bm25Index {
         let total_length = *self.total_doc_length.read();
         let avgdl = total_length as f32 / doc_count as f32;
 
-        // Perf: Pre-compute IDF values for all query terms (single lock acquisition)
-        // This avoids repeated lock acquisitions in the scoring loop.
-        let idf_cache: FxHashMap<&str, f32> = {
+        // Perf: Single lock acquisition for IDF cache, candidates, AND document data
+        // This avoids multiple lock acquisitions and allows efficient scoring.
+        let k1 = self.params.k1;
+        let b = self.params.b;
+
+        let mut scores: Vec<(u64, f32)> = {
             let inv_idx = self.inverted_index.read();
+            let docs = self.documents.read();
             let n = doc_count as f32;
-            query_terms
+
+            // Build IDF cache
+            let idf_cache: FxHashMap<&str, f32> = query_terms
                 .iter()
                 .map(|term| {
-                    let df = inv_idx.get(term).map_or(0, HashSet::len);
-                    let idf = if df == 0 {
+                    let df = inv_idx.get(term).map_or(0, FxHashSet::len);
+                    let idf_val = if df == 0 {
                         0.0
                     } else {
                         let df_f = df as f32;
                         ((n - df_f + 0.5) / (df_f + 0.5) + 1.0).ln()
                     };
-                    (term.as_str(), idf)
+                    (term.as_str(), idf_val)
                 })
-                .collect()
-        };
+                .collect();
 
-        // Find candidate documents (documents containing at least one query term)
-        let candidates: HashSet<u64> = {
-            let inv_idx = self.inverted_index.read();
-            query_terms
+            // Collect and score candidates in one pass
+            let candidates: FxHashSet<u64> = query_terms
                 .iter()
                 .filter_map(|term| inv_idx.get(term))
                 .flat_map(|s| s.iter().copied())
-                .collect()
-        };
+                .collect();
 
-        // Perf: Pre-allocate scores vector with estimated capacity
-        let mut scores: Vec<(u64, f32)> = Vec::with_capacity(candidates.len().min(k * 2));
-
-        // Score each candidate using cached IDF values
-        {
-            let docs = self.documents.read();
-            let k1 = self.params.k1;
-            let b = self.params.b;
-
-            for doc_id in candidates {
-                if let Some(doc) = docs.get(&doc_id) {
+            candidates
+                .into_iter()
+                .filter_map(|doc_id| {
+                    let doc = docs.get(&doc_id)?;
                     let score =
                         Self::score_document_fast(doc, &query_terms, &idf_cache, k1, b, avgdl);
                     if score > 0.0 {
-                        scores.push((doc_id, score));
+                        Some((doc_id, score))
+                    } else {
+                        None
                     }
-                }
-            }
-        }
+                })
+                .collect()
+        };
 
         // Perf: Use partial_sort for top-k instead of full sort
         if scores.len() > k {

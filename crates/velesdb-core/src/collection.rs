@@ -417,10 +417,9 @@ impl Collection {
         // Get BM25 text search results
         let text_results = self.text_index.search(text_query, k * 2);
 
-        // Apply RRF (Reciprocal Rank Fusion)
+        // Perf: Apply RRF (Reciprocal Rank Fusion) with FxHashMap for faster hashing
         // RRF score = 1 / (rank + 60) - the constant 60 is standard
-        let mut fused_scores: std::collections::HashMap<u64, f32> =
-            std::collections::HashMap::new();
+        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
 
         // Add vector scores with RRF
         #[allow(clippy::cast_precision_loss)]
@@ -436,10 +435,17 @@ impl Collection {
             *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
         }
 
-        // Sort by fused score
+        // Perf: Use partial sort for top-k instead of full sort
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
-        scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored_ids.truncate(k);
+        if scored_ids.len() > k {
+            scored_ids.select_nth_unstable_by(k, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scored_ids.truncate(k);
+            scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
 
         // Fetch full point data
         let vector_storage = self.vector_storage.read();
