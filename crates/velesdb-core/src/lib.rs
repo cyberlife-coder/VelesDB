@@ -37,6 +37,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod collection;
+pub mod column_store;
 pub mod distance;
 pub mod error;
 pub mod filter;
