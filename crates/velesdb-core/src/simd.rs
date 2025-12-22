@@ -431,4 +431,98 @@ mod tests {
         let b = vec![1.0, 2.0];
         let _ = cosine_similarity_fast(&a, &b);
     }
+
+    // --- norm() tests ---
+
+    #[test]
+    fn test_norm_zero_vector() {
+        let v = vec![0.0, 0.0, 0.0];
+        assert!(norm(&v).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_norm_unit_vector() {
+        let v = vec![1.0, 0.0, 0.0];
+        assert!((norm(&v) - 1.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_norm_known_value() {
+        let v = vec![3.0, 4.0];
+        assert!((norm(&v) - 5.0).abs() < EPSILON);
+    }
+
+    // --- squared_l2_distance tests ---
+
+    #[test]
+    fn test_squared_l2_identical() {
+        let v = vec![1.0, 2.0, 3.0];
+        assert!(squared_l2_distance(&v, &v).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_squared_l2_known_value() {
+        let a = vec![0.0, 0.0];
+        let b = vec![3.0, 4.0];
+        assert!((squared_l2_distance(&a, &b) - 25.0).abs() < EPSILON);
+    }
+
+    // --- hamming_distance_fast tests ---
+
+    #[test]
+    fn test_hamming_identical() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        assert!(hamming_distance_fast(&a, &a).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_hamming_all_different() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0, 1.0];
+        assert!((hamming_distance_fast(&a, &b) - 4.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_hamming_partial() {
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0, 1.0];
+        assert!((hamming_distance_fast(&a, &b) - 2.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_hamming_odd_dimension() {
+        let a = vec![1.0, 0.0, 1.0, 0.0, 1.0];
+        let b = vec![0.0, 0.0, 1.0, 1.0, 1.0];
+        assert!((hamming_distance_fast(&a, &b) - 2.0).abs() < EPSILON);
+    }
+
+    // --- jaccard_similarity_fast tests ---
+
+    #[test]
+    fn test_jaccard_identical() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        assert!((jaccard_similarity_fast(&a, &a) - 1.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_jaccard_disjoint() {
+        let a = vec![1.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0, 0.0];
+        assert!(jaccard_similarity_fast(&a, &b).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_jaccard_half_overlap() {
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 1.0, 0.0];
+        // Intersection: 1, Union: 3
+        assert!((jaccard_similarity_fast(&a, &b) - (1.0 / 3.0)).abs() < EPSILON);
+    }
+
+    #[test]
+    fn test_jaccard_empty_sets() {
+        let a = vec![0.0, 0.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 0.0, 0.0];
+        assert!((jaccard_similarity_fast(&a, &b) - 1.0).abs() < EPSILON);
+    }
 }
