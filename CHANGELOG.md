@@ -219,6 +219,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.5] - 2025-12-22
+
+### Added
+
+#### BM25 Full-Text Search
+- **Text Search API**: `POST /collections/{name}/search/text`
+  - BM25 ranking algorithm for full-text search
+  - Automatic text extraction from JSON payloads
+  - Configurable `top_k` results
+
+- **Hybrid Search API**: `POST /collections/{name}/search/hybrid`
+  - Combines vector similarity + BM25 text relevance
+  - Reciprocal Rank Fusion (RRF) for score fusion
+  - Configurable `vector_weight` parameter
+
+#### VelesQL MATCH Clause
+- **Full-text search in VelesQL**:
+  ```sql
+  -- Text search only
+  SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10
+  
+  -- Hybrid search (vector + text)
+  SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'rust' LIMIT 10
+  ```
+
+#### BM25 Persistence
+- **Automatic index rebuild**: BM25 index is rebuilt from persisted payloads on collection open
+- Added `ids()` method to `PayloadStorage` trait
+
+### Performance
+
+| Operation | Metric | Value |
+|-----------|--------|-------|
+| BM25 Search (10k docs) | Latency | < 5ms |
+| Hybrid Search | RRF Fusion | O(n log k) |
+| Text Indexing | Per document | ~10 µs |
+
+### Testing
+
+- **348 tests** total (333 core + 14 server + 1 WASM)
+- New integration tests for text/hybrid search endpoints
+- TDD approach with tests written before implementation
+
+---
+
 ## [Unreleased]
 
 ### Planned

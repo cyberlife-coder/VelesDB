@@ -93,12 +93,35 @@ curl -X POST http://localhost:8080/collections/documents/search \
     "filter": {"category": {"$eq": "tech"}}
   }'
 
+# BM25 full-text search
+curl -X POST http://localhost:8080/collections/documents/search/text \
+  -H "Content-Type: application/json" \
+  -d '{"query": "rust programming", "top_k": 10}'
+
+# Hybrid search (vector + text)
+curl -X POST http://localhost:8080/collections/documents/search/hybrid \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector": [0.15, 0.25, ...],
+    "query": "rust programming",
+    "top_k": 10,
+    "vector_weight": 0.7
+  }'
+
 # VelesQL query
 curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
   -d '{
     "query": "SELECT * FROM documents WHERE VECTOR NEAR $v LIMIT 5",
     "params": {"v": [0.15, 0.25, ...]}
+  }'
+
+# VelesQL with MATCH (full-text)
+curl -X POST http://localhost:8080/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM documents WHERE content MATCH '\''rust'\'' LIMIT 10",
+    "params": {}
   }'
 ```
 

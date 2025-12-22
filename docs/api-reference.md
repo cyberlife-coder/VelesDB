@@ -221,6 +221,76 @@ Search for similar vectors.
 }
 ```
 
+### POST /collections/:name/search/text
+
+BM25 full-text search across document payloads.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| query | string | Yes | Text search query |
+| top_k | integer | No | Number of results (default: 10) |
+
+**Example:**
+```json
+{
+  "query": "rust programming language",
+  "top_k": 10
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "id": 1,
+      "score": 2.45,
+      "payload": {"content": "Learn Rust programming"}
+    }
+  ],
+  "timing_ms": 1.23
+}
+```
+
+### POST /collections/:name/search/hybrid
+
+Hybrid search combining vector similarity and BM25 text relevance using Reciprocal Rank Fusion (RRF).
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| vector | array[float] | Yes | Query vector |
+| query | string | Yes | Text search query |
+| top_k | integer | No | Number of results (default: 10) |
+| vector_weight | float | No | Weight for vector results (0.0-1.0, default: 0.5) |
+
+**Example:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3, ...],
+  "query": "rust programming",
+  "top_k": 10,
+  "vector_weight": 0.7
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "id": 1,
+      "score": 0.0312,
+      "payload": {"content": "Rust programming guide"}
+    }
+  ],
+  "timing_ms": 2.45
+}
+```
+
 ---
 
 ## Error Responses
@@ -327,6 +397,7 @@ Execute a VelesQL query.
 | LIKE | `field LIKE pattern` | `title LIKE '%rust%'` |
 | NULL check | `field IS NULL` | `deleted_at IS NULL` |
 | Logical | `AND`, `OR` | `a = 1 AND b = 2` |
+| Full-text | `field MATCH 'query'` | `content MATCH 'rust'` |
 | Limit | `LIMIT n` | `LIMIT 10` |
 
 ---

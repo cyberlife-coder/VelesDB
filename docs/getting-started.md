@@ -114,6 +114,47 @@ Response:
 }
 ```
 
+### 4. Full-Text Search (BM25)
+
+Search documents by text content:
+
+```bash
+curl -X POST http://localhost:8080/collections/my_documents/search/text \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "machine learning",
+    "top_k": 5
+  }'
+```
+
+### 5. Hybrid Search (Vector + Text)
+
+Combine vector similarity with text relevance:
+
+```bash
+curl -X POST http://localhost:8080/collections/my_documents/search/hybrid \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector": [0.15, 0.25, 0.35, ...],
+    "query": "machine learning",
+    "top_k": 5,
+    "vector_weight": 0.7
+  }'
+```
+
+### 6. VelesQL with MATCH
+
+Use SQL-like syntax for full-text search:
+
+```bash
+curl -X POST http://localhost:8080/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM my_documents WHERE title MATCH '\''AI'\'' LIMIT 10",
+    "params": {}
+  }'
+```
+
 ## Next Steps
 
 - Read the [API Reference](api-reference.md) for complete endpoint documentation
