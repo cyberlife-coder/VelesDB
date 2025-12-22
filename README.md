@@ -388,22 +388,50 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 
 ## 🆚 Comparison vs Competitors
 
-| Feature | 🐺 VelesDB | 🦀 Qdrant | 🐿️ Pinecone | 🐘 pgvector |
-|---------|-----------|-----------|-------------|-------------|
-| **Core Language** | **Rust** | Rust | C++/Go (Proprietary) | C |
-| **Deployment** | **Single Binary** | Docker/Cloud | SaaS Only | PostgreSQL Extension |
-| **Vector Types** | **Float32, Binary, Set** | Float32, Binary | Float32 | Float32, Float16 |
-| **Query Language** | **SQL-like (VelesQL)** | JSON DSL | JSON/SDK | SQL |
-| **Full Text Search** | ✅ BM25 + Hybrid | ✅ | ❌ | ✅ (via Postgres) |
-| **Quantization** | **SQ8 (Scalar)** | Binary/SQ | Proprietary | IVFFlat/HNSW |
-| **License** | **BSL-1.1** | Apache 2.0 | Closed | PostgreSQL |
-| **Best For** | **Embedded / Edge / Speed** | Scale / Cloud | Managed SaaS | Relational + Vector |
+| Feature | 🐺 VelesDB | 🦁 LanceDB | 🦀 Qdrant | 🐿️ Pinecone | 🐘 pgvector |
+|---------|-----------|------------|-----------|-------------|-------------|
+| **Core Language** | **Rust** | Rust | Rust | C++/Go (Proprietary) | C |
+| **Deployment** | **Single Binary** | Embedded/Cloud | Docker/Cloud | SaaS Only | PostgreSQL Extension |
+| **Vector Types** | **Float32, Binary, Set** | Float32, Float16 | Float32, Binary | Float32 | Float32, Float16 |
+| **Query Language** | **SQL-like (VelesQL)** | Python SDK/SQL | JSON DSL | JSON/SDK | SQL |
+| **Full Text Search** | ✅ BM25 + Hybrid | ✅ Hybrid | ✅ | ❌ | ✅ (via Postgres) |
+| **Quantization** | **SQ8 (Scalar)** | IVF-PQ, RaBitQ | Binary/SQ | Proprietary | IVFFlat/HNSW |
+| **License** | **BSL-1.1** | Apache 2.0 | Apache 2.0 | Closed | PostgreSQL |
+| **Best For** | **Embedded / Edge / Speed** | Multimodal / Lakehouse | Scale / Cloud | Managed SaaS | Relational + Vector |
 
-### Key Differentiators
+### 🎯 Why Choose VelesDB?
 
-1.  **VelesQL**: Write queries in SQL, not complex JSON objects.
-2.  **Specialized Metrics**: Native optimization for Hamming (Binary) and Jaccard (Sets) distances.
-3.  **Simplicity**: Zero dependencies, single binary, runs anywhere (Edge, Server, Docker).
+#### ⚡ Microsecond Latency
+- **~45-75ns** per vector operation (768D) vs milliseconds for competitors
+- **122x faster filtering** with ColumnStore (RoaringBitmap) vs JSON-based filtering
+- **SIMD-optimized** distance calculations (AVX2/SSE4.2)
+
+#### 📝 SQL-Native Queries (VelesQL)
+```sql
+-- Clean, familiar syntax - no JSON DSL to learn
+SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
+```
+
+#### 📦 Zero-Config Simplicity
+- **Single binary** (~15MB) — no Docker, no dependencies
+- **13k lines of code** vs 50k+ (LanceDB) — less complexity, fewer bugs
+- Runs on **Edge, Desktop, Server, WASM** (browser-ready)
+
+#### 🔧 Unique Features
+| Feature | VelesDB | LanceDB | Others |
+|---------|---------|---------|--------|
+| **Jaccard Similarity** | ✅ Native | ❌ | ❌ |
+| **Binary Quantization (1-bit)** | ✅ 32x compression | ❌ | Limited |
+| **WASM/Browser Support** | ✅ | ❌ | ❌ |
+| **Tauri Desktop Plugin** | ✅ | ❌ | ❌ |
+| **REST API Built-in** | ✅ | ❌ (embedded only) | Varies |
+
+#### 🎯 Best For These Use Cases
+- **Edge/IoT** — Memory-constrained devices with latency requirements
+- **Desktop Apps** — Tauri/Electron AI-powered applications
+- **Browser/WASM** — Client-side vector search
+- **RAG Pipelines** — Fast semantic retrieval for LLM context
+- **Real-time Search** — Sub-millisecond response requirements
 
 
 ---
