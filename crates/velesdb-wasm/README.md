@@ -101,12 +101,115 @@ class VectorStore {
 | `euclidean` | L2 distance | Image features, spatial data |
 | `dot` | Dot product | Pre-normalized vectors |
 
+## IndexedDB Persistence
+
+Save and restore your vector store for offline-first applications:
+
+```javascript
+import init, { VectorStore } from 'velesdb-wasm';
+
+// Save to IndexedDB
+async function saveToIndexedDB(store, dbName = 'velesdb') {
+  const bytes = store.export_to_bytes();
+  
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(dbName, 1);
+    
+    request.onupgradeneeded = (e) => {
+      e.target.result.createObjectStore('vectors');
+    };
+    
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const tx = db.transaction('vectors', 'readwrite');
+      tx.objectStore('vectors').put(bytes, 'store');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+
+// Load from IndexedDB
+async function loadFromIndexedDB(dbName = 'velesdb') {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(dbName, 1);
+    
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const tx = db.transaction('vectors', 'readonly');
+      const getReq = tx.objectStore('vectors').get('store');
+      
+      getReq.onsuccess = () => {
+        if (getReq.result) {
+          const store = VectorStore.import_from_bytes(getReq.result);
+          resolve(store);
+        } else {
+          resolve(null);
+        }
+      };
+    };
+  });
+}
+
+// Usage
+async function main() {
+  await init();
+  
+  // Try to load existing store
+  let store = await loadFromIndexedDB();
+  
+  if (!store) {
+    // Create new store
+    store = new VectorStore(768, 'cosine');
+    store.insert(1n, new Float32Array(768).fill(0.1));
+  }
+  
+  // ... use store ...
+  
+  // Save before closing
+  await saveToIndexedDB(store);
+}
+```
+
+### Persistence API
+
+```typescript
+class VectorStore {
+  // Export to binary format (for IndexedDB, localStorage, file download)
+  export_to_bytes(): Uint8Array;
+  
+  // Import from binary format (static constructor)
+  static import_from_bytes(bytes: Uint8Array): VectorStore;
+}
+```
+
+### Binary Format
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Magic | 4 bytes | `"VELS"` |
+| Version | 1 byte | Format version (1) |
+| Dimension | 4 bytes | Vector dimension (u32 LE) |
+| Metric | 1 byte | 0=cosine, 1=euclidean, 2=dot |
+| Count | 8 bytes | Number of vectors (u64 LE) |
+| Vectors | variable | id (8B) + data (dim × 4B) each |
+
+### Performance
+
+Ultra-fast serialization thanks to contiguous memory layout:
+
+| Operation | 10k vectors (768D) | Throughput |
+|-----------|-------------------|------------|
+| Export | ~7 ms | **4479 MB/s** |
+| Import | ~10 ms | **2943 MB/s** |
+
 ## Use Cases
 
 - **Browser-based RAG** - 100% client-side semantic search
-- **Offline-first apps** - Works without internet
+- **Offline-first apps** - Works without internet, persists to IndexedDB
 - **Privacy-preserving AI** - Data never leaves the browser
 - **Electron/Tauri apps** - Desktop AI without a server
+- **PWA applications** - Full offline support with service workers
 
 ## Building from Source
 

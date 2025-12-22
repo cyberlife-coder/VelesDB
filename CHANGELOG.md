@@ -294,6 +294,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2025-12-22
+
+### Added
+
+#### TypeScript SDK (WIS-71)
+- **`@velesdb/sdk`**: Unified TypeScript client for browser and Node.js
+  - WASM backend for client-side vector search
+  - REST backend for server communication
+  - Full type definitions with strict TypeScript
+  - Error handling with custom exception classes
+  - 61 comprehensive tests
+
+- **API**:
+  ```typescript
+  import { VelesDB } from '@velesdb/sdk';
+  
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+  await db.createCollection('docs', { dimension: 768 });
+  await db.insert('docs', { id: '1', vector: [...] });
+  const results = await db.search('docs', query, { k: 5 });
+  ```
+
+#### IndexedDB Persistence (WIS-73)
+- **`export_to_bytes()`**: Serialize vector store to binary format
+- **`import_from_bytes()`**: Restore from binary data
+- Custom binary format with "VELS" magic number, versioning
+- Perfect for IndexedDB, localStorage, file downloads
+
+- **Performance** (after optimization):
+  | Operation | Throughput |
+  |-----------|------------|
+  | Export | **4479 MB/s** |
+  | Import | **2943 MB/s** |
+
+#### Tauri RAG Tutorial (WIS-74)
+- **`examples/tauri-rag-app`**: Complete desktop RAG application
+  - React + Tailwind UI
+  - Document ingestion with chunking
+  - Semantic search with VelesDB
+  - Ready-to-run Tauri v2 template
+
+### Changed
+
+#### Performance Optimizations
+- **Contiguous memory layout**: 58x faster import
+  - Vector data stored in single buffer instead of individual allocations
+  - Better cache locality for search operations
+  - Bulk memory copy via unsafe slice operations
+
+- **Pre-allocation**: Exact buffer sizing to avoid reallocations
+
+### Testing
+
+- **427 tests** total (+53 from v0.2.0)
+  - 337 Rust core tests
+  - 29 WASM tests
+  - 61 TypeScript SDK tests
+
+---
+
 ## [Unreleased]
 
 ### Planned
@@ -302,7 +363,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Product Quantization (WIS-65)
 - Multi-tenancy (WIS-68)
 - API Authentication (WIS-69)
+- Starlight documentation site
 
+[0.3.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.0
 [0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
