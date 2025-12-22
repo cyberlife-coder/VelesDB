@@ -8,23 +8,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 
-// Mock WASM module
-const createMockStore = () => ({
-  insert: vi.fn(),
-  insert_batch: vi.fn(),
-  search: vi.fn(() => [[BigInt(1), 0.95], [BigInt(2), 0.85]]),
-  remove: vi.fn(() => true),
-  clear: vi.fn(),
-  reserve: vi.fn(),
-  free: vi.fn(),
-  len: 0,
-  is_empty: true,
-  dimension: 128,
-});
+// Mock WASM module with class-based VectorStore
+class MockVectorStore {
+  insert = vi.fn();
+  insert_batch = vi.fn();
+  search = vi.fn(() => [[BigInt(1), 0.95], [BigInt(2), 0.85]]);
+  remove = vi.fn(() => true);
+  clear = vi.fn();
+  reserve = vi.fn();
+  free = vi.fn();
+  len = 0;
+  is_empty = true;
+  dimension: number;
+
+  constructor(dimension: number, _metric: string) {
+    this.dimension = dimension;
+  }
+}
 
 const mockWasmModule = {
   default: vi.fn(() => Promise.resolve()),
-  VectorStore: vi.fn(() => createMockStore()),
+  VectorStore: MockVectorStore,
 };
 
 // Mock the dynamic import
