@@ -192,6 +192,100 @@ impl VectorStore {
     pub fn memory_usage(&self) -> usize {
         self.vectors.len() * (std::mem::size_of::<u64>() + self.dimension * 4)
     }
+
+    /// Creates a new vector store with pre-allocated capacity.
+    ///
+    /// This is more efficient when you know the approximate number of vectors
+    /// you'll be inserting, as it avoids repeated memory allocations.
+    ///
+    /// # Arguments
+    ///
+    /// * `dimension` - Vector dimension
+    /// * `metric` - Distance metric: "cosine", "euclidean", or "dot"
+    /// * `capacity` - Number of vectors to pre-allocate space for
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metric is not recognized.
+    #[wasm_bindgen]
+    pub fn with_capacity(
+        dimension: usize,
+        metric: &str,
+        capacity: usize,
+    ) -> Result<VectorStore, JsValue> {
+        let metric = match metric.to_lowercase().as_str() {
+            "cosine" => DistanceMetric::Cosine,
+            "euclidean" | "l2" => DistanceMetric::Euclidean,
+            "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
+            _ => {
+                return Err(JsValue::from_str(
+                    "Unknown metric. Use: cosine, euclidean, dot",
+                ))
+            }
+        };
+
+        Ok(Self {
+            vectors: Vec::with_capacity(capacity),
+            dimension,
+            metric,
+        })
+    }
+
+    /// Pre-allocates memory for the specified number of additional vectors.
+    ///
+    /// Call this before bulk insertions to avoid repeated allocations.
+    ///
+    /// # Arguments
+    ///
+    /// * `additional` - Number of additional vectors to reserve space for
+    #[wasm_bindgen]
+    pub fn reserve(&mut self, additional: usize) {
+        self.vectors.reserve(additional);
+    }
+
+    /// Inserts multiple vectors in a single batch operation.
+    ///
+    /// This is significantly faster than calling `insert()` multiple times
+    /// because it pre-allocates memory and reduces per-call overhead.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch` - JavaScript array of `[id, Float32Array]` pairs
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any vector dimension doesn't match store dimension.
+    #[wasm_bindgen]
+    pub fn insert_batch(&mut self, batch: JsValue) -> Result<(), JsValue> {
+        let batch: Vec<(u64, Vec<f32>)> = serde_wasm_bindgen::from_value(batch)
+            .map_err(|e| JsValue::from_str(&format!("Invalid batch format: {e}")))?;
+
+        // Validate all dimensions first
+        for (id, vector) in &batch {
+            if vector.len() != self.dimension {
+                return Err(JsValue::from_str(&format!(
+                    "Vector {} dimension mismatch: expected {}, got {}",
+                    id,
+                    self.dimension,
+                    vector.len()
+                )));
+            }
+        }
+
+        // Pre-allocate space
+        self.vectors.reserve(batch.len());
+
+        // Remove existing IDs first (collect to avoid borrow issues)
+        let ids_to_remove: Vec<u64> = batch.iter().map(|(id, _)| *id).collect();
+        self.vectors.retain(|v| !ids_to_remove.contains(&v.id));
+
+        // Insert all vectors
+        for (id, vector) in batch {
+            self.vectors.push(StoredVector { id, data: vector });
+        }
+
+        Ok(())
+    }
 }
 
 /// Search result containing ID and score.

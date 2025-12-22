@@ -120,17 +120,26 @@
             const dims = parseInt(document.getElementById('dimensions').value);
             currentDimensions = dims;
 
-            // Re-create store with new dimensions
-            store = new VectorStore(dims, 'cosine');
+            // Re-create store with pre-allocated capacity (performance optimization)
+            store = VectorStore.with_capacity(dims, 'cosine', count);
 
             const startTime = performance.now();
             
-            for (let i = 0; i < count; i++) {
-                const vector = new Float32Array(dims);
-                for (let j = 0; j < dims; j++) {
-                    vector[j] = Math.random() * 2 - 1;
+            // Use batch insert for better performance
+            const batchSize = 1000;
+            for (let batchStart = 0; batchStart < count; batchStart += batchSize) {
+                const batchEnd = Math.min(batchStart + batchSize, count);
+                const batch = [];
+                
+                for (let i = batchStart; i < batchEnd; i++) {
+                    const vector = [];
+                    for (let j = 0; j < dims; j++) {
+                        vector.push(Math.random() * 2 - 1);
+                    }
+                    batch.push([BigInt(i), vector]);
                 }
-                store.insert(BigInt(i), vector);
+                
+                store.insert_batch(batch);
             }
 
             const elapsed = performance.now() - startTime;

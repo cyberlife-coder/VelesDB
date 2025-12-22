@@ -30,9 +30,9 @@ async function main() {
   // Create a vector store (768 dimensions, cosine similarity)
   const store = new VectorStore(768, 'cosine');
 
-  // Insert vectors
-  store.insert(1, new Float32Array([0.1, 0.2, ...]));
-  store.insert(2, new Float32Array([0.3, 0.4, ...]));
+  // Insert vectors (use BigInt for IDs)
+  store.insert(1n, new Float32Array([0.1, 0.2, ...]));
+  store.insert(2n, new Float32Array([0.3, 0.4, ...]));
 
   // Search for similar vectors
   const query = new Float32Array([0.15, 0.25, ...]);
@@ -45,6 +45,26 @@ async function main() {
 main();
 ```
 
+### High-Performance Bulk Insert
+
+For optimal performance when inserting many vectors:
+
+```javascript
+// Pre-allocate capacity (avoids repeated memory allocations)
+const store = VectorStore.with_capacity(768, 'cosine', 100000);
+
+// Batch insert (much faster than individual inserts)
+const batch = [
+  [1n, [0.1, 0.2, ...]],
+  [2n, [0.3, 0.4, ...]],
+  // ... more vectors
+];
+store.insert_batch(batch);
+
+// Or reserve capacity on existing store
+store.reserve(50000);
+```
+
 ## API
 
 ### VectorStore
@@ -53,6 +73,9 @@ main();
 class VectorStore {
   // Create a new store
   constructor(dimension: number, metric: 'cosine' | 'euclidean' | 'dot');
+  
+  // Create with pre-allocated capacity (performance optimization)
+  static with_capacity(dimension: number, metric: string, capacity: number): VectorStore;
 
   // Properties
   readonly len: number;
@@ -60,10 +83,12 @@ class VectorStore {
   readonly dimension: number;
 
   // Methods
-  insert(id: number, vector: Float32Array): void;
-  search(query: Float32Array, k: number): Array<[number, number]>;
-  remove(id: number): boolean;
+  insert(id: bigint, vector: Float32Array): void;
+  insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
+  search(query: Float32Array, k: number): Array<[bigint, number]>;
+  remove(id: bigint): boolean;
   clear(): void;
+  reserve(additional: number): void;  // Pre-allocate memory
   memory_usage(): number;
 }
 ```
