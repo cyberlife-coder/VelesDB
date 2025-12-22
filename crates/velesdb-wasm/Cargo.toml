@@ -3,7 +3,7 @@ name = "velesdb-wasm"
 version = "0.2.0"
 edition = "2021"
 description = "VelesDB for WebAssembly - Vector search in the browser"
-license-file = "../../LICENSE"
+license = "BUSL-1.1"
 repository = "https://github.com/cyberlife-coder/VelesDB"
 
 [lib]
