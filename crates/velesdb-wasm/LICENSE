@@ -1,0 +1,18 @@
+The Business Source License (this "License") is a copyright license.
+The Licensor hereby grants you the right to copy, modify, create derivative works, redistribute, and make non-production use of the Licensed Work. The Licensor hereby grants you the right to make production use of the Licensed Work, provided that such production use does not include offering the Licensed Work to third parties as a managed service, or as a component of a managed service, where the primary value of the service is derived from the Licensed Work.
+
+"Licensor" means Wiscale France.
+"Licensed Work" means the software VelesDB Core.
+"Change Date" means December 18, 2029.
+"Change License" means the Apache License, Version 2.0.
+
+The Licensed Work is subject to the restrictions in the "Production Use Restriction" section below.
+
+Production Use Restriction:
+The Licensed Work may not be used to provide a vector database as a service (DBaaS) or any other service that is substantially the same as the Licensed Work.
+
+If you wish to use the Licensed Work in a manner that violates the Production Use Restriction, you must enter into a commercial license agreement with the Licensor.
+
+Upon the Change Date, the Licensed Work will automatically be re-licensed under the Change License.
+
+The Licensed Work is provided "AS IS", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages or other liability, whether in an action of contract, tort or otherwise, arising from, out of or in connection with the Licensed Work or the use or other dealings in the Licensed Work.
