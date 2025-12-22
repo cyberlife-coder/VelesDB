@@ -643,6 +643,21 @@ retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
 ### Tauri Desktop Integration
 
+Install the plugin in your Tauri project:
+
+```toml
+# Cargo.toml (backend)
+[dependencies]
+tauri-plugin-velesdb = "0.1"
+```
+
+```bash
+# Frontend (npm / pnpm / yarn)
+npm install tauri-plugin-velesdb
+# pnpm add tauri-plugin-velesdb
+# yarn add tauri-plugin-velesdb
+```
+
 Build AI-powered desktop apps with vector search:
 
 ```rust

@@ -28,9 +28,15 @@ tauri-plugin-velesdb = "0.1"
 ```json
 {
   "dependencies": {
-    "@anthropic/tauri-plugin-velesdb": "^0.1.0"
+    "tauri-plugin-velesdb": "^0.1.0"
   }
 }
+```
+
+```bash
+npm install tauri-plugin-velesdb
+# pnpm add tauri-plugin-velesdb
+# yarn add tauri-plugin-velesdb
 ```
 
 ## Usage
