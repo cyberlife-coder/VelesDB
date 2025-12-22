@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-hybrid-search"
+description = "Enables the hybrid_search command without any pre-configured scope."
+commands.allow = ["hybrid_search"]
+
+[[permission]]
+identifier = "deny-hybrid-search"
+description = "Denies the hybrid_search command without any pre-configured scope."
+commands.deny = ["hybrid_search"]

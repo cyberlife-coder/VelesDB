@@ -6,6 +6,7 @@ members = [
     "crates/velesdb-python",
     "crates/velesdb-cli",
     "crates/velesdb-wasm",
+    "integrations/tauri-plugin-velesdb",
 ]
 
 [workspace.package]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-delete-points"
+description = "Enables the delete_points command without any pre-configured scope."
+commands.allow = ["delete_points"]
+
+[[permission]]
+identifier = "deny-delete-points"
+description = "Denies the delete_points command without any pre-configured scope."
+commands.deny = ["delete_points"]

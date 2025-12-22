@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-get-points"
+description = "Enables the get_points command without any pre-configured scope."
+commands.allow = ["get_points"]
+
+[[permission]]
+identifier = "deny-get-points"
+description = "Denies the get_points command without any pre-configured scope."
+commands.deny = ["get_points"]

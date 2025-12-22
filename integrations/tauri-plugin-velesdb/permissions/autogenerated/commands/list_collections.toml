@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-list-collections"
+description = "Enables the list_collections command without any pre-configured scope."
+commands.allow = ["list_collections"]
+
+[[permission]]
+identifier = "deny-list-collections"
+description = "Denies the list_collections command without any pre-configured scope."
+commands.deny = ["list_collections"]
