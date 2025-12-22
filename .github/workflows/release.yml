@@ -168,6 +168,20 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           cargo publish -p velesdb-cli || echo "velesdb-cli already published"
+          sleep 30
+
+      - name: Publish velesdb-wasm
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p velesdb-wasm || echo "velesdb-wasm already published"
+          sleep 30
+
+      - name: Publish tauri-plugin-velesdb
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p tauri-plugin-velesdb || echo "tauri-plugin-velesdb already published"
 
   # ===========================================================================
   # Publication sur PyPI - DÉPLACÉ vers pypi-publish.yml
