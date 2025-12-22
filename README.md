@@ -59,6 +59,7 @@ Just as Veles bridges the earthly and mystical realms, VelesDB bridges raw data 
 - 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale
 - 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
 - 🔍 **Metadata Filtering** — Filter results by payload (eq, gt, lt, in, contains...)
+- 📝 **BM25 Full-Text Search** — Hybrid search combining vectors + text relevance
 - 💾 **Persistent Storage** — HNSW index with WAL for durability
 - 🔌 **Simple REST API** — Easy integration with any language
 - 📦 **Single Binary** — No dependencies, easy deployment
@@ -233,6 +234,8 @@ curl -X POST http://localhost:8080/query \
 |----------|--------|-------------|
 | `/collections/{name}/search` | `POST` | Vector similarity search |
 | `/collections/{name}/search/batch` | `POST` | Batch search (multiple queries) |
+| `/collections/{name}/search/text` | `POST` | BM25 full-text search |
+| `/collections/{name}/search/hybrid` | `POST` | Hybrid vector + text search |
 | `/query` | `POST` | Execute VelesQL query |
 
 ### Health
@@ -391,7 +394,7 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 | **Deployment** | **Single Binary** | Docker/Cloud | SaaS Only | PostgreSQL Extension |
 | **Vector Types** | **Float32, Binary, Set** | Float32, Binary | Float32 | Float32, Float16 |
 | **Query Language** | **SQL-like (VelesQL)** | JSON DSL | JSON/SDK | SQL |
-| **Full Text Search** | ❌ (Coming in Premium) | ✅ | ❌ | ✅ (via Postgres) |
+| **Full Text Search** | ✅ BM25 + Hybrid | ✅ | ❌ | ✅ (via Postgres) |
 | **Quantization** | **SQ8 (Scalar)** | Binary/SQ | Proprietary | IVFFlat/HNSW |
 | **License** | **BSL-1.1** | Apache 2.0 | Closed | PostgreSQL |
 | **Best For** | **Embedded / Edge / Speed** | Scale / Cloud | Managed SaaS | Relational + Vector |
@@ -460,6 +463,8 @@ curl -X POST http://localhost:8080/query \
 | **Logical ops** | `A AND B OR C` | With proper precedence |
 | **Parameters** | `$param_name` | Safe, injection-free binding |
 | **Nested fields** | `metadata.author = 'John'` | Dot notation for JSON |
+| **Full-text search** | `content MATCH 'query'` | BM25 text search |
+| **Hybrid search** | `NEAR $v AND MATCH 'q'` | Vector + text fusion |
 
 ### Parser Performance
 
