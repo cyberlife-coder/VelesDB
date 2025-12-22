@@ -137,6 +137,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn test_cosine_identical() {
         let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.1).sin()).collect();
         let result = cosine_similarity(&a, &a);

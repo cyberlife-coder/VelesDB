@@ -859,7 +859,7 @@ pub async fn hybrid_search(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)] // Axum handler requires async
+#[allow(clippy::unused_async, clippy::too_many_lines)] // Axum handler requires async, complex query parsing
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,

@@ -1,0 +1,39 @@
+# Default permissions for tauri-plugin-velesdb
+#
+# This file defines the default permission set that applications
+# can use to enable VelesDB functionality.
+
+[default]
+description = "Default permissions for VelesDB plugin - allows all database operations"
+permissions = [
+    "allow-create-collection",
+    "allow-delete-collection",
+    "allow-list-collections",
+    "allow-get-collection",
+    "allow-upsert",
+    "allow-search",
+    "allow-text-search",
+    "allow-hybrid-search",
+    "allow-query",
+]
+
+# Read-only permission set
+[read-only]
+description = "Read-only permissions - search and list operations only"
+permissions = [
+    "allow-list-collections",
+    "allow-get-collection",
+    "allow-search",
+    "allow-text-search",
+    "allow-hybrid-search",
+    "allow-query",
+]
+
+# Search-only permission set
+[search-only]
+description = "Search-only permissions - no collection management"
+permissions = [
+    "allow-search",
+    "allow-text-search",
+    "allow-hybrid-search",
+]

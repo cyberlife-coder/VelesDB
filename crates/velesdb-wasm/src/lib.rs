@@ -1,6 +1,6 @@
-//! VelesDB WASM - Vector search in the browser
+//! `VelesDB` WASM - Vector search in the browser
 //!
-//! This crate provides WebAssembly bindings for VelesDB's core vector operations.
+//! This crate provides WebAssembly bindings for `VelesDB`'s core vector operations.
 //! It enables browser-based vector search without any server dependency.
 //!
 //! # Features
@@ -51,6 +51,10 @@ impl VectorStore {
     ///
     /// * `dimension` - Vector dimension (e.g., 768 for BERT, 1536 for GPT)
     /// * `metric` - Distance metric: "cosine", "euclidean", or "dot"
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metric is not recognized.
     #[wasm_bindgen(constructor)]
     pub fn new(dimension: usize, metric: &str) -> Result<VectorStore, JsValue> {
         let metric = match metric.to_lowercase().as_str() {
@@ -73,18 +77,21 @@ impl VectorStore {
 
     /// Returns the number of vectors in the store.
     #[wasm_bindgen(getter)]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.vectors.len()
     }
 
     /// Returns true if the store is empty.
     #[wasm_bindgen(getter)]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.vectors.is_empty()
     }
 
     /// Returns the vector dimension.
     #[wasm_bindgen(getter)]
+    #[must_use]
     pub fn dimension(&self) -> usize {
         self.dimension
     }
@@ -94,7 +101,11 @@ impl VectorStore {
     /// # Arguments
     ///
     /// * `id` - Unique identifier for the vector
-    /// * `vector` - Float32Array of the vector data
+    /// * `vector` - `Float32Array` of the vector data
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector dimension doesn't match store dimension.
     #[wasm_bindgen]
     pub fn insert(&mut self, id: u64, vector: &[f32]) -> Result<(), JsValue> {
         if vector.len() != self.dimension {
@@ -120,12 +131,16 @@ impl VectorStore {
     ///
     /// # Arguments
     ///
-    /// * `query` - Query vector as Float32Array
+    /// * `query` - Query vector as `Float32Array`
     /// * `k` - Number of results to return
     ///
     /// # Returns
     ///
     /// Array of [id, score] pairs sorted by relevance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query dimension doesn't match store dimension.
     #[wasm_bindgen]
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
         if query.len() != self.dimension {
@@ -173,6 +188,7 @@ impl VectorStore {
 
     /// Returns memory usage estimate in bytes.
     #[wasm_bindgen]
+    #[must_use]
     pub fn memory_usage(&self) -> usize {
         self.vectors.len() * (std::mem::size_of::<u64>() + self.dimension * 4)
     }

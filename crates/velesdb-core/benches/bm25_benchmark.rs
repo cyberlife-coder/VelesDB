@@ -3,11 +3,11 @@
 //! Run with: `cargo bench --bench bm25_benchmark`
 //!
 //! Tests performance of:
-//! - Bm25Index tokenization
-//! - Bm25Index add_document
-//! - Bm25Index search (BM25 scoring)
-//! - Collection text_search
-//! - Collection hybrid_search (RRF fusion)
+//! - `Bm25Index` tokenization
+//! - `Bm25Index::add_document`
+//! - `Bm25Index::search` (BM25 scoring)
+//! - `Collection::text_search`
+//! - `Collection::hybrid_search` (RRF fusion)
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use serde_json::json;
@@ -37,11 +37,11 @@ fn generate_documents(count: usize) -> Vec<String> {
         .cycle()
         .take(count)
         .enumerate()
-        .map(|(i, doc)| format!("Document {} - {}", i, doc))
+        .map(|(i, doc)| format!("Document {i} - {doc}"))
         .collect()
 }
 
-/// Benchmark Bm25Index::add_document
+/// Benchmark `Bm25Index::add_document`
 fn bench_bm25_add_document(c: &mut Criterion) {
     let mut group = c.benchmark_group("bm25_add_document");
 
@@ -63,7 +63,7 @@ fn bench_bm25_add_document(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark Bm25Index::search with varying index sizes
+/// Benchmark `Bm25Index::search` with varying index sizes
 fn bench_bm25_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("bm25_search");
 
@@ -91,7 +91,7 @@ fn bench_bm25_search(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark Collection::text_search
+/// Benchmark `Collection::text_search`
 fn bench_collection_text_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("collection_text_search");
 
@@ -122,7 +122,7 @@ fn bench_collection_text_search(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark Collection::hybrid_search (vector + BM25 with RRF)
+/// Benchmark `Collection::hybrid_search` (vector + BM25 with RRF)
 fn bench_collection_hybrid_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("collection_hybrid_search");
 
@@ -169,7 +169,7 @@ fn bench_collection_hybrid_search(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark tokenization (internal, via add_document with empty index)
+/// Benchmark tokenization (internal, via `add_document` with empty index)
 fn bench_tokenization(c: &mut Criterion) {
     let mut group = c.benchmark_group("bm25_tokenization");
 

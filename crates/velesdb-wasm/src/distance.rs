@@ -16,6 +16,7 @@ pub enum DistanceMetric {
 impl DistanceMetric {
     /// Calculates the distance/similarity between two vectors.
     #[inline]
+    #[must_use]
     pub fn calculate(&self, a: &[f32], b: &[f32]) -> f32 {
         match self {
             Self::Cosine => simd::cosine_similarity(a, b),
@@ -26,6 +27,7 @@ impl DistanceMetric {
 
     /// Returns true if higher values indicate more similarity.
     #[inline]
+    #[must_use]
     pub const fn higher_is_better(&self) -> bool {
         match self {
             Self::Cosine | Self::DotProduct => true,

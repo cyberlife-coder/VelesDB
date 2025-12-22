@@ -425,6 +425,12 @@
           "type": "string",
           "const": "deny-upsert",
           "markdownDescription": "Denies the upsert command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-upsert`\n- `allow-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-query`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-upsert`\n- `allow-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-query`"
         }
       ]
     }

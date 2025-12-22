@@ -1,0 +1,54 @@
+{
+  "name": "@velesdb/tauri-plugin-velesdb",
+  "version": "0.1.0",
+  "description": "TypeScript bindings for the VelesDB Tauri plugin - Vector search in desktop apps",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup index.ts --format cjs,esm --dts",
+    "lint": "eslint index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "tauri",
+    "plugin",
+    "velesdb",
+    "vector",
+    "database",
+    "search",
+    "embeddings",
+    "ai",
+    "desktop"
+  ],
+  "author": "Cyberlife Coder",
+  "license": "BSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cyberlife-coder/VelesDB.git",
+    "directory": "integrations/tauri-plugin-velesdb/guest-js"
+  },
+  "bugs": {
+    "url": "https://github.com/cyberlife-coder/VelesDB/issues"
+  },
+  "homepage": "https://velesdb.com",
+  "peerDependencies": {
+    "@tauri-apps/api": ">=2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -636,6 +636,47 @@ results = vectorstore.similarity_search("greeting", k=2)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 ```
 
+### Tauri Desktop Integration
+
+Build AI-powered desktop apps with vector search:
+
+```rust
+// Rust - Plugin Registration
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_velesdb::init("./data"))
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+```javascript
+// JavaScript - Frontend API
+import { invoke } from '@tauri-apps/api/core';
+
+// Create collection
+await invoke('plugin:velesdb|create_collection', {
+  request: { name: 'documents', dimension: 768, metric: 'cosine' }
+});
+
+// Vector search
+const results = await invoke('plugin:velesdb|search', {
+  request: { collection: 'documents', vector: [...], topK: 10 }
+});
+
+// Hybrid search (vector + BM25)
+const hybrid = await invoke('plugin:velesdb|hybrid_search', {
+  request: { 
+    collection: 'documents', 
+    vector: [...], 
+    query: 'AI tutorial',
+    vectorWeight: 0.7 
+  }
+});
+```
+
+See [tauri-plugin-velesdb](./integrations/tauri-plugin-velesdb) for full documentation.
+
 ---
 
 ## 💻 VelesQL CLI
@@ -730,18 +771,22 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 - [x] CLI / REPL for VelesQL
 - [x] LangChain integration (`langchain-velesdb`)
 - [x] **New Metrics**: Hamming (Binary) & Jaccard (Sets)
-- [ ] OpenAPI/Swagger docs
+- [x] OpenAPI/Swagger docs
+- [x] **BM25 Full-Text Search** with hybrid search (vector + text)
+- [x] **Tauri Desktop Plugin** for AI-powered desktop apps
+- [x] **WASM Support** for browser-based vector search
 
 ### v0.3.0 (Planned)
 - [ ] LlamaIndex integration
 - [ ] Publish to crates.io & PyPI
-- [ ] WASM support for browser
-- [ ] WebSocket subscriptions
+- [ ] TypeScript SDK
+- [ ] Multi-tenancy support
 
 ### v1.0.0 (Future)
 - [ ] Production-ready stability
-- [ ] HNSW parameters auto-tuning
+- [ ] Product Quantization (PQ)
 - [ ] Sparse vector support
+- [ ] API Authentication
 
 ---
 
@@ -751,7 +796,6 @@ Need enterprise features? **VelesDB Premium** extends Core with:
 
 | Feature | Description |
 |---------|-------------|
-| **Hybrid Search** | BM25 + vector fusion for superior relevance |
 | **Encryption at Rest** | AES-256-GCM for data security |
 | **Snapshots** | Atomic backup/restore |
 | **RBAC / Multi-tenancy** | Role-based access control |

@@ -1,3 +1,19 @@
+## Default Permission
+
+Default permissions for VelesDB plugin - allows all database operations
+
+#### This default permission set includes the following:
+
+- `allow-create-collection`
+- `allow-delete-collection`
+- `allow-list-collections`
+- `allow-get-collection`
+- `allow-upsert`
+- `allow-search`
+- `allow-text-search`
+- `allow-hybrid-search`
+- `allow-query`
+
 ## Permission Table
 
 <table>
