@@ -1,9 +1,10 @@
-//! WASM integration tests for VectorStore
+//! WASM integration tests for `VectorStore`
 //!
 //! Run with: `wasm-pack test --node`
 
 #![cfg(target_arch = "wasm32")]
 
+use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
 use velesdb_wasm::VectorStore;
@@ -253,6 +254,107 @@ fn test_case_insensitive_metric() {
     assert_eq!(store1.dimension(), 4);
     assert_eq!(store2.dimension(), 4);
     assert_eq!(store3.dimension(), 4);
+}
+
+// =============================================================================
+// Batch Insert Tests (TDD - Performance Optimization)
+// =============================================================================
+
+fn to_js_batch(batch: Vec<(u64, Vec<f32>)>) -> JsValue {
+    serde_wasm_bindgen::to_value(&batch).unwrap()
+}
+
+#[wasm_bindgen_test]
+fn test_batch_insert_single_batch() {
+    let mut store = VectorStore::new(4, "cosine").unwrap();
+
+    // Prepare batch data: Vec<(u64, Vec<f32>)>
+    let batch: Vec<(u64, Vec<f32>)> = (0..100)
+        .map(|i| (i, vec![i as f32, 0.0, 0.0, 0.0]))
+        .collect();
+
+    store
+        .insert_batch(to_js_batch(batch))
+        .expect("Batch insert should succeed");
+
+    assert_eq!(store.len(), 100);
+}
+
+#[wasm_bindgen_test]
+fn test_batch_insert_performance_10k() {
+    let mut store = VectorStore::new(128, "cosine").unwrap();
+
+    let batch: Vec<(u64, Vec<f32>)> = (0..10_000)
+        .map(|i| {
+            let mut vec = vec![0.0_f32; 128];
+            vec[0] = i as f32;
+            (i, vec)
+        })
+        .collect();
+
+    store
+        .insert_batch(to_js_batch(batch))
+        .expect("Batch insert should succeed");
+
+    assert_eq!(store.len(), 10_000);
+}
+
+#[wasm_bindgen_test]
+fn test_batch_insert_dimension_mismatch() {
+    let mut store = VectorStore::new(4, "cosine").unwrap();
+
+    // One vector has wrong dimension
+    let batch: Vec<(u64, Vec<f32>)> = vec![
+        (1, vec![1.0, 0.0, 0.0, 0.0]),
+        (2, vec![1.0, 0.0, 0.0]), // Wrong!
+    ];
+
+    let result = store.insert_batch(to_js_batch(batch));
+    assert!(result.is_err());
+}
+
+#[wasm_bindgen_test]
+fn test_batch_insert_empty() {
+    let mut store = VectorStore::new(4, "cosine").unwrap();
+
+    let batch: Vec<(u64, Vec<f32>)> = vec![];
+    store
+        .insert_batch(to_js_batch(batch))
+        .expect("Empty batch should succeed");
+
+    assert_eq!(store.len(), 0);
+}
+
+// =============================================================================
+// Reserve Capacity Tests (TDD - Memory Pre-allocation)
+// =============================================================================
+
+#[wasm_bindgen_test]
+fn test_reserve_capacity() {
+    let mut store = VectorStore::new(128, "cosine").unwrap();
+
+    // Reserve space for 10k vectors
+    store.reserve(10_000);
+
+    // Should still be empty
+    assert_eq!(store.len(), 0);
+    assert!(store.is_empty());
+
+    // Now insert should be faster (pre-allocated)
+    for i in 0..1000 {
+        store.insert(i, &vec![0.0_f32; 128]).unwrap();
+    }
+
+    assert_eq!(store.len(), 1000);
+}
+
+#[wasm_bindgen_test]
+fn test_with_capacity_constructor() {
+    let store = VectorStore::with_capacity(128, "cosine", 10_000).unwrap();
+
+    assert_eq!(store.dimension(), 128);
+    assert_eq!(store.len(), 0);
+    assert!(store.is_empty());
 }
 
 // =============================================================================
