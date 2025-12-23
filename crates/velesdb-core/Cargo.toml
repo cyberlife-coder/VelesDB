@@ -126,3 +126,7 @@ harness = false
 [[bench]]
 name = "import_benchmark"
 harness = false
+
+[[bench]]
+name = "perf_benchmark"
+harness = false
