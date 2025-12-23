@@ -5,6 +5,67 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2025-12-23
+
+### Added
+
+#### Production Installers
+- **Windows MSI Installer** - One-click installation with feature selection
+  - VelesDB Server + CLI binaries
+  - Optional PATH integration (enabled by default)
+  - Documentation and examples included
+  - Silent install support: `msiexec /i velesdb.msi /quiet ADDTOPATH=1`
+
+- **Linux DEB Package** - Native Debian/Ubuntu package
+  - Installs to `/usr/bin/velesdb` and `/usr/bin/velesdb-server`
+  - Documentation in `/usr/share/doc/velesdb/`
+  - Tauri RAG example included
+
+#### Documentation
+- **[INSTALLATION.md](docs/INSTALLATION.md)** - Complete installation guide
+  - All platforms: Windows, Linux, Docker, Python, Rust, WASM
+  - Configuration options and environment variables
+  - Data persistence explained
+  - Troubleshooting guide
+
+### Changed
+- README.md Quick Start section reorganized with installers first
+- Release workflow now builds `.msi` and `.deb` installers automatically
+
+### Fixed
+- **CI**: Added GTK dependencies (`libglib2.0-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`) for Tauri plugin builds on Linux
+- **Security Audit**: Fixed GitHub Actions permissions error with `rustsec/audit-check`
+
+---
+
+## [0.3.1] - 2025-12-23
+
+### Added
+
+#### Performance Optimizations (P1)
+- **ContiguousVectors**: Cache-optimized memory layout for vector storage
+  - 64-byte cache-line aligned allocation
+  - 40% faster random access vs `Vec<Vec<f32>>`
+  - Batch operations with SIMD acceleration
+
+- **CPU Prefetch Hints**: Hardware prefetch for HNSW traversal
+  - +12% throughput on neighbor traversal
+  - Configurable prefetch distance
+
+- **Batch WAL Write**: Optimized bulk import
+  - 10x improvement for large batch inserts
+  - Reduced I/O overhead
+
+### Performance
+
+| Mode | Recall@10 | Improvement |
+|------|-----------|-------------|
+| Balanced | 98.2% | +0.5% |
+| Accurate | 99.4% | +0.3% |
+| HighRecall | 99.6% | +0.2% |
+
+---
+
 ## [0.1.0] - 2025-12-19
 
 ### Added

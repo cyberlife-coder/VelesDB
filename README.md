@@ -159,7 +159,39 @@ curl -X POST http://localhost:8080/collections \
 
 ## 🚀 Quick Start
 
-### Option 1: One-liner Install (Recommended)
+### Option 1: Windows Installer (.msi) ⭐ Recommended
+
+Download the MSI installer from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
+
+```
+velesdb-0.3.2-x86_64.msi
+```
+
+**Features:**
+- ✅ VelesDB Server + CLI + REPL
+- ✅ Optional PATH integration (enabled by default)
+- ✅ Documentation and examples included
+- ✅ Feature selection during install
+
+**Silent install:**
+```powershell
+msiexec /i velesdb-0.3.2-x86_64.msi /quiet ADDTOPATH=1
+```
+
+### Option 2: Linux Package (.deb)
+
+Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
+
+```bash
+# Install
+sudo dpkg -i velesdb-0.3.2-amd64.deb
+
+# Binaries installed to /usr/bin
+velesdb --version
+velesdb-server --version
+```
+
+### Option 3: One-liner Script
 
 **Linux / macOS:**
 ```bash
@@ -171,16 +203,7 @@ curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/script
 irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install.ps1 | iex
 ```
 
-Then start using VelesDB:
-```bash
-# Start the server
-velesdb-server
-
-# Or use the interactive CLI
-velesdb
-```
-
-### Option 2: Python (pip)
+### Option 4: Python (pip)
 
 ```bash
 pip install velesdb
@@ -195,7 +218,7 @@ collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
 results = collection.search([...], top_k=10)
 ```
 
-### Option 3: Rust (cargo)
+### Option 5: Rust (cargo)
 
 ```bash
 # Add to Cargo.toml
@@ -206,18 +229,36 @@ cargo install velesdb-cli
 cargo install velesdb-server
 ```
 
-### Option 4: Docker
+### Option 6: Docker
 
 ```bash
 docker run -d -p 8080:8080 -v velesdb_data:/data ghcr.io/cyberlife-coder/velesdb:latest
 ```
 
-### Verify Installation
+### Option 7: Portable Archives
+
+Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
+
+| Platform | File |
+|----------|------|
+| Windows | `velesdb-windows-x86_64.zip` |
+| Linux | `velesdb-linux-x86_64.tar.gz` |
+
+### Start Using VelesDB
 
 ```bash
+# Start the REST API server (data persisted in ./data)
+velesdb-server --data-dir ./my_data
+
+# Or use the interactive CLI with VelesQL REPL
+velesdb repl
+
+# Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.1.1"}
+# {"status":"healthy","version":"0.3.2"}
 ```
+
+📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
 
 ---
 
