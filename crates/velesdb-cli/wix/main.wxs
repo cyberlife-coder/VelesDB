@@ -1,0 +1,226 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  VelesDB Windows Installer (MSI)
+  
+  Features:
+  - VelesDB Server (REST API)
+  - VelesDB CLI (REPL + commands)
+  - Examples (Tauri RAG app)
+  - Optional PATH modification
+  
+  Build: cargo wix --nocapture
+-->
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+    
+    <Product
+        Id='*'
+        Name='VelesDB'
+        UpgradeCode='E8F9A2B1-4C5D-6E7F-8A9B-0C1D2E3F4A5B'
+        Manufacturer='VelesDB Team'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+        
+        <Package Id='*'
+            Keywords='Installer'
+            Description='VelesDB - High-Performance Vector Database'
+            Manufacturer='VelesDB Team'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            Platform='x64'/>
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='VelesDB Installation'/>
+
+        <!-- =================================================================
+             Directory Structure
+             ================================================================= -->
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='ProgramFiles64Folder' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='VelesDB'>
+                    <Directory Id='BinFolder' Name='bin'/>
+                    <Directory Id='ExamplesFolder' Name='examples'>
+                        <Directory Id='TauriExampleFolder' Name='tauri-rag-app'/>
+                    </Directory>
+                    <Directory Id='DocsFolder' Name='docs'/>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <!-- =================================================================
+             Components: Binaries
+             ================================================================= -->
+        <DirectoryRef Id='BinFolder'>
+            <!-- VelesDB Server -->
+            <Component Id='ServerExe' Guid='A1B2C3D4-E5F6-7890-ABCD-EF1234567890' Win64='yes'>
+                <File Id='velesdb_server.exe'
+                    Name='velesdb-server.exe'
+                    DiskId='1'
+                    Source='..\..\..\target\release\velesdb-server.exe'
+                    KeyPath='yes'/>
+            </Component>
+            
+            <!-- VelesDB CLI -->
+            <Component Id='CliExe' Guid='B2C3D4E5-F6A7-8901-BCDE-F23456789012' Win64='yes'>
+                <File Id='velesdb.exe'
+                    Name='velesdb.exe'
+                    DiskId='1'
+                    Source='..\..\..\target\release\velesdb.exe'
+                    KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
+
+        <!-- =================================================================
+             Components: Documentation
+             ================================================================= -->
+        <DirectoryRef Id='APPLICATIONFOLDER'>
+            <Component Id='ReadmeFile' Guid='C3D4E5F6-A7B8-9012-CDEF-345678901234' Win64='yes'>
+                <File Id='README.md'
+                    Name='README.md'
+                    DiskId='1'
+                    Source='..\..\..\README.md'
+                    KeyPath='yes'/>
+            </Component>
+            
+            <Component Id='LicenseFile' Guid='D4E5F6A7-B8C9-0123-DEF0-456789012345' Win64='yes'>
+                <File Id='LICENSE'
+                    Name='LICENSE'
+                    DiskId='1'
+                    Source='..\..\..\LICENSE'
+                    KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
+        
+        <DirectoryRef Id='DocsFolder'>
+            <Component Id='ArchitectureDoc' Guid='E5F6A7B8-C9D0-1234-EF01-567890123456' Win64='yes'>
+                <File Id='ARCHITECTURE.md'
+                    Name='ARCHITECTURE.md'
+                    DiskId='1'
+                    Source='..\..\..\docs\ARCHITECTURE.md'
+                    KeyPath='yes'/>
+            </Component>
+            
+            <Component Id='BenchmarksDoc' Guid='F6A7B8C9-D0E1-2345-F012-678901234567' Win64='yes'>
+                <File Id='BENCHMARKS.md'
+                    Name='BENCHMARKS.md'
+                    DiskId='1'
+                    Source='..\..\..\docs\BENCHMARKS.md'
+                    KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
+
+        <!-- =================================================================
+             Components: Examples (Tauri RAG App)
+             ================================================================= -->
+        <DirectoryRef Id='TauriExampleFolder'>
+            <Component Id='TauriExample' Guid='A7B8C9D0-E1F2-3456-0123-789012345678' Win64='yes'>
+                <File Id='tauri_readme'
+                    Name='README.md'
+                    DiskId='1'
+                    Source='..\..\..\examples\tauri-rag-app\README.md'
+                    KeyPath='yes'/>
+                <File Id='tauri_index'
+                    Name='index.html'
+                    DiskId='1'
+                    Source='..\..\..\examples\tauri-rag-app\index.html'/>
+                <File Id='tauri_package'
+                    Name='package.json'
+                    DiskId='1'
+                    Source='..\..\..\examples\tauri-rag-app\package.json'/>
+            </Component>
+        </DirectoryRef>
+
+        <!-- =================================================================
+             Component: PATH Environment Variable (Optional)
+             ================================================================= -->
+        <DirectoryRef Id='BinFolder'>
+            <Component Id='PathEnv' Guid='B8C9D0E1-F2A3-4567-1234-890123456789' Win64='yes'>
+                <Condition>ADDTOPATH</Condition>
+                <Environment Id='PATH'
+                    Name='PATH'
+                    Value='[BinFolder]'
+                    Permanent='no'
+                    Part='last'
+                    Action='set'
+                    System='yes'/>
+                <RegistryValue Root='HKLM'
+                    Key='Software\VelesDB'
+                    Name='PathAdded'
+                    Type='integer'
+                    Value='1'
+                    KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
+
+        <!-- =================================================================
+             Features
+             ================================================================= -->
+        <Feature Id='Binaries'
+            Title='VelesDB Binaries'
+            Description='Core VelesDB executables (Server + CLI)'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            
+            <ComponentRef Id='ServerExe'/>
+            <ComponentRef Id='CliExe'/>
+            <ComponentRef Id='ReadmeFile'/>
+            <ComponentRef Id='LicenseFile'/>
+        </Feature>
+
+        <Feature Id='Documentation'
+            Title='Documentation'
+            Description='Architecture and benchmark documentation'
+            Level='1'
+            AllowAdvertise='no'>
+            
+            <ComponentRef Id='ArchitectureDoc'/>
+            <ComponentRef Id='BenchmarksDoc'/>
+        </Feature>
+
+        <Feature Id='Examples'
+            Title='Examples'
+            Description='Example projects including Tauri RAG application'
+            Level='1'
+            AllowAdvertise='no'>
+            
+            <ComponentRef Id='TauriExample'/>
+        </Feature>
+
+        <Feature Id='AddToPath'
+            Title='Add to PATH'
+            Description='Add VelesDB binaries to system PATH environment variable'
+            Level='1'
+            AllowAdvertise='no'>
+            
+            <ComponentRef Id='PathEnv'/>
+        </Feature>
+
+        <!-- =================================================================
+             Custom Properties
+             ================================================================= -->
+        <Property Id='ADDTOPATH' Value='1'/>
+        
+        <Property Id='ARPPRODUCTICON' Value='velesdb.ico'/>
+        <Property Id='ARPHELPLINK' Value='https://github.com/cyberlife-coder/VelesDB'/>
+        <Property Id='ARPURLINFOABOUT' Value='https://velesdb.com'/>
+        
+        <!-- =================================================================
+             UI Configuration
+             ================================================================= -->
+        <UIRef Id='WixUI_FeatureTree'/>
+        <UIRef Id='WixUI_ErrorProgressText'/>
+        
+        <WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>
+
+    </Product>
+</Wix>
