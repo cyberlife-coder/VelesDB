@@ -197,7 +197,7 @@ jobs:
           prefix-key: "bench"
 
       - name: Run benchmarks
-        run: cargo bench --all-features -- --noplot
+        run: cargo bench -p velesdb-core --all-features -- --noplot
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
