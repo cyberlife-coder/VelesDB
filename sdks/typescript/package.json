@@ -1,6 +1,6 @@
 {
   "name": "@velesdb/sdk",
-  "version": "0.1.0",
+  "version": "0.3.7",
   "description": "Official TypeScript SDK for VelesDB - Vector Search in Microseconds",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -63,7 +63,7 @@
     "vitest": "^4.0.16"
   },
   "dependencies": {
-    "velesdb-wasm": "^0.2.0"
+    "velesdb-wasm": "^0.3.7"
   },
   "engines": {
     "node": ">=18.0.0"
