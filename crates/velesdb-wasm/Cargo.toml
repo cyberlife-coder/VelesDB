@@ -1,6 +1,6 @@
 [package]
 name = "velesdb-wasm"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "VelesDB for WebAssembly - Vector search in the browser"
 license = "BUSL-1.1"
