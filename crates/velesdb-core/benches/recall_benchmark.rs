@@ -153,7 +153,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
     group.finish();
 }
 
-/// Print recall statistics (not a benchmark, just for documentation)
+/// Compute and print recall statistics (benchmark + one-time stats output)
 fn print_recall_stats(c: &mut Criterion) {
     let mut group = c.benchmark_group("recall_stats");
     group.sample_size(10);
@@ -185,9 +185,34 @@ fn print_recall_stats(c: &mut Criterion) {
         .map(|q| brute_force_knn(q, &dataset, k, DistanceMetric::Cosine))
         .collect();
 
+    // Compute stats once before benchmark for display
+    let mut final_recalls = Vec::new();
+    for quality in [
+        SearchQuality::Fast,
+        SearchQuality::Balanced,
+        SearchQuality::Accurate,
+    ] {
+        let mut total_recall = 0.0;
+        for (query, ground_truth) in queries.iter().zip(&ground_truths) {
+            let results = index.search_with_quality(query, k, quality);
+            let result_ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+            total_recall += recall_at_k(ground_truth, &result_ids);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let avg_recall = total_recall / queries.len() as f64;
+        final_recalls.push(avg_recall);
+    }
+
+    // Print stats once (before benchmark)
+    println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}) ===");
+    println!("Fast (ef=64):     {:.1}%", final_recalls[0] * 100.0);
+    println!("Balanced (ef=128): {:.1}%", final_recalls[1] * 100.0);
+    println!("Accurate (ef=256): {:.1}%", final_recalls[2] * 100.0);
+
+    // Benchmark the computation (no print inside)
     group.bench_function("compute_recall_stats", |b| {
         b.iter(|| {
-            let mut recalls = Vec::new();
+            let mut recalls = Vec::with_capacity(3);
 
             for quality in [
                 SearchQuality::Fast,
@@ -206,12 +231,6 @@ fn print_recall_stats(c: &mut Criterion) {
                 let avg_recall = total_recall / queries.len() as f64;
                 recalls.push(avg_recall);
             }
-
-            // Print results (only visible in verbose mode)
-            println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}) ===");
-            println!("Fast (ef=64):     {:.1}%", recalls[0] * 100.0);
-            println!("Balanced (ef=128): {:.1}%", recalls[1] * 100.0);
-            println!("Accurate (ef=256): {:.1}%", recalls[2] * 100.0);
 
             black_box(recalls)
         });
