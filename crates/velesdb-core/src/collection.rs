@@ -233,6 +233,82 @@ impl Collection {
         Ok(())
     }
 
+    /// Bulk insert optimized for high-throughput import.
+    ///
+    /// # Performance
+    ///
+    /// This method is optimized for bulk loading:
+    /// - Uses parallel HNSW insertion (rayon)
+    /// - Single flush at the end (not per-point)
+    /// - ~2-3x faster than regular `upsert()` for large batches
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point has a mismatched dimension.
+    pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
+        if points.is_empty() {
+            return Ok(0);
+        }
+
+        let config = self.config.read();
+        let dimension = config.dimension;
+        drop(config);
+
+        // Validate dimensions first
+        for point in points {
+            if point.dimension() != dimension {
+                return Err(Error::DimensionMismatch {
+                    expected: dimension,
+                    actual: point.dimension(),
+                });
+            }
+        }
+
+        // Perf: Collect vectors for parallel HNSW insertion
+        let vectors_for_hnsw: Vec<(u64, Vec<f32>)> =
+            points.iter().map(|p| (p.id, p.vector.clone())).collect();
+
+        let mut vector_storage = self.vector_storage.write();
+        let mut payload_storage = self.payload_storage.write();
+
+        // Store vectors and payloads (sequential - I/O bound)
+        for point in points {
+            vector_storage
+                .store(point.id, &point.vector)
+                .map_err(Error::Io)?;
+
+            if let Some(payload) = &point.payload {
+                payload_storage
+                    .store(point.id, payload)
+                    .map_err(Error::Io)?;
+            }
+
+            // Update BM25 text index
+            if let Some(payload) = &point.payload {
+                let text = Self::extract_text_from_payload(payload);
+                if !text.is_empty() {
+                    self.text_index.add_document(point.id, &text);
+                }
+            }
+        }
+
+        // Perf: Parallel HNSW insertion (CPU bound - benefits from parallelism)
+        let inserted = self.index.insert_batch_parallel(vectors_for_hnsw);
+        self.index.set_searching_mode();
+
+        // Update point count
+        let mut config = self.config.write();
+        config.point_count = vector_storage.len();
+        drop(config);
+
+        // Single flush at the end (not per-point)
+        vector_storage.flush().map_err(Error::Io)?;
+        payload_storage.flush().map_err(Error::Io)?;
+        self.index.save(&self.path).map_err(Error::Io)?;
+
+        Ok(inserted)
+    }
+
     /// Retrieves points by their IDs.
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {

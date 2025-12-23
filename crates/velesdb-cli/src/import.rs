@@ -48,58 +48,93 @@ struct JsonRecord {
 ///
 /// # Performance
 ///
-/// Uses batch upsert with pre-allocated buffers for optimal throughput.
-/// Baseline: ~1.5K vectors/sec at 768D with batch_size=1000.
+/// Optimized for high-throughput import:
+/// - **Streaming parse**: Processes file line-by-line (no full file in memory)
+/// - **Parallel HNSW insert**: Uses rayon for CPU-bound indexing
+/// - **Batch flush**: Single I/O flush per batch
+/// - Target: ~3-5K vectors/sec at 768D with batch_size=1000
 pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
     let file = File::open(path).context("Failed to open JSONL file")?;
-    // Perf: Use larger buffer for reduced syscalls
-    let reader = BufReader::with_capacity(64 * 1024, file);
-    let lines: Vec<_> = reader.lines().collect::<std::io::Result<_>>()?;
-    let total = lines.len();
+    let file_size = file.metadata()?.len();
+
+    // Perf: Streaming - count lines without loading all in memory
+    let total = BufReader::with_capacity(64 * 1024, &file).lines().count();
 
     if total == 0 {
         anyhow::bail!("Empty file");
     }
 
-    // Detect dimension from first record
+    // Reopen file for actual processing
+    let file = File::open(path)?;
+    let mut reader = BufReader::with_capacity(128 * 1024, file);
+
+    // Perf: Read first line to detect dimension
+    let mut first_line = String::new();
+    reader.read_line(&mut first_line)?;
     let first_record: JsonRecord =
-        serde_json::from_str(&lines[0]).context("Failed to parse first line")?;
+        serde_json::from_str(&first_line).context("Failed to parse first line")?;
     let dimension = config.dimension.unwrap_or(first_record.vector.len());
 
     // Create or get collection
     let collection = get_or_create_collection(db, &config.collection, dimension, config.metric)?;
 
     let progress = create_progress_bar(total, config.show_progress);
+    if config.show_progress {
+        progress.set_message(format!(
+            "Importing {} vectors ({:.1} MB)",
+            total,
+            file_size as f64 / (1024.0 * 1024.0)
+        ));
+    }
+
     let mut stats = ImportStats::default();
     let start = std::time::Instant::now();
 
+    // Perf: Pre-allocate batch buffer
     let mut batch: Vec<Point> = Vec::with_capacity(config.batch_size);
 
-    for line in lines {
+    // Process first record (already parsed)
+    if first_record.vector.len() == dimension {
+        batch.push(Point::new(
+            first_record.id,
+            first_record.vector,
+            first_record.payload,
+        ));
+        stats.imported += 1;
+    } else {
+        stats.errors += 1;
+    }
+    progress.inc(1);
+
+    // Perf: Streaming parse - process line by line
+    let mut line = String::with_capacity(dimension * 10); // Pre-allocate line buffer
+    while reader.read_line(&mut line)? > 0 {
         match serde_json::from_str::<JsonRecord>(&line) {
             Ok(record) => {
                 if record.vector.len() != dimension {
                     stats.errors += 1;
-                    progress.inc(1);
-                    continue;
-                }
-                batch.push(Point::new(record.id, record.vector, record.payload));
-                stats.imported += 1;
+                } else {
+                    batch.push(Point::new(record.id, record.vector, record.payload));
+                    stats.imported += 1;
 
-                if batch.len() >= config.batch_size {
-                    collection.upsert(std::mem::take(&mut batch))?;
+                    // Perf: Use upsert_bulk with parallel HNSW insert
+                    if batch.len() >= config.batch_size {
+                        collection.upsert_bulk(&batch)?;
+                        batch.clear();
+                    }
                 }
             }
             Err(_) => {
                 stats.errors += 1;
             }
         }
+        line.clear(); // Reuse buffer
         progress.inc(1);
     }
 
     // Flush remaining batch
     if !batch.is_empty() {
-        collection.upsert(batch)?;
+        collection.upsert_bulk(&batch)?;
     }
 
     progress.finish_with_message("Import complete");
@@ -113,12 +148,17 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
 ///
 /// # Performance
 ///
-/// Uses batch upsert with pre-allocated buffers for optimal throughput.
-/// Baseline: ~1.5K vectors/sec at 768D with batch_size=1000.
+/// Optimized for high-throughput import:
+/// - **Streaming parse**: Processes records one at a time
+/// - **Parallel HNSW insert**: Uses rayon for CPU-bound indexing
+/// - **Batch flush**: Single I/O flush per batch
+/// - Target: ~3-5K vectors/sec at 768D with batch_size=1000
 pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
     let file = File::open(path).context("Failed to open CSV file")?;
-    // Perf: Use buffered reader for reduced syscalls
-    let buffered = BufReader::with_capacity(64 * 1024, file);
+    let file_size = file.metadata()?.len();
+
+    // Perf: Use large buffer for reduced syscalls
+    let buffered = BufReader::with_capacity(128 * 1024, file);
     let mut reader = csv::Reader::from_reader(buffered);
 
     // Get headers
@@ -135,14 +175,16 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
             config.vector_column
         ))?;
 
-    // Count records for progress bar
+    // Count records for progress bar (streaming count)
     let total = reader.records().count();
     if total == 0 {
         anyhow::bail!("Empty file");
     }
 
+    // Reopen for processing
     let file = File::open(path)?;
-    let mut reader = csv::Reader::from_reader(file);
+    let buffered = BufReader::with_capacity(128 * 1024, file);
+    let mut reader = csv::Reader::from_reader(buffered);
 
     // Detect dimension from first record
     let first_record = reader.records().next().context("No records in CSV")??;
@@ -153,16 +195,27 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
     // Create or get collection
     let collection = get_or_create_collection(db, &config.collection, dimension, config.metric)?;
 
-    // Reset reader
+    // Reopen for final processing
     let file = File::open(path)?;
-    let mut reader = csv::Reader::from_reader(file);
+    let buffered = BufReader::with_capacity(128 * 1024, file);
+    let mut reader = csv::Reader::from_reader(buffered);
 
     let progress = create_progress_bar(total, config.show_progress);
+    if config.show_progress {
+        progress.set_message(format!(
+            "Importing {} vectors ({:.1} MB)",
+            total,
+            file_size as f64 / (1024.0 * 1024.0)
+        ));
+    }
+
     let mut stats = ImportStats::default();
     let start = std::time::Instant::now();
 
+    // Perf: Pre-allocate batch buffer
     let mut batch: Vec<Point> = Vec::with_capacity(config.batch_size);
 
+    // Perf: Streaming parse - process record by record
     for result in reader.records() {
         match result {
             Ok(record) => {
@@ -201,8 +254,10 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
                         batch.push(Point::new(id, vector, payload_val));
                         stats.imported += 1;
 
+                        // Perf: Use upsert_bulk with parallel HNSW insert
                         if batch.len() >= config.batch_size {
-                            collection.upsert(std::mem::take(&mut batch))?;
+                            collection.upsert_bulk(&batch)?;
+                            batch.clear();
                         }
                     }
                     Err(_) => {
@@ -219,7 +274,7 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
 
     // Flush remaining batch
     if !batch.is_empty() {
-        collection.upsert(batch)?;
+        collection.upsert_bulk(&batch)?;
     }
 
     progress.finish_with_message("Import complete");

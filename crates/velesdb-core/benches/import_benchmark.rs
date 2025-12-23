@@ -113,6 +113,65 @@ fn bench_batch_insert(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark upsert_bulk vs upsert (parallel HNSW insert comparison)
+fn bench_bulk_vs_regular(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bulk_vs_regular");
+    group.sample_size(10);
+    let dimension = 768;
+    let total_points = 5_000;
+    let batch_size = 1000;
+
+    let points = generate_points(total_points, dimension);
+
+    group.throughput(Throughput::Elements(total_points as u64));
+
+    // Regular upsert (sequential HNSW insert)
+    group.bench_function("upsert_regular", |b| {
+        b.iter_with_setup(
+            || {
+                let dir = tempfile::tempdir().unwrap();
+                let db = Database::open(dir.path()).unwrap();
+                db.create_collection("test", dimension, DistanceMetric::Cosine)
+                    .unwrap();
+                (dir, db, points.clone())
+            },
+            |(dir, db, pts)| {
+                let col = db.get_collection("test").unwrap();
+                for batch in pts.chunks(batch_size) {
+                    col.upsert(batch.to_vec()).unwrap();
+                }
+                black_box(col.len());
+                drop(db);
+                drop(dir);
+            },
+        );
+    });
+
+    // Optimized upsert_bulk (parallel HNSW insert)
+    group.bench_function("upsert_bulk", |b| {
+        b.iter_with_setup(
+            || {
+                let dir = tempfile::tempdir().unwrap();
+                let db = Database::open(dir.path()).unwrap();
+                db.create_collection("test", dimension, DistanceMetric::Cosine)
+                    .unwrap();
+                (dir, db, points.clone())
+            },
+            |(dir, db, pts)| {
+                let col = db.get_collection("test").unwrap();
+                for batch in pts.chunks(batch_size) {
+                    col.upsert_bulk(batch).unwrap();
+                }
+                black_box(col.len());
+                drop(db);
+                drop(dir);
+            },
+        );
+    });
+
+    group.finish();
+}
+
 /// Benchmark insertion throughput at scale
 fn bench_insert_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("insert_throughput");
@@ -218,6 +277,7 @@ criterion_group!(
     benches,
     bench_single_insert,
     bench_batch_insert,
+    bench_bulk_vs_regular,
     bench_insert_throughput,
     bench_payload_overhead,
 );
