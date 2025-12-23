@@ -44,3 +44,4 @@ lcov.info
 # Temporary files
 *.tmp
 *.temp
+rag-demo-data/
