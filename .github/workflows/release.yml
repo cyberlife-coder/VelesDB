@@ -105,7 +105,6 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/velesdb dist/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/velesdb-server dist/ 2>/dev/null || true
-          cp target/${{ matrix.target }}/release/velesdb-cli dist/ 2>/dev/null || true
           cp README.md LICENSE dist/
           tar -czvf ${{ matrix.artifact }}.${{ matrix.ext }} -C dist .
 
@@ -117,10 +116,46 @@ jobs:
           Copy-Item README.md,LICENSE dist/
           Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact }}.${{ matrix.ext }}
 
+      # =========================================================================
+      # Linux: Create .deb installer
+      # =========================================================================
+      - name: Install cargo-deb (Linux)
+        if: runner.os == 'Linux'
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo deb -p velesdb-cli --no-build --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/debian/*.deb velesdb-${{ needs.validate.outputs.version }}-amd64.deb
+
+      # =========================================================================
+      # Windows: Create .msi installer
+      # =========================================================================
+      - name: Install WiX toolset (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install wixtoolset -y
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+
+      - name: Install cargo-wix (Windows)
+        if: runner.os == 'Windows'
+        run: cargo install cargo-wix --locked
+
+      - name: Build .msi installer (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo wix --no-build --nocapture -o velesdb-${{ needs.validate.outputs.version }}-x86_64.msi
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: "*.${{ matrix.ext }}"
+          path: |
+            *.${{ matrix.ext }}
+            *.deb
+            *.msi
 
   # ===========================================================================
   # Publish to crates.io (stable releases only)
@@ -182,6 +217,8 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.deb
+            artifacts/**/*.msi
           generate_release_notes: true
 
   # ===========================================================================
