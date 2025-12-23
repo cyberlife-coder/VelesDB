@@ -60,8 +60,9 @@ The benchmarks below isolate **compute performance** to help you understand the 
 | **Hamming (Binary)** | Latency | **~6 ns** | ~164M ops/sec | **~34x** (vs f32) |
 | **ColumnStore Filter** | Eq String (100k) | **~27 µs** | ~3.7M items/sec | **122x** vs JSON |
 | **VelesQL Parser** | Simple | **~528 ns** | ~1.9M qps | - |
+| **VelesQL Cache Hit** | Cached | **~15 ns** | ~67M qps | **35x** vs parse |
 
-> **Note**: All distance functions now use explicit SIMD via the `wide` crate (f32x8). The ColumnStore provides columnar filtering that is 44-122x faster than JSON-based filtering.
+> **Note**: All distance functions now use explicit SIMD via the `wide` crate (f32x8). The ColumnStore provides columnar filtering that is 44-122x faster than JSON-based filtering. Query caching provides 35x speedup for repetitive workloads.
 
 ---
 
@@ -141,6 +142,34 @@ Performance of the SQL-like query parser.
 | **Simple** | `SELECT * FROM table` | 528 ns | 1.9M qps |
 | **Vector** | `... WHERE vector NEAR $v` | 835 ns | 1.2M qps |
 | **Complex** | Multiple conditions | 3.6 µs | 277k qps |
+
+### Query Cache (WIS-85)
+
+For repetitive workloads, use `QueryCache` to avoid re-parsing identical queries:
+
+| Scenario | Time | Throughput | Improvement |
+|----------|------|------------|-------------|
+| **Direct Parse** | 528 ns | 1.9M qps | baseline |
+| **Cache Miss** | ~600 ns | 1.7M qps | +14% overhead |
+| **Cache Hit** | **~15 ns** | **67M qps** | **35x faster** |
+
+```rust
+use velesdb_core::velesql::QueryCache;
+
+// Create cache with max 1000 entries
+let cache = QueryCache::new(1000);
+
+// First call: cache miss (parses query)
+let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
+
+// Subsequent calls: cache hit (~35x faster)
+let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
+
+// Check hit rate
+println!("Hit rate: {:.1}%", cache.stats().hit_rate());
+```
+
+> **Tip**: For REST API servers with repetitive queries, `QueryCache` can reduce parsing overhead by 95%+.
 
 ---
 
