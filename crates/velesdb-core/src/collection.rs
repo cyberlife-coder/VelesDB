@@ -264,33 +264,39 @@ impl Collection {
             }
         }
 
-        // Perf: Collect vectors for parallel HNSW insertion
+        // Perf: Collect vectors for parallel HNSW insertion (needed for clone anyway)
         let vectors_for_hnsw: Vec<(u64, Vec<f32>)> =
             points.iter().map(|p| (p.id, p.vector.clone())).collect();
 
+        // Perf: Single batch WAL write + contiguous mmap write
+        // Use references from vectors_for_hnsw to avoid double allocation
+        let vectors_for_storage: Vec<(u64, &[f32])> = vectors_for_hnsw
+            .iter()
+            .map(|(id, v)| (*id, v.as_slice()))
+            .collect();
+
         let mut vector_storage = self.vector_storage.write();
+        vector_storage
+            .store_batch(&vectors_for_storage)
+            .map_err(Error::Io)?;
+        drop(vector_storage);
+
+        // Store payloads and update BM25 (still sequential for now)
         let mut payload_storage = self.payload_storage.write();
-
-        // Store vectors and payloads (sequential - I/O bound)
         for point in points {
-            vector_storage
-                .store(point.id, &point.vector)
-                .map_err(Error::Io)?;
-
             if let Some(payload) = &point.payload {
                 payload_storage
                     .store(point.id, payload)
                     .map_err(Error::Io)?;
-            }
 
-            // Update BM25 text index
-            if let Some(payload) = &point.payload {
+                // Update BM25 text index
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
                     self.text_index.add_document(point.id, &text);
                 }
             }
         }
+        drop(payload_storage);
 
         // Perf: Parallel HNSW insertion (CPU bound - benefits from parallelism)
         let inserted = self.index.insert_batch_parallel(vectors_for_hnsw);
@@ -298,12 +304,12 @@ impl Collection {
 
         // Update point count
         let mut config = self.config.write();
-        config.point_count = vector_storage.len();
+        config.point_count = self.vector_storage.read().len();
         drop(config);
 
         // Single flush at the end (not per-point)
-        vector_storage.flush().map_err(Error::Io)?;
-        payload_storage.flush().map_err(Error::Io)?;
+        self.vector_storage.write().flush().map_err(Error::Io)?;
+        self.payload_storage.write().flush().map_err(Error::Io)?;
         self.index.save(&self.path).map_err(Error::Io)?;
 
         Ok(inserted)
