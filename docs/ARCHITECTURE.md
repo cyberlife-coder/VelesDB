@@ -47,7 +47,7 @@ This document describes the internal architecture of VelesDB.
 │  │                     DISTANCE LAYER (SIMD)                        │   │
 │  ├─────────────────────────────────────────────────────────────────┤   │
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
-│  │  (76ns)  │   (47ns)    │    (45ns)     │   (6ns)   │   (SIMD)   │   │
+│  │  (81ns)  │   (49ns)    │    (39ns)     │   (6ns)   │   (SIMD)   │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ WASM SIMD128 │ Auto-vectorization │ Fallback   │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
@@ -159,9 +159,9 @@ This document describes the internal architecture of VelesDB.
 
 | Metric | Implementation | Latency (768D) |
 |--------|---------------|----------------|
-| Cosine | AVX2 FMA | **76 ns** |
-| Euclidean | AVX2 FMA | **47 ns** |
-| Dot Product | AVX2 FMA | **45 ns** |
+| Dot Product | AVX2 FMA | **39 ns** |
+| Euclidean | AVX2 FMA | **49 ns** |
+| Cosine | AVX2 FMA | **81 ns** |
 | Hamming | POPCNT | **6 ns** |
 | Jaccard | Auto-vectorized | ~100 ns |
 

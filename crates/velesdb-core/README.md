@@ -67,9 +67,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Operation | Time (768d) | Throughput |
 |-----------|-------------|------------|
-| Cosine Similarity | **~76 ns** | 13M ops/sec |
-| Euclidean Distance | **~47 ns** | 21M ops/sec |
-| Dot Product | **~45 ns** | 22M ops/sec |
+| Dot Product | **~39 ns** | 26M ops/sec |
+| Euclidean Distance | **~49 ns** | 20M ops/sec |
+| Cosine Similarity | **~81 ns** | 12M ops/sec |
 | Hamming (Binary) | **~6 ns** | 164M ops/sec |
 
 - Search latency: **< 1ms** for 100k vectors

@@ -62,7 +62,10 @@ pub use point::Point;
 pub use quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
 
 pub use column_store::{ColumnStore, ColumnType, ColumnValue, StringId, StringTable, TypedColumn};
-pub use metrics::{average_metrics, mrr, precision_at_k, recall_at_k};
+pub use metrics::{
+    average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
+    precision_at_k, recall_at_k, LatencyStats,
+};
 
 /// Database instance managing collections and storage.
 pub struct Database {
