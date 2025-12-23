@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VelesDB RAG Demo - PDF Q&A</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+        .loading {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+    </style>
+</head>
+<body class="min-h-screen gradient-bg">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-white mb-2">
+                🐺 VelesDB RAG Demo
+            </h1>
+            <p class="text-white/80">
+                Upload PDFs, ask questions, get answers powered by vector search
+            </p>
+        </header>
+
+        <!-- Status Card -->
+        <div id="status-card" class="glass rounded-xl p-4 mb-6 shadow-lg">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+                <div class="flex items-center gap-2">
+                    <span id="status-indicator" class="w-3 h-3 rounded-full bg-gray-400"></span>
+                    <span id="status-text" class="text-gray-600">Checking connection...</span>
+                </div>
+                <div id="stats" class="text-sm text-gray-500">
+                    <span id="doc-count">0</span> documents indexed
+                </div>
+            </div>
+            <div id="model-info" class="mt-3 pt-3 border-t border-gray-200 text-sm text-gray-600">
+                <span class="font-medium">Model:</span> <span id="model-name">loading...</span>
+                <span class="mx-2">|</span>
+                <span class="font-medium">Dimensions:</span> <span id="model-dims">-</span>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="glass rounded-xl p-6 mb-6 shadow-lg">
+            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                <i data-lucide="upload" class="w-5 h-5"></i>
+                Upload PDF
+            </h2>
+            <div id="drop-zone" 
+                 class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-purple-500 transition-colors cursor-pointer">
+                <input type="file" id="file-input" accept=".pdf" class="hidden">
+                <i data-lucide="file-text" class="w-12 h-12 mx-auto text-gray-400 mb-3"></i>
+                <p class="text-gray-600">Drag & drop a PDF here, or click to select</p>
+                <p class="text-sm text-gray-400 mt-1">Max file size: 50MB</p>
+            </div>
+            <div id="upload-progress" class="hidden mt-4">
+                <div class="flex items-center gap-3">
+                    <div class="loading">
+                        <i data-lucide="loader-2" class="w-5 h-5 text-purple-600 animate-spin"></i>
+                    </div>
+                    <span id="upload-status" class="text-gray-600">Processing...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Section -->
+        <div class="glass rounded-xl p-6 mb-6 shadow-lg">
+            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                <i data-lucide="search" class="w-5 h-5"></i>
+                Ask a Question
+            </h2>
+            <form id="search-form" class="flex gap-3">
+                <input type="text" 
+                       id="query-input" 
+                       placeholder="What would you like to know?"
+                       class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none">
+                <button type="submit" 
+                        class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2">
+                    <i data-lucide="send" class="w-4 h-4"></i>
+                    Search
+                </button>
+            </form>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results-section" class="hidden glass rounded-xl p-6 shadow-lg">
+            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                <i data-lucide="file-search" class="w-5 h-5"></i>
+                Results
+            </h2>
+            <div id="results-container" class="space-y-4">
+                <!-- Results will be inserted here -->
+            </div>
+        </div>
+
+        <!-- Documents List -->
+        <div id="documents-section" class="mt-6 glass rounded-xl p-6 shadow-lg">
+            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                <i data-lucide="folder" class="w-5 h-5"></i>
+                Indexed Documents
+            </h2>
+            <div id="documents-list" class="space-y-2">
+                <p class="text-gray-500 text-center py-4">No documents indexed yet</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="text-center mt-8 text-white/60 text-sm">
+            <p>Powered by VelesDB - Vector Search in Microseconds</p>
+            <p class="mt-1">
+                <a href="/docs" class="underline hover:text-white">API Docs</a>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        const API_BASE = '';
+
+        // Status check
+        async function checkHealth() {
+            try {
+                const res = await fetch(`${API_BASE}/health`);
+                const data = await res.json();
+                
+                const indicator = document.getElementById('status-indicator');
+                const text = document.getElementById('status-text');
+                const docCount = document.getElementById('doc-count');
+                
+                if (data.velesdb_connected) {
+                    indicator.className = 'w-3 h-3 rounded-full bg-green-500';
+                    text.textContent = 'Connected to VelesDB';
+                    text.className = 'text-green-600';
+                } else {
+                    indicator.className = 'w-3 h-3 rounded-full bg-yellow-500';
+                    text.textContent = 'VelesDB not connected';
+                    text.className = 'text-yellow-600';
+                }
+                
+                docCount.textContent = data.documents_count;
+                
+                // Update model info
+                document.getElementById('model-name').textContent = data.embedding_model || '-';
+                document.getElementById('model-dims').textContent = data.embedding_dimension || '-';
+            } catch (e) {
+                document.getElementById('status-indicator').className = 'w-3 h-3 rounded-full bg-red-500';
+                document.getElementById('status-text').textContent = 'API not available';
+                document.getElementById('status-text').className = 'text-red-600';
+            }
+        }
+
+        // Load documents list
+        async function loadDocuments() {
+            try {
+                const res = await fetch(`${API_BASE}/documents`);
+                const data = await res.json();
+                
+                const container = document.getElementById('documents-list');
+                
+                if (data.documents.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500 text-center py-4">No documents indexed yet</p>';
+                    return;
+                }
+                
+                container.innerHTML = data.documents.map(doc => `
+                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="file-text" class="w-5 h-5 text-purple-600"></i>
+                            <div>
+                                <p class="font-medium">${doc.name}</p>
+                                <p class="text-sm text-gray-500">${doc.pages} pages, ${doc.chunks} chunks</p>
+                            </div>
+                        </div>
+                        <button onclick="deleteDocument('${doc.name}')" 
+                                class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `).join('');
+                
+                lucide.createIcons();
+            } catch (e) {
+                console.error('Failed to load documents:', e);
+            }
+        }
+
+        // File upload
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-purple-500', 'bg-purple-50');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-purple-500', 'bg-purple-50');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-purple-500', 'bg-purple-50');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type === 'application/pdf') {
+                uploadFile(file);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) uploadFile(file);
+        });
+
+        async function uploadFile(file) {
+            const progress = document.getElementById('upload-progress');
+            const status = document.getElementById('upload-status');
+            
+            progress.classList.remove('hidden');
+            status.textContent = `Uploading ${file.name}...`;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                status.textContent = 'Processing and embedding...';
+                
+                const res = await fetch(`${API_BASE}/documents/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    const timing = `PDF: ${data.processing_time_ms?.toFixed(0) || '-'}ms | Embed: ${data.embedding_time_ms?.toFixed(0) || '-'}ms | Insert: ${data.insert_time_ms?.toFixed(1) || '-'}ms`;
+                    status.innerHTML = `✓ ${data.message}<br><span class="text-xs text-gray-500">${timing}</span>`;
+                    status.className = 'text-green-600';
+                    await loadDocuments();
+                    await checkHealth();
+                } else {
+                    status.textContent = `✗ ${data.message}`;
+                    status.className = 'text-red-600';
+                }
+            } catch (e) {
+                status.textContent = `✗ Upload failed: ${e.message}`;
+                status.className = 'text-red-600';
+            }
+            
+            setTimeout(() => {
+                progress.classList.add('hidden');
+                status.className = 'text-gray-600';
+            }, 3000);
+        }
+
+        // Search
+        document.getElementById('search-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const query = document.getElementById('query-input').value.trim();
+            if (!query) return;
+            
+            const resultsSection = document.getElementById('results-section');
+            const resultsContainer = document.getElementById('results-container');
+            
+            resultsSection.classList.remove('hidden');
+            resultsContainer.innerHTML = '<div class="loading text-center py-8 text-gray-500">Searching...</div>';
+            
+            try {
+                const res = await fetch(`${API_BASE}/search`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, top_k: 5 })
+                });
+                
+                const data = await res.json();
+                
+                if (data.results.length === 0) {
+                    resultsContainer.innerHTML = '<p class="text-center py-8 text-gray-500">No results found. Try uploading some documents first.</p>';
+                    return;
+                }
+                
+                // Performance metrics header
+                const perfHeader = `
+                    <div class="mb-4 p-3 bg-purple-50 rounded-lg text-sm">
+                        <span class="font-medium text-purple-700">⚡ Performance:</span>
+                        <span class="ml-2">Embedding: <strong>${data.embedding_time_ms?.toFixed(1) || '-'}ms</strong></span>
+                        <span class="ml-3">VelesDB Search: <strong>${data.search_time_ms?.toFixed(2) || '-'}ms</strong></span>
+                        <span class="ml-3">Total: <strong>${((data.embedding_time_ms || 0) + (data.search_time_ms || 0)).toFixed(1)}ms</strong></span>
+                    </div>
+                `;
+                
+                resultsContainer.innerHTML = perfHeader + data.results.map((r, i) => `
+                    <div class="p-4 bg-gray-50 rounded-lg border-l-4 border-purple-500">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm font-medium text-purple-600">
+                                ${r.document_name} - Page ${r.page_number}
+                            </span>
+                            <span class="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded">
+                                Score: ${(r.score * 100).toFixed(1)}%
+                            </span>
+                        </div>
+                        <p class="text-gray-700">${r.text}</p>
+                    </div>
+                `).join('');
+                
+            } catch (e) {
+                resultsContainer.innerHTML = `<p class="text-center py-8 text-red-500">Search failed: ${e.message}</p>`;
+            }
+        });
+
+        // Delete document
+        async function deleteDocument(name) {
+            if (!confirm(`Delete "${name}" from the index?`)) return;
+            
+            try {
+                await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}`, {
+                    method: 'DELETE'
+                });
+                await loadDocuments();
+                await checkHealth();
+            } catch (e) {
+                alert(`Failed to delete: ${e.message}`);
+            }
+        }
+
+        // Initialize
+        checkHealth();
+        loadDocuments();
+        setInterval(checkHealth, 30000);
+    </script>
+</body>
+</html>
