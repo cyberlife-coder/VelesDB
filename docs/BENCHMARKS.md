@@ -32,9 +32,9 @@ VelesDB v0.2 provides **both exact and approximate search**:
 | Mode | Recall | Use Case |
 |------|--------|----------|
 | **Brute-force** | 100% | Small datasets (<10k), quality-critical |
-| **HNSW HighRecall** | 99.8% | Large datasets, near-exact results |
-| **HNSW Balanced** | 98.7% | Best performance/quality tradeoff |
-| **HNSW Fast** | 91.1% | Maximum speed, acceptable quality |
+| **HNSW HighRecall** | 99.4% | Large datasets, near-exact results |
+| **HNSW Balanced** | 98.0% | Best performance/quality tradeoff |
+| **HNSW Fast** | 90.2% | Maximum speed, acceptable quality |
 
 See [Search Quality](#-search-quality-recallk) for detailed benchmarks.
 
@@ -54,9 +54,9 @@ The benchmarks below isolate **compute performance** to help you understand the 
 
 | Operation | Metric | Time (768d) | Throughput | Speedup vs Baseline |
 |-----------|--------|-------------|------------|---------------------|
-| **Cosine Similarity** | Latency | **~76 ns** | ~13M ops/sec | **4.2x** |
-| **Euclidean Distance** | Latency | **~47 ns** | ~21M ops/sec | **2.9x** |
-| **Dot Product** | Latency | **~45 ns** | ~22M ops/sec | **2.9x** |
+| **Cosine Similarity** | Latency | **~81 ns** | ~12M ops/sec | **3.3x** |
+| **Euclidean Distance** | Latency | **~49 ns** | ~20M ops/sec | **5.3x** |
+| **Dot Product** | Latency | **~39 ns** | ~26M ops/sec | **6.8x** |
 | **Hamming (Binary)** | Latency | **~6 ns** | ~164M ops/sec | **~34x** (vs f32) |
 | **ColumnStore Filter** | Eq String (100k) | **~27 µs** | ~3.7M items/sec | **122x** vs JSON |
 | **VelesQL Parser** | Simple | **~528 ns** | ~1.9M qps | - |
@@ -75,27 +75,27 @@ Results are from `search_benchmark` which measures the full public API call over
 
 | Implementation | Time per op | Throughput |
 |----------------|-------------|------------|
-| Baseline (Auto-vec) | 320 ns | 3.1M ops/s |
-| **VelesDB Optimized (SIMD)** | **76 ns** | **13M ops/s** |
-| **Improvement** | **-76% latency** | **4.2x throughput** |
+| Baseline (Auto-vec) | 265 ns | 3.8M ops/s |
+| **VelesDB Optimized (SIMD)** | **81 ns** | **12M ops/s** |
+| **Improvement** | **-69% latency** | **3.3x throughput** |
 
 ### Euclidean Distance (768 dimensions)
 > Used for spatial data and image features.
 
 | Implementation | Time per op | Throughput |
 |----------------|-------------|------------|
-| Baseline (Auto-vec) | 138 ns | 7.2M ops/s |
-| **VelesDB Optimized (SIMD)** | **47 ns** | **21M ops/s** |
-| **Improvement** | **-66% latency** | **2.9x throughput** |
+| Baseline (Auto-vec) | 258 ns | 3.9M ops/s |
+| **VelesDB Optimized (SIMD)** | **49 ns** | **20M ops/s** |
+| **Improvement** | **-81% latency** | **5.3x throughput** |
 
 ### Dot Product (768 dimensions)
 > Used for raw similarity and inner product.
 
 | Implementation | Time per op | Throughput |
 |----------------|-------------|------------|
-| Baseline (Auto-vec) | 130 ns | 7.7M ops/s |
-| **VelesDB Optimized (SIMD)** | **45 ns** | **22M ops/s** |
-| **Improvement** | **-65% latency** | **2.9x throughput** |
+| Baseline (Auto-vec) | 265 ns | 3.8M ops/s |
+| **VelesDB Optimized (SIMD)** | **39 ns** | **26M ops/s** |
+| **Improvement** | **-85% latency** | **6.8x throughput** |
 
 ### Binary Hamming Distance (768 bits / 12 u64)
 > Used for binary fingerprints and image hashing.
@@ -155,10 +155,10 @@ Index built with `HnswParams::max_recall()` (M=32, ef_construction=500):
 
 | Quality Profile | ef_search | Recall@10 | Latency (k=10) |
 |-----------------|-----------|-----------|----------------|
-| **Fast** | 64 | **91.1%** | ~3.5ms |
-| **Balanced** | 128 | **98.7%** | ~7.5ms |
-| **Accurate** | 256 | **99.8%** | ~11ms |
-| **HighRecall** | 512 | **99.8%** | ~25ms |
+| **Fast** | 64 | **90.2%** | ~3.5ms |
+| **Balanced** | 128 | **98.0%** | ~7.5ms |
+| **Accurate** | 256 | **99.2%** | ~11ms |
+| **HighRecall** | 512 | **99.4%** | ~26ms |
 
 > **Note**: These results use `HnswParams::max_recall()` for quality-critical applications.
 > For faster indexing with slightly lower recall, use `HnswParams::auto()` or `HnswParams::fast_indexing()`.
@@ -202,18 +202,18 @@ Process multiple queries in parallel:
 
 | Queries | Sequential | Parallel (8 cores) | Speedup |
 |---------|------------|-------------------|---------|
-| 100 | ~180ms | ~25ms | **7.2x** |
-| 1000 | ~1.8s | ~250ms | **7.2x** |
+| 100 | ~86ms | ~4.5ms | **19x** |
+| 1000 | ~860ms | ~45ms | **19x** |
 
 ### Brute-Force Parallel Search
 
 Exact search with 100% recall, parallelized across cores:
 
-| Dataset | 1 Thread | 4 Threads | 8 Threads | Scaling |
-|---------|----------|-----------|-----------|---------|
-| 10,000 | ~5ms | ~1.3ms | ~0.7ms | ~7x |
-| 50,000 | ~25ms | ~6.5ms | ~3.5ms | ~7x |
-| 100,000 | ~50ms | ~13ms | ~7ms | ~7x |
+| Dataset | 1 Thread | 2 Threads | 4 Threads | 8 Threads | Scaling |
+|---------|----------|-----------|-----------|-----------|--------|
+| 1,000 | ~0.8ms | - | - | ~0.25ms | ~3x |
+| 10,000 | ~2.6ms | - | - | ~0.9ms | ~3x |
+| 50,000 | ~7.7ms | ~4.7ms | ~3.4ms | ~2.9ms | **2.7x** |
 
 > **Note**: Scaling efficiency depends on memory bandwidth and CPU cache hierarchy. NUMA systems may see reduced scaling on cross-socket access.
 

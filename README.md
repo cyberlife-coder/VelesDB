@@ -43,7 +43,7 @@ VelesDB is a **high-performance vector database** built entirely in Rust. It's d
 | **Setup** | Single binary | Complex deps |
 | **Query Language** | SQL-like (VelesQL) | Custom DSL |
 | **Memory** | 4x reduction (SQ8) | Varies |
-| **Latency** | Sub-millisecond | ~1-5ms |
+| **Latency** | Sub-millisecond (~39-81ns) | ~1-5ms |
 
 ### 🐺 Why "Veles"?
 
@@ -373,10 +373,10 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 
 | Operation | Time | Throughput | Implementation |
 |-----------|------|------------|----------------|
+| **Dot Product** | **~39 ns** | **26M ops/sec** | AVX2 f32x8 FMA |
+| **Euclidean** | **~49 ns** | **20M ops/sec** | AVX2 f32x8 FMA |
 | **Hamming (Binary)** | **~6 ns** | **164M ops/sec** | POPCNT + SIMD |
-| **Euclidean** | **~47 ns** | **21M ops/sec** | AVX2 f32x8 FMA |
-| **Dot Product** | **~45 ns** | **22M ops/sec** | AVX2 f32x8 FMA |
-| **Cosine** | **~76 ns** | **13M ops/sec** | Single-pass SIMD Fused |
+| **Cosine** | **~81 ns** | **12M ops/sec** | Single-pass SIMD Fused |
 
 ### Query Performance
 
@@ -404,7 +404,7 @@ VelesDB is built for speed. All critical paths are SIMD-optimized.
 ### 🎯 Why Choose VelesDB?
 
 #### ⚡ Microsecond Latency
-- **~45-75ns** per vector operation (768D) vs milliseconds for competitors
+- **~39-81ns** per vector operation (768D) vs milliseconds for competitors
 - **122x faster filtering** with ColumnStore (RoaringBitmap) vs JSON-based filtering
 - **SIMD-optimized** distance calculations (AVX2/SSE4.2)
 
