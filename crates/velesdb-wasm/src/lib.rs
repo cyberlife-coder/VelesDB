@@ -381,18 +381,18 @@ impl VectorStore {
         Ok(bytes)
     }
 
-    /// Saves the vector store to IndexedDB.
+    /// Saves the vector store to `IndexedDB`.
     ///
-    /// This method persists all vectors to the browser's IndexedDB,
+    /// This method persists all vectors to the browser's `IndexedDB`,
     /// enabling offline-first applications.
     ///
     /// # Arguments
     ///
-    /// * `db_name` - Name of the IndexedDB database
+    /// * `db_name` - Name of the `IndexedDB` database
     ///
     /// # Errors
     ///
-    /// Returns an error if IndexedDB is not available or the save fails.
+    /// Returns an error if `IndexedDB` is not available or the save fails.
     ///
     /// # Example
     ///
@@ -407,13 +407,13 @@ impl VectorStore {
         persistence::save_to_indexeddb(db_name, &bytes).await
     }
 
-    /// Loads a vector store from IndexedDB.
+    /// Loads a vector store from `IndexedDB`.
     ///
-    /// This method restores all vectors from the browser's IndexedDB.
+    /// This method restores all vectors from the browser's `IndexedDB`.
     ///
     /// # Arguments
     ///
-    /// * `db_name` - Name of the IndexedDB database
+    /// * `db_name` - Name of the `IndexedDB` database
     ///
     /// # Errors
     ///
@@ -431,13 +431,13 @@ impl VectorStore {
         Self::import_from_bytes(&bytes)
     }
 
-    /// Deletes the IndexedDB database.
+    /// Deletes the `IndexedDB` database.
     ///
     /// Use this to clear all persisted data.
     ///
     /// # Arguments
     ///
-    /// * `db_name` - Name of the IndexedDB database to delete
+    /// * `db_name` - Name of the `IndexedDB` database to delete
     ///
     /// # Errors
     ///
