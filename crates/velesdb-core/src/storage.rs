@@ -20,6 +20,18 @@ pub trait VectorStorage: Send + Sync {
     /// Returns an error if the write operation fails.
     fn store(&mut self, id: u64, vector: &[f32]) -> io::Result<()>;
 
+    /// Stores multiple vectors in a single batch operation.
+    ///
+    /// This is optimized for bulk imports:
+    /// - Single WAL write for the entire batch
+    /// - Contiguous memory writes
+    /// - Single fsync at the end
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write operation fails.
+    fn store_batch(&mut self, vectors: &[(u64, &[f32])]) -> io::Result<usize>;
+
     /// Retrieves a vector by ID.
     ///
     /// # Errors
@@ -225,6 +237,114 @@ impl VectorStorage for MmapStorage {
         }
 
         Ok(())
+    }
+
+    fn store_batch(&mut self, vectors: &[(u64, &[f32])]) -> io::Result<usize> {
+        if vectors.is_empty() {
+            return Ok(0);
+        }
+
+        let vector_size = self.dimension * std::mem::size_of::<f32>();
+
+        // Validate all dimensions upfront
+        for (_, vector) in vectors {
+            if vector.len() != self.dimension {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        self.dimension,
+                        vector.len()
+                    ),
+                ));
+            }
+        }
+
+        // 1. Calculate total space needed and prepare batch WAL entry
+        let mut new_vectors: Vec<(u64, usize)> = Vec::with_capacity(vectors.len());
+        let mut total_new_size = 0usize;
+
+        {
+            let index = self.index.read();
+            for &(id, _) in vectors {
+                if !index.contains_key(&id) {
+                    let offset = self.next_offset.load(Ordering::Relaxed) + total_new_size;
+                    new_vectors.push((id, offset));
+                    total_new_size += vector_size;
+                }
+            }
+        }
+
+        // 2. Pre-allocate space for all new vectors at once
+        if total_new_size > 0 {
+            let start_offset = self.next_offset.load(Ordering::Relaxed);
+            self.ensure_capacity(start_offset + total_new_size)?;
+            self.next_offset
+                .fetch_add(total_new_size, Ordering::Relaxed);
+        }
+
+        // 3. Single WAL write for entire batch (Op: BatchStore = 3)
+        {
+            let mut wal = self.wal.write();
+            // Batch header: Op(1) | Count(4)
+            wal.write_all(&[3u8])?;
+            #[allow(clippy::cast_possible_truncation)]
+            let count = vectors.len() as u32;
+            wal.write_all(&count.to_le_bytes())?;
+
+            // Write all vectors contiguously
+            for &(id, vector) in vectors {
+                let vector_bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        vector.as_ptr().cast::<u8>(),
+                        std::mem::size_of_val(vector),
+                    )
+                };
+                wal.write_all(&id.to_le_bytes())?;
+                #[allow(clippy::cast_possible_truncation)]
+                let len_u32 = vector_bytes.len() as u32;
+                wal.write_all(&len_u32.to_le_bytes())?;
+                wal.write_all(vector_bytes)?;
+            }
+            // Note: No flush here - caller controls fsync timing
+        }
+
+        // 4. Write all vectors to mmap contiguously
+        {
+            let index = self.index.read();
+            let mut mmap = self.mmap.write();
+
+            for &(id, vector) in vectors {
+                let vector_bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        vector.as_ptr().cast::<u8>(),
+                        std::mem::size_of_val(vector),
+                    )
+                };
+
+                // Get offset (existing or from new_vectors)
+                let offset = if let Some(&existing) = index.get(&id) {
+                    existing
+                } else {
+                    new_vectors
+                        .iter()
+                        .find(|(vid, _)| *vid == id)
+                        .map_or(0, |(_, off)| *off)
+                };
+
+                mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
+            }
+        }
+
+        // 5. Batch update index
+        if !new_vectors.is_empty() {
+            let mut index = self.index.write();
+            for (id, offset) in new_vectors {
+                index.insert(id, offset);
+            }
+        }
+
+        Ok(vectors.len())
     }
 
     fn retrieve(&self, id: u64) -> io::Result<Option<Vec<f32>>> {

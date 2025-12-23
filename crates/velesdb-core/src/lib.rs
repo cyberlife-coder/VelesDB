@@ -44,6 +44,7 @@ pub mod filter;
 pub mod half_precision;
 pub mod index;
 pub mod metrics;
+pub mod perf_optimizations;
 pub mod point;
 pub mod quantization;
 pub mod simd;
