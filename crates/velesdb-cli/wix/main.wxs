@@ -3,12 +3,12 @@
   VelesDB Windows Installer (MSI)
   
   Features:
-  - VelesDB Server (REST API)
-  - VelesDB CLI (REPL + commands)
-  - Examples (Tauri RAG app)
-  - Optional PATH modification
+  * VelesDB Server (REST API)
+  * VelesDB CLI (REPL + commands)
+  * Examples (Tauri RAG app)
+  * Optional PATH modification
   
-  Build: cargo wix --nocapture
+  Build: cargo wix
 -->
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
     
