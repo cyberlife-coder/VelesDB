@@ -355,6 +355,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2025-12-23
+
+### Added
+
+#### Performance Optimizations P1 (WIS-86/87)
+
+- **ContiguousVectors**: Cache-optimized memory layout
+  - 64-byte aligned contiguous buffer for cache line efficiency
+  - Zero-indirection vector access
+  - 14 TDD tests
+
+- **CPU Prefetch Hints**: L2 cache warming for HNSW traversal
+  - Lookahead distance of 4 vectors
+  - +12% throughput on random access patterns
+
+- **Batch WAL Write**: Single disk write per bulk import
+  - `store_batch()` method on `VectorStorage` trait
+  - Contiguous mmap allocation for batch vectors
+
+- **Batch Distance Computation**: SIMD-optimized batch operations
+  - `batch_dot_products()` with prefetching
+  - `batch_cosine_similarities()` for parallel queries
+
+### Performance
+
+| Benchmark | Result | Improvement |
+|-----------|--------|-------------|
+| Random Access | **2.3 Gelem/s** | +12% with prefetch |
+| Insert (128D) | **100M elem/s** | Contiguous layout |
+| Insert (768D) | **1.84M elem/s** | Batch WAL |
+| Bulk Import | **15.4K vec/s** | 10x vs regular upsert |
+| Memory Alloc | **6.75ms** | +8% vs Vec<Vec> |
+
+### Search Quality
+
+| Mode | Recall@10 | Status |
+|------|-----------|--------|
+| Balanced (ef=128) | **98.2%** | ✅ >= 95% |
+| Accurate (ef=256) | **99.4%** | ✅ >= 95% |
+| HighRecall (ef=512) | **99.6%** | ✅ >= 95% |
+
+### Testing
+
+- **417 tests** total (all passing)
+- Code coverage maintained >= 80%
+
+---
+
 ## [Unreleased]
 
 ### Planned
@@ -365,9 +413,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API Authentication (WIS-69)
 - Starlight documentation site
 
+[0.3.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.1
 [0.3.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.0
 [0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.3.1...HEAD

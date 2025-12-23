@@ -1,8 +1,8 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: December 2025*
+*Last updated: December 23, 2025 (v0.3.1)*
 
-This document details the performance benchmarks for VelesDB v0.2.0. Tests were conducted on a standard workstation (8-core CPU, AVX2 support).
+This document details the performance benchmarks for VelesDB. Tests were conducted on a standard workstation (8-core CPU, AVX2/AVX-512 support).
 
 > 📈 **See also**: [Performance Optimization Roadmap](./PERFORMANCE_ROADMAP.md) for planned improvements.
 >
@@ -155,10 +155,10 @@ Index built with `HnswParams::max_recall()` (M=32, ef_construction=500):
 
 | Quality Profile | ef_search | Recall@10 | Latency (k=10) |
 |-----------------|-----------|-----------|----------------|
-| **Fast** | 64 | **90.2%** | ~3.5ms |
-| **Balanced** | 128 | **98.0%** | ~7.5ms |
-| **Accurate** | 256 | **99.2%** | ~11ms |
-| **HighRecall** | 512 | **99.4%** | ~26ms |
+| **Fast** | 64 | **89.2%** | ~3.5ms |
+| **Balanced** | 128 | **98.2%** | ~7.5ms |
+| **Accurate** | 256 | **99.4%** | ~11ms |
+| **HighRecall** | 512 | **99.6%** | ~26ms |
 
 > **Note**: These results use `HnswParams::max_recall()` for quality-critical applications.
 > For faster indexing with slightly lower recall, use `HnswParams::auto()` or `HnswParams::fast_indexing()`.
@@ -235,9 +235,37 @@ cargo bench --bench parallel_benchmark
 
 ---
 
+## 🔥 Performance Optimizations (v0.3.1)
+
+New optimizations added in v0.3.1 for maximum throughput:
+
+### ContiguousVectors + Prefetch
+
+| Benchmark | Result | Improvement |
+|-----------|--------|-------------|
+| Random Access | **2.3 Gelem/s** | +12% with prefetch |
+| Insert (128D) | **100M elem/s** | Contiguous layout |
+| Insert (768D) | **1.84M elem/s** | Batch WAL |
+| Bulk Import | **15.4K vec/s** | 10x vs regular upsert |
+
+### Optimizations Under the Hood
+
+- **64-byte aligned memory**: Cache line optimization
+- **CPU prefetch hints**: L2 cache warming for HNSW traversal
+- **Batch WAL writes**: Single disk write per bulk import
+- **Zero-copy mmap**: Memory-mapped files for instant startup
+
+### How to Run Performance Benchmarks
+
+```bash
+cargo bench --bench perf_benchmark
+```
+
+---
+
 ## 🧪 Methodology
 
-- **Hardware**: Windows Workstation, 8-core CPU
+- **Hardware**: Windows Workstation, 8-core CPU, 32GB RAM
 - **Environment**: Rust 1.83, Release build (`--release`)
 - **Framework**: Criterion.rs
-- **Optimizations**: AVX2 enabled, `target-cpu=native`
+- **Optimizations**: AVX-512/AVX2 enabled, `target-cpu=native`
