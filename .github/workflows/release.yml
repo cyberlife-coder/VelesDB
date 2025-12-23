@@ -130,24 +130,10 @@ jobs:
           cp target/${{ matrix.target }}/debian/*.deb velesdb-${{ needs.validate.outputs.version }}-amd64.deb
 
       # =========================================================================
-      # Windows: Create .msi installer
+      # Windows: MSI installer (TODO: fix WiX paths in future release)
       # =========================================================================
-      - name: Install WiX toolset (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install wixtoolset -y
-          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
-
-      - name: Install cargo-wix (Windows)
-        if: runner.os == 'Windows'
-        run: cargo install cargo-wix --locked
-
-      - name: Build .msi installer (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cargo wix -p velesdb-cli --no-build --nocapture -o velesdb-${{ needs.validate.outputs.version }}-x86_64.msi
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
+      # MSI temporarily disabled - using ZIP archive instead
+      # See issue: cargo-wix requires files relative to crate directory
 
       - uses: actions/upload-artifact@v4
         with:
@@ -155,7 +141,6 @@ jobs:
           path: |
             *.${{ matrix.ext }}
             *.deb
-            *.msi
 
   # ===========================================================================
   # Publish to crates.io (stable releases only)
