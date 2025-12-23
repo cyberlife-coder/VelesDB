@@ -1,4 +1,10 @@
-//! Integration tests for VelesDB real-world usage scenarios.
+//! Integration tests for `VelesDB` real-world usage scenarios.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_lossless,
+    clippy::uninlined_format_args
+)]
 //!
 //! These tests simulate complete workflows that users would perform
 //! in production environments.

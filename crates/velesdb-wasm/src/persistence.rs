@@ -1,4 +1,4 @@
-//! IndexedDB persistence for VectorStore.
+//! `IndexedDB` persistence for `VectorStore`.
 //!
 //! Provides async save/load operations for offline-first applications.
 
@@ -9,7 +9,7 @@ use web_sys::{Event, IdbDatabase, IdbObjectStore, IdbRequest, IdbTransactionMode
 const STORE_NAME: &str = "vectors";
 const DATA_KEY: &str = "data";
 
-/// Opens or creates an IndexedDB database.
+/// Opens or creates an `IndexedDB` database.
 async fn open_db(db_name: &str) -> Result<IdbDatabase, JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
     let idb_factory = window
@@ -73,7 +73,7 @@ async fn wait_for_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
     request.result()
 }
 
-/// Saves bytes to IndexedDB.
+/// Saves bytes to `IndexedDB`.
 pub async fn save_to_indexeddb(db_name: &str, data: &[u8]) -> Result<(), JsValue> {
     let db = open_db(db_name).await?;
 
@@ -89,7 +89,7 @@ pub async fn save_to_indexeddb(db_name: &str, data: &[u8]) -> Result<(), JsValue
     Ok(())
 }
 
-/// Loads bytes from IndexedDB.
+/// Loads bytes from `IndexedDB`.
 pub async fn load_from_indexeddb(db_name: &str) -> Result<Vec<u8>, JsValue> {
     let db = open_db(db_name).await?;
 
@@ -107,7 +107,7 @@ pub async fn load_from_indexeddb(db_name: &str) -> Result<Vec<u8>, JsValue> {
     Ok(array.to_vec())
 }
 
-/// Deletes the IndexedDB database.
+/// Deletes the `IndexedDB` database.
 pub async fn delete_database(db_name: &str) -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
     let idb_factory = window

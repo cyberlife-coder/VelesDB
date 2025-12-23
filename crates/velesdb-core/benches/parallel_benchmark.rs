@@ -1,4 +1,9 @@
-//! Parallel search benchmark for VelesDB multi-threading validation.
+//! Parallel search benchmark for `VelesDB` multi-threading validation.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unreadable_literal
+)]
 //!
 //! Run with: `cargo bench --bench parallel_benchmark`
 //!

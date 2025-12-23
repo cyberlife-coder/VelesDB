@@ -782,10 +782,17 @@ Comprehensive documentation is available on **DeepWiki**:
 | [**SIMD Optimizations**](https://deepwiki.com/cyberlife-coder/VelesDB/3.5-simd-optimizations) | Platform-specific SIMD (AVX2, NEON, WASM SIMD128) |
 | [**Performance & Benchmarks**](https://deepwiki.com/cyberlife-coder/VelesDB/9-performance-and-benchmarks) | Detailed benchmarks and optimization guide |
 
+### Tutorials
+
+| Tutorial | Description |
+|----------|-------------|
+| [**Build a RAG Desktop App**](docs/tutorials/tauri-rag-app/) | Step-by-step guide to build a local RAG app with Tauri |
+
 ### Quick Links
 
 - 📖 **[Full Documentation](https://deepwiki.com/cyberlife-coder/VelesDB/)** — Architecture, internals, and API reference
 - 📊 **[Benchmarks](docs/BENCHMARKS.md)** — Performance metrics and comparisons
+- 📝 **[VelesQL Specification](docs/VELESQL_SPEC.md)** — Complete language reference with BNF grammar
 - 📝 **[Changelog](CHANGELOG.md)** — Version history and release notes
 - 🏗️ **[Architecture](docs/ARCHITECTURE.md)** — Technical deep-dive
 
@@ -855,6 +862,9 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 - [x] **BM25 Full-Text Search** with hybrid search (vector + text)
 - [x] **Tauri Desktop Plugin** for AI-powered desktop apps
 - [x] **WASM Support** for browser-based vector search
+- [x] **Advanced Search Metrics**: NDCG, Hit Rate, MAP, Precision@k
+- [x] **Latency Percentiles**: p50, p95, p99 for production monitoring
+- [x] **VelesQL Specification**: Complete language documentation with BNF grammar
 
 ### v0.3.0 (Planned)
 - [ ] LlamaIndex integration

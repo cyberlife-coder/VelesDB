@@ -158,9 +158,11 @@ curl -X POST http://localhost:8080/query \
 ## Next Steps
 
 - Read the [API Reference](api-reference.md) for complete endpoint documentation
+- Read the [VelesQL Specification](VELESQL_SPEC.md) for query language reference
 - Learn about [Configuration](configuration.md) options
-- Explore [Architecture](architecture.md) to understand VelesDB internals
+- Explore [Architecture](ARCHITECTURE.md) to understand VelesDB internals
 - Check out [Examples](../examples/) for real-world use cases
+- Follow the [Tauri RAG Tutorial](tutorials/tauri-rag-app/) to build a desktop AI app
 
 ## Getting Help
 

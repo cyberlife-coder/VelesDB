@@ -1,4 +1,10 @@
-//! Recall@k benchmark for VelesDB search quality validation.
+//! Recall@k benchmark for `VelesDB` search quality validation.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::match_same_arms,
+    clippy::unreadable_literal
+)]
 //!
 //! Run with: `cargo bench --bench recall_benchmark`
 //!
@@ -38,10 +44,11 @@ fn brute_force_knn(
         .enumerate()
         .map(|(idx, vec)| {
             let dist = match metric {
-                DistanceMetric::Cosine => simd::cosine_similarity_fast(query, vec),
                 DistanceMetric::Euclidean => simd::euclidean_distance_fast(query, vec),
                 DistanceMetric::DotProduct => simd::dot_product_fast(query, vec),
-                _ => simd::cosine_similarity_fast(query, vec),
+                DistanceMetric::Cosine | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
+                    simd::cosine_similarity_fast(query, vec)
+                }
             };
             #[allow(clippy::cast_possible_truncation)]
             (idx as u64, dist)
