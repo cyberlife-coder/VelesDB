@@ -53,3 +53,30 @@ dirs = "5.0"
 
 [dev-dependencies]
 tempfile = "3.10"
+
+# =============================================================================
+# Linux .deb package configuration (cargo-deb)
+# =============================================================================
+[package.metadata.deb]
+maintainer = "VelesDB Team <team@velesdb.com>"
+copyright = "2024-2025, VelesDB Team"
+license-file = ["../../LICENSE", "0"]
+extended-description = """VelesDB is a high-performance vector database written in Rust.
+Features:
+- HNSW index with SIMD acceleration
+- VelesQL: SQL-like query language
+- Interactive REPL
+- REST API server
+- Sub-millisecond latency"""
+section = "database"
+priority = "optional"
+assets = [
+    ["target/release/velesdb", "usr/bin/", "755"],
+    ["target/release/velesdb-server", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/velesdb/", "644"],
+    ["../../LICENSE", "usr/share/doc/velesdb/", "644"],
+    ["../../docs/ARCHITECTURE.md", "usr/share/doc/velesdb/", "644"],
+    ["../../docs/BENCHMARKS.md", "usr/share/doc/velesdb/", "644"],
+    ["../../examples/tauri-rag-app/README.md", "usr/share/doc/velesdb/examples/tauri-rag-app/", "644"],
+    ["../../examples/tauri-rag-app/package.json", "usr/share/doc/velesdb/examples/tauri-rag-app/", "644"],
+]
