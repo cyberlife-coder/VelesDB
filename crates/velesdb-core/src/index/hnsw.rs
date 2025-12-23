@@ -81,7 +81,7 @@ impl HnswParams {
         }
     }
 
-    /// Creates parameters optimized for high recall (≥99%).
+    /// Creates parameters optimized for high recall (≥97%).
     ///
     /// Uses higher M and `ef_construction` at the cost of more memory and slower indexing.
     #[must_use]
@@ -91,6 +91,31 @@ impl HnswParams {
             max_connections: base.max_connections + 8,
             ef_construction: base.ef_construction + 200,
             ..base
+        }
+    }
+
+    /// Creates parameters optimized for maximum recall (≥99%).
+    ///
+    /// Uses aggressive M and `ef_construction` values. Best for quality-critical applications.
+    /// Trade-off: 2-3x more memory, 3-5x slower indexing.
+    #[must_use]
+    pub fn max_recall(dimension: usize) -> Self {
+        match dimension {
+            0..=256 => Self {
+                max_connections: 32,
+                ef_construction: 500,
+                max_elements: 100_000,
+            },
+            257..=768 => Self {
+                max_connections: 48,
+                ef_construction: 800,
+                max_elements: 100_000,
+            },
+            _ => Self {
+                max_connections: 64,
+                ef_construction: 1000,
+                max_elements: 100_000,
+            },
         }
     }
 
@@ -128,13 +153,15 @@ impl HnswParams {
 /// With typical index sizes (<1M vectors), all profiles stay well under 10ms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SearchQuality {
-    /// Fast search with `ef_search=64`. ~90% recall, lowest latency.
+    /// Fast search with `ef_search=64`. ~85% recall, lowest latency.
     Fast,
-    /// Balanced search with `ef_search=128`. ~95% recall, good tradeoff.
+    /// Balanced search with `ef_search=128`. ~92% recall, good tradeoff.
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=256`. ~99% recall, best quality.
+    /// Accurate search with `ef_search=256`. ~97% recall, best quality.
     Accurate,
+    /// High recall search with `ef_search=512`. ~99%+ recall, highest quality.
+    HighRecall,
     /// Custom `ef_search` value for fine-tuning.
     Custom(usize),
 }
@@ -147,6 +174,7 @@ impl SearchQuality {
             Self::Fast => 64.max(k * 2),
             Self::Balanced => 128.max(k * 4),
             Self::Accurate => 256.max(k * 8),
+            Self::HighRecall => 512.max(k * 16),
             Self::Custom(ef) => (*ef).max(k),
         }
     }

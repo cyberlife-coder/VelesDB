@@ -76,8 +76,9 @@ fn bench_hnsw_recall(c: &mut Criterion) {
         // Generate dataset
         let dataset: Vec<Vec<f32>> = (0..n).map(|i| generate_vector(dim, i as u64)).collect();
 
-        // Build HNSW index with custom params for recall testing
-        let params = HnswParams::custom(16, 200, n + 1000);
+        // Build HNSW index with max_recall params for high quality
+        // M=32, ef_construction=500 for dim<=256
+        let params = HnswParams::max_recall(dim);
         let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
 
         for (idx, vec) in dataset.iter().enumerate() {
@@ -106,11 +107,13 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                 SearchQuality::Fast,
                 SearchQuality::Balanced,
                 SearchQuality::Accurate,
+                SearchQuality::HighRecall,
             ] {
                 let quality_name = match quality {
                     SearchQuality::Fast => "fast",
                     SearchQuality::Balanced => "balanced",
                     SearchQuality::Accurate => "accurate",
+                    SearchQuality::HighRecall => "highrecall",
                     SearchQuality::Custom(_) => "custom",
                 };
 
@@ -165,8 +168,8 @@ fn print_recall_stats(c: &mut Criterion) {
     // Generate dataset
     let dataset: Vec<Vec<f32>> = (0..n).map(|i| generate_vector(dim, i as u64)).collect();
 
-    // Build HNSW index with custom params for recall testing
-    let params = HnswParams::custom(16, 200, n + 1000);
+    // Build HNSW index with max_recall params for high quality
+    let params = HnswParams::max_recall(dim);
     let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
 
     for (idx, vec) in dataset.iter().enumerate() {
@@ -191,6 +194,7 @@ fn print_recall_stats(c: &mut Criterion) {
         SearchQuality::Fast,
         SearchQuality::Balanced,
         SearchQuality::Accurate,
+        SearchQuality::HighRecall,
     ] {
         let mut total_recall = 0.0;
         for (query, ground_truth) in queries.iter().zip(&ground_truths) {
@@ -204,20 +208,22 @@ fn print_recall_stats(c: &mut Criterion) {
     }
 
     // Print stats once (before benchmark)
-    println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}) ===");
-    println!("Fast (ef=64):     {:.1}%", final_recalls[0] * 100.0);
-    println!("Balanced (ef=128): {:.1}%", final_recalls[1] * 100.0);
-    println!("Accurate (ef=256): {:.1}%", final_recalls[2] * 100.0);
+    println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}, M=32, ef_c=500) ===");
+    println!("Fast (ef=64):       {:.1}%", final_recalls[0] * 100.0);
+    println!("Balanced (ef=128):  {:.1}%", final_recalls[1] * 100.0);
+    println!("Accurate (ef=256):  {:.1}%", final_recalls[2] * 100.0);
+    println!("HighRecall (ef=512): {:.1}%", final_recalls[3] * 100.0);
 
     // Benchmark the computation (no print inside)
     group.bench_function("compute_recall_stats", |b| {
         b.iter(|| {
-            let mut recalls = Vec::with_capacity(3);
+            let mut recalls = Vec::with_capacity(4);
 
             for quality in [
                 SearchQuality::Fast,
                 SearchQuality::Balanced,
                 SearchQuality::Accurate,
+                SearchQuality::HighRecall,
             ] {
                 let mut total_recall = 0.0;
 
