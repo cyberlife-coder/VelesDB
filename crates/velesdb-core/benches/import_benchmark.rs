@@ -2,8 +2,11 @@
 //!
 //! Tests insertion throughput with different batch sizes and data formats.
 
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::cast_precision_loss)]
+#![allow(
+    clippy::uninlined_format_args,
+    clippy::cast_precision_loss,
+    clippy::doc_markdown
+)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use velesdb_core::{Database, DistanceMetric, Point};
