@@ -138,15 +138,26 @@ CHUNK_OVERLAP=50
 
 ## 📊 Performance Benchmarks
 
-Benchmarks measured on Windows 11, Python 3.10, VelesDB 0.3.7:
+Benchmarks measured on Windows 11, Python 3.10, VelesDB 0.3.7 (500 iterations):
 
-### Search Latency (after warm-up)
+### Layer-by-Layer Latency
 
-| Component | Latency | Description |
-|-----------|---------|-------------|
-| **Query Embedding** | ~12ms | sentence-transformers encode |
-| **VelesDB Search** | ~5ms | HNSW vector search via REST API |
-| **Total Search** | ~20ms | End-to-end query response |
+| Layer | Mean | P95 | StdDev | Stability |
+|-------|------|-----|--------|-----------|
+| TCP Connection | 0.29ms | 0.51ms | 0.16ms | Variable |
+| HTTP Client Creation | 6.41ms | 7.35ms | 2.20ms | Avoid (use persistent) |
+| **HTTP Request (persistent)** | **0.61ms** | 0.81ms | 0.09ms | ✅ Stable |
+| **VelesDB Search (sync)** | **0.89ms** | 1.45ms | 0.23ms | ✅ Good |
+| VelesDB Search (async) | 2.65ms | 3.17ms | 0.28ms | ✅ Stable |
+| **Full API Search** | **19.10ms** | 24.68ms | 5.80ms | Acceptable |
+
+### Full API Breakdown
+
+| Component | Mean | StdDev | % of Total |
+|-----------|------|--------|------------|
+| **Embedding** | 12.09ms | 5.51ms | 63% |
+| **VelesDB** | 5.33ms | 0.68ms | 28% |
+| **Overhead** | ~1.68ms | - | 9% |
 
 ### Document Ingestion
 
@@ -161,14 +172,14 @@ Benchmarks measured on Windows 11, Python 3.10, VelesDB 0.3.7:
 | Metric | Cold Start | After Warm-up |
 |--------|------------|---------------|
 | First Search | ~300ms | - |
-| Subsequent Searches | - | ~20ms |
+| Subsequent Searches | - | ~19ms |
 | Model Loading | ~2-3s | Cached |
 
 ### Comparison with Other Solutions
 
 | Solution | Search Latency | Notes |
 |----------|---------------|-------|
-| **VelesDB (this demo)** | ~5ms | REST API, HNSW |
+| **VelesDB (this demo)** | **0.89ms** | REST API, HNSW, persistent client |
 | VelesDB (native Rust) | <1ms | Direct integration |
 | Pinecone | ~50-100ms | Cloud service |
 | Qdrant | ~10-50ms | Self-hosted |
