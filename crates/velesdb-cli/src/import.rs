@@ -2,6 +2,14 @@
 //!
 //! Supports importing vectors from CSV and JSON Lines files.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::if_not_else,
+    clippy::single_match_else,
+    clippy::needless_raw_string_hashes
+)]
+
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
@@ -343,6 +351,8 @@ pub struct ImportStats {
 
 impl ImportStats {
     /// Records per second
+    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn records_per_sec(&self) -> f64 {
         if self.duration_ms == 0 {
             0.0
@@ -353,6 +363,11 @@ impl ImportStats {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    clippy::redundant_closure_for_method_calls
+)]
 mod tests {
     use super::*;
     use std::io::Write;

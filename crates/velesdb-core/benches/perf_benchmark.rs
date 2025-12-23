@@ -1,9 +1,16 @@
 //! Performance benchmarks for optimizations.
 //!
 //! Measures:
-//! - ContiguousVectors vs Vec<Vec<f32>> access patterns
+//! - `ContiguousVectors` vs `Vec<Vec<f32>>` access patterns
 //! - Prefetch impact on HNSW-like traversal
 //! - Batch distance computations
+
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::semicolon_if_nothing_returned,
+    clippy::similar_names,
+    clippy::doc_markdown
+)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use velesdb_core::perf_optimizations::ContiguousVectors;

@@ -1,4 +1,4 @@
-//! IndexedDB Persistence Benchmarks
+//! `IndexedDB` Persistence Benchmarks
 //!
 //! Run with browser via wasm-pack test:
 //! `wasm-pack test --headless --chrome -- --ignored`
