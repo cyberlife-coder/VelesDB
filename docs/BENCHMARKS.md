@@ -2,7 +2,7 @@
 
 *Last updated: December 2025*
 
-This document details the performance benchmarks for VelesDB v0.1.1. Tests were conducted on a standard workstation (8-core CPU, AVX2 support).
+This document details the performance benchmarks for VelesDB v0.2.0. Tests were conducted on a standard workstation (8-core CPU, AVX2 support).
 
 > 📈 **See also**: [Performance Optimization Roadmap](./PERFORMANCE_ROADMAP.md) for planned improvements.
 >
@@ -12,27 +12,31 @@ This document details the performance benchmarks for VelesDB v0.1.1. Tests were 
 
 ## ⚠️ What We Measure (Important Disclaimer)
 
-VelesDB v0.1 benchmarks measure **kernel-level performance**:
+VelesDB benchmarks measure **kernel-level performance**:
 
 | Measured | NOT Measured (yet) |
 |----------|-------------------|
 | Pure SIMD distance computations | End-to-end query latency with I/O |
 | In-memory operations | Network/disk overhead |
-| Single-threaded throughput | Multi-threaded scaling |
-| **Exact search (100% recall)** | Approximate search tradeoffs |
+| Single-threaded throughput | Full multi-threaded scaling |
+| **HNSW Recall@k** (91-99.8%) | Disk-based index performance |
 
 ### 🎯 Our Focus
 
 > **"VelesDB focuses on raw CPU efficiency and predictable microsecond latency for in-memory workloads."**
 
-### 📊 Recall Guarantee
+### 📊 Recall Options
 
-VelesDB v0.1 uses **exact brute-force search**:
-- **Recall@k = 100%** — Every true neighbor is found
-- **No approximation** — Results are mathematically correct
-- **Predictable latency** — No variance from probabilistic algorithms
+VelesDB v0.2 provides **both exact and approximate search**:
 
-ANN indices (HNSW, IVF) with configurable recall/latency tradeoffs are planned for **v0.3+**.
+| Mode | Recall | Use Case |
+|------|--------|----------|
+| **Brute-force** | 100% | Small datasets (<10k), quality-critical |
+| **HNSW HighRecall** | 99.8% | Large datasets, near-exact results |
+| **HNSW Balanced** | 98.7% | Best performance/quality tradeoff |
+| **HNSW Fast** | 91.1% | Maximum speed, acceptable quality |
+
+See [Search Quality](#-search-quality-recallk) for detailed benchmarks.
 
 ### 🔍 Real-World Considerations
 
@@ -146,15 +150,27 @@ VelesDB provides configurable recall/latency tradeoffs through search quality pr
 
 ### HNSW Recall by Quality Profile
 
-Measured on 10,000 vectors (128 dimensions) with cosine similarity:
+Measured on 10,000 vectors (128 dimensions) with cosine similarity.
+Index built with `HnswParams::max_recall()` (M=32, ef_construction=500):
 
-| Quality Profile | ef_search | Recall@10 | Recall@100 | Latency |
-|-----------------|-----------|-----------|------------|---------|
-| **Fast** | 64 | ~90% | ~85% | ~1.2ms |
-| **Balanced** | 128 | ~95% | ~92% | ~1.8ms |
-| **Accurate** | 256 | ~99% | ~97% | ~2.2ms |
+| Quality Profile | ef_search | Recall@10 | Latency (k=10) |
+|-----------------|-----------|-----------|----------------|
+| **Fast** | 64 | **91.1%** | ~3.5ms |
+| **Balanced** | 128 | **98.7%** | ~7.5ms |
+| **Accurate** | 256 | **99.8%** | ~11ms |
+| **HighRecall** | 512 | **99.8%** | ~25ms |
 
-> **Note**: Recall depends on dataset characteristics. Dense, clustered data achieves higher recall than sparse, uniform distributions.
+> **Note**: These results use `HnswParams::max_recall()` for quality-critical applications.
+> For faster indexing with slightly lower recall, use `HnswParams::auto()` or `HnswParams::fast_indexing()`.
+
+### Available HNSW Parameter Presets
+
+| Preset | M | ef_construction | Use Case |
+|--------|---|-----------------|----------|
+| `auto(dim)` | 16-32 | 200-500 | General purpose |
+| `high_recall(dim)` | 24-40 | 400-700 | Quality-sensitive |
+| `max_recall(dim)` | 32-64 | 500-1000 | Maximum quality |
+| `fast_indexing(dim)` | 8-16 | 100-250 | Fast bulk inserts |
 
 ### Brute Force (Exact Search)
 

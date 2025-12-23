@@ -156,6 +156,7 @@ A few outliers (< 5%) are normal. More indicates system instability.
 | `column_filter_benchmark` | Column Store vs JSON | `cargo bench --bench column_filter_benchmark` |
 | `search_benchmark` | Distance functions | `cargo bench --bench search_benchmark` |
 | `hnsw_benchmark` | HNSW index operations | `cargo bench --bench hnsw_benchmark` |
+| `recall_benchmark` | Search quality metrics (Recall@k) | `cargo bench --bench recall_benchmark` |
 | `velesql_benchmark` | VelesQL parsing | `cargo bench --bench velesql_benchmark` |
 
 ---
