@@ -180,6 +180,71 @@ impl SearchQuality {
     }
 }
 
+/// ID mappings for HNSW index.
+///
+/// Groups all mapping-related data under a single lock to reduce
+/// lock contention during parallel insertions (WIS-9).
+#[derive(Debug, Clone, Default)]
+struct HnswMappings {
+    /// Mapping from external IDs to internal indices.
+    id_to_idx: HashMap<u64, usize>,
+    /// Mapping from internal indices to external IDs.
+    idx_to_id: HashMap<usize, u64>,
+    /// Next available internal index.
+    next_idx: usize,
+}
+
+impl HnswMappings {
+    /// Creates new empty mappings.
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers an ID and returns its internal index.
+    /// Returns `None` if the ID already exists.
+    fn register(&mut self, id: u64) -> Option<usize> {
+        if self.id_to_idx.contains_key(&id) {
+            return None;
+        }
+        let idx = self.next_idx;
+        self.next_idx += 1;
+        self.id_to_idx.insert(id, idx);
+        self.idx_to_id.insert(idx, id);
+        Some(idx)
+    }
+
+    /// Removes an ID and returns its internal index if it existed.
+    fn remove(&mut self, id: u64) -> Option<usize> {
+        if let Some(idx) = self.id_to_idx.remove(&id) {
+            self.idx_to_id.remove(&idx);
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    /// Gets the internal index for an external ID.
+    fn get_idx(&self, id: u64) -> Option<usize> {
+        self.id_to_idx.get(&id).copied()
+    }
+
+    /// Gets the external ID for an internal index.
+    fn get_id(&self, idx: usize) -> Option<u64> {
+        self.idx_to_id.get(&idx).copied()
+    }
+
+    /// Returns the number of registered IDs.
+    fn len(&self) -> usize {
+        self.id_to_idx.len()
+    }
+
+    /// Returns true if no IDs are registered.
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.id_to_idx.is_empty()
+    }
+}
+
 /// HNSW index for efficient approximate nearest neighbor search.
 ///
 /// # Example
@@ -200,12 +265,8 @@ pub struct HnswIndex {
     /// Internal HNSW index (type-erased for flexibility)
     /// Wrapped in `ManuallyDrop` to control drop order - must be dropped BEFORE `io_holder`
     inner: RwLock<ManuallyDrop<HnswInner>>,
-    /// Mapping from external IDs to internal indices
-    id_to_idx: RwLock<HashMap<u64, usize>>,
-    /// Mapping from internal indices to external IDs
-    idx_to_id: RwLock<HashMap<usize, u64>>,
-    /// Next available internal index
-    next_idx: RwLock<usize>,
+    /// ID mappings (external ID <-> internal index) under single lock (WIS-9)
+    mappings: RwLock<HnswMappings>,
     /// Vector storage for SIMD re-ranking (idx -> vector)
     vectors: RwLock<HashMap<usize, Vec<f32>>>,
     /// Holds the `HnswIo` for loaded indices to prevent memory leak.
@@ -314,9 +375,7 @@ impl HnswIndex {
             dimension,
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
-            id_to_idx: RwLock::new(HashMap::new()),
-            idx_to_id: RwLock::new(HashMap::new()),
-            next_idx: RwLock::new(0),
+            mappings: RwLock::new(HnswMappings::new()),
             vectors: RwLock::new(HashMap::new()),
             io_holder: None, // No io_holder for newly created indices
         }
@@ -355,13 +414,14 @@ impl HnswIndex {
         let file = std::fs::File::create(mappings_path)?;
         let writer = std::io::BufWriter::new(file);
 
-        let id_to_idx = self.id_to_idx.read();
-        let idx_to_id = self.idx_to_id.read();
-        let next_idx = *self.next_idx.read();
+        let mappings = self.mappings.read();
 
-        // Serialize as a tuple of references to avoid copying
-        bincode::serialize_into(writer, &(&*id_to_idx, &*idx_to_id, next_idx))
-            .map_err(std::io::Error::other)?;
+        // Serialize as a tuple to maintain backward compatibility
+        bincode::serialize_into(
+            writer,
+            &(&mappings.id_to_idx, &mappings.idx_to_id, mappings.next_idx),
+        )
+        .map_err(std::io::Error::other)?;
 
         Ok(())
     }
@@ -446,9 +506,11 @@ impl HnswIndex {
             dimension,
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
-            id_to_idx: RwLock::new(id_to_idx),
-            idx_to_id: RwLock::new(idx_to_id),
-            next_idx: RwLock::new(next_idx),
+            mappings: RwLock::new(HnswMappings {
+                id_to_idx,
+                idx_to_id,
+                next_idx,
+            }),
             vectors: RwLock::new(HashMap::new()), // Note: vectors not restored from disk
             io_holder: Some(io_holder),           // Store to prevent memory leak
         })
@@ -488,7 +550,7 @@ impl HnswIndex {
 
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
-        let idx_to_id = self.idx_to_id.read();
+        let mappings = self.mappings.read();
 
         let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
 
@@ -496,7 +558,7 @@ impl HnswIndex {
             HnswInner::Cosine(hnsw) => {
                 let neighbours = hnsw.search(query, k, ef_search);
                 for n in &neighbours {
-                    if let Some(&id) = idx_to_id.get(&n.d_id) {
+                    if let Some(id) = mappings.get_id(n.d_id) {
                         // Clamp to [0,1] to handle float precision issues
                         let score = (1.0 - n.distance).clamp(0.0, 1.0);
                         results.push((id, score));
@@ -506,7 +568,7 @@ impl HnswIndex {
             HnswInner::Euclidean(hnsw) | HnswInner::Hamming(hnsw) | HnswInner::Jaccard(hnsw) => {
                 let neighbours = hnsw.search(query, k, ef_search);
                 for n in &neighbours {
-                    if let Some(&id) = idx_to_id.get(&n.d_id) {
+                    if let Some(id) = mappings.get_id(n.d_id) {
                         results.push((id, n.distance));
                     }
                 }
@@ -514,7 +576,7 @@ impl HnswIndex {
             HnswInner::DotProduct(hnsw) => {
                 let neighbours = hnsw.search(query, k, ef_search);
                 for n in &neighbours {
-                    if let Some(&id) = idx_to_id.get(&n.d_id) {
+                    if let Some(id) = mappings.get_id(n.d_id) {
                         results.push((id, -n.distance));
                     }
                 }
@@ -592,8 +654,8 @@ impl HnswIndex {
 
     /// Computes exact distance using SIMD-optimized functions.
     fn compute_exact_distance_inner(&self, _inner: &HnswInner, id: u64, query: &[f32]) -> f32 {
-        let id_to_idx = self.id_to_idx.read();
-        let Some(&idx) = id_to_idx.get(&id) else {
+        let mappings = self.mappings.read();
+        let Some(idx) = mappings.get_idx(id) else {
             return f32::MAX;
         };
 
@@ -650,11 +712,10 @@ impl HnswIndex {
         let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
 
         // Pre-register all IDs and get their indices (sequential, fast)
+        // WIS-9: Single lock acquisition instead of 3 separate locks
         let mut registered: Vec<(Vec<f32>, usize)> = Vec::with_capacity(vectors.len());
         {
-            let mut id_to_idx = self.id_to_idx.write();
-            let mut idx_to_id = self.idx_to_id.write();
-            let mut next_idx = self.next_idx.write();
+            let mut mappings = self.mappings.write();
 
             for (id, vector) in vectors {
                 assert_eq!(
@@ -665,16 +726,10 @@ impl HnswIndex {
                     vector.len()
                 );
 
-                // Skip duplicates
-                if id_to_idx.contains_key(&id) {
-                    continue;
+                // Skip duplicates, register returns None if ID exists
+                if let Some(idx) = mappings.register(id) {
+                    registered.push((vector, idx));
                 }
-
-                let idx = *next_idx;
-                *next_idx += 1;
-                id_to_idx.insert(id, idx);
-                idx_to_id.insert(idx, id);
-                registered.push((vector, idx));
             }
         }
 
@@ -786,13 +841,13 @@ impl HnswIndex {
         );
 
         let vectors = self.vectors.read();
-        let idx_to_id = self.idx_to_id.read();
+        let mappings = self.mappings.read();
 
         // Compute distances in parallel
         let mut results: Vec<(u64, f32)> = vectors
             .par_iter()
             .filter_map(|(idx, vec)| {
-                let id = *idx_to_id.get(idx)?;
+                let id = mappings.get_id(*idx)?;
                 let score = match self.metric {
                     DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vec),
                     DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vec),
@@ -874,31 +929,20 @@ impl VectorIndex for HnswIndex {
             vector.len()
         );
 
-        // Check if ID already exists - hnsw_rs doesn't support updates!
-        // Inserting the same idx twice creates duplicates/ghosts in the graph.
-        let mut id_to_idx = self.id_to_idx.write();
-        if id_to_idx.contains_key(&id) {
-            // ID already exists - skip insertion to avoid corrupting the index.
-            // Use a dedicated upsert() method if you need update semantics.
-            // For now, we silently skip (production code should log this).
-            return;
-        }
-
-        let mut idx_to_id = self.idx_to_id.write();
-        let mut next_idx = self.next_idx.write();
-
-        let idx = *next_idx;
-        *next_idx += 1;
-        id_to_idx.insert(id, idx);
-        idx_to_id.insert(idx, id);
+        // WIS-9: Single lock acquisition for all mappings
+        let idx = {
+            let mut mappings = self.mappings.write();
+            // Check if ID already exists - hnsw_rs doesn't support updates!
+            // register() returns None if ID already exists
+            match mappings.register(id) {
+                Some(idx) => idx,
+                None => return, // ID already exists, skip insertion
+            }
+        };
 
         // Store vector for SIMD re-ranking
         let mut vectors = self.vectors.write();
         vectors.insert(idx, vector.to_vec());
-
-        drop(id_to_idx);
-        drop(idx_to_id);
-        drop(next_idx);
         drop(vectors);
 
         // Insert into HNSW index
@@ -932,20 +976,14 @@ impl VectorIndex for HnswIndex {
     /// For workloads with many deletions, consider periodic index rebuilding
     /// to reclaim memory and maintain optimal graph structure.
     fn remove(&self, id: u64) -> bool {
-        let mut id_to_idx = self.id_to_idx.write();
-        let mut idx_to_id = self.idx_to_id.write();
-
-        if let Some(idx) = id_to_idx.remove(&id) {
-            idx_to_id.remove(&idx);
-            // Soft delete: vector remains in HNSW graph but is excluded from results
-            true
-        } else {
-            false
-        }
+        // WIS-9: Single lock for mappings
+        let mut mappings = self.mappings.write();
+        // Soft delete: vector remains in HNSW graph but is excluded from results
+        mappings.remove(id).is_some()
     }
 
     fn len(&self) -> usize {
-        self.id_to_idx.read().len()
+        self.mappings.read().len()
     }
 
     fn dimension(&self) -> usize {
