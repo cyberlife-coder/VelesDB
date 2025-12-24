@@ -549,6 +549,72 @@ WHERE price > 100
 
 ---
 
+## EXPLAIN Query Plan
+
+The `QueryPlan` API allows you to inspect how VelesDB will execute a query before running it.
+
+### Usage
+
+```rust
+use velesdb_core::velesql::{Parser, QueryPlan};
+
+let query = Parser::parse("SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10")?;
+let plan = QueryPlan::from_select(&query.select);
+
+// Human-readable tree format
+println!("{}", plan.to_tree());
+
+// JSON format for tooling
+let json = plan.to_json()?;
+```
+
+### Output Format
+
+```
+Query Plan:
+├─ VectorSearch
+│   ├─ Collection: docs
+│   ├─ Metric: cosine
+│   ├─ ef_search: 100
+│   └─ Candidates: 10
+├─ Filter
+│   ├─ Conditions: category = ?
+│   └─ Selectivity: 50.0%
+└─ Limit: 10
+
+Estimated cost: 0.105ms
+Index used: HNSW
+Filter strategy: post-filtering (low selectivity)
+```
+
+### Plan Nodes
+
+| Node | Description |
+|------|-------------|
+| `VectorSearch` | HNSW approximate nearest neighbor search |
+| `Filter` | Metadata filter (pre or post vector search) |
+| `Limit` | Maximum results to return |
+| `Offset` | Skip N results |
+| `TableScan` | Full collection scan (no vector search) |
+
+### Filter Strategies
+
+| Strategy | When Used | Performance |
+|----------|-----------|-------------|
+| `pre-filtering` | High selectivity (<10% match) | Filter first, then vector search |
+| `post-filtering` | Low selectivity (>10% match) | Vector search first, then filter |
+
+### Performance
+
+| Operation | Time |
+|-----------|------|
+| `QueryPlan::from_select()` (simple) | ~61 ns |
+| `QueryPlan::from_select()` (complex) | ~398 ns |
+| `to_tree()` | ~893 ns |
+| `to_json()` | ~702 ns |
+
+---
+
 ## Parser Performance
 
 | Query Type | Parse Time | Throughput |

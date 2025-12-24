@@ -23,6 +23,10 @@ Thumbs.db
 /data/
 *.db
 
+# Demo data (generated during local testing)
+/rag-demo-data/
+/demos/
+
 # Logs
 *.log
 logs/

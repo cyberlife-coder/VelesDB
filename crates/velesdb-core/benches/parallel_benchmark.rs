@@ -117,6 +117,69 @@ fn bench_brute_force(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark parallel insert (WIS-9: lock contention reduction)
+///
+/// Measures throughput of `insert_batch_parallel` which benefits from
+/// the HnswMappings refactoring (4 locks → 2 locks per insert).
+fn bench_parallel_insert(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parallel_insert");
+    group.sample_size(10);
+
+    let dim = 128;
+
+    for &n in &[1000, 5000, 10000] {
+        // Generate vectors to insert
+        let vectors: Vec<(u64, Vec<f32>)> = (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_possible_truncation)]
+                (i as u64, generate_vector(dim, i as u64))
+            })
+            .collect();
+
+        group.bench_function(
+            criterion::BenchmarkId::new("batch_parallel", format!("{n}v")),
+            |b| {
+                b.iter_with_setup(
+                    || {
+                        // Setup: create fresh index for each iteration
+                        let params = HnswParams::custom(16, 200, n + 1000);
+                        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+                        (index, vectors.clone())
+                    },
+                    |(index, vecs)| {
+                        // Measure: parallel batch insert
+                        let inserted = index.insert_batch_parallel(vecs);
+                        index.set_searching_mode();
+                        black_box(inserted)
+                    },
+                );
+            },
+        );
+
+        // Compare with sequential insert
+        group.bench_function(
+            criterion::BenchmarkId::new("sequential", format!("{n}v")),
+            |b| {
+                b.iter_with_setup(
+                    || {
+                        let params = HnswParams::custom(16, 200, n + 1000);
+                        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+                        (index, vectors.clone())
+                    },
+                    |(index, vecs)| {
+                        for (id, vec) in vecs {
+                            index.insert(id, &vec);
+                        }
+                        black_box(index.len())
+                    },
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 /// Benchmark scaling with thread count
 fn bench_thread_scaling(c: &mut Criterion) {
     use rayon::ThreadPoolBuilder;
@@ -169,6 +232,7 @@ criterion_group!(
     benches,
     bench_batch_search,
     bench_brute_force,
+    bench_parallel_insert,
     bench_thread_scaling
 );
 criterion_main!(benches);

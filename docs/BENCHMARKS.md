@@ -246,6 +246,18 @@ Exact search with 100% recall, parallelized across cores:
 
 > **Note**: Scaling efficiency depends on memory bandwidth and CPU cache hierarchy. NUMA systems may see reduced scaling on cross-socket access.
 
+### Parallel Batch Insert (WIS-9)
+
+Bulk vector insertion using `insert_batch_parallel` vs sequential `insert`:
+
+| Vectors | Batch Parallel | Sequential | Speedup |
+|---------|----------------|------------|---------|
+| 1,000 | **17 ms** | 200 ms | **12x** |
+| 5,000 | **167 ms** | 2.6 s | **16x** |
+| 10,000 | **445 ms** | 8.1 s | **18x** |
+
+> **Perf**: WIS-9 refactored `HnswMappings` to reduce lock contention from 4 locks to 2 locks per insert operation. Combined with `hnsw_rs` native parallel insertion, this enables massive speedups for bulk imports.
+
 ### API Usage
 
 ```rust
