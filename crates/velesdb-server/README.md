@@ -1,7 +1,7 @@
 # VelesDB Server
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-server.svg)](https://crates.io/crates/velesdb-server)
-[![License](https://img.shields.io/crates/l/velesdb-server.svg)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
 
 REST API server for VelesDB - a high-performance vector database.
 
