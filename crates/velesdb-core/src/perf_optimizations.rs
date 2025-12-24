@@ -206,14 +206,9 @@ impl ContiguousVectors {
                 _mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T1);
             }
 
-            #[cfg(target_arch = "aarch64")]
-            unsafe {
-                use std::arch::aarch64::_prefetch;
-                _prefetch(ptr.cast::<i8>(), 0, 2); // PLDL2KEEP
-            }
-
-            // No-op on other architectures
-            #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+            // aarch64 prefetch requires nightly (stdarch_aarch64_prefetch)
+            // For now, we skip prefetch on ARM64 until the feature is stabilized
+            #[cfg(not(target_arch = "x86_64"))]
             let _ = ptr;
         }
     }
