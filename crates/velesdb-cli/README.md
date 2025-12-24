@@ -1,7 +1,7 @@
 # VelesDB CLI
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-cli.svg)](https://crates.io/crates/velesdb-cli)
-[![License](https://img.shields.io/crates/l/velesdb-cli.svg)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
 
 Interactive CLI and REPL for VelesDB with VelesQL support.
 

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-core.svg)](https://crates.io/crates/velesdb-core)
 [![Documentation](https://docs.rs/velesdb-core/badge.svg)](https://docs.rs/velesdb-core)
-[![License](https://img.shields.io/crates/l/velesdb-core.svg)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
 
 High-performance vector database engine written in Rust.

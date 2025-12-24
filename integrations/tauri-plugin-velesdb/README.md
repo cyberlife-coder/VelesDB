@@ -1,7 +1,7 @@
 # tauri-plugin-velesdb
 
 [![Crates.io](https://img.shields.io/crates/v/tauri-plugin-velesdb.svg)](https://crates.io/crates/tauri-plugin-velesdb)
-[![License](https://img.shields.io/crates/l/tauri-plugin-velesdb.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-ELv2-blue)](LICENSE)
 
 A Tauri plugin for **VelesDB** - Vector search in desktop applications.
 
