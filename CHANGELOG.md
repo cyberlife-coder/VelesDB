@@ -5,6 +5,28 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-12-24
+
+### 🎉 License Change - Elastic License 2.0 (ELv2)
+
+VelesDB Core is now licensed under **Elastic License 2.0 (ELv2)** — a **source-available** license.
+
+#### What this means:
+- ✅ **Free to use** for any purpose (commercial or personal)
+- ✅ **Free to modify** and create derivative works
+- ✅ **Free to distribute** with your applications
+- ❌ **Cannot provide as a managed service** (DBaaS) without permission
+
+This change ensures VelesDB remains freely available while protecting against cloud providers offering it as a competing service.
+
+### Changed
+- Updated all license references from BSL-1.1 to ELv2
+- Updated all documentation to use "source-available" terminology
+- Updated license badges across all README files
+- Updated OpenAPI documentation with correct license
+
+---
+
 ## [0.3.8] - 2025-12-23
 
 ### Added
@@ -502,10 +524,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API Authentication (WIS-69)
 - Starlight documentation site
 
+[0.4.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.4.0
+[0.3.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.8
 [0.3.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.1
 [0.3.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.0
 [0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.4.0...HEAD
