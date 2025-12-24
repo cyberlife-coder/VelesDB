@@ -1,7 +1,7 @@
-//! Benchmark for `VelesQL` parser performance.
+//! Benchmark for `VelesQL` parser and EXPLAIN performance.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use velesdb_core::velesql::Parser;
+use velesdb_core::velesql::{Parser, QueryPlan};
 
 /// Simple SELECT query
 const SIMPLE_QUERY: &str = "SELECT * FROM documents LIMIT 10";
@@ -89,13 +89,69 @@ fn bench_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// EXPLAIN Query Plan Benchmarks (WIS-22)
+// =============================================================================
+
+fn bench_explain_simple(c: &mut Criterion) {
+    let query = Parser::parse(SIMPLE_QUERY).expect("valid query");
+    c.bench_function("explain_plan_simple", |b| {
+        b.iter(|| {
+            let _ = black_box(QueryPlan::from_select(&query.select));
+        });
+    });
+}
+
+fn bench_explain_vector(c: &mut Criterion) {
+    let query = Parser::parse(VECTOR_QUERY).expect("valid query");
+    c.bench_function("explain_plan_vector", |b| {
+        b.iter(|| {
+            let _ = black_box(QueryPlan::from_select(&query.select));
+        });
+    });
+}
+
+fn bench_explain_complex(c: &mut Criterion) {
+    let query = Parser::parse(COMPLEX_QUERY).expect("valid query");
+    c.bench_function("explain_plan_complex", |b| {
+        b.iter(|| {
+            let _ = black_box(QueryPlan::from_select(&query.select));
+        });
+    });
+}
+
+fn bench_explain_to_tree(c: &mut Criterion) {
+    let query = Parser::parse(COMPLEX_QUERY).expect("valid query");
+    let plan = QueryPlan::from_select(&query.select);
+    c.bench_function("explain_to_tree", |b| {
+        b.iter(|| {
+            let _ = black_box(plan.to_tree());
+        });
+    });
+}
+
+fn bench_explain_to_json(c: &mut Criterion) {
+    let query = Parser::parse(COMPLEX_QUERY).expect("valid query");
+    let plan = QueryPlan::from_select(&query.select);
+    c.bench_function("explain_to_json", |b| {
+        b.iter(|| {
+            let _ = black_box(plan.to_json());
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_parse_simple,
     bench_parse_vector,
     bench_parse_complex,
     bench_parse_multi_condition,
-    bench_throughput
+    bench_throughput,
+    bench_explain_simple,
+    bench_explain_vector,
+    bench_explain_complex,
+    bench_explain_to_tree,
+    bench_explain_to_json
 );
 
 criterion_main!(benches);
