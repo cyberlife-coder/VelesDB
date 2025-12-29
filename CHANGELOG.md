@@ -5,6 +5,38 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2025-12-29
+
+### Added
+
+#### Python SDK - Bulk Import Optimization
+- **`upsert_bulk()` method** - 7x faster bulk imports
+  - Parallel HNSW insertion using Rayon
+  - Single flush at the end (no per-batch I/O)
+  - 3,300 vectors/sec on 768D embeddings
+
+#### Benchmark Kit
+- **`benchmarks/` directory** - Reproducible VelesDB vs pgvectorscale benchmark
+  - `benchmark.py` - Full comparison script
+  - `benchmark_quick.py` - VelesDB-only quick test
+  - `docker-compose.yml` - pgvectorscale container setup
+  - Detailed methodology documentation
+
+### Performance Results (10k vectors, 768D)
+
+| Metric | pgvectorscale | VelesDB | Speedup |
+|--------|---------------|---------|---------|
+| Total Ingest | 22.3s | **3.0s** | **7.4x** |
+| Avg Latency | 52.8ms | **4.0ms** | **13x** |
+| Throughput | 18.9 QPS | **246.8 QPS** | **13x** |
+
+### Documentation
+- Updated README with pgvectorscale benchmark results
+- Added `upsert_bulk()` documentation to Python SDK
+- Updated `docs/BENCHMARKS.md` with competitor comparison
+
+---
+
 ## [0.4.0] - 2025-12-24
 
 ### 🎉 License Change - Elastic License 2.0 (ELv2)

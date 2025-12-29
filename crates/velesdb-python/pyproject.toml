@@ -4,10 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "velesdb"
-version = "0.3.7"
+version = "0.4.1"
 description = "A high-performance vector database for AI applications"
 readme = "README.md"
-license = { text = "BSL-1.1" }
+license = { text = "Elastic License 2.0 (ELv2)" }
 authors = [
     { name = "VelesDB Team", email = "contact@velesdb.io" }
 ]

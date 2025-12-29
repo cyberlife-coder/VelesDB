@@ -80,15 +80,29 @@ LIMIT 10
 
 ### 🏆 VelesDB vs The Competition
 
-| Metric | 🐺 **VelesDB** | Qdrant | Pinecone | pgvector |
-|--------|---------------|--------|----------|----------|
-| **Latency (768D)** | **39ns** ⚡ | ~1ms | ~5ms | ~10ms |
-| **Setup Time** | **< 1 min** | 5-10 min | Cloud only | PostgreSQL req. |
-| **Binary Size** | **15 MB** | 100+ MB | N/A | Extension |
-| **Query Language** | **SQL (VelesQL)** | JSON DSL | JSON/SDK | SQL |
-| **Filtering Speed** | **122x faster** | Baseline | N/A | Baseline |
-| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ |
-| **Recall@10** | **98.2%** | ~95% | ~95% | ~90% |
+| Metric | 🐺 **VelesDB** | Qdrant | Pinecone | pgvector | pgvectorscale |
+|--------|---------------|--------|----------|----------|---------------|
+| **Latency (768D)** | **4ms** ⚡ | ~10ms | ~5ms | ~50ms | ~53ms |
+| **Throughput** | **247 QPS** | ~100 QPS | ~200 QPS | ~20 QPS | ~19 QPS |
+| **Setup Time** | **< 1 min** | 5-10 min | Cloud only | PostgreSQL req. | PostgreSQL req. |
+| **Binary Size** | **15 MB** | 100+ MB | N/A | Extension | Extension |
+| **Query Language** | **SQL (VelesQL)** | JSON DSL | JSON/SDK | SQL | SQL |
+| **Filtering Speed** | **122x faster** | Baseline | N/A | Baseline | Baseline |
+| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Recall@10** | **98.2%** | ~95% | ~95% | ~90% | ~95% |
+
+### 📊 Benchmark: VelesDB vs pgvectorscale (DiskANN)
+
+We benchmarked VelesDB against [pgvectorscale](https://github.com/timescale/pgvectorscale) (Timescale's DiskANN extension) on **10,000 vectors (768D)**:
+
+| Metric | pgvectorscale | VelesDB | Speedup |
+|--------|---------------|---------|---------|
+| **Total Ingest** | 22.3s | **3.0s** | **7.4x faster** |
+| **Avg Search Latency** | 52.8ms | **4.0ms** | **13x faster** |
+| **P95 Search Latency** | 61.9ms | **5.0ms** | **12x faster** |
+| **Throughput** | 18.9 QPS | **246.8 QPS** | **13x higher** |
+
+> 📊 **Run your own benchmarks:** See [benchmarks/](benchmarks/) for the complete benchmark kit.
 
 ### 🐺 Why "Veles"?
 

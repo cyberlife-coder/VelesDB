@@ -282,6 +282,58 @@ impl Collection {
         })
     }
 
+    /// Bulk insert optimized for high-throughput import.
+    ///
+    /// This method is ~2-3x faster than regular upsert() for large batches:
+    /// - Uses parallel HNSW insertion (rayon)
+    /// - Single flush at the end (not per-batch)
+    ///
+    /// Args:
+    ///     points: List of point dicts with 'id', 'vector', and optional 'payload'
+    ///
+    /// Example:
+    ///     >>> # For bulk loading, use upsert_bulk instead of upsert
+    ///     >>> collection.upsert_bulk([
+    ///     ...     {"id": i, "vector": vectors[i]} for i in range(10000)
+    ///     ... ])
+    #[pyo3(signature = (points))]
+    fn upsert_bulk(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
+        Python::with_gil(|py| {
+            let mut core_points = Vec::with_capacity(points.len());
+
+            for point_dict in points {
+                let id: u64 = point_dict
+                    .get("id")
+                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
+                    .extract(py)?;
+
+                let vector_obj = point_dict
+                    .get("vector")
+                    .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
+                let vector = extract_vector(py, vector_obj)?;
+
+                let payload: Option<serde_json::Value> = match point_dict.get("payload") {
+                    Some(p) => {
+                        let dict: HashMap<String, PyObject> =
+                            p.extract(py).ok().unwrap_or_default();
+                        let json_map: serde_json::Map<String, serde_json::Value> = dict
+                            .into_iter()
+                            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+                            .collect();
+                        Some(serde_json::Value::Object(json_map))
+                    }
+                    None => None,
+                };
+
+                core_points.push(Point::new(id, vector, payload));
+            }
+
+            self.inner
+                .upsert_bulk(&core_points)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_bulk: {}", e)))
+        })
+    }
+
     /// Search for similar vectors.
     ///
     /// Args:

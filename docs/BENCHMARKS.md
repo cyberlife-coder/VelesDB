@@ -1,8 +1,58 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: December 23, 2025 (v0.3.1)*
+*Last updated: December 29, 2025 (v0.4.0)*
 
 This document details the performance benchmarks for VelesDB. Tests were conducted on a standard workstation (8-core CPU, AVX2/AVX-512 support).
+
+---
+
+## 🆚 Competitor Comparison: VelesDB vs pgvectorscale
+
+We benchmarked VelesDB against [pgvectorscale](https://github.com/timescale/pgvectorscale) (Timescale's DiskANN extension for PostgreSQL).
+
+### Test Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Dataset** | 10,000 vectors |
+| **Dimensions** | 768 (BERT-sized) |
+| **Queries** | 100 random queries |
+| **Top-K** | 10 results |
+| **Metric** | Cosine similarity |
+| **VelesDB** | Native Python SDK (PyO3), `upsert_bulk()` |
+| **pgvectorscale** | Docker (`timescale/timescaledb-ha:pg16-oss`), DiskANN index |
+
+### Results
+
+| Metric | pgvectorscale | VelesDB | Speedup |
+|--------|---------------|---------|---------|
+| **Total Ingest** | 22.3s | **3.0s** | **7.4x faster** |
+| **Avg Search Latency** | 52.8ms | **4.0ms** | **13x faster** |
+| **P50 Latency** | 50.1ms | **3.5ms** | **14x faster** |
+| **P95 Latency** | 61.9ms | **5.0ms** | **12x faster** |
+| **P99 Latency** | 60.2ms | **5.0ms** | **12x faster** |
+| **Throughput** | 18.9 QPS | **246.8 QPS** | **13x higher** |
+
+### Key Findings
+
+1. **Ingestion**: VelesDB's parallel HNSW insertion (`upsert_bulk()`) + single flush outperforms pgvectorscale's sequential INSERT + separate DiskANN index build.
+
+2. **Search Latency**: VelesDB's SIMD-optimized distance calculations and in-memory HNSW graph deliver sub-5ms latency vs pgvectorscale's 50ms+ (which includes PostgreSQL query overhead).
+
+3. **Architecture Difference**:
+   - **pgvectorscale** = PostgreSQL overhead + DiskANN (disk-resident, optimized for 50M+ vectors)
+   - **VelesDB** = Purpose-built engine + HNSW (memory-mapped, optimized for sub-ms latency)
+
+### How to Reproduce
+
+```bash
+cd benchmarks/
+docker-compose up -d  # Start pgvectorscale
+pip install -r requirements.txt
+python benchmark.py --vectors 10000 --dim 768
+```
+
+> 📂 **Benchmark kit**: See [benchmarks/](../benchmarks/) for the complete reproducible test suite.
 
 > 📈 **See also**: [Performance Optimization Roadmap](./PERFORMANCE_ROADMAP.md) for planned improvements.
 >

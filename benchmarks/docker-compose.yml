@@ -1,0 +1,24 @@
+services:
+  pgvectorscale:
+    image: timescale/timescaledb-ha:pg16-oss
+    container_name: velesdb-bench-pg
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_PASSWORD=benchpass
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=benchmark
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+volumes:
+  pgdata:

@@ -10,11 +10,12 @@ High-performance vector database engine written in Rust.
 ## Features
 
 - **Blazing Fast**: HNSW index with explicit SIMD (4x faster than auto-vectorized)
+- **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **ColumnStore Filtering**: 122x faster than JSON filtering at scale
-- **Metadata Filtering**: Filter search results by payload attributes
-- **VelesQL**: SQL-like query language for vector operations
+- **VelesQL**: SQL-like query language with MATCH support for full-text search
+- **Bulk Operations**: Optimized batch insert with parallel HNSW indexing
 
 ## Installation
 
@@ -25,7 +26,7 @@ cargo add velesdb-core
 ## Quick Start
 
 ```rust
-use velesdb_core::{Database, DistanceMetric};
+use velesdb_core::{Database, DistanceMetric, Point};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,18 +37,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let collection = db.create_collection("documents", 384, DistanceMetric::Cosine)?;
 
     // Insert vectors with metadata
-    collection.upsert(vec![
-        (1, vec![0.1; 384], json!({"title": "Hello World", "category": "greeting"})),
-        (2, vec![0.2; 384], json!({"title": "Rust Programming", "category": "tech"})),
-    ])?;
+    let points = vec![
+        Point::new(1, vec![0.1; 384], Some(json!({"title": "Hello World", "category": "greeting"}))),
+        Point::new(2, vec![0.2; 384], Some(json!({"title": "Rust Programming", "category": "tech"}))),
+    ];
+    collection.upsert(&points)?;
 
-    // Search for similar vectors
+    // Vector similarity search
     let query = vec![0.15; 384];
     let results = collection.search(&query, 5)?;
 
     for result in results {
-        println!("ID: {}, Score: {:.4}", result.id, result.score);
+        println!("ID: {}, Score: {:.4}", result.point.id, result.score);
     }
+
+    // Hybrid search (vector + full-text)
+    let hybrid_results = collection.hybrid_search(
+        &query,
+        "rust programming",
+        5,
+        Some(0.7) // 70% vector, 30% text
+    )?;
 
     Ok(())
 }
@@ -65,16 +75,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Performance
 
-| Operation | Time (768d) | Throughput |
-|-----------|-------------|------------|
+### Vector Operations (768D)
+
+| Operation | Time | Throughput |
+|-----------|------|------------|
 | Dot Product | **~39 ns** | 26M ops/sec |
 | Euclidean Distance | **~49 ns** | 20M ops/sec |
 | Cosine Similarity | **~81 ns** | 12M ops/sec |
 | Hamming (Binary) | **~6 ns** | 164M ops/sec |
 
-- Search latency: **< 1ms** for 100k vectors
+### End-to-End Benchmark (10k vectors, 768D)
+
+| Metric | pgvectorscale | VelesDB | Speedup |
+|--------|---------------|---------|---------|
+| **Ingest** | 22.3s | **3.0s** | 7.4x |
+| **Search Latency** | 52.8ms | **4.0ms** | 13x |
+| **Throughput** | 18.9 QPS | **246.8 QPS** | 13x |
+
+### Key Performance Features
+
+- Search latency: **< 5ms** for 10k vectors
+- Bulk import: **3,300 vectors/sec** with `upsert_bulk()`
 - ColumnStore filtering: **122x faster** than JSON at 100k items
 - Memory efficient with SQ8 quantization (4x reduction)
+
+> 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 
 ## License
 
