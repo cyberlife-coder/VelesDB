@@ -1,5 +1,5 @@
 {
-  "name": "@velesdb/sdk",
+  "name": "@wiscale/velesdb-sdk",
   "version": "0.5.0",
   "description": "Official TypeScript SDK for VelesDB - Vector Search in Microseconds",
   "main": "dist/index.js",
