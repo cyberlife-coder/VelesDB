@@ -751,14 +751,6 @@ impl HnswIndex {
             }
         }
 
-        // Store vectors for SIMD re-ranking (single lock)
-        {
-            let mut vectors_store = self.vectors.write();
-            for (idx, v) in &to_insert {
-                vectors_store.insert(*idx, v.clone());
-            }
-        }
-
         // Prepare references for hnsw_rs parallel_insert: &[(&Vec<T>, usize)]
         let data_refs: Vec<(&Vec<f32>, usize)> =
             to_insert.iter().map(|(idx, v)| (v, *idx)).collect();
@@ -781,6 +773,15 @@ impl HnswIndex {
                 HnswInner::DotProduct(hnsw) => {
                     hnsw.parallel_insert(&data_refs);
                 }
+            }
+        }
+
+        // Perf Round 9: Move vectors into storage AFTER HNSW insert (avoids clone)
+        // Store vectors for SIMD re-ranking
+        {
+            let mut vectors_store = self.vectors.write();
+            for (idx, v) in to_insert {
+                vectors_store.insert(idx, v); // Move instead of clone
             }
         }
 
