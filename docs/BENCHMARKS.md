@@ -257,7 +257,7 @@ Performance of the SQL-like query parser.
 | **Vector** | `... WHERE vector NEAR $v` | 835 ns | 1.2M qps |
 | **Complex** | Multiple conditions | 3.6 µs | 277k qps |
 
-### Query Cache (WIS-85)
+### Query Cache
 
 For repetitive workloads, use `QueryCache` to avoid re-parsing identical queries:
 
@@ -360,7 +360,7 @@ Exact search with 100% recall, parallelized across cores:
 
 > **Note**: Scaling efficiency depends on memory bandwidth and CPU cache hierarchy. NUMA systems may see reduced scaling on cross-socket access.
 
-### Parallel Batch Insert (WIS-9)
+### Parallel Batch Insert
 
 Bulk vector insertion using `insert_batch_parallel` vs sequential `insert`:
 
@@ -370,7 +370,7 @@ Bulk vector insertion using `insert_batch_parallel` vs sequential `insert`:
 | 5,000 | **167 ms** | 2.6 s | **16x** |
 | 10,000 | **445 ms** | 8.1 s | **18x** |
 
-> **Perf**: WIS-9 refactored `HnswMappings` to reduce lock contention from 4 locks to 2 locks per insert operation. Combined with `hnsw_rs` native parallel insertion, this enables massive speedups for bulk imports.
+> **Perf**: Refactored `HnswMappings` to reduce lock contention from 4 locks to 2 locks per insert operation. Combined with `hnsw_rs` native parallel insertion, this enables massive speedups for bulk imports.
 
 ### API Usage
 

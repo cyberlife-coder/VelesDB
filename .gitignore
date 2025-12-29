@@ -25,7 +25,7 @@ Thumbs.db
 
 # Demo data (generated during local testing)
 /rag-demo-data/
-/demos/
+# Note: /demos/ is PUBLIC - contains example applications for users
 
 # Logs
 *.log
@@ -48,4 +48,3 @@ lcov.info
 # Temporary files
 *.tmp
 *.temp
-rag-demo-data/

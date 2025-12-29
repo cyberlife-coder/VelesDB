@@ -1,7 +1,6 @@
 # 🚀 VelesDB Performance Optimization Roadmap
 
 *Created: December 2025*
-*Linear EPIC: [WIS-44](https://linear.app/tui-france/issue/WIS-44)*
 
 ## 📊 Current State (Baseline)
 
@@ -26,7 +25,7 @@ Based on sequential benchmark runs (December 2025):
 
 ## 🎯 Optimization Priorities
 
-### Phase A: Diagnostic (WIS-45)
+### Phase A: Diagnostic
 
 **Goal**: Identify and measure the exact sources of overhead
 
@@ -34,7 +33,7 @@ Based on sequential benchmark runs (December 2025):
 - Measure: assertions, dispatch, alignment, inlining
 - **Target**: Identify top 3 overhead sources
 
-### Phase B: High-Performance Filtering (WIS-46)
+### Phase B: High-Performance Filtering
 
 **Goal**: Maintain 50M+ items/s at 100k scale
 
@@ -55,7 +54,7 @@ Proposed (Column Store):
 
 **Expected Gain**: 3x+ throughput at scale
 
-### Phase C: SIMD Tuning (WIS-47)
+### Phase C: SIMD Tuning
 
 **Goal**: +10-20% gains, no regressions
 
@@ -71,7 +70,7 @@ match len {
 
 **Testing Matrix**: 64, 128, 256, 384, 512, 768, 1024, 1536 dimensions
 
-### Phase D: Documentation (WIS-48)
+### Phase D: Documentation
 
 **Goal**: Reproducible benchmarks
 
@@ -96,10 +95,10 @@ match len {
 
 | Phase | Issue | Priority | Estimated Effort |
 |-------|-------|----------|------------------|
-| A | WIS-45 | 🔴 High | 2-3 days |
-| B | WIS-46 | 🔴 High | 5-7 days |
-| C | WIS-47 | 🟡 Medium | 3-4 days |
-| D | WIS-48 | 🟢 Low | 1 day |
+| A | Diagnostic | 🔴 High | 2-3 days |
+| B | Filtering | 🔴 High | 5-7 days |
+| C | SIMD | 🟡 Medium | 3-4 days |
+| D | Docs | 🟢 Low | 1 day |
 
 **Total**: ~2-3 weeks
 
