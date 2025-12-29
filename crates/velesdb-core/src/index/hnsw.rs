@@ -24,8 +24,8 @@ use hnsw_rs::api::AnnT;
 use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
 /// HNSW index parameters for tuning performance and recall.
@@ -199,9 +199,10 @@ impl SearchQuality {
 #[derive(Debug, Clone, Default)]
 struct HnswMappings {
     /// Mapping from external IDs to internal indices.
-    id_to_idx: HashMap<u64, usize>,
+    /// Perf: `FxHashMap` is faster than std `HashMap` for integer keys
+    id_to_idx: FxHashMap<u64, usize>,
     /// Mapping from internal indices to external IDs.
-    idx_to_id: HashMap<usize, u64>,
+    idx_to_id: FxHashMap<usize, u64>,
     /// Next available internal index.
     next_idx: usize,
 }
@@ -280,7 +281,7 @@ pub struct HnswIndex {
     /// ID mappings (external ID <-> internal index) under single lock (WIS-9)
     mappings: RwLock<HnswMappings>,
     /// Vector storage for SIMD re-ranking (idx -> vector)
-    vectors: RwLock<HashMap<usize, Vec<f32>>>,
+    vectors: RwLock<FxHashMap<usize, Vec<f32>>>,
     /// Holds the `HnswIo` for loaded indices to prevent memory leak.
     /// The Hnsw borrows from this, so it must be dropped AFTER inner.
     /// Only Some when index was loaded from disk.
@@ -388,7 +389,7 @@ impl HnswIndex {
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings: RwLock::new(HnswMappings::new()),
-            vectors: RwLock::new(HashMap::new()),
+            vectors: RwLock::new(FxHashMap::default()),
             io_holder: None, // No io_holder for newly created indices
         }
     }
@@ -510,9 +511,12 @@ impl HnswIndex {
         // 2. Load Mappings
         let file = std::fs::File::open(mappings_path)?;
         let reader = std::io::BufReader::new(file);
-        let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
-            bincode::deserialize_from(reader)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let (id_to_idx, idx_to_id, next_idx): (
+            FxHashMap<u64, usize>,
+            FxHashMap<usize, u64>,
+            usize,
+        ) = bincode::deserialize_from(reader)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         Ok(Self {
             dimension,
@@ -523,8 +527,8 @@ impl HnswIndex {
                 idx_to_id,
                 next_idx,
             }),
-            vectors: RwLock::new(HashMap::new()), // Note: vectors not restored from disk
-            io_holder: Some(io_holder),           // Store to prevent memory leak
+            vectors: RwLock::new(FxHashMap::default()), // Note: vectors not restored from disk
+            io_holder: Some(io_holder),                 // Store to prevent memory leak
         })
     }
 

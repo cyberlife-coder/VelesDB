@@ -5,7 +5,7 @@
 
 use memmap2::MmapMut;
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -73,7 +73,8 @@ pub struct MmapStorage {
     /// Vector dimension
     dimension: usize,
     /// In-memory index of ID -> file offset
-    index: RwLock<HashMap<u64, usize>>,
+    /// Perf: `FxHashMap` is faster than std `HashMap` for integer keys
+    index: RwLock<FxHashMap<u64, usize>>,
     /// Write-Ahead Log writer
     wal: RwLock<io::BufWriter<File>>,
     /// File handle for the data file (kept open for resizing)
@@ -130,7 +131,7 @@ impl MmapStorage {
         let index_path = path.join("vectors.idx");
         let (index, next_offset) = if index_path.exists() {
             let file = File::open(&index_path)?;
-            let index: HashMap<u64, usize> = bincode::deserialize_from(io::BufReader::new(file))
+            let index: FxHashMap<u64, usize> = bincode::deserialize_from(io::BufReader::new(file))
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
             // Calculate next_offset based on stored data
@@ -143,7 +144,7 @@ impl MmapStorage {
             };
             (index, size)
         } else {
-            (HashMap::new(), 0)
+            (FxHashMap::default(), 0)
         };
 
         Ok(Self {
@@ -261,8 +262,9 @@ impl VectorStorage for MmapStorage {
         }
 
         // 1. Calculate total space needed and prepare batch WAL entry
-        // Perf: Use HashMap for O(1) lookup instead of Vec with O(n) find
-        let mut new_vector_offsets: HashMap<u64, usize> = HashMap::with_capacity(vectors.len());
+        // Perf: Use FxHashMap for O(1) lookup instead of Vec with O(n) find
+        let mut new_vector_offsets: FxHashMap<u64, usize> = FxHashMap::default();
+        new_vector_offsets.reserve(vectors.len());
         let mut total_new_size = 0usize;
 
         {
@@ -457,7 +459,7 @@ pub trait PayloadStorage: Send + Sync {
 #[allow(clippy::module_name_repetitions)]
 pub struct LogPayloadStorage {
     _path: PathBuf,
-    index: RwLock<HashMap<u64, u64>>, // ID -> Offset of length
+    index: RwLock<FxHashMap<u64, u64>>, // ID -> Offset of length
     wal: RwLock<io::BufWriter<File>>,
     reader: RwLock<File>, // Independent file handle for reading, protected for seeking
 }
@@ -486,7 +488,7 @@ impl LogPayloadStorage {
         let reader = File::open(&log_path)?;
 
         // Replay log to build index
-        let mut index = HashMap::new();
+        let mut index = FxHashMap::default();
         let len = reader.metadata()?.len();
         let mut pos = 0;
         let mut reader_buf = io::BufReader::new(&reader);

@@ -410,15 +410,17 @@ impl Collection {
     }
 
     /// Returns the number of points in the collection.
+    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
     #[must_use]
     pub fn len(&self) -> usize {
-        self.vector_storage.read().len()
+        self.config.read().point_count
     }
 
     /// Returns true if the collection is empty.
+    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.vector_storage.read().is_empty()
+        self.config.read().point_count == 0
     }
 
     /// Saves the collection configuration and index to disk.
