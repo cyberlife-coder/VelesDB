@@ -375,13 +375,26 @@ impl ColumnStore {
             return Vec::new();
         }
 
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| match v {
-                Some(id) if ids.contains(id) => Some(idx),
-                _ => None,
-            })
-            .collect()
+        // Perf: Use HashSet only for large IN clauses (>16 values)
+        // Vec.contains() is faster for small arrays due to cache locality
+        if ids.len() > 16 {
+            let id_set: rustc_hash::FxHashSet<StringId> = ids.into_iter().collect();
+            col.iter()
+                .enumerate()
+                .filter_map(|(idx, v)| match v {
+                    Some(id) if id_set.contains(id) => Some(idx),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            col.iter()
+                .enumerate()
+                .filter_map(|(idx, v)| match v {
+                    Some(id) if ids.contains(id) => Some(idx),
+                    _ => None,
+                })
+                .collect()
+        }
     }
 
     /// Counts rows matching equality on an integer column.
