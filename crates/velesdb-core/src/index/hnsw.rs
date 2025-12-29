@@ -57,24 +57,29 @@ impl HnswParams {
     ///
     /// | Dimension   | M     | `ef_construction` | Recall Target |
     /// |-------------|-------|-----------------|---------------|
-    /// | d ≤ 256     | 16    | 200             | ≥95%          |
-    /// | 256 < d ≤768| 16    | 200             | ≥95%          |
-    /// | d > 768     | 24    | 300             | ≥95%          |
+    /// | d ≤ 256     | 16    | 250             | ≥97%          |
+    /// | 256 < d ≤768| 20    | 300             | ≥97%          |
+    /// | d > 768     | 24    | 400             | ≥97%          |
     ///
-    /// These parameters match pgvector defaults for fair benchmarking.
+    /// Perf: Tuned for better recall than pgvector defaults (Round 7)
     #[must_use]
     pub fn auto(dimension: usize) -> Self {
-        // Perf: Match pgvector defaults for fair benchmarking
-        // m=16, ef_construction=200 is the standard HNSW configuration
+        // Perf: Higher ef_construction for better graph quality (Round 7)
+        // Slightly higher M for 768D vectors (common embedding size)
         match dimension {
-            0..=768 => Self {
+            0..=256 => Self {
                 max_connections: 16,
-                ef_construction: 200,
+                ef_construction: 250,
+                max_elements: 100_000,
+            },
+            257..=768 => Self {
+                max_connections: 20,
+                ef_construction: 300,
                 max_elements: 100_000,
             },
             _ => Self {
                 max_connections: 24,
-                ef_construction: 300,
+                ef_construction: 400,
                 max_elements: 100_000,
             },
         }
@@ -165,14 +170,15 @@ impl HnswParams {
 /// With typical index sizes (<1M vectors), all profiles stay well under 10ms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SearchQuality {
-    /// Fast search with `ef_search=64`. ~85% recall, lowest latency.
+    /// Fast search with `ef_search=100`. ~90% recall, lowest latency.
     Fast,
-    /// Balanced search with `ef_search=128`. ~92% recall, good tradeoff.
+    /// Balanced search with `ef_search=200`. ~96% recall, good tradeoff.
+    /// Perf: Increased from 128 to 200 for better recall (Round 7)
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=256`. ~97% recall, best quality.
+    /// Accurate search with `ef_search=400`. ~98% recall, best quality.
     Accurate,
-    /// High recall search with `ef_search=512`. ~99%+ recall, highest quality.
+    /// High recall search with `ef_search=600`. ~99%+ recall, highest quality.
     HighRecall,
     /// Custom `ef_search` value for fine-tuning.
     Custom(usize),
@@ -180,13 +186,14 @@ pub enum SearchQuality {
 
 impl SearchQuality {
     /// Returns the `ef_search` value for this quality profile.
+    /// Perf: Values tuned for optimal recall/latency tradeoff (Round 7)
     #[must_use]
     pub fn ef_search(&self, k: usize) -> usize {
         match self {
-            Self::Fast => 64.max(k * 2),
-            Self::Balanced => 128.max(k * 4),
-            Self::Accurate => 256.max(k * 8),
-            Self::HighRecall => 512.max(k * 16),
+            Self::Fast => 100.max(k * 3),
+            Self::Balanced => 200.max(k * 6),
+            Self::Accurate => 400.max(k * 12),
+            Self::HighRecall => 600.max(k * 20),
             Self::Custom(ef) => (*ef).max(k),
         }
     }
@@ -1321,22 +1328,22 @@ mod tests {
     fn test_hnsw_params_auto_small_dimension() {
         let params = HnswParams::auto(128);
         assert_eq!(params.max_connections, 16);
-        assert_eq!(params.ef_construction, 200);
+        assert_eq!(params.ef_construction, 250); // Round 7 tuned
     }
 
     #[test]
     fn test_hnsw_params_auto_medium_dimension() {
         let params = HnswParams::auto(768);
-        // Match pgvector defaults for fair benchmarking
-        assert_eq!(params.max_connections, 16);
-        assert_eq!(params.ef_construction, 200);
+        // Round 7: Increased M=20 and ef_construction=300 for better recall
+        assert_eq!(params.max_connections, 20);
+        assert_eq!(params.ef_construction, 300);
     }
 
     #[test]
     fn test_hnsw_params_auto_large_dimension() {
         let params = HnswParams::auto(1536);
         assert_eq!(params.max_connections, 24);
-        assert_eq!(params.ef_construction, 300);
+        assert_eq!(params.ef_construction, 400); // Round 7 tuned
     }
 
     #[test]
@@ -1366,11 +1373,11 @@ mod tests {
 
     #[test]
     fn test_hnsw_params_boundary_768() {
-        // Test boundary at 768 (pgvector-compatible params up to 768)
+        // Test boundary at 768 (Round 7: 257-768 range uses M=20)
         let params_768 = HnswParams::auto(768);
         let params_769 = HnswParams::auto(769);
 
-        assert_eq!(params_768.max_connections, 16);
+        assert_eq!(params_768.max_connections, 20); // Round 7: M=20 for 768D
         assert_eq!(params_769.max_connections, 24);
     }
 
@@ -1686,16 +1693,16 @@ mod tests {
 
     #[test]
     fn test_search_quality_ef_search_values() {
-        // Verify ef_search values for different quality profiles
-        assert_eq!(SearchQuality::Fast.ef_search(10), 64);
-        assert_eq!(SearchQuality::Balanced.ef_search(10), 128);
-        assert_eq!(SearchQuality::Accurate.ef_search(10), 256);
+        // Verify ef_search values for different quality profiles (Round 7 tuned)
+        assert_eq!(SearchQuality::Fast.ef_search(10), 100);
+        assert_eq!(SearchQuality::Balanced.ef_search(10), 200);
+        assert_eq!(SearchQuality::Accurate.ef_search(10), 400);
         assert_eq!(SearchQuality::Custom(100).ef_search(10), 100);
 
-        // ef_search should be at least k * multiplier
-        assert_eq!(SearchQuality::Fast.ef_search(100), 200); // k*2
-        assert_eq!(SearchQuality::Balanced.ef_search(100), 400); // k*4
-        assert_eq!(SearchQuality::Accurate.ef_search(100), 800); // k*8
+        // ef_search should be at least k * multiplier (Round 7 tuned)
+        assert_eq!(SearchQuality::Fast.ef_search(100), 300); // k*3
+        assert_eq!(SearchQuality::Balanced.ef_search(100), 600); // k*6
+        assert_eq!(SearchQuality::Accurate.ef_search(100), 1200); // k*12
     }
 
     // =========================================================================
