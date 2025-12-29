@@ -24,14 +24,13 @@ memmap2 = { workspace = true }
 bincode = { workspace = true }
 roaring = { workspace = true }
 
-# HNSW index - use simdeez_f SIMD only on x86_64
-# On ARM (Apple Silicon), scalar fallback is used for HNSW internal ops,
-# but VelesDB's own SIMD (wide crate) handles search reranking with NEON.
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-hnsw_rs = { version = "0.3", features = ["simdeez_f"] }
-
-[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
-hnsw_rs = { version = "0.3", default-features = false }
+# HNSW index - SIMD enabled for performance (requires Rust nightly)
+# The simdeez_f feature enables AVX2/SSE SIMD for distance calculations
+# This significantly speeds up HNSW graph construction during insertion
+[dependencies.hnsw_rs]
+version = "0.3"
+default-features = false
+features = ["simdeez_f"]
 
 [dependencies.uuid]
 version = "1.7"

@@ -1,23 +1,8 @@
-# Build stage
-FROM rust:1.84-bookworm AS builder
+# VelesDB Benchmark Dockerfile
+# Uses pre-compiled binary to avoid Rust nightly dependency issues
+#
+# Prerequisites: cargo build --release --bin velesdb-server
 
-WORKDIR /app
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy manifests and source
-COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
-COPY integrations ./integrations
-
-# Build the application
-RUN cargo build --release --bin velesdb-server
-
-# Runtime stage
 FROM debian:bookworm-slim
 
 WORKDIR /app
@@ -25,13 +10,14 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN useradd -r -s /bin/false velesdb
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/velesdb-server /usr/local/bin/
+# Copy pre-compiled binary (context is parent dir)
+COPY ./target/release/velesdb-server /usr/local/bin/
 
 # Create data directory
 RUN mkdir -p /data && chown velesdb:velesdb /data

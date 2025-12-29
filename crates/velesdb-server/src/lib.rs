@@ -485,18 +485,27 @@ pub async fn upsert_points(
         .map(|p| Point::new(p.id, p.vector, p.payload))
         .collect();
 
-    let count = points.len();
+    // CRITICAL: upsert_bulk is blocking (HNSW insertion + I/O)
+    // Must use spawn_blocking to avoid blocking the async runtime
+    let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
-    match collection.upsert(points) {
-        Ok(()) => Json(serde_json::json!({
+    match result {
+        Ok(Ok(inserted)) => Json(serde_json::json!({
             "message": "Points upserted",
-            "count": count
+            "count": inserted
         }))
         .into_response(),
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
