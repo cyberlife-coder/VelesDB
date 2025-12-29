@@ -1,15 +1,15 @@
 {
   "name": "tauri-plugin-velesdb",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "TypeScript bindings for the VelesDB Tauri plugin - Vector search in desktop apps",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "files": [
@@ -33,7 +33,7 @@
     "desktop"
   ],
   "author": "Cyberlife Coder",
-  "license": "BSL-1.1",
+  "license": "Elastic-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/cyberlife-coder/VelesDB.git",
