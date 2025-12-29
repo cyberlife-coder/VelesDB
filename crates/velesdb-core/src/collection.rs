@@ -162,10 +162,13 @@ impl Collection {
 
     /// Inserts or updates points in the collection.
     ///
+    /// Accepts any iterator of points (Vec, slice, array, etc.)
+    ///
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
-    pub fn upsert(&self, points: Vec<Point>) -> Result<()> {
+    pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
+        let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
         let dimension = config.dimension;
         drop(config);
