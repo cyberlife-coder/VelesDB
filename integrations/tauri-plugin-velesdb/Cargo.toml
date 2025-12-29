@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-velesdb"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Cyberlife Coder"]
 description = "Tauri plugin for VelesDB - Vector search in desktop apps"
