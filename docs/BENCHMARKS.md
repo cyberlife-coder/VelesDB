@@ -1,21 +1,21 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: December 29, 2025 (v0.5.0 - Post-Refactoring TDD)*
+*Last updated: December 30, 2025 (v0.5.0 - Rounds 7-9 Optimization)*
 
 This document details the performance benchmarks for VelesDB. Tests were conducted on a standard workstation (8-core CPU, AVX2/AVX-512 support).
 
 ---
 
-## 🚀 v0.5.0 Headline: VelesDB 6.8x Faster Insertion Than pgvector
+## 🚀 v0.5.0 Headline: VelesDB 5.3x Faster + 98.8% Recall
 
 ### Performance Summary (50,000 vectors, 768D, Docker)
 
 | Metric | pgvector | VelesDB REST | Winner |
 |--------|----------|--------------|--------|
-| **Insert + Index** | 163.47s | **23.95s** | **VelesDB 6.8x** ✅ |
-| **Search P50** | 50.7ms | 50.3ms | ~Equal |
-| **Search P99** | 61.4ms | 60.5ms | ~Equal |
-| **Recall@10** | **100%** | 97.4% | pgvector |
+| **Insert + Index** | 154.59s | **29.02s** | **VelesDB 5.3x** ✅ |
+| **Search P50** | 50.4ms | **49.5ms** | **VelesDB** ✅ |
+| **Search P99** | 60.0ms | 60.6ms | ~Equal |
+| **Recall@10** | **100%** | 98.8% | pgvector (-1.2%) |
 
 ### Why VelesDB REST is Slower on Search
 
@@ -73,10 +73,10 @@ This ensures an apples-to-apples comparison of the complete ingestion pipeline.
 
 | Metric | pgvector | VelesDB REST | Winner |
 |--------|----------|--------------|--------|
-| **Insert + Index** | 163.47s | **23.95s** | **VelesDB 6.8x** ✅ |
-| **Search P50** | 50.7ms | 50.3ms | ~Equal |
-| **Search P99** | 61.4ms | 60.5ms | ~Equal |
-| **Recall@10** | **100%** | 97.4% | pgvector |
+| **Insert + Index** | 154.59s | **29.02s** | **VelesDB 5.3x** ✅ |
+| **Search P50** | 50.4ms | **49.5ms** | **VelesDB** ✅ |
+| **Search P99** | 60.0ms | 60.6ms | ~Equal |
+| **Recall@10** | **100%** | 98.8% | pgvector (-1.2%) |
 
 ### Embedded Mode (VelesDB's Strength)
 
@@ -86,9 +86,10 @@ This ensures an apples-to-apples comparison of the complete ingestion pipeline.
 
 ### Key Findings
 
-**Insertion (v0.5.0 Post-Refactoring):**
-- VelesDB **6.8x faster** than pgvector for bulk imports (50k vectors)
+**Insertion (v0.5.0 Rounds 7-9):**
+- VelesDB **5.3x faster** than pgvector for bulk imports (50k vectors)
 - SIMD + parallel insertion + O(1) storage lookup optimizations
+- Higher M=20 and ef_construction=300 for better recall (98.8%)
 
 **Search:**
 - Embedded mode: VelesDB 20x faster (no network overhead)
