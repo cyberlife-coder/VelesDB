@@ -59,7 +59,7 @@ jobs:
         run: |
           echo "## 📦 npm Publish Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Package:** tauri-plugin-velesdb" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** @wiscale/tauri-plugin-velesdb" >> $GITHUB_STEP_SUMMARY
           VERSION=$(node -p "require('./package.json').version")
           echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
           echo "**Dry run:** ${{ inputs.dry_run || 'false' }}" >> $GITHUB_STEP_SUMMARY

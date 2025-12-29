@@ -48,6 +48,18 @@ jobs:
       - name: Build WASM package
         run: wasm-pack build --target web --release
 
+      - name: Update package.json for @wiscale scope
+        working-directory: crates/velesdb-wasm/pkg
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json'));
+            pkg.name = '@wiscale/velesdb-wasm';
+            pkg.version = '0.5.1';
+            pkg.license = 'Elastic-2.0';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -85,12 +97,12 @@ jobs:
         run: sleep 60
 
       - name: Install from npm
-        run: npm install velesdb-wasm
+        run: npm install @wiscale/velesdb-wasm
 
       - name: Test import
         run: |
           cat > test.mjs << 'EOF'
-          import init, { VectorStore } from 'velesdb-wasm';
+          import init, { VectorStore } from '@wiscale/velesdb-wasm';
           console.log('velesdb-wasm imported successfully');
           console.log('VectorStore:', typeof VectorStore);
           EOF

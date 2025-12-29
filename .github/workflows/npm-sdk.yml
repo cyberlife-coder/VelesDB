@@ -55,5 +55,5 @@ jobs:
         run: |
           echo "## 📦 npm SDK Publish Summary" >> $GITHUB_STEP_SUMMARY
           VERSION=$(node -p "require('./package.json').version")
-          echo "**Package:** @velesdb/sdk" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** @wiscale/velesdb-sdk" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
