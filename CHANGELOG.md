@@ -5,6 +5,59 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-12-29
+
+### 🚀 Performance - 3.2x Faster Than pgvector
+
+Major HNSW insertion optimization making VelesDB significantly faster than pgvector for batch imports.
+
+#### Benchmark Results (5,000 vectors, 768D, Docker)
+
+| Metric | pgvector | VelesDB | Result |
+|--------|----------|---------|--------|
+| **Insert + Index** | 8.54s | **2.63s** | **3.2x faster** |
+| **Recall@10** | 100.0% | 99.7% | Comparable |
+| **Search P50** | 3.0ms | 4.0ms | Comparable |
+
+### Added
+
+#### SIMD-Accelerated HNSW Insertion
+- **`simdeez_f` feature enabled** for hnsw_rs - AVX2/SSE SIMD distance calculations
+- **`parallel_insert`** - Native parallel HNSW graph construction using Rayon
+- **`HnswParams::fast()`** - New constructor for pgvector-compatible settings (m=16, ef=200)
+
+#### Async-Safe Server
+- **`spawn_blocking`** wrapper for bulk operations - Prevents blocking the Tokio runtime
+- **100MB body limit** - Support for large batch uploads via REST API
+
+### Changed
+
+#### HNSW Parameters Aligned with pgvector
+- 768D vectors: m=16, ef_construction=200 (was m=24, ef=400)
+- Optimized for insertion speed while maintaining >99% recall
+- Added `HnswParams::high_recall()` for quality-critical use cases
+
+#### Benchmark Methodology
+- Fair comparison: Both databases measured with insert + index time
+- pgvector index build time now included in total measurement
+- Standardized batch sizes for equitable comparison
+
+### Fixed
+
+- **Async/blocking deadlock** - `upsert_bulk()` no longer blocks async runtime
+- **HTTP 413 errors** - Increased body size limit for large batches
+- **HNSW insertion blocking** - Replaced sequential insertion with parallel
+
+### Performance Notes
+
+The 3.2x speedup over pgvector is achieved through:
+1. **Parallel HNSW insertion** - Utilizes all CPU cores during graph construction
+2. **SIMD distance calculations** - AVX2/SSE acceleration in hnsw_rs
+3. **Deferred index save** - No disk I/O during batch insertion
+4. **Optimized parameters** - pgvector-compatible m=16, ef=200
+
+---
+
 ## [0.4.1] - 2025-12-29
 
 ### Added

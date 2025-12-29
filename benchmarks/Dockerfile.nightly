@@ -1,12 +1,16 @@
-# Build stage
-FROM rust:1.84-bookworm AS builder
+# VelesDB Benchmark Dockerfile - Rust Nightly
+# Required for anndists dependency (uses edition 2024)
+
+FROM rust:slim-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
+# Install nightly and build dependencies
+RUN rustup default nightly && \
+    apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests and source
@@ -25,6 +29,7 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

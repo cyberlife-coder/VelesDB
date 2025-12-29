@@ -1,4 +1,5 @@
 # VelesDB Benchmark Dependencies
-velesdb>=0.4.0
+velesdb>=0.4.1
 numpy>=1.24.0
 psycopg2-binary>=2.9.0
+requests>=2.31.0

@@ -2,6 +2,7 @@
 //! `VelesDB` Server - REST API for the `VelesDB` vector database.
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -68,7 +69,9 @@ async fn main() -> anyhow::Result<()> {
             "/collections/{name}",
             get(get_collection).delete(delete_collection),
         )
+        // 100MB limit for batch vector uploads (1000 vectors × 768D × 4 bytes = ~3MB typical)
         .route("/collections/{name}/points", post(upsert_points))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),

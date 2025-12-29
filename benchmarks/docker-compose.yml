@@ -1,6 +1,29 @@
 services:
-  pgvectorscale:
-    image: timescale/timescaledb-ha:pg16-oss
+  # VelesDB server for fair comparison
+  velesdb:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.nightly
+    container_name: velesdb-bench-server
+    ports:
+      - "8080:8080"
+    volumes:
+      - velesdb_data:/data
+    environment:
+      - RUST_LOG=warn
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # pgvector for comparison
+  pgvector:
+    image: pgvector/pgvector:pg16
     container_name: velesdb-bench-pg
     ports:
       - "5433:5432"
@@ -22,3 +45,4 @@ services:
 
 volumes:
   pgdata:
+  velesdb_data:

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-VelesDB Recall Benchmark v2
-===========================
-Mesure correcte du Recall@k avec différents profils de recherche.
+VelesDB vs pgvector - Recall Benchmark
+======================================
 
-Le recall dépend de:
-1. ef_search (plus élevé = meilleur recall, plus lent)
-2. La structure des données (clusters vs aléatoire uniforme)
-3. La taille du dataset
+IMPORTANT: Architecture Comparison
+----------------------------------
+- VelesDB: Native Python SDK (PyO3) - NO network overhead
+- pgvector: Docker + PostgreSQL + psycopg2 - ~50ms network/SQL overhead
+
+This benchmark compares:
+1. RECALL accuracy (both use HNSW algorithm)
+2. END-TO-END latency (including architecture overhead)
+
+For a pure HNSW algorithm comparison, the recall numbers are relevant.
+For real-world deployment comparison, the latency numbers are relevant.
+
+VelesDB's advantage is ARCHITECTURAL: no SQL parsing, no network stack.
 """
 
 import argparse
@@ -251,14 +259,26 @@ def main():
     print(f"Queries: {args.queries}, Top-K: {args.top_k}")
     print("-" * 70)
     
+    print("\n📊 RECALL (HNSW Algorithm Quality):")
     if vdb:
-        print(f"VelesDB:  Recall={vdb['recall']:.1f}%  P50={vdb['latency_p50_ms']:.1f}ms  P99={vdb['latency_p99_ms']:.1f}ms")
+        print(f"  VelesDB:  {vdb['recall']:.1f}%")
     if pg:
-        print(f"pgvector: Recall={pg['recall']:.1f}%  P50={pg['latency_p50_ms']:.1f}ms  P99={pg['latency_p99_ms']:.1f}ms")
+        print(f"  pgvector: {pg['recall']:.1f}%")
+    
+    print("\n⏱️ LATENCY (End-to-End, includes architecture overhead):")
+    if vdb:
+        print(f"  VelesDB (native):     P50={vdb['latency_p50_ms']:.1f}ms  P99={vdb['latency_p99_ms']:.1f}ms")
+    if pg:
+        print(f"  pgvector (Docker+SQL): P50={pg['latency_p50_ms']:.1f}ms  P99={pg['latency_p99_ms']:.1f}ms")
+    
+    print("\n⚠️ NOTE: Latency difference is primarily ARCHITECTURAL:")
+    print("   - VelesDB: Native Python calls (PyO3), no network")
+    print("   - pgvector: Docker + PostgreSQL + SQL parsing + network")
     
     if vdb and pg:
         speedup = pg['latency_p50_ms'] / vdb['latency_p50_ms']
-        print(f"\n🏆 VelesDB is {speedup:.1f}x faster with {vdb['recall'] - pg['recall']:+.1f}% recall difference")
+        recall_diff = vdb['recall'] - pg['recall']
+        print(f"\n📈 VelesDB: {speedup:.0f}x faster latency, {recall_diff:+.1f}% recall difference")
 
 
 if __name__ == "__main__":

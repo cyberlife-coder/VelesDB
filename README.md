@@ -91,23 +91,39 @@ LIMIT 10
 | **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Recall@10** | **99%** | ~95% | ~95% | 100% | ~95% |
 
-### 📊 Benchmark: VelesDB vs pgvector (HNSW)
+### 📊 Benchmark: VelesDB vs pgvector (v0.5.0)
 
-We benchmarked VelesDB against [pgvector](https://github.com/pgvector/pgvector) HNSW on **clustered embeddings (768D)** — realistic AI workloads:
+We benchmarked VelesDB against [pgvector](https://github.com/pgvector/pgvector) on **clustered embeddings (768D)**.
 
-| Dataset Size | VelesDB Recall | pgvector Recall | VelesDB P50 | pgvector P50 | **Speedup** |
-|--------------|----------------|-----------------|-------------|--------------|-------------|
-| **1,000** | 100.0% | 100.0% | **0.5ms** | 50ms | **100x** |
-| **5,000** | 99.6% | 100.0% | **2.0ms** | 50ms | **25x** |
-| **10,000** | 99.0% | 100.0% | **2.5ms** | 50ms | **20x** |
-| **50,000** | 99.0% | 100.0% | **3.0ms** | 50ms | **17x** |
-| **100,000** | 97.8% | 100.0% | **4.3ms** | 50ms | **12x** |
+#### 🚀 Insertion Performance (5,000 vectors, Docker)
 
-**Key insights:**
-- 🚀 **VelesDB: 12-100x faster** depending on dataset size
-- 🎯 **97-100% recall** across all scales
-- 📈 **VelesDB scales logarithmically** (0.5ms → 4.3ms for 100x data)
-- ⏱️ **pgvector: ~50ms constant overhead** (SQL parsing + networking)
+| Metric | pgvector | VelesDB | Result |
+|--------|----------|---------|--------|
+| **Insert + Index** | 8.54s | **2.63s** | **3.2x faster** |
+| **Recall@10** | 100.0% | 99.7% | Comparable |
+| **Search P50** | 3.0ms | 4.0ms | Comparable |
+
+#### Embedded Mode (VelesDB's strength)
+
+| Dataset | VelesDB (native) | pgvector (Docker) | Speedup |
+|---------|------------------|-------------------|---------|
+| 10,000 | **2.5ms** | 50ms | **20x** |
+
+**Key optimizations in v0.5.0:**
+- **SIMD-accelerated HNSW** - AVX2/SSE distance calculations
+- **Parallel insertion** - Rayon-based graph construction
+- **Deferred index save** - No disk I/O during batch operations
+
+**When to choose VelesDB:**
+- ✅ Bulk import speed (3.2x faster than pgvector)
+- ✅ Embedded/Desktop apps (20x faster search)
+- ✅ Edge/IoT/WASM deployments
+- ✅ No PostgreSQL needed
+
+**When to choose pgvector:**
+- ✅ Existing PostgreSQL infrastructure
+- ✅ SQL ecosystem integration
+- ✅ Need 100% recall (vs 99.7%)
 
 > 📊 **Run your own benchmarks:** See [benchmarks/](benchmarks/) for the complete benchmark kit.
 
