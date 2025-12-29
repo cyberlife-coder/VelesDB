@@ -196,8 +196,17 @@ jobs:
         with:
           prefix-key: "bench"
 
-      - name: Run benchmarks
-        run: cargo bench -p velesdb-core --bench '*' -- --noplot
+      - name: Run benchmarks (excluding slow scalability tests)
+        run: |
+          # Run only fast benchmarks - scalability_benchmark is excluded (takes hours)
+          # Run manually with: cargo bench --bench scalability_benchmark
+          cargo bench -p velesdb-core \
+            --bench bm25_benchmark \
+            --bench column_filter_benchmark \
+            --bench filter_benchmark \
+            --bench simd_benchmark \
+            --bench velesql_benchmark \
+            -- --noplot
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
