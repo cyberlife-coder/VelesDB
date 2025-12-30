@@ -129,3 +129,7 @@ harness = false
 [[bench]]
 name = "perf_benchmark"
 harness = false
+
+[[bench]]
+name = "quantization_benchmark"
+harness = false
