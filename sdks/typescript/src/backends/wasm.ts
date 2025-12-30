@@ -45,7 +45,7 @@ export class WasmBackend implements IVelesDBBackend {
 
     try {
       // Dynamic import for WASM module
-      this.wasmModule = await import('velesdb-wasm') as WasmModule;
+      this.wasmModule = await import('@wiscale/velesdb-wasm') as WasmModule;
       await this.wasmModule.default();
       this._initialized = true;
     } catch (error) {
