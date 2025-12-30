@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/velesdb-logo.svg" alt="VelesDB Logo" width="200"/>
+  <img src="docs/assets/velesdb-icon.png" alt="VelesDB Logo" width="200"/>
 </p>
 
 <h1 align="center">VelesDB</h1>

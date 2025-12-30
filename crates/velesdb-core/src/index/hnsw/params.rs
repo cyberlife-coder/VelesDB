@@ -168,10 +168,93 @@ mod tests {
     }
 
     #[test]
+    fn test_hnsw_params_fast() {
+        let params = HnswParams::fast();
+        assert_eq!(params.max_connections, 16);
+        assert_eq!(params.ef_construction, 200);
+        assert_eq!(params.max_elements, 100_000);
+    }
+
+    #[test]
+    fn test_hnsw_params_high_recall() {
+        let params = HnswParams::high_recall(768);
+        assert_eq!(params.max_connections, 24); // 16 + 8
+        assert_eq!(params.ef_construction, 400); // 200 + 200
+    }
+
+    #[test]
+    fn test_hnsw_params_max_recall_small() {
+        let params = HnswParams::max_recall(128);
+        assert_eq!(params.max_connections, 32);
+        assert_eq!(params.ef_construction, 500);
+    }
+
+    #[test]
+    fn test_hnsw_params_max_recall_medium() {
+        let params = HnswParams::max_recall(512);
+        assert_eq!(params.max_connections, 48);
+        assert_eq!(params.ef_construction, 800);
+    }
+
+    #[test]
+    fn test_hnsw_params_max_recall_large() {
+        let params = HnswParams::max_recall(1024);
+        assert_eq!(params.max_connections, 64);
+        assert_eq!(params.ef_construction, 1000);
+    }
+
+    #[test]
+    fn test_hnsw_params_fast_indexing() {
+        let params = HnswParams::fast_indexing(768);
+        assert_eq!(params.max_connections, 8); // 16 / 2
+        assert_eq!(params.ef_construction, 100); // 200 / 2
+    }
+
+    #[test]
+    fn test_hnsw_params_custom() {
+        let params = HnswParams::custom(32, 400, 50_000);
+        assert_eq!(params.max_connections, 32);
+        assert_eq!(params.ef_construction, 400);
+        assert_eq!(params.max_elements, 50_000);
+    }
+
+    #[test]
     fn test_search_quality_ef_search() {
         assert_eq!(SearchQuality::Fast.ef_search(10), 64);
         assert_eq!(SearchQuality::Balanced.ef_search(10), 128);
         assert_eq!(SearchQuality::Accurate.ef_search(10), 256);
         assert_eq!(SearchQuality::Custom(50).ef_search(10), 50);
+    }
+
+    #[test]
+    fn test_search_quality_ef_search_high_k() {
+        // Test that ef_search scales with k
+        assert_eq!(SearchQuality::Fast.ef_search(100), 200); // 100 * 2
+        assert_eq!(SearchQuality::Balanced.ef_search(50), 200); // 50 * 4
+        assert_eq!(SearchQuality::Accurate.ef_search(40), 320); // 40 * 8
+        assert_eq!(SearchQuality::HighRecall.ef_search(10), 512);
+        assert_eq!(SearchQuality::HighRecall.ef_search(50), 800); // 50 * 16
+    }
+
+    #[test]
+    fn test_search_quality_default() {
+        let quality = SearchQuality::default();
+        assert_eq!(quality, SearchQuality::Balanced);
+    }
+
+    #[test]
+    fn test_hnsw_params_serialize_deserialize() {
+        let params = HnswParams::custom(32, 400, 50_000);
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: HnswParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(params, deserialized);
+    }
+
+    #[test]
+    fn test_search_quality_serialize_deserialize() {
+        let quality = SearchQuality::Custom(100);
+        let json = serde_json::to_string(&quality).unwrap();
+        let deserialized: SearchQuality = serde_json::from_str(&json).unwrap();
+        assert_eq!(quality, deserialized);
     }
 }

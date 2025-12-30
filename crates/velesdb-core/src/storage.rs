@@ -744,4 +744,102 @@ mod tests {
         let retrieved = storage.retrieve(1).unwrap();
         assert_eq!(retrieved, Some(payload));
     }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn test_mmap_storage_multiple_vectors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let dim: usize = 4;
+
+        let mut storage = MmapStorage::new(&path, dim).unwrap();
+
+        // Store multiple vectors
+        for i in 0u64..10 {
+            let vector: Vec<f32> = (0..dim).map(|j| (i as usize * dim + j) as f32).collect();
+            storage.store(i, &vector).unwrap();
+        }
+
+        // Verify all vectors
+        for i in 0u64..10 {
+            let expected: Vec<f32> = (0..dim).map(|j| (i as usize * dim + j) as f32).collect();
+            let retrieved = storage.retrieve(i).unwrap();
+            assert_eq!(retrieved, Some(expected));
+        }
+    }
+
+    #[test]
+    fn test_mmap_storage_update_vector() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut storage = MmapStorage::new(&path, 3).unwrap();
+
+        // Store initial vector
+        storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+
+        // Update with new vector
+        storage.store(1, &[4.0, 5.0, 6.0]).unwrap();
+
+        // Verify updated vector
+        let retrieved = storage.retrieve(1).unwrap();
+        assert_eq!(retrieved, Some(vec![4.0, 5.0, 6.0]));
+    }
+
+    #[test]
+    fn test_mmap_storage_retrieve_nonexistent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let storage = MmapStorage::new(&path, 3).unwrap();
+        let retrieved = storage.retrieve(999).unwrap();
+        assert_eq!(retrieved, None);
+    }
+
+    #[test]
+    fn test_payload_storage_multiple_payloads() {
+        let dir = tempdir().unwrap();
+        let mut storage = LogPayloadStorage::new(dir.path()).unwrap();
+
+        // Store multiple payloads
+        for i in 0u64..5 {
+            let payload = json!({"id": i, "data": format!("payload_{}", i)});
+            storage.store(i, &payload).unwrap();
+        }
+
+        // Verify all payloads
+        for i in 0u64..5 {
+            let retrieved = storage.retrieve(i).unwrap();
+            assert!(retrieved.is_some());
+            assert_eq!(retrieved.unwrap()["id"], i);
+        }
+    }
+
+    #[test]
+    fn test_payload_storage_retrieve_nonexistent() {
+        let dir = tempdir().unwrap();
+        let storage = LogPayloadStorage::new(dir.path()).unwrap();
+        let retrieved = storage.retrieve(999).unwrap();
+        assert_eq!(retrieved, None);
+    }
+
+    #[test]
+    fn test_payload_storage_complex_json() {
+        let dir = tempdir().unwrap();
+        let mut storage = LogPayloadStorage::new(dir.path()).unwrap();
+
+        let payload = json!({
+            "string": "hello",
+            "number": 42,
+            "float": 3.15,
+            "bool": true,
+            "null": null,
+            "array": [1, 2, 3],
+            "nested": {"key": "value"}
+        });
+
+        storage.store(1, &payload).unwrap();
+        let retrieved = storage.retrieve(1).unwrap();
+        assert_eq!(retrieved, Some(payload));
+    }
 }
