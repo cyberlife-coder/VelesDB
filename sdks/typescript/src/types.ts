@@ -4,7 +4,10 @@
  */
 
 /** Supported distance metrics for vector similarity */
-export type DistanceMetric = 'cosine' | 'euclidean' | 'dot';
+export type DistanceMetric = 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard';
+
+/** Storage mode for vector quantization */
+export type StorageMode = 'full' | 'sq8' | 'binary';
 
 /** Backend type for VelesDB connection */
 export type BackendType = 'wasm' | 'rest';
@@ -27,6 +30,12 @@ export interface CollectionConfig {
   dimension: number;
   /** Distance metric (default: 'cosine') */
   metric?: DistanceMetric;
+  /** Storage mode for vector quantization (default: 'full')
+   * - 'full': Full f32 precision (3 KB/vector for 768D)
+   * - 'sq8': 8-bit scalar quantization, 4x memory reduction (~1% recall loss)
+   * - 'binary': 1-bit binary quantization, 32x memory reduction (edge/IoT)
+   */
+  storageMode?: StorageMode;
   /** Optional collection description */
   description?: string;
 }
@@ -39,6 +48,8 @@ export interface Collection {
   dimension: number;
   /** Distance metric */
   metric: DistanceMetric;
+  /** Storage mode */
+  storageMode?: StorageMode;
   /** Number of vectors */
   count: number;
   /** Creation timestamp */

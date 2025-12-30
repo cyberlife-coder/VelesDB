@@ -11,6 +11,10 @@ pub enum DistanceMetric {
     Euclidean,
     /// Dot product (higher = more similar)
     DotProduct,
+    /// Hamming distance (lower = more similar)
+    Hamming,
+    /// Jaccard similarity (higher = more similar)
+    Jaccard,
 }
 
 impl DistanceMetric {
@@ -22,6 +26,8 @@ impl DistanceMetric {
             Self::Cosine => simd::cosine_similarity(a, b),
             Self::Euclidean => simd::euclidean_distance(a, b),
             Self::DotProduct => simd::dot_product(a, b),
+            Self::Hamming => simd::hamming_distance(a, b),
+            Self::Jaccard => simd::jaccard_similarity(a, b),
         }
     }
 
@@ -30,8 +36,8 @@ impl DistanceMetric {
     #[must_use]
     pub const fn higher_is_better(&self) -> bool {
         match self {
-            Self::Cosine | Self::DotProduct => true,
-            Self::Euclidean => false,
+            Self::Cosine | Self::DotProduct | Self::Jaccard => true,
+            Self::Euclidean | Self::Hamming => false,
         }
     }
 }

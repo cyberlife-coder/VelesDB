@@ -114,6 +114,51 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a * norm_b)
 }
 
+/// Computes Hamming distance (count of differing elements).
+/// Treats non-zero values as 1, zero as 0.
+#[inline]
+pub fn hamming_distance(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+
+    let mut count = 0u32;
+    for i in 0..a.len() {
+        let bit_a = if a[i] != 0.0 { 1u32 } else { 0u32 };
+        let bit_b = if b[i] != 0.0 { 1u32 } else { 0u32 };
+        if bit_a != bit_b {
+            count += 1;
+        }
+    }
+    count as f32
+}
+
+/// Computes Jaccard similarity (intersection / union).
+/// Treats non-zero values as set membership.
+#[inline]
+pub fn jaccard_similarity(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+
+    let mut intersection = 0u32;
+    let mut union = 0u32;
+
+    for i in 0..a.len() {
+        let in_a = a[i] != 0.0;
+        let in_b = b[i] != 0.0;
+
+        if in_a && in_b {
+            intersection += 1;
+        }
+        if in_a || in_b {
+            union += 1;
+        }
+    }
+
+    if union == 0 {
+        return 1.0; // Both empty sets are identical
+    }
+
+    intersection as f32 / union as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
