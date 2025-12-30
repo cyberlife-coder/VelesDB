@@ -551,7 +551,7 @@ impl Collection {
 
         let results: Vec<Vec<SearchResult>> = index_results
             .into_iter()
-            .map(|query_results| {
+            .map(|query_results: Vec<(u64, f32)>| {
                 query_results
                     .into_iter()
                     .filter_map(|(id, score)| {

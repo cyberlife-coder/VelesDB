@@ -45,6 +45,9 @@ version = "0.5"
 [dependencies.rayon]
 version = "1.10"
 
+[dependencies.arc-swap]
+version = "1.7"
+
 [dependencies.bytes]
 version = "1.5"
 
