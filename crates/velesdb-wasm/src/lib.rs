@@ -31,6 +31,19 @@ mod simd;
 
 pub use distance::DistanceMetric;
 
+/// Storage mode for vector quantization.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StorageMode {
+    /// Full f32 precision (4 bytes per dimension)
+    #[default]
+    Full,
+    /// SQ8: 8-bit scalar quantization (1 byte per dimension, 4x compression)
+    SQ8,
+    /// Binary: 1-bit quantization (1 bit per dimension, 32x compression)
+    Binary,
+}
+
 /// A vector store for in-memory vector search.
 ///
 /// # Performance
@@ -38,14 +51,29 @@ pub use distance::DistanceMetric;
 /// Uses contiguous memory layout for optimal cache locality and fast
 /// serialization. Vector data is stored in a single buffer rather than
 /// individual Vec allocations.
+///
+/// # Storage Modes
+///
+/// - `Full`: f32 precision, best recall
+/// - `SQ8`: 4x memory reduction, ~1% recall loss
+/// - `Binary`: 32x memory reduction, ~5-10% recall loss
 #[wasm_bindgen]
 pub struct VectorStore {
     /// Vector IDs in insertion order
     ids: Vec<u64>,
-    /// Contiguous buffer: all vector data packed sequentially
+    /// Contiguous buffer for Full mode (f32)
     data: Vec<f32>,
+    /// Contiguous buffer for SQ8 mode (u8)
+    data_sq8: Vec<u8>,
+    /// Contiguous buffer for Binary mode (packed bits)
+    data_binary: Vec<u8>,
+    /// Min values for SQ8 dequantization (per vector)
+    sq8_mins: Vec<f32>,
+    /// Scale values for SQ8 dequantization (per vector)
+    sq8_scales: Vec<f32>,
     dimension: usize,
     metric: DistanceMetric,
+    storage_mode: StorageMode,
 }
 
 #[wasm_bindgen]
@@ -78,9 +106,81 @@ impl VectorStore {
         Ok(Self {
             ids: Vec::new(),
             data: Vec::new(),
+            data_sq8: Vec::new(),
+            data_binary: Vec::new(),
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
             dimension,
             metric,
+            storage_mode: StorageMode::Full,
         })
+    }
+
+    /// Creates a new vector store with specified storage mode for memory optimization.
+    ///
+    /// # Arguments
+    ///
+    /// * `dimension` - Vector dimension
+    /// * `metric` - Distance metric
+    /// * `mode` - Storage mode: "full", "sq8", or "binary"
+    ///
+    /// # Storage Modes
+    ///
+    /// - `full`: Best recall, 4 bytes/dimension
+    /// - `sq8`: 4x compression, ~1% recall loss
+    /// - `binary`: 32x compression, ~5-10% recall loss
+    #[wasm_bindgen]
+    pub fn new_with_mode(
+        dimension: usize,
+        metric: &str,
+        mode: &str,
+    ) -> Result<VectorStore, JsValue> {
+        let metric = match metric.to_lowercase().as_str() {
+            "cosine" => DistanceMetric::Cosine,
+            "euclidean" | "l2" => DistanceMetric::Euclidean,
+            "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
+            "hamming" => DistanceMetric::Hamming,
+            "jaccard" => DistanceMetric::Jaccard,
+            _ => {
+                return Err(JsValue::from_str(
+                    "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
+                ))
+            }
+        };
+
+        let storage_mode = match mode.to_lowercase().as_str() {
+            "full" => StorageMode::Full,
+            "sq8" => StorageMode::SQ8,
+            "binary" => StorageMode::Binary,
+            _ => {
+                return Err(JsValue::from_str(
+                    "Unknown storage mode. Use: full, sq8, binary",
+                ))
+            }
+        };
+
+        Ok(Self {
+            ids: Vec::new(),
+            data: Vec::new(),
+            data_sq8: Vec::new(),
+            data_binary: Vec::new(),
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
+            dimension,
+            metric,
+            storage_mode,
+        })
+    }
+
+    /// Returns the storage mode.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn storage_mode(&self) -> String {
+        match self.storage_mode {
+            StorageMode::Full => "full".to_string(),
+            StorageMode::SQ8 => "sq8".to_string(),
+            StorageMode::Binary => "binary".to_string(),
+        }
     }
 
     /// Returns the number of vectors in the store.
@@ -126,16 +226,73 @@ impl VectorStore {
 
         // Remove existing vector with same ID if present
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
-            self.ids.remove(idx);
-            let start = idx * self.dimension;
-            self.data.drain(start..start + self.dimension);
+            self.remove_at_index(idx);
         }
 
-        // Append to contiguous buffer
+        // Append based on storage mode
         self.ids.push(id);
-        self.data.extend_from_slice(vector);
+        match self.storage_mode {
+            StorageMode::Full => {
+                self.data.extend_from_slice(vector);
+            }
+            StorageMode::SQ8 => {
+                // SQ8: Quantize to u8 with per-vector min/scale
+                let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
+                    (min.min(v), max.max(v))
+                });
+                let scale = if (max - min).abs() < 1e-10 {
+                    1.0
+                } else {
+                    255.0 / (max - min)
+                };
+
+                self.sq8_mins.push(min);
+                self.sq8_scales.push(scale);
+
+                for &v in vector {
+                    let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
+                    self.data_sq8.push(quantized);
+                }
+            }
+            StorageMode::Binary => {
+                // Binary: Pack 8 bits per byte (1 bit per dimension)
+                let bytes_needed = self.dimension.div_ceil(8);
+                for byte_idx in 0..bytes_needed {
+                    let mut byte = 0u8;
+                    for bit in 0..8 {
+                        let dim_idx = byte_idx * 8 + bit;
+                        if dim_idx < self.dimension && vector[dim_idx] > 0.0 {
+                            byte |= 1 << bit;
+                        }
+                    }
+                    self.data_binary.push(byte);
+                }
+            }
+        }
 
         Ok(())
+    }
+
+    /// Removes vector at the given index (internal helper).
+    fn remove_at_index(&mut self, idx: usize) {
+        self.ids.remove(idx);
+        match self.storage_mode {
+            StorageMode::Full => {
+                let start = idx * self.dimension;
+                self.data.drain(start..start + self.dimension);
+            }
+            StorageMode::SQ8 => {
+                let start = idx * self.dimension;
+                self.data_sq8.drain(start..start + self.dimension);
+                self.sq8_mins.remove(idx);
+                self.sq8_scales.remove(idx);
+            }
+            StorageMode::Binary => {
+                let bytes_per_vec = self.dimension.div_ceil(8);
+                let start = idx * bytes_per_vec;
+                self.data_binary.drain(start..start + bytes_per_vec);
+            }
+        }
     }
 
     /// Searches for the k nearest neighbors to the query vector.
@@ -162,18 +319,75 @@ impl VectorStore {
             )));
         }
 
-        // Perf: Iterate over contiguous buffer with better cache locality
-        let mut results: Vec<(u64, f32)> = self
-            .ids
-            .iter()
-            .enumerate()
-            .map(|(idx, &id)| {
-                let start = idx * self.dimension;
-                let v_data = &self.data[start..start + self.dimension];
-                let score = self.metric.calculate(query, v_data);
-                (id, score)
-            })
-            .collect();
+        let mut results: Vec<(u64, f32)> = match self.storage_mode {
+            StorageMode::Full => {
+                // Full precision - direct calculation
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &id)| {
+                        let start = idx * self.dimension;
+                        let v_data = &self.data[start..start + self.dimension];
+                        let score = self.metric.calculate(query, v_data);
+                        (id, score)
+                    })
+                    .collect()
+            }
+            StorageMode::SQ8 => {
+                // SQ8 - dequantize on the fly
+                let mut dequantized = vec![0.0f32; self.dimension];
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &id)| {
+                        let start = idx * self.dimension;
+                        let min = self.sq8_mins[idx];
+                        let scale = self.sq8_scales[idx];
+
+                        // Dequantize: value = (quantized / scale) + min
+                        for (i, &q) in self.data_sq8[start..start + self.dimension]
+                            .iter()
+                            .enumerate()
+                        {
+                            dequantized[i] = (q as f32 / scale) + min;
+                        }
+
+                        let score = self.metric.calculate(query, &dequantized);
+                        (id, score)
+                    })
+                    .collect()
+            }
+            StorageMode::Binary => {
+                // Binary - unpack bits and compare
+                let bytes_per_vec = self.dimension.div_ceil(8);
+                let mut binary_vec = vec![0.0f32; self.dimension];
+
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &id)| {
+                        let start = idx * bytes_per_vec;
+
+                        // Unpack bits to f32 (0.0 or 1.0)
+                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
+                            .iter()
+                            .enumerate()
+                        {
+                            for bit in 0..8 {
+                                let dim_idx = i * 8 + bit;
+                                if dim_idx < self.dimension {
+                                    binary_vec[dim_idx] =
+                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
+                                }
+                            }
+                        }
+
+                        let score = self.metric.calculate(query, &binary_vec);
+                        (id, score)
+                    })
+                    .collect()
+            }
+        };
 
         // Sort by relevance
         if self.metric.higher_is_better() {
@@ -191,9 +405,7 @@ impl VectorStore {
     #[wasm_bindgen]
     pub fn remove(&mut self, id: u64) -> bool {
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
-            self.ids.remove(idx);
-            let start = idx * self.dimension;
-            self.data.drain(start..start + self.dimension);
+            self.remove_at_index(idx);
             true
         } else {
             false
@@ -205,13 +417,24 @@ impl VectorStore {
     pub fn clear(&mut self) {
         self.ids.clear();
         self.data.clear();
+        self.data_sq8.clear();
+        self.data_binary.clear();
+        self.sq8_mins.clear();
+        self.sq8_scales.clear();
     }
 
     /// Returns memory usage estimate in bytes.
     #[wasm_bindgen]
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        self.ids.len() * std::mem::size_of::<u64>() + self.data.len() * 4
+        let id_bytes = self.ids.len() * std::mem::size_of::<u64>();
+        match self.storage_mode {
+            StorageMode::Full => id_bytes + self.data.len() * 4,
+            StorageMode::SQ8 => {
+                id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
+            }
+            StorageMode::Binary => id_bytes + self.data_binary.len(),
+        }
     }
 
     /// Creates a new vector store with pre-allocated capacity.
@@ -238,9 +461,11 @@ impl VectorStore {
             "cosine" => DistanceMetric::Cosine,
             "euclidean" | "l2" => DistanceMetric::Euclidean,
             "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
+            "hamming" => DistanceMetric::Hamming,
+            "jaccard" => DistanceMetric::Jaccard,
             _ => {
                 return Err(JsValue::from_str(
-                    "Unknown metric. Use: cosine, euclidean, dot",
+                    "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
                 ))
             }
         };
@@ -248,8 +473,13 @@ impl VectorStore {
         Ok(Self {
             ids: Vec::with_capacity(capacity),
             data: Vec::with_capacity(capacity * dimension),
+            data_sq8: Vec::new(),
+            data_binary: Vec::new(),
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
             dimension,
             metric,
+            storage_mode: StorageMode::Full,
         })
     }
 
@@ -554,8 +784,13 @@ impl VectorStore {
         Ok(Self {
             ids,
             data,
+            data_sq8: Vec::new(),
+            data_binary: Vec::new(),
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
             dimension,
             metric,
+            storage_mode: StorageMode::Full,
         })
     }
 }
@@ -579,6 +814,134 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
-// Tests for VectorStore are in distance.rs and simd.rs modules
-// The wasm-bindgen VectorStore tests require wasm-bindgen-test and must
-// be run with `wasm-pack test --node`
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_storage_mode_full() {
+        let store = VectorStore::new(4, "cosine").unwrap();
+        assert_eq!(store.storage_mode(), "full");
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_storage_mode_sq8() {
+        let store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
+        assert_eq!(store.storage_mode(), "sq8");
+    }
+
+    #[test]
+    fn test_storage_mode_binary() {
+        let store = VectorStore::new_with_mode(4, "cosine", "binary").unwrap();
+        assert_eq!(store.storage_mode(), "binary");
+    }
+
+    #[test]
+    fn test_sq8_insert_and_memory() {
+        let mut store = VectorStore::new_with_mode(768, "cosine", "sq8").unwrap();
+        let vector: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001).collect();
+
+        store.insert(1, &vector).unwrap();
+
+        assert_eq!(store.len(), 1);
+        // SQ8: 768 bytes (u8) + 8 bytes (min+scale) + 8 bytes (id) = 784 bytes
+        // Full would be: 768 * 4 + 8 = 3080 bytes
+        let mem = store.memory_usage();
+        assert!(mem < 1000, "SQ8 should use less than 1KB, got {}", mem);
+    }
+
+    #[test]
+    fn test_binary_insert_and_memory() {
+        let mut store = VectorStore::new_with_mode(768, "cosine", "binary").unwrap();
+        let vector: Vec<f32> = (0..768)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+
+        store.insert(1, &vector).unwrap();
+
+        assert_eq!(store.len(), 1);
+        // Binary: 768/8 = 96 bytes + 8 bytes (id) = 104 bytes
+        // Full would be: 768 * 4 + 8 = 3080 bytes (~30x more)
+        let mem = store.memory_usage();
+        assert!(
+            mem < 150,
+            "Binary should use less than 150 bytes, got {}",
+            mem
+        );
+    }
+
+    #[test]
+    fn test_sq8_quantization_roundtrip() {
+        let mut store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
+
+        // Insert vectors - verify quantization works
+        store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();
+        store.insert(3, &[0.5, 0.5, 0.0, 0.0]).unwrap();
+
+        assert_eq!(store.len(), 3);
+        // Verify SQ8 data was stored
+        assert_eq!(store.data_sq8.len(), 12); // 3 vectors * 4 dims
+        assert_eq!(store.sq8_mins.len(), 3);
+        assert_eq!(store.sq8_scales.len(), 3);
+    }
+
+    #[test]
+    fn test_binary_packing() {
+        let mut store = VectorStore::new_with_mode(8, "hamming", "binary").unwrap();
+
+        // Insert binary vectors
+        store
+            .insert(1, &[1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            .unwrap();
+
+        assert_eq!(store.len(), 1);
+        // 8 dims = 1 byte
+        assert_eq!(store.data_binary.len(), 1);
+        // First two bits set: 0b00000011 = 3
+        assert_eq!(store.data_binary[0], 3);
+    }
+
+    #[test]
+    fn test_binary_packing_large() {
+        let mut store = VectorStore::new_with_mode(16, "hamming", "binary").unwrap();
+
+        // All ones in first byte, all zeros in second
+        let mut vec = vec![0.0f32; 16];
+        for item in vec.iter_mut().take(8) {
+            *item = 1.0;
+        }
+        store.insert(1, &vec).unwrap();
+
+        assert_eq!(store.data_binary.len(), 2);
+        assert_eq!(store.data_binary[0], 0xFF); // All 8 bits set
+        assert_eq!(store.data_binary[1], 0x00); // No bits set
+    }
+
+    #[test]
+    fn test_remove_sq8() {
+        let mut store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
+        store.insert(1, &[1.0, 2.0, 3.0, 4.0]).unwrap();
+        store.insert(2, &[5.0, 6.0, 7.0, 8.0]).unwrap();
+
+        assert_eq!(store.len(), 2);
+        assert!(store.remove(1));
+        assert_eq!(store.len(), 1);
+        assert!(!store.remove(1)); // Already removed
+    }
+
+    #[test]
+    fn test_clear_all_modes() {
+        for mode in ["full", "sq8", "binary"] {
+            let mut store = VectorStore::new_with_mode(4, "cosine", mode).unwrap();
+            store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+            store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();
+
+            assert_eq!(store.len(), 2);
+            store.clear();
+            assert_eq!(store.len(), 0);
+            assert_eq!(store.memory_usage(), 0);
+        }
+    }
+}
