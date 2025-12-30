@@ -25,10 +25,17 @@ pub struct CreateCollectionRequest {
     /// Distance metric: "cosine", "euclidean", "dot", "hamming", "jaccard".
     #[serde(default = "default_metric")]
     pub metric: String,
+    /// Storage mode: "full", "sq8", "binary".
+    #[serde(default = "default_storage_mode")]
+    pub storage_mode: String,
 }
 
 fn default_metric() -> String {
     "cosine".to_string()
+}
+
+fn default_storage_mode() -> String {
+    "full".to_string()
 }
 
 /// Response for collection info.
@@ -43,6 +50,8 @@ pub struct CollectionInfo {
     pub metric: String,
     /// Number of points.
     pub count: usize,
+    /// Storage mode.
+    pub storage_mode: String,
 }
 
 /// A point to insert/update.
@@ -182,6 +191,28 @@ fn metric_to_string(metric: velesdb_core::distance::DistanceMetric) -> String {
     .to_string()
 }
 
+fn parse_storage_mode(mode: &str) -> Result<velesdb_core::StorageMode> {
+    use velesdb_core::StorageMode;
+    match mode.to_lowercase().as_str() {
+        "full" | "f32" => Ok(StorageMode::Full),
+        "sq8" | "int8" => Ok(StorageMode::SQ8),
+        "binary" | "bit" => Ok(StorageMode::Binary),
+        _ => Err(Error::InvalidConfig(format!(
+            "Invalid storage_mode '{mode}'. Use 'full', 'sq8', or 'binary'"
+        ))),
+    }
+}
+
+fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> String {
+    use velesdb_core::StorageMode;
+    match mode {
+        StorageMode::Full => "full",
+        StorageMode::SQ8 => "sq8",
+        StorageMode::Binary => "binary",
+    }
+    .to_string()
+}
+
 // ============================================================================
 // Tauri Commands
 // ============================================================================
@@ -195,14 +226,22 @@ pub async fn create_collection<R: Runtime>(
 ) -> std::result::Result<CollectionInfo, CommandError> {
     let metric = parse_metric(&request.metric).map_err(CommandError::from)?;
 
+    let storage_mode = parse_storage_mode(&request.storage_mode).map_err(CommandError::from)?;
+
     state
         .with_db(|db| {
-            db.create_collection(&request.name, request.dimension, metric)?;
+            db.create_collection_with_options(
+                &request.name,
+                request.dimension,
+                metric,
+                storage_mode,
+            )?;
             Ok(CollectionInfo {
                 name: request.name.clone(),
                 dimension: request.dimension,
                 metric: metric_to_string(metric),
                 count: 0,
+                storage_mode: storage_mode_to_string(storage_mode),
             })
         })
         .map_err(CommandError::from)
@@ -241,6 +280,7 @@ pub async fn list_collections<R: Runtime>(
                         dimension: config.dimension,
                         metric: metric_to_string(config.metric),
                         count: coll.len(),
+                        storage_mode: storage_mode_to_string(config.storage_mode),
                     });
                 }
             }
@@ -267,6 +307,7 @@ pub async fn get_collection<R: Runtime>(
                 dimension: config.dimension,
                 metric: metric_to_string(config.metric),
                 count: coll.len(),
+                storage_mode: storage_mode_to_string(config.storage_mode),
             })
         })
         .map_err(CommandError::from)
@@ -589,6 +630,7 @@ mod tests {
         assert_eq!(request.name, "test");
         assert_eq!(request.dimension, 768);
         assert_eq!(request.metric, "cosine"); // default
+        assert_eq!(request.storage_mode, "full"); // default
     }
 
     #[test]
@@ -613,6 +655,7 @@ mod tests {
             dimension: 768,
             metric: "cosine".to_string(),
             count: 100,
+            storage_mode: "full".to_string(),
         };
 
         // Act
@@ -623,6 +666,7 @@ mod tests {
         assert!(json.contains("\"dimension\":768"));
         assert!(json.contains("\"metric\":\"cosine\""));
         assert!(json.contains("\"count\":100"));
+        assert!(json.contains("\"storageMode\":\"full\""));
     }
 
     #[test]

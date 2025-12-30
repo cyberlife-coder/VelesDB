@@ -45,6 +45,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         path: Path to the VelesDB database directory.
         collection_name: Name of the collection to use.
         metric: Distance metric (cosine, euclidean, dot).
+        storage_mode: Vector storage mode (full, sq8, binary).
     """
 
     stores_text: bool = True
@@ -53,6 +54,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
     path: str = "./velesdb_data"
     collection_name: str = "llamaindex"
     metric: str = "cosine"
+    storage_mode: str = "full"
 
     _db: Optional[velesdb.Database] = None
     _collection: Optional[velesdb.Collection] = None
@@ -66,6 +68,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         path: str = "./velesdb_data",
         collection_name: str = "llamaindex",
         metric: str = "cosine",
+        storage_mode: str = "full",
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -74,10 +77,15 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             path: Path to VelesDB database directory.
             collection_name: Name of the collection.
             metric: Distance metric ("cosine", "euclidean", "dot").
+            storage_mode: Storage mode ("full", "sq8", "binary").
+                - "full": Full f32 precision (default)
+                - "sq8": 8-bit scalar quantization (4x memory reduction)
+                - "binary": 1-bit binary quantization (32x memory reduction)
             **kwargs: Additional arguments.
         """
         super().__init__(
             path=path,
+            storage_mode=storage_mode,
             collection_name=collection_name,
             metric=metric,
             **kwargs,

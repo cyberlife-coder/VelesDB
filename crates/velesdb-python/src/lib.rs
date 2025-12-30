@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use velesdb_core::{Database as CoreDatabase, DistanceMetric, Point};
+use velesdb_core::{Database as CoreDatabase, DistanceMetric, Point, StorageMode};
 
 /// Extracts a vector from a PyObject, supporting both Python lists and NumPy arrays.
 ///
@@ -102,25 +102,31 @@ impl Database {
     ///     dimension: Vector dimension (e.g., 768 for BERT embeddings)
     ///     metric: Distance metric - "cosine", "euclidean", "dot", "hamming", or "jaccard"
     ///             (default: "cosine")
+    ///     storage_mode: Storage mode - "full", "sq8", or "binary" (default: "full")
+    ///                   - "full": Full f32 precision
+    ///                   - "sq8": 8-bit scalar quantization (4x memory reduction)
+    ///                   - "binary": 1-bit binary quantization (32x memory reduction)
     ///
     /// Returns:
     ///     Collection instance
     ///
     /// Example:
     ///     >>> collection = db.create_collection("documents", dimension=768, metric="cosine")
-    ///     >>> # For binary vectors:
-    ///     >>> fingerprints = db.create_collection("hashes", dimension=256, metric="hamming")
-    #[pyo3(signature = (name, dimension, metric = "cosine"))]
+    ///     >>> # With SQ8 quantization for memory savings:
+    ///     >>> quantized = db.create_collection("embeddings", dimension=768, storage_mode="sq8")
+    #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full"))]
     fn create_collection(
         &self,
         name: &str,
         dimension: usize,
         metric: &str,
+        storage_mode: &str,
     ) -> PyResult<Collection> {
         let distance_metric = parse_metric(metric)?;
+        let mode = parse_storage_mode(storage_mode)?;
 
         self.inner
-            .create_collection(name, dimension, distance_metric)
+            .create_collection_with_options(name, dimension, distance_metric, mode)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create collection: {}", e)))?;
 
         let collection = self
@@ -467,6 +473,18 @@ fn parse_metric(metric: &str) -> PyResult<DistanceMetric> {
         _ => Err(PyValueError::new_err(format!(
             "Invalid metric '{}'. Use 'cosine', 'euclidean', 'dot', 'hamming', or 'jaccard'",
             metric
+        ))),
+    }
+}
+
+fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
+    match mode.to_lowercase().as_str() {
+        "full" | "f32" => Ok(StorageMode::Full),
+        "sq8" | "int8" => Ok(StorageMode::SQ8),
+        "binary" | "bit" => Ok(StorageMode::Binary),
+        _ => Err(PyValueError::new_err(format!(
+            "Invalid storage_mode '{}'. Use 'full', 'sq8', or 'binary'",
+            mode
         ))),
     }
 }

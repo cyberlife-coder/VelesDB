@@ -16,13 +16,14 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use velesdb_core::{Database, DistanceMetric, Point};
+use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 
 /// Import configuration
 pub struct ImportConfig {
     pub collection: String,
     pub dimension: Option<usize>,
     pub metric: DistanceMetric,
+    pub storage_mode: StorageMode,
     pub batch_size: usize,
     pub id_column: String,
     pub vector_column: String,
@@ -35,6 +36,7 @@ impl Default for ImportConfig {
             collection: String::new(),
             dimension: None,
             metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
             batch_size: 1000,
             id_column: "id".to_string(),
             vector_column: "vector".to_string(),
@@ -84,7 +86,13 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
     let dimension = config.dimension.unwrap_or(first_record.vector.len());
 
     // Create or get collection
-    let collection = get_or_create_collection(db, &config.collection, dimension, config.metric)?;
+    let collection = get_or_create_collection(
+        db,
+        &config.collection,
+        dimension,
+        config.metric,
+        config.storage_mode,
+    )?;
 
     let progress = create_progress_bar(total, config.show_progress);
     if config.show_progress {
@@ -201,7 +209,13 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
     let dimension = config.dimension.unwrap_or(first_vector.len());
 
     // Create or get collection
-    let collection = get_or_create_collection(db, &config.collection, dimension, config.metric)?;
+    let collection = get_or_create_collection(
+        db,
+        &config.collection,
+        dimension,
+        config.metric,
+        config.storage_mode,
+    )?;
 
     // Reopen for final processing
     let file = File::open(path)?;
@@ -312,11 +326,12 @@ fn get_or_create_collection(
     name: &str,
     dimension: usize,
     metric: DistanceMetric,
+    storage_mode: StorageMode,
 ) -> Result<velesdb_core::Collection> {
     if let Some(col) = db.get_collection(name) {
         Ok(col)
     } else {
-        db.create_collection(name, dimension, metric)?;
+        db.create_collection_with_options(name, dimension, metric, storage_mode)?;
         db.get_collection(name)
             .context("Failed to get created collection")
     }

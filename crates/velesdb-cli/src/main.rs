@@ -12,7 +12,7 @@ mod repl;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use velesdb_core::DistanceMetric;
+use velesdb_core::{DistanceMetric, StorageMode};
 
 #[derive(Parser)]
 #[command(name = "velesdb")]
@@ -42,6 +42,25 @@ impl From<MetricArg> for DistanceMetric {
             MetricArg::Cosine => DistanceMetric::Cosine,
             MetricArg::Euclidean => DistanceMetric::Euclidean,
             MetricArg::Dot => DistanceMetric::DotProduct,
+        }
+    }
+}
+
+/// CLI storage mode option
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+enum StorageModeArg {
+    #[default]
+    Full,
+    Sq8,
+    Binary,
+}
+
+impl From<StorageModeArg> for StorageMode {
+    fn from(m: StorageModeArg) -> Self {
+        match m {
+            StorageModeArg::Full => StorageMode::Full,
+            StorageModeArg::Sq8 => StorageMode::SQ8,
+            StorageModeArg::Binary => StorageMode::Binary,
         }
     }
 }
@@ -94,6 +113,10 @@ enum Commands {
         /// Distance metric
         #[arg(long, value_enum, default_value = "cosine")]
         metric: MetricArg,
+
+        /// Storage mode (full, sq8, binary)
+        #[arg(long, value_enum, default_value = "full")]
+        storage_mode: StorageModeArg,
 
         /// ID column name (for CSV)
         #[arg(long, default_value = "id")]
@@ -149,6 +172,7 @@ fn main() -> anyhow::Result<()> {
             collection,
             dimension,
             metric,
+            storage_mode,
             id_column,
             vector_column,
             batch_size,
@@ -161,6 +185,7 @@ fn main() -> anyhow::Result<()> {
                 collection,
                 dimension,
                 metric: metric.into(),
+                storage_mode: storage_mode.into(),
                 batch_size,
                 id_column,
                 vector_column,

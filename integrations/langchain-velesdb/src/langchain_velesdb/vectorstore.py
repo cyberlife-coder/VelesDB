@@ -46,6 +46,7 @@ class VelesDBVectorStore(VectorStore):
         path: str = "./velesdb_data",
         collection_name: str = "langchain",
         metric: str = "cosine",
+        storage_mode: str = "full",
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -56,12 +57,17 @@ class VelesDBVectorStore(VectorStore):
             collection_name: Name of the collection. Defaults to "langchain".
             metric: Distance metric ("cosine", "euclidean", "dot").
                 Defaults to "cosine".
+            storage_mode: Storage mode ("full", "sq8", "binary").
+                - "full": Full f32 precision (default)
+                - "sq8": 8-bit scalar quantization (4x memory reduction)
+                - "binary": 1-bit binary quantization (32x memory reduction)
             **kwargs: Additional arguments passed to the database.
         """
         self._embedding = embedding
         self._path = path
         self._collection_name = collection_name
         self._metric = metric
+        self._storage_mode = storage_mode
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
         self._next_id = 1
