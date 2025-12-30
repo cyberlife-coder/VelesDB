@@ -51,14 +51,16 @@ jobs:
       - name: Update package.json for @wiscale scope
         working-directory: crates/velesdb-wasm/pkg
         run: |
+          # Get version from Cargo.toml
+          VERSION=$(grep -m1 'version = ' ../Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json'));
             pkg.name = '@wiscale/velesdb-wasm';
-            pkg.version = '0.5.1';
+            pkg.version = process.argv[1];
             pkg.license = 'Elastic-2.0';
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
+          " "$VERSION"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

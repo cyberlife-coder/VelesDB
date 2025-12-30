@@ -28,7 +28,7 @@
   <img src="https://img.shields.io/badge/⚡_Distance_SIMD-41ns_(768D)-brightgreen?style=for-the-badge" alt="Latency"/>
   <img src="https://img.shields.io/badge/🎯_Recall-99.4%25-blue?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
-  <img src="https://img.shields.io/badge/✅_Tests-542_passed-success?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/✅_Tests-611_passed-success?style=for-the-badge" alt="Tests"/>
 </p>
 
 <p align="center">
