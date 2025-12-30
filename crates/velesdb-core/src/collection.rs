@@ -4,8 +4,10 @@ use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::{Bm25Index, HnswIndex, VectorIndex};
 use crate::point::{Point, SearchResult};
-use crate::quantization::StorageMode;
+use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
+
+use std::collections::HashMap;
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -52,6 +54,12 @@ pub struct Collection {
 
     /// BM25 index for full-text search.
     text_index: Arc<Bm25Index>,
+
+    /// SQ8 quantized vectors cache (for SQ8 storage mode).
+    sq8_cache: Arc<RwLock<HashMap<u64, QuantizedVector>>>,
+
+    /// Binary quantized vectors cache (for Binary storage mode).
+    binary_cache: Arc<RwLock<HashMap<u64, BinaryQuantizedVector>>>,
 }
 
 impl Collection {
@@ -120,6 +128,8 @@ impl Collection {
             payload_storage,
             index,
             text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
         };
 
         collection.save_config()?;
@@ -178,6 +188,8 @@ impl Collection {
             payload_storage,
             index,
             text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -198,6 +210,7 @@ impl Collection {
         let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
         let dimension = config.dimension;
+        let storage_mode = config.storage_mode;
         drop(config);
 
         // Validate dimensions first
@@ -213,39 +226,58 @@ impl Collection {
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
 
+        // Get quantized caches if needed
+        let mut sq8_cache = match storage_mode {
+            StorageMode::SQ8 => Some(self.sq8_cache.write()),
+            _ => None,
+        };
+        let mut binary_cache = match storage_mode {
+            StorageMode::Binary => Some(self.binary_cache.write()),
+            _ => None,
+        };
+
         for point in points {
             // 1. Store Vector
             vector_storage
                 .store(point.id, &point.vector)
                 .map_err(Error::Io)?;
 
-            // 2. Store Payload (if present)
+            // 2. Store quantized vector based on storage_mode
+            match storage_mode {
+                StorageMode::SQ8 => {
+                    if let Some(ref mut cache) = sq8_cache {
+                        let quantized = QuantizedVector::from_f32(&point.vector);
+                        cache.insert(point.id, quantized);
+                    }
+                }
+                StorageMode::Binary => {
+                    if let Some(ref mut cache) = binary_cache {
+                        let quantized = BinaryQuantizedVector::from_f32(&point.vector);
+                        cache.insert(point.id, quantized);
+                    }
+                }
+                StorageMode::Full => {}
+            }
+
+            // 3. Store Payload (if present)
             if let Some(payload) = &point.payload {
                 payload_storage
                     .store(point.id, payload)
                     .map_err(Error::Io)?;
             } else {
-                // If payload is None, check if we need to delete existing payload?
-                // For now, let's assume upsert with None doesn't clear payload unless explicit.
-                // Or consistency: Point represents full state. If None, maybe we should delete?
-                // Let's stick to: if None, do nothing (keep existing) or delete?
-                // Typically upsert replaces. Let's say if None, we delete potential existing payload to be consistent.
-                let _ = payload_storage.delete(point.id); // Ignore error if not found
+                let _ = payload_storage.delete(point.id);
             }
 
-            // 3. Update Vector Index
-            // Note: HnswIndex.insert() skips if ID already exists (no updates supported)
-            // For true upsert semantics, we'd need to remove then re-insert
+            // 4. Update Vector Index
             self.index.insert(point.id, &point.vector);
 
-            // 4. Update BM25 Text Index
+            // 5. Update BM25 Text Index
             if let Some(payload) = &point.payload {
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
                     self.text_index.add_document(point.id, &text);
                 }
             } else {
-                // Remove from text index if payload was cleared
                 self.text_index.remove_document(point.id);
             }
         }
@@ -254,8 +286,7 @@ impl Collection {
         let mut config = self.config.write();
         config.point_count = vector_storage.len();
 
-        // Auto-flush for durability (MVP choice: consistent but slower)
-        // In prod, this might be backgrounded or explicit.
+        // Auto-flush for durability
         vector_storage.flush().map_err(Error::Io)?;
         payload_storage.flush().map_err(Error::Io)?;
         self.index.save(&self.path).map_err(Error::Io)?;

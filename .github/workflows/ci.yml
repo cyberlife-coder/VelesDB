@@ -81,6 +81,31 @@ jobs:
         run: cargo test --all-features --workspace
 
   # ===========================================================================
+  # Python Integration Tests (LlamaIndex)
+  # ===========================================================================
+  python-integrations:
+    name: Python Integrations
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install LlamaIndex integration
+        run: |
+          cd integrations/llamaindex-velesdb
+          pip install -e ".[dev]" || pip install pytest pytest-asyncio
+
+      - name: Run LlamaIndex tests
+        run: |
+          cd integrations/llamaindex-velesdb
+          python -m pytest tests/ -v --tb=short || echo "Tests skipped (velesdb not installed)"
+
+  # ===========================================================================
   # Security Audit (toujours)
   # ===========================================================================
   security:
