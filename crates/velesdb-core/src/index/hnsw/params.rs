@@ -3,6 +3,7 @@
 //! This module contains configuration types for tuning HNSW index
 //! performance and search quality.
 
+use crate::quantization::StorageMode;
 use serde::{Deserialize, Serialize};
 
 /// HNSW index parameters for tuning performance and recall.
@@ -19,6 +20,10 @@ pub struct HnswParams {
     pub ef_construction: usize,
     /// Initial capacity (grows automatically if exceeded).
     pub max_elements: usize,
+    /// Vector storage mode (Full, SQ8, or Binary).
+    /// SQ8 provides 4x memory reduction with ~1% recall loss.
+    #[serde(default)]
+    pub storage_mode: StorageMode,
 }
 
 impl Default for HnswParams {
@@ -36,11 +41,13 @@ impl HnswParams {
                 max_connections: 16,
                 ef_construction: 200,
                 max_elements: 100_000,
+                storage_mode: StorageMode::Full,
             },
             _ => Self {
                 max_connections: 24,
                 ef_construction: 300,
                 max_elements: 100_000,
+                storage_mode: StorageMode::Full,
             },
         }
     }
@@ -52,6 +59,7 @@ impl HnswParams {
             max_connections: 16,
             ef_construction: 200,
             max_elements: 100_000,
+            storage_mode: StorageMode::Full,
         }
     }
 
@@ -74,16 +82,19 @@ impl HnswParams {
                 max_connections: 32,
                 ef_construction: 500,
                 max_elements: 100_000,
+                storage_mode: StorageMode::Full,
             },
             257..=768 => Self {
                 max_connections: 48,
                 ef_construction: 800,
                 max_elements: 100_000,
+                storage_mode: StorageMode::Full,
             },
             _ => Self {
                 max_connections: 64,
                 ef_construction: 1000,
                 max_elements: 100_000,
+                storage_mode: StorageMode::Full,
             },
         }
     }
@@ -110,7 +121,32 @@ impl HnswParams {
             max_connections,
             ef_construction,
             max_elements,
+            storage_mode: StorageMode::Full,
         }
+    }
+
+    /// Creates parameters with SQ8 quantization for 4x memory reduction.
+    ///
+    /// # Memory Savings
+    ///
+    /// | Dimension | Full (f32) | SQ8 (u8) | Reduction |
+    /// |-----------|------------|----------|----------|
+    /// | 768 | 3 KB | 776 B | 4x |
+    /// | 1536 | 6 KB | 1.5 KB | 4x |
+    #[must_use]
+    pub fn with_sq8(dimension: usize) -> Self {
+        let mut params = Self::auto(dimension);
+        params.storage_mode = StorageMode::SQ8;
+        params
+    }
+
+    /// Creates parameters with binary quantization for 32x memory reduction.
+    /// Best for edge/IoT devices with limited RAM.
+    #[must_use]
+    pub fn with_binary(dimension: usize) -> Self {
+        let mut params = Self::auto(dimension);
+        params.storage_mode = StorageMode::Binary;
+        params
     }
 }
 
@@ -216,6 +252,37 @@ mod tests {
         assert_eq!(params.max_connections, 32);
         assert_eq!(params.ef_construction, 400);
         assert_eq!(params.max_elements, 50_000);
+        assert_eq!(params.storage_mode, StorageMode::Full);
+    }
+
+    #[test]
+    fn test_hnsw_params_with_sq8() {
+        // Arrange & Act
+        let params = HnswParams::with_sq8(768);
+
+        // Assert - SQ8 mode enabled with auto-tuned params
+        assert_eq!(params.storage_mode, StorageMode::SQ8);
+        assert_eq!(params.max_connections, 16); // From auto(768)
+        assert_eq!(params.ef_construction, 200);
+    }
+
+    #[test]
+    fn test_hnsw_params_with_binary() {
+        // Arrange & Act
+        let params = HnswParams::with_binary(768);
+
+        // Assert - Binary mode for 32x compression
+        assert_eq!(params.storage_mode, StorageMode::Binary);
+        assert_eq!(params.max_connections, 16);
+    }
+
+    #[test]
+    fn test_hnsw_params_storage_mode_default() {
+        // Arrange & Act
+        let params = HnswParams::default();
+
+        // Assert - Default is Full precision
+        assert_eq!(params.storage_mode, StorageMode::Full);
     }
 
     #[test]
