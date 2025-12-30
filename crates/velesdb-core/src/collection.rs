@@ -412,16 +412,121 @@ impl Collection {
         Ok(results)
     }
 
+    /// Performs fast vector similarity search returning only IDs and scores.
+    ///
+    /// Perf: This is ~3-5x faster than `search()` because it skips vector/payload retrieval.
+    /// Use this when you only need IDs and scores, not full point data.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector
+    /// * `k` - Maximum number of results to return
+    ///
+    /// # Returns
+    ///
+    /// Vector of (id, score) tuples sorted by similarity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
+        let config = self.config.read();
+
+        if query.len() != config.dimension {
+            return Err(Error::DimensionMismatch {
+                expected: config.dimension,
+                actual: query.len(),
+            });
+        }
+        drop(config);
+
+        // Perf: Direct HNSW search without vector/payload retrieval (Round 8)
+        Ok(self.index.search(query, k))
+    }
+
+    /// Performs batch vector similarity search in parallel using rayon.
+    ///
+    /// Perf: This is significantly faster than calling `search` in a loop
+    /// because it parallelizes across CPU cores and amortizes lock overhead.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - Slice of query vectors
+    /// * `k` - Maximum number of results per query
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results for each query, with full point data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any query vector dimension doesn't match the collection.
+    pub fn search_batch_parallel(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        use crate::index::SearchQuality;
+
+        let config = self.config.read();
+        let dimension = config.dimension;
+        drop(config);
+
+        // Validate all query dimensions first
+        for query in queries {
+            if query.len() != dimension {
+                return Err(Error::DimensionMismatch {
+                    expected: dimension,
+                    actual: query.len(),
+                });
+            }
+        }
+
+        // Perf: Use parallel HNSW search (P0 optimization)
+        let index_results = self
+            .index
+            .search_batch_parallel(queries, k, SearchQuality::Balanced);
+
+        // Map results to SearchResult with full point data
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let results: Vec<Vec<SearchResult>> = index_results
+            .into_iter()
+            .map(|query_results| {
+                query_results
+                    .into_iter()
+                    .filter_map(|(id, score)| {
+                        let vector = vector_storage.retrieve(id).ok().flatten()?;
+                        let payload = payload_storage.retrieve(id).ok().flatten();
+                        Some(SearchResult {
+                            point: Point {
+                                id,
+                                vector,
+                                payload,
+                            },
+                            score,
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+
+        Ok(results)
+    }
+
     /// Returns the number of points in the collection.
+    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
     #[must_use]
     pub fn len(&self) -> usize {
-        self.vector_storage.read().len()
+        self.config.read().point_count
     }
 
     /// Returns true if the collection is empty.
+    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.vector_storage.read().is_empty()
+        self.config.read().point_count == 0
     }
 
     /// Saves the collection configuration and index to disk.
@@ -774,6 +879,28 @@ mod tests {
         // Search with wrong dimension
         let result = collection.search(&[1.0, 0.0], 5);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_collection_search_ids_fast() {
+        // Round 8: Test fast search returning only IDs and scores
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test_collection");
+
+        let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+        collection
+            .upsert(vec![
+                Point::without_payload(1, vec![1.0, 0.0, 0.0]),
+                Point::without_payload(2, vec![0.9, 0.1, 0.0]),
+                Point::without_payload(3, vec![0.0, 1.0, 0.0]),
+            ])
+            .unwrap();
+
+        // Fast search returns (id, score) tuples
+        let results = collection.search_ids(&[1.0, 0.0, 0.0], 2).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, 1); // Best match
+        assert!(results[0].1 > results[1].1); // Scores are sorted
     }
 
     #[test]

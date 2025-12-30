@@ -5,6 +5,22 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2025-12-30
+
+### 🔐 On-Premises & Documentation
+
+#### Added
+- **On-Premises Deployment section** in README - Data sovereignty, air-gap, GDPR/HIPAA compliance
+- **P0: Parallel batch search** - `search_batch_parallel` using Rayon for multi-query workloads
+- **P1: HNSW prefetch hints** - CPU cache warming during re-ranking phase
+
+#### Changed
+- **Simplified BENCHMARKS.md** - Reduced from 430 to 96 lines, focus on key metrics
+- **Updated competition table** - Clearer differentiation vs pgvector/Qdrant/Pinecone
+- **Version bump to 0.5.1** - All crates and documentation updated
+
+---
+
 ## [0.5.0] - 2025-12-29
 
 ### 🚀 Performance - 3.2x Faster Than pgvector

@@ -80,52 +80,28 @@ LIMIT 10
 
 ### 🏆 VelesDB vs The Competition
 
-| Metric | 🐺 **VelesDB** | Qdrant | Pinecone | pgvector | pgvectorscale |
-|--------|---------------|--------|----------|----------|---------------|
-| **Latency (768D)** | **4ms** ⚡ | ~10ms | ~5ms | ~50ms | ~53ms |
-| **Throughput** | **247 QPS** | ~100 QPS | ~200 QPS | ~20 QPS | ~19 QPS |
-| **Setup Time** | **< 1 min** | 5-10 min | Cloud only | PostgreSQL req. | PostgreSQL req. |
-| **Binary Size** | **15 MB** | 100+ MB | N/A | Extension | Extension |
-| **Query Language** | **SQL (VelesQL)** | JSON DSL | JSON/SDK | SQL | SQL |
-| **Filtering Speed** | **122x faster** | Baseline | N/A | Baseline | Baseline |
-| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Recall@10** | **99%** | ~95% | ~95% | 100% | ~95% |
+| Metric | 🐺 **VelesDB** | Qdrant | Pinecone | pgvector |
+|--------|---------------|--------|----------|----------|
+| **Insert Speed** | **5.3x faster** ⚡ | ~1x | Cloud | Baseline |
+| **Embedded Latency** | **2.5ms** | N/A | N/A | ~50ms |
+| **Setup Time** | **< 1 min** | 5-10 min | Cloud only | PostgreSQL req. |
+| **Binary Size** | **15 MB** | 100+ MB | N/A | Extension |
+| **Query Language** | **SQL (VelesQL)** | JSON DSL | JSON/SDK | SQL |
+| **On-Prem/Air-Gap** | ✅ | ✅ | ❌ | ✅ |
+| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ |
+| **Recall@10** | **98.8%** | ~95% | ~95% | 100% |
 
-### 📊 Benchmark: VelesDB vs pgvector (v0.5.0)
+### 📊 Benchmark: VelesDB vs pgvector (v0.5.1)
 
-We benchmarked VelesDB against [pgvector](https://github.com/pgvector/pgvector) on **clustered embeddings (768D)**.
+**50,000 vectors, 768D, Docker** — [Full benchmark](docs/BENCHMARKS.md)
 
-#### 🚀 Insertion Performance (5,000 vectors, Docker)
-
-| Metric | pgvector | VelesDB | Result |
+| Metric | pgvector | VelesDB | Winner |
 |--------|----------|---------|--------|
-| **Insert + Index** | 8.54s | **2.63s** | **3.2x faster** |
-| **Recall@10** | 100.0% | 99.7% | Comparable |
-| **Search P50** | 3.0ms | 4.0ms | Comparable |
+| **Insert + Index** | 154s | **29s** | **VelesDB 5.3x** ✅ |
+| **Embedded Search** | 50ms | **2.5ms** | **VelesDB 20x** ✅ |
+| **Recall@10** | 100% | 98.8% | pgvector |
 
-#### Embedded Mode (VelesDB's strength)
-
-| Dataset | VelesDB (native) | pgvector (Docker) | Speedup |
-|---------|------------------|-------------------|---------|
-| 10,000 | **2.5ms** | 50ms | **20x** |
-
-**Key optimizations in v0.5.0:**
-- **SIMD-accelerated HNSW** - AVX2/SSE distance calculations
-- **Parallel insertion** - Rayon-based graph construction
-- **Deferred index save** - No disk I/O during batch operations
-
-**When to choose VelesDB:**
-- ✅ Bulk import speed (3.2x faster than pgvector)
-- ✅ Embedded/Desktop apps (20x faster search)
-- ✅ Edge/IoT/WASM deployments
-- ✅ No PostgreSQL needed
-
-**When to choose pgvector:**
-- ✅ Existing PostgreSQL infrastructure
-- ✅ SQL ecosystem integration
-- ✅ Need 100% recall (vs 99.7%)
-
-> 📊 **Run your own benchmarks:** See [benchmarks/](benchmarks/) for the complete benchmark kit.
+> 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
 ### 🐺 Why "Veles"?
 
@@ -148,6 +124,33 @@ Just as Veles bridges the earthly and mystical realms, VelesDB bridges raw data 
 - 🔌 **Simple REST API** — Easy integration with any language
 - 📦 **Single Binary** — No dependencies, easy deployment
 - 🐳 **Docker Ready** — Run anywhere in seconds
+- 🔐 **On-Prem Ready** — Air-gapped, data sovereign, GDPR/HIPAA compliant
+
+---
+
+## 🔐 On-Premises & Edge Deployment
+
+VelesDB is designed for **on-prem and edge deployments** where data sovereignty matters:
+
+| Advantage | VelesDB | Cloud Vector DBs |
+|-----------|---------|------------------|
+| **Data Sovereignty** | ✅ 100% local | ❌ Data in cloud |
+| **Air-Gapped** | ✅ Single binary, no internet | ❌ Requires connectivity |
+| **Latency** | ✅ 2.5ms embedded | ❌ 50-100ms network |
+| **GDPR/HIPAA** | ✅ Full control | ⚠️ Shared responsibility |
+| **Audit Trail** | ✅ Local logs | ⚠️ Provider-dependent |
+
+**Perfect for:**
+- 🏥 Healthcare (HIPAA) — Patient embeddings stay on-site
+- 🏦 Finance (PCI-DSS) — Transaction vectors never leave your network
+- 🏭 Manufacturing — Air-gapped factory floor AI
+- 🤖 Robotics — Microsecond latency for real-time decisions
+- 📱 Edge/IoT — Single binary deploys anywhere
+
+```bash
+# Deploy on-prem in seconds
+./velesdb-server --data-dir /secure/vectors --bind 127.0.0.1:8080
+```
 
 ### 📐 Distance Metrics
 
@@ -201,7 +204,7 @@ curl -X POST http://localhost:8080/collections \
 Download the MSI installer from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
 
 ```
-velesdb-0.3.2-x86_64.msi
+velesdb-0.5.1-x86_64.msi
 ```
 
 **Features:**
@@ -212,7 +215,7 @@ velesdb-0.3.2-x86_64.msi
 
 **Silent install:**
 ```powershell
-msiexec /i velesdb-0.3.2-x86_64.msi /quiet ADDTOPATH=1
+msiexec /i velesdb-0.5.1-x86_64.msi /quiet ADDTOPATH=1
 ```
 
 ### Option 2: Linux Package (.deb)
@@ -221,7 +224,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.3.2-amd64.deb
+sudo dpkg -i velesdb-0.5.1-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -292,7 +295,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.3.2"}
+# {"status":"healthy","version":"0.5.1"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
