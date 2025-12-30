@@ -120,7 +120,7 @@ pub struct CreateCollectionRequest {
     /// Vector dimension.
     #[schema(example = 768)]
     pub dimension: usize,
-    /// Distance metric (cosine, euclidean, dot).
+    /// Distance metric (cosine, euclidean, dot, hamming, jaccard).
     #[serde(default = "default_metric")]
     #[schema(example = "cosine")]
     pub metric: String,
@@ -355,11 +355,16 @@ pub async fn create_collection(
         "cosine" => DistanceMetric::Cosine,
         "euclidean" | "l2" => DistanceMetric::Euclidean,
         "dot" | "dotproduct" | "ip" => DistanceMetric::DotProduct,
+        "hamming" => DistanceMetric::Hamming,
+        "jaccard" => DistanceMetric::Jaccard,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
-                    error: format!("Invalid metric: {}", req.metric),
+                    error: format!(
+                        "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
+                        req.metric
+                    ),
                 }),
             )
                 .into_response()

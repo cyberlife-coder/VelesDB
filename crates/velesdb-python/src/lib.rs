@@ -448,6 +448,100 @@ impl Collection {
             .flush()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to flush: {}", e)))
     }
+
+    /// Full-text search using BM25 ranking.
+    ///
+    /// Args:
+    ///     query: Text query string
+    ///     top_k: Number of results to return (default: 10)
+    ///
+    /// Returns:
+    ///     List of search results with 'id', 'score', and 'payload'
+    ///
+    /// Example:
+    ///     >>> results = collection.text_search("machine learning", top_k=5)
+    #[pyo3(signature = (query, top_k = 10))]
+    fn text_search(&self, query: &str, top_k: usize) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let results = self.inner.text_search(query, top_k);
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|r| {
+                    let mut result = HashMap::new();
+                    result.insert("id".to_string(), r.point.id.into_py(py));
+                    result.insert("score".to_string(), r.score.into_py(py));
+
+                    let payload_py = match &r.point.payload {
+                        Some(p) => json_to_python(py, p),
+                        None => py.None(),
+                    };
+                    result.insert("payload".to_string(), payload_py);
+
+                    result
+                })
+                .collect();
+
+            Ok(py_results)
+        })
+    }
+
+    /// Hybrid search combining vector similarity and text search.
+    ///
+    /// Uses Reciprocal Rank Fusion (RRF) to combine results from both
+    /// vector search and BM25 text search.
+    ///
+    /// Args:
+    ///     vector: Query vector (Python list or numpy array)
+    ///     query: Text query string
+    ///     top_k: Number of results to return (default: 10)
+    ///     vector_weight: Weight for vector results (0.0-1.0, default: 0.5)
+    ///
+    /// Returns:
+    ///     List of search results with 'id', 'score', and 'payload'
+    ///
+    /// Example:
+    ///     >>> results = collection.hybrid_search(
+    ///     ...     vector=[0.1, 0.2, 0.3],
+    ///     ...     query="machine learning",
+    ///     ...     top_k=10,
+    ///     ...     vector_weight=0.7
+    ///     ... )
+    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5))]
+    fn hybrid_search(
+        &self,
+        vector: PyObject,
+        query: &str,
+        top_k: usize,
+        vector_weight: f32,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let query_vector = extract_vector(py, &vector)?;
+            let results = self
+                .inner
+                .hybrid_search(&query_vector, query, top_k, Some(vector_weight))
+                .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))?;
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|r| {
+                    let mut result = HashMap::new();
+                    result.insert("id".to_string(), r.point.id.into_py(py));
+                    result.insert("score".to_string(), r.score.into_py(py));
+
+                    let payload_py = match &r.point.payload {
+                        Some(p) => json_to_python(py, p),
+                        None => py.None(),
+                    };
+                    result.insert("payload".to_string(), payload_py);
+
+                    result
+                })
+                .collect();
+
+            Ok(py_results)
+        })
+    }
 }
 
 /// Search result from a vector query.
