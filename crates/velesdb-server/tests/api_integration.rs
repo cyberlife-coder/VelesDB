@@ -816,3 +816,176 @@ async fn test_velesql_hybrid_near_and_match() {
     // Doc 1 should rank highest (matches both vector and text)
     assert_eq!(results[0]["id"], 1);
 }
+
+// =============================================================================
+// Storage Mode Tests (SQ8, Binary quantization)
+// =============================================================================
+
+#[tokio::test]
+async fn test_create_collection_with_sq8_storage() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "sq8_vectors",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "storage_mode": "sq8"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn test_create_collection_with_binary_storage() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "binary_vectors",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "storage_mode": "binary"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn test_create_collection_invalid_storage_mode() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "invalid_storage",
+                        "dimension": 128,
+                        "metric": "cosine",
+                        "storage_mode": "invalid_mode"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_sq8_collection_upsert_and_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create SQ8 collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "sq8_test",
+                        "dimension": 4,
+                        "metric": "cosine",
+                        "storage_mode": "sq8"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/sq8_test/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                            {"id": 3, "vector": [0.9, 0.1, 0.0, 0.0]}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Search
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/sq8_test/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 3
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["results"].is_array());
+    let results = json["results"].as_array().expect("Not an array");
+    assert_eq!(results.len(), 3);
+    // First result should be exact match
+    assert_eq!(results[0]["id"], 1);
+}

@@ -30,7 +30,7 @@ use std::sync::Arc;
 use utoipa::{OpenApi, ToSchema};
 
 use velesdb_core::velesql::{self, Condition, VectorExpr};
-use velesdb_core::{Database, DistanceMetric, Point};
+use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 
 // ============================================================================
 // OpenAPI Documentation
@@ -124,10 +124,18 @@ pub struct CreateCollectionRequest {
     #[serde(default = "default_metric")]
     #[schema(example = "cosine")]
     pub metric: String,
+    /// Storage mode (full, sq8, binary). Defaults to full.
+    #[serde(default = "default_storage_mode")]
+    #[schema(example = "full")]
+    pub storage_mode: String,
 }
 
 fn default_metric() -> String {
     "cosine".to_string()
+}
+
+fn default_storage_mode() -> String {
+    "full".to_string()
 }
 
 /// Response with collection information.
@@ -356,7 +364,28 @@ pub async fn create_collection(
         }
     };
 
-    match state.db.create_collection(&req.name, req.dimension, metric) {
+    let storage_mode = match req.storage_mode.to_lowercase().as_str() {
+        "full" | "f32" => StorageMode::Full,
+        "sq8" | "int8" => StorageMode::SQ8,
+        "binary" | "bit" => StorageMode::Binary,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid storage_mode: {}. Valid: full, sq8, binary",
+                        req.storage_mode
+                    ),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    match state
+        .db
+        .create_collection_with_options(&req.name, req.dimension, metric, storage_mode)
+    {
         Ok(()) => (
             StatusCode::CREATED,
             Json(serde_json::json!({

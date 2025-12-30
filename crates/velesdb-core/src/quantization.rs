@@ -11,10 +11,12 @@
 //! | Cache efficiency | Baseline | ~4x better |
 //! | Recall loss | 0% | ~0.5-1% |
 
+use serde::{Deserialize, Serialize};
 use std::io;
 
 /// Storage mode for vectors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum StorageMode {
     /// Full precision f32 storage (default).
     #[default]

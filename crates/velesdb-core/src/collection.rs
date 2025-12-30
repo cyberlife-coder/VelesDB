@@ -4,6 +4,7 @@ use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::{Bm25Index, HnswIndex, VectorIndex};
 use crate::point::{Point, SearchResult};
+use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 
 use parking_lot::RwLock;
@@ -25,6 +26,10 @@ pub struct CollectionConfig {
 
     /// Number of points in the collection.
     pub point_count: usize,
+
+    /// Storage mode for vectors (Full, SQ8, Binary).
+    #[serde(default)]
+    pub storage_mode: StorageMode,
 }
 
 /// A collection of vectors with associated metadata.
@@ -56,6 +61,27 @@ impl Collection {
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
     pub fn create(path: PathBuf, dimension: usize, metric: DistanceMetric) -> Result<Self> {
+        Self::create_with_options(path, dimension, metric, StorageMode::default())
+    }
+
+    /// Creates a new collection with custom storage options.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the collection directory
+    /// * `dimension` - Vector dimension
+    /// * `metric` - Distance metric
+    /// * `storage_mode` - Vector storage mode (Full, SQ8, Binary)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_with_options(
+        path: PathBuf,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+    ) -> Result<Self> {
         std::fs::create_dir_all(&path)?;
 
         let name = path
@@ -69,6 +95,7 @@ impl Collection {
             dimension,
             metric,
             point_count: 0,
+            storage_mode,
         };
 
         // Initialize persistent storages

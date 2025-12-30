@@ -117,6 +117,28 @@ impl Database {
         dimension: usize,
         metric: DistanceMetric,
     ) -> Result<()> {
+        self.create_collection_with_options(name, dimension, metric, StorageMode::default())
+    }
+
+    /// Creates a new collection with custom storage options.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    /// * `dimension` - Vector dimension
+    /// * `metric` - Distance metric
+    /// * `storage_mode` - Vector storage mode (Full, SQ8, Binary)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_collection_with_options(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+    ) -> Result<()> {
         let mut collections = self.collections.write();
 
         if collections.contains_key(name) {
@@ -124,7 +146,8 @@ impl Database {
         }
 
         let collection_path = self.data_dir.join(name);
-        let collection = Collection::create(collection_path, dimension, metric)?;
+        let collection =
+            Collection::create_with_options(collection_path, dimension, metric, storage_mode)?;
         collections.insert(name.to_string(), collection);
 
         Ok(())
