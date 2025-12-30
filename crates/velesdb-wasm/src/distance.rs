@@ -72,6 +72,47 @@ mod tests {
     fn test_higher_is_better() {
         assert!(DistanceMetric::Cosine.higher_is_better());
         assert!(DistanceMetric::DotProduct.higher_is_better());
+        assert!(DistanceMetric::Jaccard.higher_is_better());
         assert!(!DistanceMetric::Euclidean.higher_is_better());
+        assert!(!DistanceMetric::Hamming.higher_is_better());
+    }
+
+    #[test]
+    fn test_hamming_identical() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let result = DistanceMetric::Hamming.calculate(&a, &a);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_hamming_different() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![0.0, 1.0, 1.0, 0.0];
+        let result = DistanceMetric::Hamming.calculate(&a, &b);
+        assert!((result - 2.0).abs() < 1e-5); // 2 bits differ
+    }
+
+    #[test]
+    fn test_jaccard_identical() {
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let result = DistanceMetric::Jaccard.calculate(&a, &a);
+        assert!((result - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_jaccard_half_overlap() {
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 1.0, 0.0];
+        let result = DistanceMetric::Jaccard.calculate(&a, &b);
+        // intersection=1, union=3 -> 1/3
+        assert!((result - 1.0 / 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_jaccard_disjoint() {
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 1.0, 1.0];
+        let result = DistanceMetric::Jaccard.calculate(&a, &b);
+        assert!((result - 0.0).abs() < 1e-5);
     }
 }
