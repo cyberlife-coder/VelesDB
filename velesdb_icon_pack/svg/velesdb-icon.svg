@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VelesDB Icon</title>
+  <desc>Icon for VelesDB - The fastest source-available vector database. Inspired by Veles, the Slavic god of wisdom.</desc>
+  
+  <!-- Background - Dark Navy -->
+  <rect width="512" height="512" fill="#0A1628"/>
+  
+  <!-- Veles Symbol - V with subtle horns (Unified design) -->
+  <g fill="#00A3FF">
+    <!-- Main V shape with integrated horns -->
+    <path d="
+      M 256 400
+      L 130 170
+      L 115 155
+      L 85 160
+      L 75 140
+      L 110 130
+      L 140 150
+      L 256 360
+      L 372 150
+      L 402 130
+      L 437 140
+      L 427 160
+      L 397 155
+      L 382 170
+      Z
+    "/>
+  </g>
+</svg>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VelesDB Logo</title>
+  <desc>Logo for VelesDB - The fastest source-available vector database</desc>
+  
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0A1628"/>
+  
+  <!-- Veles Symbol - Unified V with subtle horns -->
+  <path 
+    d="M 256 420
+       L 120 160
+       L 100 140
+       L 80 145
+       L 70 130
+       L 95 120
+       L 130 140
+       L 256 380
+       L 382 140
+       L 417 120
+       L 442 130
+       L 432 145
+       L 412 140
+       L 392 160
+       Z"
+    fill="#00A3FF"
+  />
+</svg>

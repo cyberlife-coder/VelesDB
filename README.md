@@ -109,6 +109,31 @@ LIMIT 10
 
 Just as Veles bridges the earthly and mystical realms, VelesDB bridges raw data and meaningful AI-powered insights.
 
+### 🎨 The VelesDB Icon
+
+<p align="center">
+  <img src="docs/assets/velesdb-icon.png" alt="VelesDB Icon" width="150"/>
+</p>
+
+The VelesDB icon is a carefully crafted symbol that embodies our identity and values:
+
+| Element | Description |
+|---------|-------------|
+| **The "V" Shape** | Represents **VelesDB** — bold, distinctive, and instantly recognizable |
+| **Stylized Horns** | Evokes the mythical **Veles**, guardian of wisdom and sacred knowledge |
+| **Unified Design** | A modern, minimalist shape suited for tech applications across all platforms |
+
+#### 🎨 Color Palette
+
+| Element | Color | Hex Code |
+|---------|-------|----------|
+| **Symbol** | Electric Blue | `#00A3FF` |
+| **Background** | Dark Navy | `#0A1628` |
+
+The **electric blue** symbolizes speed, technology, and innovation — perfectly aligned with our microsecond-latency promise. The **dark navy** background provides contrast and conveys reliability and professionalism.
+
+> 📦 **Full icon pack available:** [velesdb_icon_pack/](velesdb_icon_pack/) — SVG, PNG, WebP, iOS, Android, Desktop, and Favicon formats.
+
 ---
 
 ## ✨ Features
@@ -1054,7 +1079,7 @@ Need enterprise features? **VelesDB Premium** extends Core with:
 | **Distributed Mode** | Horizontal scaling |
 | **Priority Support** | SLA-backed support |
 
-👉 [Learn more about VelesDB Premium](https://github.com/cyberlife-coder/velesdb-premium)
+👉 COMING SOON
 
 ---
 
