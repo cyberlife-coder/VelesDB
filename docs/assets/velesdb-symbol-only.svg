@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 400" width="512" height="400">
+  <title>VelesDB Symbol</title>
+  <desc>Symbol for VelesDB - V with horns inspired by Veles, the Slavic god of wisdom.</desc>
+  
+  <!-- Veles Symbol Only - No background -->
+  <path 
+    fill="#00A3FF"
+    d="
+      M 256 380
+      L 100 100
+      L 80 80
+      L 40 90
+      L 25 60
+      L 70 45
+      L 115 70
+      L 256 340
+      L 397 70
+      L 442 45
+      L 487 60
+      L 472 90
+      L 432 80
+      L 412 100
+      Z
+    "
+  />
+</svg>
