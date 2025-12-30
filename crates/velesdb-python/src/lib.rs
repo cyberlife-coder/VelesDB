@@ -542,6 +542,62 @@ impl Collection {
             Ok(py_results)
         })
     }
+
+    /// Batch search for multiple query vectors in parallel.
+    ///
+    /// This method is optimized for high throughput when searching
+    /// with multiple query vectors simultaneously.
+    ///
+    /// Args:
+    ///     vectors: List of query vectors
+    ///     top_k: Number of results per query (default: 10)
+    ///
+    /// Returns:
+    ///     List of result lists, one per query vector
+    ///
+    /// Example:
+    ///     >>> queries = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    ///     >>> batch_results = collection.batch_search(queries, top_k=5)
+    ///     >>> for i, results in enumerate(batch_results):
+    ///     ...     print(f"Query {i}: {len(results)} results")
+    #[pyo3(signature = (vectors, top_k = 10))]
+    fn batch_search(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        top_k: usize,
+    ) -> PyResult<Vec<Vec<HashMap<String, PyObject>>>> {
+        Python::with_gil(|py| {
+            let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+            let batch_results = self
+                .inner
+                .search_batch_parallel(&query_refs, top_k)
+                .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))?;
+
+            let py_batch_results: Vec<Vec<HashMap<String, PyObject>>> = batch_results
+                .into_iter()
+                .map(|results| {
+                    results
+                        .into_iter()
+                        .map(|r| {
+                            let mut result = HashMap::new();
+                            result.insert("id".to_string(), r.point.id.into_py(py));
+                            result.insert("score".to_string(), r.score.into_py(py));
+
+                            let payload_py = match &r.point.payload {
+                                Some(p) => json_to_python(py, p),
+                                None => py.None(),
+                            };
+                            result.insert("payload".to_string(), payload_py);
+
+                            result
+                        })
+                        .collect()
+                })
+                .collect();
+
+            Ok(py_batch_results)
+        })
+    }
 }
 
 /// Search result from a vector query.

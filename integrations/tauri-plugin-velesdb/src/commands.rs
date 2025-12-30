@@ -76,6 +76,26 @@ pub struct UpsertRequest {
     pub points: Vec<PointInput>,
 }
 
+/// Request to get points by IDs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPointsRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Point IDs to retrieve.
+    pub ids: Vec<u64>,
+}
+
+/// Request to delete points by IDs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePointsRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Point IDs to delete.
+    pub ids: Vec<u64>,
+}
+
 /// Request to search vectors.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +105,19 @@ pub struct SearchRequest {
     /// Query vector.
     pub vector: Vec<f32>,
     /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+}
+
+/// Request for batch search.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchSearchRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Query vectors.
+    pub vectors: Vec<Vec<f32>>,
+    /// Number of results per query.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
 }
@@ -147,6 +180,18 @@ pub struct SearchResult {
     pub id: u64,
     /// Similarity/distance score.
     pub score: f32,
+    /// Point payload.
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Point output for get operations.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointOutput {
+    /// Point ID.
+    pub id: u64,
+    /// Vector data.
+    pub vector: Vec<f32>,
     /// Point payload.
     pub payload: Option<serde_json::Value>,
 }
@@ -339,6 +384,53 @@ pub async fn upsert<R: Runtime>(
         .map_err(CommandError::from)
 }
 
+/// Gets points by their IDs.
+#[command]
+pub async fn get_points<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: GetPointsRequest,
+) -> std::result::Result<Vec<Option<PointOutput>>, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let points = coll.get(&request.ids);
+            Ok(points
+                .into_iter()
+                .map(|opt| {
+                    opt.map(|p| PointOutput {
+                        id: p.id,
+                        vector: p.vector,
+                        payload: p.payload,
+                    })
+                })
+                .collect())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Deletes points by their IDs.
+#[command]
+pub async fn delete_points<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: DeletePointsRequest,
+) -> std::result::Result<(), CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            coll.delete(&request.ids)?;
+            Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
 /// Searches for similar vectors.
 #[command]
 pub async fn search<R: Runtime>(
@@ -370,6 +462,47 @@ pub async fn search<R: Runtime>(
         results,
         timing_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+/// Batch search for multiple query vectors in parallel.
+#[command]
+pub async fn batch_search<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: BatchSearchRequest,
+) -> std::result::Result<Vec<SearchResponse>, CommandError> {
+    let start = std::time::Instant::now();
+
+    let batch_results = state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let query_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
+            let results = coll.search_batch_parallel(&query_refs, request.top_k)?;
+
+            Ok(results
+                .into_iter()
+                .map(|search_results| {
+                    search_results
+                        .into_iter()
+                        .map(|r| SearchResult {
+                            id: r.point.id,
+                            score: r.score,
+                            payload: r.point.payload,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>())
+        })
+        .map_err(CommandError::from)?;
+
+    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    Ok(batch_results
+        .into_iter()
+        .map(|results| SearchResponse { results, timing_ms })
+        .collect())
 }
 
 /// Searches by text using BM25.
