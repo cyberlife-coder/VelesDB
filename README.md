@@ -562,6 +562,27 @@ curl -X POST http://localhost:8080/query \
 
 > 📊 Full benchmarks: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
+### 📦 Vector Quantization (Memory Reduction)
+
+Reduce memory usage by **4-32x** with minimal recall loss:
+
+| Method | Compression | Recall Loss | Use Case |
+|--------|-------------|-------------|----------|
+| **SQ8** (8-bit) | **4x** | < 2% | General purpose, Edge |
+| **Binary** (1-bit) | **32x** | ~10-15% | Fingerprints, IoT |
+
+```rust
+use velesdb_core::quantization::{QuantizedVector, dot_product_quantized_simd};
+
+// Compress 768D vector: 3072 bytes → 776 bytes (4x reduction)
+let quantized = QuantizedVector::from_f32(&embedding);
+
+// SIMD-optimized search (only ~30% slower than f32)
+let similarity = dot_product_quantized_simd(&query, &quantized);
+```
+
+> 📖 Full guide: [docs/QUANTIZATION.md](docs/QUANTIZATION.md)
+
 ---
 
 ## 🆚 Comparison vs Competitors
