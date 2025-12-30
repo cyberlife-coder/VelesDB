@@ -648,15 +648,58 @@ impl HnswIndex {
         }
 
         // 2. Re-rank using SIMD-optimized exact distance computation
-        let inner = self.inner.read();
-        let mut reranked: Vec<(u64, f32)> = candidates
-            .into_iter()
-            .map(|(id, _)| {
-                // Get the vector for this ID and compute exact distance
-                let exact_dist = self.compute_exact_distance_inner(&inner, id, query);
-                (id, exact_dist)
-            })
+        // Perf P1: Prefetch vectors to hide memory latency
+        let mappings = self.mappings.read();
+        let vectors = self.vectors.read();
+
+        // Collect indices for prefetching
+        let indices: Vec<(u64, Option<usize>)> = candidates
+            .iter()
+            .map(|(id, _)| (*id, mappings.get_idx(*id)))
             .collect();
+
+        let prefetch_distance = 4;
+        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidates.len());
+
+        for (i, (id, idx_opt)) in indices.iter().enumerate() {
+            // Prefetch upcoming vectors (P1 optimization)
+            if i + prefetch_distance < indices.len() {
+                if let Some(future_idx) = indices[i + prefetch_distance].1 {
+                    if let Some(future_vec) = vectors.get(&future_idx) {
+                        #[cfg(target_arch = "x86_64")]
+                        unsafe {
+                            use std::arch::x86_64::_mm_prefetch;
+                            _mm_prefetch(
+                                future_vec.as_ptr().cast::<i8>(),
+                                std::arch::x86_64::_MM_HINT_T0,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Compute exact distance for current vector
+            let exact_dist = if let Some(idx) = idx_opt {
+                if let Some(v) = vectors.get(idx) {
+                    match self.metric {
+                        DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
+                        DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
+                        DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
+                        DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
+                        DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
+                    }
+                } else {
+                    f32::MAX
+                }
+            } else {
+                f32::MAX
+            };
+
+            reranked.push((*id, exact_dist));
+        }
+
+        drop(vectors);
+        drop(mappings);
 
         // 3. Sort by distance (metric-dependent ordering)
         match self.metric {
@@ -673,29 +716,6 @@ impl HnswIndex {
         // 4. Return top k
         reranked.truncate(k);
         reranked
-    }
-
-    /// Computes exact distance using SIMD-optimized functions.
-    fn compute_exact_distance_inner(&self, _inner: &HnswInner, id: u64, query: &[f32]) -> f32 {
-        let mappings = self.mappings.read();
-        let Some(idx) = mappings.get_idx(id) else {
-            return f32::MAX;
-        };
-
-        // Get vector from our storage
-        let vectors = self.vectors.read();
-        let Some(v) = vectors.get(&idx) else {
-            return f32::MAX;
-        };
-
-        // Use our SIMD-optimized distance functions based on metric
-        match self.metric {
-            DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
-            DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
-            DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
-            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
-            DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
-        }
     }
 
     /// Inserts multiple vectors in parallel using rayon.

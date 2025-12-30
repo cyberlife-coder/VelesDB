@@ -704,33 +704,37 @@ pub async fn batch_search(
         }
     };
 
-    let mut all_results = Vec::with_capacity(req.searches.len());
+    // Perf P0: Use parallel batch search instead of sequential loop
+    // Collect query vectors as slices for parallel processing
+    let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
 
-    for search_req in req.searches {
-        match collection.search(&search_req.vector, search_req.top_k) {
-            Ok(results) => {
-                all_results.push(SearchResponse {
-                    results: results
-                        .into_iter()
-                        .map(|r| SearchResultResponse {
-                            id: r.point.id,
-                            score: r.score,
-                            payload: r.point.payload,
-                        })
-                        .collect(),
-                });
-            }
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-                    .into_response()
-            }
+    // Assume all searches have the same top_k (use first or default)
+    let top_k = req.searches.first().map_or(10, |s| s.top_k);
+
+    let all_results = match collection.search_batch_parallel(&queries, top_k) {
+        Ok(batch_results) => batch_results
+            .into_iter()
+            .map(|results| SearchResponse {
+                results: results
+                    .into_iter()
+                    .map(|r| SearchResultResponse {
+                        id: r.point.id,
+                        score: r.score,
+                        payload: r.point.payload,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
         }
-    }
+    };
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
 

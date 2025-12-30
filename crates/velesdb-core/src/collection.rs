@@ -441,6 +441,77 @@ impl Collection {
         Ok(self.index.search(query, k))
     }
 
+    /// Performs batch vector similarity search in parallel using rayon.
+    ///
+    /// Perf: This is significantly faster than calling `search` in a loop
+    /// because it parallelizes across CPU cores and amortizes lock overhead.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - Slice of query vectors
+    /// * `k` - Maximum number of results per query
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results for each query, with full point data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any query vector dimension doesn't match the collection.
+    pub fn search_batch_parallel(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        use crate::index::SearchQuality;
+
+        let config = self.config.read();
+        let dimension = config.dimension;
+        drop(config);
+
+        // Validate all query dimensions first
+        for query in queries {
+            if query.len() != dimension {
+                return Err(Error::DimensionMismatch {
+                    expected: dimension,
+                    actual: query.len(),
+                });
+            }
+        }
+
+        // Perf: Use parallel HNSW search (P0 optimization)
+        let index_results = self
+            .index
+            .search_batch_parallel(queries, k, SearchQuality::Balanced);
+
+        // Map results to SearchResult with full point data
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let results: Vec<Vec<SearchResult>> = index_results
+            .into_iter()
+            .map(|query_results| {
+                query_results
+                    .into_iter()
+                    .filter_map(|(id, score)| {
+                        let vector = vector_storage.retrieve(id).ok().flatten()?;
+                        let payload = payload_storage.retrieve(id).ok().flatten();
+                        Some(SearchResult {
+                            point: Point {
+                                id,
+                                vector,
+                                payload,
+                            },
+                            score,
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+
+        Ok(results)
+    }
+
     /// Returns the number of points in the collection.
     /// Perf: Uses cached `point_count` from config instead of acquiring storage lock
     #[must_use]
