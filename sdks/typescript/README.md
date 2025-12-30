@@ -90,7 +90,25 @@ Create a new collection.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `dimension` | `number` | Required | Vector dimension |
-| `metric` | `'cosine' \| 'euclidean' \| 'dot'` | `'cosine'` | Distance metric |
+| `metric` | `'cosine' \| 'euclidean' \| 'dot' \| 'hamming' \| 'jaccard'` | `'cosine'` | Distance metric |
+| `storageMode` | `'full' \| 'sq8' \| 'binary'` | `'full'` | Memory optimization mode |
+
+#### Storage Modes
+
+| Mode | Memory (768D) | Compression | Use Case |
+|------|---------------|-------------|----------|
+| `full` | 3 KB/vector | 1x | Default, max precision |
+| `sq8` | 776 B/vector | **4x** | Scale, RAM-constrained |
+| `binary` | 96 B/vector | **32x** | Edge, IoT |
+
+```typescript
+// Memory-optimized collection
+await db.createCollection('embeddings', {
+  dimension: 768,
+  metric: 'cosine',
+  storageMode: 'sq8'  // 4x memory reduction
+});
+```
 
 ### `db.insert(collection, document)`
 

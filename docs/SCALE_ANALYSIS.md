@@ -157,9 +157,9 @@ if let Some(id) = mappings.get_id(n.d_id) {
 |--------------|--------|--------|--------|
 | **SQ8 Quantization** | Low | High | ✅ **Implemented** - `HnswParams::with_sq8()` |
 | **Binary Quantization** | Low | High | ✅ **Implemented** - `HnswParams::with_binary()` |
-| **Contiguous vector storage** | Medium | High | 🔜 Planned |
-| **Prefetch optimization** | Low | Medium | 🔜 Planned |
-| **Lock-free reads** | Medium | Medium | 🔜 Planned |
+| **Contiguous vector storage** | Medium | High | ✅ **Implemented** - `VectorStore` module |
+| **Prefetch optimization** | Low | Medium | ✅ **Implemented** - CPU prefetch in VectorStore |
+| **Lock-free reads** | Medium | Medium | ✅ **Ready** - `arc-swap` dependency added |
 
 ### Usage: SQ8 Quantization (4x Memory Reduction)
 

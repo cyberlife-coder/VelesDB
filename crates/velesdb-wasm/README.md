@@ -9,7 +9,8 @@ WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vec
 
 - **In-browser vector search** - No server required
 - **SIMD optimized** - Uses WASM SIMD128 for fast distance calculations
-- **Multiple metrics** - Cosine, Euclidean, Dot Product
+- **Multiple metrics** - Cosine, Euclidean, Dot Product, Hamming, Jaccard
+- **Memory optimization** - SQ8 (4x) and Binary (32x) quantization
 - **Lightweight** - Minimal bundle size
 
 ## Installation
@@ -72,7 +73,10 @@ store.reserve(50000);
 ```typescript
 class VectorStore {
   // Create a new store
-  constructor(dimension: number, metric: 'cosine' | 'euclidean' | 'dot');
+  constructor(dimension: number, metric: 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard');
+  
+  // Create with storage mode (sq8/binary for memory optimization)
+  static new_with_mode(dimension: number, metric: string, mode: 'full' | 'sq8' | 'binary'): VectorStore;
   
   // Create with pre-allocated capacity (performance optimization)
   static with_capacity(dimension: number, metric: string, capacity: number): VectorStore;
@@ -81,6 +85,7 @@ class VectorStore {
   readonly len: number;
   readonly is_empty: boolean;
   readonly dimension: number;
+  readonly storage_mode: string;  // "full", "sq8", or "binary"
 
   // Methods
   insert(id: bigint, vector: Float32Array): void;
@@ -89,7 +94,7 @@ class VectorStore {
   remove(id: bigint): boolean;
   clear(): void;
   reserve(additional: number): void;  // Pre-allocate memory
-  memory_usage(): number;
+  memory_usage(): number;  // Accurate for each storage mode
 }
 ```
 
@@ -100,6 +105,31 @@ class VectorStore {
 | `cosine` | Cosine similarity | Text embeddings (BERT, GPT) |
 | `euclidean` | L2 distance | Image features, spatial data |
 | `dot` | Dot product | Pre-normalized vectors |
+| `hamming` | Hamming distance | Binary vectors, fingerprints |
+| `jaccard` | Jaccard similarity | Set similarity, sparse vectors |
+
+## Storage Modes (Memory Optimization)
+
+Reduce memory usage with quantization:
+
+```javascript
+// Full precision (default) - best recall
+const full = new VectorStore(768, 'cosine');
+
+// SQ8: 4x memory reduction (~1% recall loss)
+const sq8 = VectorStore.new_with_mode(768, 'cosine', 'sq8');
+
+// Binary: 32x memory reduction (~5-10% recall loss)
+const binary = VectorStore.new_with_mode(768, 'hamming', 'binary');
+
+console.log(sq8.storage_mode);  // "sq8"
+```
+
+| Mode | Memory (768D) | Compression | Use Case |
+|------|---------------|-------------|----------|
+| `full` | 3080 bytes | 1x | Default, max precision |
+| `sq8` | 784 bytes | **4x** | Scale, RAM-constrained |
+| `binary` | 104 bytes | **32x** | Edge, IoT, mobile PWA |
 
 ## IndexedDB Persistence
 
