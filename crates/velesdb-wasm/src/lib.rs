@@ -66,9 +66,11 @@ impl VectorStore {
             "cosine" => DistanceMetric::Cosine,
             "euclidean" | "l2" => DistanceMetric::Euclidean,
             "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
+            "hamming" => DistanceMetric::Hamming,
+            "jaccard" => DistanceMetric::Jaccard,
             _ => {
                 return Err(JsValue::from_str(
-                    "Unknown metric. Use: cosine, euclidean, dot",
+                    "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
                 ))
             }
         };
@@ -352,11 +354,13 @@ impl VectorStore {
         let dim_u32 = self.dimension as u32;
         bytes.extend_from_slice(&dim_u32.to_le_bytes());
 
-        // Metric (1 byte: 0=cosine, 1=euclidean, 2=dot)
+        // Metric (1 byte: 0=cosine, 1=euclidean, 2=dot, 3=hamming, 4=jaccard)
         let metric_byte = match self.metric {
             DistanceMetric::Cosine => 0u8,
             DistanceMetric::Euclidean => 1u8,
             DistanceMetric::DotProduct => 2u8,
+            DistanceMetric::Hamming => 3u8,
+            DistanceMetric::Jaccard => 4u8,
         };
         bytes.push(metric_byte);
 
@@ -485,6 +489,8 @@ impl VectorStore {
             0 => DistanceMetric::Cosine,
             1 => DistanceMetric::Euclidean,
             2 => DistanceMetric::DotProduct,
+            3 => DistanceMetric::Hamming,
+            4 => DistanceMetric::Jaccard,
             _ => return Err(JsValue::from_str("Invalid metric byte")),
         };
 
