@@ -25,10 +25,10 @@
 
 <!-- Performance Badges -->
 <p align="center">
-  <img src="https://img.shields.io/badge/⚡_Latency-39ns_(768D)-brightgreen?style=for-the-badge" alt="Latency"/>
-  <img src="https://img.shields.io/badge/🎯_Recall-99%25-blue?style=for-the-badge" alt="Recall"/>
+  <img src="https://img.shields.io/badge/⚡_Distance_SIMD-41ns_(768D)-brightgreen?style=for-the-badge" alt="Latency"/>
+  <img src="https://img.shields.io/badge/🎯_Recall-99.4%25-blue?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
-  <img src="https://img.shields.io/badge/✅_Tests-417_passed-success?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/✅_Tests-542_passed-success?style=for-the-badge" alt="Tests"/>
 </p>
 
 <p align="center">
@@ -47,8 +47,8 @@
 <table align="center">
 <tr>
 <td align="center" width="25%">
-<h3>🏎️ 39ns Latency</h3>
-<p>SIMD-optimized vector ops.<br/><strong>100x faster</strong> than competitors.</p>
+<h3>🏎️ 41ns Distance</h3>
+<p>AVX-512 optimized ops.<br/>🚀 <strong>Extreme performance</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📝 SQL You Know</h3>
@@ -60,7 +60,7 @@
 </td>
 <td align="center" width="25%">
 <h3>🎯 99% Recall</h3>
-<p>Production-grade accuracy.<br/><strong>20x faster than pgvector.</strong></p>
+<p>Production-grade accuracy.<br/><strong>HNSW-optimized</strong></p>
 </td>
 </tr>
 </table>
@@ -80,26 +80,27 @@ LIMIT 10
 
 ### 🏆 VelesDB vs The Competition
 
-| Metric | 🐺 **VelesDB** | Qdrant | Pinecone | pgvector |
-|--------|---------------|--------|----------|----------|
-| **Insert Speed** | **5.3x faster** ⚡ | ~1x | Cloud | Baseline |
-| **Embedded Latency** | **2.5ms** | N/A | N/A | ~50ms |
-| **Setup Time** | **< 1 min** | 5-10 min | Cloud only | PostgreSQL req. |
+| Metric | 🐺 **VelesDB** | Qdrant | pgvectorscale | pgvector |
+|--------|---------------|--------|---------------|----------|
+| **Architecture** | **Single Binary** | Container | Postgres Ext | Postgres Ext |
+| **Search Latency** | **128µs (10K)** | ~30ms (50M) | ~31ms (50M) | ~50ms (50M) |
+| **Setup Time** | **< 1 min** | 5-10 min | 15+ min | 15+ min |
 | **Binary Size** | **15 MB** | 100+ MB | N/A | Extension |
-| **Query Language** | **SQL (VelesQL)** | JSON DSL | JSON/SDK | SQL |
-| **On-Prem/Air-Gap** | ✅ | ✅ | ❌ | ✅ |
+| **Query Language** | **SQL (VelesQL)** | JSON DSL | SQL | SQL |
+| **On-Prem** | ✅ | ✅ | ✅ | ✅ |
 | **WASM/Browser** | ✅ | ❌ | ❌ | ❌ |
-| **Recall@10** | **98.8%** | ~95% | ~95% | 100% |
+| **Recall@10** | **99.4%** | ~99% | ~99% | 100% |
 
-### 📊 Benchmark: VelesDB vs pgvector (v0.5.1)
+### 📊 Benchmark: VelesDB Local Performance
 
-**50,000 vectors, 768D, Docker** — [Full benchmark](docs/BENCHMARKS.md)
+**10,000 vectors, 768D, Local Windows (Criterion)** — [Full details](docs/BENCHMARKS.md)
 
-| Metric | pgvector | VelesDB | Winner |
-|--------|----------|---------|--------|
-| **Insert + Index** | 154s | **29s** | **VelesDB 5.3x** ✅ |
-| **Embedded Search** | 50ms | **2.5ms** | **VelesDB 20x** ✅ |
-| **Recall@10** | 100% | 98.8% | pgvector |
+| Operation | VelesDB (Core) | Details |
+|-----------|----------------|---------|
+| **SIMD Cosine** | **41ns** | AVX-512 optimized |
+| **HNSW Search** | **128µs** | p50 latency (10K) |
+| **VelesQL Parse** | **570ns** | Zero-allocation |
+| **Recall@10** | **99.4%** | ef=256 |
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
@@ -527,28 +528,28 @@ curl -X POST http://localhost:8080/query \
 
 | Operation | Latency | Throughput | vs. Naive |
 |-----------|---------|------------|-----------|
-| **Dot Product** | **39 ns** | **26M ops/sec** | 🚀 **4.2x faster** |
+| **Dot Product** | **41 ns** | **24M ops/sec** | 🚀 **4.2x faster** |
 | **Euclidean** | **49 ns** | **20M ops/sec** | 🚀 **3.8x faster** |
 | **Cosine** | **81 ns** | **12M ops/sec** | 🚀 **3.5x faster** |
-| **Hamming (Binary)** | **6 ns** | **164M ops/sec** | 🚀 **10x faster** |
+| **Hamming (Binary)**| **6 ns** | **164M ops/sec** | 🚀 **10x faster** |
 
-### 📊 System Performance
+### 📊 System Performance (10K Vectors, Local)
 
 | Benchmark | Result | Details |
 |-----------|--------|---------|
-| **Bulk Import** | **15.4K vec/sec** | 768D vectors with payloads |
-| **Random Access** | **2.3 Gelem/sec** | Contiguous memory + prefetch |
-| **Filtering (ColumnStore)** | **122x faster** | vs. JSON-based filtering |
-| **VelesQL Parsing** | **1.9M queries/sec** | Zero-allocation parser |
-| **Recall@10** | **98.2%** | Balanced mode (ef=128) |
+| **HNSW Search** | **128 µs** | p50 latency |
+| **VelesQL Parsing**| **570 ns** | Simple SELECT |
+| **VelesQL Cache Hit**| **49 ns** | HashMap pre-allocation |
+| **Recall@10** | **99.4%** | Accurate mode (ef=256) |
+| **BM25 Search** | **7.9 µs** | 1K documents |
 
 ### 🎯 Search Quality (Recall)
 
 | Mode | ef | Recall@10 | Use Case |
 |------|-----|-----------|----------|
 | Fast | 64 | 89.2% | Real-time, high throughput |
-| **Balanced** | 128 | **98.2%** | **Production recommended** |
-| Accurate | 256 | 99.4% | High precision requirements |
+| Balanced | 128 | 98.2% | Production recommended |
+| **Accurate** | 256 | **99.4%** | **High precision** |
 | HighRecall | 512 | 99.6% | Maximum accuracy |
 
 ### 🛠️ Optimizations Under the Hood
@@ -578,10 +579,10 @@ curl -X POST http://localhost:8080/query \
 
 ### 🎯 Why Choose VelesDB?
 
-#### ⚡ Microsecond Latency
-- **~39-81ns** per vector operation (768D) vs milliseconds for competitors
-- **122x faster filtering** with ColumnStore (RoaringBitmap) vs JSON-based filtering
-- **SIMD-optimized** distance calculations (AVX2/SSE4.2)
+#### ⚡ Extreme Latency
+- **~41-81ns** per vector distance (768D)
+- **128µs** HNSW search p50 on 10K vectors
+- **SIMD-optimized** (AVX-512, AVX2, NEON)
 
 #### 📝 SQL-Native Queries (VelesQL)
 ```sql
@@ -591,8 +592,8 @@ SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
 
 #### 📦 Zero-Config Simplicity
 - **Single binary** (~15MB) — no Docker, no dependencies
-- **13k lines of code** vs 50k+ (LanceDB) — less complexity, fewer bugs
-- Runs on **Edge, Desktop, Server, WASM** (browser-ready)
+- **WASM support** for browser-side search
+- **Tauri plugin** for AI-powered desktop apps
 
 #### 🔧 Unique Features
 | Feature | VelesDB | LanceDB | Others |
@@ -675,9 +676,9 @@ curl -X POST http://localhost:8080/query \
 
 | Query Type | Time | Throughput |
 |------------|------|------------|
-| Simple SELECT | ~755 ns | **1.3M queries/sec** |
-| Vector search | ~1.2 µs | **800K queries/sec** |
-| Complex (multi-filter) | ~4.8 µs | **200K queries/sec** |
+| Simple SELECT | **570 ns** | **1.7M queries/sec** |
+| Vector search | **873 ns** | **1.1M queries/sec** |
+| Complex (multi-filter) | **3.5 µs** | **280K queries/sec** |
 
 ---
 

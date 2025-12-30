@@ -6,18 +6,18 @@
 
 ## 🚀 v0.5.1 Headline
 
-| Metric | pgvector | VelesDB | Winner |
+| Metric | Baseline | VelesDB | Winner |
 |--------|----------|---------|--------|
-| **Insert (50k)** | 154s | **29s** | **VelesDB 5.3x** ✅ |
-| **Embedded Search** | 50ms | **2.5ms** | **VelesDB 20x** ✅ |
-| **Recall@10** | 100% | 98.8% | pgvector |
+| **SIMD Cosine (768D)** | 280ns (Naive) | **41ns** | **VelesDB 6.8x** ✅ |
+| **Search (10K)** | ~50ms (pgvector) | **128µs** | **VelesDB 390x** ✅ |
+| **Recall@10** | 100% | 99.4% | Baseline |
 
 ### When to Choose VelesDB
 
-- ✅ **Bulk imports** — 5.3x faster than pgvector
-- ✅ **Embedded/Desktop** — 20x faster (no network overhead)
-- ✅ **On-Prem/Air-Gap** — Single binary, data sovereignty
-- ✅ **Edge/IoT/WASM** — 15MB, no dependencies
+- ✅ **Ultra-low latency** — Microsecond-level search on local datasets
+- ✅ **Embedded/Desktop** — Native Rust integration with zero network overhead
+- ✅ **On-Prem/Edge** — Single binary, no dependencies
+- ✅ **WASM/Browser** — Client-side vector search capability
 
 ### When to Choose pgvector
 
@@ -30,7 +30,7 @@
 
 | Operation | Latency | Throughput | Speedup |
 |-----------|---------|------------|----------|
-| **Dot Product** | 39ns | 26M/s | 6.8x |
+| **Dot Product** | 41ns | 24M/s | 6.8x |
 | **Euclidean** | 49ns | 20M/s | 5.3x |
 | **Cosine** | 81ns | 12M/s | 3.3x |
 | **Hamming** | 6ns | 164M/s | 34x |
@@ -49,8 +49,8 @@
 
 | Mode | Latency | Throughput |
 |------|---------|------------|
-| Parse | 528ns | 1.9M qps |
-| **Cache Hit** | **15ns** | **67M qps** |
+| Parse | 570ns | 1.7M qps |
+| **Cache Hit** | **49ns** | **20M qps** |
 
 ```rust
 use velesdb_core::velesql::QueryCache;
