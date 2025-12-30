@@ -26,253 +26,10 @@ use hnsw_rs::api::AnnT;
 use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
-<<<<<<<< HEAD:crates/velesdb-core/src/index/hnsw/index.rs
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
-========
-use rustc_hash::FxHashMap;
-use serde::{Deserialize, Serialize};
-use std::mem::ManuallyDrop;
-
-/// HNSW index parameters for tuning performance and recall.
-///
-/// Use [`HnswParams::auto`] for automatic tuning based on vector dimension,
-/// or create custom parameters for specific workloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HnswParams {
-    /// Number of bi-directional links per node (M parameter).
-    /// Higher = better recall, more memory, slower insert.
-    pub max_connections: usize,
-    /// Size of dynamic candidate list during construction.
-    /// Higher = better recall, slower indexing.
-    pub ef_construction: usize,
-    /// Initial capacity (grows automatically if exceeded).
-    pub max_elements: usize,
-}
-
-impl Default for HnswParams {
-    fn default() -> Self {
-        Self::auto(768) // Default for common embedding dimension
-    }
-}
-
-impl HnswParams {
-    /// Creates optimized parameters based on vector dimension.
-    ///
-    /// # Recommendations
-    ///
-    /// | Dimension   | M     | `ef_construction` | Recall Target |
-    /// |-------------|-------|-----------------|---------------|
-    /// | d ≤ 256     | 16    | 250             | ≥97%          |
-    /// | 256 < d ≤768| 20    | 300             | ≥97%          |
-    /// | d > 768     | 24    | 400             | ≥97%          |
-    ///
-    /// Perf: Tuned for better recall than pgvector defaults (Round 7)
-    #[must_use]
-    pub fn auto(dimension: usize) -> Self {
-        // Perf: Higher ef_construction for better graph quality (Round 7)
-        // Slightly higher M for 768D vectors (common embedding size)
-        match dimension {
-            0..=256 => Self {
-                max_connections: 16,
-                ef_construction: 250,
-                max_elements: 100_000,
-            },
-            257..=768 => Self {
-                max_connections: 20,
-                ef_construction: 300,
-                max_elements: 100_000,
-            },
-            _ => Self {
-                max_connections: 24,
-                ef_construction: 400,
-                max_elements: 100_000,
-            },
-        }
-    }
-
-    /// Creates fast parameters optimized for insertion speed.
-    ///
-    /// Uses pgvector-compatible settings (m=16, ef=200) regardless of dimension.
-    /// Good for bulk loading where insertion speed matters more than recall.
-    #[must_use]
-    pub fn fast() -> Self {
-        Self {
-            max_connections: 16,
-            ef_construction: 200,
-            max_elements: 100_000,
-        }
-    }
-
-    /// Creates parameters optimized for high recall (≥97%).
-    ///
-    /// Uses higher M and `ef_construction` at the cost of more memory and slower indexing.
-    #[must_use]
-    pub fn high_recall(dimension: usize) -> Self {
-        let base = Self::auto(dimension);
-        Self {
-            max_connections: base.max_connections + 8,
-            ef_construction: base.ef_construction + 200,
-            ..base
-        }
-    }
-
-    /// Creates parameters optimized for maximum recall (≥99%).
-    ///
-    /// Uses aggressive M and `ef_construction` values. Best for quality-critical applications.
-    /// Trade-off: 2-3x more memory, 3-5x slower indexing.
-    #[must_use]
-    pub fn max_recall(dimension: usize) -> Self {
-        match dimension {
-            0..=256 => Self {
-                max_connections: 32,
-                ef_construction: 500,
-                max_elements: 100_000,
-            },
-            257..=768 => Self {
-                max_connections: 48,
-                ef_construction: 800,
-                max_elements: 100_000,
-            },
-            _ => Self {
-                max_connections: 64,
-                ef_construction: 1000,
-                max_elements: 100_000,
-            },
-        }
-    }
-
-    /// Creates parameters optimized for fast indexing.
-    ///
-    /// Uses lower M and `ef_construction` for faster inserts, with slightly lower recall.
-    #[must_use]
-    pub fn fast_indexing(dimension: usize) -> Self {
-        let base = Self::auto(dimension);
-        Self {
-            max_connections: (base.max_connections / 2).max(8),
-            ef_construction: base.ef_construction / 2,
-            ..base
-        }
-    }
-
-    /// Creates custom parameters.
-    #[must_use]
-    pub const fn custom(
-        max_connections: usize,
-        ef_construction: usize,
-        max_elements: usize,
-    ) -> Self {
-        Self {
-            max_connections,
-            ef_construction,
-            max_elements,
-        }
-    }
-}
-
-/// Search quality profile controlling the recall/latency tradeoff.
-///
-/// Higher quality = better recall but slower search.
-/// With typical index sizes (<1M vectors), all profiles stay well under 10ms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum SearchQuality {
-    /// Fast search with `ef_search=100`. ~90% recall, lowest latency.
-    Fast,
-    /// Balanced search with `ef_search=200`. ~96% recall, good tradeoff.
-    /// Perf: Increased from 128 to 200 for better recall (Round 7)
-    #[default]
-    Balanced,
-    /// Accurate search with `ef_search=400`. ~98% recall, best quality.
-    Accurate,
-    /// High recall search with `ef_search=600`. ~99%+ recall, highest quality.
-    HighRecall,
-    /// Custom `ef_search` value for fine-tuning.
-    Custom(usize),
-}
-
-impl SearchQuality {
-    /// Returns the `ef_search` value for this quality profile.
-    /// Perf: Values tuned for optimal recall/latency tradeoff (Round 7)
-    #[must_use]
-    pub fn ef_search(&self, k: usize) -> usize {
-        match self {
-            Self::Fast => 100.max(k * 3),
-            Self::Balanced => 200.max(k * 6),
-            Self::Accurate => 400.max(k * 12),
-            Self::HighRecall => 600.max(k * 20),
-            Self::Custom(ef) => (*ef).max(k),
-        }
-    }
-}
-
-/// ID mappings for HNSW index.
-///
-/// Groups all mapping-related data under a single lock to reduce
-/// lock contention during parallel insertions (WIS-9).
-#[derive(Debug, Clone, Default)]
-struct HnswMappings {
-    /// Mapping from external IDs to internal indices.
-    /// Perf: `FxHashMap` is faster than std `HashMap` for integer keys
-    id_to_idx: FxHashMap<u64, usize>,
-    /// Mapping from internal indices to external IDs.
-    idx_to_id: FxHashMap<usize, u64>,
-    /// Next available internal index.
-    next_idx: usize,
-}
-
-impl HnswMappings {
-    /// Creates new empty mappings.
-    fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registers an ID and returns its internal index.
-    /// Returns `None` if the ID already exists.
-    fn register(&mut self, id: u64) -> Option<usize> {
-        if self.id_to_idx.contains_key(&id) {
-            return None;
-        }
-        let idx = self.next_idx;
-        self.next_idx += 1;
-        self.id_to_idx.insert(id, idx);
-        self.idx_to_id.insert(idx, id);
-        Some(idx)
-    }
-
-    /// Removes an ID and returns its internal index if it existed.
-    fn remove(&mut self, id: u64) -> Option<usize> {
-        if let Some(idx) = self.id_to_idx.remove(&id) {
-            self.idx_to_id.remove(&idx);
-            Some(idx)
-        } else {
-            None
-        }
-    }
-
-    /// Gets the internal index for an external ID.
-    fn get_idx(&self, id: u64) -> Option<usize> {
-        self.id_to_idx.get(&id).copied()
-    }
-
-    /// Gets the external ID for an internal index.
-    fn get_id(&self, idx: usize) -> Option<u64> {
-        self.idx_to_id.get(&idx).copied()
-    }
-
-    /// Returns the number of registered IDs.
-    fn len(&self) -> usize {
-        self.id_to_idx.len()
-    }
-
-    /// Returns true if no IDs are registered.
-    #[allow(dead_code)]
-    fn is_empty(&self) -> bool {
-        self.id_to_idx.is_empty()
-    }
-}
-
->>>>>>>> feature/expert-refactoring-tdd:crates/velesdb-core/src/index/hnsw.rs
 /// HNSW index for efficient approximate nearest neighbor search.
 ///
 /// # Example
@@ -524,30 +281,17 @@ impl HnswIndex {
         // 2. Load Mappings
         let file = std::fs::File::open(mappings_path)?;
         let reader = std::io::BufReader::new(file);
-        let (id_to_idx, idx_to_id, next_idx): (
-            FxHashMap<u64, usize>,
-            FxHashMap<usize, u64>,
-            usize,
-        ) = bincode::deserialize_from(reader)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
+            bincode::deserialize_from(reader)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         Ok(Self {
             dimension,
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
-<<<<<<<< HEAD:crates/velesdb-core/src/index/hnsw/index.rs
             mappings: RwLock::new(HnswMappings::from_parts(id_to_idx, idx_to_id, next_idx)),
-            vectors: RwLock::new(HashMap::new()), // Note: vectors not restored from disk
-            io_holder: Some(io_holder),           // Store to prevent memory leak
-========
-            mappings: RwLock::new(HnswMappings {
-                id_to_idx,
-                idx_to_id,
-                next_idx,
-            }),
             vectors: RwLock::new(FxHashMap::default()), // Note: vectors not restored from disk
             io_holder: Some(io_holder),                 // Store to prevent memory leak
->>>>>>>> feature/expert-refactoring-tdd:crates/velesdb-core/src/index/hnsw.rs
         })
     }
 
@@ -1358,46 +1102,9 @@ mod tests {
     }
 
     // =========================================================================
-    // HnswParams Auto-tuning Tests (WIS-12)
+    // HnswIndex with Params Tests
+    // Note: HnswParams unit tests are in params.rs
     // =========================================================================
-
-    #[test]
-    fn test_hnsw_params_auto_small_dimension() {
-        let params = HnswParams::auto(128);
-        assert_eq!(params.max_connections, 16);
-        assert_eq!(params.ef_construction, 250); // Round 7 tuned
-    }
-
-    #[test]
-    fn test_hnsw_params_auto_medium_dimension() {
-        let params = HnswParams::auto(768);
-        // Round 7: Increased M=20 and ef_construction=300 for better recall
-        assert_eq!(params.max_connections, 20);
-        assert_eq!(params.ef_construction, 300);
-    }
-
-    #[test]
-    fn test_hnsw_params_auto_large_dimension() {
-        let params = HnswParams::auto(1536);
-        assert_eq!(params.max_connections, 24);
-        assert_eq!(params.ef_construction, 400); // Round 7 tuned
-    }
-
-    #[test]
-    fn test_hnsw_params_high_recall() {
-        let params = HnswParams::high_recall(768);
-        let base = HnswParams::auto(768);
-        assert_eq!(params.max_connections, base.max_connections + 8);
-        assert_eq!(params.ef_construction, base.ef_construction + 200);
-    }
-
-    #[test]
-    fn test_hnsw_params_fast_indexing() {
-        let params = HnswParams::fast_indexing(768);
-        let base = HnswParams::auto(768);
-        assert_eq!(params.max_connections, base.max_connections / 2);
-        assert_eq!(params.ef_construction, base.ef_construction / 2);
-    }
 
     #[test]
     fn test_hnsw_with_params() {
@@ -1406,16 +1113,6 @@ mod tests {
 
         assert_eq!(index.dimension(), 1536);
         assert!(index.is_empty());
-    }
-
-    #[test]
-    fn test_hnsw_params_boundary_768() {
-        // Test boundary at 768 (Round 7: 257-768 range uses M=20)
-        let params_768 = HnswParams::auto(768);
-        let params_769 = HnswParams::auto(769);
-
-        assert_eq!(params_768.max_connections, 20); // Round 7: M=20 for 768D
-        assert_eq!(params_769.max_connections, 24);
     }
 
     // =========================================================================
@@ -1728,19 +1425,7 @@ mod tests {
         assert_eq!(results.len(), 3);
     }
 
-    #[test]
-    fn test_search_quality_ef_search_values() {
-        // Verify ef_search values for different quality profiles (Round 7 tuned)
-        assert_eq!(SearchQuality::Fast.ef_search(10), 100);
-        assert_eq!(SearchQuality::Balanced.ef_search(10), 200);
-        assert_eq!(SearchQuality::Accurate.ef_search(10), 400);
-        assert_eq!(SearchQuality::Custom(100).ef_search(10), 100);
-
-        // ef_search should be at least k * multiplier (Round 7 tuned)
-        assert_eq!(SearchQuality::Fast.ef_search(100), 300); // k*3
-        assert_eq!(SearchQuality::Balanced.ef_search(100), 600); // k*6
-        assert_eq!(SearchQuality::Accurate.ef_search(100), 1200); // k*12
-    }
+    // Note: SearchQuality::ef_search unit tests are in params.rs
 
     // =========================================================================
     // Edge Cases and Error Handling
