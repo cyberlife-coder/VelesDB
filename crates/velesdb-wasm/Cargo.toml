@@ -46,9 +46,8 @@ version = "0.4"
 wasm-bindgen-test = "0.3"
 serde-wasm-bindgen = "0.6"
 
-[[test]]
-name = "wasm_bench"
-path = "benches/wasm_bench.rs"
+# Note: wasm_bench.rs is auto-detected as a bench target
+# No explicit [[bench]] needed - Cargo handles it automatically
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

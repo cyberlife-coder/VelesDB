@@ -1,0 +1,19 @@
+# VelesDB Migration - ChromaDB Source Example
+# Usage: velesdb-migrate run --config chromadb-migration.yaml
+
+source:
+  type: chromadb
+  url: http://localhost:8000
+  collection: documents
+  # tenant: default_tenant
+  # database: default_database
+
+destination:
+  path: ./velesdb_data
+  collection: chroma_docs
+  dimension: 768
+  metric: cosine
+
+options:
+  batch_size: 1000
+  workers: 4

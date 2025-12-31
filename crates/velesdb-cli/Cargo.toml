@@ -73,10 +73,10 @@ priority = "optional"
 assets = [
     ["target/release/velesdb", "usr/bin/", "755"],
     ["target/release/velesdb-server", "usr/bin/", "755"],
+    ["target/release/velesdb-migrate", "usr/bin/", "755"],
     ["../../README.md", "usr/share/doc/velesdb/", "644"],
     ["../../LICENSE", "usr/share/doc/velesdb/", "644"],
     ["../../docs/ARCHITECTURE.md", "usr/share/doc/velesdb/", "644"],
     ["../../docs/BENCHMARKS.md", "usr/share/doc/velesdb/", "644"],
-    ["../../examples/tauri-rag-app/README.md", "usr/share/doc/velesdb/examples/tauri-rag-app/", "644"],
-    ["../../examples/tauri-rag-app/package.json", "usr/share/doc/velesdb/examples/tauri-rag-app/", "644"],
+    ["../../crates/velesdb-migrate/README.md", "usr/share/doc/velesdb/migrate/", "644"],
 ]

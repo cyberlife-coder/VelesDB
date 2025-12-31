@@ -1,0 +1,22 @@
+# VelesDB Migration - Weaviate Source Example
+# Usage: velesdb-migrate run --config weaviate-migration.yaml
+
+source:
+  type: weaviate
+  url: http://localhost:8080
+  class_name: Document
+  # api_key: your-api-key  # Optional
+  properties:
+    - title
+    - content
+    - author
+
+destination:
+  path: ./velesdb_data
+  collection: weaviate_docs
+  dimension: 768
+  metric: cosine
+
+options:
+  batch_size: 1000
+  workers: 4

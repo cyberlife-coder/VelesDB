@@ -1,0 +1,25 @@
+# VelesDB Migration - Supabase Source Example
+# Usage: velesdb-migrate run --config supabase-migration.yaml
+
+source:
+  type: supabase
+  url: https://your-project.supabase.co
+  api_key: ${SUPABASE_SERVICE_KEY}
+  table: documents
+  vector_column: embedding
+  id_column: id
+  payload_columns:
+    - title
+    - content
+    - created_at
+
+destination:
+  path: ./velesdb_data
+  collection: supabase_docs
+  dimension: 768
+  metric: cosine
+  storage_mode: full
+
+options:
+  batch_size: 500
+  workers: 2

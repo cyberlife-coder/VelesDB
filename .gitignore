@@ -48,3 +48,7 @@ lcov.info
 # Temporary files
 *.tmp
 *.temp
+
+# Migration test configs (may contain sensitive URLs)
+test-*.yaml
+migration-*.yaml

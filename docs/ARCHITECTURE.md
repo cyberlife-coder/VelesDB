@@ -50,6 +50,7 @@ This document describes the internal architecture of VelesDB.
 │  │  (81ns)  │   (49ns)    │    (39ns)     │   (6ns)   │   (SIMD)   │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ WASM SIMD128 │ Auto-vectorization │ Fallback   │   │
+│  │               │              │                    │ (ARM64)    │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 └────────────────────────────────────┬────────────────────────────────────┘
@@ -283,14 +284,38 @@ Query Vector + Text Query
 
 ## Platform Support
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Linux x86_64 | ✅ Full | AVX2/AVX-512 |
-| macOS x86_64 | ✅ Full | AVX2 |
-| macOS ARM64 | ✅ Full | NEON |
-| Windows x86_64 | ✅ Full | AVX2 |
-| WASM (Browser) | ✅ Full | SIMD128 |
-| WASM (Node.js) | ✅ Full | SIMD128 |
+| Platform | Status | SIMD | Performance |
+|----------|--------|------|-------------|
+| Linux x86_64 | ✅ Full | AVX2/AVX-512 | 100% |
+| Windows x86_64 | ✅ Full | AVX2 | 100% |
+| macOS x86_64 | ✅ Full | AVX2 | 100% |
+| **macOS ARM64** | ✅ Full | **Fallback** | **~80%** |
+| WASM (Browser) | ✅ Full | SIMD128 | ~70% |
+| WASM (Node.js) | ✅ Full | SIMD128 | ~70% |
+
+### ARM64 (Apple Silicon) Note
+
+On macOS ARM64 (M1/M2/M3), VelesDB uses a **scalar fallback** for distance calculations 
+instead of SIMD. This is because the underlying `hnsw_rs` library's `simdeez` feature 
+only supports x86 SIMD instructions (AVX2/SSE).
+
+**Impact:**
+- Distance calculations are ~20% slower than x86_64 with AVX2
+- All other operations (indexing, storage, queries) are unaffected
+- Overall search latency remains in the microsecond range
+
+**Technical details:**
+```toml
+# Cargo.toml - Conditional compilation
+[dependencies.hnsw_rs]
+version = "0.3"
+default-features = false  # ARM64: no SIMD
+
+[target.'cfg(target_arch = "x86_64")'.dependencies.hnsw_rs]
+features = ["simdeez_f"]   # x86_64: AVX2/SSE enabled
+```
+
+**Future:** NEON SIMD support for ARM64 may be added when `hnsw_rs` upstream supports it.
 
 ## Future Architecture
 

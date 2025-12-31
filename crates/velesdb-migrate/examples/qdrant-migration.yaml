@@ -1,0 +1,22 @@
+# VelesDB Migration - Qdrant Source Example
+# Usage: velesdb-migrate run --config qdrant-migration.yaml
+
+source:
+  type: qdrant
+  url: http://localhost:6333
+  collection: documents
+  # api_key: your-api-key  # For Qdrant Cloud
+
+destination:
+  path: ./velesdb_data
+  collection: migrated_docs
+  dimension: 768
+  metric: cosine
+  storage_mode: full
+
+options:
+  batch_size: 1000
+  workers: 4
+  checkpoint_enabled: true
+  dry_run: false
+  continue_on_error: false

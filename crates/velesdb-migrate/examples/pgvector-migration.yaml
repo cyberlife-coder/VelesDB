@@ -1,0 +1,29 @@
+# VelesDB Migration - PostgreSQL pgvector Source Example
+# Requires: cargo install --features postgres
+# Usage: velesdb-migrate run --config pgvector-migration.yaml
+
+source:
+  type: pgvector
+  connection_string: postgres://user:password@localhost:5432/mydb
+  table: embeddings
+  vector_column: embedding
+  id_column: id
+  payload_columns:
+    - title
+    - content
+    - category
+    - created_at
+  # filter: "created_at > '2024-01-01'"  # Optional WHERE clause
+
+destination:
+  path: ./velesdb_data
+  collection: pg_documents
+  dimension: 768
+  metric: cosine
+  storage_mode: full
+
+options:
+  batch_size: 1000
+  workers: 4
+  checkpoint_enabled: true
+  continue_on_error: false
