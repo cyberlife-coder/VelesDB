@@ -37,10 +37,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Get version from Cargo.toml
+      - name: Get version from root Cargo.toml
         id: check
         run: |
-          VERSION=$(grep -m1 'version = ' crates/velesdb-wasm/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(grep -m1 'version = ' ../../Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           
           # Check if version exists on npm
