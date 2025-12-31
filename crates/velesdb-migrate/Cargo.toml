@@ -53,7 +53,7 @@ async-trait = "0.1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 
 # VelesDB client (for destination)
-velesdb-core = { path = "../velesdb-core" }
+velesdb-core = { version = "0.6.0", path = "../velesdb-core" }
 
 [dev-dependencies]
 tokio-test = "0.4"
