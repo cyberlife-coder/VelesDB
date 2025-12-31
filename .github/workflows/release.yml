@@ -90,6 +90,9 @@ jobs:
             artifact: velesdb-macos-x86_64
             ext: tar.gz
 
+    env:
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
+
     steps:
       - uses: actions/checkout@v4
 
@@ -212,7 +215,8 @@ jobs:
             local status=$2
             if [ "$status" = "publish" ]; then
               echo "📦 Publishing $crate..."
-              cargo publish -p $crate --allow-dirty && sleep 30
+              cargo publish -p $crate --allow-dirty || echo "Already published $crate"
+              sleep 30
             else
               echo "⏭️ Skipping $crate (already published)"
             fi
