@@ -15,9 +15,6 @@
 </p>
 
 <p align="center">
-  <a href="https://crates.io/crates/velesdb-core"><img src="https://img.shields.io/crates/v/velesdb-core.svg?style=flat-square&color=orange" alt="Crates.io"></a>
-  <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb?style=flat-square&color=blue" alt="PyPI"></a>
-  <a href="https://docs.rs/velesdb-core"><img src="https://img.shields.io/docsrs/velesdb-core?style=flat-square" alt="docs.rs"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB/actions"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&style=flat-square" alt="Build Status"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-ELv2-blue?style=flat-square" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="GitHub Stars"></a>
@@ -225,26 +222,7 @@ curl -X POST http://localhost:8080/collections \
 
 ## 🚀 Quick Start
 
-### Option 1: Windows Installer (.msi) ⭐ Recommended
-
-Download the MSI installer from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
-
-```
-velesdb-0.5.1-x86_64.msi
-```
-
-**Features:**
-- ✅ VelesDB Server + CLI + REPL
-- ✅ Optional PATH integration (enabled by default)
-- ✅ Documentation and examples included
-- ✅ Feature selection during install
-
-**Silent install:**
-```powershell
-msiexec /i velesdb-0.5.1-x86_64.msi /quiet ADDTOPATH=1
-```
-
-### Option 2: Linux Package (.deb)
+### Option 1: Linux Package (.deb) ⭐ Recommended for Linux
 
 Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
 
@@ -257,7 +235,7 @@ velesdb --version
 velesdb-server --version
 ```
 
-### Option 3: One-liner Script
+### Option 2: One-liner Script
 
 **Linux / macOS:**
 ```bash
@@ -269,10 +247,13 @@ curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/script
 irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install.ps1 | iex
 ```
 
-### Option 4: Python (pip)
+### Option 3: Python (from source)
 
 ```bash
-pip install velesdb
+# Build from source (requires Rust)
+cd crates/velesdb-python
+pip install maturin
+maturin develop --release
 ```
 
 ```python
@@ -284,24 +265,35 @@ collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
 results = collection.search([...], top_k=10)
 ```
 
-### Option 5: Rust (cargo)
+> 📦 **Coming soon:** `pip install velesdb` (PyPI publication planned for v0.6.0)
+
+### Option 4: Rust (from source)
 
 ```bash
-# Add to Cargo.toml
-cargo add velesdb-core
+# Clone and build
+git clone https://github.com/cyberlife-coder/VelesDB.git
+cd VelesDB
+cargo build --release
 
-# Or install CLI/Server
-cargo install velesdb-cli
-cargo install velesdb-server
+# Binaries in target/release/
+./target/release/velesdb-server --help
 ```
 
-### Option 6: Docker
+> 📦 **Coming soon:** `cargo install velesdb-cli` (crates.io publication planned for v0.6.0)
+
+### Option 5: Docker (build locally)
 
 ```bash
-docker run -d -p 8080:8080 -v velesdb_data:/data ghcr.io/cyberlife-coder/velesdb:latest
+# Build and run locally
+git clone https://github.com/cyberlife-coder/VelesDB.git
+cd VelesDB
+docker build -t velesdb .
+docker run -d -p 8080:8080 -v velesdb_data:/data velesdb
 ```
 
-### Option 7: Portable Archives
+> 📦 **Coming soon:** `docker pull ghcr.io/cyberlife-coder/velesdb` (planned for v0.6.0)
+
+### Option 6: Portable Archives
 
 Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases):
 
@@ -309,6 +301,8 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 |----------|------|
 | Windows | `velesdb-windows-x86_64.zip` |
 | Linux | `velesdb-linux-x86_64.tar.gz` |
+| macOS (ARM) | `velesdb-macos-arm64.tar.gz` |
+| macOS (Intel) | `velesdb-macos-x86_64.tar.gz` |
 
 ### Start Using VelesDB
 
@@ -1005,6 +999,31 @@ Comprehensive documentation is available on **DeepWiki**:
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/stargazers">
     <img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=for-the-badge&logo=github&color=yellow" alt="GitHub Stars"/>
+  </a>
+</p>
+
+### 📢 Share VelesDB
+
+Help us grow by sharing VelesDB with your network!
+
+<p align="center">
+  <a href="https://twitter.com/intent/tweet?text=🚀%20Check%20out%20VelesDB%20-%20The%20fastest%20vector%20database%20for%20AI%20apps!%20Built%20in%20Rust%20with%20microsecond%20latency.&url=https://github.com/cyberlife-coder/VelesDB&hashtags=VectorDatabase,AI,Rust,OpenSource">
+    <img src="https://img.shields.io/badge/Share_on-Twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" alt="Share on Twitter"/>
+  </a>
+  <a href="https://www.linkedin.com/sharing/share-offsite/?url=https://github.com/cyberlife-coder/VelesDB">
+    <img src="https://img.shields.io/badge/Share_on-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="Share on LinkedIn"/>
+  </a>
+  <a href="https://www.reddit.com/submit?url=https://github.com/cyberlife-coder/VelesDB&title=VelesDB%20-%20The%20fastest%20vector%20database%20for%20AI%20applications">
+    <img src="https://img.shields.io/badge/Share_on-Reddit-FF4500?style=for-the-badge&logo=reddit&logoColor=white" alt="Share on Reddit"/>
+  </a>
+  <a href="https://news.ycombinator.com/submitlink?u=https://github.com/cyberlife-coder/VelesDB&t=VelesDB%20-%20Vector%20Search%20in%20Microseconds">
+    <img src="https://img.shields.io/badge/Share_on-Hacker_News-F0652F?style=for-the-badge&logo=ycombinator&logoColor=white" alt="Share on Hacker News"/>
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/cyberlife-coder/VelesDB/fork">
+    <img src="https://img.shields.io/badge/🍴_Fork_this_repo-181717?style=for-the-badge&logo=github" alt="Fork on GitHub"/>
   </a>
 </p>
 
