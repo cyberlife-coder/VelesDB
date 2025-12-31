@@ -1,0 +1,19 @@
+# VelesDB Migration - Milvus Source Example
+# Usage: velesdb-migrate run --config milvus-migration.yaml
+
+source:
+  type: milvus
+  url: http://localhost:19530
+  collection: documents
+  # username: root
+  # password: milvus
+
+destination:
+  path: ./velesdb_data
+  collection: milvus_docs
+  dimension: 768
+  metric: cosine
+
+options:
+  batch_size: 1000
+  workers: 4

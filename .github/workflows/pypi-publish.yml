@@ -31,11 +31,41 @@ env:
 
 jobs:
   # ===========================================================================
+  # Check if version already exists on PyPI
+  # ===========================================================================
+  check-version:
+    name: Check PyPI version
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.check.outputs.should_publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version from Cargo.toml
+        id: check
+        run: |
+          VERSION=$(grep -m1 'version = ' crates/velesdb-python/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Check if version exists on PyPI
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/velesdb/$VERSION/json")
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "⏭️ Version $VERSION already exists on PyPI"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "📦 Version $VERSION not found on PyPI, will publish"
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ===========================================================================
   # Build wheels for all platforms
   # ===========================================================================
   build-wheels:
     name: Build wheels (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: check-version
+    if: needs.check-version.outputs.should_publish == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +114,8 @@ jobs:
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
+    needs: check-version
+    if: needs.check-version.outputs.should_publish == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

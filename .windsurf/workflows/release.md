@@ -1,92 +1,199 @@
 ---
-description: Préparer et publier une nouvelle release VelesDB
+description: Préparer et publier une nouvelle release VelesDB avec 7 experts
 ---
 
-# Workflow : Release VelesDB
+# Workflow : Release VelesDB (7 Experts)
 
-## 1. Préparation
+Ce workflow fait intervenir 7 experts virtuels pour garantir une release de qualité.
 
-1. S'assurer que `main` est stable :
-// turbo
+## 🎯 Prérequis
+
+Définir la nouvelle version (ex: `0.6.0`) :
 ```powershell
-cargo make ci
+$VERSION = "0.6.0"
 ```
 
-2. Vérifier qu'il n'y a pas de vulnérabilités :
+---
+
+## 👨‍💼 Expert 1 : QA Lead - Validation CI/CD
+
+**Objectif** : S'assurer que tout passe avant release
+
+// turbo
+```powershell
+cargo fmt --all -- --check
+```
+
+// turbo
+```powershell
+cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
+```
+
+// turbo
+```powershell
+cargo test --all-features --workspace
+```
+
 ```powershell
 cargo audit
 cargo deny check
 ```
 
-## 2. Version
+---
 
-1. Décider du type de release :
-   - **patch** (0.1.X) : Bug fixes
-   - **minor** (0.X.0) : Nouvelles features backward-compatible
-   - **major** (X.0.0) : Breaking changes
+## 👨‍💻 Expert 2 : Version Manager - SemVer Update
 
-2. Mettre à jour la version dans `Cargo.toml` workspace :
-   ```toml
-   [workspace.package]
-   version = "0.2.0"
-   ```
+**Objectif** : Mettre à jour la version PARTOUT
 
-## 3. Changelog
+### Fichiers à modifier :
 
-1. Créer/mettre à jour `CHANGELOG.md` :
-   ```markdown
-   ## [0.2.0] - 2025-01-15
+1. **Workspace Cargo.toml** :
+```toml
+# Cargo.toml (root)
+[workspace.package]
+version = "X.Y.Z"
+```
 
-   ### Added
-   - Feature X (#123)
-   - Feature Y (#124)
+2. **Crates avec version explicite** :
+   - `crates/velesdb-migrate/Cargo.toml` → `version = "X.Y.Z"`
+   - `crates/velesdb-cli/Cargo.toml` → dépendance `velesdb-core = "X.Y.Z"`
+   - `crates/velesdb-server/Cargo.toml` → dépendance `velesdb-core = "X.Y.Z"`
+   - `crates/velesdb-migrate/Cargo.toml` → dépendance `velesdb-core`
 
-   ### Fixed
-   - Bug Z (#125)
+3. **SDKs** :
+   - `sdks/python/pyproject.toml` → `version = "X.Y.Z"`
+   - `sdks/nodejs/package.json` → `"version": "X.Y.Z"`
+   - `crates/velesdb-wasm/package.json` → `"version": "X.Y.Z"`
 
-   ### Changed
-   - API modification (#126)
-   ```
-
-## 4. Tests finaux
+4. **Intégrations** :
+   - `integrations/tauri-plugin-velesdb/Cargo.toml`
+   - `integrations/llamaindex-velesdb/pyproject.toml`
 
 // turbo
 ```powershell
-cargo test --all-features --release
-cargo bench --all-features
+# Vérifier la cohérence des versions
+Get-ChildItem -Recurse -Include "Cargo.toml","package.json","pyproject.toml" | Select-String -Pattern "version.*=.*`"" | Select-Object -First 20
 ```
 
-## 5. Commit de release
+---
+
+## 📝 Expert 3 : Documentation Lead - CHANGELOG
+
+**Objectif** : Documenter les changements
+
+Mettre à jour `CHANGELOG.md` avec le format Keep a Changelog :
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+- velesdb-migrate: Support migration from Supabase, Qdrant, Pinecone, Weaviate, Milvus, ChromaDB
+- Auto-detection of vector dimensions for all sources
+- macOS ARM64 and x86_64 binaries in releases
+
+### Changed
+- Improved CI/CD pipeline with multi-platform builds
+
+### Fixed
+- Fixed compiler warnings in velesdb-migrate
+
+### Security
+- Removed hardcoded credentials from test files
+```
+
+---
+
+## 📚 Expert 4 : Technical Writer - README Updates
+
+**Objectif** : Mettre à jour la documentation technique
+
+1. **README.md principal** : Version badge, features list
+2. **crates/velesdb-migrate/README.md** : Nouvelles sources supportées
+3. **docs/ARCHITECTURE.md** : Si changements d'architecture
+4. **docs/API.md** : Si nouveaux endpoints
+
+---
+
+## 🎨 Expert 5 : Marketing Lead - Communication
+
+**Objectif** : Préparer les annonces
+
+1. **Release notes** (pour GitHub Release) :
+   - Résumé exécutif (3 lignes max)
+   - Highlights visuels (émojis)
+   - Liens vers docs
+
+2. **Tweet/Social** :
+   ```
+   🚀 VelesDB vX.Y.Z released!
+   
+   ✨ New: velesdb-migrate tool for easy migration
+   📦 Supports: Supabase, Qdrant, Pinecone, Weaviate, Milvus
+   🍎 Now with macOS binaries!
+   
+   https://github.com/cyberlife-coder/velesdb/releases
+   ```
+
+---
+
+## 🔧 Expert 6 : Build Engineer - Tag & Release
+
+**Objectif** : Créer le tag et déclencher les builds
 
 ```powershell
+# 1. Commit tous les changements
 git add .
-git commit -m "chore: release v0.2.0"
-```
+git commit -m "chore: release v$VERSION
 
-## 6. Tag
+- Update version to $VERSION across all crates
+- Update CHANGELOG.md
+- Update documentation"
 
-```powershell
-git tag -a v0.2.0 -m "Release v0.2.0"
+# 2. Créer le tag (déclenche GitHub Actions)
+git tag -a "v$VERSION" -m "Release v$VERSION"
+
+# 3. Push
 git push origin main --tags
 ```
 
-## 7. GitHub Release
+**Vérifier les builds** :
+- GitHub Actions → Release workflow
+- Artifacts : Linux, Windows, macOS (ARM64 + x86_64)
+- crates.io publication
+- PyPI publication (via release event)
+- npm publication (via release event)
 
-1. Aller sur GitHub Releases
-2. Créer une release depuis le tag
-3. Copier le changelog
-4. Attacher les binaires (générés par CI)
+---
 
-## 8. Annonce
+## 🔄 Expert 7 : Integration Lead - Post-Release
 
-1. Post sur Discord
-2. Tweet (si compte @velesdb existe)
-3. Article de blog si release majeure
+**Objectif** : Synchroniser l'écosystème
 
-## 9. Post-release
-
-1. Mettre à jour velesdb-premium pour utiliser le nouveau tag
-2. Bumper la version pour le développement :
-   ```toml
-   version = "0.3.0-dev"
+1. **velesdb-premium** :
+   ```powershell
+   cd ../velesdb-premium
+   # Mettre à jour la dépendance velesdb-core
    ```
+
+2. **Vérifier les publications** :
+   - [ ] crates.io : `cargo search velesdb`
+   - [ ] PyPI : `pip index versions velesdb`
+   - [ ] npm : `npm view @velesdb/velesdb-wasm`
+
+3. **Bumper pour développement** :
+   ```toml
+   # Cargo.toml
+   version = "X.Y.Z-dev"  # ou prochaine version
+   ```
+
+---
+
+## ✅ Checklist Finale
+
+- [ ] CI/CD passe (Expert 1)
+- [ ] Versions cohérentes partout (Expert 2)
+- [ ] CHANGELOG à jour (Expert 3)
+- [ ] Documentation mise à jour (Expert 4)
+- [ ] Annonces préparées (Expert 5)
+- [ ] Tag créé et builds lancés (Expert 6)
+- [ ] Écosystème synchronisé (Expert 7)

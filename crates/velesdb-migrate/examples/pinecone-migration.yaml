@@ -1,0 +1,19 @@
+# VelesDB Migration - Pinecone Source Example
+# Usage: velesdb-migrate run --config pinecone-migration.yaml
+
+source:
+  type: pinecone
+  api_key: ${PINECONE_API_KEY}
+  environment: us-east-1-aws
+  index: my-index
+  # namespace: production  # Optional
+
+destination:
+  path: ./velesdb_data
+  collection: pinecone_vectors
+  dimension: 1536
+  metric: cosine
+
+options:
+  batch_size: 100
+  workers: 2

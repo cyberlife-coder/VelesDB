@@ -69,15 +69,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux x86_64 (main target)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: velesdb-linux-x86_64
             ext: tar.gz
+          # Windows x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: velesdb-windows-x86_64
             ext: zip
-          # macOS désactivé (anndists AVX2 x86 only)
+          # macOS ARM64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: velesdb-macos-arm64
+            ext: tar.gz
+          # macOS x86_64 (Intel)
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: velesdb-macos-x86_64
+            ext: tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -103,17 +114,28 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
+          # Copy all binaries
           cp target/${{ matrix.target }}/release/velesdb dist/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/velesdb-server dist/ 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/velesdb-migrate dist/ 2>/dev/null || true
           cp README.md LICENSE dist/
+          # List what we packaged
+          echo "📦 Packaging binaries:"
+          ls -la dist/
           tar -czvf ${{ matrix.artifact }}.${{ matrix.ext }} -C dist .
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           mkdir dist
-          Copy-Item target/${{ matrix.target }}/release/*.exe dist/ -ErrorAction SilentlyContinue
+          # Copy all binaries
+          Copy-Item target/${{ matrix.target }}/release/velesdb.exe dist/ -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/velesdb-server.exe dist/ -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/velesdb-migrate.exe dist/ -ErrorAction SilentlyContinue
           Copy-Item README.md,LICENSE dist/
+          # List what we packaged
+          Write-Host "📦 Packaging binaries:"
+          Get-ChildItem dist/
           Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact }}.${{ matrix.ext }}
 
       # =========================================================================
@@ -154,16 +176,53 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish crates (ordered by dependency)
+      - name: Check which crates need publishing
+        id: check-crates
+        run: |
+          VERSION=${{ needs.validate.outputs.version }}
+          echo "Checking crates for version $VERSION..."
+          
+          # Function to check if version exists on crates.io
+          check_crate() {
+            local crate=$1
+            if cargo search "$crate" | grep -q "$crate = \"$VERSION\""; then
+              echo "skip"
+            else
+              echo "publish"
+            fi
+          }
+          
+          echo "velesdb_core=$(check_crate velesdb-core)" >> $GITHUB_OUTPUT
+          echo "velesdb_server=$(check_crate velesdb-server)" >> $GITHUB_OUTPUT
+          echo "velesdb_cli=$(check_crate velesdb-cli)" >> $GITHUB_OUTPUT
+          echo "velesdb_migrate=$(check_crate velesdb-migrate)" >> $GITHUB_OUTPUT
+          echo "tauri_plugin=$(check_crate tauri-plugin-velesdb)" >> $GITHUB_OUTPUT
+
+      - name: Publish crates (ordered by dependency, skip already published)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           # Order matters: dependencies first
-          for crate in velesdb-core velesdb-server velesdb-cli tauri-plugin-velesdb; do
-            echo "📦 Publishing $crate..."
-            cargo publish -p $crate --allow-dirty || echo "⚠️ $crate: already published or error"
-            sleep 30  # Wait for crates.io index
-          done
+          # 1. velesdb-core (base library - no dependencies)
+          # 2. velesdb-server, velesdb-cli, velesdb-migrate (depend on core)
+          # 3. tauri-plugin-velesdb (depends on core)
+          
+          publish_if_needed() {
+            local crate=$1
+            local status=$2
+            if [ "$status" = "publish" ]; then
+              echo "📦 Publishing $crate..."
+              cargo publish -p $crate --allow-dirty && sleep 30
+            else
+              echo "⏭️ Skipping $crate (already published)"
+            fi
+          }
+          
+          publish_if_needed velesdb-core "${{ steps.check-crates.outputs.velesdb_core }}"
+          publish_if_needed velesdb-server "${{ steps.check-crates.outputs.velesdb_server }}"
+          publish_if_needed velesdb-cli "${{ steps.check-crates.outputs.velesdb_cli }}"
+          publish_if_needed velesdb-migrate "${{ steps.check-crates.outputs.velesdb_migrate }}"
+          publish_if_needed tauri-plugin-velesdb "${{ steps.check-crates.outputs.tauri_plugin }}"
 
   # ===========================================================================
   # Create GitHub Release

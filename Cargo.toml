@@ -6,6 +6,7 @@ members = [
     "crates/velesdb-python",
     "crates/velesdb-cli",
     "crates/velesdb-wasm",
+    "crates/velesdb-migrate",
     "integrations/tauri-plugin-velesdb",
 ]
 exclude = [
