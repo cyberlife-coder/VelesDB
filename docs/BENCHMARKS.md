@@ -9,7 +9,7 @@
 | Metric | Baseline | VelesDB | Winner |
 |--------|----------|---------|--------|
 | **SIMD Dot Product (768D)** | 280ns (Naive) | **35ns** | **VelesDB 8x** ✅ |
-| **Search (10K)** | ~50ms (pgvector) | **128µs** | **VelesDB 390x** ✅ |
+| **Search (10K)** | ~50ms (pgvector) | **~105µs** | **VelesDB 476x** ✅ |
 | **Recall@10** | 100% | **100%** | **VelesDB Perfect** ✅ |
 
 ### When to Choose VelesDB

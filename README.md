@@ -159,7 +159,7 @@ LIMIT 10
 | Metric | 🐺 **VelesDB** | Qdrant | Milvus | Pinecone | pgvector |
 |--------|---------------|--------|--------|----------|----------|
 | **Architecture** | **Single Binary** | Container | Cluster | SaaS | Postgres Ext |
-| **Search Latency** | **128µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
+| **Search Latency** | **~105µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
 | **Setup Time** | **< 1 min** | 5-10 min | 30+ min | 5 min | 15+ min |
 | **Binary Size** | **15 MB** | 100+ MB | GBs | N/A | Extension |
 | **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
@@ -176,11 +176,11 @@ LIMIT 10
 | Operation | VelesDB (Core) | Details |
 |-----------|----------------|---------|
 | **SIMD Dot Product** | **35ns** | AVX-512 optimized |
-| **HNSW Search** | **128µs** | p50 latency (10K) |
+| **HNSW Search** | **~105µs** | p50 latency (10K) |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
 | **Recall@10** | **98%+ / 100%*** | Balanced / Perfect mode |
 
-> *Default: 98% @ 128µs (Balanced) • Optional: 100% @ ~50ms (Perfect mode)*
+> *Default: 98% @ ~105µs (Balanced) • Optional: 100% @ ~55ms (Perfect mode)*
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
