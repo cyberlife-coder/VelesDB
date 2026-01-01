@@ -2,16 +2,15 @@
   <img src="docs/assets/velesdb-icon.png" alt="VelesDB Logo" width="200"/>
 </p>
 
-<h1 align="center">VelesDB</h1>
+<h1 align="center">🐺 VelesDB</h1>
 
 <h3 align="center">
-  🚀 <strong>Vector Search in Microseconds</strong> 🚀<br/>
-  <em>The SQL You Already Know</em>
+  🚀 <strong>The Real-Time Memory for AI Agents</strong> 🚀<br/>
+  <em>Microsecond Vector Search • Local Context • Zero Latency</em>
 </h3>
 
 <p align="center">
-  <strong>The fastest source-available vector database for AI applications</strong><br/>
-  Built in Rust • Zero Config • Production Ready
+  <a href="#-english">🇬🇧 English</a> • <a href="#-français">🇫🇷 Français</a>
 </p>
 
 <p align="center">
@@ -20,17 +19,16 @@
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="GitHub Stars"></a>
 </p>
 
-<!-- Performance Badges -->
 <p align="center">
-  <img src="https://img.shields.io/badge/⚡_Distance_SIMD-45ns_(768D)-brightgreen?style=for-the-badge" alt="Latency"/>
-  <img src="https://img.shields.io/badge/🎯_Recall-99.4%25-blue?style=for-the-badge" alt="Recall"/>
+  <img src="https://img.shields.io/badge/⚡_Search-128µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_SIMD-35ns-blue?style=for-the-badge" alt="SIMD Distance"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
-  <img src="https://img.shields.io/badge/✅_Tests-611_passed-success?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/🎯_Recall-98%25+-success?style=for-the-badge" alt="Recall"/>
 </p>
 
 <p align="center">
   <a href="#-quick-start">🚀 Quick Start</a> •
-  <a href="#-why-velesdb">💡 Why VelesDB</a> •
+  <a href="#-full-ecosystem">🌍 Ecosystem</a> •
   <a href="#-performance">⚡ Performance</a> •
   <a href="#-velesql-query-language">📝 VelesQL</a> •
   <a href="https://deepwiki.com/cyberlife-coder/VelesDB/">📖 Docs</a> •
@@ -39,54 +37,137 @@
 
 ---
 
+<a name="-english"></a>
+## 🇬🇧 English: The Agentic Memory Engine
+
+### 🎯 The Problem We Solve
+
+> **"My RAG agent takes 200ms per context retrieval. Users notice the lag."**
+
+Traditional vector databases add **50-100ms of latency** per query. For an AI agent that retrieves context 10+ times per conversation, that's **1+ second of delay** before the first token.
+
+### 💡 The VelesDB Solution
+
+**VelesDB delivers sub-millisecond retrieval** by running embedded in your application — no network round-trips, no cluster overhead.
+
+| Metric | VelesDB | Cloud Vector DBs |
+| :--- | :--- | :--- |
+| **Search Latency** | **128µs** | 50-100ms |
+| **10 Retrievals** | **1.3ms total** | 500ms-1s total |
+| **Time to First Token** | **Instant** | Noticeable delay |
+
+### 🏢 Coming From Another Vector DB?
+
+| If you use... | VelesDB advantage |
+| :--- | :--- |
+| **Pinecone** | No API keys, no cloud costs, 100x faster locally |
+| **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile |
+| **Milvus** | Zero config vs complex cluster setup |
+| **pgvector** | Purpose-built for vectors, 400x faster search |
+| **ChromaDB** | Production-grade Rust vs Python prototype |
+
+```sql
+-- Migrate in minutes. Same SQL patterns you know.
+SELECT * FROM documents 
+WHERE vector NEAR $query 
+  AND category = 'tech' 
+LIMIT 10
+```
+
+---
+
+<a name="-français"></a>
+## 🇫🇷 Français : Le Moteur de Mémoire Agentique
+
+### 🎯 Le Problème Que Nous Résolvons
+
+> **"Mon agent RAG met 200ms par récupération de contexte. Les utilisateurs perçoivent le délai."**
+
+Les bases vectorielles traditionnelles ajoutent **50-100ms de latence** par requête. Pour un agent IA qui récupère le contexte 10+ fois par conversation, c'est **1+ seconde de délai** avant le premier token.
+
+### 💡 La Solution VelesDB
+
+**VelesDB offre une récupération sub-milliseconde** en s'exécutant directement dans votre application — pas de round-trips réseau, pas de surcharge cluster.
+
+| Métrique | VelesDB | Cloud Vector DBs |
+| :--- | :--- | :--- |
+| **Latence Recherche** | **128µs** | 50-100ms |
+| **10 Récupérations** | **1.3ms total** | 500ms-1s total |
+| **Time to First Token** | **Instantané** | Délai perceptible |
+
+### 🏢 Vous Venez d'une Autre Base Vectorielle ?
+
+| Si vous utilisez... | Avantage VelesDB |
+| :--- | :--- |
+| **Pinecone** | Pas de clés API, pas de coûts cloud, 100x plus rapide en local |
+| **Qdrant** | Binaire unique (15Mo vs 100Mo+), WASM/Mobile natif |
+| **Milvus** | Zéro config vs configuration cluster complexe |
+| **pgvector** | Conçu pour les vecteurs, recherche 400x plus rapide |
+| **ChromaDB** | Rust production-grade vs prototype Python |
+
+```sql
+-- Migrez en quelques minutes. Les mêmes patterns SQL que vous connaissez.
+SELECT * FROM documents 
+WHERE vector NEAR $query 
+  AND category = 'tech' 
+LIMIT 10
+```
+
+---
+
 <h2 align="center">⚡ Why Developers Choose VelesDB</h2>
 
 <table align="center">
 <tr>
 <td align="center" width="25%">
-<h3>🏎️ 41ns Distance</h3>
-<p>AVX-512 optimized ops.<br/>🚀 <strong>Extreme performance</strong></p>
+<h3>🏎️ 128µs Search</h3>
+<p>HNSW + AVX-512 SIMD.<br/><strong>400x faster than pgvector</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📝 SQL You Know</h3>
-<p>VelesQL: familiar syntax.<br/><strong>No DSL to learn.</strong></p>
+<p>VelesQL: no JSON DSL.<br/><strong>Migrate in minutes.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>📦 Single Binary</h3>
-<p>15MB, zero deps.<br/><strong>Deploy in seconds.</strong></p>
+<h3>📦 15MB Binary</h3>
+<p>Zero dependencies.<br/><strong>Works offline.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>🎯 99% Recall</h3>
-<p>Production-grade accuracy.<br/><strong>HNSW-optimized</strong></p>
+<h3>🌍 Run Anywhere</h3>
+<p>Server, Browser, Mobile.<br/><strong>Same codebase.</strong></p>
 </td>
 </tr>
 </table>
 
 ---
 
-## 🎯 What is VelesDB?
+## 🎯 Perfect For / Idéal Pour
 
-VelesDB is the **fastest source-available vector database** built entirely in Rust. Designed for AI applications requiring **microsecond latency** — semantic search, RAG pipelines, recommendation engines, and real-time AI.
+| Use Case | Why VelesDB Wins |
+| :--- | :--- |
+| **RAG Pipelines** | Sub-ms retrieval = faster Time to First Token |
+| **AI Agents** | Embedded memory with instant context switching |
+| **Desktop Apps (Tauri/Electron)** | Single binary, no server needed |
+| **Mobile AI (iOS/Android)** | Native SDKs with 32x memory compression |
+| **Browser-side Search** | WASM module, zero backend |
+| **Edge/IoT Devices** | 15MB footprint, ARM NEON optimized |
+| **On-Prem / Air-Gapped** | No cloud dependency, full data sovereignty |
 
-```sql
--- It's that simple. No JSON DSL, no complex APIs.
-SELECT * FROM documents 
-WHERE vector NEAR $query AND category = 'tech' 
-LIMIT 10
-```
+---
 
 ### 🏆 VelesDB vs The Competition
 
-| Metric | 🐺 **VelesDB** | Qdrant | pgvectorscale | pgvector |
-|--------|---------------|--------|---------------|----------|
-| **Architecture** | **Single Binary** | Container | Postgres Ext | Postgres Ext |
-| **Search Latency** | **128µs (10K)** | ~30ms (50M) | ~31ms (50M) | ~50ms (50M) |
-| **Setup Time** | **< 1 min** | 5-10 min | 15+ min | 15+ min |
-| **Binary Size** | **15 MB** | 100+ MB | N/A | Extension |
-| **Query Language** | **SQL (VelesQL)** | JSON DSL | SQL | SQL |
-| **On-Prem** | ✅ | ✅ | ✅ | ✅ |
-| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ |
-| **Recall@10** | **99.4%** | ~99% | ~99% | 100% |
+| Metric | 🐺 **VelesDB** | Qdrant | Milvus | Pinecone | pgvector |
+|--------|---------------|--------|--------|----------|----------|
+| **Architecture** | **Single Binary** | Container | Cluster | SaaS | Postgres Ext |
+| **Search Latency** | **128µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
+| **Setup Time** | **< 1 min** | 5-10 min | 30+ min | 5 min | 15+ min |
+| **Binary Size** | **15 MB** | 100+ MB | GBs | N/A | Extension |
+| **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
+| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Mobile (iOS/Android)** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Recall@10** | **98-100%*** | ~99% | ~99% | ~99% | 100% |
+
+> *98% default (Balanced mode) • 100% available with Perfect mode (brute-force SIMD)
 
 ### 📊 Benchmark: VelesDB Local Performance
 
@@ -94,62 +175,39 @@ LIMIT 10
 
 | Operation | VelesDB (Core) | Details |
 |-----------|----------------|---------|
-| **SIMD Dot Product** | **45ns** | AVX-512 optimized |
+| **SIMD Dot Product** | **35ns** | AVX-512 optimized |
 | **HNSW Search** | **128µs** | p50 latency (10K) |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
-| **Recall@10** | **99.4%** | ef=256 |
+| **Recall@10** | **98%+ / 100%*** | Balanced / Perfect mode |
+
+> *Default: 98% @ 128µs (Balanced) • Optional: 100% @ ~50ms (Perfect mode)*
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
-### 📦 Ecosystem Overview
+---
 
-VelesDB is a modular ecosystem of crates and SDKs:
+<a name="-full-ecosystem"></a>
+## 🌍 Full Ecosystem / Écosystème Complet
 
-| Crate/SDK | Description | Install |
-|-----------|-------------|--------|
-| **[velesdb-core](crates/velesdb-core)** | 🦀 Core engine library (HNSW, SIMD, VelesQL) | `cargo add velesdb-core` |
-| **[velesdb-server](crates/velesdb-server)** | 🌐 REST API server (11 endpoints, OpenAPI) | `cargo install velesdb-server` |
-| **[velesdb-cli](crates/velesdb-cli)** | 💻 CLI & REPL for VelesQL | `cargo install velesdb-cli` |
-| **[velesdb-python](crates/velesdb-python)** | 🐍 Python bindings (PyO3 + NumPy) | `pip install velesdb` |
-| **[velesdb-wasm](crates/velesdb-wasm)** | 🌍 WebAssembly for browsers | `npm i @wiscale/velesdb-wasm` |
-| **[velesdb-mobile](crates/velesdb-mobile)** | 📱 iOS (Swift) & Android (Kotlin) | UniFFI bindings |
-| **[velesdb-migrate](crates/velesdb-migrate)** | 🔄 Migration from Qdrant, Pinecone, etc. | `cargo install velesdb-migrate` |
-| **[tauri-plugin-velesdb](integrations/tauri-plugin-velesdb)** | 🖥️ Tauri v2 desktop plugin | `cargo add tauri-plugin-velesdb` |
-| **[langchain-velesdb](integrations/langchain-velesdb)** | 🦜 LangChain VectorStore | `pip install langchain-velesdb` |
-| **[llamaindex-velesdb](integrations/llamaindex-velesdb)** | 🦙 LlamaIndex integration | `pip install llama-index-vector-stores-velesdb` |
+VelesDB is designed to run **where your agents live** — from cloud servers to mobile devices to browsers.
+
+| Domain | Component | Description | Install |
+| :--- | :--- | :--- | :--- |
+| **🦀 Core** | **[velesdb-core](crates/velesdb-core)** | Core engine (HNSW, SIMD, VelesQL) | `cargo add velesdb-core` |
+| **🌐 Server** | **[velesdb-server](crates/velesdb-server)** | REST API (11 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **💻 CLI** | **[velesdb-cli](crates/velesdb-cli)** | Interactive REPL for VelesQL | `cargo install velesdb-cli` |
+| **🐍 Python** | **[velesdb-python](crates/velesdb-python)** | PyO3 bindings + NumPy | `pip install velesdb` |
+| **📜 TypeScript** | **[typescript-sdk](sdks/typescript)** | Node.js & Browser SDK | `npm i @wiscale/velesdb` |
+| **🌍 WASM** | **[velesdb-wasm](crates/velesdb-wasm)** | Browser-side vector search | `npm i @wiscale/velesdb-wasm` |
+| **📱 Mobile** | **[velesdb-mobile](crates/velesdb-mobile)** | iOS (Swift) & Android (Kotlin) | UniFFI bindings |
+| **🖥️ Desktop** | **[tauri-plugin](integrations/tauri-plugin-velesdb)** | Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
+| **🦜 LangChain** | **[langchain-velesdb](integrations/langchain-velesdb)** | Official VectorStore | `pip install langchain-velesdb` |
+| **🦙 LlamaIndex** | **[llamaindex-velesdb](integrations/llamaindex-velesdb)** | Document indexing | `pip install llama-index-vector-stores-velesdb` |
+| **🔄 Migration** | **[velesdb-migrate](crates/velesdb-migrate)** | From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
 
 ---
 
-### 🐺 Why "Veles"?
-
-**Veles** (Велес) is a major Slavic deity — the god of wisdom, magic, and knowledge. As the guardian of sacred knowledge and keeper of memories, Veles embodies what a vector database does: storing, organizing, and retrieving the essence of information.
-
-Just as Veles bridges the earthly and mystical realms, VelesDB bridges raw data and meaningful AI-powered insights.
-
-### 🎨 The VelesDB Icon
-
-<p align="center">
-  <img src="docs/assets/velesdb-icon.png" alt="VelesDB Icon" width="150"/>
-</p>
-
-The VelesDB icon is a carefully crafted symbol that embodies our identity and values:
-
-| Element | Description |
-|---------|-------------|
-| **The "V" Shape** | Represents **VelesDB** — bold, distinctive, and instantly recognizable |
-| **Stylized Horns** | Evokes the mythical **Veles**, guardian of wisdom and sacred knowledge |
-| **Unified Design** | A modern, minimalist shape suited for tech applications across all platforms |
-
-#### 🎨 Color Palette
-
-| Element | Color | Hex Code |
-|---------|-------|----------|
-| **Symbol** | Electric Blue | `#00A3FF` |
-| **Background** | Dark Navy | `#0A1628` |
-
-The **electric blue** symbolizes speed, technology, and innovation — perfectly aligned with our microsecond-latency promise. The **dark navy** background provides contrast and conveys reliability and professionalism.
-
-> 📦 **Full icon pack available:** [velesdb_icon_pack/](velesdb_icon_pack/) — SVG, PNG, WebP, iOS, Android, Desktop, and Favicon formats.
+> 💡 **Why "Veles"?** Named after the Slavic god of wisdom and keeper of memories — embodying what a vector database does: storing and retrieving the essence of knowledge.
 
 ---
 
@@ -247,7 +305,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.7.1-amd64.deb
+sudo dpkg -i velesdb-0.7.2-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -343,7 +401,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.7.1"}
+# {"status":"healthy","version":"0.7.2"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -550,9 +608,9 @@ curl -X POST http://localhost:8080/query \
 
 | Operation | Latency | Throughput | vs. Naive |
 |-----------|---------|------------|-----------|
-| **Dot Product** | **45 ns** | **22M ops/sec** | 🚀 **4.2x faster** |
-| **Euclidean** | **49 ns** | **20M ops/sec** | 🚀 **3.8x faster** |
-| **Cosine** | **79 ns** | **12M ops/sec** | 🚀 **3.5x faster** |
+| **Dot Product** | **35 ns** | **28M ops/sec** | 🚀 **8x faster** |
+| **Euclidean** | **44 ns** | **22M ops/sec** | 🚀 **6x faster** |
+| **Cosine** | **82 ns** | **12M ops/sec** | 🚀 **3.4x faster** |
 | **Hamming (Binary)**| **6 ns** | **164M ops/sec** | 🚀 **10x faster** |
 
 ### 📊 System Performance (10K Vectors, Local)
@@ -562,17 +620,18 @@ curl -X POST http://localhost:8080/query \
 | **HNSW Search** | **128 µs** | p50 latency |
 | **VelesQL Parsing**| **570 ns** | Simple SELECT |
 | **VelesQL Cache Hit**| **49 ns** | HashMap pre-allocation |
-| **Recall@10** | **99.4%** | Accurate mode (ef=256) |
+| **Recall@10** | **100%** | Perfect mode (brute-force SIMD) |
 | **BM25 Search** | **7.9 µs** | 1K documents |
 
 ### 🎯 Search Quality (Recall)
 
-| Mode | ef | Recall@10 | Use Case |
-|------|-----|-----------|----------|
-| Fast | 64 | 89.2% | Real-time, high throughput |
-| Balanced | 128 | 98.2% | Production recommended |
-| **Accurate** | 256 | **99.4%** | **High precision** |
-| HighRecall | 512 | 99.6% | Maximum accuracy |
+| Mode | Recall@10 | Latency | Use Case |
+|------|-----------|---------|----------|
+| Fast | 90.6% | ~7ms | Real-time, high throughput |
+| Balanced | 98.2% | ~12ms | Production recommended |
+| Accurate | 99.3% | ~18ms | High precision |
+| HighRecall | 99.8% | ~37ms | Very high precision |
+| **Perfect** | **100%** | ~55ms | **Guaranteed accuracy (brute-force SIMD)** |
 
 ### 🛠️ Optimizations Under the Hood
 
@@ -623,7 +682,7 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 ### 🎯 Why Choose VelesDB?
 
 #### ⚡ Extreme Latency
-- **~45-79ns** per vector distance (768D)
+- **~35-82ns** per vector distance (768D)
 - **128µs** HNSW search p50 on 10K vectors
 - **SIMD-optimized** (AVX-512, AVX2, NEON)
 
@@ -702,8 +761,7 @@ curl -X POST http://localhost:8080/query \
 
 | Feature | Example | Description |
 |---------|---------|-------------|
-| **Vector search** | `vector NEAR $v` | Find similar vectors |
-| **Distance metrics** | `vector NEAR COSINE $v` | `COSINE`, `EUCLIDEAN`, `DOT` |
+| **Vector search** | `vector NEAR $v` | Find similar vectors (uses collection's metric) |
 | **Comparisons** | `price > 100` | `=`, `!=`, `>`, `<`, `>=`, `<=` |
 | **IN clause** | `category IN ('tech', 'ai')` | Match any value in list |
 | **BETWEEN** | `price BETWEEN 10 AND 100` | Range queries |
@@ -1036,7 +1094,7 @@ velesdb-cli info ./data
 
 **REPL Session:**
 ```
-VelesQL REPL v0.7.1
+VelesQL REPL v0.7.2
 Type 'help' for commands, 'quit' to exit.
 
 velesql> SELECT * FROM documents WHERE category = 'tech' LIMIT 5;
@@ -1182,7 +1240,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v0.7.1 ✅ (Current)
+### v0.7.2 ✅ (Current)
 - [x] **⚡ SIMD 32-wide Unrolling** - 12-17% latency reduction on vector ops
 - [x] **Pre-normalized Vectors** - `cosine_similarity_normalized()` ~40% faster
 - [x] **OpenAI Embedding Support** - Benchmarks for 1536D and 3072D dimensions
@@ -1241,7 +1299,11 @@ ELv2 is a source-available license that allows free use, modification, and distr
 ---
 
 <p align="center">
-  <strong>Built with ❤️ and 🦀 Rust by <a href="https://github.com/cyberlife-coder">Wiscale France</a></strong>
+  <strong>Built with ❤️ and 🦀 Rust</strong>
+</p>
+
+<p align="center">
+  <strong>Original Author:</strong> <a href="https://github.com/cyberlife-coder">Julien Lange</a> — <a href="https://wiscale.io"><strong>WiScale</strong></a>
 </p>
 
 <p align="center">

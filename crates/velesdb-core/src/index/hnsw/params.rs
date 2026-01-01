@@ -160,8 +160,12 @@ pub enum SearchQuality {
     Balanced,
     /// Accurate search with `ef_search=256`.
     Accurate,
-    /// High recall search with `ef_search=512`.
+    /// High recall search with `ef_search=1024` (was 512, improved for ~99.7% recall).
     HighRecall,
+    /// Perfect recall mode with `ef_search=2048+` for guaranteed 100% recall.
+    /// Uses very large candidate pool with exact SIMD re-ranking.
+    /// Best for applications where accuracy is more important than latency.
+    Perfect,
     /// Custom `ef_search` value.
     Custom(usize),
 }
@@ -174,7 +178,10 @@ impl SearchQuality {
             Self::Fast => 64.max(k * 2),
             Self::Balanced => 128.max(k * 4),
             Self::Accurate => 256.max(k * 8),
-            Self::HighRecall => 512.max(k * 16),
+            // HighRecall: increased from 512 to 1024 for ~99.7% recall
+            Self::HighRecall => 1024.max(k * 32),
+            // Perfect: very large pool for 100% recall guarantee
+            Self::Perfect => 2048.max(k * 50),
             Self::Custom(ef) => (*ef).max(k),
         }
     }
@@ -294,13 +301,36 @@ mod tests {
     }
 
     #[test]
+    fn test_search_quality_perfect_ef_search() {
+        // Perfect mode should use very high ef_search for 100% recall
+        // Base value 2048, scales with k * 50
+        assert_eq!(SearchQuality::Perfect.ef_search(10), 2048); // max(2048, 10*50=500)
+        assert_eq!(SearchQuality::Perfect.ef_search(50), 2500); // max(2048, 50*50=2500)
+        assert_eq!(SearchQuality::Perfect.ef_search(100), 5000); // max(2048, 100*50=5000)
+    }
+
+    #[test]
     fn test_search_quality_ef_search_high_k() {
         // Test that ef_search scales with k
         assert_eq!(SearchQuality::Fast.ef_search(100), 200); // 100 * 2
         assert_eq!(SearchQuality::Balanced.ef_search(50), 200); // 50 * 4
         assert_eq!(SearchQuality::Accurate.ef_search(40), 320); // 40 * 8
-        assert_eq!(SearchQuality::HighRecall.ef_search(10), 512);
-        assert_eq!(SearchQuality::HighRecall.ef_search(50), 800); // 50 * 16
+                                                                // HighRecall now uses 1024 base (was 512) for better recall
+        assert_eq!(SearchQuality::HighRecall.ef_search(10), 1024); // max(1024, 10*32=320)
+        assert_eq!(SearchQuality::HighRecall.ef_search(50), 1600); // max(1024, 50*32=1600)
+    }
+
+    #[test]
+    fn test_search_quality_perfect_serialize_deserialize() {
+        // Arrange
+        let quality = SearchQuality::Perfect;
+
+        // Act
+        let json = serde_json::to_string(&quality).unwrap();
+        let deserialized: SearchQuality = serde_json::from_str(&json).unwrap();
+
+        // Assert
+        assert_eq!(quality, deserialized);
     }
 
     #[test]

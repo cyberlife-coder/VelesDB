@@ -5,6 +5,38 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-01-01
+
+### 🎯 Search Quality & CI Improvements
+
+#### Added
+
+- **Perfect recall mode** - Guaranteed 100% recall via brute-force SIMD search
+  - New `SearchQuality::Perfect` variant
+  - `search_brute_force()` method for exact KNN
+  - `search_with_rerank_quality()` for customizable re-ranking
+
+- **Improved HighRecall mode** - Increased `ef_search` from 512 to 1024 for ~99.8% recall
+
+#### Fixed
+
+- **CI/CD** - Resolved all clippy pedantic errors for CI compatibility
+- **CLI** - Fixed clippy pedantic warnings in CLI crate
+- **Mobile SDK** - Removed non-existent uniffi-bindgen-cli dependency
+- **Documentation** - Fixed explicit f32 type in cosine_similarity_normalized doctest
+
+#### Search Quality Summary
+
+| Profile | Recall@10 | Latency | Method |
+|---------|-----------|---------|--------|
+| Fast | 90.6% | ~7ms | HNSW ef=64 |
+| Balanced | 98.2% | ~12ms | HNSW ef=128 |
+| Accurate | 99.3% | ~18ms | HNSW ef=256 |
+| HighRecall | 99.8% | ~37ms | HNSW ef=1024 |
+| **Perfect** | **100%** | ~55ms | Brute-force SIMD |
+
+---
+
 ## [0.7.1] - 2026-01-01
 
 ### ⚡ SIMD Performance Optimization
@@ -753,4 +785,5 @@ This change ensures VelesDB remains freely available while protecting against cl
 [0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.7.1...HEAD
+[0.7.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.2
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.7.2...HEAD

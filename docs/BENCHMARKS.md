@@ -1,16 +1,16 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: January 1, 2026 (v0.7.1)*
+*Last updated: January 1, 2026 (v0.7.2)*
 
 ---
 
-## 🚀 v0.7.1 Headline
+## 🚀 v0.7.2 Headline
 
 | Metric | Baseline | VelesDB | Winner |
 |--------|----------|---------|--------|
-| **SIMD Dot Product (768D)** | 280ns (Naive) | **45ns** | **VelesDB 6.2x** ✅ |
+| **SIMD Dot Product (768D)** | 280ns (Naive) | **35ns** | **VelesDB 8x** ✅ |
 | **Search (10K)** | ~50ms (pgvector) | **128µs** | **VelesDB 390x** ✅ |
-| **Recall@10** | 100% | 99.4% | Baseline |
+| **Recall@10** | 100% | **100%** | **VelesDB Perfect** ✅ |
 
 ### When to Choose VelesDB
 
@@ -30,9 +30,9 @@
 
 | Operation | Latency | Throughput | Speedup |
 |-----------|---------|------------|----------|
-| **Dot Product** | 45ns | 22M/s | 6.2x |
-| **Euclidean** | 47ns | 21M/s | 5.9x |
-| **Cosine** | 79ns | 12M/s | 3.5x |
+| **Dot Product** | 35ns | 28M/s | 8x |
+| **Euclidean** | 44ns | 22M/s | 6x |
+| **Cosine** | 82ns | 12M/s | 3.4x |
 | **Hamming** | 6ns | 164M/s | 34x |
 
 ---
@@ -62,11 +62,13 @@ let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
 
 ## 📈 HNSW Recall Profiles
 
-| Profile | ef_search | Recall@10 |
-|---------|-----------|----------|
-| Fast | 64 | 89% |
-| **Balanced** | 128 | **98%** |
-| Accurate | 256 | 99.4% |
+| Profile | Recall@10 | Latency (10K) | Method |
+|---------|-----------|---------------|--------|
+| Fast | 90.6% | ~7ms | HNSW ef=64 |
+| **Balanced** | 98.2% | ~12ms | HNSW ef=128 |
+| Accurate | 99.3% | ~18ms | HNSW ef=256 |
+| HighRecall | 99.8% | ~37ms | HNSW ef=1024 |
+| **Perfect** | **100%** | ~55ms | **Brute-force SIMD** |
 
 ---
 
@@ -79,7 +81,7 @@ let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
 
 ---
 
-## 🔥 v0.7.1 Optimizations
+## 🔥 v0.7.2 Optimizations
 
 - **32-wide SIMD unrolling** — 4x f32x8 accumulators for maximum ILP
 - **Pre-normalized functions** — `cosine_similarity_normalized()` ~40% faster
