@@ -169,6 +169,7 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
 /// - **Parallel HNSW insert**: Uses rayon for CPU-bound indexing
 /// - **Batch flush**: Single I/O flush per batch
 /// - Target: ~3-5K vectors/sec at 768D with batch_size=1000
+#[allow(clippy::too_many_lines)]
 pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
     let file = File::open(path).context("Failed to open CSV file")?;
     let file_size = file.metadata()?.len();

@@ -187,6 +187,7 @@ enum Commands {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 

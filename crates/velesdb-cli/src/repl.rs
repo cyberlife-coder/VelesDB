@@ -134,6 +134,7 @@ enum CommandResult {
     Error(String),
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> CommandResult {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let cmd = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
@@ -405,7 +406,7 @@ fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Command
             let name = parts[1];
             let filename = parts
                 .get(2)
-                .map_or_else(|| format!("{}.json", name), |s| s.to_string());
+                .map_or_else(|| format!("{name}.json"), std::string::ToString::to_string);
 
             match db.get_collection(name) {
                 Some(col) => {
