@@ -31,7 +31,7 @@ fn generate_vector(dimension: usize, seed: usize) -> Vec<f32> {
 fn bench_quantization_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("SQ8 Encode");
 
-    for dim in [128, 384, 768, 1536].iter() {
+    for dim in [128, 384, 768, 1536, 3072].iter() {
         let vector = generate_vector(*dim, 42);
 
         group.bench_with_input(BenchmarkId::new("from_f32", dim), dim, |b, _| {
@@ -45,7 +45,7 @@ fn bench_quantization_encode(c: &mut Criterion) {
 fn bench_dot_product_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("Dot Product: f32 vs SQ8");
 
-    for dim in [768, 1536].iter() {
+    for dim in [768, 1536, 3072].iter() {
         let query = generate_vector(*dim, 1);
         let vector = generate_vector(*dim, 2);
         let quantized = QuantizedVector::from_f32(&vector);
@@ -72,7 +72,7 @@ fn bench_dot_product_comparison(c: &mut Criterion) {
 fn bench_euclidean_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("Euclidean: f32 vs SQ8");
 
-    for dim in [768, 1536].iter() {
+    for dim in [768, 1536, 3072].iter() {
         let query = generate_vector(*dim, 1);
         let vector = generate_vector(*dim, 2);
         let quantized = QuantizedVector::from_f32(&vector);
@@ -99,7 +99,7 @@ fn bench_euclidean_comparison(c: &mut Criterion) {
 fn bench_cosine_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("Cosine: f32 vs SQ8");
 
-    for dim in [768, 1536].iter() {
+    for dim in [768, 1536, 3072].iter() {
         let query = generate_vector(*dim, 1);
         let vector = generate_vector(*dim, 2);
         let quantized = QuantizedVector::from_f32(&vector);
@@ -126,7 +126,7 @@ fn bench_cosine_comparison(c: &mut Criterion) {
 fn bench_memory_usage(c: &mut Criterion) {
     let mut group = c.benchmark_group("Memory Usage");
 
-    for dim in [768, 1536].iter() {
+    for dim in [768, 1536, 3072].iter() {
         let vector = generate_vector(*dim, 42);
         let quantized = QuantizedVector::from_f32(&vector);
 
@@ -135,8 +135,7 @@ fn bench_memory_usage(c: &mut Criterion) {
         let ratio = f32_bytes as f32 / sq8_bytes as f32;
 
         println!(
-            "Dimension {}: f32={} bytes, SQ8={} bytes, ratio={:.1}x",
-            dim, f32_bytes, sq8_bytes, ratio
+            "Dimension {dim}: f32={f32_bytes} bytes, SQ8={sq8_bytes} bytes, ratio={ratio:.1}x"
         );
 
         // Benchmark is just to show the stats

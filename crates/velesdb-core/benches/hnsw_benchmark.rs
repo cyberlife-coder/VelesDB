@@ -199,7 +199,7 @@ fn bench_recall_validation(c: &mut Criterion) {
     let mut group = c.benchmark_group("recall_validation");
     group.sample_size(10); // Fewer samples since we're measuring recall, not time
 
-    for &dim in &[128_usize, 384, 768, 1536] {
+    for &dim in &[128_usize, 384, 768, 1536, 3072] {
         let n_vectors = 5000_u64;
         let k = 10_usize;
 

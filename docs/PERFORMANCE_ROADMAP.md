@@ -1,25 +1,36 @@
 # 🚀 VelesDB Performance Optimization Roadmap
 
-*Created: December 2025*
+*Created: December 2025*  
+*Last Updated: January 2026*
 
-## 📊 Current State (Baseline)
+## 📊 Current State (After Optimizations)
 
-Based on sequential benchmark runs (December 2025):
+Based on benchmark runs (January 2026) with implemented Technical Stories:
 
-| Operation | Latency | Throughput | Gap vs Optimal |
-|-----------|---------|------------|----------------|
-| Cosine Similarity (768d) | ~310 ns | 3.2M ops/s | ~3.5x vs kernel |
-| Euclidean Distance (768d) | ~138 ns | 7.2M ops/s | ~2x vs kernel |
-| Dot Product (768d) | ~130 ns | 7.7M ops/s | ~2x vs kernel |
-| Hamming Binary (768b) | ~6 ns | 164M ops/s | ✅ Optimal |
-| Metadata Filter (100k) | ~5.2 ms | 19M items/s | -70% vs 10k |
-| VelesQL Parse (simple) | ~528 ns | 1.9M qps | ✅ OK |
+| Operation | Latency | Throughput | Status |
+|-----------|---------|------------|--------|
+| Dot Product (768D) | **~38 ns** | 26M ops/s | ✅ Optimized |
+| Euclidean Distance (768D) | **~47 ns** | 21M ops/s | ✅ Optimized |
+| Cosine Similarity (768D) | **~83 ns** | 12M ops/s | ✅ Optimized |
+| Hamming Distance (768D) | **~16 ns** | 62M ops/s | ✅ Optimal |
+| Jaccard Similarity (768D) | **~90 ns** | 11M ops/s | ✅ New |
+| VelesQL Parse (simple) | ~570 ns | 1.8M qps | ✅ OK |
+| ColumnStore Filter (100k) | ~42 µs | 122x vs JSON | ✅ Optimized |
 
-### Key Observations
+### ✅ Implemented Technical Stories (P0)
 
-1. **SIMD Kernel vs API Gap**: Raw SIMD kernels (`simd_explicit.rs`) are 2-3.5x faster than the public API (`simd.rs`)
-2. **Filtering Scale Issue**: Throughput drops from 65M/s at 10k items to 19M/s at 100k items
-3. **Workload Analysis**: Filtering is **frequent (50%+)** for target RAG use cases
+| Story | Description | Status |
+|-------|-------------|--------|
+| **TS-CORE-001** | Adaptive prefetch distance (4-16 based on vector size) | ✅ Done |
+| **TS-CORE-002** | Batch search lock optimization (N→1 contention) | ✅ Done |
+| **TS-CORE-004** | Storage compaction with atomic swap | ✅ Done |
+
+### Key Improvements vs December 2025
+
+1. **Cosine**: 310ns → **83ns** (3.7x faster)
+2. **Euclidean**: 138ns → **47ns** (2.9x faster)  
+3. **Dot Product**: 130ns → **38ns** (3.4x faster)
+4. **ColumnStore Filtering**: 122x faster than JSON at 100k items
 
 ---
 
@@ -80,27 +91,35 @@ match len {
 
 ---
 
-## 📈 Success Metrics
+## 📈 Success Metrics (Updated January 2026)
 
-| Metric | Current | Target | Improvement |
-|--------|---------|--------|-------------|
-| Cosine (768d) | 310 ns | <220 ns | -30% |
-| Euclidean (768d) | 138 ns | <100 ns | -30% |
-| Filter (100k) | 19M/s | 50M/s | +160% |
-| Filter (1M) | TBD | 40M/s | - |
+| Metric | Dec 2025 | Target | Jan 2026 | Status |
+|--------|----------|--------|----------|--------|
+| Cosine (768D) | 310 ns | <220 ns | **83 ns** | ✅ Exceeded |
+| Euclidean (768D) | 138 ns | <100 ns | **47 ns** | ✅ Exceeded |
+| Dot Product (768D) | 130 ns | <100 ns | **38 ns** | ✅ Exceeded |
+| Filter (100k) | 19M/s | 50M/s | **122x faster** | ✅ Exceeded |
+| Recall@10 | ~95% | >98% | **99.4%** | ✅ Achieved |
 
 ---
 
-## 🗓️ Timeline
+## 🗓️ Timeline Status
 
-| Phase | Issue | Priority | Estimated Effort |
-|-------|-------|----------|------------------|
-| A | Diagnostic | 🔴 High | 2-3 days |
-| B | Filtering | 🔴 High | 5-7 days |
-| C | SIMD | 🟡 Medium | 3-4 days |
-| D | Docs | 🟢 Low | 1 day |
+| Phase | Issue | Priority | Status |
+|-------|-------|----------|--------|
+| A | Diagnostic | 🔴 High | ✅ Complete |
+| B | ColumnStore Filtering | 🔴 High | ✅ Complete (122x faster) |
+| C | SIMD Optimization | 🟡 Medium | ✅ Complete (3-4x faster) |
+| D | Documentation | 🟢 Low | 🔄 In Progress |
 
-**Total**: ~2-3 weeks
+## 🔮 Future Optimizations (P1-P3)
+
+| Story | Priority | Description |
+|-------|----------|-------------|
+| TS-CORE-003 | P1 | AVX-512 native exploitation (currently AVX2 via `wide`) |
+| TS-CORE-005 | P2 | Product Quantization (PQ) for memory reduction |
+| TS-SERVER-001 | P1 | Tokio runtime tuning |
+| TS-WASM-001 | P2 | Binary size reduction (<500KB) |
 
 ---
 

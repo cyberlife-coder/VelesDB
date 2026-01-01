@@ -4,9 +4,9 @@ use pest::Parser as PestParser;
 use pest_derive::Parser;
 
 use super::ast::{
-    BetweenCondition, Column, CompareOp, Comparison, Condition, DistanceMetricType, InCondition,
-    IsNullCondition, LikeCondition, MatchCondition, Query, SelectColumns, SelectStatement, Value,
-    VectorExpr, VectorSearch,
+    BetweenCondition, Column, CompareOp, Comparison, Condition, InCondition, IsNullCondition,
+    LikeCondition, MatchCondition, Query, SelectColumns, SelectStatement, Value, VectorExpr,
+    VectorSearch,
 };
 use super::error::{ParseError, ParseErrorKind};
 
@@ -213,30 +213,18 @@ impl Parser {
     }
 
     fn parse_vector_search(pair: pest::iterators::Pair<Rule>) -> Result<Condition, ParseError> {
-        let mut metric = DistanceMetricType::default();
         let mut vector = None;
 
         for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::metric => {
-                    metric = match inner.as_str().to_uppercase().as_str() {
-                        "EUCLIDEAN" => DistanceMetricType::Euclidean,
-                        "DOT" => DistanceMetricType::Dot,
-                        // "COSINE" and any other value defaults to Cosine
-                        _ => DistanceMetricType::Cosine,
-                    };
-                }
-                Rule::vector_value => {
-                    vector = Some(Self::parse_vector_value(inner)?);
-                }
-                _ => {}
+            if inner.as_rule() == Rule::vector_value {
+                vector = Some(Self::parse_vector_value(inner)?);
             }
         }
 
         let vector =
             vector.ok_or_else(|| ParseError::syntax(0, "", "Expected vector expression"))?;
 
-        Ok(Condition::VectorSearch(VectorSearch { metric, vector }))
+        Ok(Condition::VectorSearch(VectorSearch { vector }))
     }
 
     fn parse_vector_value(pair: pest::iterators::Pair<Rule>) -> Result<VectorExpr, ParseError> {
@@ -541,7 +529,6 @@ mod tests {
         let query = Parser::parse("SELECT * FROM documents WHERE vector NEAR $v").unwrap();
         match query.select.where_clause {
             Some(Condition::VectorSearch(vs)) => {
-                assert_eq!(vs.metric, DistanceMetricType::Cosine);
                 assert_eq!(vs.vector, VectorExpr::Parameter("v".to_string()));
             }
             _ => panic!("Expected vector search condition"),
@@ -559,28 +546,6 @@ mod tests {
                 }
                 VectorExpr::Parameter(_) => panic!("Expected literal vector"),
             },
-            _ => panic!("Expected vector search condition"),
-        }
-    }
-
-    #[test]
-    fn test_parse_vector_near_euclidean() {
-        let query = Parser::parse("SELECT * FROM docs WHERE vector NEAR EUCLIDEAN $v").unwrap();
-        match query.select.where_clause {
-            Some(Condition::VectorSearch(vs)) => {
-                assert_eq!(vs.metric, DistanceMetricType::Euclidean);
-            }
-            _ => panic!("Expected vector search condition"),
-        }
-    }
-
-    #[test]
-    fn test_parse_vector_near_dot() {
-        let query = Parser::parse("SELECT * FROM docs WHERE vector NEAR DOT $v").unwrap();
-        match query.select.where_clause {
-            Some(Condition::VectorSearch(vs)) => {
-                assert_eq!(vs.metric, DistanceMetricType::Dot);
-            }
             _ => panic!("Expected vector search condition"),
         }
     }

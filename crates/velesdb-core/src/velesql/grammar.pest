@@ -38,11 +38,11 @@ primary_expr = {
     compare_expr
 }
 
-// Vector search: vector NEAR [metric] vector_value
+// Vector search: vector NEAR vector_value
+// Note: Distance metric is defined at collection creation, not per-query
 vector_search = { 
-    ^"vector" ~ ^"NEAR" ~ metric? ~ vector_value 
+    ^"vector" ~ ^"NEAR" ~ vector_value 
 }
-metric = { ^"COSINE" | ^"EUCLIDEAN" | ^"DOT" }
 vector_value = { vector_literal | parameter }
 vector_literal = { "[" ~ float ~ ("," ~ float)* ~ "]" }
 

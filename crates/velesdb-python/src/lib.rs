@@ -209,7 +209,7 @@ impl Collection {
     /// Get collection configuration info.
     ///
     /// Returns:
-    ///     Dict with name, dimension, metric, and point_count
+    ///     Dict with name, dimension, metric, storage_mode, and point_count
     fn info(&self) -> PyResult<HashMap<String, PyObject>> {
         Python::with_gil(|py| {
             let config = self.inner.config();
@@ -219,6 +219,12 @@ impl Collection {
             info.insert(
                 "metric".to_string(),
                 format!("{:?}", config.metric).to_lowercase().into_py(py),
+            );
+            info.insert(
+                "storage_mode".to_string(),
+                format!("{:?}", config.storage_mode)
+                    .to_lowercase()
+                    .into_py(py),
             );
             info.insert("point_count".to_string(), config.point_count.into_py(py));
             Ok(info)

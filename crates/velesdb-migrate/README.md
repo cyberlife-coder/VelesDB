@@ -405,7 +405,7 @@ options:
 ## 🔧 CLI Reference
 
 ```
-velesdb-migrate 0.5.2
+velesdb-migrate 0.7.0
 Migrate vectors from other databases to VelesDB
 
 USAGE:

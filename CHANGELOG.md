@@ -5,6 +5,43 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-01-01
+
+### ⚡ SIMD Performance Optimization
+
+#### Added
+
+- **32-wide SIMD unrolling** - 4x f32x8 accumulators for maximum ILP
+  - `cosine_similarity_fast`: **-12% latency** (768D: 90ns → 79ns)
+  - `dot_product_fast`: **-17% latency** (768D: 54ns → 45ns)
+  - `euclidean_distance_fast`: **-15% latency**
+
+- **Pre-normalized vector functions** - Fast path for unit vectors
+  - `cosine_similarity_normalized()`: **~40% faster** than standard cosine
+  - `batch_cosine_normalized()`: Batch with CPU prefetch hints
+  - Skips norm computation when vectors are already normalized
+
+- **Benchmark dimensions expanded** - OpenAI embedding support
+  - Added 1536D (text-embedding-3-small) to all benchmarks
+  - Added 3072D (text-embedding-3-large) to all benchmarks
+
+#### Performance Summary (768D vectors)
+
+| Function | Before | After | Improvement |
+|----------|--------|-------|-------------|
+| cosine_similarity | 90ns | 79ns | **-12%** |
+| dot_product | 54ns | 45ns | **-17%** |
+| euclidean | 55ns | 47ns | **-15%** |
+| cosine_normalized | N/A | 45ns | **New** |
+
+#### Files Modified
+
+- `src/simd.rs` - Switched to 32-wide optimized implementations
+- `src/simd_avx512.rs` - Added `cosine_similarity_normalized`, `batch_cosine_normalized`
+- `benches/*.rs` - Added dimensions 1536, 3072
+
+---
+
 ## [0.7.0] - 2026-01-01
 
 ### 📱 Mobile SDK - iOS & Android

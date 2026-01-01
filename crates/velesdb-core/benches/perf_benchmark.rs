@@ -89,7 +89,7 @@ fn bench_random_access(c: &mut Criterion) {
 fn bench_batch_dot_products(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_dot_products");
 
-    for dimension in [128, 768, 1536] {
+    for dimension in [128, 768, 1536, 3072] {
         let count = 100;
         let vectors = generate_vectors(count, dimension);
         let query: Vec<f32> = (0..dimension)
@@ -140,7 +140,7 @@ fn bench_batch_dot_products(c: &mut Criterion) {
 fn bench_insert_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("insert_throughput");
 
-    for dimension in [128, 768, 1536] {
+    for dimension in [128, 768, 1536, 3072] {
         let count = 1000;
         let vectors = generate_vectors(count, dimension);
 

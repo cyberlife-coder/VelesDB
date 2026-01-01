@@ -5438,7 +5438,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "parking_lot",
  "serde",
@@ -6353,7 +6353,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -6373,7 +6373,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -6404,7 +6404,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-migrate"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6430,7 +6430,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-mobile"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -6442,7 +6442,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "numpy",
  "pyo3",
@@ -6453,7 +6453,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -6477,7 +6477,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-wasm"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "half",
  "js-sys",

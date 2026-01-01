@@ -92,24 +92,13 @@ pub enum Condition {
 }
 
 /// Vector similarity search condition.
+///
+/// Note: The distance metric is defined at collection creation time,
+/// not per-query. The search uses the collection's configured metric.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VectorSearch {
-    /// Distance metric (default: Cosine).
-    pub metric: DistanceMetricType,
     /// Vector expression (literal or parameter).
     pub vector: VectorExpr,
-}
-
-/// Distance metric for vector search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum DistanceMetricType {
-    /// Cosine similarity (default).
-    #[default]
-    Cosine,
-    /// Euclidean distance.
-    Euclidean,
-    /// Dot product.
-    Dot,
 }
 
 /// Vector expression in a NEAR clause.
@@ -283,12 +272,6 @@ mod tests {
     fn test_value_from_bool() {
         let v: Value = true.into();
         assert_eq!(v, Value::Boolean(true));
-    }
-
-    #[test]
-    fn test_distance_metric_default() {
-        let metric = DistanceMetricType::default();
-        assert_eq!(metric, DistanceMetricType::Cosine);
     }
 
     #[test]

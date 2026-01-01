@@ -7,28 +7,37 @@
 //!
 //! ## Features
 //!
-//! - **Blazing Fast**: HNSW index with SIMD-optimized distance calculations
+//! - **Blazing Fast**: HNSW index with explicit SIMD (4x faster)
+//! - **5 Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
+//! - **Hybrid Search**: Vector + BM25 full-text with RRF fusion
+//! - **Quantization**: SQ8 (4x) and Binary (32x) memory compression
 //! - **Persistent Storage**: Memory-mapped files for efficient disk access
-//! - **Simple API**: Easy-to-use interface for vector operations
 //!
 //! ## Quick Start
 //!
 //! ```rust,ignore
-//! use velesdb_core::{Database, Collection, DistanceMetric};
+//! use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
+//! use serde_json::json;
 //!
 //! // Create a new database
 //! let db = Database::open("./data")?;
 //!
-//! // Create a collection
-//! let collection = db.create_collection("documents", 768, DistanceMetric::Cosine)?;
+//! // Create a collection (all 5 metrics available)
+//! db.create_collection("documents", 768, DistanceMetric::Cosine)?;
+//! // Or with quantization: DistanceMetric::Hamming + StorageMode::Binary
 //!
-//! // Insert vectors
+//! let collection = db.get_collection("documents").unwrap();
+//!
+//! // Insert vectors (upsert takes ownership)
 //! collection.upsert(vec![
-//!     Point::new(1, vec![0.1, 0.2, ...], json!({"title": "Hello World"})),
+//!     Point::new(1, vec![0.1; 768], Some(json!({"title": "Hello World"}))),
 //! ])?;
 //!
 //! // Search for similar vectors
 //! let results = collection.search(&query_vector, 10)?;
+//!
+//! // Hybrid search (vector + text)
+//! let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7))?;
 //! ```
 
 #![warn(missing_docs)]

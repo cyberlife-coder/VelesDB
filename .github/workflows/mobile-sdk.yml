@@ -1,0 +1,87 @@
+name: Mobile SDK Build
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'crates/velesdb-mobile/**'
+      - 'crates/velesdb-core/**'
+  workflow_dispatch:
+
+jobs:
+  android-build:
+    name: Build Android (AAR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Install UniFFI Bindgen
+        run: cargo install uniffi-bindgen-cli@0.28.3
+
+      - name: Build Android Libraries
+        run: |
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --release -p velesdb-mobile
+
+      - name: Generate Kotlin Bindings
+        run: |
+          mkdir -p generated/android
+          uniffi-bindgen generate --library target/aarch64-linux-android/release/libvelesdb_mobile.so --language kotlin --out-dir generated/android
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: velesdb-android-sdk
+          path: |
+            target/*/release/libvelesdb_mobile.so
+            generated/android/
+
+  ios-build:
+    name: Build iOS (XCFramework)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+
+      - name: Install UniFFI Bindgen
+        run: cargo install uniffi-bindgen-cli@0.28.3
+
+      - name: Build iOS Libraries
+        run: |
+          cargo build --target aarch64-apple-ios --release -p velesdb-mobile
+          cargo build --target aarch64-apple-ios-sim --release -p velesdb-mobile
+
+      - name: Generate Swift Bindings
+        run: |
+          mkdir -p generated/ios
+          uniffi-bindgen generate --library target/aarch64-apple-ios/release/libvelesdb_mobile.a --language swift --out-dir generated/ios
+
+      - name: Create XCFramework
+        run: |
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
+            -headers generated/ios/ \
+            -library target/aarch64-apple-ios-sim/release/libvelesdb_mobile.a \
+            -headers generated/ios/ \
+            -output VelesDB.xcframework
+
+      - name: Upload iOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: velesdb-ios-sdk
+          path: |
+            VelesDB.xcframework
+            generated/ios/*.swift

@@ -662,7 +662,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use velesdb_core::velesql::{
-        CompareOp, Comparison, Condition, DistanceMetricType, Value, VectorExpr, VectorSearch,
+        CompareOp, Comparison, Condition, Value, VectorExpr, VectorSearch,
     };
 
     // =========================================================================
@@ -720,7 +720,6 @@ mod tests {
     #[test]
     fn test_contains_vector_search_with_vector() {
         let condition = Condition::VectorSearch(VectorSearch {
-            metric: DistanceMetricType::Cosine,
             vector: VectorExpr::Literal(vec![0.1, 0.2]),
         });
         assert!(contains_vector_search(&condition));
@@ -739,7 +738,6 @@ mod tests {
     #[test]
     fn test_contains_vector_search_nested_and() {
         let vector_cond = Condition::VectorSearch(VectorSearch {
-            metric: DistanceMetricType::Cosine,
             vector: VectorExpr::Literal(vec![0.1]),
         });
         let other_cond = Condition::Comparison(Comparison {
@@ -754,7 +752,6 @@ mod tests {
     #[test]
     fn test_contains_vector_search_nested_or() {
         let vector_cond = Condition::VectorSearch(VectorSearch {
-            metric: DistanceMetricType::Cosine,
             vector: VectorExpr::Literal(vec![0.1]),
         });
         let other_cond = Condition::Comparison(Comparison {
@@ -769,7 +766,6 @@ mod tests {
     #[test]
     fn test_contains_vector_search_group() {
         let vector_cond = Condition::VectorSearch(VectorSearch {
-            metric: DistanceMetricType::Cosine,
             vector: VectorExpr::Literal(vec![0.1]),
         });
         let grouped = Condition::Group(Box::new(vector_cond));

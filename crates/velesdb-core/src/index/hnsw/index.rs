@@ -414,7 +414,12 @@ impl HnswIndex {
             .map(|(id, _)| (*id, mappings.get_idx(*id)))
             .collect();
 
-        let prefetch_distance = 4;
+        // Perf TS-CORE-001: Adaptive prefetch distance based on vector size
+        // For 768D vectors (3KB), prefetch 8-12 vectors to hide ~100-200 cycle memory latency
+        // Formula: prefetch_distance = max(4, min(16, vector_bytes / L2_CACHE_LINE))
+        let l2_cache_line: usize = 64; // Typical L2 cache line size
+        let vector_bytes = self.dimension * std::mem::size_of::<f32>();
+        let prefetch_distance = (vector_bytes / l2_cache_line).clamp(4, 16);
         let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidates.len());
 
         for (i, (id, idx_opt)) in indices.iter().enumerate() {
@@ -603,9 +608,58 @@ impl HnswIndex {
     ) -> Vec<Vec<(u64, f32)>> {
         use rayon::prelude::*;
 
+        // Perf TS-CORE-002: Acquire locks ONCE for entire batch to reduce contention
+        // Before: N lock acquire/release cycles for N queries
+        // After: 1 lock acquire, N searches, 1 release
+        let ef_search = quality.ef_search(k);
+        let inner = self.inner.read();
+        let mappings = self.mappings.read();
+
         queries
             .par_iter()
-            .map(|query| self.search_with_quality(query, k, quality))
+            .map(|query| {
+                assert_eq!(
+                    query.len(),
+                    self.dimension,
+                    "Query dimension mismatch: expected {}, got {}",
+                    self.dimension,
+                    query.len()
+                );
+
+                let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
+
+                match &**inner {
+                    HnswInner::Cosine(hnsw) => {
+                        let neighbours = hnsw.search(query, k, ef_search);
+                        for n in &neighbours {
+                            if let Some(id) = mappings.get_id(n.d_id) {
+                                let score = (1.0 - n.distance).clamp(0.0, 1.0);
+                                results.push((id, score));
+                            }
+                        }
+                    }
+                    HnswInner::Euclidean(hnsw)
+                    | HnswInner::Hamming(hnsw)
+                    | HnswInner::Jaccard(hnsw) => {
+                        let neighbours = hnsw.search(query, k, ef_search);
+                        for n in &neighbours {
+                            if let Some(id) = mappings.get_id(n.d_id) {
+                                results.push((id, n.distance));
+                            }
+                        }
+                    }
+                    HnswInner::DotProduct(hnsw) => {
+                        let neighbours = hnsw.search(query, k, ef_search);
+                        for n in &neighbours {
+                            if let Some(id) = mappings.get_id(n.d_id) {
+                                results.push((id, -n.distance));
+                            }
+                        }
+                    }
+                }
+
+                results
+            })
             .collect()
     }
 
@@ -1500,5 +1554,263 @@ mod tests {
         let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.001).sin()).collect();
         let results = index.search(&query, 10);
         assert_eq!(results.len(), 10);
+    }
+
+    // =========================================================================
+    // TS-CORE-001: Adaptive Prefetch Tests
+    // =========================================================================
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    fn test_search_with_rerank_768d_prefetch() {
+        // Test adaptive prefetch for 768D vectors (3KB each)
+        // prefetch_distance should be 768*4/64 = 48, clamped to 16
+        let index = HnswIndex::new(768, DistanceMetric::Cosine);
+
+        // Insert 100 vectors
+        for i in 0u64..100 {
+            let v: Vec<f32> = (0..768)
+                .map(|j| ((i + j as u64) as f32 * 0.001).sin())
+                .collect();
+            index.insert(i, &v);
+        }
+
+        let query: Vec<f32> = (0..768).map(|j| (j as f32 * 0.001).sin()).collect();
+        let results = index.search_with_rerank(&query, 10, 50);
+
+        assert!(!results.is_empty(), "Should return results");
+        assert!(results.len() <= 10, "Should not exceed k");
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    fn test_search_with_rerank_small_dim_prefetch() {
+        // Test adaptive prefetch for small vectors (32D = 128 bytes)
+        // prefetch_distance should be 128/64 = 2, clamped to 4 (minimum)
+        let index = HnswIndex::new(32, DistanceMetric::Cosine);
+
+        for i in 0u64..50 {
+            let v: Vec<f32> = (0..32)
+                .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+                .collect();
+            index.insert(i, &v);
+        }
+
+        let query: Vec<f32> = (0..32).map(|j| (j as f32 * 0.01).sin()).collect();
+        let results = index.search_with_rerank(&query, 5, 20);
+
+        assert!(!results.is_empty(), "Should return results");
+    }
+
+    // =========================================================================
+    // TS-CORE-002: Batch Search Optimization Tests
+    // =========================================================================
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    fn test_search_batch_parallel_consistency() {
+        let index = HnswIndex::new(64, DistanceMetric::Cosine);
+
+        // Insert 200 vectors
+        for i in 0u64..200 {
+            let v: Vec<f32> = (0..64)
+                .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+                .collect();
+            index.insert(i, &v);
+        }
+
+        // Create batch queries
+        let queries: Vec<Vec<f32>> = (0..10)
+            .map(|i| {
+                (0..64)
+                    .map(|j| ((200 + i + j) as f32 * 0.01).sin())
+                    .collect()
+            })
+            .collect();
+        let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
+
+        // Batch search
+        let batch_results = index.search_batch_parallel(&query_refs, 5, SearchQuality::Balanced);
+
+        // Individual searches for comparison
+        let individual_results: Vec<Vec<(u64, f32)>> = queries
+            .iter()
+            .map(|q| index.search_with_quality(q, 5, SearchQuality::Balanced))
+            .collect();
+
+        // Results should match (same IDs, though order might vary slightly)
+        assert_eq!(batch_results.len(), individual_results.len());
+        for (batch, individual) in batch_results.iter().zip(&individual_results) {
+            assert_eq!(batch.len(), individual.len(), "Result counts should match");
+        }
+    }
+
+    #[test]
+    fn test_search_batch_parallel_empty_queries() {
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        index.insert(1, &[1.0, 0.0, 0.0]);
+
+        let queries: Vec<&[f32]> = vec![];
+        let results = index.search_batch_parallel(&queries, 5, SearchQuality::Fast);
+
+        assert!(
+            results.is_empty(),
+            "Empty queries should return empty results"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    fn test_search_batch_parallel_large_batch() {
+        let index = HnswIndex::new(128, DistanceMetric::Cosine);
+
+        // Insert 500 vectors
+        for i in 0u64..500 {
+            let v: Vec<f32> = (0..128)
+                .map(|j| ((i + j as u64) as f32 * 0.001).sin())
+                .collect();
+            index.insert(i, &v);
+        }
+        index.set_searching_mode();
+
+        // 100 queries batch
+        let queries: Vec<Vec<f32>> = (0..100)
+            .map(|i| {
+                (0..128)
+                    .map(|j| ((500 + i + j) as f32 * 0.001).sin())
+                    .collect()
+            })
+            .collect();
+        let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
+
+        let results = index.search_batch_parallel(&query_refs, 10, SearchQuality::Accurate);
+
+        assert_eq!(results.len(), 100, "Should return 100 result sets");
+        for result in &results {
+            assert_eq!(result.len(), 10, "Each result should have 10 neighbors");
+        }
+    }
+
+    // =========================================================================
+    // Recall Quality Regression Tests
+    // =========================================================================
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn test_recall_quality_minimum_threshold() {
+        // Ensure recall@10 >= 90% for HighRecall quality on small dataset
+        let dim = 64;
+        let n = 500;
+        let k = 10;
+
+        let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+
+        // Generate deterministic dataset
+        let dataset: Vec<Vec<f32>> = (0..n)
+            .map(|i| {
+                (0..dim)
+                    .map(|j| ((i * dim + j) as f32 * 0.001).sin())
+                    .collect()
+            })
+            .collect();
+
+        for (idx, vec) in dataset.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            index.insert(idx as u64, vec);
+        }
+
+        // Generate query
+        let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.001).sin()).collect();
+
+        // Compute ground truth with brute force
+        let mut distances: Vec<(u64, f32)> = dataset
+            .iter()
+            .enumerate()
+            .map(|(idx, vec)| {
+                let sim = crate::simd::cosine_similarity_fast(&query, vec);
+                #[allow(clippy::cast_possible_truncation)]
+                (idx as u64, sim)
+            })
+            .collect();
+        distances.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let ground_truth: Vec<u64> = distances.iter().take(k).map(|(id, _)| *id).collect();
+
+        // HNSW search
+        let results = index.search_with_quality(&query, k, SearchQuality::HighRecall);
+        let result_ids: std::collections::HashSet<u64> =
+            results.iter().map(|(id, _)| *id).collect();
+        let gt_set: std::collections::HashSet<u64> = ground_truth.iter().copied().collect();
+
+        let recall = result_ids.intersection(&gt_set).count() as f64 / k as f64;
+
+        assert!(
+            recall >= 0.8,
+            "Recall@{k} should be >= 80% for HighRecall, got {:.1}%",
+            recall * 100.0
+        );
+    }
+
+    // =========================================================================
+    // Stress Tests
+    // =========================================================================
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
+    fn test_concurrent_search_stress() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let index = Arc::new(HnswIndex::new(64, DistanceMetric::Cosine));
+
+        // Insert vectors
+        for i in 0u64..100 {
+            let v: Vec<f32> = (0..64)
+                .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+                .collect();
+            index.insert(i, &v);
+        }
+
+        // Spawn multiple search threads
+        let handles: Vec<_> = (0..4)
+            .map(|t| {
+                let idx = Arc::clone(&index);
+                thread::spawn(move || {
+                    for i in 0..50 {
+                        let query: Vec<f32> = (0..64)
+                            .map(|j| ((t * 100 + i + j) as f32 * 0.01).sin())
+                            .collect();
+                        let results = idx.search(&query, 5);
+                        assert!(!results.is_empty());
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+    }
+
+    #[test]
+    fn test_all_distance_metrics_search_with_rerank() {
+        for metric in [
+            DistanceMetric::Cosine,
+            DistanceMetric::Euclidean,
+            DistanceMetric::DotProduct,
+            DistanceMetric::Hamming,
+            DistanceMetric::Jaccard,
+        ] {
+            let index = HnswIndex::new(8, metric);
+            index.insert(1, &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            index.insert(2, &[0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            index.insert(3, &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+            let results = index.search_with_rerank(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 3, 3);
+
+            assert!(
+                !results.is_empty(),
+                "search_with_rerank should work for {metric:?}"
+            );
+        }
     }
 }

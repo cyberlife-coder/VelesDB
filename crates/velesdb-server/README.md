@@ -45,10 +45,20 @@ RUST_LOG=info velesdb-server
 ### Collections
 
 ```bash
-# Create collection
+# Create collection (default: full precision, cosine)
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "documents", "dimension": 768, "metric": "cosine"}'
+
+# Create collection with quantization (SQ8 = 4x memory reduction)
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "compressed", "dimension": 768, "metric": "cosine", "storage_mode": "sq8"}'
+
+# Create binary collection (Hamming + Binary = 32x compression)
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "fingerprints", "dimension": 256, "metric": "hamming", "storage_mode": "binary"}'
 
 # List collections
 curl http://localhost:8080/collections
@@ -108,6 +118,16 @@ curl -X POST http://localhost:8080/collections/documents/search/hybrid \
     "vector_weight": 0.7
   }'
 
+# Batch search (multiple queries in parallel)
+curl -X POST http://localhost:8080/collections/documents/search/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "searches": [
+      {"vector": [0.1, 0.2, ...], "top_k": 5},
+      {"vector": [0.3, 0.4, ...], "top_k": 5}
+    ]
+  }'
+
 # VelesQL query
 curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
@@ -125,17 +145,17 @@ curl -X POST http://localhost:8080/query \
   }'
 ```
 
-### Health & Info
+### Health & OpenAPI
 
 ```bash
 # Health check
 curl http://localhost:8080/health
 
-# Server info
-curl http://localhost:8080/info
+# OpenAPI spec (JSON)
+curl http://localhost:8080/api-docs/openapi.json
 
-# OpenAPI spec
-curl http://localhost:8080/openapi.json
+# Swagger UI (interactive docs)
+# Open in browser: http://localhost:8080/swagger-ui
 ```
 
 ## Distance Metrics

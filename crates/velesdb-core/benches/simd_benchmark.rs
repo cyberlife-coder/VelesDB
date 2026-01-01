@@ -8,6 +8,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::simd::{
     cosine_similarity_fast, dot_product_fast, euclidean_distance_fast, hamming_distance_fast,
+    jaccard_similarity_fast,
 };
 use velesdb_core::simd_explicit::{
     cosine_similarity_simd, dot_product_simd, euclidean_distance_simd, hamming_distance_binary,
@@ -22,7 +23,7 @@ fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
 fn bench_dot_product(c: &mut Criterion) {
     let mut group = c.benchmark_group("dot_product");
 
-    for dim in &[128, 384, 768, 1536] {
+    for dim in &[128, 384, 768, 1536, 3072] {
         let a = generate_vector(*dim, 0.0);
         let b = generate_vector(*dim, 1.0);
 
@@ -41,7 +42,7 @@ fn bench_dot_product(c: &mut Criterion) {
 fn bench_euclidean_distance(c: &mut Criterion) {
     let mut group = c.benchmark_group("euclidean_distance");
 
-    for dim in &[128, 384, 768, 1536] {
+    for dim in &[128, 384, 768, 1536, 3072] {
         let a = generate_vector(*dim, 0.0);
         let b = generate_vector(*dim, 1.0);
 
@@ -60,7 +61,7 @@ fn bench_euclidean_distance(c: &mut Criterion) {
 fn bench_cosine_similarity(c: &mut Criterion) {
     let mut group = c.benchmark_group("cosine_similarity");
 
-    for dim in &[128, 384, 768, 1536] {
+    for dim in &[128, 384, 768, 1536, 3072] {
         let a = generate_vector(*dim, 0.0);
         let b = generate_vector(*dim, 1.0);
 
@@ -91,7 +92,7 @@ fn generate_packed_binary(num_u64: usize, seed: u64) -> Vec<u64> {
 fn bench_hamming_f32(c: &mut Criterion) {
     let mut group = c.benchmark_group("hamming_f32");
 
-    for dim in &[128, 384, 768, 1536] {
+    for dim in &[128, 384, 768, 1536, 3072] {
         let a = generate_binary_vector(*dim, 0);
         let b = generate_binary_vector(*dim, 1);
 
@@ -112,7 +113,7 @@ fn bench_hamming_binary(c: &mut Criterion) {
 
     // Compare f32 Hamming vs packed binary with POPCNT
     // 768 f32 elements = 768 bits = 12 u64s
-    for (f32_dim, u64_count) in &[(128, 2), (384, 6), (768, 12), (1536, 24)] {
+    for (f32_dim, u64_count) in &[(128, 2), (384, 6), (768, 12), (1536, 24), (3072, 48)] {
         let a_f32 = generate_binary_vector(*f32_dim, 0);
         let b_f32 = generate_binary_vector(*f32_dim, 1);
         let a_u64 = generate_packed_binary(*u64_count, 0x1234_5678);
@@ -146,12 +147,68 @@ fn bench_hamming_binary(c: &mut Criterion) {
     group.finish();
 }
 
+/// Generate set-like vectors for Jaccard similarity benchmarks.
+/// Values > 0.5 are considered "in the set".
+fn generate_set_vector(dim: usize, density: f32, seed: usize) -> Vec<f32> {
+    (0..dim)
+        .map(|i| {
+            // Use deterministic pseudo-random based on seed and index
+            let hash = ((i + seed) as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            let normalized = (hash as f32) / (u64::MAX as f32);
+            if normalized < density {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+fn bench_jaccard_similarity(c: &mut Criterion) {
+    let mut group = c.benchmark_group("jaccard_similarity");
+
+    for dim in &[128, 384, 768, 1536, 3072] {
+        // Generate sparse set vectors with ~30% density
+        let a = generate_set_vector(*dim, 0.3, 42);
+        let b = generate_set_vector(*dim, 0.3, 123);
+
+        group.bench_with_input(BenchmarkId::new("fast", dim), dim, |bencher, _| {
+            bencher.iter(|| jaccard_similarity_fast(black_box(&a), black_box(&b)));
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_jaccard_density(c: &mut Criterion) {
+    let mut group = c.benchmark_group("jaccard_density");
+    let dim = 768;
+
+    // Benchmark different set densities
+    for density in &[0.1, 0.3, 0.5, 0.7, 0.9] {
+        let a = generate_set_vector(dim, *density, 42);
+        let b = generate_set_vector(dim, *density, 123);
+
+        group.bench_with_input(
+            BenchmarkId::new("density", format!("{:.0}%", density * 100.0)),
+            density,
+            |bencher, _| {
+                bencher.iter(|| jaccard_similarity_fast(black_box(&a), black_box(&b)));
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dot_product,
     bench_euclidean_distance,
     bench_cosine_similarity,
     bench_hamming_f32,
-    bench_hamming_binary
+    bench_hamming_binary,
+    bench_jaccard_similarity,
+    bench_jaccard_density
 );
 criterion_main!(benches);
