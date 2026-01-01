@@ -228,7 +228,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.5.1-amd64.deb
+sudo dpkg -i velesdb-0.6.0-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -265,7 +265,10 @@ collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
 results = collection.search([...], top_k=10)
 ```
 
-> 📦 **Coming soon:** `pip install velesdb` (PyPI publication planned for v0.6.0)
+```bash
+# Install from PyPI
+pip install velesdb
+```
 
 ### Option 4: Rust (from source)
 
@@ -279,7 +282,10 @@ cargo build --release
 ./target/release/velesdb-server --help
 ```
 
-> 📦 **Coming soon:** `cargo install velesdb-cli` (crates.io publication planned for v0.6.0)
+```bash
+# Install from crates.io
+cargo install velesdb-cli
+```
 
 ### Option 5: Docker (build locally)
 
@@ -291,7 +297,10 @@ docker build -t velesdb .
 docker run -d -p 8080:8080 -v velesdb_data:/data velesdb
 ```
 
-> 📦 **Coming soon:** `docker pull ghcr.io/cyberlife-coder/velesdb` (planned for v0.6.0)
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/cyberlife-coder/velesdb:latest
+```
 
 ### Option 6: Portable Archives
 
@@ -315,7 +324,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.5.1"}
+# {"status":"healthy","version":"0.7.0"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -1067,9 +1076,10 @@ VelesDB/
 │   │   │   ├── velesql/      # Query language parser
 │   │   │   └── simd/         # SIMD optimizations
 │   │   └── tests/
-│   └── velesdb-server/   # REST API server
-│       ├── src/
-│       └── tests/
+│   ├── velesdb-server/   # REST API server
+│   ├── velesdb-mobile/   # iOS/Android bindings (UniFFI)
+│   ├── velesdb-wasm/     # WebAssembly module
+│   └── velesdb-python/   # Python bindings (PyO3)
 ├── benches/              # Benchmarks
 └── docs/                 # Documentation
 ```
@@ -1082,7 +1092,13 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v0.5.1 ✅ (Current)
+### v0.7.0 ✅ (Current)
+- [x] **📱 Mobile SDK** - Native iOS (Swift) and Android (Kotlin) bindings via UniFFI
+- [x] **StorageMode IoT** - Memory optimization: Full, SQ8 (4x), Binary (32x)
+- [x] **GitHub Actions Mobile CI** - Automated builds for iOS/Android targets
+- [x] All previous v0.5.x features
+
+### v0.5.x (Previous)
 - [x] HNSW vector index with auto-tuned parameters
 - [x] REST API (11 endpoints) with OpenAPI/Swagger docs
 - [x] VelesQL query language with complete BNF grammar
@@ -1095,14 +1111,12 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 - [x] **WASM Support** for browser-based vector search
 - [x] **Parallel Batch Search** for high-throughput queries
 - [x] **HNSW Prefetch Hints** for reduced memory latency
+- [x] **SQ8 Quantization** with SIMD acceleration
+- [x] **LlamaIndex Integration**
 
-### v0.6.0 (Planned)
-- [ ] LlamaIndex integration
-- [ ] Publish to crates.io & PyPI
-- [ ] TypeScript SDK
-
-### v1.0.0 (Future)
+### v1.0.0 (Planned)
 - [ ] Production-ready stability
+- [ ] Publish to crates.io & PyPI
 - [ ] Product Quantization (PQ)
 - [ ] Sparse vector support
 

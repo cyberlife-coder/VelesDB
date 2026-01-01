@@ -1,6 +1,6 @@
 [project]
 name = "velesdb-rag-demo"
-version = "0.1.0"
+version = "0.6.0"
 description = "RAG Demo with PDF ingestion using VelesDB for vector storage"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,3 +44,4 @@ addopts = "-v --cov=src --cov-report=term-missing"
 [tool.coverage.run]
 source = ["src"]
 omit = ["tests/*"]
+

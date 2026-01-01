@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "velesdb"
-version = "0.6.0"
+version = "0.7.0"
 description = "A high-performance vector database for AI applications"
 readme = "README.md"
 license = { text = "Elastic License 2.0 (ELv2)" }
@@ -48,3 +48,4 @@ Issues = "https://github.com/cyberlife-coder/VelesDB/issues"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "velesdb"
+

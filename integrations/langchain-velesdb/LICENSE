@@ -1,0 +1,157 @@
+Elastic License 2.0 (ELv2) — VelesDB Core (Revised)
+
+## Acceptance
+
+By using the Software, you agree to all of the terms and conditions below.
+
+## Copyright License
+
+The Licensor grants you a non-exclusive, royalty-free, worldwide, non-sublicensable, non-transferable license to use, copy, distribute, make available, and prepare derivative works of the Software, in each case subject to the limitations and conditions below.
+
+## Limitations
+
+### 1) No Hosted or Managed Service
+
+You may not provide the Software to third parties as a Hosted or Managed Service, where the service provides users with access to any substantial set of the features or functionality of the Software.
+
+This restriction includes (without limitation):
+- offering the Software as a cloud service, hosted service, managed service, or database-as-a-service (DBaaS),
+- operating the Software for third parties (including as an MSP, outsourcer, consultant, or service provider), even if provided to a single customer,
+- exposing the Software's query, administration, indexing, ingestion, or management capabilities (or any substantially similar capabilities) to third parties through an API, SDK, web interface, command line, or any other interface.
+
+### 2) No Circumvention of Paid Features
+
+You may not move, change, disable, or circumvent any licensing mechanism or functionality that enforces paid features, and you may not remove or obscure any functionality in the Software that is protected by such licensing mechanism.
+
+### 3) No Removal of Notices; Trademarks
+
+You may not alter, remove, or obscure any licensing, copyright, or other notices of the Licensor in the Software.
+Any use of the Licensor's trademarks is subject to applicable law.
+
+## Permitted Use (Clarification)
+
+You may use the Software in production, including for commercial purposes, and you may embed or integrate the Software into your own products and services, provided that:
+- the Software is used only as an internal component of your product or service; and
+- your end users are not provided access to a substantial set of the Software's features or functionality.
+
+For example, it is permitted to use the Software internally to power features such as search, retrieval, ranking, recommendations, or RAG, where end users only receive the results produced by your application and do not receive access to the Software itself.
+
+## Examples (Non-Normative)
+
+### Allowed (not a Hosted or Managed Service)
+
+- Your application uses VelesDB Core internally to power search/retrieval, and customers cannot create/manage collections, indexes, or databases, nor run arbitrary queries against VelesDB Core.
+- You distribute VelesDB Core bundled with a desktop or on-premise application for the customer's own internal use, where you are not operating VelesDB Core as a service for that customer.
+
+### Not Allowed without a Premium License (Hosted or Managed Service)
+
+- "VelesDB Cloud" or any hosted/managed vector database service powered by the Software, where customers can ingest data, manage collections/indexes, or query the Software directly.
+- A managed service provided by you (or on your behalf) for a customer, even if that service is for a single customer (e.g., MSP/outsourcing/infogérance), where the customer is granted access to any substantial set of the Software's features or functionality.
+- A multi-tenant service that offers access to the Software's core capabilities (including query and administration) to third parties.
+
+## Patents
+
+The Licensor grants you a license, under any patent claims the Licensor can license, or becomes able to license, to make, have made, use, sell, offer for sale, import and have imported the Software, in each case subject to the limitations and conditions in this license.
+This license does not cover any patent claims that you cause to be infringed by modifications or additions to the Software.
+If you or your company make any written claim that the Software infringes or contributes to infringement of any patent, your patent license for the Software granted under these terms ends immediately.
+If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+## Notices
+
+You must ensure that anyone who gets a copy of any part of the Software from you also gets a copy of these terms.
+If you modify the Software, you must include in any modified copies of the Software prominent notices stating that you have modified the Software.
+
+## No Other Rights
+
+These terms do not imply any licenses other than those expressly granted in these terms.
+
+## Termination
+
+If you use the Software in violation of these terms, such use is not licensed, and your licenses will automatically terminate.
+If the Licensor provides you with a notice of your violation, and you cease all violation of this license no later than 30 days after you receive that notice, your licenses will be reinstated retroactively.
+However, if you violate these terms after such reinstatement, any additional violation of these terms will cause your licenses to terminate automatically and permanently.
+
+## No Liability
+
+As far as the law allows, the Software comes as is, without any warranty or condition, and the Licensor will not be liable to you for any damages arising out of these terms or the use or nature of the Software, under any kind of legal claim.
+
+## Definitions
+
+The "Licensor" is Wiscale France.
+
+The "Software" is the software the Licensor makes available under these terms, VelesDB Core.
+
+"You" refers to the individual or entity agreeing to these terms.
+
+"Your company" is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.
+Control means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.
+Control can be direct or indirect.
+
+"Your licenses" are all the licenses granted to you for the Software under these terms.
+
+"Use" means anything you do with the Software requiring one of your licenses.
+
+"Hosted or Managed Service" means a service where You (or a third party acting on Your behalf) host or operate the Software for third parties, and those third parties are provided with access (directly or indirectly) to a substantial set of the Software's features or functionality.
+Access includes, without limitation, access through an API, SDK, web interface, command line, or any other interface that enables third parties to create, manage, query, administer, index, ingest, or otherwise use the Software's core capabilities.
+
+"Substantial set of features or functionality" means access to features or functionality that (taken together) would reasonably allow a third party to use the Software as a general-purpose database, vector database, or query engine, or as a replacement for the Software, rather than merely receiving the results of your product's features.
+
+---
+
+## Licensing FAQ (VelesDB Core — Elastic License 2.0)
+
+This FAQ is provided for convenience only and does not replace the LICENSE terms. If in doubt, contact the Licensor (Wiscale France) for a Premium license.
+
+### 1) Can I use VelesDB Core in production?
+Yes. Production use is permitted, including commercial production use, as long as you comply with the license limitations (notably: no Hosted or Managed Service).
+
+### 2) Can I use VelesDB Core inside my own SaaS product?
+Yes, if VelesDB Core is used only as an internal component of your SaaS and your customers are not given access to a substantial set of VelesDB's features or functionality.
+
+In practice, this means your customers can use *your* app features (search, RAG, recommendations), but they cannot use VelesDB as a database product.
+
+### 3) What is NOT allowed without a Premium license?
+You may not provide VelesDB Core to third parties as a Hosted or Managed Service. This includes, without limitation:
+- offering "VelesDB Cloud" or any hosted/managed VelesDB service,
+- providing a DBaaS/vector DB service backed by VelesDB Core,
+- running VelesDB Core as an MSP/outsourcing/infogérance service for customers, even a single customer, where they are granted access to VelesDB's core capabilities.
+
+If you want to do any of the above, you need a Premium license.
+
+### 4) Can I expose a public API endpoint that runs vector search against VelesDB Core?
+It depends:
+- Allowed: you expose an endpoint like `/search` that returns results for your product, without giving customers the ability to create/manage collections, ingest vectors, manage indexes, run arbitrary queries, or administer the database.
+- Not allowed without Premium: you expose VelesDB-like capabilities (collections, ingestion, indexing, querying, admin) to third parties in a way that makes your service effectively "VelesDB as a service".
+
+### 5) Can I let my customers upload documents, and I index them in VelesDB Core for RAG?
+Yes, as long as customers are using your product feature and are not granted access to VelesDB's substantial feature set (no direct database-like access).
+
+### 6) Can an agency/consultant/MSP host VelesDB Core for a client?
+Not under the Core license, if it is a Hosted or Managed Service (including single-customer managed hosting where the client has access to substantial VelesDB capabilities). That scenario requires a Premium license.
+
+### 7) Can I embed VelesDB Core in a desktop app or on-prem product I sell?
+Yes, typically. Distributing VelesDB Core bundled with your product is permitted, provided you comply with the license (include the license text and notices, do not remove notices, etc.), and you are not providing it as a Hosted or Managed Service.
+
+### 8) Can I modify VelesDB Core and keep my changes private?
+Yes. The license allows modification. If you distribute a modified version, you must include prominent notices stating that you modified it, and you must provide a copy of the license terms to recipients.
+
+### 9) Can I redistribute VelesDB Core (as-is or modified)?
+Yes, subject to the license conditions:
+- recipients must receive the license terms,
+- you must keep notices intact,
+- if modified, you must mark your modifications prominently.
+
+### 10) Can I remove license headers or copyright notices?
+No. You may not alter, remove, or obscure licensing/copyright/other notices.
+
+### 11) Can I use the name "VelesDB" for my fork?
+No automatic rights. Trademark use is subject to applicable law. In practice, do not brand your fork as "VelesDB" without permission from Wiscale France. Use a different name.
+
+### 12) What about a multi-tenant service where each tenant only has limited features?
+If tenants (third parties) get access to a substantial set of VelesDB's database/vector database/query capabilities, it is a Hosted or Managed Service and requires a Premium license. Multi-tenant offerings are generally not permitted under the Core license.
+
+### 13) What if I'm unsure whether my use case counts as "Hosted or Managed Service"?
+Ask. If your business model involves hosting/operating VelesDB Core for third parties (including a single customer) with database-like access, you likely need a Premium license.
+
+### 14) How do I get a Premium license?
+Contact Wiscale France to discuss licensing for hosted/managed services (including "VelesDB Cloud"), MSP/infogérance scenarios, and other premium use cases.

@@ -129,6 +129,10 @@ impl VectorStore {
     /// - `full`: Best recall, 4 bytes/dimension
     /// - `sq8`: 4x compression, ~1% recall loss
     /// - `binary`: 32x compression, ~5-10% recall loss
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metric or storage mode is unknown.
     #[wasm_bindgen]
     pub fn new_with_mode(
         dimension: usize,
@@ -250,6 +254,7 @@ impl VectorStore {
                 self.sq8_scales.push(scale);
 
                 for &v in vector {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
                     self.data_sq8.push(quantized);
                 }
@@ -349,7 +354,7 @@ impl VectorStore {
                             .iter()
                             .enumerate()
                         {
-                            dequantized[i] = (q as f32 / scale) + min;
+                            dequantized[i] = (f32::from(q) / scale) + min;
                         }
 
                         let score = self.metric.calculate(query, &dequantized);
@@ -840,6 +845,7 @@ mod tests {
     #[test]
     fn test_sq8_insert_and_memory() {
         let mut store = VectorStore::new_with_mode(768, "cosine", "sq8").unwrap();
+        #[allow(clippy::cast_precision_loss)]
         let vector: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001).collect();
 
         store.insert(1, &vector).unwrap();
@@ -848,7 +854,7 @@ mod tests {
         // SQ8: 768 bytes (u8) + 8 bytes (min+scale) + 8 bytes (id) = 784 bytes
         // Full would be: 768 * 4 + 8 = 3080 bytes
         let mem = store.memory_usage();
-        assert!(mem < 1000, "SQ8 should use less than 1KB, got {}", mem);
+        assert!(mem < 1000, "SQ8 should use less than 1KB, got {mem}");
     }
 
     #[test]
@@ -866,8 +872,7 @@ mod tests {
         let mem = store.memory_usage();
         assert!(
             mem < 150,
-            "Binary should use less than 150 bytes, got {}",
-            mem
+            "Binary should use less than 150 bytes, got {mem}"
         );
     }
 

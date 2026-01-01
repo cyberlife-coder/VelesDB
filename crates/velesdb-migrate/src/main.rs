@@ -1,5 +1,10 @@
 //! VelesDB Migration CLI
 
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::module_name_repetitions)]
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{error, info, Level};

@@ -122,13 +122,16 @@ pub fn hamming_distance(a: &[f32], b: &[f32]) -> f32 {
 
     let mut count = 0u32;
     for i in 0..a.len() {
-        let bit_a = if a[i] != 0.0 { 1u32 } else { 0u32 };
-        let bit_b = if b[i] != 0.0 { 1u32 } else { 0u32 };
+        let bit_a = u32::from(a[i] != 0.0);
+        let bit_b = u32::from(b[i] != 0.0);
         if bit_a != bit_b {
             count += 1;
         }
     }
-    count as f32
+    #[allow(clippy::cast_precision_loss)]
+    {
+        count as f32
+    }
 }
 
 /// Computes Jaccard similarity (intersection / union).
@@ -156,7 +159,10 @@ pub fn jaccard_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 1.0; // Both empty sets are identical
     }
 
-    intersection as f32 / union as f32
+    #[allow(clippy::cast_precision_loss)]
+    {
+        intersection as f32 / union as f32
+    }
 }
 
 #[cfg(test)]

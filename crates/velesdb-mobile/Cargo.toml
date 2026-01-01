@@ -1,0 +1,38 @@
+[package]
+name = "velesdb-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file = "../../LICENSE"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+description = "VelesDB mobile bindings for iOS and Android via UniFFI"
+keywords = ["vector-database", "mobile", "ios", "android", "uniffi"]
+categories = ["database", "api-bindings"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+name = "velesdb_mobile"
+
+[dependencies]
+velesdb-core = { path = "../velesdb-core", version = "0.7.0" }
+uniffi = { version = "0.28", features = ["tokio"] }
+tokio = { version = "1.42", features = ["rt-multi-thread"] }
+thiserror = "2.0"
+serde_json = "1.0"
+
+# iOS targets (add via: rustup target add <target>)
+# - aarch64-apple-ios (device)
+# - aarch64-apple-ios-sim (simulator ARM)
+# - x86_64-apple-ios (simulator Intel)
+
+# Android targets (add via: rustup target add <target>)
+# - aarch64-linux-android (ARM64 devices)
+# - armv7-linux-androideabi (ARMv7 devices)
+# - x86_64-linux-android (x86_64 emulator)
+# - i686-linux-android (x86 emulator)
+
+[dev-dependencies]
+tempfile = "3.14"

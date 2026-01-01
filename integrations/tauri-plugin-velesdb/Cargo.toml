@@ -1,8 +1,9 @@
 [package]
 name = "tauri-plugin-velesdb"
-version = "0.6.0"
-edition = "2021"
-authors = ["Cyberlife Coder"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Tauri plugin for VelesDB - Vector search in desktop apps"
 license-file = "../../LICENSE"
 repository = "https://github.com/cyberlife-coder/VelesDB"
@@ -17,12 +18,12 @@ tauri-plugin = { version = "2.0", features = ["build"] }
 tauri = { version = "2.0", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 tracing = "0.1"
 parking_lot = "0.12"
 
 # VelesDB core dependency (local path for development)
-velesdb-core = { path = "../../crates/velesdb-core", version = "0.6.0" }
+velesdb-core = { path = "../../crates/velesdb-core", version = "0.7.0" }
 
 [dev-dependencies]
 tempfile = "3.14"

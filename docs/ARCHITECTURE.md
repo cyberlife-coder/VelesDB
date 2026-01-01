@@ -8,9 +8,9 @@ This document describes the internal architecture of VelesDB.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           CLIENT LAYER                                   │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  TypeScript SDK   │   Python SDK   │   REST Client   │   VelesQL CLI   │
-│  (@velesdb/sdk)   │   (velesdb)    │   (curl/HTTP)   │   (velesdb-cli) │
-└────────┬──────────┴───────┬────────┴────────┬────────┴────────┬────────┘
+│  TypeScript SDK │ Python SDK │ REST Client │ VelesQL CLI │ Mobile SDK  │
+│  (@velesdb/sdk) │ (velesdb)  │ (curl/HTTP) │ (velesdb)   │ (iOS/Android)│
+└───────┬─────────┴──────┬─────┴───────┬─────┴──────┬──────┴──────┬──────┘
          │                  │                 │                 │
          ▼                  ▼                 ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -76,6 +76,7 @@ This document describes the internal architecture of VelesDB.
 |-----------|----------|---------|
 | **TypeScript SDK** | TypeScript | Unified client for browser/Node.js |
 | **Python SDK** | Python | Native bindings via PyO3 |
+| **Mobile SDK** | Swift/Kotlin | Native iOS and Android bindings via UniFFI |
 | **REST Client** | Any | HTTP API access |
 | **VelesQL CLI** | Rust | Interactive query REPL |
 
@@ -97,6 +98,12 @@ This document describes the internal architecture of VelesDB.
 - PyO3 bindings for Python
 - NumPy array support
 - Zero-copy when possible
+
+#### velesdb-mobile
+- UniFFI bindings for iOS (Swift) and Android (Kotlin)
+- Thread-safe `Arc`-wrapped handles
+- StorageMode support (Full, SQ8, Binary) for IoT/Edge
+- Targets: `aarch64-apple-ios`, `aarch64-linux-android`, etc.
 
 ### 3. Core Engine (velesdb-core)
 
@@ -292,6 +299,9 @@ Query Vector + Text Query
 | **macOS ARM64** | ✅ Full | **Fallback** | **~80%** |
 | WASM (Browser) | ✅ Full | SIMD128 | ~70% |
 | WASM (Node.js) | ✅ Full | SIMD128 | ~70% |
+| **iOS (ARM64)** | ✅ Full | NEON | ~90% |
+| **Android (ARM64)** | ✅ Full | NEON | ~90% |
+| **Android (ARMv7)** | ✅ Full | Fallback | ~70% |
 
 ### ARM64 (Apple Silicon) Note
 

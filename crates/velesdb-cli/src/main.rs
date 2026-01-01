@@ -1,5 +1,8 @@
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
 //! `VelesDB` CLI - Interactive REPL for `VelesQL` queries
 //!
 //! Usage:
@@ -34,6 +37,8 @@ enum MetricArg {
     Cosine,
     Euclidean,
     Dot,
+    Hamming,
+    Jaccard,
 }
 
 impl From<MetricArg> for DistanceMetric {
@@ -42,6 +47,8 @@ impl From<MetricArg> for DistanceMetric {
             MetricArg::Cosine => DistanceMetric::Cosine,
             MetricArg::Euclidean => DistanceMetric::Euclidean,
             MetricArg::Dot => DistanceMetric::DotProduct,
+            MetricArg::Hamming => DistanceMetric::Hamming,
+            MetricArg::Jaccard => DistanceMetric::Jaccard,
         }
     }
 }

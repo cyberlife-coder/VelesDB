@@ -3,7 +3,7 @@ name = "tauri-rag-app"
 version = "0.1.0"
 description = "Local RAG Desktop App with VelesDB"
 authors = ["Wiscale France"]
-license = "BUSL-1.1"
+license-file = "../../../LICENSE"
 edition = "2021"
 
 [build-dependencies]

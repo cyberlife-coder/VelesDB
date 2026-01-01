@@ -5,6 +5,51 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-01-01
+
+### 📱 Mobile SDK - iOS & Android
+
+VelesDB now supports native mobile platforms via UniFFI bindings.
+
+#### Added
+
+- **velesdb-mobile crate** - Native bindings for iOS (Swift) and Android (Kotlin)
+  - UniFFI-based FFI generation
+  - `VelesDatabase` and `VelesCollection` objects
+  - Full CRUD operations (upsert, search, delete)
+  - Thread-safe, `Arc`-wrapped handles
+
+- **StorageMode for IoT/Edge** - Memory optimization for constrained devices
+  - `Full`: Best recall, 4 bytes/dimension
+  - `Sq8`: 4x compression, ~1% recall loss (recommended for mobile)
+  - `Binary`: 32x compression, ~5-10% recall loss (extreme IoT)
+
+- **Distance Metrics** - All 5 metrics supported
+  - Cosine, Euclidean, Dot Product, Hamming, Jaccard
+
+- **GitHub Actions CI** - `mobile-build.yml` workflow
+  - iOS targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
+  - Android targets: `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`
+  - UniFFI binding generation (Swift/Kotlin)
+
+#### Documentation
+
+- `crates/velesdb-mobile/README.md` - Complete integration guide
+  - Swift quick start
+  - Kotlin quick start
+  - Build instructions for iOS/Android
+  - API reference with all methods
+  - Memory footprint table
+
+#### Crate Coherence
+
+- All crates aligned on workspace version `0.7.0`
+- All crates using ELv2 license (`license-file`)
+- All inter-crate dependencies with explicit versions
+- Authors aligned on workspace (`VelesDB Team`)
+
+---
+
 ## [0.5.2] - 2025-12-30
 
 ### 🎯 Quantization & Integrations
@@ -655,12 +700,19 @@ This change ensures VelesDB remains freely available while protecting against cl
 - API Authentication (WIS-69)
 - Starlight documentation site
 
+[0.7.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.7.0
+[0.6.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.6.0
+[0.5.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.5.2
+[0.5.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.5.1
+[0.5.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.5.0
+[0.4.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.4.1
 [0.4.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.4.0
 [0.3.8]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.8
+[0.3.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.2
 [0.3.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.1
 [0.3.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.3.0
-[0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.2.0
+[0.1.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.4
 [0.1.2]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.2
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v0.1.0
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v0.7.0...HEAD

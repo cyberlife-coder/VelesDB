@@ -1,15 +1,15 @@
 [package]
 name = "velesdb-migrate"
-version = "0.6.0"
-edition = "2021"
-rust-version = "1.83"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 license-file = "LICENSE"
-repository = "https://github.com/cyberlife-coder/velesdb"
-homepage = "https://velesdb.com"
-documentation = "https://docs.velesdb.com"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 keywords = ["vector-database", "migration", "embeddings", "ai", "velesdb"]
 categories = ["database", "command-line-utilities"]
-authors = ["Julien Lange <contact@wiscale.fr>"]
+authors.workspace = true
 description = "Migration tool for importing vectors from other databases into VelesDB"
 
 [[bin]]
@@ -53,7 +53,7 @@ async-trait = "0.1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 
 # VelesDB client (for destination)
-velesdb-core = { version = "0.6.0", path = "../velesdb-core" }
+velesdb-core = { version = "0.7.0", path = "../velesdb-core" }
 
 [dev-dependencies]
 tokio-test = "0.4"

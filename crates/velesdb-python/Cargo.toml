@@ -1,6 +1,6 @@
 [package]
 name = "velesdb-python"
-version = "0.6.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license-file = "LICENSE"
@@ -17,7 +17,7 @@ name = "velesdb"
 crate-type = ["cdylib"]
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core" }
+velesdb-core = { path = "../velesdb-core", version = "0.7.0" }
 pyo3 = { version = "0.24", features = ["extension-module"] }
 serde_json = { workspace = true }
 numpy = "0.24"

@@ -10,10 +10,12 @@ Complete installation instructions for all platforms and deployment methods.
 | **Linux** | `.deb` package | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
 | **Windows** | `.zip` portable | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
 | **Linux** | `.tar.gz` portable | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) |
-| **Python** | `pip` | [PyPI](https://pypi.org/project/velesdb/) |
-| **Rust** | `cargo` | [crates.io](https://crates.io/crates/velesdb-core) |
-| **npm** | WASM | [npm](https://www.npmjs.com/package/velesdb-wasm) |
+| **Python** | `pip` | [PyPI](https://pypi.org/project/velesdb/) ✅ |
+| **Rust** | `cargo` | [crates.io](https://crates.io/crates/velesdb-core) ✅ |
+| **npm** | WASM/SDK | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
 | **Docker** | Container | [ghcr.io](https://ghcr.io/cyberlife-coder/velesdb) |
+| **iOS** | XCFramework | [Build from source](#-mobile-iosandroid) |
+| **Android** | AAR/SO | [Build from source](#-mobile-iosandroid) |
 
 ---
 
@@ -43,13 +45,13 @@ The MSI installer provides the easiest installation experience with:
 
 ```powershell
 # Install with PATH modification (default)
-msiexec /i velesdb-0.5.1-x86_64.msi /quiet ADDTOPATH=1
+msiexec /i velesdb-0.6.0-x86_64.msi /quiet ADDTOPATH=1
 
 # Install without PATH modification
-msiexec /i velesdb-0.5.1-x86_64.msi /quiet ADDTOPATH=0
+msiexec /i velesdb-0.6.0-x86_64.msi /quiet ADDTOPATH=0
 
 # Install to custom directory
-msiexec /i velesdb-0.5.1-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
+msiexec /i velesdb-0.6.0-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
 ```
 
 #### Uninstall
@@ -57,7 +59,7 @@ msiexec /i velesdb-0.5.1-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
 Via **Control Panel > Programs > Uninstall**, or:
 
 ```powershell
-msiexec /x velesdb-0.5.1-x86_64.msi /quiet
+msiexec /x velesdb-0.6.0-x86_64.msi /quiet
 ```
 
 ### Portable ZIP
@@ -66,7 +68,7 @@ For portable installations without admin rights:
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v0.5.1/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
+Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v0.6.0/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
 Expand-Archive velesdb.zip -DestinationPath C:\VelesDB
 
 # Add to PATH (optional, current session only)
@@ -83,10 +85,10 @@ $env:PATH += ";C:\VelesDB"
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v0.5.1/velesdb-0.5.1-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v0.6.0/velesdb-0.6.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-0.5.1-amd64.deb
+sudo dpkg -i velesdb-0.6.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -108,7 +110,7 @@ sudo dpkg -r velesdb
 
 ```bash
 # Download and extract
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v0.5.1/velesdb-linux-x86_64.tar.gz
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v0.6.0/velesdb-linux-x86_64.tar.gz
 tar -xzf velesdb-linux-x86_64.tar.gz -C /opt/velesdb
 
 # Add to PATH
@@ -214,17 +216,98 @@ volumes:
 ## 🌐 WASM / Browser
 
 ```bash
-npm install velesdb-wasm
+# WASM module for browser
+npm install @wiscale/velesdb-wasm
+
+# Full TypeScript SDK
+npm install @wiscale/velesdb-sdk
+
+# Tauri plugin bindings
+npm install @wiscale/tauri-plugin-velesdb
 ```
 
 ```javascript
-import init, { VectorStore } from 'velesdb-wasm';
+import init, { VectorStore } from '@wiscale/velesdb-wasm';
 
 await init();
 const store = new VectorStore(768, 'cosine');
 store.insert(1, new Float32Array([...]));
 const results = store.search(new Float32Array([...]), 10);
 ```
+
+---
+
+## 📱 Mobile (iOS/Android)
+
+VelesDB provides native mobile bindings via UniFFI.
+
+### Prerequisites
+
+```bash
+# iOS targets
+rustup target add aarch64-apple-ios        # Device
+rustup target add aarch64-apple-ios-sim    # Simulator (ARM)
+rustup target add x86_64-apple-ios         # Simulator (Intel)
+
+# Android targets
+rustup target add aarch64-linux-android    # ARM64
+rustup target add armv7-linux-androideabi  # ARMv7
+rustup target add x86_64-linux-android     # x86_64
+
+# Android NDK tool
+cargo install cargo-ndk
+```
+
+### Build for iOS
+
+```bash
+# Build static library
+cargo build --release --target aarch64-apple-ios -p velesdb-mobile
+
+# Generate Swift bindings
+cargo run --bin uniffi-bindgen generate \
+    --library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
+    --language swift \
+    --out-dir bindings/swift
+```
+
+### Build for Android
+
+```bash
+# Build shared libraries for all ABIs
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
+    build --release -p velesdb-mobile
+
+# Generate Kotlin bindings
+cargo run --bin uniffi-bindgen generate \
+    --library target/aarch64-linux-android/release/libvelesdb_mobile.so \
+    --language kotlin \
+    --out-dir bindings/kotlin
+```
+
+### Usage (Swift)
+
+```swift
+import VelesDB
+
+let db = try VelesDatabase.open(path: documentsPath + "/velesdb")
+try db.createCollection(name: "docs", dimension: 384, metric: .cosine)
+
+let collection = try db.getCollection(name: "docs")!
+let results = try collection.search(vector: embedding, limit: 10)
+```
+
+### Usage (Kotlin)
+
+```kotlin
+val db = VelesDatabase.open("${context.filesDir}/velesdb")
+db.createCollection("docs", 384u, DistanceMetric.COSINE)
+
+val collection = db.getCollection("docs")!!
+val results = collection.search(embedding, 10u)
+```
+
+📖 Full guide: [crates/velesdb-mobile/README.md](../crates/velesdb-mobile/README.md)
 
 ---
 

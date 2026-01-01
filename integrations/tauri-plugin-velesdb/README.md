@@ -28,7 +28,7 @@ tauri-plugin-velesdb = "0.1"
 ```json
 {
   "dependencies": {
-    "@wiscale/tauri-plugin-velesdb": "^0.5.1"
+    "@wiscale/tauri-plugin-velesdb": "^0.6.0"
   }
 }
 ```

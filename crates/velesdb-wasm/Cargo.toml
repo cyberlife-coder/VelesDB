@@ -1,10 +1,16 @@
 [package]
 name = "velesdb-wasm"
-version = "0.6.0"
-edition = "2021"
-description = "VelesDB for WebAssembly - Vector search in the browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 license-file = "../../LICENSE"
-repository = "https://github.com/cyberlife-coder/VelesDB"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+description = "VelesDB for WebAssembly - Vector search in the browser"
+keywords = ["vector-database", "wasm", "webassembly", "browser", "search"]
+categories = ["database", "wasm"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

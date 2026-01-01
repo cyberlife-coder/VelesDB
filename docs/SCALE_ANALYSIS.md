@@ -25,7 +25,7 @@ Compare VelesDB search latency against competitors at **50M vectors scale** and 
 
 ## 🔬 Architecture Analysis
 
-### Current VelesDB Architecture (v0.5.1)
+### Current VelesDB Architecture (v0.7.0)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

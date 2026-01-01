@@ -4,6 +4,10 @@
 //!
 //! Run with: `cargo bench --bench quantization_benchmark`
 
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::explicit_iter_loop)]
+#![allow(clippy::semicolon_if_nothing_returned)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
