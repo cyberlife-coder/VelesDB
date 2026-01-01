@@ -200,6 +200,7 @@ jobs:
           echo "velesdb_server=$(check_crate velesdb-server)" >> $GITHUB_OUTPUT
           echo "velesdb_cli=$(check_crate velesdb-cli)" >> $GITHUB_OUTPUT
           echo "velesdb_migrate=$(check_crate velesdb-migrate)" >> $GITHUB_OUTPUT
+          echo "velesdb_mobile=$(check_crate velesdb-mobile)" >> $GITHUB_OUTPUT
           echo "tauri_plugin=$(check_crate tauri-plugin-velesdb)" >> $GITHUB_OUTPUT
 
       - name: Publish crates (ordered by dependency, skip already published)
@@ -227,6 +228,7 @@ jobs:
           publish_if_needed velesdb-server "${{ steps.check-crates.outputs.velesdb_server }}"
           publish_if_needed velesdb-cli "${{ steps.check-crates.outputs.velesdb_cli }}"
           publish_if_needed velesdb-migrate "${{ steps.check-crates.outputs.velesdb_migrate }}"
+          publish_if_needed velesdb-mobile "${{ steps.check-crates.outputs.velesdb_mobile }}"
           publish_if_needed tauri-plugin-velesdb "${{ steps.check-crates.outputs.tauri_plugin }}"
 
   # ===========================================================================
