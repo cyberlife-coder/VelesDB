@@ -1,16 +1,5 @@
-// Clippy allows for migration tool - pragmatic choices for CLI tool
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::unnecessary_wraps)]
-#![allow(clippy::manual_string_new)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::wildcard_imports)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::struct_excessive_bools)]
+// Migration tool - pedantic lints relaxed for CLI ergonomics
+#![allow(clippy::pedantic)]
 
 //! # `VelesDB` Migration Tool
 //!

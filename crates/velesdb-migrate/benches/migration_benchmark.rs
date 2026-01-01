@@ -5,6 +5,8 @@
 //! For real data benchmarks, set environment variables:
 //! - SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_TABLE
 
+#![allow(clippy::pedantic)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::env;
 

@@ -1,11 +1,13 @@
 //! Integration tests for velesdb-migrate with real data sources.
 //!
 //! These tests require environment variables to be set:
-//! - SUPABASE_URL: Your Supabase project URL
-//! - SUPABASE_SERVICE_KEY: Your Supabase service role key
-//! - SUPABASE_TABLE: The table name to test with
+//! - `SUPABASE_URL`: Your Supabase project URL
+//! - `SUPABASE_SERVICE_KEY`: Your Supabase service role key
+//! - `SUPABASE_TABLE`: The table name to test with
 //!
-//! Run with: cargo test --test integration_test -- --ignored
+//! Run with: `cargo test --test integration_test -- --ignored`
+
+#![allow(clippy::pedantic)]
 
 use std::env;
 use tempfile::TempDir;

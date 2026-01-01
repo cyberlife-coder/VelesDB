@@ -1,5 +1,15 @@
 // UniFFI requires owned types (String, Vec) for FFI bindings - references not supported
 #![allow(clippy::needless_pass_by_value)]
+// FFI boundary - pedantic lints relaxed for UniFFI compatibility
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::wildcard_imports)]
+#![allow(clippy::redundant_closure_for_method_calls)]
 
 //! VelesDB Mobile - Native bindings for iOS and Android
 //!

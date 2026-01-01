@@ -1,9 +1,10 @@
 //! VelesDB Migration CLI
+//!
+//! CLI tool for migrating vectors from other databases to VelesDB.
+//! Pedantic lints relaxed for CLI ergonomics.
 
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::module_name_repetitions)]
+// CLI tool - relax pedantic lints for ergonomics
+#![allow(clippy::pedantic)]
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;

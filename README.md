@@ -22,7 +22,7 @@
 
 <!-- Performance Badges -->
 <p align="center">
-  <img src="https://img.shields.io/badge/⚡_Distance_SIMD-41ns_(768D)-brightgreen?style=for-the-badge" alt="Latency"/>
+  <img src="https://img.shields.io/badge/⚡_Distance_SIMD-45ns_(768D)-brightgreen?style=for-the-badge" alt="Latency"/>
   <img src="https://img.shields.io/badge/🎯_Recall-99.4%25-blue?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
   <img src="https://img.shields.io/badge/✅_Tests-611_passed-success?style=for-the-badge" alt="Tests"/>
@@ -94,12 +94,31 @@ LIMIT 10
 
 | Operation | VelesDB (Core) | Details |
 |-----------|----------------|---------|
-| **SIMD Cosine** | **41ns** | AVX-512 optimized |
+| **SIMD Dot Product** | **45ns** | AVX-512 optimized |
 | **HNSW Search** | **128µs** | p50 latency (10K) |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
 | **Recall@10** | **99.4%** | ef=256 |
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
+
+### 📦 Ecosystem Overview
+
+VelesDB is a modular ecosystem of crates and SDKs:
+
+| Crate/SDK | Description | Install |
+|-----------|-------------|--------|
+| **[velesdb-core](crates/velesdb-core)** | 🦀 Core engine library (HNSW, SIMD, VelesQL) | `cargo add velesdb-core` |
+| **[velesdb-server](crates/velesdb-server)** | 🌐 REST API server (11 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **[velesdb-cli](crates/velesdb-cli)** | 💻 CLI & REPL for VelesQL | `cargo install velesdb-cli` |
+| **[velesdb-python](crates/velesdb-python)** | 🐍 Python bindings (PyO3 + NumPy) | `pip install velesdb` |
+| **[velesdb-wasm](crates/velesdb-wasm)** | 🌍 WebAssembly for browsers | `npm i @wiscale/velesdb-wasm` |
+| **[velesdb-mobile](crates/velesdb-mobile)** | 📱 iOS (Swift) & Android (Kotlin) | UniFFI bindings |
+| **[velesdb-migrate](crates/velesdb-migrate)** | 🔄 Migration from Qdrant, Pinecone, etc. | `cargo install velesdb-migrate` |
+| **[tauri-plugin-velesdb](integrations/tauri-plugin-velesdb)** | 🖥️ Tauri v2 desktop plugin | `cargo add tauri-plugin-velesdb` |
+| **[langchain-velesdb](integrations/langchain-velesdb)** | 🦜 LangChain VectorStore | `pip install langchain-velesdb` |
+| **[llamaindex-velesdb](integrations/llamaindex-velesdb)** | 🦙 LlamaIndex integration | `pip install llama-index-vector-stores-velesdb` |
+
+---
 
 ### 🐺 Why "Veles"?
 
@@ -228,7 +247,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.6.0-amd64.deb
+sudo dpkg -i velesdb-0.7.1-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -324,7 +343,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.7.0"}
+# {"status":"healthy","version":"0.7.1"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -531,9 +550,9 @@ curl -X POST http://localhost:8080/query \
 
 | Operation | Latency | Throughput | vs. Naive |
 |-----------|---------|------------|-----------|
-| **Dot Product** | **41 ns** | **24M ops/sec** | 🚀 **4.2x faster** |
+| **Dot Product** | **45 ns** | **22M ops/sec** | 🚀 **4.2x faster** |
 | **Euclidean** | **49 ns** | **20M ops/sec** | 🚀 **3.8x faster** |
-| **Cosine** | **81 ns** | **12M ops/sec** | 🚀 **3.5x faster** |
+| **Cosine** | **79 ns** | **12M ops/sec** | 🚀 **3.5x faster** |
 | **Hamming (Binary)**| **6 ns** | **164M ops/sec** | 🚀 **10x faster** |
 
 ### 📊 System Performance (10K Vectors, Local)
@@ -604,7 +623,7 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 ### 🎯 Why Choose VelesDB?
 
 #### ⚡ Extreme Latency
-- **~41-81ns** per vector distance (768D)
+- **~45-79ns** per vector distance (768D)
 - **128µs** HNSW search p50 on 10K vectors
 - **SIMD-optimized** (AVX-512, AVX2, NEON)
 
@@ -783,7 +802,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-velesdb-core = "0.1"
+velesdb-core = "0.7"
 ```
 
 ### Example
@@ -929,6 +948,77 @@ See [tauri-plugin-velesdb](./integrations/tauri-plugin-velesdb) for full documen
 
 ---
 
+## 📱 Mobile SDK (iOS & Android)
+
+**NEW in v0.7.0!** Native bindings for mobile platforms via [UniFFI](https://mozilla.github.io/uniffi-rs/).
+
+### Features
+
+- **Native Performance** — Direct Rust bindings, no FFI overhead
+- **Binary Quantization** — 32x memory reduction for constrained devices
+- **ARM NEON SIMD** — Optimized for mobile processors (Apple A-series, Snapdragon)
+- **Offline-First** — Full functionality without network connectivity
+- **Thread-Safe** — Safe to use from multiple threads/queues
+
+### Swift (iOS)
+
+```swift
+import VelesDB
+
+// Open database
+let db = try VelesDatabase.open(path: documentsPath + "/velesdb")
+
+// Create collection (384D for MiniLM)
+try db.createCollection(name: "documents", dimension: 384, metric: .cosine)
+
+// Get collection and insert
+let collection = try db.getCollection(name: "documents")!
+let point = VelesPoint(id: 1, vector: embedding, payload: "{\"title\": \"Hello\"}")
+try collection.upsert(point: point)
+
+// Search
+let results = try collection.search(vector: queryEmbedding, limit: 10)
+```
+
+### Kotlin (Android)
+
+```kotlin
+import com.velesdb.mobile.*
+
+// Open database
+val db = VelesDatabase.open("${context.filesDir}/velesdb")
+
+// Create collection
+db.createCollection("documents", 384u, DistanceMetric.COSINE)
+
+// Get collection and insert
+val collection = db.getCollection("documents")!!
+val point = VelesPoint(id = 1uL, vector = embedding, payload = "{\"title\": \"Hello\"}")
+collection.upsert(point)
+
+// Search
+val results = collection.search(queryEmbedding, 10u)
+```
+
+### Storage Modes (IoT/Edge)
+
+| Mode | Compression | Memory/dim | Recall Loss | Use Case |
+|------|-------------|------------|-------------|----------|
+| `Full` | 1x | 4 bytes | 0% | Best quality |
+| `Sq8` | 4x | 1 byte | ~1% | **Recommended for mobile** |
+| `Binary` | 32x | 1 bit | ~5-10% | Extreme IoT constraints |
+
+```swift
+// iOS - SQ8 compression (4x memory reduction)
+try db.createCollectionWithStorage(
+    name: "embeddings", dimension: 384, metric: .cosine, storageMode: .sq8
+)
+```
+
+📖 **Full documentation:** [crates/velesdb-mobile/README.md](crates/velesdb-mobile/README.md)
+
+---
+
 ## 💻 VelesQL CLI
 
 Interactive command-line interface for VelesQL queries.
@@ -946,7 +1036,7 @@ velesdb-cli info ./data
 
 **REPL Session:**
 ```
-VelesQL REPL v0.2.0
+VelesQL REPL v0.7.1
 Type 'help' for commands, 'quit' to exit.
 
 velesql> SELECT * FROM documents WHERE category = 'tech' LIMIT 5;
@@ -1092,11 +1182,15 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v0.7.0 ✅ (Current)
+### v0.7.1 ✅ (Current)
+- [x] **⚡ SIMD 32-wide Unrolling** - 12-17% latency reduction on vector ops
+- [x] **Pre-normalized Vectors** - `cosine_similarity_normalized()` ~40% faster
+- [x] **OpenAI Embedding Support** - Benchmarks for 1536D and 3072D dimensions
+
+### v0.7.0
 - [x] **📱 Mobile SDK** - Native iOS (Swift) and Android (Kotlin) bindings via UniFFI
 - [x] **StorageMode IoT** - Memory optimization: Full, SQ8 (4x), Binary (32x)
 - [x] **GitHub Actions Mobile CI** - Automated builds for iOS/Android targets
-- [x] All previous v0.5.x features
 
 ### v0.5.x (Previous)
 - [x] HNSW vector index with auto-tuned parameters
