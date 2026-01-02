@@ -20,6 +20,8 @@ on:
     paths:
       - 'crates/velesdb-mobile/**'
       - 'crates/velesdb-core/**'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       generate_bindings:
