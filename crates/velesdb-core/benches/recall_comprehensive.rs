@@ -17,7 +17,7 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     let mut state = seed;
     (0..dim)
         .map(|_| {
-            state = state.wrapping_mul(1103515245).wrapping_add(12345);
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12345);
             #[allow(clippy::cast_precision_loss)]
             let val = ((state >> 16) & 0x7FFF) as f32 / 32768.0;
             val * 2.0 - 1.0
@@ -46,14 +46,11 @@ fn bench_comprehensive(c: &mut Criterion) {
 
     for (n_vectors, dim, label) in configs {
         println!("\n{}", "=".repeat(60));
-        println!(
-            "  Configuration: {} - {} vectors, {}D",
-            label, n_vectors, dim
-        );
+        println!("  Configuration: {label} - {n_vectors} vectors, {dim}D");
         println!("{}", "=".repeat(60));
 
         // Generate dataset
-        println!("  Generating {} vectors of dimension {}...", n_vectors, dim);
+        println!("  Generating {n_vectors} vectors of dimension {dim}...");
         let start = Instant::now();
         let dataset: Vec<Vec<f32>> = (0..n_vectors)
             .map(|i| generate_vector(dim, i as u64))
@@ -83,7 +80,7 @@ fn bench_comprehensive(c: &mut Criterion) {
             .collect();
 
         // Compute ground truth
-        println!("  Computing ground truth for {} queries...", num_queries);
+        println!("  Computing ground truth for {num_queries} queries...");
         let start = Instant::now();
         let ground_truths: Vec<Vec<u64>> = queries
             .iter()
@@ -140,10 +137,7 @@ fn bench_comprehensive(c: &mut Criterion) {
 
             let status = if avg_recall >= 95.0 { "✅" } else { "⚠️" };
 
-            println!(
-                "  {:12} {:10} {:>10.1}% {:>10.2}ms {}",
-                quality_name, ef, avg_recall, p50_latency, status
-            );
+            println!("  {quality_name:12} {ef:10} {avg_recall:>10.1}% {p50_latency:>10.2}ms {status}");
         }
 
         println!("  {}", "-".repeat(55));

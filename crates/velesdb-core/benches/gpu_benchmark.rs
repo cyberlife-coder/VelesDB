@@ -14,7 +14,7 @@ fn generate_random_vector(dim: usize, seed: u64) -> Vec<f32> {
     let mut state = seed;
     (0..dim)
         .map(|_| {
-            state = state.wrapping_mul(1103515245).wrapping_add(12345);
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12345);
             #[allow(clippy::cast_precision_loss)]
             let val = ((state >> 16) & 0x7FFF) as f32 / 32768.0;
             val * 2.0 - 1.0
