@@ -5,6 +5,29 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-01-02
+
+### 🧪 Property-Based Testing (FT-2)
+
+Added proptest property-based tests for improved test coverage and robustness.
+
+#### Added
+
+- **FT-2: Property-based tests with proptest**
+  - `prop_len_equals_insertions` - Verifies len() consistency
+  - `prop_search_returns_at_most_k` - Search result bounds
+  - `prop_brute_force_exact` - Brute force correctness
+  - `prop_remove_decreases_len` - Remove operation semantics
+  - `prop_duplicate_insert_idempotent` - Idempotent insert
+  - `prop_batch_insert_count` - Batch operation correctness
+
+#### Documentation
+
+- Updated backlog with FT-2 completion
+- RF-2 (index.rs split) deferred due to complexity risk
+
+---
+
 ## [0.8.3] - 2026-01-02
 
 ### 🚀 GPU Acceleration (P1-GPU-1, P2-GPU-2)
