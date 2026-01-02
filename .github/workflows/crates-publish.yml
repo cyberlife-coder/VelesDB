@@ -1,14 +1,14 @@
 name: Crates.io Publish
 
 on:
-  release:
-    types: [published]
+  # Note: tauri-plugin-velesdb is already published by release.yml
+  # This workflow is kept for manual publishing only
   workflow_dispatch:
     inputs:
       dry_run:
         description: 'Dry run (no actual publish)'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 env:

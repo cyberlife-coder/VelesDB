@@ -39,6 +39,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: '1.83'
           components: rustfmt, clippy
 
       - name: Install system dependencies (for Tauri plugin)
