@@ -47,9 +47,11 @@
 
 pub mod collection;
 pub mod column_store;
+pub mod config;
 pub mod distance;
 pub mod error;
 pub mod filter;
+pub mod gpu;
 pub mod half_precision;
 pub mod index;
 pub mod metrics;
@@ -76,6 +78,10 @@ pub use quantization::{
 };
 
 pub use column_store::{ColumnStore, ColumnType, ColumnValue, StringId, StringTable, TypedColumn};
+pub use config::{
+    ConfigError, HnswConfig, LimitsConfig, LoggingConfig, QuantizationConfig, SearchConfig,
+    SearchMode, ServerConfig, StorageConfig, VelesConfig,
+};
 pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
     precision_at_k, recall_at_k, LatencyStats,

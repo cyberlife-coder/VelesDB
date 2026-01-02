@@ -1,0 +1,76 @@
+# VelesDB Ultra-Optimized Benchmark Dockerfile
+# Maximum performance: LTO, native CPU, codegen-units=1
+#
+# Build time: ~10-15 min (LTO is slow but worth it)
+# Performance: +10-20% vs standard release
+
+FROM rust:slim-bookworm AS builder
+
+WORKDIR /app
+
+# Install nightly (required for anndists) and build dependencies
+RUN rustup default nightly && \
+    apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy manifests first for better caching
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY integrations ./integrations
+
+# Create optimized .cargo/config.toml for maximum performance
+RUN mkdir -p .cargo && echo '\
+[build]\n\
+rustflags = ["-C", "target-cpu=native"]\n\
+\n\
+[profile.release]\n\
+lto = "fat"\n\
+codegen-units = 1\n\
+opt-level = 3\n\
+panic = "abort"\n\
+strip = true\n\
+' > .cargo/config.toml
+
+# Set environment for maximum optimization
+ENV RUSTFLAGS="-C target-cpu=x86-64-v3 -C opt-level=3"
+
+# Build with maximum optimizations
+RUN cargo build --release --bin velesdb-server \
+    && strip /app/target/release/velesdb-server
+
+# Runtime stage - minimal image
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -r -s /bin/false velesdb
+
+# Copy optimized binary
+COPY --from=builder /app/target/release/velesdb-server /usr/local/bin/
+
+# Create data directory
+RUN mkdir -p /data && chown velesdb:velesdb /data
+
+USER velesdb
+
+EXPOSE 8080
+
+ENV VELESDB_DATA_DIR=/data
+ENV VELESDB_HOST=0.0.0.0
+ENV VELESDB_PORT=8080
+ENV RUST_LOG=warn
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["velesdb-server"]

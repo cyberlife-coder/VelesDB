@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-velesdb"
-version = "0.7.2"
+version = "0.8.0"
 description = "LangChain integration for VelesDB vector database"
 readme = "README.md"
 license = {text = "Elastic-2.0"}

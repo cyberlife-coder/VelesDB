@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.83"
 license-file = "LICENSE"
@@ -57,6 +57,10 @@ tonic = "0.12"
 prost = "0.13"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Configuration
+figment = { version = "0.10", features = ["toml", "env"] }
+toml = "0.8"
 
 # Testing
 criterion = "0.5"

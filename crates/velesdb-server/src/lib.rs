@@ -179,6 +179,20 @@ pub struct SearchRequest {
     /// Number of results to return.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    /// Search mode preset: fast, balanced, accurate, high_recall, perfect.
+    /// Overrides ef_search with predefined values.
+    #[serde(default)]
+    #[schema(example = "balanced")]
+    pub mode: Option<String>,
+    /// HNSW ef_search parameter (higher = better recall, slower).
+    /// Overrides mode if both are specified.
+    #[serde(default)]
+    #[schema(example = 128)]
+    pub ef_search: Option<usize>,
+    /// Query timeout in milliseconds.
+    #[serde(default)]
+    #[schema(example = 30000)]
+    pub timeout_ms: Option<u64>,
 }
 
 /// Request for batch vector search.
@@ -190,6 +204,18 @@ pub struct BatchSearchRequest {
 
 fn default_top_k() -> usize {
     10
+}
+
+/// Convert mode string to ef_search value.
+fn mode_to_ef_search(mode: &str) -> Option<usize> {
+    match mode.to_lowercase().as_str() {
+        "fast" => Some(64),
+        "balanced" => Some(128),
+        "accurate" => Some(256),
+        "high_recall" | "highrecall" => Some(1024),
+        "perfect" => Some(usize::MAX), // Will trigger brute-force
+        _ => None,
+    }
 }
 
 /// Response from vector search.
@@ -681,7 +707,18 @@ pub async fn search(
         }
     };
 
-    match collection.search(&req.vector, req.top_k) {
+    // Determine effective ef_search from mode or explicit value
+    let effective_ef = req
+        .ef_search
+        .or_else(|| req.mode.as_ref().and_then(|m| mode_to_ef_search(m)));
+
+    let search_result = if let Some(ef) = effective_ef {
+        collection.search_with_ef(&req.vector, req.top_k, ef)
+    } else {
+        collection.search(&req.vector, req.top_k)
+    };
+
+    match search_result {
         Ok(results) => {
             let response = SearchResponse {
                 results: results

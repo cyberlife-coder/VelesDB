@@ -470,6 +470,63 @@ impl Collection {
         Ok(results)
     }
 
+    /// Performs vector similarity search with custom `ef_search` parameter.
+    ///
+    /// Higher `ef_search` = better recall, slower search.
+    /// Default `ef_search` is 128 (Balanced mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub fn search_with_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+
+        if query.len() != config.dimension {
+            return Err(Error::DimensionMismatch {
+                expected: config.dimension,
+                actual: query.len(),
+            });
+        }
+        drop(config);
+
+        // Convert ef_search to SearchQuality
+        let quality = match ef_search {
+            0..=64 => crate::SearchQuality::Fast,
+            65..=128 => crate::SearchQuality::Balanced,
+            129..=256 => crate::SearchQuality::Accurate,
+            257..=1024 => crate::SearchQuality::HighRecall,
+            _ => crate::SearchQuality::Perfect,
+        };
+
+        let index_results = self.index.search_with_quality(query, k, quality);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let results: Vec<SearchResult> = index_results
+            .into_iter()
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .collect();
+
+        Ok(results)
+    }
+
     /// Performs fast vector similarity search returning only IDs and scores.
     ///
     /// Perf: This is ~3-5x faster than `search()` because it skips vector/payload retrieval.

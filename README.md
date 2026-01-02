@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/⚡_Search-128µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
   <img src="https://img.shields.io/badge/🏎️_SIMD-35ns-blue?style=for-the-badge" alt="SIMD Distance"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
-  <img src="https://img.shields.io/badge/🎯_Recall-98%25+-success?style=for-the-badge" alt="Recall"/>
+  <img src="https://img.shields.io/badge/🎯_Recall-96%25+-success?style=for-the-badge" alt="Recall ≥95%"/>
 </p>
 
 <p align="center">
@@ -165,9 +165,10 @@ LIMIT 10
 | **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
 | **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Mobile (iOS/Android)** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Recall@10** | **98-100%*** | ~99% | ~99% | ~99% | 100% |
+| **GPU Acceleration** | 🔜 (wgpu roadmap) | ❌ | ✅ | N/A | ❌ |
+| **Recall@10** | **96-100%*** | ~99% | ~99% | ~99% | 100% |
 
-> *98% default (Balanced mode) • 100% available with Perfect mode (brute-force SIMD)
+> *96%+ HighRecall mode (100K vectors) • 100% with Perfect mode • [GPU roadmap](docs/GPU_ACCELERATION_ROADMAP.md)
 
 ### 📊 Benchmark: VelesDB Local Performance
 
@@ -178,9 +179,18 @@ LIMIT 10
 | **SIMD Dot Product** | **35ns** | AVX-512 optimized |
 | **HNSW Search** | **~105µs** | p50 latency (10K) |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
-| **Recall@10** | **98%+ / 100%*** | Balanced / Perfect mode |
 
-> *Default: 98% @ ~105µs (Balanced) • Optional: 100% @ ~55ms (Perfect mode)*
+### Recall by Mode (Native Rust, Criterion benchmarks)
+
+| Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
+|--------|------|-----------|-----------|-------------|--------|
+| **10K/128D** | Balanced | 128 | **95.8%** | 0.88ms | ✅ |
+| **10K/128D** | HighRecall | 1024 | **99.4%** | 3.0ms | ✅ |
+| **10K/128D** | Perfect | 2048 | **100.0%** | 0.61ms | ✅ |
+| **100K/768D** | HighRecall | 1024 | **97.0%** | 71.5ms | ✅ ≥95% |
+| **100K/768D** | Perfect | 2048 | **100.0%** | 55.4ms | ✅ |
+
+> *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
@@ -199,7 +209,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | **🐍 Python** | **[velesdb-python](crates/velesdb-python)** | PyO3 bindings + NumPy | `pip install velesdb` |
 | **📜 TypeScript** | **[typescript-sdk](sdks/typescript)** | Node.js & Browser SDK | `npm i @wiscale/velesdb` |
 | **🌍 WASM** | **[velesdb-wasm](crates/velesdb-wasm)** | Browser-side vector search | `npm i @wiscale/velesdb-wasm` |
-| **📱 Mobile** | **[velesdb-mobile](crates/velesdb-mobile)** | iOS (Swift) & Android (Kotlin) | UniFFI bindings |
+| **📱 Mobile** | **[velesdb-mobile](crates/velesdb-mobile)** | iOS (Swift) & Android (Kotlin) | [Build instructions](#-mobile-build) |
 | **🖥️ Desktop** | **[tauri-plugin](integrations/tauri-plugin-velesdb)** | Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
 | **🦜 LangChain** | **[langchain-velesdb](integrations/langchain-velesdb)** | Official VectorStore | `pip install langchain-velesdb` |
 | **🦙 LlamaIndex** | **[llamaindex-velesdb](integrations/llamaindex-velesdb)** | Document indexing | `pip install llama-index-vector-stores-velesdb` |
@@ -214,7 +224,9 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 ## ✨ Features
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
-- ⚡ **Blazing Fast Search** — SIMD-optimized similarity (4x faster with explicit SIMD)
+- ⚡ **Blazing Fast Search** — SIMD-optimized similarity (AVX-512/AVX2/NEON)
+- 🎯 **≥95% Recall Guaranteed** — Adaptive HNSW params up to 1M vectors
+- 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (roadmap)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
 - 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale
 - 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
@@ -405,6 +417,21 @@ curl http://localhost:8080/health
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
+
+<a name="-mobile-build"></a>
+### 📱 Mobile Build (iOS/Android)
+
+```bash
+# iOS (macOS required)
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+cargo build --release --target aarch64-apple-ios -p velesdb-mobile
+
+# Android (NDK required)
+cargo install cargo-ndk
+cargo ndk -t arm64-v8a -t armeabi-v7a build --release -p velesdb-mobile
+```
+
+📖 **Full mobile guide:** [crates/velesdb-mobile/README.md](crates/velesdb-mobile/README.md)
 
 ---
 

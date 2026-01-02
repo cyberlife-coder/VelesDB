@@ -5,6 +5,73 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-01-02
+
+### ⚙️ Configuration & Search Modes
+
+Major release focused on **configuration flexibility** and **search mode documentation**.
+
+#### Added
+
+- **Configuration file support** (`velesdb.toml`)
+  - Full configuration via TOML file
+  - Environment variable overrides (`VELESDB_*`)
+  - Hierarchical priority: file < env < CLI < runtime
+  - Validation at startup with clear error messages
+  - `velesdb config validate|show|init` commands
+
+- **VelesQL `WITH` clause** - Query-time configuration override
+  - `WITH (mode = 'high_recall')` - Set search mode per query
+  - `WITH (ef_search = 512)` - Direct ef_search override
+  - `WITH (timeout_ms = 5000)` - Query timeout
+  - Combines with filters: `WHERE vector NEAR $v AND ... WITH (...)`
+
+- **REPL session configuration** - New backslash commands
+  - `\set <setting> <value>` - Set session parameter
+  - `\show [setting]` - Display current settings
+  - `\reset [setting]` - Reset to defaults
+  - `\use <collection>` - Select active collection
+  - `\info` - Database information
+  - `\bench <collection> [n] [k]` - Quick benchmark
+
+- **Search Modes documentation** - Official documentation of presets
+  - `Fast` (ef=64): ~90% recall, <1ms latency
+  - `Balanced` (ef=128): ~98% recall, ~2ms latency (default)
+  - `Accurate` (ef=256): ~99% recall, ~5ms latency
+  - `HighRecall` (ef=1024): ~99.7% recall, ~15ms latency
+  - `Perfect` (bruteforce): 100% recall guaranteed
+  - Comparison with Milvus, OpenSearch, Qdrant parameter mappings
+
+#### Documentation
+
+- **New**: `docs/SEARCH_MODES.md` - Complete search mode guide with recall/latency tradeoffs
+- **New**: `docs/CONFIGURATION.md` - Configuration file reference
+- **New**: `docs/CLI_REPL.md` - CLI and REPL command reference
+- **Updated**: `docs/VELESQL_SPEC.md` - Added WITH clause grammar and examples
+
+#### Configuration Options
+
+| Section | Key Options |
+|---------|-------------|
+| `[search]` | `default_mode`, `ef_search`, `max_results`, `query_timeout_ms` |
+| `[hnsw]` | `m`, `ef_construction`, `max_layers` |
+| `[storage]` | `data_dir`, `storage_mode`, `mmap_cache_mb` |
+| `[limits]` | `max_dimensions`, `max_vectors_per_collection`, `max_perfect_mode_vectors` |
+| `[server]` | `host`, `port`, `workers`, `cors_enabled` |
+| `[logging]` | `level`, `format`, `file` |
+| `[quantization]` | `default_type`, `rerank_enabled` |
+
+#### Breaking Changes
+
+- None. All changes are backward compatible.
+
+#### Migration Guide
+
+No migration required. Existing databases and configurations continue to work.
+New features are opt-in via configuration file or runtime settings.
+
+---
+
 ## [0.7.2] - 2026-01-01
 
 ### 🎯 Search Quality & CI Improvements
