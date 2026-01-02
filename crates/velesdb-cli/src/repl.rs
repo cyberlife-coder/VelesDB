@@ -439,8 +439,8 @@ fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Command
         "\\reset" | ".reset" => {
             let key = parts.get(1).copied();
             config.session.reset(key);
-            if key.is_some() {
-                println!("Reset {}\n", key.unwrap().cyan());
+            if let Some(k) = key {
+                println!("Reset {}\n", k.cyan());
             } else {
                 println!("All settings reset to defaults\n");
             }

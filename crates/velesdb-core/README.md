@@ -182,16 +182,17 @@ db.create_collection_with_options(
 - Bulk import: **3,300 vectors/sec** with `upsert_bulk()`
 - ColumnStore filtering: **122x faster** than JSON at 100k items
 
-### Recall by Configuration
+### Recall by Configuration (Native Rust, Criterion)
 
-| Config | Mode | ef_search | Recall@10 | Latency | Status |
-|--------|------|-----------|-----------|---------|--------|
-| **10K/128D** (Native) | HighRecall | 1024 | **99.2%** | ~8ms | ✅ |
-| **10K/128D** (Native) | Perfect | 2048 | **100.0%** | ~7ms | ✅ |
-| **100K/768D** (Docker) | HighRecall | 1024 | **96.1%** | 73ms | ✅ ≥95% |
-| **100K/768D** (Docker) | Perfect | 2048 | **100.0%** | 42ms | ✅ |
+| Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
+|--------|------|-----------|-----------|-------------|--------|
+| **10K/128D** | Balanced | 128 | **95.8%** | 0.88ms | ✅ |
+| **10K/128D** | HighRecall | 1024 | **99.4%** | 3.0ms | ✅ |
+| **10K/128D** | Perfect | 2048 | **100.0%** | 0.61ms | ✅ |
+| **100K/768D** | HighRecall | 1024 | **97.0%** | 71.5ms | ✅ ≥95% |
+| **100K/768D** | Perfect | 2048 | **100.0%** | 55.4ms | ✅ |
 
-> *Recall varies by dataset size/dimension. ≥95% guaranteed for HighRecall mode.*
+> *Latency P50 = median over 100 queries. ≥95% recall guaranteed for HighRecall mode.*
 
 > 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 

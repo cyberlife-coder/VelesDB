@@ -180,16 +180,17 @@ LIMIT 10
 | **HNSW Search** | **~105µs** | p50 latency (10K) |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
 
-### Recall by Mode
+### Recall by Mode (Native Rust, Criterion benchmarks)
 
-| Config | Mode | ef_search | Recall@10 | Latency | Status |
-|--------|------|-----------|-----------|---------|--------|
-| **10K/128D** (Native) | HighRecall | 1024 | **99.2%** | ~8ms | ✅ |
-| **10K/128D** (Native) | Perfect | 2048 | **100.0%** | ~7ms | ✅ |
-| **100K/768D** (Docker) | HighRecall | 1024 | **96.1%** | 73ms | ✅ ≥95% |
-| **100K/768D** (Docker) | Perfect | 2048 | **100.0%** | 42ms | ✅ |
+| Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
+|--------|------|-----------|-----------|-------------|--------|
+| **10K/128D** | Balanced | 128 | **95.8%** | 0.88ms | ✅ |
+| **10K/128D** | HighRecall | 1024 | **99.4%** | 3.0ms | ✅ |
+| **10K/128D** | Perfect | 2048 | **100.0%** | 0.61ms | ✅ |
+| **100K/768D** | HighRecall | 1024 | **97.0%** | 71.5ms | ✅ ≥95% |
+| **100K/768D** | Perfect | 2048 | **100.0%** | 55.4ms | ✅ |
 
-> *Recall decreases with larger datasets and higher dimensions (curse of dimensionality)*
+> *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
