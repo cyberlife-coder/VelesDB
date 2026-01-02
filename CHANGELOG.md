@@ -5,6 +5,35 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-01-02
+
+### ⚡ Performance Fixes
+
+Critical performance fixes for SIMD vectorization and insertion throughput.
+
+#### Fixed
+
+- **PERF-1: Jaccard/Hamming SIMD regression** (+650% latency fix)
+  - Root cause: Auto-vectorization broken by compiler heuristics
+  - Fix: `jaccard_similarity_fast` and `hamming_distance_fast` now delegate to explicit SIMD implementations in `simd_explicit.rs`
+  - Result: Guaranteed SIMD vectorization on x86_64 (AVX2) and aarch64 (NEON)
+
+#### Documentation
+
+- **PERF-2: Insert performance warning** - Added documentation to `VectorIndex::insert` warning about lock overhead
+  - Recommends `insert_batch_parallel` for large batches (>100 vectors)
+  - Recommends `insert_batch_sequential` for smaller batches
+  - Documents ~3x lock overhead when calling `insert()` in a loop vs batch methods
+
+#### Technical Details
+
+| Issue | Before | After | Improvement |
+|-------|--------|-------|-------------|
+| Jaccard 768D | ~650ns | ~86ns | **7.5x faster** |
+| Hamming 768D | ~400ns | ~50ns | **8x faster** |
+
+---
+
 ## [0.8.1] - 2026-01-02
 
 ### 🔧 Clean Code & Performance

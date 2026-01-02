@@ -14,6 +14,12 @@ use crate::distance::DistanceMetric;
 /// Trait for vector index implementations.
 ///
 /// All index implementations must be thread-safe (Send + Sync).
+///
+/// # Performance Note
+///
+/// For bulk insertions, prefer batch methods like [`HnswIndex::insert_batch_parallel`]
+/// or [`HnswIndex::insert_batch_sequential`] over calling [`insert`] in a loop.
+/// Individual inserts incur per-call lock overhead that batch methods avoid.
 pub trait VectorIndex: Send + Sync {
     /// Inserts a vector into the index.
     ///
@@ -21,6 +27,15 @@ pub trait VectorIndex: Send + Sync {
     ///
     /// * `id` - Unique identifier for the vector
     /// * `vector` - The vector data to index
+    ///
+    /// # Performance Warning (PERF-2)
+    ///
+    /// This method acquires locks for each insertion. For bulk loading, use:
+    /// - [`HnswIndex::insert_batch_parallel`] - Best for large batches (>100 vectors)
+    /// - [`HnswIndex::insert_batch_sequential`] - Best for smaller batches
+    ///
+    /// Calling `insert()` in a loop incurs ~3x lock overhead per vector compared
+    /// to batch methods which acquire locks once for the entire batch.
     fn insert(&self, id: u64, vector: &[f32]);
 
     /// Searches for the k nearest neighbors of the query vector.

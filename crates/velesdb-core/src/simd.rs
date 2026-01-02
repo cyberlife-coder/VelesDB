@@ -233,52 +233,17 @@ pub fn batch_cosine_normalized(candidates: &[&[f32]], query: &[f32]) -> Vec<f32>
 /// # Panics
 ///
 /// Panics if vectors have different lengths.
+///
+/// # Performance (PERF-1 fix v0.8.2)
+///
+/// Delegates to `simd_explicit::hamming_distance_simd` for guaranteed SIMD
+/// vectorization. Previous scalar implementation suffered from auto-vectorization
+/// being broken by compiler heuristics.
 #[inline]
 #[must_use]
 pub fn hamming_distance_fast(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-
-    let chunks = a.len() / 4;
-    let remainder = a.len() % 4;
-
-    let mut count0 = 0u32;
-    let mut count1 = 0u32;
-    let mut count2 = 0u32;
-    let mut count3 = 0u32;
-
-    for i in 0..chunks {
-        let base = i * 4;
-        // Convert to binary: > 0.5 = 1, else 0
-        let a0 = a[base] > 0.5;
-        let a1 = a[base + 1] > 0.5;
-        let a2 = a[base + 2] > 0.5;
-        let a3 = a[base + 3] > 0.5;
-
-        let b0 = b[base] > 0.5;
-        let b1 = b[base + 1] > 0.5;
-        let b2 = b[base + 2] > 0.5;
-        let b3 = b[base + 3] > 0.5;
-
-        // XOR to find differences
-        count0 += u32::from(a0 != b0);
-        count1 += u32::from(a1 != b1);
-        count2 += u32::from(a2 != b2);
-        count3 += u32::from(a3 != b3);
-    }
-
-    // Handle remainder
-    let base = chunks * 4;
-    for i in 0..remainder {
-        let ai = a[base + i] > 0.5;
-        let bi = b[base + i] > 0.5;
-        count0 += u32::from(ai != bi);
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    // Intentional: hamming distance won't exceed 2^23 in practice
-    {
-        (count0 + count1 + count2 + count3) as f32
-    }
+    // PERF-1: Delegate to explicit SIMD to avoid auto-vectorization issues
+    crate::simd_explicit::hamming_distance_simd(a, b)
 }
 
 /// Computes Jaccard similarity for set-like vectors.
@@ -299,64 +264,16 @@ pub fn hamming_distance_fast(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Panics if vectors have different lengths.
 ///
-/// # Optimization
+/// # Performance (PERF-1 fix v0.8.2)
 ///
-/// Uses loop unrolling with 8-element blocks for better instruction-level
-/// parallelism. The compiler auto-vectorizes the comparison operations.
+/// Delegates to `simd_explicit::jaccard_similarity_simd` for guaranteed SIMD
+/// vectorization. Previous scalar implementation suffered from auto-vectorization
+/// being broken by compiler heuristics (+650% regression).
 #[inline]
 #[must_use]
 pub fn jaccard_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-
-    let mut intersection = 0u32;
-    let mut union = 0u32;
-
-    // Process 8 elements at a time (unrolled for ILP)
-    let chunks = a.len() / 8;
-    for i in 0..chunks {
-        let offset = i * 8;
-
-        // Unrolled comparisons for better ILP
-        let (int0, uni0) = count_pair(a[offset], b[offset]);
-        let (int1, uni1) = count_pair(a[offset + 1], b[offset + 1]);
-        let (int2, uni2) = count_pair(a[offset + 2], b[offset + 2]);
-        let (int3, uni3) = count_pair(a[offset + 3], b[offset + 3]);
-        let (int4, uni4) = count_pair(a[offset + 4], b[offset + 4]);
-        let (int5, uni5) = count_pair(a[offset + 5], b[offset + 5]);
-        let (int6, uni6) = count_pair(a[offset + 6], b[offset + 6]);
-        let (int7, uni7) = count_pair(a[offset + 7], b[offset + 7]);
-
-        intersection += int0 + int1 + int2 + int3 + int4 + int5 + int6 + int7;
-        union += uni0 + uni1 + uni2 + uni3 + uni4 + uni5 + uni6 + uni7;
-    }
-
-    // Handle remainder
-    let remainder_start = chunks * 8;
-    for i in remainder_start..a.len() {
-        let (int_i, uni_i) = count_pair(a[i], b[i]);
-        intersection += int_i;
-        union += uni_i;
-    }
-
-    // Empty sets are defined as identical (similarity = 1.0)
-    if union == 0 {
-        return 1.0;
-    }
-
-    #[allow(clippy::cast_precision_loss)] // Intentional: set size won't exceed 2^23 in practice
-    {
-        intersection as f32 / union as f32
-    }
-}
-
-/// Counts intersection and union contribution for a single element pair.
-#[inline]
-fn count_pair(a: f32, b: f32) -> (u32, u32) {
-    let in_a = a > 0.5;
-    let in_b = b > 0.5;
-    let intersection = u32::from(in_a && in_b);
-    let union = u32::from(in_a || in_b);
-    (intersection, union)
+    // PERF-1: Delegate to explicit SIMD to avoid auto-vectorization issues
+    crate::simd_explicit::jaccard_similarity_simd(a, b)
 }
 
 #[cfg(test)]
