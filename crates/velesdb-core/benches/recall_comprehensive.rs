@@ -137,7 +137,9 @@ fn bench_comprehensive(c: &mut Criterion) {
 
             let status = if avg_recall >= 95.0 { "✅" } else { "⚠️" };
 
-            println!("  {quality_name:12} {ef:10} {avg_recall:>10.1}% {p50_latency:>10.2}ms {status}");
+            println!(
+                "  {quality_name:12} {ef:10} {avg_recall:>10.1}% {p50_latency:>10.2}ms {status}"
+            );
         }
 
         println!("  {}", "-".repeat(55));
