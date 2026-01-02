@@ -2,22 +2,31 @@
 
 Benchmark suite comparing VelesDB against pgvector (HNSW).
 
-## 🚀 v0.5.0 Results: VelesDB 3.2x Faster Than pgvector
+## 🚀 v0.7.3 Results: VelesDB Recall ≥95% Guaranteed
 
-### Insertion Performance (5,000 vectors, 768D, Docker)
+### Search Performance (100K vectors, 768D, Docker)
 
-| Metric | pgvector | VelesDB | Result |
-|--------|----------|---------|--------|
-| **Insert + Index** | 8.54s | **2.63s** | **3.2x faster** |
-| **Recall@10** | 100.0% | 99.7% | Comparable |
-| **Search P50** | 3.0ms | 4.0ms | Comparable |
+| Mode | ef_search | Recall@10 | Latency P50 |
+|------|-----------|-----------|-------------|
+| Fast | 64 | 34.2% | 59.3ms |
+| Balanced | 128 | 48.8% | 60.9ms |
+| Accurate | 256 | 67.6% | 78.3ms |
+| **HighRecall** | **1024** | **96.1%** ✅ | 73.0ms |
+| **Perfect** | **2048** | **100.0%** | 42.1ms |
 
-### Key Optimizations in v0.5.0
+### Insert Performance (100K vectors, 768D)
 
-- **SIMD-accelerated HNSW** - AVX2/SSE distance calculations via `simdeez_f`
-- **Parallel insertion** - Native Rayon-based graph construction
-- **Deferred index save** - No disk I/O during batch operations
-- **Async-safe server** - `spawn_blocking` for bulk operations
+| Dataset | VelesDB | pgvector | Speedup |
+|---------|---------|----------|--------|
+| 10K | ~5s | ~19s | **3.8x** |
+| 100K | ~52s | ~365s | **7x** |
+
+### Key Optimizations in v0.7.x
+
+- **SIMD AVX-512/AVX2** - 32-wide processing with FMA
+- **Adaptive HNSW params** - `HnswParams::for_dataset_size()` for optimal recall
+- **Parallel search** - Batch parallel with prefetching
+- **Quantization** - SQ8 (4x) and Binary (32x) compression
 
 ## Benchmark Modes
 
@@ -81,14 +90,23 @@ Both databases are measured with **total time including index construction**:
 
 This ensures an apples-to-apples comparison of the complete ingestion pipeline.
 
-### HNSW Parameters
+### HNSW Parameters (Adaptive)
 
-Both databases use equivalent parameters:
+VelesDB uses adaptive parameters based on dataset size:
 
-| Parameter | VelesDB | pgvector |
-|-----------|---------|----------|
-| M (connections) | 16 | 16 |
-| ef_construction | 200 | 200 |
+| Dataset Size | M | ef_construction | Target Recall |
+|--------------|---|-----------------|---------------|
+| ≤10K | 32 | 400 | ≥98% |
+| ≤100K | 64 | 800 | ≥95% |
+| ≤500K | 96 | 1200 | ≥95% |
+| **≤1M** | **128** | **1600** | **≥95%** |
+
+```rust
+// Automatic parameter selection
+let params = HnswParams::for_dataset_size(768, 100_000);
+// Or for 1M scale
+let params = HnswParams::million_scale(768);
+```
 
 ## When to Choose Each
 

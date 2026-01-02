@@ -1,9 +1,9 @@
 services:
-  # VelesDB server for fair comparison
+  # VelesDB server for fair comparison (ultra-optimized build)
   velesdb:
     build:
       context: ..
-      dockerfile: benchmarks/Dockerfile.nightly
+      dockerfile: benchmarks/Dockerfile.optimized
     container_name: velesdb-bench-server
     ports:
       - "8080:8080"

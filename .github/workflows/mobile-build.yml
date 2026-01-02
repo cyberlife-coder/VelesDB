@@ -25,7 +25,7 @@ on:
       generate_bindings:
         description: 'Generate UniFFI bindings (Swift/Kotlin)'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 env:

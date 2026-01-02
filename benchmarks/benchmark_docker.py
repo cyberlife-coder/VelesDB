@@ -103,7 +103,8 @@ def test_velesdb_rest(data: np.ndarray, queries: np.ndarray, ground_truth: List[
         for _ in range(5):
             session.post(f"{base_url}/collections/{collection_name}/search", json={
                 "vector": queries[0].tolist(),
-                "top_k": top_k
+                "top_k": top_k,
+                "ef_search": 512
             })
         
         # Search and measure
@@ -115,7 +116,8 @@ def test_velesdb_rest(data: np.ndarray, queries: np.ndarray, ground_truth: List[
             start = time.time()
             resp = session.post(f"{base_url}/collections/{collection_name}/search", json={
                 "vector": q.tolist(),
-                "top_k": top_k
+                "top_k": top_k,
+                "ef_search": 512  # HighRecall mode for fair comparison
             })
             latencies.append(time.time() - start)
             

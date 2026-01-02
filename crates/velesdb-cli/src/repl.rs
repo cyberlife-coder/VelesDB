@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use velesdb_core::Database;
 
+use crate::session::SessionSettings;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// REPL configuration
@@ -20,6 +22,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct ReplConfig {
     pub timing: bool,
     pub format: OutputFormat,
+    pub session: SessionSettings,
 }
 
 impl Default for ReplConfig {
@@ -27,6 +30,7 @@ impl Default for ReplConfig {
         Self {
             timing: true,
             format: OutputFormat::Table,
+            session: SessionSettings::new(),
         }
     }
 }
@@ -398,6 +402,148 @@ fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Command
             CommandResult::Continue
         }
 
+        // ========== Session commands (backslash style) ==========
+        "\\set" | ".set" => {
+            if parts.len() < 3 {
+                println!("Usage: \\set <setting> <value>\n");
+                println!("Settings: mode, ef_search, timeout_ms, rerank, max_results\n");
+                return CommandResult::Continue;
+            }
+            let key = parts[1];
+            let value = parts[2];
+            match config.session.set(key, value) {
+                Ok(()) => println!("{} = {}\n", key.cyan(), value.green()),
+                Err(e) => return CommandResult::Error(e),
+            }
+            CommandResult::Continue
+        }
+
+        "\\show" | ".show" => {
+            if parts.len() < 2 {
+                // Show all settings
+                println!("\n{}", "Session Settings".bold().underline());
+                for (key, value) in config.session.all_settings() {
+                    println!("  {} = {}", key.cyan(), value.green());
+                }
+                println!();
+            } else {
+                let key = parts[1];
+                match config.session.get(key) {
+                    Some(value) => println!("{} = {}\n", key.cyan(), value.green()),
+                    None => return CommandResult::Error(format!("Unknown setting: {key}")),
+                }
+            }
+            CommandResult::Continue
+        }
+
+        "\\reset" | ".reset" => {
+            let key = parts.get(1).copied();
+            config.session.reset(key);
+            if let Some(k) = key {
+                println!("Reset {}\n", k.cyan());
+            } else {
+                println!("All settings reset to defaults\n");
+            }
+            CommandResult::Continue
+        }
+
+        "\\use" | ".use" => {
+            if parts.len() < 2 {
+                match config.session.active_collection() {
+                    Some(name) => println!("Active collection: {}\n", name.green()),
+                    None => println!("No active collection. Usage: \\use <collection>\n"),
+                }
+            } else {
+                let name = parts[1];
+                if db.get_collection(name).is_some() {
+                    config.session.use_collection(Some(name.to_string()));
+                    println!("Using collection: {}\n", name.green());
+                } else {
+                    return CommandResult::Error(format!("Collection '{name}' not found"));
+                }
+            }
+            CommandResult::Continue
+        }
+
+        "\\info" | ".info" => {
+            println!("\n{}", "VelesDB Information".bold().underline());
+            println!("  {} {}", "Version:".cyan(), VERSION.green());
+            println!("  {} {}", "Database:".cyan(), "active".green());
+
+            let collections = db.list_collections();
+            println!("  {} {}", "Collections:".cyan(), collections.len());
+
+            let total_points: usize = collections
+                .iter()
+                .filter_map(|name| db.get_collection(name))
+                .map(|col| col.config().point_count)
+                .sum();
+            println!("  {} {}", "Total Points:".cyan(), total_points);
+
+            if let Some(col_name) = config.session.active_collection() {
+                println!("  {} {}", "Active Collection:".cyan(), col_name.green());
+            }
+            println!();
+            CommandResult::Continue
+        }
+
+        "\\bench" | ".bench" => {
+            if parts.len() < 2 {
+                println!("Usage: \\bench <collection> [n_queries] [k]\n");
+                return CommandResult::Continue;
+            }
+            let name = parts[1];
+            let n_queries: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
+            let k: usize = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
+
+            match db.get_collection(name) {
+                Some(col) => {
+                    let cfg = col.config();
+                    println!(
+                        "\nBenchmarking {} ({} points, {}D)...\n",
+                        name.green(),
+                        cfg.point_count,
+                        cfg.dimension
+                    );
+                    println!(
+                        "  {} queries, k={}, mode={:?}",
+                        n_queries,
+                        k,
+                        config.session.mode()
+                    );
+
+                    // Generate random query vectors
+                    let start = Instant::now();
+                    let mut total_results = 0usize;
+
+                    for i in 0..n_queries {
+                        // Use deterministic pseudo-random for reproducibility
+                        let query: Vec<f32> = (0..cfg.dimension)
+                            .map(|j| ((i * 31 + j * 17) % 1000) as f32 / 1000.0)
+                            .collect();
+
+                        if let Ok(results) = col.search(&query, k) {
+                            total_results += results.len();
+                        }
+                    }
+
+                    let elapsed = start.elapsed();
+                    let qps = n_queries as f64 / elapsed.as_secs_f64();
+                    let avg_latency_ms = elapsed.as_millis() as f64 / n_queries as f64;
+
+                    println!("\n{}", "Results:".bold());
+                    println!("  {} {:.2} queries/sec", "Throughput:".cyan(), qps);
+                    println!("  {} {:.2} ms", "Avg Latency:".cyan(), avg_latency_ms);
+                    println!("  {} {} results", "Total Results:".cyan(), total_results);
+                    println!();
+                }
+                None => {
+                    return CommandResult::Error(format!("Collection '{name}' not found"));
+                }
+            }
+            CommandResult::Continue
+        }
+
         ".export" => {
             if parts.len() < 2 {
                 println!("Usage: .export <collection_name> [filename.json]\n");
@@ -490,12 +636,38 @@ fn print_help() {
     );
     println!("  {}          Clear screen", ".clear".yellow());
     println!();
+    println!("{}", "Session Commands:".bold().underline());
+    println!();
+    println!(
+        "  {}   Set session parameter",
+        "\\set <key> <value>".yellow()
+    );
+    println!("  {}       Show session settings", "\\show [key]".yellow());
+    println!("  {}      Reset settings", "\\reset [key]".yellow());
+    println!(
+        "  {}     Select active collection",
+        "\\use <collection>".yellow()
+    );
+    println!("  {}             Database information", "\\info".yellow());
+    println!("  {} Quick benchmark", "\\bench <col> [n] [k]".yellow());
+    println!();
+    println!("{}", "Session Settings:".bold().underline());
+    println!();
+    println!(
+        "  {} fast, balanced, accurate, high_recall, perfect",
+        "mode".cyan()
+    );
+    println!("  {} 16-4096 (or auto from mode)", "ef_search".cyan());
+    println!("  {} Query timeout in ms", "timeout_ms".cyan());
+    println!("  {} Enable reranking (true/false)", "rerank".cyan());
+    println!("  {} Max results per query", "max_results".cyan());
+    println!();
     println!("{}", "VelesQL Examples:".bold().underline());
     println!();
     println!("  {}", "SELECT * FROM documents LIMIT 10;".italic().white());
     println!(
         "  {}",
-        "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, ...] LIMIT 5;"
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast');"
             .italic()
             .white()
     );

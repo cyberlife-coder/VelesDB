@@ -78,31 +78,33 @@ impl WithClause {
 
     /// Gets `ef_search` if specified.
     #[must_use]
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn get_ef_search(&self) -> Option<usize> {
         self.get("ef_search")
-            .and_then(|v| v.as_integer())
+            .and_then(WithValue::as_integer)
             .map(|v| v as usize)
     }
 
     /// Gets timeout in milliseconds if specified.
     #[must_use]
+    #[allow(clippy::cast_sign_loss)]
     pub fn get_timeout_ms(&self) -> Option<u64> {
         self.get("timeout_ms")
-            .and_then(|v| v.as_integer())
+            .and_then(WithValue::as_integer)
             .map(|v| v as u64)
     }
 
     /// Gets rerank option if specified.
     #[must_use]
     pub fn get_rerank(&self) -> Option<bool> {
-        self.get("rerank").and_then(|v| v.as_bool())
+        self.get("rerank").and_then(WithValue::as_bool)
     }
 }
 
 /// A single option in a WITH clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WithOption {
-    /// Option key (e.g., "mode", "ef_search").
+    /// Option key (e.g., "mode", "`ef_search`").
     pub key: String,
     /// Option value.
     pub value: WithValue,
@@ -111,7 +113,7 @@ pub struct WithOption {
 /// Value type for WITH clause options.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WithValue {
-    /// String value (e.g., 'high_recall').
+    /// String value (e.g., '`high_recall`').
     String(String),
     /// Integer value (e.g., 512).
     Integer(i64),
@@ -147,6 +149,7 @@ impl WithValue {
     pub fn as_float(&self) -> Option<f64> {
         match self {
             Self::Float(f) => Some(*f),
+            #[allow(clippy::cast_precision_loss)]
             Self::Integer(i) => Some(*i as f64),
             _ => None,
         }
