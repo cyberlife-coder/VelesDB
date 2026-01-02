@@ -76,7 +76,7 @@ assets = [
     ["target/release/velesdb-migrate", "usr/bin/", "755"],
     ["../../README.md", "usr/share/doc/velesdb/", "644"],
     ["../../LICENSE", "usr/share/doc/velesdb/", "644"],
-    ["../../docs/ARCHITECTURE.md", "usr/share/doc/velesdb/", "644"],
+    ["../../docs/reference/ARCHITECTURE.md", "usr/share/doc/velesdb/", "644"],
     ["../../docs/BENCHMARKS.md", "usr/share/doc/velesdb/", "644"],
     ["../../crates/velesdb-migrate/README.md", "usr/share/doc/velesdb/migrate/", "644"],
 ]
