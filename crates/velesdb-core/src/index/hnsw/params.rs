@@ -48,8 +48,8 @@ impl HnswParams {
             },
             // 257+ dimensions: aggressive params for ≥95% recall
             _ => Self {
-                max_connections: 64,
-                ef_construction: 800,
+                max_connections: 32,
+                ef_construction: 400,
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
             },
@@ -295,8 +295,8 @@ mod tests {
     #[test]
     fn test_hnsw_params_default() {
         let params = HnswParams::default();
-        assert_eq!(params.max_connections, 64); // auto(768) -> 257..=768 range
-        assert_eq!(params.ef_construction, 800);
+        assert_eq!(params.max_connections, 32); // auto(768) -> optimized default
+        assert_eq!(params.ef_construction, 400);
     }
 
     #[test]
@@ -309,8 +309,8 @@ mod tests {
     #[test]
     fn test_hnsw_params_auto_large_dimension() {
         let params = HnswParams::auto(1024);
-        assert_eq!(params.max_connections, 64); // > 768 range
-        assert_eq!(params.ef_construction, 800);
+        assert_eq!(params.max_connections, 32); // > 256 range
+        assert_eq!(params.ef_construction, 400);
     }
 
     #[test]
@@ -324,8 +324,8 @@ mod tests {
     #[test]
     fn test_hnsw_params_high_recall() {
         let params = HnswParams::high_recall(768);
-        assert_eq!(params.max_connections, 72); // 64 + 8
-        assert_eq!(params.ef_construction, 1000); // 800 + 200
+        assert_eq!(params.max_connections, 40); // 32 + 8
+        assert_eq!(params.ef_construction, 600); // 400 + 200
     }
 
     #[test]
@@ -393,8 +393,8 @@ mod tests {
     #[test]
     fn test_hnsw_params_fast_indexing() {
         let params = HnswParams::fast_indexing(768);
-        assert_eq!(params.max_connections, 32); // 64 / 2
-        assert_eq!(params.ef_construction, 400); // 800 / 2
+        assert_eq!(params.max_connections, 16); // 32 / 2
+        assert_eq!(params.ef_construction, 200); // 400 / 2
     }
 
     #[test]
@@ -413,8 +413,8 @@ mod tests {
 
         // Assert - SQ8 mode enabled with auto-tuned params
         assert_eq!(params.storage_mode, StorageMode::SQ8);
-        assert_eq!(params.max_connections, 64); // From auto(768)
-        assert_eq!(params.ef_construction, 800);
+        assert_eq!(params.max_connections, 32); // From auto(768)
+        assert_eq!(params.ef_construction, 400);
     }
 
     #[test]
@@ -424,7 +424,7 @@ mod tests {
 
         // Assert - Binary mode for 32x compression
         assert_eq!(params.storage_mode, StorageMode::Binary);
-        assert_eq!(params.max_connections, 64);
+        assert_eq!(params.max_connections, 32);
     }
 
     #[test]

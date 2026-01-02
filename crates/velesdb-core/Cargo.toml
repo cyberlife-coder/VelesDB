@@ -60,6 +60,10 @@ version = "1.5"
 [dependencies.rustc-hash]
 version = "2.0"
 
+# Lock-free concurrent HashMap for high-throughput parallel operations
+[dependencies.dashmap]
+version = "5.5"
+
 [dependencies.wide]
 version = "0.7"
 

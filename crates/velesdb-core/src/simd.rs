@@ -21,6 +21,89 @@
 use crate::simd_avx512;
 use crate::simd_explicit;
 
+// ============================================================================
+// CPU Cache Prefetch Utilities (QW-2 Refactoring)
+// ============================================================================
+
+/// L2 cache line size in bytes (standard for modern `x86_64` CPUs).
+pub const L2_CACHE_LINE_BYTES: usize = 64;
+
+/// Calculates optimal prefetch distance based on vector dimension.
+///
+/// # Algorithm
+///
+/// Prefetch distance is computed to stay within L2 cache constraints:
+/// - `distance = (vector_bytes / L2_CACHE_LINE).clamp(4, 16)`
+/// - Minimum 4: Ensure enough lookahead for out-of-order execution
+/// - Maximum 16: Prevent cache pollution from over-prefetching
+///
+/// # Performance Impact
+///
+/// - `768D` vectors (3072 bytes): `prefetch_distance` = 16
+/// - `128D` vectors (512 bytes): `prefetch_distance` = 8
+/// - `32D` vectors (128 bytes): `prefetch_distance` = 4
+#[inline]
+#[must_use]
+pub const fn calculate_prefetch_distance(dimension: usize) -> usize {
+    let vector_bytes = dimension * std::mem::size_of::<f32>();
+    let raw_distance = vector_bytes / L2_CACHE_LINE_BYTES;
+    // Manual clamp for const fn (clamp is not const in stable Rust)
+    if raw_distance < 4 {
+        4
+    } else if raw_distance > 16 {
+        16
+    } else {
+        raw_distance
+    }
+}
+
+/// Prefetches a vector into L1 cache (T0 hint) for upcoming SIMD operations.
+///
+/// # Platform Support
+///
+/// - **`x86_64`**: Uses `_mm_prefetch` with `_MM_HINT_T0` (all cache levels)
+/// - **`aarch64`**: Uses `__prefetch` (ARM NEON)
+/// - **Other**: No-op (graceful degradation)
+///
+/// # Safety
+///
+/// This function is safe because prefetch instructions are hints and cannot
+/// cause memory faults even with invalid addresses.
+///
+/// # Performance
+///
+/// Reduces cache miss latency by ~50-100 cycles when vectors are prefetched
+/// 4-16 iterations ahead of actual use.
+#[inline]
+pub fn prefetch_vector(vector: &[f32]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: _mm_prefetch is a hint instruction that cannot fault
+        unsafe {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: prefetch is a hint instruction that cannot fault
+        unsafe {
+            use std::arch::aarch64::_prefetch;
+            use std::arch::aarch64::{_PREFETCH_LOCALITY3, _PREFETCH_READ};
+            _prefetch(
+                vector.as_ptr().cast::<i8>(),
+                _PREFETCH_READ,
+                _PREFETCH_LOCALITY3,
+            );
+        }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        // No-op for unsupported architectures
+        let _ = vector;
+    }
+}
+
 /// Computes cosine similarity using explicit SIMD (f32x8).
 ///
 /// # Algorithm
@@ -215,6 +298,11 @@ pub fn hamming_distance_fast(a: &[f32], b: &[f32]) -> f32 {
 /// # Panics
 ///
 /// Panics if vectors have different lengths.
+///
+/// # Optimization
+///
+/// Uses loop unrolling with 8-element blocks for better instruction-level
+/// parallelism. The compiler auto-vectorizes the comparison operations.
 #[inline]
 #[must_use]
 pub fn jaccard_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
@@ -223,16 +311,31 @@ pub fn jaccard_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
     let mut intersection = 0u32;
     let mut union = 0u32;
 
-    for i in 0..a.len() {
-        let in_a = a[i] > 0.5;
-        let in_b = b[i] > 0.5;
+    // Process 8 elements at a time (unrolled for ILP)
+    let chunks = a.len() / 8;
+    for i in 0..chunks {
+        let offset = i * 8;
 
-        if in_a && in_b {
-            intersection += 1;
-        }
-        if in_a || in_b {
-            union += 1;
-        }
+        // Unrolled comparisons for better ILP
+        let (int0, uni0) = count_pair(a[offset], b[offset]);
+        let (int1, uni1) = count_pair(a[offset + 1], b[offset + 1]);
+        let (int2, uni2) = count_pair(a[offset + 2], b[offset + 2]);
+        let (int3, uni3) = count_pair(a[offset + 3], b[offset + 3]);
+        let (int4, uni4) = count_pair(a[offset + 4], b[offset + 4]);
+        let (int5, uni5) = count_pair(a[offset + 5], b[offset + 5]);
+        let (int6, uni6) = count_pair(a[offset + 6], b[offset + 6]);
+        let (int7, uni7) = count_pair(a[offset + 7], b[offset + 7]);
+
+        intersection += int0 + int1 + int2 + int3 + int4 + int5 + int6 + int7;
+        union += uni0 + uni1 + uni2 + uni3 + uni4 + uni5 + uni6 + uni7;
+    }
+
+    // Handle remainder
+    let remainder_start = chunks * 8;
+    for i in remainder_start..a.len() {
+        let (int_i, uni_i) = count_pair(a[i], b[i]);
+        intersection += int_i;
+        union += uni_i;
     }
 
     // Empty sets are defined as identical (similarity = 1.0)
@@ -246,7 +349,18 @@ pub fn jaccard_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+/// Counts intersection and union contribution for a single element pair.
+#[inline]
+fn count_pair(a: f32, b: f32) -> (u32, u32) {
+    let in_a = a > 0.5;
+    let in_b = b > 0.5;
+    let intersection = u32::from(in_a && in_b);
+    let union = u32::from(in_a || in_b);
+    (intersection, union)
+}
+
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 
@@ -560,5 +674,143 @@ mod tests {
         let a = vec![0.0, 0.0, 0.0, 0.0];
         let b = vec![0.0, 0.0, 0.0, 0.0];
         assert!((jaccard_similarity_fast(&a, &b) - 1.0).abs() < EPSILON);
+    }
+
+    // -------------------------------------------------------------------------
+    // TDD: Jaccard SIMD optimization tests (P2)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_jaccard_simd_large_vectors() {
+        // Test with 768D vectors (typical embedding size)
+        let a: Vec<f32> = (0..768)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f32> = (0..768)
+            .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+            .collect();
+
+        let result = jaccard_similarity_fast(&a, &b);
+
+        // Verify result is in valid range
+        assert!((0.0..=1.0).contains(&result), "Jaccard must be in [0,1]");
+    }
+
+    #[test]
+    fn test_jaccard_simd_aligned_vectors() {
+        // Test with 8-aligned dimension (optimal for SIMD)
+        let a: Vec<f32> = (0..64).map(|i| if i < 32 { 1.0 } else { 0.0 }).collect();
+        let b: Vec<f32> = (0..64).map(|i| if i < 48 { 1.0 } else { 0.0 }).collect();
+
+        let result = jaccard_similarity_fast(&a, &b);
+
+        // Intersection: 32 (first 32 elements), Union: 48
+        let expected = 32.0 / 48.0;
+        assert!(
+            (result - expected).abs() < EPSILON,
+            "Expected {expected}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_simd_unaligned_vectors() {
+        // Test with non-8-aligned dimension (tests remainder handling)
+        let a: Vec<f32> = (0..67).map(|i| if i < 30 { 1.0 } else { 0.0 }).collect();
+        let b: Vec<f32> = (0..67).map(|i| if i < 40 { 1.0 } else { 0.0 }).collect();
+
+        let result = jaccard_similarity_fast(&a, &b);
+
+        // Intersection: 30, Union: 40
+        let expected = 30.0 / 40.0;
+        assert!(
+            (result - expected).abs() < EPSILON,
+            "Expected {expected}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_consistency_scalar_vs_reference() {
+        // Property test: verify consistency across different vector sizes
+        for dim in [7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 768] {
+            let a: Vec<f32> = (0..dim)
+                .map(|i| if (i * 7) % 11 < 6 { 1.0 } else { 0.0 })
+                .collect();
+            let b: Vec<f32> = (0..dim)
+                .map(|i| if (i * 5) % 9 < 5 { 1.0 } else { 0.0 })
+                .collect();
+
+            let result = jaccard_similarity_fast(&a, &b);
+
+            // Compute reference manually
+            let mut intersection = 0u32;
+            let mut union = 0u32;
+            for i in 0..dim {
+                let in_a = a[i] > 0.5;
+                let in_b = b[i] > 0.5;
+                if in_a && in_b {
+                    intersection += 1;
+                }
+                if in_a || in_b {
+                    union += 1;
+                }
+            }
+            let expected = if union == 0 {
+                1.0
+            } else {
+                intersection as f32 / union as f32
+            };
+
+            assert!(
+                (result - expected).abs() < EPSILON,
+                "Dim {dim}: expected {expected}, got {result}"
+            );
+        }
+    }
+
+    // =========================================================================
+    // QW-2: Prefetch Helper Tests
+    // =========================================================================
+
+    #[test]
+    fn test_calculate_prefetch_distance_small_vectors() {
+        // 32D vectors (128 bytes) -> raw = 2, clamped to 4
+        assert_eq!(calculate_prefetch_distance(32), 4);
+        // 64D vectors (256 bytes) -> raw = 4
+        assert_eq!(calculate_prefetch_distance(64), 4);
+    }
+
+    #[test]
+    fn test_calculate_prefetch_distance_medium_vectors() {
+        // 128D vectors (512 bytes) -> raw = 8
+        assert_eq!(calculate_prefetch_distance(128), 8);
+        // 256D vectors (1024 bytes) -> raw = 16
+        assert_eq!(calculate_prefetch_distance(256), 16);
+    }
+
+    #[test]
+    fn test_calculate_prefetch_distance_large_vectors() {
+        // 768D vectors (3072 bytes) -> raw = 48, clamped to 16
+        assert_eq!(calculate_prefetch_distance(768), 16);
+        // 1536D vectors (6144 bytes) -> raw = 96, clamped to 16
+        assert_eq!(calculate_prefetch_distance(1536), 16);
+    }
+
+    #[test]
+    fn test_prefetch_vector_does_not_panic() {
+        // Prefetch should never panic, even with edge cases
+        let empty: Vec<f32> = vec![];
+        prefetch_vector(&empty); // Empty vector - should be no-op
+
+        let small = vec![1.0, 2.0, 3.0];
+        prefetch_vector(&small); // Small vector
+
+        let large = generate_test_vector(768, 0.0);
+        prefetch_vector(&large); // Large vector
+    }
+
+    #[test]
+    fn test_l2_cache_line_constant() {
+        // Verify constant is set correctly for x86_64
+        assert_eq!(L2_CACHE_LINE_BYTES, 64);
     }
 }

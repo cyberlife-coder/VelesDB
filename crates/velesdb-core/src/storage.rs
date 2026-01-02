@@ -4,12 +4,73 @@
 //! and log-structured storage for metadata payloads.
 
 use memmap2::MmapMut;
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockReadGuard};
 use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Zero-copy guard for vector data from mmap storage.
+///
+/// This guard holds a read lock on the mmap and provides direct access
+/// to the vector data without any memory allocation or copy.
+///
+/// # Performance
+///
+/// Using `VectorSliceGuard` instead of `retrieve()` eliminates:
+/// - Heap allocation for the result `Vec<f32>`
+/// - Memory copy from mmap to the new vector
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let guard = storage.retrieve_ref(id)?.unwrap();
+/// let slice: &[f32] = guard.as_ref();
+/// // Use slice directly - no allocation occurred
+/// ```
+pub struct VectorSliceGuard<'a> {
+    /// Read guard holding the mmap lock
+    _guard: RwLockReadGuard<'a, MmapMut>,
+    /// Pointer to the start of vector data
+    ptr: *const f32,
+    /// Number of f32 elements
+    len: usize,
+}
+
+// SAFETY: VectorSliceGuard is Send+Sync because:
+// 1. The underlying data is in a memory-mapped file (shared memory)
+// 2. We hold a RwLockReadGuard which ensures exclusive read access
+// 3. The pointer is derived from the guard and valid for its lifetime
+unsafe impl Send for VectorSliceGuard<'_> {}
+unsafe impl Sync for VectorSliceGuard<'_> {}
+
+impl VectorSliceGuard<'_> {
+    /// Returns the vector data as a slice.
+    #[inline]
+    #[must_use]
+    pub fn as_slice(&self) -> &[f32] {
+        // SAFETY: ptr and len were validated during construction,
+        // and the guard ensures the mmap remains valid
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl AsRef<[f32]> for VectorSliceGuard<'_> {
+    #[inline]
+    fn as_ref(&self) -> &[f32] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::Deref for VectorSliceGuard<'_> {
+    type Target = [f32];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
 
 /// Trait defining storage operations for vectors.
 pub trait VectorStorage: Send + Sync {
@@ -557,6 +618,74 @@ impl MmapStorage {
         let ratio = 1.0 - (active_size as f64 / current_offset as f64);
         ratio.max(0.0)
     }
+
+    /// Retrieves a vector by ID without copying (zero-copy).
+    ///
+    /// Returns a guard that provides direct access to the mmap'd data.
+    /// This is significantly faster than `retrieve()` for read-heavy workloads
+    /// as it eliminates heap allocation and memory copy.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The vector ID to retrieve
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(guard))` - Guard providing zero-copy access to the vector
+    /// - `Ok(None)` - Vector with this ID doesn't exist
+    /// - `Err(...)` - I/O error (e.g., corrupted data)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let guard = storage.retrieve_ref(id)?.unwrap();
+    /// let slice: &[f32] = guard.as_ref();
+    /// // Use slice directly - no allocation occurred
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// Compared to `retrieve()`:
+    /// - **No heap allocation** - data accessed directly from mmap
+    /// - **No memcpy** - pointer arithmetic only
+    /// - **Lock held** - guard must be dropped to release read lock
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored offset is out of bounds (corrupted index).
+    pub fn retrieve_ref(&self, id: u64) -> io::Result<Option<VectorSliceGuard<'_>>> {
+        // First check if ID exists (separate lock to minimize contention)
+        let offset = {
+            let index = self.index.read();
+            match index.get(&id) {
+                Some(&offset) => offset,
+                None => return Ok(None),
+            }
+        };
+
+        // Now acquire mmap read lock and validate bounds
+        let mmap = self.mmap.read();
+        let vector_size = self.dimension * std::mem::size_of::<f32>();
+
+        if offset + vector_size > mmap.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Offset out of bounds",
+            ));
+        }
+
+        // SAFETY: We've validated that offset + vector_size <= mmap.len()
+        // The pointer is derived from the mmap which is held by the guard
+        // Note: mmap data is written with f32 alignment via store(), so alignment is guaranteed
+        #[allow(clippy::cast_ptr_alignment)]
+        let ptr = unsafe { mmap.as_ptr().add(offset).cast::<f32>() };
+
+        Ok(Some(VectorSliceGuard {
+            _guard: mmap,
+            ptr,
+            len: self.dimension,
+        }))
+    }
 }
 
 /// Trait defining storage operations for metadata payloads.
@@ -981,6 +1110,91 @@ mod tests {
         storage.store(1, &payload).unwrap();
         let retrieved = storage.retrieve(1).unwrap();
         assert_eq!(retrieved, Some(payload));
+    }
+
+    // =========================================================================
+    // Zero-Copy Retrieval Tests (TDD)
+    // =========================================================================
+
+    #[test]
+    fn test_retrieve_ref_returns_slice_without_allocation() {
+        // Arrange
+        let dir = tempdir().unwrap();
+        let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+        let vector = vec![1.0, 2.0, 3.0];
+        storage.store(1, &vector).unwrap();
+
+        // Act - Use zero-copy retrieval
+        let guard = storage.retrieve_ref(1).unwrap();
+
+        // Assert - Data is correct without allocation
+        assert!(guard.is_some());
+        let slice = guard.unwrap();
+        assert_eq!(slice.as_ref(), &[1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_retrieve_ref_nonexistent_returns_none() {
+        // Arrange
+        let dir = tempdir().unwrap();
+        let storage = MmapStorage::new(dir.path(), 3).unwrap();
+
+        // Act
+        let guard = storage.retrieve_ref(999).unwrap();
+
+        // Assert
+        assert!(guard.is_none());
+    }
+
+    #[test]
+    fn test_retrieve_ref_multiple_concurrent_reads() {
+        // Arrange
+        let dir = tempdir().unwrap();
+        let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+        storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+        storage.store(2, &[4.0, 5.0, 6.0]).unwrap();
+
+        // Act - Multiple concurrent zero-copy reads
+        let guard1 = storage.retrieve_ref(1).unwrap().unwrap();
+        let guard2 = storage.retrieve_ref(2).unwrap().unwrap();
+
+        // Assert - Both are valid simultaneously
+        assert_eq!(guard1.as_ref(), &[1.0, 2.0, 3.0]);
+        assert_eq!(guard2.as_ref(), &[4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_retrieve_ref_data_integrity_after_update() {
+        // Arrange
+        let dir = tempdir().unwrap();
+        let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+        storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+
+        // Act - Update and retrieve
+        storage.store(1, &[7.0, 8.0, 9.0]).unwrap();
+        let guard = storage.retrieve_ref(1).unwrap().unwrap();
+
+        // Assert - Returns updated data
+        assert_eq!(guard.as_ref(), &[7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+    fn test_retrieve_ref_large_dimension() {
+        // Arrange - 768D vector (typical embedding size)
+        let dir = tempdir().unwrap();
+        let dim = 768;
+        let mut storage = MmapStorage::new(dir.path(), dim).unwrap();
+        let vector: Vec<f32> = (0..dim).map(|i| i as f32).collect();
+        storage.store(1, &vector).unwrap();
+
+        // Act
+        let guard = storage.retrieve_ref(1).unwrap().unwrap();
+
+        // Assert
+        assert_eq!(guard.as_ref().len(), dim);
+        assert_eq!(guard.as_ref()[0], 0.0);
+        assert_eq!(guard.as_ref()[767], 767.0);
     }
 
     // =========================================================================

@@ -1,7 +1,13 @@
-//! ID mappings for HNSW index.
+//! ID mappings for HNSW index (DEPRECATED).
 //!
 //! This module provides bidirectional mapping between external IDs (u64)
 //! and internal HNSW indices (usize).
+//!
+//! **Note**: This module is deprecated in favor of `ShardedMappings` which
+//! provides lock-free concurrent access. Kept for backwards compatibility
+//! with existing tests and potential future use.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 

@@ -79,6 +79,28 @@ impl DistanceMetric {
             Self::Euclidean | Self::Hamming => false,
         }
     }
+
+    /// Sorts search results by distance/similarity according to the metric.
+    ///
+    /// - **Similarity metrics** (`Cosine`, `DotProduct`, `Jaccard`): sorts descending (higher = better)
+    /// - **Distance metrics** (`Euclidean`, `Hamming`): sorts ascending (lower = better)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut results = vec![(1, 0.9), (2, 0.7), (3, 0.8)];
+    /// DistanceMetric::Cosine.sort_results(&mut results);
+    /// assert_eq!(results[0].0, 1); // Highest similarity first
+    /// ```
+    pub fn sort_results(&self, results: &mut [(u64, f32)]) {
+        if self.higher_is_better() {
+            // Similarity metrics: descending order (higher = better)
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            // Distance metrics: ascending order (lower = better)
+            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +275,63 @@ mod tests {
     fn test_jaccard_higher_is_better() {
         // Jaccard: higher similarity = more similar
         assert!(DistanceMetric::Jaccard.higher_is_better());
+    }
+
+    // =========================================================================
+    // TDD Tests for sort_results (QW-1 Refactoring)
+    // =========================================================================
+
+    #[test]
+    fn test_sort_results_cosine_descending() {
+        let mut results = vec![(1, 0.7), (2, 0.9), (3, 0.8)];
+        DistanceMetric::Cosine.sort_results(&mut results);
+        assert_eq!(results[0].0, 2); // Highest first
+        assert_eq!(results[1].0, 3);
+        assert_eq!(results[2].0, 1);
+    }
+
+    #[test]
+    fn test_sort_results_euclidean_ascending() {
+        let mut results = vec![(1, 5.0), (2, 2.0), (3, 3.0)];
+        DistanceMetric::Euclidean.sort_results(&mut results);
+        assert_eq!(results[0].0, 2); // Lowest first
+        assert_eq!(results[1].0, 3);
+        assert_eq!(results[2].0, 1);
+    }
+
+    #[test]
+    fn test_sort_results_dot_product_descending() {
+        let mut results = vec![(1, 10.0), (2, 30.0), (3, 20.0)];
+        DistanceMetric::DotProduct.sort_results(&mut results);
+        assert_eq!(results[0].0, 2); // Highest first
+    }
+
+    #[test]
+    fn test_sort_results_hamming_ascending() {
+        let mut results = vec![(1, 4.0), (2, 1.0), (3, 2.0)];
+        DistanceMetric::Hamming.sort_results(&mut results);
+        assert_eq!(results[0].0, 2); // Lowest first
+    }
+
+    #[test]
+    fn test_sort_results_jaccard_descending() {
+        let mut results = vec![(1, 0.3), (2, 0.9), (3, 0.5)];
+        DistanceMetric::Jaccard.sort_results(&mut results);
+        assert_eq!(results[0].0, 2); // Highest first
+    }
+
+    #[test]
+    fn test_sort_results_handles_nan() {
+        let mut results = vec![(1, f32::NAN), (2, 0.5), (3, 0.8)];
+        // Should not panic with NaN values
+        DistanceMetric::Cosine.sort_results(&mut results);
+        // NaN ordering is implementation-defined, just verify no panic
+    }
+
+    #[test]
+    fn test_sort_results_empty() {
+        let mut results: Vec<(u64, f32)> = vec![];
+        DistanceMetric::Cosine.sort_results(&mut results);
+        assert!(results.is_empty());
     }
 }

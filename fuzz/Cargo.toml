@@ -1,0 +1,37 @@
+[package]
+name = "velesdb-fuzz"
+version = "0.0.0"
+authors = ["VelesDB Team"]
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.velesdb-core]
+path = "../crates/velesdb-core"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_velesql_parser"
+path = "fuzz_targets/fuzz_velesql_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_distance_metrics"
+path = "fuzz_targets/fuzz_distance_metrics.rs"
+test = false
+doc = false
+bench = false

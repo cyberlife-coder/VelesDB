@@ -52,3 +52,26 @@ lcov.info
 # Migration test configs (may contain sensitive URLs)
 test-*.yaml
 migration-*.yaml
+
+# Fuzzing artifacts (cargo-fuzz)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+
+# Benchmark output files
+bench_output.txt
+*.bench.json
+
+# Criterion benchmark data
+/target/criterion/
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Node modules (TypeScript SDK)
+node_modules/
+
+# Build artifacts from sub-crates
+**/target/

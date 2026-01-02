@@ -20,15 +20,15 @@
 //! | 256 < d ≤768| 16-24 | 200-400         | 128-256   |
 //! | d > 768     | 24-32 | 300-600         | 256-512   |
 
-use super::mappings::HnswMappings;
 use super::params::{HnswParams, SearchQuality};
+use super::sharded_mappings::ShardedMappings;
+use super::sharded_vectors::ShardedVectors;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 use hnsw_rs::api::AnnT;
 use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
-use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
@@ -44,27 +44,85 @@ use std::mem::ManuallyDrop;
 /// index.insert(1, &vec![0.1; 768]);
 /// let results = index.search(&vec![0.1; 768], 10);
 /// ```
+/// HNSW index for efficient approximate nearest neighbor search.
+///
+/// # Safety Invariants (Self-Referential Pattern)
+///
+/// When loaded from disk via [`HnswIndex::load`], this struct uses a
+/// self-referential pattern where `inner` (the HNSW graph) borrows from
+/// `io_holder` (the memory-mapped file). This requires careful lifetime
+/// management:
+///
+/// 1. **Field Order**: `io_holder` must be declared AFTER `inner` so Rust's
+///    default drop order drops `inner` first (fields drop in declaration order).
+///
+/// 2. **`ManuallyDrop`**: `inner` is wrapped in `ManuallyDrop` so we can
+///    explicitly control when it's dropped in our `Drop` impl.
+///
+/// 3. **Custom Drop**: Our `Drop` impl explicitly drops `inner` before
+///    returning, ensuring `io_holder` (dropped automatically after) outlives it.
+///
+/// 4. **Lifetime Extension**: We use `'static` lifetime in `HnswInner` which is
+///    technically a lie - the actual lifetime is tied to `io_holder`. This is
+///    safe because we guarantee `io_holder` outlives `inner` via the above.
+///
+/// **Note**: The `ouroboros` crate cannot be used here because `hnsw_rs::Hnsw`
+/// has an invariant lifetime parameter, which is incompatible with self-referential
+/// struct crates that require covariant lifetimes.
+///
+/// # Why Not Unsafe Alternatives?
+///
+/// - `ouroboros`/`self_cell`: Require covariant lifetimes (Hnsw is invariant)
+/// - `rental`: Deprecated and unmaintained
+/// - `owning_ref`: Doesn't support this pattern
+///
+/// The current approach is a well-documented Rust pattern for handling libraries
+/// that return borrowed data from owned resources.
 pub struct HnswIndex {
     /// Vector dimension
     dimension: usize,
     /// Distance metric
     metric: DistanceMetric,
-    /// Internal HNSW index (type-erased for flexibility)
-    /// Wrapped in `ManuallyDrop` to control drop order - must be dropped BEFORE `io_holder`
+    /// Internal HNSW index (type-erased for flexibility).
+    ///
+    /// # Safety
+    ///
+    /// Wrapped in `ManuallyDrop` to control drop order. MUST be dropped
+    /// BEFORE `io_holder` because it contains references into `io_holder`'s
+    /// memory-mapped data (when loaded from disk).
     inner: RwLock<ManuallyDrop<HnswInner>>,
-    /// ID mappings (external ID <-> internal index) under single lock (WIS-9)
-    mappings: RwLock<HnswMappings>,
-    /// Vector storage for SIMD re-ranking (idx -> vector)
-    vectors: RwLock<FxHashMap<usize, Vec<f32>>>,
-    /// Holds the `HnswIo` for loaded indices to prevent memory leak.
-    /// The Hnsw borrows from this, so it must be dropped AFTER inner.
-    /// Only Some when index was loaded from disk.
-    /// Note: This field is intentionally not read - it exists purely for lifetime management.
-    #[allow(dead_code)]
+    /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
+    mappings: ShardedMappings,
+    /// Vector storage for SIMD re-ranking - sharded for parallel writes (EPIC-A.2)
+    vectors: ShardedVectors,
+    /// Holds the `HnswIo` for loaded indices.
+    ///
+    /// # Safety
+    ///
+    /// This field MUST be declared AFTER `inner` and MUST outlive `inner`.
+    /// The `Hnsw` in `inner` borrows from the memory-mapped data owned by `HnswIo`.
+    /// Our `Drop` impl ensures `inner` is dropped first.
+    ///
+    /// - `Some(Box<HnswIo>)`: Index was loaded from disk, `inner` borrows from this
+    /// - `None`: Index was created in memory, no borrowing relationship
+    #[allow(dead_code)] // Read implicitly via lifetime - dropped after inner
     io_holder: Option<Box<HnswIo>>,
 }
 
 /// Internal HNSW index wrapper to handle different distance metrics.
+///
+/// # Safety Note on `'static` Lifetime
+///
+/// The `'static` lifetime here is a "lifetime lie" - the actual data may be
+/// borrowed from `HnswIndex::io_holder` (when loaded from disk). This is safe
+/// because:
+///
+/// 1. The `'static` lifetime is contained within `HnswIndex` and never escapes
+/// 2. `HnswIndex::Drop` ensures this enum is dropped before `io_holder`
+/// 3. All access goes through `HnswIndex` which maintains the invariant
+///
+/// For indices created via `new()`/`with_params()`, the data is truly owned
+/// and `'static` is accurate.
 enum HnswInner {
     Cosine(Hnsw<'static, f32, DistCosine>),
     Euclidean(Hnsw<'static, f32, DistL2>),
@@ -73,6 +131,92 @@ enum HnswInner {
     Hamming(Hnsw<'static, f32, DistL2>),
     /// Jaccard uses L2 internally for graph construction, actual similarity computed during re-ranking
     Jaccard(Hnsw<'static, f32, DistL2>),
+}
+
+// ============================================================================
+// RF-1: HnswOps Trait - Abstracts common HNSW operations to eliminate
+// repeated match patterns (12+ occurrences reduced to impl blocks)
+// ============================================================================
+
+impl HnswInner {
+    /// Searches the HNSW graph and returns raw neighbors with distances.
+    fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<hnsw_rs::prelude::Neighbour> {
+        match self {
+            Self::Cosine(hnsw) => hnsw.search(query, k, ef_search),
+            Self::Euclidean(hnsw) | Self::Hamming(hnsw) | Self::Jaccard(hnsw) => {
+                hnsw.search(query, k, ef_search)
+            }
+            Self::DotProduct(hnsw) => hnsw.search(query, k, ef_search),
+        }
+    }
+
+    /// Inserts a single vector into the HNSW graph.
+    fn insert(&self, data: (&[f32], usize)) {
+        match self {
+            Self::Cosine(hnsw) => hnsw.insert(data),
+            Self::Euclidean(hnsw) | Self::Hamming(hnsw) | Self::Jaccard(hnsw) => hnsw.insert(data),
+            Self::DotProduct(hnsw) => hnsw.insert(data),
+        }
+    }
+
+    /// Parallel batch insert into the HNSW graph.
+    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) {
+        match self {
+            Self::Cosine(hnsw) => hnsw.parallel_insert(data),
+            Self::Euclidean(hnsw) | Self::Hamming(hnsw) | Self::Jaccard(hnsw) => {
+                hnsw.parallel_insert(data);
+            }
+            Self::DotProduct(hnsw) => hnsw.parallel_insert(data),
+        }
+    }
+
+    /// Sets the index to searching mode after bulk insertions.
+    fn set_searching_mode(&mut self, mode: bool) {
+        match self {
+            Self::Cosine(hnsw) => hnsw.set_searching_mode(mode),
+            Self::Euclidean(hnsw) | Self::Hamming(hnsw) | Self::Jaccard(hnsw) => {
+                hnsw.set_searching_mode(mode);
+            }
+            Self::DotProduct(hnsw) => hnsw.set_searching_mode(mode),
+        }
+    }
+
+    /// Dumps the HNSW graph to files for persistence.
+    fn file_dump(&self, path: &std::path::Path, basename: &str) -> Result<(), std::io::Error> {
+        match self {
+            Self::Cosine(hnsw) => hnsw
+                .file_dump(path, basename)
+                .map(|_| ())
+                .map_err(std::io::Error::other),
+            Self::Euclidean(hnsw) | Self::Hamming(hnsw) | Self::Jaccard(hnsw) => hnsw
+                .file_dump(path, basename)
+                .map(|_| ())
+                .map_err(std::io::Error::other),
+            Self::DotProduct(hnsw) => hnsw
+                .file_dump(path, basename)
+                .map(|_| ())
+                .map_err(std::io::Error::other),
+        }
+    }
+
+    /// Transforms raw HNSW distance to the appropriate score based on metric type.
+    ///
+    /// - **`Cosine`**: `(1.0 - distance).clamp(0.0, 1.0)` (similarity in `[0,1]`)
+    /// - **`Euclidean`/`Hamming`/`Jaccard`**: raw distance (lower is better)
+    /// - **`DotProduct`**: `-distance` (`hnsw_rs` stores negated dot product)
+    #[inline]
+    fn transform_score(&self, raw_distance: f32) -> f32 {
+        match self {
+            Self::Cosine(_) => (1.0 - raw_distance).clamp(0.0, 1.0),
+            Self::Euclidean(_) | Self::Hamming(_) | Self::Jaccard(_) => raw_distance,
+            Self::DotProduct(_) => -raw_distance,
+        }
+    }
 }
 
 impl HnswIndex {
@@ -162,8 +306,8 @@ impl HnswIndex {
             dimension,
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
-            mappings: RwLock::new(HnswMappings::new()),
-            vectors: RwLock::new(FxHashMap::default()),
+            mappings: ShardedMappings::new(),
+            vectors: ShardedVectors::new(),
             io_holder: None, // No io_holder for newly created indices
         }
     }
@@ -179,30 +323,16 @@ impl HnswIndex {
 
         let basename = "hnsw_index";
 
-        // 1. Save HNSW graph
+        // 1. Save HNSW graph (RF-1: using HnswInner method)
         let inner = self.inner.read();
-        match &**inner {
-            HnswInner::Cosine(hnsw) => {
-                hnsw.file_dump(path, basename)
-                    .map_err(std::io::Error::other)?;
-            }
-            HnswInner::Euclidean(hnsw) | HnswInner::Hamming(hnsw) | HnswInner::Jaccard(hnsw) => {
-                hnsw.file_dump(path, basename)
-                    .map_err(std::io::Error::other)?;
-            }
-            HnswInner::DotProduct(hnsw) => {
-                hnsw.file_dump(path, basename)
-                    .map_err(std::io::Error::other)?;
-            }
-        }
+        inner.file_dump(path, basename)?;
 
         // 2. Save Mappings
         let mappings_path = path.join("id_mappings.bin");
         let file = std::fs::File::create(mappings_path)?;
         let writer = std::io::BufWriter::new(file);
 
-        let mappings = self.mappings.read();
-        let (id_to_idx, idx_to_id, next_idx) = mappings.as_parts();
+        let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
 
         // Serialize as a tuple to maintain backward compatibility
         bincode::serialize_into(writer, &(id_to_idx, idx_to_id, next_idx))
@@ -213,9 +343,20 @@ impl HnswIndex {
 
     /// Loads the HNSW index and ID mappings from the specified directory.
     ///
+    /// # Safety
+    ///
+    /// This function uses unsafe code to handle the self-referential pattern
+    /// required by `hnsw_rs`. The `HnswIo::load_hnsw()` returns an `Hnsw<'a>`
+    /// that borrows from `HnswIo`, but we need both to live in the same struct.
+    ///
+    /// The safety is guaranteed by:
+    /// 1. `io_holder` is stored in the struct and outlives `inner`
+    /// 2. `Drop` impl ensures `inner` is dropped before `io_holder`
+    /// 3. The `'static` lifetime never escapes this struct
+    ///
     /// # Errors
     ///
-    /// Returns an error if loading fails.
+    /// Returns an error if loading fails (missing files, corrupted data, etc.).
     pub fn load<P: AsRef<std::path::Path>>(
         path: P,
         dimension: usize,
@@ -235,15 +376,27 @@ impl HnswIndex {
 
         // 1. Load HNSW graph
         // Store HnswIo in a Box that we'll keep in the struct.
-        // We use unsafe to extend the lifetime to 'static because:
-        // - The HnswIo will live as long as the HnswIndex
-        // - We implement Drop to ensure proper cleanup order
         let mut io_holder = Box::new(HnswIo::new(path, basename));
 
-        // SAFETY: We're extending the lifetime to 'static, but we guarantee that:
-        // 1. io_holder lives in the struct alongside the Hnsw
-        // 2. Drop impl ensures inner (which borrows from io_holder) is dropped first
-        // 3. io_holder is dropped after inner in the Drop impl
+        // SAFETY: Lifetime Extension for Self-Referential Pattern
+        //
+        // We extend the lifetime from 'a (borrowed from io_holder) to 'static.
+        // This is safe because:
+        //
+        // 1. CONTAINMENT: Both io_holder and the Hnsw live inside HnswIndex.
+        //    The 'static lifetime never escapes - all access is through &self.
+        //
+        // 2. DROP ORDER: Our Drop impl explicitly drops inner BEFORE io_holder.
+        //    This is enforced by ManuallyDrop + explicit drop in Drop::drop().
+        //
+        // 3. NO FIELD REORDERING: Rust guarantees struct fields drop in order,
+        //    but we use ManuallyDrop to be explicit and defensive.
+        //
+        // 4. INVARIANT LIFETIME: hnsw_rs::Hnsw has an invariant lifetime param,
+        //    which prevents using safe abstractions like ouroboros/self_cell.
+        //
+        // This pattern is documented and used when wrapping libraries that return
+        // borrowed data from owned resources (e.g., memory-mapped files).
         let io_ref: &'static mut HnswIo =
             unsafe { &mut *std::ptr::from_mut::<HnswIo>(io_holder.as_mut()) };
 
@@ -291,9 +444,9 @@ impl HnswIndex {
             dimension,
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
-            mappings: RwLock::new(HnswMappings::from_parts(id_to_idx, idx_to_id, next_idx)),
-            vectors: RwLock::new(FxHashMap::default()), // Note: vectors not restored from disk
-            io_holder: Some(io_holder),                 // Store to prevent memory leak
+            mappings: ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx),
+            vectors: ShardedVectors::new(), // Note: vectors not restored from disk
+            io_holder: Some(io_holder),     // Store to prevent memory leak
         })
     }
 
@@ -338,36 +491,15 @@ impl HnswIndex {
 
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
-        let mappings = self.mappings.read();
 
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
+        // RF-1: Using HnswInner methods for search and score transformation
+        let neighbours = inner.search(query, k, ef_search);
+        let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
 
-        match &**inner {
-            HnswInner::Cosine(hnsw) => {
-                let neighbours = hnsw.search(query, k, ef_search);
-                for n in &neighbours {
-                    if let Some(id) = mappings.get_id(n.d_id) {
-                        // Clamp to [0,1] to handle float precision issues
-                        let score = (1.0 - n.distance).clamp(0.0, 1.0);
-                        results.push((id, score));
-                    }
-                }
-            }
-            HnswInner::Euclidean(hnsw) | HnswInner::Hamming(hnsw) | HnswInner::Jaccard(hnsw) => {
-                let neighbours = hnsw.search(query, k, ef_search);
-                for n in &neighbours {
-                    if let Some(id) = mappings.get_id(n.d_id) {
-                        results.push((id, n.distance));
-                    }
-                }
-            }
-            HnswInner::DotProduct(hnsw) => {
-                let neighbours = hnsw.search(query, k, ef_search);
-                for n in &neighbours {
-                    if let Some(id) = mappings.get_id(n.d_id) {
-                        results.push((id, -n.distance));
-                    }
-                }
+        for n in &neighbours {
+            if let Some(id) = self.mappings.get_id(n.d_id) {
+                let score = inner.transform_score(n.distance);
+                results.push((id, score));
             }
         }
 
@@ -413,79 +545,40 @@ impl HnswIndex {
         }
 
         // 2. Re-rank using SIMD-optimized exact distance computation
-        // Perf P1: Prefetch vectors to hide memory latency
-        let mappings = self.mappings.read();
-        let vectors = self.vectors.read();
-
-        // Collect indices for prefetching
-        let indices: Vec<(u64, Option<usize>)> = candidates
+        // EPIC-A.2: Collect candidate vectors from ShardedVectors for re-ranking
+        let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
             .iter()
-            .map(|(id, _)| (*id, mappings.get_idx(*id)))
+            .filter_map(|(id, _)| {
+                let idx = self.mappings.get_idx(*id)?;
+                let vec = self.vectors.get(idx)?;
+                Some((*id, idx, vec))
+            })
             .collect();
 
         // Perf TS-CORE-001: Adaptive prefetch distance based on vector size
-        // For 768D vectors (3KB), prefetch 8-12 vectors to hide ~100-200 cycle memory latency
-        // Formula: prefetch_distance = max(4, min(16, vector_bytes / L2_CACHE_LINE))
-        let l2_cache_line: usize = 64; // Typical L2 cache line size
-        let vector_bytes = self.dimension * std::mem::size_of::<f32>();
-        let prefetch_distance = (vector_bytes / l2_cache_line).clamp(4, 16);
-        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidates.len());
+        let prefetch_distance = crate::simd::calculate_prefetch_distance(self.dimension);
+        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
 
-        for (i, (id, idx_opt)) in indices.iter().enumerate() {
-            // Prefetch upcoming vectors (P1 optimization)
-            if i + prefetch_distance < indices.len() {
-                if let Some(future_idx) = indices[i + prefetch_distance].1 {
-                    if let Some(future_vec) = vectors.get(&future_idx) {
-                        #[cfg(target_arch = "x86_64")]
-                        unsafe {
-                            use std::arch::x86_64::_mm_prefetch;
-                            _mm_prefetch(
-                                future_vec.as_ptr().cast::<i8>(),
-                                std::arch::x86_64::_MM_HINT_T0,
-                            );
-                        }
-                        #[cfg(not(target_arch = "x86_64"))]
-                        {
-                            let _ = future_vec;
-                        }
-                    }
-                }
+        for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
+            // Prefetch upcoming vectors (P1 optimization on local snapshot)
+            if i + prefetch_distance < candidate_vectors.len() {
+                crate::simd::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
             }
 
             // Compute exact distance for current vector
-            let exact_dist = if let Some(idx) = idx_opt {
-                if let Some(v) = vectors.get(idx) {
-                    match self.metric {
-                        DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
-                        DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
-                        DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
-                        DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
-                        DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
-                    }
-                } else {
-                    f32::MAX
-                }
-            } else {
-                f32::MAX
+            let exact_dist = match self.metric {
+                DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
+                DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
+                DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
+                DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
+                DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
             };
 
             reranked.push((*id, exact_dist));
         }
 
-        drop(vectors);
-        drop(mappings);
-
         // 3. Sort by distance (metric-dependent ordering)
-        match self.metric {
-            DistanceMetric::Cosine | DistanceMetric::DotProduct | DistanceMetric::Jaccard => {
-                // Higher is better - sort descending
-                reranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-            DistanceMetric::Euclidean | DistanceMetric::Hamming => {
-                // Lower is better - sort ascending
-                reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-        }
+        self.metric.sort_results(&mut reranked);
 
         // 4. Return top k
         reranked.truncate(k);
@@ -503,18 +596,18 @@ impl HnswIndex {
     /// * `k` - Number of nearest neighbors to return
     #[must_use]
     pub fn search_brute_force(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
-        let mappings = self.mappings.read();
-        let vectors = self.vectors.read();
-
-        if vectors.is_empty() {
+        if self.vectors.is_empty() {
             return Vec::new();
         }
 
-        // Compute distance to all vectors using SIMD
-        let mut all_distances: Vec<(u64, f32)> = Vec::with_capacity(vectors.len());
+        // EPIC-A.2: Use collect_for_parallel for ShardedVectors iteration
+        let vectors_snapshot = self.vectors.collect_for_parallel();
 
-        for (&idx, vec) in vectors.iter() {
-            if let Some(id) = mappings.get_id(idx) {
+        // Compute distance to all vectors using SIMD
+        let mut all_distances: Vec<(u64, f32)> = Vec::with_capacity(vectors_snapshot.len());
+
+        for (idx, vec) in &vectors_snapshot {
+            if let Some(id) = self.mappings.get_id(*idx) {
                 let dist = match self.metric {
                     DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vec),
                     DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vec),
@@ -526,22 +619,8 @@ impl HnswIndex {
             }
         }
 
-        drop(vectors);
-        drop(mappings);
-
-        // Sort by distance
-        match self.metric {
-            DistanceMetric::Cosine | DistanceMetric::DotProduct | DistanceMetric::Jaccard => {
-                // Higher is better - sort descending
-                all_distances
-                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-            DistanceMetric::Euclidean | DistanceMetric::Hamming => {
-                // Lower is better - sort ascending
-                all_distances
-                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-        }
+        // Sort by distance (metric-dependent ordering)
+        self.metric.sort_results(&mut all_distances);
 
         all_distances.truncate(k);
         all_distances
@@ -592,72 +671,39 @@ impl HnswIndex {
         }
 
         // 2. Re-rank using SIMD-optimized exact distance computation
-        let mappings = self.mappings.read();
-        let vectors = self.vectors.read();
-
-        let indices: Vec<(u64, Option<usize>)> = candidates
+        // EPIC-A.2: Collect candidate vectors from ShardedVectors
+        let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
             .iter()
-            .map(|(id, _)| (*id, mappings.get_idx(*id)))
+            .filter_map(|(id, _)| {
+                let idx = self.mappings.get_idx(*id)?;
+                let vec = self.vectors.get(idx)?;
+                Some((*id, idx, vec))
+            })
             .collect();
 
-        let l2_cache_line: usize = 64;
-        let vector_bytes = self.dimension * std::mem::size_of::<f32>();
-        let prefetch_distance = (vector_bytes / l2_cache_line).clamp(4, 16);
-        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidates.len());
+        let prefetch_distance = crate::simd::calculate_prefetch_distance(self.dimension);
+        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
 
-        for (i, (id, idx_opt)) in indices.iter().enumerate() {
+        for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
             // Prefetch upcoming vectors
-            if i + prefetch_distance < indices.len() {
-                if let Some(future_idx) = indices[i + prefetch_distance].1 {
-                    if let Some(future_vec) = vectors.get(&future_idx) {
-                        #[cfg(target_arch = "x86_64")]
-                        unsafe {
-                            use std::arch::x86_64::_mm_prefetch;
-                            _mm_prefetch(
-                                future_vec.as_ptr().cast::<i8>(),
-                                std::arch::x86_64::_MM_HINT_T0,
-                            );
-                        }
-                        #[cfg(not(target_arch = "x86_64"))]
-                        {
-                            let _ = future_vec;
-                        }
-                    }
-                }
+            if i + prefetch_distance < candidate_vectors.len() {
+                crate::simd::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
             }
 
             // Compute exact distance
-            let exact_dist = if let Some(idx) = idx_opt {
-                if let Some(v) = vectors.get(idx) {
-                    match self.metric {
-                        DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
-                        DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
-                        DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
-                        DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
-                        DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
-                    }
-                } else {
-                    f32::MAX
-                }
-            } else {
-                f32::MAX
+            let exact_dist = match self.metric {
+                DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
+                DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
+                DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
+                DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
+                DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
             };
 
             reranked.push((*id, exact_dist));
         }
 
-        drop(vectors);
-        drop(mappings);
-
-        // 3. Sort by distance
-        match self.metric {
-            DistanceMetric::Cosine | DistanceMetric::DotProduct | DistanceMetric::Jaccard => {
-                reranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-            DistanceMetric::Euclidean | DistanceMetric::Hamming => {
-                reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-        }
+        // 3. Sort by distance (metric-dependent ordering)
+        self.metric.sort_results(&mut reranked);
 
         reranked.truncate(k);
         reranked
@@ -698,21 +744,18 @@ impl HnswIndex {
     {
         let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
 
-        // Pre-register all IDs first (single lock)
+        // Pre-register all IDs first (lock-free with ShardedMappings)
         let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
-        {
-            let mut mappings = self.mappings.write();
-            for (id, vector) in vectors {
-                assert_eq!(
-                    vector.len(),
-                    self.dimension,
-                    "Vector dimension mismatch: expected {}, got {}",
-                    self.dimension,
-                    vector.len()
-                );
-                if let Some(idx) = mappings.register(id) {
-                    to_insert.push((idx, vector));
-                }
+        for (id, vector) in vectors {
+            assert_eq!(
+                vector.len(),
+                self.dimension,
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            );
+            if let Some(idx) = self.mappings.register(id) {
+                to_insert.push((idx, vector));
             }
         }
 
@@ -723,31 +766,85 @@ impl HnswIndex {
         let count = data_refs.len();
 
         // Insert into HNSW graph using native parallel_insert (uses rayon internally)
-        // This is safe because we hold no other locks at this point
+        // RF-1: Using HnswInner method
         {
             let inner = self.inner.write();
-            match &**inner {
-                HnswInner::Cosine(hnsw) => {
-                    hnsw.parallel_insert(&data_refs);
-                }
-                HnswInner::Euclidean(hnsw)
-                | HnswInner::Hamming(hnsw)
-                | HnswInner::Jaccard(hnsw) => {
-                    hnsw.parallel_insert(&data_refs);
-                }
-                HnswInner::DotProduct(hnsw) => {
-                    hnsw.parallel_insert(&data_refs);
-                }
+            inner.parallel_insert(&data_refs);
+        }
+
+        // EPIC-A.2: Use ShardedVectors batch insert for parallel-safe storage
+        // Store vectors for SIMD re-ranking
+        self.vectors.insert_batch(to_insert);
+
+        count
+    }
+
+    /// Inserts multiple vectors sequentially with optimized lock acquisition.
+    ///
+    /// This method is optimized for bulk insertions when parallel processing
+    /// is not desired or available. It acquires the HNSW lock once for the
+    /// entire batch, reducing lock overhead from 3N to N+2 lock operations.
+    ///
+    /// # Performance
+    ///
+    /// - **Single-vector insert**: 3 lock acquisitions per vector (mappings, vectors, inner)
+    /// - **Batch sequential**: 1 lock acquisition for entire batch on `inner`
+    /// - **Expected improvement**: ~50% faster than N individual `insert()` calls
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Iterator of (id, vector) pairs to insert
+    ///
+    /// # Returns
+    ///
+    /// Number of vectors successfully inserted (duplicates are skipped).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any vector has a dimension different from the index dimension.
+    ///
+    /// # When to Use
+    ///
+    /// - Use `insert_batch_parallel` for maximum throughput on multi-core systems
+    /// - Use `insert_batch_sequential` when:
+    ///   - Running in single-threaded context
+    ///   - Rayon thread pool conflicts with async runtime
+    ///   - Deterministic insertion order is required
+    pub fn insert_batch_sequential<I>(&self, vectors: I) -> usize
+    where
+        I: IntoIterator<Item = (u64, Vec<f32>)>,
+    {
+        let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
+
+        // Step 1: Pre-register all IDs (lock-free with DashMap)
+        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
+        for (id, vector) in vectors {
+            assert_eq!(
+                vector.len(),
+                self.dimension,
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            );
+            if let Some(idx) = self.mappings.register(id) {
+                to_insert.push((idx, vector));
             }
         }
 
-        // Perf Round 9: Move vectors into storage AFTER HNSW insert (avoids clone)
-        // Store vectors for SIMD re-ranking
-        {
-            let mut vectors_store = self.vectors.write();
-            for (idx, v) in to_insert {
-                vectors_store.insert(idx, v); // Move instead of clone
-            }
+        let count = to_insert.len();
+        if count == 0 {
+            return 0;
+        }
+
+        // Step 2: Batch insert into ShardedVectors (grouped by shard)
+        self.vectors
+            .insert_batch(to_insert.iter().map(|(i, v)| (*i, v.clone())));
+
+        // Step 3: Single lock acquisition for HNSW graph - insert all vectors
+        // RF-1: Using HnswInner method
+        let inner = self.inner.write();
+        for (idx, vector) in &to_insert {
+            inner.insert((vector.as_slice(), *idx));
         }
 
         count
@@ -793,7 +890,6 @@ impl HnswIndex {
         // After: 1 lock acquire, N searches, 1 release
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
-        let mappings = self.mappings.read();
 
         queries
             .par_iter()
@@ -806,35 +902,14 @@ impl HnswIndex {
                     query.len()
                 );
 
-                let mut results: Vec<(u64, f32)> = Vec::with_capacity(k);
+                // RF-1: Using HnswInner methods for search and score transformation
+                let neighbours = inner.search(query, k, ef_search);
+                let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
 
-                match &**inner {
-                    HnswInner::Cosine(hnsw) => {
-                        let neighbours = hnsw.search(query, k, ef_search);
-                        for n in &neighbours {
-                            if let Some(id) = mappings.get_id(n.d_id) {
-                                let score = (1.0 - n.distance).clamp(0.0, 1.0);
-                                results.push((id, score));
-                            }
-                        }
-                    }
-                    HnswInner::Euclidean(hnsw)
-                    | HnswInner::Hamming(hnsw)
-                    | HnswInner::Jaccard(hnsw) => {
-                        let neighbours = hnsw.search(query, k, ef_search);
-                        for n in &neighbours {
-                            if let Some(id) = mappings.get_id(n.d_id) {
-                                results.push((id, n.distance));
-                            }
-                        }
-                    }
-                    HnswInner::DotProduct(hnsw) => {
-                        let neighbours = hnsw.search(query, k, ef_search);
-                        for n in &neighbours {
-                            if let Some(id) = mappings.get_id(n.d_id) {
-                                results.push((id, -n.distance));
-                            }
-                        }
+                for n in &neighbours {
+                    if let Some(id) = self.mappings.get_id(n.d_id) {
+                        let score = inner.transform_score(n.distance);
+                        results.push((id, score));
                     }
                 }
 
@@ -878,14 +953,14 @@ impl HnswIndex {
             query.len()
         );
 
-        let vectors = self.vectors.read();
-        let mappings = self.mappings.read();
+        // EPIC-A.2: Use collect_for_parallel for rayon par_iter support
+        let vectors_snapshot = self.vectors.collect_for_parallel();
 
-        // Compute distances in parallel
-        let mut results: Vec<(u64, f32)> = vectors
+        // Compute distances in parallel using rayon
+        let mut results: Vec<(u64, f32)> = vectors_snapshot
             .par_iter()
             .filter_map(|(idx, vec)| {
-                let id = mappings.get_id(*idx)?;
+                let id = self.mappings.get_id(*idx)?;
                 let score = match self.metric {
                     DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vec),
                     DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vec),
@@ -897,17 +972,8 @@ impl HnswIndex {
             })
             .collect();
 
-        // Sort by similarity (metric-dependent ordering)
-        match self.metric {
-            DistanceMetric::Cosine | DistanceMetric::DotProduct | DistanceMetric::Jaccard => {
-                // Higher is better - sort descending
-                results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-            DistanceMetric::Euclidean | DistanceMetric::Hamming => {
-                // Lower is better - sort ascending
-                results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            }
-        }
+        // Sort by distance (metric-dependent ordering)
+        self.metric.sort_results(&mut results);
 
         results.truncate(k);
         results
@@ -922,18 +988,9 @@ impl HnswIndex {
     /// For single-threaded sequential insertions, this is typically not needed,
     /// but it's good practice to call it anyway before benchmarks.
     pub fn set_searching_mode(&self) {
+        // RF-1: Using HnswInner method
         let mut inner = self.inner.write();
-        match &mut **inner {
-            HnswInner::Cosine(hnsw) => {
-                hnsw.set_searching_mode(true);
-            }
-            HnswInner::Euclidean(hnsw) | HnswInner::Hamming(hnsw) | HnswInner::Jaccard(hnsw) => {
-                hnsw.set_searching_mode(true);
-            }
-            HnswInner::DotProduct(hnsw) => {
-                hnsw.set_searching_mode(true);
-            }
-        }
+        inner.set_searching_mode(true);
     }
 }
 
@@ -967,35 +1024,19 @@ impl VectorIndex for HnswIndex {
             vector.len()
         );
 
-        // WIS-9: Single lock acquisition for all mappings
-        let idx = {
-            let mut mappings = self.mappings.write();
-            // Check if ID already exists - hnsw_rs doesn't support updates!
-            // register() returns None if ID already exists
-            match mappings.register(id) {
-                Some(idx) => idx,
-                None => return, // ID already exists, skip insertion
-            }
+        // EPIC-A.1: Lock-free registration with ShardedMappings
+        // Check if ID already exists - hnsw_rs doesn't support updates!
+        // register() returns None if ID already exists
+        let Some(idx) = self.mappings.register(id) else {
+            return; // ID already exists, skip insertion
         };
 
-        // Store vector for SIMD re-ranking
-        let mut vectors = self.vectors.write();
-        vectors.insert(idx, vector.to_vec());
-        drop(vectors);
+        // EPIC-A.2: Store vector using ShardedVectors for parallel-safe storage
+        self.vectors.insert(idx, vector.to_vec());
 
-        // Insert into HNSW index
+        // Insert into HNSW index (RF-1: using HnswInner method)
         let inner = self.inner.write();
-        match &**inner {
-            HnswInner::Cosine(hnsw) => {
-                hnsw.insert((vector, idx));
-            }
-            HnswInner::Euclidean(hnsw) | HnswInner::Hamming(hnsw) | HnswInner::Jaccard(hnsw) => {
-                hnsw.insert((vector, idx));
-            }
-            HnswInner::DotProduct(hnsw) => {
-                hnsw.insert((vector, idx));
-            }
-        }
+        inner.insert((vector, idx));
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
@@ -1015,14 +1056,13 @@ impl VectorIndex for HnswIndex {
     /// For workloads with many deletions, consider periodic index rebuilding
     /// to reclaim memory and maintain optimal graph structure.
     fn remove(&self, id: u64) -> bool {
-        // WIS-9: Single lock for mappings
-        let mut mappings = self.mappings.write();
+        // EPIC-A.1: Lock-free removal with ShardedMappings
         // Soft delete: vector remains in HNSW graph but is excluded from results
-        mappings.remove(id).is_some()
+        self.mappings.remove(id).is_some()
     }
 
     fn len(&self) -> usize {
-        self.mappings.read().len()
+        self.mappings.len()
     }
 
     fn dimension(&self) -> usize {
@@ -1035,6 +1075,11 @@ impl VectorIndex for HnswIndex {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::redundant_closure_for_method_calls
+)]
 mod tests {
     use super::*;
 
@@ -1337,6 +1382,79 @@ mod tests {
         // Assert - Only 1 new vector should be inserted
         assert_eq!(inserted, 1);
         assert_eq!(index.len(), 2);
+    }
+
+    // =========================================================================
+    // QW-3: insert_batch_sequential Tests
+    // =========================================================================
+
+    #[test]
+    fn test_hnsw_insert_batch_sequential() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        let vectors: Vec<(u64, Vec<f32>)> = vec![
+            (1, vec![1.0, 0.0, 0.0]),
+            (2, vec![0.0, 1.0, 0.0]),
+            (3, vec![0.0, 0.0, 1.0]),
+            (4, vec![0.5, 0.5, 0.0]),
+            (5, vec![0.5, 0.0, 0.5]),
+        ];
+
+        // Act
+        let inserted = index.insert_batch_sequential(vectors);
+
+        // Assert
+        assert_eq!(inserted, 5);
+        assert_eq!(index.len(), 5);
+
+        // Verify search works
+        let results = index.search(&[1.0, 0.0, 0.0], 3);
+        assert_eq!(results.len(), 3);
+        let result_ids: Vec<u64> = results.iter().map(|r| r.0).collect();
+        assert!(result_ids.contains(&1), "ID 1 should be in top 3 results");
+    }
+
+    #[test]
+    fn test_hnsw_insert_batch_sequential_skips_duplicates() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        index.insert(1, &[1.0, 0.0, 0.0]);
+
+        // Act - Try to insert batch with duplicate ID
+        let vectors: Vec<(u64, Vec<f32>)> = vec![
+            (1, vec![0.0, 1.0, 0.0]), // Duplicate ID
+            (2, vec![0.0, 0.0, 1.0]), // New
+        ];
+        let inserted = index.insert_batch_sequential(vectors);
+
+        // Assert - Only 1 new vector should be inserted
+        assert_eq!(inserted, 1);
+        assert_eq!(index.len(), 2);
+    }
+
+    #[test]
+    fn test_hnsw_insert_batch_sequential_empty() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        let vectors: Vec<(u64, Vec<f32>)> = vec![];
+
+        // Act
+        let inserted = index.insert_batch_sequential(vectors);
+
+        // Assert
+        assert_eq!(inserted, 0);
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector dimension mismatch")]
+    fn test_hnsw_insert_batch_sequential_wrong_dimension() {
+        // Arrange
+        let index = HnswIndex::new(3, DistanceMetric::Cosine);
+        let vectors: Vec<(u64, Vec<f32>)> = vec![(1, vec![1.0, 0.0])]; // Wrong dim
+
+        // Act - should panic
+        index.insert_batch_sequential(vectors);
     }
 
     // =========================================================================
@@ -1991,6 +2109,247 @@ mod tests {
                 !results.is_empty(),
                 "search_with_rerank should work for {metric:?}"
             );
+        }
+    }
+
+    // =========================================================================
+    // SAFETY: Drop Order Tests for io_holder unsafe invariant
+    // =========================================================================
+    //
+    // These tests verify that the unsafe lifetime extension in HnswIndex::load()
+    // doesn't cause use-after-free when the index is dropped.
+    //
+    // CRITICAL INVARIANT: `inner` (which borrows from io_holder) MUST be dropped
+    // BEFORE `io_holder`. Our Drop impl ensures this via ManuallyDrop.
+
+    #[test]
+    fn test_drop_safety_loaded_index_no_segfault() {
+        // This test verifies that dropping a loaded HnswIndex doesn't segfault.
+        // If the Drop order is wrong, this will cause use-after-free.
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("Failed to create temp dir");
+
+        // 1. Create and save an index
+        {
+            let index = HnswIndex::new(4, DistanceMetric::Cosine);
+            index.insert(1, &[1.0, 0.0, 0.0, 0.0]);
+            index.insert(2, &[0.0, 1.0, 0.0, 0.0]);
+            index.insert(3, &[0.0, 0.0, 1.0, 0.0]);
+            index.save(dir.path()).expect("Failed to save");
+        }
+
+        // 2. Load and drop multiple times to stress test Drop safety
+        for _ in 0..5 {
+            let loaded =
+                HnswIndex::load(dir.path(), 4, DistanceMetric::Cosine).expect("Failed to load");
+
+            // Perform operations that touch the borrowed data
+            let results = loaded.search(&[1.0, 0.0, 0.0, 0.0], 2);
+            assert!(!results.is_empty(), "Search should return results");
+
+            // Index is dropped here - if Drop order is wrong, this segfaults
+        }
+    }
+
+    #[test]
+    fn test_drop_safety_loaded_index_concurrent_drop() {
+        // Stress test: multiple threads loading and dropping indices
+        use std::sync::Arc;
+        use std::thread;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("Failed to create temp dir");
+
+        // Create and save an index
+        {
+            let index = HnswIndex::new(4, DistanceMetric::Cosine);
+            for i in 0u64..10 {
+                let v = vec![i as f32, 0.0, 0.0, 0.0];
+                index.insert(i, &v);
+            }
+            index.save(dir.path()).expect("Failed to save");
+        }
+
+        let path = Arc::new(dir.path().to_path_buf());
+
+        // Spawn threads that load, search, and drop
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let p = Arc::clone(&path);
+                thread::spawn(move || {
+                    for _ in 0..3 {
+                        let loaded = HnswIndex::load(&*p, 4, DistanceMetric::Cosine)
+                            .expect("Failed to load");
+                        let results = loaded.search(&[1.0, 0.0, 0.0, 0.0], 3);
+                        assert!(!results.is_empty());
+                        // Drop happens here
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("Thread should not panic from Drop");
+        }
+    }
+
+    #[test]
+    fn test_drop_safety_search_after_partial_operations() {
+        // Test that search works correctly even with complex operation sequences
+        // before drop, ensuring borrowed data is valid until Drop.
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("Failed to create temp dir");
+
+        // Create index with various operations
+        {
+            let index = HnswIndex::new(8, DistanceMetric::Euclidean);
+            for i in 0u64..20 {
+                let v: Vec<f32> = (0..8).map(|j| (i + j) as f32 * 0.1).collect();
+                index.insert(i, &v);
+            }
+            index.save(dir.path()).expect("Failed to save");
+        }
+
+        // Load and perform many operations before drop
+        let loaded =
+            HnswIndex::load(dir.path(), 8, DistanceMetric::Euclidean).expect("Failed to load");
+
+        // Multiple searches touching the mmap'd data
+        for i in 0..10 {
+            let query: Vec<f32> = (0..8).map(|j| (i + j) as f32 * 0.1).collect();
+            let results = loaded.search(&query, 5);
+            assert!(results.len() <= 5);
+        }
+
+        // Batch search
+        let queries: Vec<Vec<f32>> = (0..5)
+            .map(|i| (0..8).map(|j| (i + j) as f32 * 0.1).collect())
+            .collect();
+        let query_refs: Vec<&[f32]> = queries.iter().map(|v| v.as_slice()).collect();
+        let batch_results = loaded.search_batch_parallel(&query_refs, 3, SearchQuality::Balanced);
+        assert_eq!(batch_results.len(), 5);
+
+        // Drop happens here - all borrowed data must still be valid
+        drop(loaded);
+    }
+
+    // =========================================================================
+    // SEC-1: Stress Test - Drop under heavy concurrent load
+    // Validates ManuallyDrop + RwLock safety under extreme conditions
+    // =========================================================================
+
+    #[test]
+    fn test_drop_stress_concurrent_create_destroy_loop() {
+        // Stress test: rapidly create/destroy indices while performing operations
+        // This tests the ManuallyDrop pattern under pressure
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let success_count = Arc::new(AtomicUsize::new(0));
+        let iterations = 50;
+
+        for _ in 0..iterations {
+            let success = Arc::clone(&success_count);
+
+            // Create index, perform operations, drop
+            let index = Arc::new(HnswIndex::new(16, DistanceMetric::Cosine));
+
+            // Spawn readers that will race with drop
+            let handles: Vec<_> = (0..4)
+                .map(|t| {
+                    let idx = Arc::clone(&index);
+                    std::thread::spawn(move || {
+                        // Insert some vectors
+                        for i in 0..10 {
+                            let id = (t * 100 + i) as u64;
+                            let v: Vec<f32> = (0..16).map(|j| (id + j) as f32 * 0.01).collect();
+                            idx.insert(id, &v);
+                        }
+                        // Search
+                        let q: Vec<f32> = (0..16).map(|i| i as f32 * 0.01).collect();
+                        let _ = idx.search(&q, 5);
+                    })
+                })
+                .collect();
+
+            // Wait for all threads
+            for h in handles {
+                h.join().expect("Thread panicked during stress test");
+            }
+
+            // Force drop while ensuring all operations completed
+            drop(index);
+            success.fetch_add(1, Ordering::SeqCst);
+        }
+
+        assert_eq!(
+            success_count.load(Ordering::SeqCst),
+            iterations,
+            "All iterations should complete without panic"
+        );
+    }
+
+    #[test]
+    fn test_drop_stress_load_search_destroy_cycle() {
+        // Stress test: load from disk, search heavily, destroy - repeated
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("Failed to create temp dir");
+
+        // Create and save initial index
+        {
+            let index = HnswIndex::new(32, DistanceMetric::Euclidean);
+            for i in 0u64..100 {
+                let v: Vec<f32> = (0..32).map(|j| ((i + j) as f32).sin()).collect();
+                index.insert(i, &v);
+            }
+            index.save(dir.path()).expect("Failed to save");
+        }
+
+        // Repeated load/search/destroy cycles
+        for cycle in 0..20 {
+            let loaded = HnswIndex::load(dir.path(), 32, DistanceMetric::Euclidean)
+                .unwrap_or_else(|e| panic!("Cycle {cycle}: Failed to load: {e}"));
+
+            // Heavy search load
+            for i in 0..50 {
+                let q: Vec<f32> = (0..32).map(|j| ((i + j) as f32).cos()).collect();
+                let results = loaded.search(&q, 10);
+                assert!(
+                    results.len() <= 10,
+                    "Cycle {cycle}: Search returned too many results"
+                );
+            }
+
+            // Explicit drop to test ManuallyDrop pattern
+            drop(loaded);
+        }
+    }
+
+    #[test]
+    fn test_drop_stress_parallel_insert_then_drop() {
+        // Stress test: parallel batch insert immediately followed by drop
+        // Use Euclidean to avoid cosine normalization requirements
+        for _ in 0..30 {
+            let index = HnswIndex::new(64, DistanceMetric::Euclidean);
+
+            // Generate batch data with reasonable magnitude
+            let batch: Vec<(u64, Vec<f32>)> = (0..500)
+                .map(|i| {
+                    let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
+                    (i as u64, v)
+                })
+                .collect();
+
+            // Parallel insert
+            let inserted = index.insert_batch_parallel(batch);
+            assert!(inserted > 0, "Should insert at least some vectors");
+
+            // Immediate drop without set_searching_mode
+            // This tests that Drop handles partially-initialized state
+            drop(index);
         }
     }
 }

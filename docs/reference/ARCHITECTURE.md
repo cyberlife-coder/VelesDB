@@ -342,3 +342,21 @@ features = ["simdeez_f"]   # x86_64: AVX2/SSE enabled
 - **Product Quantization (PQ)**: 8-32x compression
 - **Sparse Vectors**: For hybrid sparse-dense search
 - **GPU Acceleration**: CUDA kernels for large-scale
+
+### v0.9.0 Architecture Improvements (Q1 2026)
+
+Based on the technical audit (January 2026), the following architectural changes are planned:
+
+| Change | Current | Target |
+|--------|---------|--------|
+| **Concurrency** | Global `RwLock<HashMap>` | `DashMap` + 16-shard storage |
+| **Memory** | `Vec<f32>` allocations per read | Zero-copy `&[f32]` from mmap |
+| **SIMD Dispatch** | Per-call feature detection | `OnceLock` function pointer |
+| **Unsafe** | `'static` lifetime tricks | Safe self-referential via `ouroboros` |
+
+**Expected Impact**:
+- Insert throughput: 50k/s → 150k/s (16 threads)
+- Search p99 latency: 15ms → 10ms
+- Allocations per search: ~10k → 0
+
+See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for full details.
