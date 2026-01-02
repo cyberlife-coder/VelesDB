@@ -385,6 +385,7 @@ mod tests {
             where_clause: None,
             limit: Some(10),
             offset: None,
+            with_clause: None,
         };
 
         // Act
@@ -407,6 +408,7 @@ mod tests {
             })),
             limit: Some(5),
             offset: None,
+            with_clause: None,
         };
 
         // Act
@@ -435,6 +437,7 @@ mod tests {
             )),
             limit: Some(10),
             offset: None,
+            with_clause: None,
         };
 
         // Act
@@ -456,6 +459,7 @@ mod tests {
             })),
             limit: Some(10),
             offset: None,
+            with_clause: None,
         };
 
         // Act
@@ -478,6 +482,7 @@ mod tests {
             where_clause: None,
             limit: Some(5),
             offset: None,
+            with_clause: None,
         };
 
         // Act
@@ -498,6 +503,7 @@ mod tests {
             where_clause: None,
             limit: Some(10),
             offset: Some(20),
+            with_clause: None,
         };
 
         // Act
@@ -527,6 +533,7 @@ mod tests {
             )),
             limit: Some(10),
             offset: None,
+            with_clause: None,
         };
 
         // Act
@@ -562,6 +569,7 @@ mod tests {
             where_clause: None,
             limit: Some(5),
             offset: None,
+            with_clause: None,
         };
 
         // Act

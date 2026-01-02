@@ -1,5 +1,5 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 0.1.0 MVP
+// Version 0.2.0 - WITH clause support
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -8,11 +8,17 @@ COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 // Main entry point
 query = { SOI ~ select_stmt ~ ";"? ~ EOI }
 
-// SELECT statement
+// SELECT statement with optional WITH clause
 select_stmt = { 
     ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
-    where_clause? ~ limit_clause? ~ offset_clause?
+    where_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
 }
+
+// WITH clause for query-time configuration overrides
+with_clause = { ^"WITH" ~ "(" ~ with_option_list ~ ")" }
+with_option_list = { with_option ~ ("," ~ with_option)* }
+with_option = { identifier ~ "=" ~ with_value }
+with_value = { string | float | integer | boolean | identifier }
 
 // Select list: * or column list
 select_list = { "*" | column_list }

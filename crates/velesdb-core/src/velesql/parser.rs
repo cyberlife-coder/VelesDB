@@ -6,7 +6,7 @@ use pest_derive::Parser;
 use super::ast::{
     BetweenCondition, Column, CompareOp, Comparison, Condition, InCondition, IsNullCondition,
     LikeCondition, MatchCondition, Query, SelectColumns, SelectStatement, Value, VectorExpr,
-    VectorSearch,
+    VectorSearch, WithClause, WithOption, WithValue,
 };
 use super::error::{ParseError, ParseErrorKind};
 
@@ -71,6 +71,7 @@ impl Parser {
         let mut where_clause = None;
         let mut limit = None;
         let mut offset = None;
+        let mut with_clause = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -89,6 +90,9 @@ impl Parser {
                 Rule::offset_clause => {
                     offset = Some(Self::parse_offset_clause(inner_pair)?);
                 }
+                Rule::with_clause => {
+                    with_clause = Some(Self::parse_with_clause(inner_pair)?);
+                }
                 _ => {}
             }
         }
@@ -99,6 +103,7 @@ impl Parser {
             where_clause,
             limit,
             offset,
+            with_clause,
         })
     }
 
@@ -468,6 +473,81 @@ impl Parser {
             .parse::<u64>()
             .map_err(|_| ParseError::syntax(0, int_pair.as_str(), "Invalid OFFSET value"))
     }
+
+    fn parse_with_clause(pair: pest::iterators::Pair<Rule>) -> Result<WithClause, ParseError> {
+        let mut options = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::with_option_list {
+                for opt_pair in inner_pair.into_inner() {
+                    if opt_pair.as_rule() == Rule::with_option {
+                        options.push(Self::parse_with_option(opt_pair)?);
+                    }
+                }
+            }
+        }
+
+        Ok(WithClause { options })
+    }
+
+    fn parse_with_option(pair: pest::iterators::Pair<Rule>) -> Result<WithOption, ParseError> {
+        let mut inner = pair.into_inner();
+
+        let key = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected option key"))?
+            .as_str()
+            .to_string();
+
+        let value_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected option value"))?;
+
+        let value = Self::parse_with_value(value_pair)?;
+
+        Ok(WithOption { key, value })
+    }
+
+    fn parse_with_value(pair: pest::iterators::Pair<Rule>) -> Result<WithValue, ParseError> {
+        let inner = pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected WITH value"))?;
+
+        match inner.as_rule() {
+            Rule::string => {
+                let s = inner.as_str().trim_matches('\'').to_string();
+                Ok(WithValue::String(s))
+            }
+            Rule::integer => {
+                let v = inner
+                    .as_str()
+                    .parse::<i64>()
+                    .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid integer"))?;
+                Ok(WithValue::Integer(v))
+            }
+            Rule::float => {
+                let v = inner
+                    .as_str()
+                    .parse::<f64>()
+                    .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid float"))?;
+                Ok(WithValue::Float(v))
+            }
+            Rule::boolean => {
+                let b = inner.as_str().to_uppercase() == "TRUE";
+                Ok(WithValue::Boolean(b))
+            }
+            Rule::identifier => {
+                let s = inner.as_str().to_string();
+                Ok(WithValue::Identifier(s))
+            }
+            _ => Err(ParseError::syntax(
+                0,
+                inner.as_str(),
+                "Invalid WITH value type",
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -714,5 +794,59 @@ mod tests {
         let query = Parser::parse("select * from documents where vector near $v limit 10").unwrap();
         assert_eq!(query.select.from, "documents");
         assert_eq!(query.select.limit, Some(10));
+    }
+
+    // ========== WITH clause tests ==========
+
+    #[test]
+    fn test_parse_with_clause_single_option() {
+        let query = Parser::parse(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'high_recall')",
+        )
+        .unwrap();
+        let with = query.select.with_clause.expect("Expected WITH clause");
+        assert_eq!(with.options.len(), 1);
+        assert_eq!(with.options[0].key, "mode");
+        assert_eq!(with.get_mode(), Some("high_recall"));
+    }
+
+    #[test]
+    fn test_parse_with_clause_multiple_options() {
+        let query = Parser::parse(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'fast', ef_search = 512, timeout_ms = 5000)"
+        ).unwrap();
+        let with = query.select.with_clause.expect("Expected WITH clause");
+        assert_eq!(with.options.len(), 3);
+        assert_eq!(with.get_mode(), Some("fast"));
+        assert_eq!(with.get_ef_search(), Some(512));
+        assert_eq!(with.get_timeout_ms(), Some(5000));
+    }
+
+    #[test]
+    fn test_parse_with_clause_boolean_option() {
+        let query = Parser::parse("SELECT * FROM docs LIMIT 10 WITH (rerank = true)").unwrap();
+        let with = query.select.with_clause.expect("Expected WITH clause");
+        assert_eq!(with.get_rerank(), Some(true));
+    }
+
+    #[test]
+    fn test_parse_with_clause_identifier_value() {
+        let query = Parser::parse("SELECT * FROM docs LIMIT 10 WITH (mode = high_recall)").unwrap();
+        let with = query.select.with_clause.expect("Expected WITH clause");
+        assert_eq!(with.get_mode(), Some("high_recall"));
+    }
+
+    #[test]
+    fn test_parse_without_with_clause() {
+        let query = Parser::parse("SELECT * FROM docs LIMIT 10").unwrap();
+        assert!(query.select.with_clause.is_none());
+    }
+
+    #[test]
+    fn test_parse_with_clause_float_value() {
+        let query = Parser::parse("SELECT * FROM docs LIMIT 10 WITH (threshold = 0.95)").unwrap();
+        let with = query.select.with_clause.expect("Expected WITH clause");
+        let value = with.get("threshold").expect("Expected threshold option");
+        assert_eq!(value.as_float(), Some(0.95));
     }
 }
