@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llama-index-vector-stores-velesdb"
-version = "0.7.2"
+version = "0.8.0"
 description = "LlamaIndex integration for VelesDB vector database"
 readme = "README.md"
 license = "ELv2"
