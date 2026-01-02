@@ -2508,4 +2508,157 @@ mod tests {
             }
         }
     }
+
+    // =========================================================================
+    // FT-2: Property-Based Tests with proptest
+    // =========================================================================
+
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for generating valid vector dimensions (reasonable range)
+        fn dimension_strategy() -> impl Strategy<Value = usize> {
+            8usize..=256
+        }
+
+        /// Strategy for generating a random f32 vector of given dimension
+        #[allow(dead_code)]
+        fn vector_strategy(dim: usize) -> impl Strategy<Value = Vec<f32>> {
+            proptest::collection::vec(-1.0f32..1.0, dim)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(50))]
+
+            /// Property: len() always equals number of successful insertions
+            #[test]
+            fn prop_len_equals_insertions(
+                dim in dimension_strategy(),
+                vectors in proptest::collection::vec(
+                    proptest::collection::vec(-1.0f32..1.0, 8usize..=64),
+                    1usize..=20
+                )
+            ) {
+                let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+                let mut inserted = 0usize;
+
+                for (i, v) in vectors.into_iter().enumerate() {
+                    if v.len() == dim {
+                        index.insert(i as u64, &v);
+                        inserted += 1;
+                    }
+                }
+
+                prop_assert_eq!(index.len(), inserted);
+            }
+
+            /// Property: search never returns more than k results
+            #[test]
+            fn prop_search_returns_at_most_k(
+                dim in 16usize..=64,
+                k in 1usize..=20,
+                num_vectors in 5usize..=50
+            ) {
+                let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+
+                // Insert random vectors
+                for i in 0..num_vectors {
+                    let v: Vec<f32> = (0..dim).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+                    index.insert(i as u64, &v);
+                }
+
+                let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.02).cos()).collect();
+                let results = index.search(&query, k);
+
+                prop_assert!(results.len() <= k, "Search returned {} results, expected <= {}", results.len(), k);
+            }
+
+            /// Property: brute force search always returns exact results
+            #[test]
+            fn prop_brute_force_exact(
+                dim in 8usize..=32,
+                num_vectors in 3usize..=20
+            ) {
+                let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+
+                // Insert vectors with known distances from origin
+                for i in 0..num_vectors {
+                    let mut v = vec![0.0f32; dim];
+                    v[0] = i as f32; // Distance from origin = i
+                    index.insert(i as u64, &v);
+                }
+
+                let query = vec![0.0f32; dim];
+                let results = index.search_brute_force(&query, 3);
+
+                // First result should be id=0 (exact match at origin)
+                if !results.is_empty() {
+                    prop_assert_eq!(results[0].0, 0, "Closest should be id=0 (at origin)");
+                }
+            }
+
+            /// Property: remove always decreases len or returns false
+            #[test]
+            fn prop_remove_decreases_len(
+                dim in 16usize..=32,
+                id_to_remove in 0u64..10
+            ) {
+                let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+
+                // Insert some vectors
+                for i in 0u64..10 {
+                    let v: Vec<f32> = (0..dim).map(|j| ((i + j as u64) as f32 * 0.01).sin()).collect();
+                    index.insert(i, &v);
+                }
+
+                let len_before = index.len();
+                let removed = index.remove(id_to_remove);
+
+                if removed {
+                    prop_assert_eq!(index.len(), len_before - 1);
+                } else {
+                    prop_assert_eq!(index.len(), len_before);
+                }
+            }
+
+            /// Property: duplicate inserts are idempotent (no increase in len)
+            #[test]
+            fn prop_duplicate_insert_idempotent(
+                dim in 16usize..=32
+            ) {
+                let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+                let v: Vec<f32> = (0..dim).map(|j| j as f32 * 0.1).collect();
+
+                index.insert(42, &v);
+                let len_after_first = index.len();
+
+                index.insert(42, &v); // Duplicate
+                let len_after_second = index.len();
+
+                prop_assert_eq!(len_after_first, len_after_second, "Duplicate insert should be idempotent");
+            }
+
+            /// Property: batch insert count matches individual inserts
+            #[test]
+            fn prop_batch_insert_count(
+                dim in 16usize..=32,
+                batch_size in 5usize..=30
+            ) {
+                let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+
+                let batch: Vec<(u64, Vec<f32>)> = (0..batch_size)
+                    .map(|i| {
+                        let v: Vec<f32> = (0..dim).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+                        (i as u64, v)
+                    })
+                    .collect();
+
+                let count = index.insert_batch_sequential(batch);
+
+                prop_assert_eq!(count, batch_size, "Batch insert count mismatch");
+                prop_assert_eq!(index.len(), batch_size, "Index len mismatch after batch");
+            }
+        }
+    }
 }
