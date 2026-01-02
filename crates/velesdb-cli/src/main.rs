@@ -12,6 +12,7 @@
 
 mod import;
 mod repl;
+mod session;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
