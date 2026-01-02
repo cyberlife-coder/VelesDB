@@ -182,10 +182,20 @@ impl ContiguousVectors {
     ///
     /// # Safety
     ///
-    /// Caller must ensure index < count.
+    /// Caller must ensure `index < self.len()`.
+    ///
+    /// # Debug Assertions
+    ///
+    /// In debug builds, this function will panic if `index >= self.len()`.
+    /// This catches bugs early during development without impacting release performance.
     #[inline]
     #[must_use]
     pub unsafe fn get_unchecked(&self, index: usize) -> &[f32] {
+        debug_assert!(
+            index < self.count,
+            "index out of bounds: index={index}, count={}",
+            self.count
+        );
         let offset = index * self.dimension;
         std::slice::from_raw_parts(self.data.add(offset), self.dimension)
     }
@@ -531,5 +541,50 @@ mod tests {
 
         assert_eq!(cv.len(), 20);
         assert_eq!(cv.dimension(), 1536);
+    }
+
+    // =========================================================================
+    // Safety: get_unchecked bounds check tests (TDD)
+    // =========================================================================
+
+    #[test]
+    fn test_get_unchecked_valid_index() {
+        // Arrange
+        let mut cv = ContiguousVectors::new(3, 10);
+        cv.push(&[1.0, 2.0, 3.0]);
+        cv.push(&[4.0, 5.0, 6.0]);
+
+        // Act - Valid indices should work
+        let v0 = unsafe { cv.get_unchecked(0) };
+        let v1 = unsafe { cv.get_unchecked(1) };
+
+        // Assert
+        assert_eq!(v0, &[1.0, 2.0, 3.0]);
+        assert_eq!(v1, &[4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_get_unchecked_panics_on_invalid_index_in_debug() {
+        // Arrange
+        let mut cv = ContiguousVectors::new(3, 10);
+        cv.push(&[1.0, 2.0, 3.0]);
+
+        // Act - Out of bounds index should panic in debug mode
+        let _ = unsafe { cv.get_unchecked(5) };
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_get_unchecked_panics_on_boundary_index_in_debug() {
+        // Arrange
+        let mut cv = ContiguousVectors::new(3, 10);
+        cv.push(&[1.0, 2.0, 3.0]);
+        cv.push(&[4.0, 5.0, 6.0]);
+
+        // Act - Index == count should panic (off by one)
+        let _ = unsafe { cv.get_unchecked(2) };
     }
 }

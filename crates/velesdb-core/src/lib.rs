@@ -60,8 +60,10 @@ pub mod point;
 pub mod quantization;
 pub mod simd;
 pub mod simd_avx512;
+pub mod simd_dispatch;
 pub mod simd_explicit;
 pub mod storage;
+pub mod vector_ref;
 pub mod velesql;
 
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};

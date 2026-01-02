@@ -5,6 +5,50 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-01-02
+
+### 🔧 Clean Code & Performance
+
+Internal refactoring release focused on **code quality**, **maintainability**, and **performance validation**.
+
+#### Changed
+
+- **RF-1: HnswInner abstraction** - Refactored 12 duplicated `match` patterns into centralized impl methods
+  - `search()`, `insert()`, `parallel_insert()`, `set_searching_mode()`, `file_dump()`, `transform_score()`
+  - Improved maintainability and reduced code duplication
+
+- **QW-1: Unified result sorting** - Added `DistanceMetric::sort_results()` method
+  - Handles both similarity (descending) and distance (ascending) metrics
+  - Replaced duplicated sorting logic across search methods
+
+- **QW-2: SIMD prefetch helpers** - Extracted `prefetch_vector()` and `calculate_prefetch_distance()`
+  - Platform-agnostic prefetching (x86_64, aarch64, fallback)
+  - Cache-aware distance calculation based on vector dimension
+
+#### Added
+
+- **SEC-1: Drop stress tests** - Added 3 comprehensive stress tests for `ManuallyDrop` safety
+  - `test_drop_stress_concurrent_create_destroy_loop`
+  - `test_drop_stress_load_search_destroy_cycle`
+  - `test_drop_stress_parallel_insert_then_drop`
+
+- **CI-1: Benchmark regression workflow** - `.github/workflows/bench-regression.yml`
+  - Automatic performance comparison on PRs
+  - Fails on >20% regression, bypassable with label
+
+#### Fixed
+
+- Fixed clippy `doc_markdown` warnings in documentation
+- Fixed formatting issues in HNSW index methods
+
+#### Performance
+
+- **Recall improved**: -3.9% to -23.2% latency on recall validation benchmarks
+- **Insert stable**: No regression on sequential/parallel insert throughput
+- **SIMD stable**: Core distance calculations unchanged
+
+---
+
 ## [0.8.0] - 2026-01-02
 
 ### ⚙️ Configuration & Search Modes

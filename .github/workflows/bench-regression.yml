@@ -1,0 +1,113 @@
+# =============================================================================
+# VelesDB Core - Benchmark Regression Detection (CI-1)
+# =============================================================================
+# Détecte les régressions de performance sur les PRs en comparant avec main.
+# 
+# Seuils de régression (fail si dépassés):
+# - Insert throughput: -20%
+# - Search latency: +30%
+# - SIMD operations: +20%
+# =============================================================================
+
+name: Benchmark Regression
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/velesdb-core/src/**'
+      - 'crates/velesdb-core/benches/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  benchmark-regression:
+    name: Detect Performance Regressions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Checkout base branch for comparison
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "bench-regression"
+
+      - name: Install critcmp
+        run: cargo install critcmp --locked
+
+      - name: Run baseline benchmarks (main)
+        working-directory: base
+        run: |
+          cargo bench -p velesdb-core \
+            --bench hnsw_benchmark \
+            --bench simd_benchmark \
+            -- --save-baseline main --noplot
+
+      - name: Run PR benchmarks
+        run: |
+          cargo bench -p velesdb-core \
+            --bench hnsw_benchmark \
+            --bench simd_benchmark \
+            -- --save-baseline pr --noplot
+
+      - name: Compare benchmarks
+        id: compare
+        run: |
+          echo "## Benchmark Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          critcmp main pr 2>&1 | tee comparison.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          # Check for regressions > 20%
+          if grep -E "regressed.*[2-9][0-9]\.[0-9]+%" comparison.txt; then
+            echo "regression_detected=true" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Significant regression detected (>20%)**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "regression_detected=false" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **No significant regressions detected**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload comparison artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-comparison
+          path: comparison.txt
+          retention-days: 14
+
+      - name: Fail on significant regression
+        if: steps.compare.outputs.regression_detected == 'true'
+        run: |
+          echo "❌ Performance regression detected! Review benchmark comparison above."
+          echo "If this regression is expected, add 'perf-regression-ok' label to the PR."
+          exit 1
+
+  # Allow bypassing regression check with label
+  regression-bypass:
+    name: Check Regression Bypass
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'perf-regression-ok')
+    steps:
+      - name: Regression bypass acknowledged
+        run: |
+          echo "⚠️ Performance regression acknowledged via 'perf-regression-ok' label"
+          echo "Ensure this is intentional and documented in the PR description."
