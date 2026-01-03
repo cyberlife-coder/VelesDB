@@ -661,15 +661,31 @@ impl HnswIndex {
     ///
     /// Returns a vector of (`internal_index`, vector) pairs ready for insertion.
     /// Duplicates are automatically skipped.
+    ///
+    /// # Performance
+    ///
+    /// - Single pass over input (no intermediate collection)
+    /// - Pre-allocated output vector
+    /// - Inline dimension validation
+    #[inline]
     fn prepare_batch_insert<I>(&self, vectors: I) -> Vec<(usize, Vec<f32>)>
     where
         I: IntoIterator<Item = (u64, Vec<f32>)>,
     {
-        let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
-        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
+        let iter = vectors.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let capacity = upper.unwrap_or(lower);
+        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(capacity);
 
-        for (id, vector) in vectors {
-            self.validate_dimension(&vector, "Vector");
+        for (id, vector) in iter {
+            // Inline validation for hot path
+            assert_eq!(
+                vector.len(),
+                self.dimension,
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            );
             if let Some(idx) = self.mappings.register(id) {
                 to_insert.push((idx, vector));
             }
@@ -941,8 +957,16 @@ impl Drop for HnswIndex {
 }
 
 impl VectorIndex for HnswIndex {
+    #[inline]
     fn insert(&self, id: u64, vector: &[f32]) {
-        self.validate_dimension(vector, "Vector");
+        // Inline validation for hot path performance
+        assert_eq!(
+            vector.len(),
+            self.dimension,
+            "Vector dimension mismatch: expected {}, got {}",
+            self.dimension,
+            vector.len()
+        );
 
         // Register the ID and get internal index with ShardedMappings
         // Check if ID already exists - hnsw_rs doesn't support updates!
@@ -951,10 +975,9 @@ impl VectorIndex for HnswIndex {
             return; // ID already exists, skip insertion
         };
 
-        // Insert into HNSW index FIRST (RF-1: using HnswInner method)
-        let inner = self.inner.write();
-        inner.insert((vector, idx));
-        drop(inner);
+        // Insert into HNSW index (RF-1: using HnswInner method)
+        // Perf: Minimize lock hold time by not explicitly dropping
+        self.inner.write().insert((vector, idx));
 
         // Perf: Conditionally store vector for SIMD re-ranking
         // When disabled, saves ~50% memory and ~2x insert speed
