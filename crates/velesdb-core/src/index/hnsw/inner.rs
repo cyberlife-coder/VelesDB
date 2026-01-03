@@ -39,6 +39,57 @@ pub(super) enum HnswInner {
 // unify in a single match arm binding.
 
 impl HnswInner {
+    /// Creates a new `HnswInner` with the specified metric and parameters.
+    ///
+    /// RF-2.6: Factory method to eliminate duplication in `HnswIndex::with_params`.
+    pub(super) fn new(
+        metric: crate::distance::DistanceMetric,
+        max_connections: usize,
+        max_elements: usize,
+        ef_construction: usize,
+    ) -> Self {
+        use crate::distance::DistanceMetric;
+
+        match metric {
+            DistanceMetric::Cosine => Self::Cosine(Hnsw::new(
+                max_connections,
+                max_elements,
+                16,
+                ef_construction,
+                DistCosine,
+            )),
+            DistanceMetric::Euclidean => Self::Euclidean(Hnsw::new(
+                max_connections,
+                max_elements,
+                16,
+                ef_construction,
+                DistL2,
+            )),
+            DistanceMetric::DotProduct => Self::DotProduct(Hnsw::new(
+                max_connections,
+                max_elements,
+                16,
+                ef_construction,
+                DistDot,
+            )),
+            // Hamming/Jaccard use L2 for graph construction, actual distance computed during re-ranking
+            DistanceMetric::Hamming => Self::Hamming(Hnsw::new(
+                max_connections,
+                max_elements,
+                16,
+                ef_construction,
+                DistL2,
+            )),
+            DistanceMetric::Jaccard => Self::Jaccard(Hnsw::new(
+                max_connections,
+                max_elements,
+                16,
+                ef_construction,
+                DistL2,
+            )),
+        }
+    }
+
     /// Searches the HNSW graph and returns raw neighbors with distances.
     #[inline]
     pub(super) fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<Neighbour> {

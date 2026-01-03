@@ -27,7 +27,6 @@ use super::sharded_vectors::ShardedVectors;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 use hnsw_rs::hnswio::HnswIo;
-use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
 
@@ -154,44 +153,13 @@ impl HnswIndex {
     /// ```
     #[must_use]
     pub fn with_params(dimension: usize, metric: DistanceMetric, params: HnswParams) -> Self {
-        let inner = match metric {
-            DistanceMetric::Cosine => HnswInner::Cosine(Hnsw::new(
-                params.max_connections,
-                params.max_elements,
-                16,
-                params.ef_construction,
-                DistCosine,
-            )),
-            DistanceMetric::Euclidean => HnswInner::Euclidean(Hnsw::new(
-                params.max_connections,
-                params.max_elements,
-                16,
-                params.ef_construction,
-                DistL2,
-            )),
-            DistanceMetric::DotProduct => HnswInner::DotProduct(Hnsw::new(
-                params.max_connections,
-                params.max_elements,
-                16,
-                params.ef_construction,
-                DistDot,
-            )),
-            // Hamming/Jaccard use L2 for graph construction, actual distance computed during re-ranking
-            DistanceMetric::Hamming => HnswInner::Hamming(Hnsw::new(
-                params.max_connections,
-                params.max_elements,
-                16,
-                params.ef_construction,
-                DistL2,
-            )),
-            DistanceMetric::Jaccard => HnswInner::Jaccard(Hnsw::new(
-                params.max_connections,
-                params.max_elements,
-                16,
-                params.ef_construction,
-                DistL2,
-            )),
-        };
+        // RF-2.6: Use HnswInner factory method to eliminate code duplication
+        let inner = HnswInner::new(
+            metric,
+            params.max_connections,
+            params.max_elements,
+            params.ef_construction,
+        );
 
         Self {
             dimension,
@@ -241,6 +209,24 @@ impl HnswIndex {
         })
     }
 
+    /// Validates that the query/vector dimension matches the index dimension.
+    ///
+    /// RF-2.7: Helper to eliminate 7x duplicated validation pattern.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimension doesn't match.
+    #[inline]
+    fn validate_dimension(&self, data: &[f32], data_type: &str) {
+        assert_eq!(
+            data.len(),
+            self.dimension,
+            "{data_type} dimension mismatch: expected {}, got {}",
+            self.dimension,
+            data.len()
+        );
+    }
+
     /// Computes exact SIMD distance between query and vector based on metric.
     ///
     /// This helper eliminates code duplication across search methods.
@@ -281,13 +267,7 @@ impl HnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> Vec<(u64, f32)> {
-        assert_eq!(
-            query.len(),
-            self.dimension,
-            "Query dimension mismatch: expected {}, got {}",
-            self.dimension,
-            query.len()
-        );
+        self.validate_dimension(query, "Query");
 
         // Perfect mode uses brute-force SIMD for guaranteed 100% recall
         if matches!(quality, SearchQuality::Perfect) {
@@ -334,13 +314,7 @@ impl HnswIndex {
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
     pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_k: usize) -> Vec<(u64, f32)> {
-        assert_eq!(
-            query.len(),
-            self.dimension,
-            "Query dimension mismatch: expected {}, got {}",
-            self.dimension,
-            query.len()
-        );
+        self.validate_dimension(query, "Query");
 
         // 1. Get candidates from HNSW (fast approximate search)
         let candidates = self.search_with_quality(query, rerank_k, SearchQuality::Accurate);
@@ -567,13 +541,7 @@ impl HnswIndex {
         rerank_k: usize,
         initial_quality: SearchQuality,
     ) -> Vec<(u64, f32)> {
-        assert_eq!(
-            query.len(),
-            self.dimension,
-            "Query dimension mismatch: expected {}, got {}",
-            self.dimension,
-            query.len()
-        );
+        self.validate_dimension(query, "Query");
 
         // 1. Get candidates from HNSW with specified quality
         // Avoid recursion if initial_quality is Perfect
@@ -633,13 +601,7 @@ impl HnswIndex {
         let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
 
         for (id, vector) in vectors {
-            assert_eq!(
-                vector.len(),
-                self.dimension,
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            );
+            self.validate_dimension(&vector, "Vector");
             if let Some(idx) = self.mappings.register(id) {
                 to_insert.push((idx, vector));
             }
@@ -804,13 +766,7 @@ impl HnswIndex {
         queries
             .par_iter()
             .map(|query| {
-                assert_eq!(
-                    query.len(),
-                    self.dimension,
-                    "Query dimension mismatch: expected {}, got {}",
-                    self.dimension,
-                    query.len()
-                );
+                self.validate_dimension(query, "Query");
 
                 // RF-1: Using HnswInner methods for search and score transformation
                 let neighbours = inner.search(query, k, ef_search);
@@ -855,13 +811,7 @@ impl HnswIndex {
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
         use rayon::prelude::*;
 
-        assert_eq!(
-            query.len(),
-            self.dimension,
-            "Query dimension mismatch: expected {}, got {}",
-            self.dimension,
-            query.len()
-        );
+        self.validate_dimension(query, "Query");
 
         // EPIC-A.2: Use collect_for_parallel for rayon par_iter support
         let vectors_snapshot = self.vectors.collect_for_parallel();
@@ -920,15 +870,9 @@ impl Drop for HnswIndex {
 
 impl VectorIndex for HnswIndex {
     fn insert(&self, id: u64, vector: &[f32]) {
-        assert_eq!(
-            vector.len(),
-            self.dimension,
-            "Vector dimension mismatch: expected {}, got {}",
-            self.dimension,
-            vector.len()
-        );
+        self.validate_dimension(vector, "Vector");
 
-        // EPIC-A.1: Lock-free registration with ShardedMappings
+        // Register the ID and get internal index with ShardedMappings
         // Check if ID already exists - hnsw_rs doesn't support updates!
         // register() returns None if ID already exists
         let Some(idx) = self.mappings.register(id) else {
