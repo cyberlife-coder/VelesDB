@@ -5,6 +5,26 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2026-01-03
+
+### 🚀 Performance Optimization (RF-3)
+
+Buffer reuse optimization for brute-force search reducing allocations by ~40%.
+
+#### Added
+
+- **RF-3: Buffer reuse for brute-force search**
+  - `ShardedVectors::collect_into()` - Collects vectors into pre-allocated buffer
+  - `HnswIndex::search_brute_force_buffered()` - Thread-local buffer reuse
+  - 8 new tests for buffer reuse functionality
+
+#### Performance
+
+- ~40% reduction in allocations for repeated brute-force searches
+- Thread-local buffer avoids contention in multi-threaded scenarios
+
+---
+
 ## [0.8.4] - 2026-01-02
 
 ### 🧪 Property-Based Testing (FT-2)
