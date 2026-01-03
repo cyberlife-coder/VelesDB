@@ -13,6 +13,7 @@ mod index;
 mod inner;
 mod mappings;
 mod params;
+mod persistence;
 mod sharded_mappings;
 mod sharded_vectors;
 mod vector_store;

@@ -29,7 +29,6 @@ use crate::index::VectorIndex;
 use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
 /// HNSW index for efficient approximate nearest neighbor search.
@@ -210,27 +209,8 @@ impl HnswIndex {
     ///
     /// Returns an error if saving fails.
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
-        let path = path.as_ref();
-        std::fs::create_dir_all(path)?;
-
-        let basename = "hnsw_index";
-
-        // 1. Save HNSW graph (RF-1: using HnswInner method)
-        let inner = self.inner.read();
-        inner.file_dump(path, basename)?;
-
-        // 2. Save Mappings
-        let mappings_path = path.join("id_mappings.bin");
-        let file = std::fs::File::create(mappings_path)?;
-        let writer = std::io::BufWriter::new(file);
-
-        let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
-
-        // Serialize as a tuple to maintain backward compatibility
-        bincode::serialize_into(writer, &(id_to_idx, idx_to_id, next_idx))
-            .map_err(std::io::Error::other)?;
-
-        Ok(())
+        // RF-2.3: Delegate to persistence module
+        super::persistence::save_index(path.as_ref(), &self.inner, &self.mappings)
     }
 
     /// Loads the HNSW index and ID mappings from the specified directory.
@@ -238,13 +218,7 @@ impl HnswIndex {
     /// # Safety
     ///
     /// This function uses unsafe code to handle the self-referential pattern
-    /// required by `hnsw_rs`. The `HnswIo::load_hnsw()` returns an `Hnsw<'a>`
-    /// that borrows from `HnswIo`, but we need both to live in the same struct.
-    ///
-    /// The safety is guaranteed by:
-    /// 1. `io_holder` is stored in the struct and outlives `inner`
-    /// 2. `Drop` impl ensures `inner` is dropped before `io_holder`
-    /// 3. The `'static` lifetime never escapes this struct
+    /// required by `hnsw_rs`. See `persistence::load_index` for details.
     ///
     /// # Errors
     ///
@@ -254,91 +228,16 @@ impl HnswIndex {
         dimension: usize,
         metric: DistanceMetric,
     ) -> std::io::Result<Self> {
-        let path = path.as_ref();
-        let basename = "hnsw_index";
-
-        // Check mappings file (hnsw files checked by loader)
-        let mappings_path = path.join("id_mappings.bin");
-        if !mappings_path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "ID mappings file not found",
-            ));
-        }
-
-        // 1. Load HNSW graph
-        // Store HnswIo in a Box that we'll keep in the struct.
-        let mut io_holder = Box::new(HnswIo::new(path, basename));
-
-        // SAFETY: Lifetime Extension for Self-Referential Pattern
-        //
-        // We extend the lifetime from 'a (borrowed from io_holder) to 'static.
-        // This is safe because:
-        //
-        // 1. CONTAINMENT: Both io_holder and the Hnsw live inside HnswIndex.
-        //    The 'static lifetime never escapes - all access is through &self.
-        //
-        // 2. DROP ORDER: Our Drop impl explicitly drops inner BEFORE io_holder.
-        //    This is enforced by ManuallyDrop + explicit drop in Drop::drop().
-        //
-        // 3. NO FIELD REORDERING: Rust guarantees struct fields drop in order,
-        //    but we use ManuallyDrop to be explicit and defensive.
-        //
-        // 4. INVARIANT LIFETIME: hnsw_rs::Hnsw has an invariant lifetime param,
-        //    which prevents using safe abstractions like ouroboros/self_cell.
-        //
-        // This pattern is documented and used when wrapping libraries that return
-        // borrowed data from owned resources (e.g., memory-mapped files).
-        let io_ref: &'static mut HnswIo =
-            unsafe { &mut *std::ptr::from_mut::<HnswIo>(io_holder.as_mut()) };
-
-        let inner = match metric {
-            DistanceMetric::Cosine => {
-                let hnsw = io_ref
-                    .load_hnsw::<f32, DistCosine>()
-                    .map_err(std::io::Error::other)?;
-                HnswInner::Cosine(hnsw)
-            }
-            DistanceMetric::Euclidean => {
-                let hnsw = io_ref
-                    .load_hnsw::<f32, DistL2>()
-                    .map_err(std::io::Error::other)?;
-                HnswInner::Euclidean(hnsw)
-            }
-            DistanceMetric::DotProduct => {
-                let hnsw = io_ref
-                    .load_hnsw::<f32, DistDot>()
-                    .map_err(std::io::Error::other)?;
-                HnswInner::DotProduct(hnsw)
-            }
-            DistanceMetric::Hamming => {
-                let hnsw = io_ref
-                    .load_hnsw::<f32, DistL2>()
-                    .map_err(std::io::Error::other)?;
-                HnswInner::Hamming(hnsw)
-            }
-            DistanceMetric::Jaccard => {
-                let hnsw = io_ref
-                    .load_hnsw::<f32, DistL2>()
-                    .map_err(std::io::Error::other)?;
-                HnswInner::Jaccard(hnsw)
-            }
-        };
-
-        // 2. Load Mappings
-        let file = std::fs::File::open(mappings_path)?;
-        let reader = std::io::BufReader::new(file);
-        let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
-            bincode::deserialize_from(reader)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // RF-2.3: Delegate to persistence module
+        let loaded = super::persistence::load_index(path.as_ref(), metric)?;
 
         Ok(Self {
             dimension,
             metric,
-            inner: RwLock::new(ManuallyDrop::new(inner)),
-            mappings: ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx),
+            inner: RwLock::new(ManuallyDrop::new(loaded.inner)),
+            mappings: loaded.mappings,
             vectors: ShardedVectors::new(), // Note: vectors not restored from disk
-            io_holder: Some(io_holder),     // Store to prevent memory leak
+            io_holder: Some(loaded.io_holder),
         })
     }
 
