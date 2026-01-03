@@ -193,6 +193,9 @@ pub struct SearchRequest {
     #[serde(default)]
     #[schema(example = 30000)]
     pub timeout_ms: Option<u64>,
+    /// Optional metadata filter to apply to results (JSON object with condition).
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
 }
 
 /// Request for batch vector search.
@@ -262,6 +265,9 @@ pub struct TextSearchRequest {
     #[serde(default = "default_top_k")]
     #[schema(example = 10)]
     pub top_k: usize,
+    /// Optional metadata filter to apply to results (JSON object with condition).
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
 }
 
 /// Request for hybrid search (vector + text).
@@ -280,6 +286,9 @@ pub struct HybridSearchRequest {
     #[serde(default = "default_vector_weight")]
     #[schema(example = 0.5)]
     pub vector_weight: f32,
+    /// Optional metadata filter to apply to results (JSON object with condition).
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
 }
 
 fn default_vector_weight() -> f32 {
@@ -712,7 +721,23 @@ pub async fn search(
         .ef_search
         .or_else(|| req.mode.as_ref().and_then(|m| mode_to_ef_search(m)));
 
-    let search_result = if let Some(ef) = effective_ef {
+    // Use filtered search if filter is provided
+    let search_result = if let Some(ref filter_json) = req.filter {
+        // Deserialize JSON to Filter
+        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
+            Ok(f) => f,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Invalid filter: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        };
+        collection.search_with_filter(&req.vector, req.top_k, &filter)
+    } else if let Some(ef) = effective_ef {
         collection.search_with_ef(&req.vector, req.top_k, ef)
     } else {
         collection.search(&req.vector, req.top_k)
@@ -852,7 +877,25 @@ pub async fn text_search(
         }
     };
 
-    let results = collection.text_search(&req.query, req.top_k);
+    // Use filtered search if filter is provided
+    let results = if let Some(ref filter_json) = req.filter {
+        // Deserialize JSON to Filter
+        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
+            Ok(f) => f,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Invalid filter: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        };
+        collection.text_search_with_filter(&req.query, req.top_k, &filter)
+    } else {
+        collection.text_search(&req.query, req.top_k)
+    };
 
     let response = SearchResponse {
         results: results
@@ -902,7 +945,33 @@ pub async fn hybrid_search(
         }
     };
 
-    match collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight)) {
+    // Use filtered search if filter is provided
+    let search_result = if let Some(ref filter_json) = req.filter {
+        // Deserialize JSON to Filter
+        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
+            Ok(f) => f,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Invalid filter: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        };
+        collection.hybrid_search_with_filter(
+            &req.vector,
+            &req.query,
+            req.top_k,
+            Some(req.vector_weight),
+            &filter,
+        )
+    } else {
+        collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight))
+    };
+
+    match search_result {
         Ok(results) => {
             let response = SearchResponse {
                 results: results

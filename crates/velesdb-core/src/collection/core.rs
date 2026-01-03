@@ -793,6 +793,221 @@ impl Collection {
         Ok(results)
     }
 
+    /// Searches for the k nearest neighbors with metadata filtering.
+    ///
+    /// Performs post-filtering: retrieves more candidates from HNSW,
+    /// then filters by metadata conditions.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector
+    /// * `k` - Maximum number of results to return
+    /// * `filter` - Metadata filter to apply
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the collection.
+    pub fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+
+        if query.len() != config.dimension {
+            return Err(Error::DimensionMismatch {
+                expected: config.dimension,
+                actual: query.len(),
+            });
+        }
+        drop(config);
+
+        // Post-filtering strategy: retrieve more candidates than k, then filter
+        // Heuristic: retrieve 4x candidates to account for filtered-out results
+        let candidates_k = k.saturating_mul(4).max(k + 10);
+        let index_results = self.index.search(query, candidates_k);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        // Map index results to SearchResult with full point data, applying filter
+        let mut results: Vec<SearchResult> = index_results
+            .into_iter()
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                // Apply filter - if no payload, filter fails
+                let payload_ref = payload.as_ref()?;
+                if !filter.matches(payload_ref) {
+                    return None;
+                }
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .take(k)
+            .collect();
+
+        // Ensure results are sorted by score (should already be, but defensive)
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(results)
+    }
+
+    /// Performs full-text search with metadata filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Text query to search for
+    /// * `k` - Maximum number of results to return
+    /// * `filter` - Metadata filter to apply
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results sorted by BM25 score (descending).
+    #[must_use]
+    pub fn text_search_with_filter(
+        &self,
+        query: &str,
+        k: usize,
+        filter: &crate::filter::Filter,
+    ) -> Vec<SearchResult> {
+        // Retrieve more candidates for filtering
+        let candidates_k = k.saturating_mul(4).max(k + 10);
+        let bm25_results = self.text_index.search(query, candidates_k);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        bm25_results
+            .into_iter()
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                // Apply filter - if no payload, filter fails
+                let payload_ref = payload.as_ref()?;
+                if !filter.matches(payload_ref) {
+                    return None;
+                }
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .take(k)
+            .collect()
+    }
+
+    /// Performs hybrid search (vector + text) with metadata filtering.
+    ///
+    /// Uses Reciprocal Rank Fusion (RRF) to combine results from both searches,
+    /// then applies metadata filter.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector_query` - Query vector for similarity search
+    /// * `text_query` - Text query for BM25 search
+    /// * `k` - Maximum number of results to return
+    /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
+    /// * `filter` - Metadata filter to apply
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub fn hybrid_search_with_filter(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        k: usize,
+        vector_weight: Option<f32>,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        if vector_query.len() != config.dimension {
+            return Err(Error::DimensionMismatch {
+                expected: config.dimension,
+                actual: vector_query.len(),
+            });
+        }
+        drop(config);
+
+        let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+        let text_weight = 1.0 - weight;
+
+        // Get more candidates for filtering
+        let candidates_k = k.saturating_mul(4).max(k + 10);
+
+        // Get vector search results
+        let vector_results = self.index.search(vector_query, candidates_k);
+
+        // Get BM25 text search results
+        let text_results = self.text_index.search(text_query, candidates_k);
+
+        // Apply RRF (Reciprocal Rank Fusion)
+        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+
+        #[allow(clippy::cast_precision_loss)]
+        for (rank, (id, _)) in vector_results.iter().enumerate() {
+            let rrf_score = weight / (rank as f32 + 60.0);
+            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        for (rank, (id, _)) in text_results.iter().enumerate() {
+            let rrf_score = text_weight / (rank as f32 + 60.0);
+            *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
+        }
+
+        // Sort by fused score
+        let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
+        scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Fetch full point data and apply filter
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let results: Vec<SearchResult> = scored_ids
+            .into_iter()
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                // Apply filter - if no payload, filter fails
+                let payload_ref = payload.as_ref()?;
+                if !filter.matches(payload_ref) {
+                    return None;
+                }
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .take(k)
+            .collect();
+
+        Ok(results)
+    }
+
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
         let mut texts = Vec::new();

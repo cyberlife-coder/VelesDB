@@ -693,3 +693,337 @@ fn test_upsert_bulk_bm25_indexing() {
     let results = collection.text_search("rust", 10);
     assert_eq!(results.len(), 2);
 }
+
+// =========================================================================
+// TDD Tests for search_with_filter (Feature Parity Gap Fix)
+// =========================================================================
+
+#[test]
+fn test_search_with_filter_basic_equality() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"category": "tech", "price": 100})),
+        ),
+        Point::new(
+            2,
+            vec![0.9, 0.1, 0.0],
+            Some(json!({"category": "science", "price": 200})),
+        ),
+        Point::new(
+            3,
+            vec![0.8, 0.2, 0.0],
+            Some(json!({"category": "tech", "price": 150})),
+        ),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - filter by category = "tech"
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 10, &filter).unwrap();
+
+    // Assert - only docs 1 and 3 match
+    assert_eq!(results.len(), 2);
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&3));
+    assert!(!ids.contains(&2)); // science, not tech
+}
+
+#[test]
+fn test_search_with_filter_range() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(1, vec![1.0, 0.0, 0.0], Some(json!({"price": 50}))),
+        Point::new(2, vec![0.9, 0.1, 0.0], Some(json!({"price": 150}))),
+        Point::new(3, vec![0.8, 0.2, 0.0], Some(json!({"price": 250}))),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - filter by price > 100
+    let filter = crate::filter::Filter::new(crate::filter::Condition::gt("price", 100));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 10, &filter).unwrap();
+
+    // Assert - only docs 2 and 3 match (price > 100)
+    assert_eq!(results.len(), 2);
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+}
+
+#[test]
+fn test_search_with_filter_combined_and() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"category": "tech", "price": 50})),
+        ),
+        Point::new(
+            2,
+            vec![0.9, 0.1, 0.0],
+            Some(json!({"category": "tech", "price": 150})),
+        ),
+        Point::new(
+            3,
+            vec![0.8, 0.2, 0.0],
+            Some(json!({"category": "science", "price": 150})),
+        ),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - filter by category = "tech" AND price > 100
+    let filter = crate::filter::Filter::new(crate::filter::Condition::and(vec![
+        crate::filter::Condition::eq("category", "tech"),
+        crate::filter::Condition::gt("price", 100),
+    ]));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 10, &filter).unwrap();
+
+    // Assert - only doc 2 matches (tech AND price > 100)
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].point.id, 2);
+}
+
+#[test]
+fn test_search_with_filter_no_matches() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(1, vec![1.0, 0.0, 0.0], Some(json!({"category": "tech"}))),
+        Point::new(2, vec![0.9, 0.1, 0.0], Some(json!({"category": "science"}))),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - filter by category = "art" (no matches)
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "art"));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 10, &filter).unwrap();
+
+    // Assert - empty results
+    assert!(results.is_empty());
+}
+
+#[test]
+fn test_search_with_filter_nested_field() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"metadata": {"author": "Alice"}})),
+        ),
+        Point::new(
+            2,
+            vec![0.9, 0.1, 0.0],
+            Some(json!({"metadata": {"author": "Bob"}})),
+        ),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - filter by nested field metadata.author = "Alice"
+    let filter =
+        crate::filter::Filter::new(crate::filter::Condition::eq("metadata.author", "Alice"));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 10, &filter).unwrap();
+
+    // Assert - only doc 1 matches
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].point.id, 1);
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_search_with_filter_respects_k_limit() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points: Vec<Point> = (1..=10)
+        .map(|i| {
+            Point::new(
+                i,
+                vec![1.0 - (i as f32 * 0.05), i as f32 * 0.05, 0.0],
+                Some(json!({"category": "tech"})),
+            )
+        })
+        .collect();
+    collection.upsert(points).unwrap();
+
+    // Act - filter matches all, but k=3
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 3, &filter).unwrap();
+
+    // Assert - only 3 results returned
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn test_search_with_filter_in_condition() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(1, vec![1.0, 0.0, 0.0], Some(json!({"status": "active"}))),
+        Point::new(2, vec![0.9, 0.1, 0.0], Some(json!({"status": "pending"}))),
+        Point::new(3, vec![0.8, 0.2, 0.0], Some(json!({"status": "deleted"}))),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - filter by status IN ["active", "pending"]
+    let filter = crate::filter::Filter::new(crate::filter::Condition::is_in(
+        "status",
+        vec![json!("active"), json!("pending")],
+    ));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection.search_with_filter(&query, 10, &filter).unwrap();
+
+    // Assert - docs 1 and 2 match
+    assert_eq!(results.len(), 2);
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+}
+
+#[test]
+fn test_search_with_filter_dimension_mismatch() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    collection
+        .upsert(vec![Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"category": "tech"})),
+        )])
+        .unwrap();
+
+    // Act - wrong dimension query
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
+    let result = collection.search_with_filter(&[1.0, 0.0], 10, &filter);
+
+    // Assert - should fail
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// TDD Tests for hybrid_search_with_filter
+// =========================================================================
+
+#[test]
+fn test_hybrid_search_with_filter() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"title": "Rust Programming", "category": "tech"})),
+        ),
+        Point::new(
+            2,
+            vec![0.9, 0.1, 0.0],
+            Some(json!({"title": "Rust Tutorial", "category": "education"})),
+        ),
+        Point::new(
+            3,
+            vec![0.8, 0.2, 0.0],
+            Some(json!({"title": "Python Guide", "category": "tech"})),
+        ),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - hybrid search for "rust" filtered by category = "tech"
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
+    let query = vec![1.0, 0.0, 0.0];
+    let results = collection
+        .hybrid_search_with_filter(&query, "rust", 10, Some(0.5), &filter)
+        .unwrap();
+
+    // Assert - doc 1 should be first (matches both vector + text + filter)
+    // doc 3 may also appear (matches vector + filter, but not text)
+    assert!(!results.is_empty());
+    assert_eq!(results[0].point.id, 1);
+    // All results must pass the filter (category = "tech")
+    for r in &results {
+        assert!(
+            r.point.id == 1 || r.point.id == 3,
+            "unexpected id: {}",
+            r.point.id
+        );
+    }
+}
+
+// =========================================================================
+// TDD Tests for text_search_with_filter
+// =========================================================================
+
+#[test]
+fn test_text_search_with_filter() {
+    // Arrange
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(json!({"title": "Rust Programming", "category": "tech"})),
+        ),
+        Point::new(
+            2,
+            vec![0.9, 0.1, 0.0],
+            Some(json!({"title": "Rust Tutorial", "category": "education"})),
+        ),
+        Point::new(
+            3,
+            vec![0.8, 0.2, 0.0],
+            Some(json!({"title": "Rust Guide", "category": "tech"})),
+        ),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Act - text search for "rust" filtered by category = "tech"
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
+    let results = collection.text_search_with_filter("rust", 10, &filter);
+
+    // Assert - docs 1 and 3 match (rust + tech)
+    assert_eq!(results.len(), 2);
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&3));
+}

@@ -71,6 +71,8 @@ pub struct VectorStore {
     sq8_mins: Vec<f32>,
     /// Scale values for SQ8 dequantization (per vector)
     sq8_scales: Vec<f32>,
+    /// Payloads (JSON metadata) for each vector
+    payloads: Vec<Option<serde_json::Value>>,
     dimension: usize,
     metric: DistanceMetric,
     storage_mode: StorageMode,
@@ -110,6 +112,7 @@ impl VectorStore {
             data_binary: Vec::new(),
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
+            payloads: Vec::new(),
             dimension,
             metric,
             storage_mode: StorageMode::Full,
@@ -170,6 +173,7 @@ impl VectorStore {
             data_binary: Vec::new(),
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
+            payloads: Vec::new(),
             dimension,
             metric,
             storage_mode,
@@ -235,6 +239,7 @@ impl VectorStore {
 
         // Append based on storage mode
         self.ids.push(id);
+        self.payloads.push(None);
         match self.storage_mode {
             StorageMode::Full => {
                 self.data.extend_from_slice(vector);
@@ -281,6 +286,7 @@ impl VectorStore {
     /// Removes vector at the given index (internal helper).
     fn remove_at_index(&mut self, idx: usize) {
         self.ids.remove(idx);
+        self.payloads.remove(idx);
         match self.storage_mode {
             StorageMode::Full => {
                 let start = idx * self.dimension;
@@ -426,6 +432,7 @@ impl VectorStore {
         self.data_binary.clear();
         self.sq8_mins.clear();
         self.sq8_scales.clear();
+        self.payloads.clear();
     }
 
     /// Returns memory usage estimate in bytes.
@@ -482,6 +489,7 @@ impl VectorStore {
             data_binary: Vec::new(),
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
+            payloads: Vec::with_capacity(capacity),
             dimension,
             metric,
             storage_mode: StorageMode::Full,
@@ -793,6 +801,7 @@ impl VectorStore {
             data_binary: Vec::new(),
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
+            payloads: vec![None; count],
             dimension,
             metric,
             storage_mode: StorageMode::Full,
