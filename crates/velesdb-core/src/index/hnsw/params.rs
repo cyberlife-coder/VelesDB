@@ -164,6 +164,32 @@ impl HnswParams {
         }
     }
 
+    /// Creates turbo parameters for maximum insert throughput.
+    ///
+    /// **Target**: 5k+ vec/s (vs ~2k/s with `auto` params)
+    ///
+    /// # Trade-offs
+    ///
+    /// - **Recall**: ~85% (vs ≥95% with standard params)
+    /// - **Best for**: Bulk loading, development, benchmarking
+    /// - **Not recommended for**: Production search workloads
+    ///
+    /// # Parameters
+    ///
+    /// - `M = 12`: Minimal connections for fast graph construction
+    /// - `ef_construction = 100`: Low expansion factor
+    ///
+    /// After bulk loading, consider rebuilding with higher params for production.
+    #[must_use]
+    pub fn turbo() -> Self {
+        Self {
+            max_connections: 12,
+            ef_construction: 100,
+            max_elements: 100_000,
+            storage_mode: StorageMode::Full,
+        }
+    }
+
     /// Creates parameters optimized for high recall.
     #[must_use]
     pub fn high_recall(dimension: usize) -> Self {
@@ -481,6 +507,20 @@ mod tests {
     fn test_search_quality_default() {
         let quality = SearchQuality::default();
         assert_eq!(quality, SearchQuality::Balanced);
+    }
+
+    #[test]
+    fn test_hnsw_params_turbo() {
+        // TDD: Turbo mode for maximum insert throughput
+        // Target: 5k+ vec/s (vs ~2k/s with auto params)
+        // Trade-off: Lower recall (~85%) but acceptable for bulk loading
+        let params = HnswParams::turbo();
+
+        // Aggressive params: M=12, ef=100 for fastest graph construction
+        assert_eq!(params.max_connections, 12);
+        assert_eq!(params.ef_construction, 100);
+        assert_eq!(params.max_elements, 100_000);
+        assert_eq!(params.storage_mode, StorageMode::Full);
     }
 
     #[test]

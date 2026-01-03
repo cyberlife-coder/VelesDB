@@ -215,6 +215,29 @@ impl HnswIndex {
         index
     }
 
+    /// Creates a new HNSW index in turbo mode for maximum insert throughput.
+    ///
+    /// **Target**: 5k+ vec/s (vs ~2k/s with standard `new()`)
+    ///
+    /// # Trade-offs
+    ///
+    /// - **Recall**: ~85% (vs ≥95% with standard params)
+    /// - **Best for**: Bulk loading, development, benchmarking
+    /// - **Not recommended for**: Production search workloads requiring high recall
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use velesdb_core::{HnswIndex, DistanceMetric};
+    ///
+    /// // Create turbo index for fast bulk loading
+    /// let index = HnswIndex::new_turbo(768, DistanceMetric::Cosine);
+    /// ```
+    #[must_use]
+    pub fn new_turbo(dimension: usize, metric: DistanceMetric) -> Self {
+        Self::with_params(dimension, metric, HnswParams::turbo())
+    }
+
     /// Saves the HNSW index and ID mappings to the specified directory.
     ///
     /// # Errors
@@ -998,6 +1021,27 @@ mod tests {
         assert_eq!(index.len(), 0);
         assert_eq!(index.dimension(), 768);
         assert_eq!(index.metric(), DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn test_hnsw_new_turbo_mode() {
+        // TDD: Turbo mode uses aggressive params for max insert throughput
+        // Target: 5k+ vec/s (vs ~2k/s with auto params)
+        let index = HnswIndex::new_turbo(64, DistanceMetric::Cosine);
+
+        // Insert vectors - should be faster than standard mode
+        for i in 0..100 {
+            let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
+            index.insert(i as u64, &v);
+        }
+
+        // Assert - basic functionality works
+        assert_eq!(index.len(), 100);
+
+        // Search should still work (lower recall expected ~85%)
+        let query: Vec<f32> = (0..64).map(|j| j as f32 * 0.01).collect();
+        let results = index.search(&query, 10);
+        assert!(!results.is_empty()); // At least some results
     }
 
     #[test]

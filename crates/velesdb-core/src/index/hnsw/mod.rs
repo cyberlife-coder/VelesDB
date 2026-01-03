@@ -12,6 +12,7 @@ mod backend;
 mod index;
 mod inner;
 mod mappings;
+pub mod native;
 mod params;
 mod persistence;
 mod sharded_mappings;
