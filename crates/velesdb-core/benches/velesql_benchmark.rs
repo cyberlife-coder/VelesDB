@@ -13,7 +13,7 @@ const VECTOR_QUERY: &str = "SELECT * FROM documents WHERE vector NEAR $v LIMIT 1
 const COMPLEX_QUERY: &str = r"
 SELECT id, payload.title, score 
 FROM documents 
-WHERE vector NEAR COSINE $query_vector
+WHERE vector NEAR $query_vector
   AND category = 'tech'
   AND price > 100
   AND tags IN ('rust', 'performance', 'database')

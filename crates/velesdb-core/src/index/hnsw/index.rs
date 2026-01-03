@@ -175,7 +175,7 @@ impl HnswIndex {
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings: ShardedMappings::new(),
-            vectors: ShardedVectors::new(),
+            vectors: ShardedVectors::new(dimension),
             enable_vector_storage: true, // Default: full functionality
             io_holder: None,             // No io_holder for newly created indices
         }
@@ -271,8 +271,8 @@ impl HnswIndex {
             metric,
             inner: RwLock::new(ManuallyDrop::new(loaded.inner)),
             mappings: loaded.mappings,
-            vectors: ShardedVectors::new(), // Note: vectors not restored from disk
-            enable_vector_storage: true,    // Default: full functionality
+            vectors: ShardedVectors::new(dimension), // Note: vectors not restored from disk
+            enable_vector_storage: true,             // Default: full functionality
             io_holder: Some(loaded.io_holder),
         })
     }
@@ -978,7 +978,7 @@ impl VectorIndex for HnswIndex {
         // Perf: Conditionally store vector for SIMD re-ranking
         // When disabled, saves ~50% memory and ~2x insert speed
         if self.enable_vector_storage {
-            self.vectors.insert(idx, vector.to_vec());
+            self.vectors.insert(idx, vector);
         }
     }
 

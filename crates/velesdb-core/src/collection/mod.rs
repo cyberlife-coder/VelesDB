@@ -12,8 +12,10 @@
 //! - Hybrid search combining vector and text similarity
 
 mod core;
+mod search;
+mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use core::{Collection, CollectionConfig};
+pub use types::{Collection, CollectionConfig};

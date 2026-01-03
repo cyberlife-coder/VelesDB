@@ -194,17 +194,41 @@ impl From<&[f32]> for VectorData {
 /// Computes dot product between two `VectorData` with optimal precision handling.
 ///
 /// For F32 vectors, uses SIMD-optimized f32 path.
-/// For F16/BF16 vectors, converts to f32 and uses SIMD.
+/// For F16/BF16 vectors, converts to f32 on the fly without allocation.
 #[must_use]
 pub fn dot_product(a: &VectorData, b: &VectorData) -> f32 {
     use crate::simd_avx512::dot_product_auto;
 
-    if let (VectorData::F32(va), VectorData::F32(vb)) = (a, b) {
-        dot_product_auto(va, vb)
-    } else {
-        let va = a.to_f32_vec();
-        let vb = b.to_f32_vec();
-        dot_product_auto(&va, &vb)
+    match (a, b) {
+        (VectorData::F32(va), VectorData::F32(vb)) => dot_product_auto(va, vb),
+        (VectorData::F32(va), VectorData::F16(vb)) => {
+            va.iter().zip(vb.iter()).map(|(&x, y)| x * y.to_f32()).sum()
+        }
+        (VectorData::F16(va), VectorData::F32(vb)) => {
+            va.iter().zip(vb.iter()).map(|(x, &y)| x.to_f32() * y).sum()
+        }
+        (VectorData::F16(va), VectorData::F16(vb)) => va
+            .iter()
+            .zip(vb.iter())
+            .map(|(x, y)| x.to_f32() * y.to_f32())
+            .sum(),
+        (VectorData::F32(va), VectorData::BF16(vb)) => {
+            va.iter().zip(vb.iter()).map(|(&x, y)| x * y.to_f32()).sum()
+        }
+        (VectorData::BF16(va), VectorData::F32(vb)) => {
+            va.iter().zip(vb.iter()).map(|(x, &y)| x.to_f32() * y).sum()
+        }
+        (VectorData::BF16(va), VectorData::BF16(vb)) => va
+            .iter()
+            .zip(vb.iter())
+            .map(|(x, y)| x.to_f32() * y.to_f32())
+            .sum(),
+        // Fallback for mixed F16/BF16 (rare)
+        _ => {
+            let va = a.to_f32_vec();
+            let vb = b.to_f32_vec();
+            dot_product_auto(&va, &vb)
+        }
     }
 }
 
@@ -216,9 +240,15 @@ pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
     if let (VectorData::F32(va), VectorData::F32(vb)) = (a, b) {
         cosine_similarity_auto(va, vb)
     } else {
-        let va = a.to_f32_vec();
-        let vb = b.to_f32_vec();
-        cosine_similarity_auto(&va, &vb)
+        let dot = dot_product(a, b);
+        let norm_a = norm_squared(a).sqrt();
+        let norm_b = norm_squared(b).sqrt();
+
+        if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+            0.0
+        } else {
+            dot / (norm_a * norm_b)
+        }
     }
 }
 
@@ -227,12 +257,53 @@ pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
 pub fn euclidean_distance(a: &VectorData, b: &VectorData) -> f32 {
     use crate::simd_avx512::euclidean_auto;
 
-    if let (VectorData::F32(va), VectorData::F32(vb)) = (a, b) {
-        euclidean_auto(va, vb)
-    } else {
-        let va = a.to_f32_vec();
-        let vb = b.to_f32_vec();
-        euclidean_auto(&va, &vb)
+    match (a, b) {
+        (VectorData::F32(va), VectorData::F32(vb)) => euclidean_auto(va, vb),
+        (VectorData::F32(va), VectorData::F16(vb)) => va
+            .iter()
+            .zip(vb.iter())
+            .map(|(&x, y)| (x - y.to_f32()).powi(2))
+            .sum::<f32>()
+            .sqrt(),
+        (VectorData::F16(va), VectorData::F32(vb)) => va
+            .iter()
+            .zip(vb.iter())
+            .map(|(x, &y)| (x.to_f32() - y).powi(2))
+            .sum::<f32>()
+            .sqrt(),
+        (VectorData::F16(va), VectorData::F16(vb)) => va
+            .iter()
+            .zip(vb.iter())
+            .map(|(x, y)| (x.to_f32() - y.to_f32()).powi(2))
+            .sum::<f32>()
+            .sqrt(),
+        // Fallback for others
+        _ => {
+            let va = a.to_f32_vec();
+            let vb = b.to_f32_vec();
+            euclidean_auto(&va, &vb)
+        }
+    }
+}
+
+/// Helper to compute squared L2 norm without allocation
+fn norm_squared(v: &VectorData) -> f32 {
+    match v {
+        VectorData::F32(data) => data.iter().map(|&x| x * x).sum(),
+        VectorData::F16(data) => data
+            .iter()
+            .map(|x| {
+                let f = x.to_f32();
+                f * f
+            })
+            .sum(),
+        VectorData::BF16(data) => data
+            .iter()
+            .map(|x| {
+                let f = x.to_f32();
+                f * f
+            })
+            .sum(),
     }
 }
 

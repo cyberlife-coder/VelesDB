@@ -43,28 +43,31 @@ struct VectorShard {
 /// ```rust,ignore
 /// use velesdb_core::index::hnsw::ShardedVectors;
 ///
-/// let storage = ShardedVectors::new();
-/// storage.insert(0, vec![1.0, 2.0, 3.0]);
+/// let storage = ShardedVectors::new(3);
+/// storage.insert(0, &[1.0, 2.0, 3.0]);
 /// let vec = storage.get(0);
 /// ```
 #[derive(Debug)]
 pub struct ShardedVectors {
     /// 16 independent shards, each with its own lock.
     shards: [RwLock<VectorShard>; NUM_SHARDS],
+    /// Vector dimension
+    dimension: usize,
 }
 
 impl Default for ShardedVectors {
     fn default() -> Self {
-        Self::new()
+        Self::new(0)
     }
 }
 
 impl ShardedVectors {
-    /// Creates new empty sharded vector storage.
+    /// Creates new empty sharded vector storage with specified dimension.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(dimension: usize) -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(VectorShard::default())),
+            dimension,
         }
     }
 
@@ -79,10 +82,10 @@ impl ShardedVectors {
     /// Inserts a vector at the given index.
     ///
     /// This only locks the target shard, not the entire storage.
-    pub fn insert(&self, idx: usize, vector: Vec<f32>) {
+    pub fn insert(&self, idx: usize, vector: &[f32]) {
         let shard_idx = Self::shard_index(idx);
         let mut shard = self.shards[shard_idx].write();
-        shard.vectors.insert(idx, vector);
+        shard.vectors.insert(idx, vector.to_vec());
     }
 
     /// Inserts multiple vectors in a batch.
@@ -310,7 +313,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_new_is_empty() {
         // Arrange & Act
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(3);
 
         // Assert
         assert!(storage.is_empty());
@@ -320,11 +323,11 @@ mod tests {
     #[test]
     fn test_sharded_vectors_insert_and_get() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(3);
         let vector = vec![1.0, 2.0, 3.0];
 
         // Act
-        storage.insert(0, vector.clone());
+        storage.insert(0, &vector);
 
         // Assert
         assert_eq!(storage.get(0), Some(vector));
@@ -334,13 +337,13 @@ mod tests {
     #[test]
     fn test_sharded_vectors_insert_multiple_shards() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(3);
 
         // Act - insert vectors that should go to different shards
         for i in 0..32 {
             #[allow(clippy::cast_precision_loss)]
             let val = i as f32;
-            storage.insert(i, vec![val; 3]);
+            storage.insert(i, &[val; 3]);
         }
 
         // Assert
@@ -355,7 +358,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_get_nonexistent() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(3);
 
         // Act & Assert
         assert_eq!(storage.get(999), None);
@@ -364,8 +367,8 @@ mod tests {
     #[test]
     fn test_sharded_vectors_contains() {
         // Arrange
-        let storage = ShardedVectors::new();
-        storage.insert(42, vec![1.0]);
+        let storage = ShardedVectors::new(1);
+        storage.insert(42, &[1.0]);
 
         // Act & Assert
         assert!(storage.contains(42));
@@ -375,8 +378,8 @@ mod tests {
     #[test]
     fn test_sharded_vectors_remove() {
         // Arrange
-        let storage = ShardedVectors::new();
-        storage.insert(42, vec![1.0, 2.0]);
+        let storage = ShardedVectors::new(2);
+        storage.insert(42, &[1.0, 2.0]);
 
         // Act
         let removed = storage.remove(42);
@@ -390,7 +393,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_remove_nonexistent() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(1);
 
         // Act & Assert
         assert_eq!(storage.remove(999), None);
@@ -399,8 +402,8 @@ mod tests {
     #[test]
     fn test_sharded_vectors_with_vector() {
         // Arrange
-        let storage = ShardedVectors::new();
-        storage.insert(0, vec![1.0, 2.0, 3.0]);
+        let storage = ShardedVectors::new(3);
+        storage.insert(0, &[1.0, 2.0, 3.0]);
 
         // Act
         let sum = storage.with_vector(0, |v| v.iter().sum::<f32>());
@@ -412,7 +415,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_with_vector_nonexistent() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(1);
 
         // Act
         let result = storage.with_vector(999, <[f32]>::len);
@@ -424,7 +427,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_insert_batch() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(3);
         #[allow(clippy::cast_precision_loss)]
         let batch: Vec<(usize, Vec<f32>)> = (0..100).map(|i| (i, vec![i as f32; 3])).collect();
 
@@ -443,10 +446,10 @@ mod tests {
     #[test]
     fn test_sharded_vectors_iter_all() {
         // Arrange
-        let storage = ShardedVectors::new();
-        storage.insert(0, vec![1.0]);
-        storage.insert(16, vec![2.0]); // Same shard as 0
-        storage.insert(1, vec![3.0]); // Different shard
+        let storage = ShardedVectors::new(1);
+        storage.insert(0, &[1.0]);
+        storage.insert(16, &[2.0]); // Same shard as 0
+        storage.insert(1, &[3.0]); // Different shard
 
         // Act
         let all: Vec<(usize, Vec<f32>)> = storage.iter_all();
@@ -458,11 +461,11 @@ mod tests {
     #[test]
     fn test_sharded_vectors_for_each_parallel() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(1);
         for i in 0..50 {
             #[allow(clippy::cast_precision_loss)]
             let val = i as f32;
-            storage.insert(i, vec![val]);
+            storage.insert(i, &[val]);
         }
 
         // Act
@@ -498,7 +501,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_concurrent_insert() {
         // Arrange
-        let storage = Arc::new(ShardedVectors::new());
+        let storage = Arc::new(ShardedVectors::new(768));
         let num_threads = 8;
         let vectors_per_thread = 1000;
 
@@ -509,7 +512,7 @@ mod tests {
                 thread::spawn(move || {
                     let start = t * vectors_per_thread;
                     for i in start..(start + vectors_per_thread) {
-                        s.insert(i, vec![i as f32; 768]);
+                        s.insert(i, &[i as f32; 768]);
                     }
                 })
             })
@@ -526,11 +529,11 @@ mod tests {
     #[test]
     fn test_sharded_vectors_concurrent_read_write() {
         // Arrange
-        let storage = Arc::new(ShardedVectors::new());
+        let storage = Arc::new(ShardedVectors::new(128));
 
         // Pre-populate
         for i in 0..1000 {
-            storage.insert(i, vec![i as f32; 128]);
+            storage.insert(i, &[i as f32; 128]);
         }
 
         let num_readers = 4;
@@ -557,7 +560,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 let start = 1000 + t * 100;
                 for i in start..(start + 100) {
-                    s.insert(i, vec![i as f32; 128]);
+                    s.insert(i, &[i as f32; 128]);
                 }
             }));
         }
@@ -573,7 +576,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_parallel_batch_insert() {
         // Arrange
-        let storage = Arc::new(ShardedVectors::new());
+        let storage = Arc::new(ShardedVectors::new(64));
         let num_threads = 4;
         let batch_size = 250;
 
@@ -602,7 +605,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_no_data_corruption() {
         // Verify that concurrent operations don't corrupt data
-        let storage = Arc::new(ShardedVectors::new());
+        let storage = Arc::new(ShardedVectors::new(10));
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -613,7 +616,7 @@ mod tests {
                     for i in 0..ops_per_thread {
                         let idx = t * ops_per_thread + i;
                         let expected = vec![idx as f32; 10];
-                        s.insert(idx, expected.clone());
+                        s.insert(idx, &expected);
 
                         // Verify immediately
                         let retrieved = s.get(idx);
@@ -641,9 +644,9 @@ mod tests {
     #[test]
     fn test_sharded_vectors_collect_for_parallel_returns_all() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(4);
         for i in 0..100 {
-            storage.insert(i, vec![i as f32; 4]);
+            storage.insert(i, &[i as f32; 4]);
         }
 
         // Act
@@ -660,7 +663,7 @@ mod tests {
     #[test]
     fn test_sharded_vectors_collect_for_parallel_empty() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(4);
 
         // Act
         let collected = storage.collect_for_parallel();
@@ -674,9 +677,9 @@ mod tests {
         use rayon::prelude::*;
 
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(4);
         for i in 0..50 {
-            storage.insert(i, vec![i as f32; 4]);
+            storage.insert(i, &[i as f32; 4]);
         }
 
         // Act - Use collect_for_parallel with rayon par_iter
@@ -699,9 +702,9 @@ mod tests {
         use rayon::prelude::*;
 
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(4);
         for i in 0..100 {
-            storage.insert(i, vec![i as f32; 4]);
+            storage.insert(i, &[i as f32; 4]);
         }
 
         // Act - Filter only even indices
@@ -725,9 +728,9 @@ mod tests {
     #[test]
     fn test_collect_into_reuses_buffer() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(4);
         for i in 0..50 {
-            storage.insert(i, vec![i as f32; 4]);
+            storage.insert(i, &[i as f32; 4]);
         }
 
         // Act - First collection
@@ -750,9 +753,9 @@ mod tests {
     #[test]
     fn test_collect_into_clears_and_fills() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(3);
         for i in 0..20 {
-            storage.insert(i, vec![i as f32; 3]);
+            storage.insert(i, &[i as f32; 3]);
         }
 
         // Pre-fill buffer with garbage
@@ -769,7 +772,7 @@ mod tests {
     #[test]
     fn test_collect_into_empty_storage() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(1);
         let mut buffer: Vec<(usize, Vec<f32>)> = vec![(1, vec![1.0]); 10];
 
         // Act
@@ -782,9 +785,9 @@ mod tests {
     #[test]
     fn test_collect_into_matches_collect_for_parallel() {
         // Arrange
-        let storage = ShardedVectors::new();
+        let storage = ShardedVectors::new(8);
         for i in 0..100 {
-            storage.insert(i, vec![i as f32; 8]);
+            storage.insert(i, &[i as f32; 8]);
         }
 
         // Act

@@ -12,6 +12,7 @@
 //! - Memory efficiency: 50% reduction with FP16
 
 use std::alloc::{alloc, dealloc, Layout};
+use std::fmt;
 use std::ptr;
 
 // =============================================================================
@@ -42,6 +43,16 @@ pub struct ContiguousVectors {
 // SAFETY: ContiguousVectors owns its data and doesn't share mutable access
 unsafe impl Send for ContiguousVectors {}
 unsafe impl Sync for ContiguousVectors {}
+
+impl fmt::Debug for ContiguousVectors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContiguousVectors")
+            .field("dimension", &self.dimension)
+            .field("count", &self.count)
+            .field("capacity", &self.capacity)
+            .finish_non_exhaustive()
+    }
+}
 
 impl ContiguousVectors {
     /// Creates a new `ContiguousVectors` with the given dimension and initial capacity.
@@ -117,12 +128,23 @@ impl ContiguousVectors {
         self.capacity * self.dimension * std::mem::size_of::<f32>()
     }
 
-    /// Adds a vector to the storage.
+    /// Ensures the storage has capacity for at least `required_capacity` vectors.
+    pub fn ensure_capacity(&mut self, required_capacity: usize) {
+        if required_capacity > self.capacity {
+            let new_capacity = required_capacity.max(self.capacity * 2);
+            self.resize(new_capacity);
+        }
+    }
+
+    /// Inserts a vector at a specific index.
+    ///
+    /// Automatically grows capacity if needed.
+    /// Note: This allows sparse population. Uninitialized slots contain undefined data (or 0.0 if alloc gave zeroed memory).
     ///
     /// # Panics
     ///
     /// Panics if vector dimension doesn't match.
-    pub fn push(&mut self, vector: &[f32]) {
+    pub fn insert_at(&mut self, index: usize, vector: &[f32]) {
         assert_eq!(
             vector.len(),
             self.dimension,
@@ -131,16 +153,27 @@ impl ContiguousVectors {
             vector.len()
         );
 
-        if self.count >= self.capacity {
-            self.grow();
-        }
+        self.ensure_capacity(index + 1);
 
-        let offset = self.count * self.dimension;
-        // SAFETY: We've ensured capacity and bounds
+        let offset = index * self.dimension;
+        // SAFETY: We ensured capacity covers index
         unsafe {
             ptr::copy_nonoverlapping(vector.as_ptr(), self.data.add(offset), self.dimension);
         }
-        self.count += 1;
+
+        // Update count if we're extending the "used" range
+        if index >= self.count {
+            self.count = index + 1;
+        }
+    }
+
+    /// Adds a vector to the storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if vector dimension doesn't match.
+    pub fn push(&mut self, vector: &[f32]) {
+        self.insert_at(self.count, vector);
     }
 
     /// Adds multiple vectors in batch (optimized).
@@ -170,11 +203,13 @@ impl ContiguousVectors {
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&[f32]> {
         if index >= self.count {
+            // Note: In sparse mode, index < count doesn't guarantee it was initialized,
+            // but for HNSW dense IDs it typically does.
             return None;
         }
 
         let offset = index * self.dimension;
-        // SAFETY: Index is within bounds
+        // SAFETY: Index is within bounds (checked against count, which is <= capacity)
         Some(unsafe { std::slice::from_raw_parts(self.data.add(offset), self.dimension) })
     }
 
@@ -231,22 +266,32 @@ impl ContiguousVectors {
         }
     }
 
-    /// Grows the internal buffer by 2x.
+    /// Resizes the internal buffer.
     #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
-    fn grow(&mut self) {
-        let new_capacity = self.capacity * 2;
+    fn resize(&mut self, new_capacity: usize) {
+        if new_capacity <= self.capacity {
+            return;
+        }
+
         let old_layout = Self::layout(self.dimension, self.capacity);
         let new_layout = Self::layout(self.dimension, new_capacity);
 
         // SAFETY: Layouts are valid
-        let new_data = unsafe { alloc(new_layout).cast::<f32>() };
+        // We use realloc if possible, or alloc + copy + dealloc
 
-        assert!(!new_data.is_null(), "Failed to grow ContiguousVectors");
+        let new_data = unsafe { alloc(new_layout).cast::<f32>() };
+        assert!(!new_data.is_null(), "Failed to resize ContiguousVectors");
 
         // Copy existing data
-        let copy_size = self.count * self.dimension;
+        let copy_count = self.count;
+        if copy_count > 0 {
+            let copy_size = copy_count * self.dimension;
+            unsafe {
+                ptr::copy_nonoverlapping(self.data, new_data, copy_size);
+            }
+        }
+
         unsafe {
-            ptr::copy_nonoverlapping(self.data, new_data, copy_size);
             dealloc(self.data.cast::<u8>(), old_layout);
         }
 
