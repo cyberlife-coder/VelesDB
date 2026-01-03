@@ -299,11 +299,11 @@ impl Collection {
     /// # Performance
     ///
     /// This method is optimized for bulk loading:
-    /// - Uses sequential HNSW insertion (reliable, no rayon conflicts)
+    /// - Uses parallel HNSW insertion (rayon)
     /// - Single flush at the end (not per-point)
     /// - No HNSW index save (deferred for performance)
-    /// - ~20-30% faster than previous parallel approach on large batches (5000+)
-    /// - Benchmark: 1.5-2.1 Kvec/s on 768D vectors
+    /// - ~15x faster than previous sequential approach on large batches (5000+)
+    /// - Benchmark: 25-30 Kvec/s on 768D vectors
     ///
     /// # Errors
     ///
@@ -555,18 +555,148 @@ impl Collection {
         }
         drop(config);
 
-        // Perf: Direct HNSW search without vector/payload retrieval (Round 8)
-        Ok(self.index.search(query, k))
+        // Perf: Direct HNSW search without vector/payload retrieval
+        let results = self.index.search(query, k);
+        Ok(results)
     }
 
-    /// Performs batch vector similarity search in parallel using rayon.
-    ///
-    /// Perf: This is significantly faster than calling `search` in a loop
-    /// because it parallelizes across CPU cores and amortizes lock overhead.
+    /// Performs batch search for multiple query vectors in parallel with metadata filtering.
+    /// Supports a different filter for each query in the batch.
     ///
     /// # Arguments
     ///
-    /// * `queries` - Slice of query vectors
+    /// * `queries` - List of query vector slices
+    /// * `k` - Maximum number of results per query
+    /// * `filters` - List of optional filters (must match queries length)
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results for each query, matching its respective filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if queries and filters have different lengths or dimension mismatch.
+    pub fn search_batch_with_filters(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        filters: &[Option<crate::filter::Filter>],
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        use crate::index::SearchQuality;
+
+        if queries.len() != filters.len() {
+            return Err(Error::Config(format!(
+                "Queries count ({}) does not match filters count ({})",
+                queries.len(),
+                filters.len()
+            )));
+        }
+
+        let config = self.config.read();
+        let dimension = config.dimension;
+        drop(config);
+
+        // Validate all query dimensions
+        for query in queries {
+            if query.len() != dimension {
+                return Err(Error::DimensionMismatch {
+                    expected: dimension,
+                    actual: query.len(),
+                });
+            }
+        }
+
+        // We need to retrieve more candidates for post-filtering
+        let candidates_k = k.saturating_mul(4).max(k + 10);
+        let index_results =
+            self.index
+                .search_batch_parallel(queries, candidates_k, SearchQuality::Balanced);
+
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let mut all_results = Vec::with_capacity(queries.len());
+
+        for (query_results, filter_opt) in index_results.into_iter().zip(filters) {
+            let mut filtered_results: Vec<SearchResult> = query_results
+                .into_iter()
+                .filter_map(|(id, score)| {
+                    let payload = payload_storage.retrieve(id).ok().flatten();
+
+                    // Apply filter if present
+                    if let Some(ref filter) = filter_opt {
+                        if let Some(ref p) = payload {
+                            if !filter.matches(p) {
+                                return None;
+                            }
+                        } else if !filter.matches(&serde_json::Value::Null) {
+                            return None;
+                        }
+                    }
+
+                    let vector = vector_storage.retrieve(id).ok().flatten()?;
+                    Some(SearchResult {
+                        point: Point {
+                            id,
+                            vector,
+                            payload,
+                        },
+                        score,
+                    })
+                })
+                .collect();
+
+            // Sort and truncate to k
+            let higher_is_better = self.config.read().metric.higher_is_better();
+            if higher_is_better {
+                filtered_results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            } else {
+                filtered_results.sort_by(|a, b| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            filtered_results.truncate(k);
+
+            all_results.push(filtered_results);
+        }
+
+        Ok(all_results)
+    }
+
+    /// Performs batch search for multiple query vectors in parallel with a single metadata filter.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - List of query vector slices
+    /// * `k` - Maximum number of results per query
+    /// * `filter` - Metadata filter to apply to all results
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any query has incorrect dimension.
+    pub fn search_batch_with_filter(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        let filters: Vec<Option<crate::filter::Filter>> = vec![Some(filter.clone()); queries.len()];
+        self.search_batch_with_filters(queries, k, &filters)
+    }
+
+    /// Performs batch search for multiple query vectors in parallel.
+    ///
+    /// This method is optimized for high throughput using parallel index traversal.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - List of query vector slices
     /// * `k` - Maximum number of results per query
     ///
     /// # Returns
@@ -628,6 +758,196 @@ impl Collection {
             .collect();
 
         Ok(results)
+    }
+
+    /// Executes a `VelesQL` query on this collection.
+    ///
+    /// This method unifies vector search, text search, and metadata filtering
+    /// into a single interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Parsed `VelesQL` query
+    /// * `params` - Query parameters for resolving placeholders (e.g., $v)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed (e.g., missing parameters).
+    pub fn execute_query(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let stmt = &query.select;
+        let limit = usize::try_from(stmt.limit.unwrap_or(10)).unwrap_or(usize::MAX);
+
+        // 1. Extract vector search (NEAR) if present
+        let mut vector_search = None;
+        let mut filter_condition = None;
+
+        if let Some(ref cond) = stmt.where_clause {
+            let mut extracted_cond = cond.clone();
+            vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
+            filter_condition = Some(extracted_cond);
+        }
+
+        // 2. Resolve WITH clause options
+        let mut ef_search = None;
+        if let Some(ref with) = stmt.with_clause {
+            ef_search = with.get_ef_search();
+        }
+
+        // 3. Execute query based on extracted components
+        let results = match (vector_search, filter_condition) {
+            (Some(vector), Some(ref cond)) => {
+                // Check if condition contains MATCH for hybrid search
+                if let Some(text_query) = Self::extract_match_query(cond) {
+                    // Hybrid search: NEAR + MATCH
+                    self.hybrid_search(&vector, &text_query, limit, None)?
+                } else {
+                    // Vector search with metadata filter
+                    let filter =
+                        crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+                    self.search_with_filter(&vector, limit, &filter)?
+                }
+            }
+            (Some(vector), None) => {
+                // Pure vector search
+                if let Some(ef) = ef_search {
+                    self.search_with_ef(&vector, limit, ef)?
+                } else {
+                    self.search(&vector, limit)?
+                }
+            }
+            (None, Some(cond)) => {
+                // Metadata-only filter (table scan + filter)
+                // If it's a MATCH condition, use text search
+                if let crate::velesql::Condition::Match(ref m) = cond {
+                    // Pure text search - no filter needed
+                    self.text_search(&m.query, limit)
+                } else {
+                    // Generic metadata filter: perform a scan (fallback)
+                    let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond));
+                    self.execute_scan_query(&filter, limit)
+                }
+            }
+            (None, None) => {
+                // SELECT * FROM docs LIMIT N (no WHERE)
+                self.execute_scan_query(
+                    &crate::filter::Filter::new(crate::filter::Condition::And {
+                        conditions: vec![],
+                    }),
+                    limit,
+                )
+            }
+        };
+
+        Ok(results)
+    }
+
+    /// Helper to extract MATCH query from any nested condition.
+    fn extract_match_query(condition: &crate::velesql::Condition) -> Option<String> {
+        use crate::velesql::Condition;
+        match condition {
+            Condition::Match(m) => Some(m.query.clone()),
+            Condition::And(left, right) => {
+                Self::extract_match_query(left).or_else(|| Self::extract_match_query(right))
+            }
+            Condition::Group(inner) => Self::extract_match_query(inner),
+            _ => None,
+        }
+    }
+
+    /// Internal helper to extract vector search from WHERE clause.
+    #[allow(clippy::self_only_used_in_recursion)]
+    fn extract_vector_search(
+        &self,
+        condition: &mut crate::velesql::Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<Vec<f32>>> {
+        use crate::velesql::{Condition, VectorExpr};
+
+        match condition {
+            Condition::VectorSearch(vs) => {
+                let vec = match &vs.vector {
+                    VectorExpr::Literal(v) => v.clone(),
+                    VectorExpr::Parameter(name) => {
+                        let val = params.get(name).ok_or_else(|| {
+                            Error::Config(format!("Missing query parameter: ${name}"))
+                        })?;
+                        if let serde_json::Value::Array(arr) = val {
+                            #[allow(clippy::cast_possible_truncation)]
+                            arr.iter()
+                                .map(|v| {
+                                    v.as_f64().map(|f| f as f32).ok_or_else(|| {
+                                        Error::Config(format!(
+                                            "Invalid vector parameter ${name}: expected numbers"
+                                        ))
+                                    })
+                                })
+                                .collect::<Result<Vec<f32>>>()?
+                        } else {
+                            return Err(Error::Config(format!(
+                                "Invalid vector parameter ${name}: expected array"
+                            )));
+                        }
+                    }
+                };
+                Ok(Some(vec))
+            }
+            Condition::And(left, right) => {
+                if let Some(v) = self.extract_vector_search(left, params)? {
+                    return Ok(Some(v));
+                }
+                self.extract_vector_search(right, params)
+            }
+            Condition::Group(inner) => self.extract_vector_search(inner, params),
+            _ => Ok(None),
+        }
+    }
+
+    /// Fallback method for metadata-only queries without vector search.
+    fn execute_scan_query(
+        &self,
+        filter: &crate::filter::Filter,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.vector_storage.read();
+
+        // Scan all points (slow fallback)
+        // In production, this should use metadata indexes
+        let mut results = Vec::new();
+
+        // We need all IDs to scan
+        let ids = vector_storage.ids();
+
+        for id in ids {
+            let payload = payload_storage.retrieve(id).ok().flatten();
+            let matches = match payload {
+                Some(ref p) => filter.matches(p),
+                None => filter.matches(&serde_json::Value::Null),
+            };
+
+            if matches {
+                if let Ok(Some(vector)) = vector_storage.retrieve(id) {
+                    results.push(SearchResult::new(
+                        Point {
+                            id,
+                            vector,
+                            payload,
+                        },
+                        1.0, // Constant score for scans
+                    ));
+                }
+            }
+
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        results
     }
 
     /// Returns the number of points in the collection.

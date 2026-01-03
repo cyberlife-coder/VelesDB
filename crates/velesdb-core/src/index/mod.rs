@@ -18,7 +18,7 @@ use crate::distance::DistanceMetric;
 /// # Performance Note
 ///
 /// For bulk insertions, prefer batch methods like [`HnswIndex::insert_batch_parallel`]
-/// or [`HnswIndex::insert_batch_sequential`] over calling [`Self::insert`] in a loop.
+/// over calling [`Self::insert`] in a loop.
 /// Individual inserts incur per-call lock overhead that batch methods avoid.
 pub trait VectorIndex: Send + Sync {
     /// Inserts a vector into the index.
@@ -31,8 +31,7 @@ pub trait VectorIndex: Send + Sync {
     /// # Performance Warning (PERF-2)
     ///
     /// This method acquires locks for each insertion. For bulk loading, use:
-    /// - [`HnswIndex::insert_batch_parallel`] - Best for large batches (>100 vectors)
-    /// - [`HnswIndex::insert_batch_sequential`] - Best for smaller batches
+    /// - [`HnswIndex::insert_batch_parallel`] - Best for all batches
     ///
     /// Calling `insert()` in a loop incurs ~3x lock overhead per vector compared
     /// to batch methods which acquire locks once for the entire batch.

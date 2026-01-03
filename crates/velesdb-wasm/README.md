@@ -89,13 +89,42 @@ class VectorStore {
 
   // Methods
   insert(id: bigint, vector: Float32Array): void;
+  insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;  // v0.8.5+
   insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
   search(query: Float32Array, k: number): Array<[bigint, number]>;
+  search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;  // v0.8.5+
+  text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;  // v0.8.5+
+  get(id: bigint): {id, vector, payload} | null;  // v0.8.5+
   remove(id: bigint): boolean;
   clear(): void;
   reserve(additional: number): void;  // Pre-allocate memory
   memory_usage(): number;  // Accurate for each storage mode
 }
+```
+
+### Filter Format (v0.8.5+)
+
+```javascript
+// Equality filter
+const filter = {
+  condition: { type: "eq", field: "category", value: "tech" }
+};
+
+// Comparison filters
+const filter = {
+  condition: { type: "gt", field: "price", value: 100 }
+};  // Also: gte, lt, lte, neq
+
+// Logical operators
+const filter = {
+  condition: {
+    type: "and",
+    conditions: [
+      { type: "eq", field: "category", value: "tech" },
+      { type: "gt", field: "views", value: 1000 }
+    ]
+  }
+};  // Also: or, not
 ```
 
 ## Distance Metrics

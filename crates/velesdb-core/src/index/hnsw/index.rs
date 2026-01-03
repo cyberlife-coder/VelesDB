@@ -775,7 +775,7 @@ impl HnswIndex {
     ///
     /// Number of vectors successfully inserted (duplicates are skipped).
     #[deprecated(
-        since = "0.8.6",
+        since = "0.8.5",
         note = "Use insert_batch_parallel instead - 15x faster (29k/s vs 1.9k/s)"
     )]
     pub fn insert_batch_sequential<I>(&self, vectors: I) -> usize

@@ -159,6 +159,17 @@ pub struct VelesPoint {
     pub payload: Option<String>,
 }
 
+/// Individual search request within a batch.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct IndividualSearchRequest {
+    /// Query vector.
+    pub vector: Vec<f32>,
+    /// Number of results.
+    pub top_k: u32,
+    /// Optional metadata filter as JSON string.
+    pub filter: Option<String>,
+}
+
 // ============================================================================
 // Database
 // ============================================================================
@@ -353,6 +364,287 @@ impl VelesCollection {
     #[allow(clippy::cast_possible_truncation)]
     pub fn dimension(&self) -> u32 {
         self.inner.config().dimension as u32
+    }
+
+    /// Performs full-text search using BM25.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Text query to search for
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results sorted by BM25 score.
+    pub fn text_search(&self, query: String, limit: u32) -> Vec<SearchResult> {
+        let results = self
+            .inner
+            .text_search(&query, usize::try_from(limit).unwrap_or(usize::MAX));
+
+        results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect()
+    }
+
+    /// Performs hybrid search combining vector similarity and BM25 text search.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector` - Query vector for similarity search
+    /// * `text_query` - Text query for BM25 search
+    /// * `limit` - Maximum number of results
+    /// * `vector_weight` - Weight for vector similarity (0.0-1.0)
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results sorted by fused score.
+    pub fn hybrid_search(
+        &self,
+        vector: Vec<f32>,
+        text_query: String,
+        limit: u32,
+        vector_weight: f32,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        let results = self.inner.hybrid_search(
+            &vector,
+            &text_query,
+            usize::try_from(limit).unwrap_or(usize::MAX),
+            Some(vector_weight),
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Searches with metadata filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector` - Query vector
+    /// * `limit` - Maximum number of results
+    /// * `filter_json` - JSON filter string (e.g., `{"condition": {"type": "eq", "field": "category", "value": "tech"}}`)
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results matching the filter.
+    pub fn search_with_filter(
+        &self,
+        vector: Vec<f32>,
+        limit: u32,
+        filter_json: String,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        // Parse filter JSON
+        let filter: velesdb_core::Filter =
+            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
+                message: format!("Invalid filter JSON: {e}"),
+            })?;
+
+        let results = self.inner.search_with_filter(
+            &vector,
+            usize::try_from(limit).unwrap_or(usize::MAX),
+            &filter,
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Performs batch search for multiple query vectors in parallel.
+    ///
+    /// # Arguments
+    ///
+    /// * `searches` - List of search requests
+    ///
+    /// # Returns
+    ///
+    /// List of result lists (one per query vector).
+    pub fn batch_search(
+        &self,
+        searches: Vec<IndividualSearchRequest>,
+    ) -> Result<Vec<Vec<SearchResult>>, VelesError> {
+        let query_refs: Vec<&[f32]> = searches.iter().map(|s| s.vector.as_slice()).collect();
+
+        let filters: Result<Vec<Option<velesdb_core::Filter>>, VelesError> = searches
+            .iter()
+            .map(|s| {
+                s.filter
+                    .as_ref()
+                    .map(|f_json| {
+                        serde_json::from_str(f_json).map_err(|e| VelesError::Database {
+                            message: format!("Invalid filter JSON in batch: {e}"),
+                        })
+                    })
+                    .transpose()
+            })
+            .collect();
+
+        let filters = filters?;
+        let max_top_k = searches.iter().map(|s| s.top_k).max().unwrap_or(10);
+
+        let all_results = self.inner.search_batch_with_filters(
+            &query_refs,
+            usize::try_from(max_top_k).unwrap_or(usize::MAX),
+            &filters,
+        )?;
+
+        Ok(all_results
+            .into_iter()
+            .zip(searches)
+            .map(
+                |(results, s): (Vec<velesdb_core::SearchResult>, IndividualSearchRequest)| {
+                    results
+                        .into_iter()
+                        .take(usize::try_from(s.top_k).unwrap_or(usize::MAX))
+                        .map(|r| SearchResult {
+                            id: r.point.id,
+                            score: r.score,
+                        })
+                        .collect()
+                },
+            )
+            .collect())
+    }
+
+    /// Performs text search with metadata filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Text query
+    /// * `limit` - Maximum number of results
+    /// * `filter_json` - JSON filter string
+    pub fn text_search_with_filter(
+        &self,
+        query: String,
+        limit: u32,
+        filter_json: String,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        let filter: velesdb_core::Filter =
+            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
+                message: format!("Invalid filter JSON: {e}"),
+            })?;
+
+        let results = self.inner.text_search_with_filter(
+            &query,
+            usize::try_from(limit).unwrap_or(usize::MAX),
+            &filter,
+        );
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Performs hybrid search with metadata filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector` - Query vector
+    /// * `text_query` - Text query
+    /// * `limit` - Maximum number of results
+    /// * `vector_weight` - Weight for vector similarity (0.0-1.0)
+    /// * `filter_json` - JSON filter string
+    pub fn hybrid_search_with_filter(
+        &self,
+        vector: Vec<f32>,
+        text_query: String,
+        limit: u32,
+        vector_weight: f32,
+        filter_json: String,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        let filter: velesdb_core::Filter =
+            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
+                message: format!("Invalid filter JSON: {e}"),
+            })?;
+
+        let results = self.inner.hybrid_search_with_filter(
+            &vector,
+            &text_query,
+            usize::try_from(limit).unwrap_or(usize::MAX),
+            Some(vector_weight),
+            &filter,
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Executes a VelesQL query.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_str` - VelesQL query string
+    /// * `params_json` - Optional JSON object with query parameters
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results.
+    ///
+    /// # Example
+    ///
+    /// ```swift
+    /// let results = try collection.query(
+    ///     "SELECT * FROM vectors WHERE category = 'tech' LIMIT 10",
+    ///     nil
+    /// )
+    /// ```
+    pub fn query(
+        &self,
+        query_str: String,
+        params_json: Option<String>,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        // Parse the VelesQL query
+        let parsed =
+            velesdb_core::velesql::Parser::parse(&query_str).map_err(|e| VelesError::Database {
+                message: format!("VelesQL parse error: {}", e.message),
+            })?;
+
+        // Parse params from JSON if provided
+        let params: std::collections::HashMap<String, serde_json::Value> = params_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|e| VelesError::Database {
+                message: format!("Invalid params JSON: {e}"),
+            })?
+            .unwrap_or_default();
+
+        // Execute the query
+        let results =
+            self.inner
+                .execute_query(&parsed, &params)
+                .map_err(|e| VelesError::Database {
+                    message: format!("Query execution failed: {e}"),
+                })?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
     }
 }
 

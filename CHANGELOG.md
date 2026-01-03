@@ -5,23 +5,68 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.5] - 2026-01-03
+## [0.8.6] - 2026-01-03
 
-### 🚀 Performance Optimization (RF-3)
+### 🔧 Bug Fixes & Documentation
 
-Buffer reuse optimization for brute-force search reducing allocations by ~40%.
+#### Fixed
+
+- **BM25 MATCH-only queries** - Fixed an issue where `WHERE content MATCH '...'` without a vector clause would incorrectly attempt filter-based execution instead of pure text search.
+- **Hybrid Search (NEAR + MATCH)** - Fixed detection of hybrid queries when MATCH clause was nested in logical operators.
+- **WASM compilation** - Relaxed clippy pedantic lints for WASM bindings to ensure smooth compilation.
+- **Test Data** - Fixed inconsistent test data in server integration tests ("Rust is fast").
+- **Deprecated Version** - Corrected `insert_batch_sequential` deprecation notice from 0.8.6 to 0.8.5.
 
 #### Added
 
+- **WASM text_search** - Added payload-based substring search for WASM (browser) environment.
+- **WITH Clause Documentation** - Added comprehensive documentation for VelesQL `WITH` clause in Core and CLI READMEs.
+- **Mobile VelesQL Support** - Added `query()` method to Mobile bindings (Swift/Kotlin).
+
+---
+
+## [0.8.5] - 2026-01-03
+
+### 🔄 VelesQL Query Unification
+
+Unified VelesQL execution across all components with full filter support.
+
+#### Added
+
+- **Unified `Collection::execute_query()`** - Single entry point for VelesQL execution
+  - Supports NEAR (vector search), MATCH (text search), WHERE (metadata filtering)
+  - Handles parameter resolution for vector placeholders
+  - Used by Server, CLI, Tauri, and Python bindings
+
+- **Batch search with individual filters**
+  - `search_batch_with_filters()` - Different filter per query in batch
+  - Full parity across REST, Tauri, Python, and Mobile components
+
+- **MmapStorage `ids()` method** - Required for scan-based VelesQL queries
+
 - **RF-3: Buffer reuse for brute-force search**
-  - `ShardedVectors::collect_into()` - Collects vectors into pre-allocated buffer
+  - `ShardedVectors::collect_into()` - Pre-allocated buffer collection
   - `HnswIndex::search_brute_force_buffered()` - Thread-local buffer reuse
-  - 8 new tests for buffer reuse functionality
+
+#### Changed
+
+- Server `/query` endpoint now uses `Collection::execute_query()`
+- CLI REPL now uses unified query execution with full filter support
+- Tauri `query` command refactored for VelesQL parity
+- Python `query()` method now accepts optional `params` dict
 
 #### Performance
 
 - ~40% reduction in allocations for repeated brute-force searches
-- Thread-local buffer avoids contention in multi-threaded scenarios
+- Hybrid search: 55-62µs (100-1K docs)
+- Text search: 26-30µs (100-1K docs)
+
+#### Version Alignment
+
+All components updated to v0.8.5:
+- TypeScript SDK
+- LangChain integration  
+- LlamaIndex integration
 
 ---
 

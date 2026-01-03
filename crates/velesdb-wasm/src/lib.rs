@@ -1,3 +1,18 @@
+// WASM bindings have different conventions - relax pedantic lints for FFI boundary
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::unused_self)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::manual_let_else)]
+
 //! `VelesDB` WASM - Vector search in the browser
 //!
 //! This crate provides WebAssembly bindings for `VelesDB`'s core vector operations.
@@ -283,6 +298,414 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Inserts a vector with the given ID and optional JSON payload.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for the vector
+    /// * `vector` - `Float32Array` of the vector data
+    /// * `payload` - Optional JSON payload (metadata)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector dimension doesn't match store dimension.
+    #[wasm_bindgen]
+    pub fn insert_with_payload(
+        &mut self,
+        id: u64,
+        vector: &[f32],
+        payload: JsValue,
+    ) -> Result<(), JsValue> {
+        if vector.len() != self.dimension {
+            return Err(JsValue::from_str(&format!(
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            )));
+        }
+
+        // Parse payload from JsValue
+        let parsed_payload: Option<serde_json::Value> =
+            if payload.is_null() || payload.is_undefined() {
+                None
+            } else {
+                Some(
+                    serde_wasm_bindgen::from_value(payload)
+                        .map_err(|e| JsValue::from_str(&format!("Invalid payload: {e}")))?,
+                )
+            };
+
+        // Remove existing vector with same ID if present
+        if let Some(idx) = self.ids.iter().position(|&x| x == id) {
+            self.remove_at_index(idx);
+        }
+
+        // Append based on storage mode
+        self.ids.push(id);
+        self.payloads.push(parsed_payload);
+        match self.storage_mode {
+            StorageMode::Full => {
+                self.data.extend_from_slice(vector);
+            }
+            StorageMode::SQ8 => {
+                let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
+                    (min.min(v), max.max(v))
+                });
+                let scale = if (max - min).abs() < 1e-10 {
+                    1.0
+                } else {
+                    255.0 / (max - min)
+                };
+
+                self.sq8_mins.push(min);
+                self.sq8_scales.push(scale);
+
+                for &v in vector {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
+                    self.data_sq8.push(quantized);
+                }
+            }
+            StorageMode::Binary => {
+                let bytes_needed = self.dimension.div_ceil(8);
+                for byte_idx in 0..bytes_needed {
+                    let mut byte = 0u8;
+                    for bit in 0..8 {
+                        let dim_idx = byte_idx * 8 + bit;
+                        if dim_idx < self.dimension && vector[dim_idx] > 0.0 {
+                            byte |= 1 << bit;
+                        }
+                    }
+                    self.data_binary.push(byte);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Gets a vector by ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The vector ID to retrieve
+    ///
+    /// # Returns
+    ///
+    /// An object with `id`, `vector`, and `payload` fields, or null if not found.
+    #[wasm_bindgen]
+    pub fn get(&self, id: u64) -> Result<JsValue, JsValue> {
+        let idx = match self.ids.iter().position(|&x| x == id) {
+            Some(i) => i,
+            None => return Ok(JsValue::NULL),
+        };
+
+        let vector: Vec<f32> = match self.storage_mode {
+            StorageMode::Full => {
+                let start = idx * self.dimension;
+                self.data[start..start + self.dimension].to_vec()
+            }
+            StorageMode::SQ8 => {
+                let start = idx * self.dimension;
+                let min = self.sq8_mins[idx];
+                let scale = self.sq8_scales[idx];
+                self.data_sq8[start..start + self.dimension]
+                    .iter()
+                    .map(|&q| (f32::from(q) / scale) + min)
+                    .collect()
+            }
+            StorageMode::Binary => {
+                let bytes_per_vec = self.dimension.div_ceil(8);
+                let start = idx * bytes_per_vec;
+                let mut vec = vec![0.0f32; self.dimension];
+                for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
+                    .iter()
+                    .enumerate()
+                {
+                    for bit in 0..8 {
+                        let dim_idx = i * 8 + bit;
+                        if dim_idx < self.dimension {
+                            vec[dim_idx] = if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
+                        }
+                    }
+                }
+                vec
+            }
+        };
+
+        let result = serde_json::json!({
+            "id": id,
+            "vector": vector,
+            "payload": self.payloads[idx]
+        });
+
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Searches with metadata filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector
+    /// * `k` - Number of results
+    /// * `filter` - JSON filter object (e.g., `{"condition": {"type": "eq", "field": "category", "value": "tech"}}`)
+    ///
+    /// # Returns
+    ///
+    /// Array of `[id, score, payload]` tuples sorted by relevance.
+    #[wasm_bindgen]
+    pub fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        if query.len() != self.dimension {
+            return Err(JsValue::from_str(&format!(
+                "Query dimension mismatch: expected {}, got {}",
+                self.dimension,
+                query.len()
+            )));
+        }
+
+        // Parse filter - expecting a Filter structure from velesdb-core
+        let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
+            .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
+
+        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = match self.storage_mode {
+            StorageMode::Full => self
+                .ids
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &id)| {
+                    let payload = self.payloads[idx].as_ref()?;
+                    if !self.matches_filter(payload, &filter_obj) {
+                        return None;
+                    }
+                    let start = idx * self.dimension;
+                    let v_data = &self.data[start..start + self.dimension];
+                    let score = self.metric.calculate(query, v_data);
+                    Some((id, score, Some(payload)))
+                })
+                .collect(),
+            StorageMode::SQ8 => {
+                let mut dequantized = vec![0.0f32; self.dimension];
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, &id)| {
+                        let payload = self.payloads[idx].as_ref()?;
+                        if !self.matches_filter(payload, &filter_obj) {
+                            return None;
+                        }
+                        let start = idx * self.dimension;
+                        let min = self.sq8_mins[idx];
+                        let scale = self.sq8_scales[idx];
+                        for (i, &q) in self.data_sq8[start..start + self.dimension]
+                            .iter()
+                            .enumerate()
+                        {
+                            dequantized[i] = (f32::from(q) / scale) + min;
+                        }
+                        let score = self.metric.calculate(query, &dequantized);
+                        Some((id, score, Some(payload)))
+                    })
+                    .collect()
+            }
+            StorageMode::Binary => {
+                let bytes_per_vec = self.dimension.div_ceil(8);
+                let mut binary_vec = vec![0.0f32; self.dimension];
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, &id)| {
+                        let payload = self.payloads[idx].as_ref()?;
+                        if !self.matches_filter(payload, &filter_obj) {
+                            return None;
+                        }
+                        let start = idx * bytes_per_vec;
+                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
+                            .iter()
+                            .enumerate()
+                        {
+                            for bit in 0..8 {
+                                let dim_idx = i * 8 + bit;
+                                if dim_idx < self.dimension {
+                                    binary_vec[dim_idx] =
+                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
+                                }
+                            }
+                        }
+                        let score = self.metric.calculate(query, &binary_vec);
+                        Some((id, score, Some(payload)))
+                    })
+                    .collect()
+            }
+        };
+
+        // Sort by relevance
+        if self.metric.higher_is_better() {
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        results.truncate(k);
+
+        // Convert to serializable format
+        let output: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|(id, score, payload)| {
+                serde_json::json!({
+                    "id": id,
+                    "score": score,
+                    "payload": payload
+                })
+            })
+            .collect();
+
+        serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Simple filter matching (supports basic eq, neq, gt, lt conditions).
+    fn matches_filter(&self, payload: &serde_json::Value, filter: &serde_json::Value) -> bool {
+        // Extract condition from filter
+        let condition = match filter.get("condition") {
+            Some(c) => c,
+            None => return true, // No condition = match all
+        };
+
+        self.evaluate_condition(payload, condition)
+    }
+
+    /// Evaluates a single condition against a payload.
+    fn evaluate_condition(
+        &self,
+        payload: &serde_json::Value,
+        condition: &serde_json::Value,
+    ) -> bool {
+        let cond_type = condition.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+        match cond_type {
+            "eq" => {
+                let field = condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
+                let value = condition.get("value");
+                let payload_value = self.get_nested_field(payload, field);
+                match (payload_value, value) {
+                    (Some(pv), Some(v)) => pv == v,
+                    _ => false,
+                }
+            }
+            "neq" => {
+                let field = condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
+                let value = condition.get("value");
+                let payload_value = self.get_nested_field(payload, field);
+                match (payload_value, value) {
+                    (Some(pv), Some(v)) => pv != v,
+                    (None, _) => true,
+                    _ => false,
+                }
+            }
+            "gt" => {
+                let field = condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
+                let value = condition.get("value").and_then(|v| v.as_f64());
+                let payload_value = self
+                    .get_nested_field(payload, field)
+                    .and_then(|v| v.as_f64());
+                match (payload_value, value) {
+                    (Some(pv), Some(v)) => pv > v,
+                    _ => false,
+                }
+            }
+            "gte" => {
+                let field = condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
+                let value = condition.get("value").and_then(|v| v.as_f64());
+                let payload_value = self
+                    .get_nested_field(payload, field)
+                    .and_then(|v| v.as_f64());
+                match (payload_value, value) {
+                    (Some(pv), Some(v)) => pv >= v,
+                    _ => false,
+                }
+            }
+            "lt" => {
+                let field = condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
+                let value = condition.get("value").and_then(|v| v.as_f64());
+                let payload_value = self
+                    .get_nested_field(payload, field)
+                    .and_then(|v| v.as_f64());
+                match (payload_value, value) {
+                    (Some(pv), Some(v)) => pv < v,
+                    _ => false,
+                }
+            }
+            "lte" => {
+                let field = condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
+                let value = condition.get("value").and_then(|v| v.as_f64());
+                let payload_value = self
+                    .get_nested_field(payload, field)
+                    .and_then(|v| v.as_f64());
+                match (payload_value, value) {
+                    (Some(pv), Some(v)) => pv <= v,
+                    _ => false,
+                }
+            }
+            "and" => {
+                let conditions = condition.get("conditions").and_then(|c| c.as_array());
+                match conditions {
+                    Some(conds) => conds.iter().all(|c| self.evaluate_condition(payload, c)),
+                    None => true,
+                }
+            }
+            "or" => {
+                let conditions = condition.get("conditions").and_then(|c| c.as_array());
+                match conditions {
+                    Some(conds) => conds.iter().any(|c| self.evaluate_condition(payload, c)),
+                    None => true,
+                }
+            }
+            "not" => {
+                let inner = condition.get("condition");
+                match inner {
+                    Some(c) => !self.evaluate_condition(payload, c),
+                    None => true,
+                }
+            }
+            _ => true, // Unknown condition type = match all
+        }
+    }
+
+    /// Gets a nested field from a JSON payload using dot notation.
+    fn get_nested_field<'a>(
+        &self,
+        payload: &'a serde_json::Value,
+        field: &str,
+    ) -> Option<&'a serde_json::Value> {
+        let mut current = payload;
+        for part in field.split('.') {
+            current = current.get(part)?;
+        }
+        Some(current)
+    }
+
     /// Removes vector at the given index (internal helper).
     fn remove_at_index(&mut self, idx: usize) {
         self.ids.remove(idx);
@@ -410,6 +833,101 @@ impl VectorStore {
         results.truncate(k);
 
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Performs text search on payload fields.
+    ///
+    /// This is a simple substring-based search on payload text fields.
+    /// For full BM25 text search, use the REST API backend.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Text query to search for
+    /// * `k` - Number of results
+    /// * `field` - Optional field name to search in (default: searches all string fields)
+    ///
+    /// # Returns
+    ///
+    /// Array of results with matching payloads.
+    #[wasm_bindgen]
+    pub fn text_search(
+        &self,
+        query: &str,
+        k: usize,
+        field: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let query_lower = query.to_lowercase();
+
+        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = self
+            .ids
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &id)| {
+                let payload = self.payloads[idx].as_ref()?;
+                let matches = Self::payload_contains_text(payload, &query_lower, field.as_deref());
+                if matches {
+                    Some((id, 1.0, Some(payload)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        results.truncate(k);
+
+        let output: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|(id, score, payload)| {
+                serde_json::json!({
+                    "id": id,
+                    "score": score,
+                    "payload": payload
+                })
+            })
+            .collect();
+
+        serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Checks if payload contains text in specified field or any string field.
+    fn payload_contains_text(
+        payload: &serde_json::Value,
+        query: &str,
+        field: Option<&str>,
+    ) -> bool {
+        if let Some(field_name) = field {
+            // Search specific field
+            if let Some(value) = payload.get(field_name) {
+                return Self::value_contains_text(value, query);
+            }
+            false
+        } else {
+            // Search all fields
+            Self::search_all_fields(payload, query)
+        }
+    }
+
+    /// Recursively searches all string fields in a JSON value.
+    fn search_all_fields(value: &serde_json::Value, query: &str) -> bool {
+        match value {
+            serde_json::Value::String(s) => s.to_lowercase().contains(query),
+            serde_json::Value::Object(obj) => {
+                obj.values().any(|v| Self::search_all_fields(v, query))
+            }
+            serde_json::Value::Array(arr) => arr.iter().any(|v| Self::search_all_fields(v, query)),
+            _ => false,
+        }
+    }
+
+    /// Checks if a value contains the query text.
+    fn value_contains_text(value: &serde_json::Value, query: &str) -> bool {
+        match value {
+            serde_json::Value::String(s) => s.to_lowercase().contains(query),
+            serde_json::Value::Array(arr) => {
+                arr.iter().any(|v| Self::value_contains_text(v, query))
+            }
+            _ => false,
+        }
     }
 
     /// Removes a vector by ID.

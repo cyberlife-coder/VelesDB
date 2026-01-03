@@ -156,6 +156,31 @@ AND in_stock = true
 LIMIT 10;
 ```
 
+#### WITH Clause (Query Options)
+
+Override search parameters per-query:
+
+```sql
+-- Set search mode (fast, balanced, accurate, high_recall, perfect)
+SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
+WITH (mode = 'high_recall');
+
+-- Set ef_search parameter directly
+SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
+WITH (ef_search = 512);
+
+-- Multiple options
+SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
+WITH (mode = 'fast', timeout_ms = 5000, rerank = true);
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mode` | string | Search preset: fast, balanced, accurate, high_recall, perfect |
+| `ef_search` | integer | HNSW ef_search parameter (higher = better recall) |
+| `timeout_ms` | integer | Query timeout in milliseconds |
+| `rerank` | boolean | Enable result reranking |
+
 #### Available Filter Operators
 
 | Operator | Syntax | Example |

@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{OpenApi, ToSchema};
 
-use velesdb_core::velesql::{self, Condition, VectorExpr};
+use velesdb_core::velesql;
 use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 
 // ============================================================================
@@ -804,13 +804,23 @@ pub async fn batch_search(
     };
 
     // Perf P0: Use parallel batch search instead of sequential loop
-    // Collect query vectors as slices for parallel processing
+    // Collect query vectors and optional filters
     let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
+
+    let filters: Vec<Option<velesdb_core::Filter>> = req
+        .searches
+        .iter()
+        .map(|s| {
+            s.filter
+                .as_ref()
+                .and_then(|f_json| serde_json::from_value(f_json.clone()).ok())
+        })
+        .collect();
 
     // Assume all searches have the same top_k (use first or default)
     let top_k = req.searches.first().map_or(10, |s| s.top_k);
 
-    let all_results = match collection.search_batch_parallel(&queries, top_k) {
+    let all_results = match collection.search_batch_with_filters(&queries, top_k, &filters) {
         Ok(batch_results) => batch_results
             .into_iter()
             .map(|results| SearchResponse {
@@ -1015,7 +1025,7 @@ pub async fn hybrid_search(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async, clippy::too_many_lines)] // Axum handler requires async, complex query parsing
+#[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -1057,58 +1067,17 @@ pub async fn query(
         }
     };
 
-    // Extract vector search and MATCH from WHERE clause
-    let vector_search = extract_vector_search(&select.where_clause);
-    let match_condition_opt = extract_match_condition(&select.where_clause);
-
-    // Determine limit
-    let limit = select.limit.unwrap_or(10) as usize;
-
-    // Execute appropriate search based on conditions
-    let results = match (vector_search, match_condition_opt) {
-        (Some(vs), Some(match_cond)) => {
-            let query_vector = match resolve_vector(&vs.vector, &req.params) {
-                Ok(v) => v,
-                Err(e) => return bad_request_response(&e),
-            };
-            match collection.hybrid_search(&query_vector, &match_cond.query, limit, Some(0.5)) {
-                Ok(r) => r,
-                Err(e) => return bad_request_response(&e.to_string()),
-            }
-        }
-        (Some(vs), None) => {
-            let query_vector = match resolve_vector(&vs.vector, &req.params) {
-                Ok(v) => v,
-                Err(e) => return bad_request_response(&e),
-            };
-            match collection.search(&query_vector, limit) {
-                Ok(r) => r,
-                Err(e) => return bad_request_response(&e.to_string()),
-            }
-        }
-        (None, Some(match_cond)) => collection.text_search(&match_cond.query, limit),
-        (None, None) => {
-            return bad_request_response(
-                "VelesQL queries require a search condition (NEAR or MATCH clause)",
-            );
-        }
-    };
-
-    // Apply additional filters if present (post-filtering for non-search conditions)
-    let filtered_results: Vec<_> = if select.where_clause.is_some() {
-        results
-            .into_iter()
-            .filter(|r| match_condition(&select.where_clause, &r.point.payload))
-            .collect()
-    } else {
-        results
+    // Use unified execute_query method from Collection
+    let results = match collection.execute_query(&parsed, &req.params) {
+        Ok(r) => r,
+        Err(e) => return bad_request_response(&e.to_string()),
     };
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let rows_returned = filtered_results.len();
+    let rows_returned = results.len();
 
     Json(QueryResponse {
-        results: filtered_results
+        results: results
             .into_iter()
             .map(|r| SearchResultResponse {
                 id: r.point.id,
@@ -1131,187 +1100,6 @@ fn bad_request_response(error: &str) -> axum::response::Response {
         }),
     )
         .into_response()
-}
-
-/// Resolve a vector from VectorExpr using query parameters.
-fn resolve_vector(
-    vector_expr: &VectorExpr,
-    params: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<Vec<f32>, String> {
-    match vector_expr {
-        VectorExpr::Literal(v) => Ok(v.clone()),
-        VectorExpr::Parameter(param_name) => match params.get(param_name) {
-            Some(serde_json::Value::Array(arr)) => Ok(arr
-                .iter()
-                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                .collect()),
-            _ => Err(format!("Missing or invalid parameter: ${param_name}")),
-        },
-    }
-}
-
-/// Extract vector search from a condition tree.
-fn extract_vector_search(condition: &Option<Condition>) -> Option<&velesql::VectorSearch> {
-    match condition {
-        None => None,
-        Some(cond) => extract_vector_search_inner(cond),
-    }
-}
-
-fn extract_vector_search_inner(condition: &Condition) -> Option<&velesql::VectorSearch> {
-    match condition {
-        Condition::VectorSearch(vs) => Some(vs),
-        Condition::And(left, right) => {
-            extract_vector_search_inner(left).or_else(|| extract_vector_search_inner(right))
-        }
-        Condition::Or(left, right) => {
-            extract_vector_search_inner(left).or_else(|| extract_vector_search_inner(right))
-        }
-        Condition::Group(inner) => extract_vector_search_inner(inner),
-        _ => None,
-    }
-}
-
-/// Extract MATCH condition from a condition tree.
-fn extract_match_condition(condition: &Option<Condition>) -> Option<&velesql::MatchCondition> {
-    match condition {
-        None => None,
-        Some(cond) => extract_match_inner(cond),
-    }
-}
-
-fn extract_match_inner(condition: &Condition) -> Option<&velesql::MatchCondition> {
-    match condition {
-        Condition::Match(m) => Some(m),
-        Condition::And(left, right) => {
-            extract_match_inner(left).or_else(|| extract_match_inner(right))
-        }
-        Condition::Or(left, right) => {
-            extract_match_inner(left).or_else(|| extract_match_inner(right))
-        }
-        Condition::Group(inner) => extract_match_inner(inner),
-        _ => None,
-    }
-}
-
-/// Match a condition against a payload (simplified implementation).
-fn match_condition(condition: &Option<Condition>, payload: &Option<serde_json::Value>) -> bool {
-    match (condition, payload) {
-        (None, _) => true,
-        (Some(_), None) => false,
-        (Some(cond), Some(payload_val)) => match_condition_inner(cond, payload_val),
-    }
-}
-
-fn match_condition_inner(condition: &Condition, payload: &serde_json::Value) -> bool {
-    match condition {
-        Condition::Comparison(comp) => {
-            let field_value = get_nested_value(payload, &comp.column);
-            match field_value {
-                Some(val) => compare_values(&comp.operator, val, &comp.value),
-                None => false,
-            }
-        }
-        Condition::And(left, right) => {
-            match_condition_inner(left, payload) && match_condition_inner(right, payload)
-        }
-        Condition::Or(left, right) => {
-            match_condition_inner(left, payload) || match_condition_inner(right, payload)
-        }
-        Condition::In(in_cond) => {
-            let field_value = get_nested_value(payload, &in_cond.column);
-            match field_value {
-                Some(val) => in_cond.values.iter().any(|v| values_equal(val, v)),
-                None => false,
-            }
-        }
-        Condition::IsNull(is_null) => {
-            let field_value = get_nested_value(payload, &is_null.column);
-            if is_null.is_null {
-                field_value.is_none() || field_value == Some(&serde_json::Value::Null)
-            } else {
-                field_value.is_some() && field_value != Some(&serde_json::Value::Null)
-            }
-        }
-        Condition::Group(inner) => match_condition_inner(inner, payload),
-        Condition::VectorSearch(_) => true, // Vector search is handled separately
-        _ => true,                          // Other conditions pass through for now
-    }
-}
-
-fn get_nested_value<'a>(
-    payload: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut current = payload;
-    for part in parts {
-        match current.get(part) {
-            Some(v) => current = v,
-            None => return None,
-        }
-    }
-    Some(current)
-}
-
-fn compare_values(
-    operator: &velesql::CompareOp,
-    field: &serde_json::Value,
-    value: &velesql::Value,
-) -> bool {
-    use velesql::CompareOp::*;
-
-    match (field, value) {
-        (serde_json::Value::String(f), velesql::Value::String(v)) => match operator {
-            Eq => f == v,
-            NotEq => f != v,
-            Gt => f > v,
-            Gte => f >= v,
-            Lt => f < v,
-            Lte => f <= v,
-        },
-        (serde_json::Value::Number(f), velesql::Value::Integer(v)) => {
-            let f_val = f.as_i64().unwrap_or(0);
-            match operator {
-                Eq => f_val == *v,
-                NotEq => f_val != *v,
-                Gt => f_val > *v,
-                Gte => f_val >= *v,
-                Lt => f_val < *v,
-                Lte => f_val <= *v,
-            }
-        }
-        (serde_json::Value::Number(f), velesql::Value::Float(v)) => {
-            let f_val = f.as_f64().unwrap_or(0.0);
-            match operator {
-                Eq => (f_val - v).abs() < f64::EPSILON,
-                NotEq => (f_val - v).abs() >= f64::EPSILON,
-                Gt => f_val > *v,
-                Gte => f_val >= *v,
-                Lt => f_val < *v,
-                Lte => f_val <= *v,
-            }
-        }
-        (serde_json::Value::Bool(f), velesql::Value::Boolean(v)) => match operator {
-            Eq => f == v,
-            NotEq => f != v,
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-fn values_equal(field: &serde_json::Value, value: &velesql::Value) -> bool {
-    match (field, value) {
-        (serde_json::Value::String(f), velesql::Value::String(v)) => f == v,
-        (serde_json::Value::Number(f), velesql::Value::Integer(v)) => f.as_i64() == Some(*v),
-        (serde_json::Value::Number(f), velesql::Value::Float(v)) => f
-            .as_f64()
-            .map(|fv| (fv - v).abs() < f64::EPSILON)
-            .unwrap_or(false),
-        (serde_json::Value::Bool(f), velesql::Value::Boolean(v)) => f == v,
-        _ => false,
-    }
 }
 
 // ============================================================================

@@ -130,6 +130,24 @@ is_empty = collection.is_empty()
 
 # Flush to disk
 collection.flush()
+
+# VelesQL query (v0.8.5+)
+results = collection.query(
+    "SELECT * FROM vectors WHERE category = 'tech' LIMIT 10"
+)
+
+# VelesQL with parameters
+results = collection.query(
+    "SELECT * FROM vectors WHERE VECTOR NEAR $query LIMIT 5",
+    params={"query": [0.1, 0.2, ...]}
+)
+
+# Search with metadata filter
+results = collection.search_with_filter(
+    vector=[0.1, 0.2, ...],
+    top_k=10,
+    filter={"condition": {"type": "eq", "field": "category", "value": "tech"}}
+)
 ```
 
 ### Storage Modes (Quantization)
@@ -188,8 +206,9 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 
 | Operation | Time (768d) | Throughput |
 |-----------|-------------|------------|
-| Cosine | ~76 ns | 13M ops/sec |
-| Euclidean | ~47 ns | 21M ops/sec |
+| Cosine | ~93 ns | 11M ops/sec |
+| Euclidean | ~46 ns | 22M ops/sec |
+| Dot Product | ~36 ns | 28M ops/sec |
 | Hamming | ~6 ns | 164M ops/sec |
 
 ### Benchmark: VelesDB vs pgvector (HNSW)

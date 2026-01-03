@@ -144,6 +144,50 @@ Delete a vector by ID. Returns `true` if deleted.
 
 Get a vector by ID. Returns `null` if not found.
 
+### `db.textSearch(collection, query, options)` (v0.8.5+)
+
+Full-text search using BM25 algorithm.
+
+```typescript
+const results = await db.textSearch('docs', 'machine learning', { k: 10 });
+```
+
+### `db.hybridSearch(collection, vector, textQuery, options)` (v0.8.5+)
+
+Combined vector + text search with RRF fusion.
+
+```typescript
+const results = await db.hybridSearch(
+  'docs',
+  queryVector,
+  'machine learning',
+  { k: 10, vectorWeight: 0.7 }  // 0.7 = 70% vector, 30% text
+);
+```
+
+### `db.query(queryString, params)` (v0.8.5+)
+
+Execute a VelesQL query.
+
+```typescript
+// Simple query
+const results = await db.query(
+  "SELECT * FROM documents WHERE category = 'tech' LIMIT 10"
+);
+
+// With vector parameter
+const results = await db.query(
+  "SELECT * FROM documents WHERE VECTOR NEAR $query LIMIT 5",
+  { query: [0.1, 0.2, ...] }
+);
+
+// Hybrid query
+const results = await db.query(
+  "SELECT * FROM docs WHERE VECTOR NEAR $v AND content MATCH 'rust' LIMIT 10",
+  { v: queryVector }
+);
+```
+
 ### `db.close()`
 
 Close the client and release resources.

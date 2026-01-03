@@ -1,15 +1,16 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: January 2, 2026 (v0.7.3)*
+*Last updated: January 3, 2026 (v0.8.5)*
 
 ---
 
-## 🚀 v0.7.2 Headline
+## 🚀 v0.8.5 Headline
 
 | Metric | Baseline | VelesDB | Winner |
 |--------|----------|---------|--------|
-| **SIMD Dot Product (768D)** | 280ns (Naive) | **35ns** | **VelesDB 8x** ✅ |
+| **SIMD Dot Product (768D)** | 280ns (Naive) | **36ns** | **VelesDB 8x** ✅ |
 | **Search (10K)** | ~50ms (pgvector) | **~105µs** | **VelesDB 476x** ✅ |
+| **Hybrid Search (1K)** | N/A | **62µs** | **VelesDB** ✅ |
 | **Recall@10** | 100% | **100%** | **VelesDB Perfect** ✅ |
 
 ### When to Choose VelesDB
@@ -30,10 +31,20 @@
 
 | Operation | Latency | Throughput | Speedup |
 |-----------|---------|------------|----------|
-| **Dot Product** | 35ns | 28M/s | 8x |
-| **Euclidean** | 44ns | 22M/s | 6x |
-| **Cosine** | 82ns | 12M/s | 3.4x |
+| **Dot Product** | 36ns | 28M/s | 8x |
+| **Euclidean** | 46ns | 22M/s | 6x |
+| **Cosine** | 93ns | 11M/s | 3x |
 | **Hamming** | 6ns | 164M/s | 34x |
+| **Jaccard** | 160ns | 6M/s | 10x |
+
+---
+
+## 🔍 Hybrid Search Performance
+
+| Scale | Vector+Text | Vector Only | Text Only |
+|-------|-------------|-------------|-----------|
+| 100 docs | 55µs | 54µs | 26µs |
+| 1K docs | 62µs | 56µs | 30µs |
 
 ---
 
@@ -95,15 +106,17 @@ let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
 
 ---
 
-## 🔥 v0.7.3 Optimizations
+## 🔥 v0.8.5 Optimizations
 
+- **Unified VelesQL execution** — `Collection::execute_query()` for all components
+- **Batch search with filters** — Individual filters per query in batch operations
+- **Buffer reuse** — Thread-local buffer for brute-force search (~40% allocation reduction)
 - **Adaptive HNSW params** — `for_dataset_size()` and `million_scale()` APIs
 - **32-wide SIMD unrolling** — 4x f32x8 accumulators for maximum ILP
 - **Pre-normalized functions** — `cosine_similarity_normalized()` ~40% faster
 - **SIMD-accelerated HNSW** — AVX2/SSE via `wide` crate
 - **Parallel insertion** — Rayon-based graph construction
 - **CPU prefetch hints** — L2 cache warming
-- **Batch WAL writes** — Single disk write per import
 - **GPU acceleration** — [Roadmap](GPU_ACCELERATION_ROADMAP.md) for batch operations
 
 ---

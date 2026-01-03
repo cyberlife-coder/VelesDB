@@ -460,16 +460,39 @@ impl Collection {
     /// Args:
     ///     query: Text query string
     ///     top_k: Number of results to return (default: 10)
+    ///     filter: Optional filter dictionary
     ///
     /// Returns:
     ///     List of search results with 'id', 'score', and 'payload'
     ///
     /// Example:
     ///     >>> results = collection.text_search("machine learning", top_k=5)
-    #[pyo3(signature = (query, top_k = 10))]
-    fn text_search(&self, query: &str, top_k: usize) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    #[pyo3(signature = (query, top_k = 10, filter = None))]
+    fn text_search(
+        &self,
+        query: &str,
+        top_k: usize,
+        filter: Option<PyObject>,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let results = self.inner.text_search(query, top_k);
+            let filter_obj = match filter {
+                Some(f) => {
+                    let json_str = py
+                        .import("json")?
+                        .call_method1("dumps", (f,))?
+                        .extract::<String>()?;
+                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
+                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
+                    Some(filter)
+                }
+                None => None,
+            };
+
+            let results = if let Some(f) = filter_obj {
+                self.inner.text_search_with_filter(query, top_k, &f)
+            } else {
+                self.inner.text_search(query, top_k)
+            };
 
             let py_results: Vec<HashMap<String, PyObject>> = results
                 .into_iter()
@@ -502,6 +525,7 @@ impl Collection {
     ///     query: Text query string
     ///     top_k: Number of results to return (default: 10)
     ///     vector_weight: Weight for vector results (0.0-1.0, default: 0.5)
+    ///     filter: Optional filter dictionary
     ///
     /// Returns:
     ///     List of search results with 'id', 'score', and 'payload'
@@ -513,20 +537,44 @@ impl Collection {
     ///     ...     top_k=10,
     ///     ...     vector_weight=0.7
     ///     ... )
-    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5))]
+    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5, filter = None))]
     fn hybrid_search(
         &self,
         vector: PyObject,
         query: &str,
         top_k: usize,
         vector_weight: f32,
+        filter: Option<PyObject>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
-            let results = self
-                .inner
-                .hybrid_search(&query_vector, query, top_k, Some(vector_weight))
-                .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))?;
+
+            let filter_obj = match filter {
+                Some(f) => {
+                    let json_str = py
+                        .import("json")?
+                        .call_method1("dumps", (f,))?
+                        .extract::<String>()?;
+                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
+                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
+                    Some(filter)
+                }
+                None => None,
+            };
+
+            let results = if let Some(f) = filter_obj {
+                self.inner.hybrid_search_with_filter(
+                    &query_vector,
+                    query,
+                    top_k,
+                    Some(vector_weight),
+                    &f,
+                )
+            } else {
+                self.inner
+                    .hybrid_search(&query_vector, query, top_k, Some(vector_weight))
+            }
+            .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))?;
 
             let py_results: Vec<HashMap<String, PyObject>> = results
                 .into_iter()
@@ -555,35 +603,77 @@ impl Collection {
     /// with multiple query vectors simultaneously.
     ///
     /// Args:
-    ///     vectors: List of query vectors
-    ///     top_k: Number of results per query (default: 10)
+    ///     searches: List of search dicts, each containing:
+    ///               - 'vector': Query vector (required)
+    ///               - 'top_k': Number of results (optional, default 10)
+    ///               - 'filter': Metadata filter dict (optional)
     ///
     /// Returns:
-    ///     List of result lists, one per query vector
+    ///     List of result lists, one per search query
     ///
     /// Example:
-    ///     >>> queries = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
-    ///     >>> batch_results = collection.batch_search(queries, top_k=5)
-    ///     >>> for i, results in enumerate(batch_results):
-    ///     ...     print(f"Query {i}: {len(results)} results")
-    #[pyo3(signature = (vectors, top_k = 10))]
+    ///     >>> results = collection.batch_search([
+    ///     ...     {"vector": [0.1, 0.2], "top_k": 5},
+    ///     ...     {"vector": [0.3, 0.4], "filter": {"condition": {"type": "eq", "field": "tag", "value": "A"}}}
+    ///     ... ])
+    #[pyo3(signature = (searches))]
     fn batch_search(
         &self,
-        vectors: Vec<Vec<f32>>,
-        top_k: usize,
+        searches: Vec<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<Vec<HashMap<String, PyObject>>>> {
         Python::with_gil(|py| {
-            let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+            let mut queries = Vec::with_capacity(searches.len());
+            let mut filters = Vec::with_capacity(searches.len());
+            let mut top_ks = Vec::with_capacity(searches.len());
+
+            for search_dict in searches {
+                let vector_obj = search_dict
+                    .get("vector")
+                    .ok_or_else(|| PyValueError::new_err("Search missing 'vector' field"))?;
+                let vector = extract_vector(py, vector_obj)?;
+                queries.push(vector);
+
+                let top_k: usize = search_dict
+                    .get("top_k")
+                    .or_else(|| search_dict.get("topK"))
+                    .map(|v| v.extract(py))
+                    .transpose()?
+                    .unwrap_or(10);
+                top_ks.push(top_k);
+
+                let filter_obj = match search_dict.get("filter") {
+                    Some(f) => {
+                        let json_str = py
+                            .import("json")?
+                            .call_method1("dumps", (f,))?
+                            .extract::<String>()?;
+                        let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
+                            .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
+                        Some(filter)
+                    }
+                    None => None,
+                };
+                filters.push(filter_obj);
+            }
+
+            // Use the max top_k for the batch operation
+            let max_top_k = top_ks.iter().max().copied().unwrap_or(10);
+
+            // Prepare query refs for core
+            let query_refs: Vec<&[f32]> = queries.iter().map(|v| v.as_slice()).collect();
+
             let batch_results = self
                 .inner
-                .search_batch_parallel(&query_refs, top_k)
+                .search_batch_with_filters(&query_refs, max_top_k, &filters)
                 .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))?;
 
             let py_batch_results: Vec<Vec<HashMap<String, PyObject>>> = batch_results
                 .into_iter()
-                .map(|results| {
+                .zip(top_ks)
+                .map(|(results, k)| {
                     results
                         .into_iter()
+                        .take(k)
                         .map(|r| {
                             let mut result = HashMap::new();
                             result.insert("id".to_string(), r.point.id.into_py(py));
@@ -602,6 +692,140 @@ impl Collection {
                 .collect();
 
             Ok(py_batch_results)
+        })
+    }
+
+    /// Search with metadata filtering.
+    ///
+    /// Performs vector similarity search with post-filtering based on
+    /// metadata conditions.
+    ///
+    /// Args:
+    ///     vector: Query vector (Python list or numpy array)
+    ///     top_k: Number of results to return (default: 10)
+    ///     filter: Filter dictionary with condition (e.g., {"condition": {"type": "eq", "field": "category", "value": "tech"}})
+    ///
+    /// Returns:
+    ///     List of search results matching the filter
+    ///
+    /// Example:
+    ///     >>> results = collection.search_with_filter(
+    ///     ...     vector=[0.1, 0.2, 0.3],
+    ///     ...     top_k=10,
+    ///     ...     filter={"condition": {"type": "eq", "field": "category", "value": "tech"}}
+    ///     ... )
+    #[pyo3(signature = (vector, top_k = 10, filter = None))]
+    fn search_with_filter(
+        &self,
+        vector: PyObject,
+        top_k: usize,
+        filter: Option<PyObject>,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let query_vector = extract_vector(py, &vector)?;
+
+            // Parse filter from Python dict to velesdb_core::Filter
+            let filter_obj = match filter {
+                Some(f) => {
+                    let json_str = py
+                        .import("json")?
+                        .call_method1("dumps", (f,))?
+                        .extract::<String>()?;
+                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
+                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
+                    filter
+                }
+                None => {
+                    return Err(PyValueError::new_err(
+                        "Filter is required for search_with_filter",
+                    ));
+                }
+            };
+
+            let results = self
+                .inner
+                .search_with_filter(&query_vector, top_k, &filter_obj)
+                .map_err(|e| PyRuntimeError::new_err(format!("Search with filter failed: {e}")))?;
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|r| {
+                    let mut result = HashMap::new();
+                    result.insert("id".to_string(), r.point.id.into_py(py));
+                    result.insert("score".to_string(), r.score.into_py(py));
+
+                    let payload_py = match &r.point.payload {
+                        Some(p) => json_to_python(py, p),
+                        None => py.None(),
+                    };
+                    result.insert("payload".to_string(), payload_py);
+
+                    result
+                })
+                .collect();
+
+            Ok(py_results)
+        })
+    }
+
+    /// Execute a VelesQL query.
+    ///
+    /// VelesQL is a SQL-like query language for vector search.
+    /// Supports NEAR for vector search and MATCH for text search.
+    ///
+    /// Args:
+    ///     query_str: VelesQL query string
+    ///     params: Optional dict of query parameters (e.g., {"v": [0.1, 0.2, ...]})
+    ///
+    /// Returns:
+    ///     List of search results
+    ///
+    /// Example:
+    ///     >>> results = collection.query("SELECT * FROM vectors WHERE MATCH 'machine learning' LIMIT 10")
+    ///     >>> results = collection.query("SELECT * FROM vectors WHERE category = 'tech' LIMIT 5")
+    #[pyo3(signature = (query_str, params=None))]
+    fn query(
+        &self,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            // Parse the VelesQL query to validate syntax
+            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
+                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
+            })?;
+
+            // Convert Python params to Rust HashMap<String, serde_json::Value>
+            let rust_params: std::collections::HashMap<String, serde_json::Value> = params
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+                .collect();
+
+            // Use unified execute_query from Collection
+            let results = self
+                .inner
+                .execute_query(&parsed, &rust_params)
+                .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {e}")))?;
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|r| {
+                    let mut result = HashMap::new();
+                    result.insert("id".to_string(), r.point.id.into_py(py));
+                    result.insert("score".to_string(), r.score.into_py(py));
+
+                    let payload_py = match &r.point.payload {
+                        Some(p) => json_to_python(py, p),
+                        None => py.None(),
+                    };
+                    result.insert("payload".to_string(), payload_py);
+
+                    result
+                })
+                .collect();
+
+            Ok(py_results)
         })
     }
 }

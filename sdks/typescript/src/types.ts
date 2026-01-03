@@ -126,6 +126,37 @@ export interface IVelesDBBackend {
   
   /** Get a vector by ID */
   get(collection: string, id: string | number): Promise<VectorDocument | null>;
+
+  /** Search for multiple vectors in batch */
+  searchBatch(
+    collection: string,
+    searches: Array<{
+      vector: number[] | Float32Array;
+      k?: number;
+      filter?: Record<string, unknown>;
+    }>
+  ): Promise<SearchResult[][]>;
+  
+  /** Full-text search using BM25 */
+  textSearch(
+    collection: string,
+    query: string,
+    options?: { k?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]>;
+  
+  /** Hybrid search combining vector and text */
+  hybridSearch(
+    collection: string,
+    vector: number[] | Float32Array,
+    textQuery: string,
+    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]>;
+  
+  /** Execute VelesQL query */
+  query(
+    queryString: string,
+    params?: Record<string, unknown>
+  ): Promise<SearchResult[]>;
   
   /** Close/cleanup the backend */
   close(): Promise<void>;

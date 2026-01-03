@@ -53,6 +53,9 @@ pub trait VectorStorage: Send + Sync {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Returns all stored IDs.
+    fn ids(&self) -> Vec<u64>;
 }
 
 /// Trait defining storage operations for metadata payloads.

@@ -170,9 +170,10 @@ curl http://localhost:8080/api-docs/openapi.json
 
 ## Performance
 
-- **Cosine similarity**: ~76 ns per operation (768d)
+- **Cosine similarity**: ~93 ns per operation (768d)
+- **Dot product**: ~36 ns per operation (768d)
 - **Search latency**: < 1ms for 100k vectors
-- **Throughput**: 13M+ distance calculations/sec
+- **Throughput**: 28M+ distance calculations/sec
 
 ## Configuration
 

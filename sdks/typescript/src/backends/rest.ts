@@ -259,6 +259,38 @@ export class RestBackend implements IVelesDBBackend {
     return response.data ?? [];
   }
 
+  async searchBatch(
+    collection: string,
+    searches: Array<{
+      vector: number[] | Float32Array;
+      k?: number;
+      filter?: Record<string, unknown>;
+    }>
+  ): Promise<SearchResult[][]> {
+    this.ensureInitialized();
+
+    const formattedSearches = searches.map(s => ({
+      vector: s.vector instanceof Float32Array ? Array.from(s.vector) : s.vector,
+      top_k: s.k ?? 10,
+      filter: s.filter,
+    }));
+
+    const response = await this.request<BatchSearchResponse>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/search/batch`,
+      { searches: formattedSearches }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.results.map(r => r.results) ?? [];
+  }
+
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
 
@@ -293,6 +325,87 @@ export class RestBackend implements IVelesDBBackend {
     }
 
     return response.data ?? null;
+  }
+
+  async textSearch(
+    collection: string,
+    query: string,
+    options?: { k?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ results: SearchResult[] }>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/search/text`,
+      {
+        query,
+        top_k: options?.k ?? 10,
+        filter: options?.filter,
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.results ?? [];
+  }
+
+  async hybridSearch(
+    collection: string,
+    vector: number[] | Float32Array,
+    textQuery: string,
+    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    const queryVector = vector instanceof Float32Array ? Array.from(vector) : vector;
+
+    const response = await this.request<{ results: SearchResult[] }>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/search/hybrid`,
+      {
+        vector: queryVector,
+        query: textQuery,
+        top_k: options?.k ?? 10,
+        vector_weight: options?.vectorWeight ?? 0.5,
+        filter: options?.filter,
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.results ?? [];
+  }
+
+  async query(
+    queryString: string,
+    params?: Record<string, unknown>
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ results: SearchResult[] }>(
+      'POST',
+      '/query',
+      {
+        query: queryString,
+        params: params ?? {},
+      }
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.results ?? [];
   }
 
   async close(): Promise<void> {

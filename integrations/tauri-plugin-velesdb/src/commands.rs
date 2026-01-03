@@ -107,6 +107,23 @@ pub struct SearchRequest {
     /// Number of results.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+/// Individual search request within a batch.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndividualSearchRequest {
+    /// Query vector.
+    pub vector: Vec<f32>,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
 }
 
 /// Request for batch search.
@@ -115,11 +132,8 @@ pub struct SearchRequest {
 pub struct BatchSearchRequest {
     /// Collection name.
     pub collection: String,
-    /// Query vectors.
-    pub vectors: Vec<Vec<f32>>,
-    /// Number of results per query.
-    #[serde(default = "default_top_k")]
-    pub top_k: usize,
+    /// List of search queries.
+    pub searches: Vec<IndividualSearchRequest>,
 }
 
 fn default_top_k() -> usize {
@@ -137,6 +151,9 @@ pub struct TextSearchRequest {
     /// Number of results.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
 }
 
 /// Request for hybrid search.
@@ -155,6 +172,9 @@ pub struct HybridSearchRequest {
     /// Weight for vector results (0.0-1.0).
     #[serde(default = "default_vector_weight")]
     pub vector_weight: f32,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
 }
 
 fn default_vector_weight() -> f32 {
@@ -440,13 +460,21 @@ pub async fn search<R: Runtime>(
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
 
+    let filter = request.filter.clone();
+
     let results = state
         .with_db(|db| {
             let coll = db
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let search_results = coll.search(&request.vector, request.top_k)?;
+            let search_results = if let Some(ref filter_json) = filter {
+                let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
+                    .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
+                coll.search_with_filter(&request.vector, request.top_k, &filter)?
+            } else {
+                coll.search(&request.vector, request.top_k)?
+            };
             Ok(search_results
                 .into_iter()
                 .map(|r| SearchResult {
@@ -479,8 +507,26 @@ pub async fn batch_search<R: Runtime>(
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let query_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
-            let results = coll.search_batch_parallel(&query_refs, request.top_k)?;
+            let query_refs: Vec<&[f32]> = request
+                .searches
+                .iter()
+                .map(|s| s.vector.as_slice())
+                .collect();
+            let filters: Vec<Option<velesdb_core::Filter>> = request
+                .searches
+                .iter()
+                .map(|s| {
+                    s.filter
+                        .as_ref()
+                        .and_then(|f_json| serde_json::from_value(f_json.clone()).ok())
+                })
+                .collect();
+
+            // Use the top_k from the first search as default for the batch operation if needed,
+            // though search_batch_with_filters will handle them correctly if we adapt it or use it as base.
+            // For now, we'll use search_batch_with_filters from core.
+            let top_k = request.searches.first().map_or(10, |s| s.top_k);
+            let results = coll.search_batch_with_filters(&query_refs, top_k, &filters)?;
 
             Ok(results
                 .into_iter()
@@ -514,13 +560,21 @@ pub async fn text_search<R: Runtime>(
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
 
+    let filter = request.filter.clone();
+
     let results = state
         .with_db(|db| {
             let coll = db
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let search_results = coll.text_search(&request.query, request.top_k);
+            let search_results = if let Some(ref filter_json) = filter {
+                let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
+                    .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
+                coll.text_search_with_filter(&request.query, request.top_k, &filter)
+            } else {
+                coll.text_search(&request.query, request.top_k)
+            };
             Ok(search_results
                 .into_iter()
                 .map(|r| SearchResult {
@@ -547,18 +601,32 @@ pub async fn hybrid_search<R: Runtime>(
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
 
+    let filter = request.filter.clone();
+
     let results = state
         .with_db(|db| {
             let coll = db
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let search_results = coll.hybrid_search(
-                &request.vector,
-                &request.query,
-                request.top_k,
-                Some(request.vector_weight),
-            )?;
+            let search_results = if let Some(ref filter_json) = filter {
+                let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
+                    .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
+                coll.hybrid_search_with_filter(
+                    &request.vector,
+                    &request.query,
+                    request.top_k,
+                    Some(request.vector_weight),
+                    &filter,
+                )?
+            } else {
+                coll.hybrid_search(
+                    &request.vector,
+                    &request.query,
+                    request.top_k,
+                    Some(request.vector_weight),
+                )?
+            };
             Ok(search_results
                 .into_iter()
                 .map(|r| SearchResult {
@@ -597,31 +665,19 @@ pub async fn query<R: Runtime>(
                 .get_collection(collection_name)
                 .ok_or_else(|| Error::CollectionNotFound(collection_name.clone()))?;
 
-            // For now, just return empty results for non-search queries
-            // Full VelesQL execution would require more complex logic
-            #[allow(clippy::cast_possible_truncation)]
-            let limit = parsed.select.limit.unwrap_or(10) as usize;
+            // Use unified execute_query from Collection
+            let search_results = coll
+                .execute_query(&parsed, &request.params)
+                .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
 
-            // Simple text search if MATCH is present in query
-            if request.query.to_lowercase().contains("match") {
-                // Extract text between quotes after MATCH
-                if let Some(start_idx) = request.query.find('\'') {
-                    if let Some(end_idx) = request.query[start_idx + 1..].find('\'') {
-                        let search_text = &request.query[start_idx + 1..start_idx + 1 + end_idx];
-                        let search_results = coll.text_search(search_text, limit);
-                        return Ok(search_results
-                            .into_iter()
-                            .map(|r| SearchResult {
-                                id: r.point.id,
-                                score: r.score,
-                                payload: r.point.payload,
-                            })
-                            .collect::<Vec<_>>());
-                    }
-                }
-            }
-
-            Ok(Vec::new())
+            Ok(search_results
+                .into_iter()
+                .map(|r| SearchResult {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect::<Vec<_>>())
         })
         .map_err(CommandError::from)?;
 
@@ -849,16 +905,18 @@ mod tests {
     #[test]
     fn test_batch_search_request_deserialize() {
         // Arrange
-        let json = r#"{"collection": "docs", "vectors": [[0.1, 0.2], [0.3, 0.4]]}"#;
+        let json = r#"{"collection": "docs", "searches": [{"vector": [0.1, 0.2]}, {"vector": [0.3, 0.4], "topK": 5}]}"#;
 
         // Act
         let request: BatchSearchRequest = serde_json::from_str(json).unwrap();
 
         // Assert
         assert_eq!(request.collection, "docs");
-        assert_eq!(request.vectors.len(), 2);
-        assert_eq!(request.vectors[0], vec![0.1, 0.2]);
-        assert_eq!(request.top_k, 10); // default
+        assert_eq!(request.searches.len(), 2);
+        assert_eq!(request.searches[0].vector, vec![0.1, 0.2]);
+        assert_eq!(request.searches[0].top_k, 10); // default
+        assert_eq!(request.searches[1].vector, vec![0.3, 0.4]);
+        assert_eq!(request.searches[1].top_k, 5);
     }
 
     #[test]

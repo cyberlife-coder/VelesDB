@@ -20,8 +20,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/⚡_Search-128µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
-  <img src="https://img.shields.io/badge/🏎️_SIMD-35ns-blue?style=for-the-badge" alt="SIMD Distance"/>
+  <img src="https://img.shields.io/badge/⚡_Search-105µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_SIMD-36ns-blue?style=for-the-badge" alt="SIMD Distance"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
   <img src="https://img.shields.io/badge/🎯_Recall-96%25+-success?style=for-the-badge" alt="Recall ≥95%"/>
 </p>
@@ -52,8 +52,8 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 
 | Metric | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
-| **Search Latency** | **128µs** | 50-100ms |
-| **10 Retrievals** | **1.3ms total** | 500ms-1s total |
+| **Search Latency** | **105µs** | 50-100ms |
+| **10 Retrievals** | **1.1ms total** | 500ms-1s total |
 | **Time to First Token** | **Instant** | Noticeable delay |
 
 ### 🏢 Coming From Another Vector DB?
@@ -91,8 +91,8 @@ Les bases vectorielles traditionnelles ajoutent **50-100ms de latence** par requ
 
 | Métrique | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
-| **Latence Recherche** | **128µs** | 50-100ms |
-| **10 Récupérations** | **1.3ms total** | 500ms-1s total |
+| **Latence Recherche** | **105µs** | 50-100ms |
+| **10 Récupérations** | **1.1ms total** | 500ms-1s total |
 | **Time to First Token** | **Instantané** | Délai perceptible |
 
 ### 🏢 Vous Venez d'une Autre Base Vectorielle ?

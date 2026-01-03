@@ -695,55 +695,68 @@ pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
         .get_collection(collection_name)
         .ok_or_else(|| anyhow::anyhow!("Collection '{collection_name}' not found"))?;
 
-    // For now, simple implementation - just list points with limit
-    #[allow(clippy::cast_possible_truncation)]
-    let limit = parsed.select.limit.unwrap_or(10) as usize;
-
-    // Get all point IDs (simplified - in production would use index)
-    let mut rows = Vec::new();
-
-    // Check if there's a vector search in the where clause
-    let has_vector_search = parsed
+    // Check if there's a vector search requiring parameters
+    let has_param_vector = parsed
         .select
         .where_clause
         .as_ref()
-        .is_some_and(contains_vector_search);
+        .is_some_and(contains_param_vector);
 
-    if has_vector_search {
-        // Vector search requires a vector parameter which we can't get from CLI directly
-        // For demo, return empty with message
+    if has_param_vector {
+        // Vector search with parameter requires external input
         println!(
             "{}",
-            "Note: Vector search requires a query vector. Use REST API for vector queries."
+            "Note: Vector search with $parameter requires REST API. Use literal vectors or metadata-only queries."
                 .yellow()
         );
-    } else {
-        // Just return first N points
-        let ids: Vec<u64> = (1..=(limit as u64 * 2)).collect();
-        let points = collection.get(&ids);
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        return Ok(QueryResult {
+            rows: Vec::new(),
+            duration_ms,
+        });
+    }
 
-        for point in points.into_iter().flatten() {
+    // Use unified execute_query from Collection (empty params for CLI)
+    let params = HashMap::new();
+    let results = collection
+        .execute_query(&parsed, &params)
+        .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
+
+    // Convert SearchResult to row format
+    let rows: Vec<HashMap<String, serde_json::Value>> = results
+        .into_iter()
+        .map(|r| {
             let mut row = HashMap::new();
-            row.insert("id".to_string(), serde_json::json!(point.id));
+            row.insert("id".to_string(), serde_json::json!(r.point.id));
+            row.insert("score".to_string(), serde_json::json!(r.score));
 
-            if let Some(serde_json::Value::Object(map)) = &point.payload {
+            if let Some(serde_json::Value::Object(map)) = &r.point.payload {
                 for (k, v) in map {
                     row.insert(k.clone(), v.clone());
                 }
             }
-            rows.push(row);
-
-            if rows.len() >= limit {
-                break;
-            }
-        }
-    }
+            row
+        })
+        .collect();
 
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     Ok(QueryResult { rows, duration_ms })
 }
 
+fn contains_param_vector(condition: &velesdb_core::velesql::Condition) -> bool {
+    use velesdb_core::velesql::{Condition, VectorExpr};
+    match condition {
+        Condition::VectorSearch(vs) => matches!(vs.vector, VectorExpr::Parameter(_)),
+        Condition::And(left, right) | Condition::Or(left, right) => {
+            contains_param_vector(left) || contains_param_vector(right)
+        }
+        Condition::Group(inner) => contains_param_vector(inner),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
 fn contains_vector_search(condition: &velesdb_core::velesql::Condition) -> bool {
     use velesdb_core::velesql::Condition;
     match condition {

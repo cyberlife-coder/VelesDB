@@ -12,7 +12,7 @@
 
 ## 🇫🇷 A French Initiative
 
-**VelesDB** is proudly developed by **[Wiscale France](https://wiscale.com)**, founded by **Julien Lange**.
+**VelesDB** is proudly developed by **[Wiscale France](https://wiscale.fr)**, founded by **Julien Lange**.
 
 As a French company, we are committed to:
 - **🇪🇺 GDPR compliance** — Data protection is not an afterthought, it's in our DNA
@@ -273,7 +273,7 @@ Coming from another vector database? We make it easy:
 
 <p align="center">
   <strong>VelesDB: When microseconds matter.</strong><br/>
-  <em>Built with ❤️ and 🦀 Rust by <a href="https://wiscale.com">Wiscale France</a></em><br/>
+  <em>Built with ❤️ and 🦀 Rust by <a href="https://wiscale.fr">Wiscale France</a></em><br/>
   <em>Founded by <strong>Julien Lange</strong></em>
 </p>
 
@@ -282,5 +282,5 @@ Coming from another vector database? We make it easy:
 </p>
 
 <p align="center">
-  📧 <a href="mailto:hello@wiscale.com">hello@wiscale.com</a>
+  📧 <a href="mailto:contact@wiscale.fr">contact@wiscale.fr</a>
 </p>

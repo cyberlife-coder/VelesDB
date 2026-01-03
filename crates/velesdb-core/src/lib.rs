@@ -72,7 +72,7 @@ pub use collection::Collection;
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
-pub use point::Point;
+pub use point::{Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,

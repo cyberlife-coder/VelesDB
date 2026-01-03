@@ -162,11 +162,11 @@ db.create_collection_with_options(
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| Dot Product | **~38 ns** | 26M ops/sec |
-| Euclidean Distance | **~47 ns** | 21M ops/sec |
-| Cosine Similarity | **~83 ns** | 12M ops/sec |
-| Hamming Distance | **~16 ns** | 62M ops/sec |
-| Jaccard Similarity | **~90 ns** | 11M ops/sec |
+| Dot Product | **~36 ns** | 28M ops/sec |
+| Euclidean Distance | **~46 ns** | 22M ops/sec |
+| Cosine Similarity | **~93 ns** | 11M ops/sec |
+| Hamming Distance | **~6 ns** | 164M ops/sec |
+| Jaccard Similarity | **~160 ns** | 6M ops/sec |
 
 ### End-to-End Benchmark (10k vectors, 768D)
 
@@ -300,6 +300,27 @@ AND category = 'tech'
 AND views > 100
 LIMIT 5;
 ```
+
+### WITH Clause (Query Options)
+
+Override search parameters on a per-query basis:
+
+```sql
+-- Set search mode
+SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
+WITH (mode = 'high_recall');
+
+-- Set ef_search and timeout
+SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
+WITH (ef_search = 512, timeout_ms = 5000);
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mode` | string | fast, balanced, accurate, high_recall, perfect |
+| `ef_search` | integer | HNSW ef_search (higher = better recall) |
+| `timeout_ms` | integer | Query timeout in milliseconds |
+| `rerank` | boolean | Enable result reranking |
 
 ### Available Filter Operators
 

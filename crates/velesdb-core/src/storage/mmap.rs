@@ -575,4 +575,8 @@ impl VectorStorage for MmapStorage {
     fn len(&self) -> usize {
         self.index.read().len()
     }
+
+    fn ids(&self) -> Vec<u64> {
+        self.index.read().keys().copied().collect()
+    }
 }

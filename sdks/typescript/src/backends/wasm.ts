@@ -218,6 +218,22 @@ export class WasmBackend implements IVelesDBBackend {
     }
 
     const k = options?.k ?? 10;
+
+    if (options?.filter) {
+      // Use the new search_with_filter method
+      const results = collection.store.search_with_filter(queryVector, k, options.filter) as Array<{
+        id: bigint;
+        score: number;
+        payload: any;
+      }>;
+
+      return results.map(r => ({
+        id: String(r.id),
+        score: r.score,
+        payload: r.payload || collection.payloads.get(String(r.id)),
+      }));
+    }
+
     const rawResults = collection.store.search(queryVector, k) as Array<[bigint, number]>;
 
     return rawResults.map(([id, score]: [bigint, number]) => {
@@ -234,6 +250,23 @@ export class WasmBackend implements IVelesDBBackend {
 
       return result;
     });
+  }
+
+  async searchBatch(
+    collectionName: string,
+    searches: Array<{
+      vector: number[] | Float32Array;
+      k?: number;
+      filter?: Record<string, unknown>;
+    }>
+  ): Promise<SearchResult[][]> {
+    this.ensureInitialized();
+
+    const results: SearchResult[][] = [];
+    for (const s of searches) {
+      results.push(await this.search(collectionName, s.vector, { k: s.k, filter: s.filter }));
+    }
+    return results;
   }
 
   async delete(collectionName: string, id: string | number): Promise<boolean> {
@@ -274,6 +307,45 @@ export class WasmBackend implements IVelesDBBackend {
       vector: [], // Not available in current WASM impl
       payload,
     };
+  }
+
+  async textSearch(
+    _collection: string,
+    _query: string,
+    _options?: { k?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    // WASM backend doesn't support BM25 text search
+    // Use REST backend for full-text search capabilities
+    throw new VelesDBError(
+      'Text search is not supported in WASM backend. Use REST backend for BM25 search.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async hybridSearch(
+    _collection: string,
+    _vector: number[] | Float32Array,
+    _textQuery: string,
+    _options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    // WASM backend doesn't support hybrid search (requires BM25)
+    // Use REST backend for hybrid search capabilities
+    throw new VelesDBError(
+      'Hybrid search is not supported in WASM backend. Use REST backend for hybrid search.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async query(
+    _queryString: string,
+    _params?: Record<string, unknown>
+  ): Promise<SearchResult[]> {
+    // WASM backend doesn't support VelesQL
+    // Use REST backend for VelesQL queries
+    throw new VelesDBError(
+      'VelesQL queries are not supported in WASM backend. Use REST backend for query support.',
+      'NOT_SUPPORTED'
+    );
   }
 
   async close(): Promise<void> {

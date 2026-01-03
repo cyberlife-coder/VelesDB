@@ -219,6 +219,36 @@ export class VelesDB {
   }
 
   /**
+   * Search for multiple vectors in parallel
+   * 
+   * @param collection - Collection name
+   * @param searches - List of search queries
+   * @returns List of search results for each query
+   */
+  async searchBatch(
+    collection: string,
+    searches: Array<{
+      vector: number[] | Float32Array;
+      k?: number;
+      filter?: Record<string, unknown>;
+    }>
+  ): Promise<SearchResult[][]> {
+    this.ensureInitialized();
+
+    if (!Array.isArray(searches)) {
+      throw new ValidationError('Searches must be an array');
+    }
+
+    for (const s of searches) {
+      if (!s.vector || (!Array.isArray(s.vector) && !(s.vector instanceof Float32Array))) {
+        throw new ValidationError('Each search must have a vector (array or Float32Array)');
+      }
+    }
+
+    return this.backend.searchBatch(collection, searches);
+  }
+
+  /**
    * Delete a vector by ID
    * 
    * @param collection - Collection name
@@ -240,6 +270,76 @@ export class VelesDB {
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
     return this.backend.get(collection, id);
+  }
+
+  /**
+   * Perform full-text search using BM25
+   * 
+   * @param collection - Collection name
+   * @param query - Text query
+   * @param options - Search options (k, filter)
+   * @returns Search results sorted by BM25 score
+   */
+  async textSearch(
+    collection: string,
+    query: string,
+    options?: { k?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    if (!query || typeof query !== 'string') {
+      throw new ValidationError('Query must be a non-empty string');
+    }
+
+    return this.backend.textSearch(collection, query, options);
+  }
+
+  /**
+   * Perform hybrid search combining vector similarity and BM25 text search
+   * 
+   * @param collection - Collection name
+   * @param vector - Query vector
+   * @param textQuery - Text query for BM25
+   * @param options - Search options (k, vectorWeight, filter)
+   * @returns Search results sorted by fused score
+   */
+  async hybridSearch(
+    collection: string,
+    vector: number[] | Float32Array,
+    textQuery: string,
+    options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    if (!vector || (!Array.isArray(vector) && !(vector instanceof Float32Array))) {
+      throw new ValidationError('Vector must be an array or Float32Array');
+    }
+
+    if (!textQuery || typeof textQuery !== 'string') {
+      throw new ValidationError('Text query must be a non-empty string');
+    }
+
+    return this.backend.hybridSearch(collection, vector, textQuery, options);
+  }
+
+  /**
+   * Execute a VelesQL query
+   * 
+   * @param queryString - VelesQL query string
+   * @param params - Optional query parameters
+   * @returns Query results
+   */
+  async query(
+    queryString: string,
+    params?: Record<string, unknown>
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    if (!queryString || typeof queryString !== 'string') {
+      throw new ValidationError('Query string must be a non-empty string');
+    }
+
+    return this.backend.query(queryString, params);
   }
 
   /**
