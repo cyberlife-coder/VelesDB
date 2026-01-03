@@ -241,6 +241,20 @@ impl HnswIndex {
         })
     }
 
+    /// Computes exact SIMD distance between query and vector based on metric.
+    ///
+    /// This helper eliminates code duplication across search methods.
+    #[inline]
+    fn compute_distance(&self, query: &[f32], vector: &[f32]) -> f32 {
+        match self.metric {
+            DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vector),
+            DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vector),
+            DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, vector),
+            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, vector),
+            DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, vector),
+        }
+    }
+
     /// Searches for the k nearest neighbors with a specific quality profile.
     ///
     /// # Arguments
@@ -357,13 +371,7 @@ impl HnswIndex {
             }
 
             // Compute exact distance for current vector
-            let exact_dist = match self.metric {
-                DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
-                DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
-                DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
-                DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
-                DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
-            };
+            let exact_dist = self.compute_distance(query, v);
 
             reranked.push((*id, exact_dist));
         }
@@ -399,13 +407,7 @@ impl HnswIndex {
 
         for (idx, vec) in &vectors_snapshot {
             if let Some(id) = self.mappings.get_id(*idx) {
-                let dist = match self.metric {
-                    DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vec),
-                    DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vec),
-                    DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, vec),
-                    DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, vec),
-                    DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, vec),
-                };
+                let dist = self.compute_distance(query, vec);
                 all_distances.push((id, dist));
             }
         }
@@ -453,15 +455,7 @@ impl HnswIndex {
 
             for (idx, vec) in buffer.iter() {
                 if let Some(id) = self.mappings.get_id(*idx) {
-                    let dist = match self.metric {
-                        DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vec),
-                        DistanceMetric::Euclidean => {
-                            crate::simd::euclidean_distance_fast(query, vec)
-                        }
-                        DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, vec),
-                        DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, vec),
-                        DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, vec),
-                    };
+                    let dist = self.compute_distance(query, vec);
                     all_distances.push((id, dist));
                 }
             }
@@ -615,13 +609,7 @@ impl HnswIndex {
             }
 
             // Compute exact distance
-            let exact_dist = match self.metric {
-                DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, v),
-                DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, v),
-                DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, v),
-                DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, v),
-                DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, v),
-            };
+            let exact_dist = self.compute_distance(query, v);
 
             reranked.push((*id, exact_dist));
         }
@@ -885,13 +873,7 @@ impl HnswIndex {
             .par_iter()
             .filter_map(|(idx, vec)| {
                 let id = self.mappings.get_id(*idx)?;
-                let score = match self.metric {
-                    DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vec),
-                    DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vec),
-                    DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, vec),
-                    DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, vec),
-                    DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, vec),
-                };
+                let score = self.compute_distance(query, vec);
                 Some((id, score))
             })
             .collect();
