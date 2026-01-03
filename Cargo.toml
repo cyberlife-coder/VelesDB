@@ -53,8 +53,6 @@ roaring = "0.10"
 
 # API
 axum = "0.8"
-tonic = "0.12"
-prost = "0.13"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
