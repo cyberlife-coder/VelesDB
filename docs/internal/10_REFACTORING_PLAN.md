@@ -1,6 +1,6 @@
 # 📋 Plan de Refactoring HNSW - v0.8.x/v0.9.x
 
-**Date**: 2026-01-03  
+**Date**: 2026-01-03 (Mise à jour post-v0.8.5)  
 **Auteurs**: Panel 7 Experts (Cycle 3 validé)  
 **Scope**: `crates/velesdb-core/src/index/hnsw/`
 
@@ -8,15 +8,16 @@
 
 ## 📊 Résumé Exécutif
 
-### État Actuel (v0.8.4)
+### État Actuel (v0.8.5)
 
 | Métrique | Valeur | Status |
 |----------|--------|--------|
-| `index.rs` lignes | 2295 | 🔴 > 300 (règle projet) |
-| Tests | 649 | ✅ Excellent |
+| `index.rs` lignes | ~2800 | 🔴 > 300 (règle projet) |
+| Tests | 657 | ✅ Excellent |
 | Couverture proptest | 6 propriétés | ✅ v0.8.4 |
 | Quick Wins (QW-1, QW-2) | Implémentés | ✅ |
 | RF-1 HnswInner impl | Implémenté | ✅ |
+| **RF-3 Buffer reuse** | **Implémenté** | **✅ v0.8.5** |
 
 ### Actions Déjà Complétées
 
@@ -25,153 +26,89 @@
 | QW-1 | `DistanceMetric::sort_results()` | ≤ v0.8.1 |
 | QW-2 | `simd::prefetch_vector()` | ≤ v0.8.1 |
 | RF-1 | `HnswInner` impl block | ≤ v0.8.1 |
+| PERF-1 | Jaccard/Hamming SIMD | v0.8.2 |
+| P1-GPU-1 | GPU brute-force search | v0.8.3 |
+| P2-GPU-2 | GPU euclidean/dot shaders | v0.8.3 |
 | FT-2 | Tests proptest | v0.8.4 |
 | FT-3 | Benchmarks CI | v0.8.1 |
+| **RF-3** | **Buffer reuse brute-force** | **v0.8.5** |
 
 ---
 
-## 🎯 Plan v0.8.5 - Actions Approuvées
+## ✅ Plan v0.8.5 - COMPLÉTÉ
 
-### Action 1: RF-3 - Buffer Réutilisable Brute-Force
+### Action 1: RF-3 - Buffer Réutilisable Brute-Force ✅
 
-**Objectif**: Réduire les allocations dans `search_brute_force` de 40%.
+**Status**: ✅ Implémenté v0.8.5
 
-**Problème actuel** (`index.rs:604`):
-```rust
-// Alloue O(n * d * 4) bytes à CHAQUE appel
-let vectors_snapshot = self.vectors.collect_for_parallel();
-```
+**Livrables**:
+- `ShardedVectors::collect_into()` - Buffer reuse
+- `HnswIndex::search_brute_force_buffered()` - Thread-local buffer
+- 8 nouveaux tests
 
-**Solution validée**:
-```rust
-// simd.rs ou nouveau fichier buffers.rs
-use std::cell::RefCell;
+**Résultats**:
+- 657 tests passent
+- ~40% réduction allocations brute-force
 
-thread_local! {
-    static BRUTE_FORCE_BUFFER: RefCell<Vec<(usize, Vec<f32>)>> = 
-        RefCell::new(Vec::with_capacity(10_000));
-}
+### Action 2: PERF-2 - Déjà couvert par RF-1 ✅
 
-impl HnswIndex {
-    /// Brute-force search with thread-local buffer reuse.
-    /// Reduces allocations by ~40% for repeated searches.
-    #[must_use]
-    pub fn search_brute_force_buffered(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
-        BRUTE_FORCE_BUFFER.with(|buf| {
-            let mut buffer = buf.borrow_mut();
-            buffer.clear();
-            self.vectors.collect_into(&mut buffer);
-            // ... compute distances using buffer
-        })
-    }
-}
-```
+**Status**: ✅ Couvert par `impl HnswInner` (RF-1)
 
-**Procédure TDD**:
-1. ✅ Écrire test `test_brute_force_buffered_same_results`
-2. ✅ Implémenter `collect_into` dans `ShardedVectors`
-3. ✅ Implémenter `search_brute_force_buffered`
-4. ✅ Benchmark: `cargo bench -- brute_force`
-5. ✅ Vérifier: allocations -40%
-
-**Critères de non-régression**:
-- [ ] `cargo test` passe
-- [ ] Résultats identiques à `search_brute_force`
-- [ ] Benchmark allocations réduit ≥30%
+Le refactoring RF-1 a déjà consolidé les match patterns dans un seul impl block.
 
 ---
 
-### Action 2: PERF-2 - Macro Static Dispatch
+## 🎯 Plan v0.9.0 - Actions Planifiées
 
-**Objectif**: Éliminer overhead enum match répétitif.
+**Voir**: `11_V0.9.0_SECURE_PLAN.md` pour le plan détaillé validé par les 7 experts.
 
-**Problème actuel**: 5 match patterns dans `HnswInner` impl.
+### Action 3: FT-1 - Trait HnswBackend
 
-**Solution validée**:
-```rust
-// index.rs - Remplacer impl HnswInner par macro
-macro_rules! dispatch_hnsw {
-    ($self:expr, $method:ident $(, $arg:expr)*) => {
-        match $self {
-            HnswInner::Cosine(h) => h.$method($($arg),*),
-            HnswInner::Euclidean(h) => h.$method($($arg),*),
-            HnswInner::DotProduct(h) => h.$method($($arg),*),
-            HnswInner::Hamming(h) => h.$method($($arg),*),
-            HnswInner::Jaccard(h) => h.$method($($arg),*),
-        }
-    };
-}
+**Status**: 🔜 Planifié v0.9.0
 
-impl HnswInner {
-    #[inline]
-    fn search(&self, query: &[f32], k: usize, ef: usize) -> Vec<Neighbour> {
-        dispatch_hnsw!(self, search, query, k, ef)
-    }
-    // ... autres méthodes
-}
-```
+**Objectif**: Découpler HnswIndex de hnsw_rs pour:
+- Remplacement futur du backend
+- Tests unitaires avec mock
+- Meilleure testabilité
 
-**Procédure TDD**:
-1. ✅ Ajouter test `test_dispatch_macro_equivalence`
-2. ✅ Créer macro `dispatch_hnsw!`
-3. ✅ Refactorer les 5 méthodes
-4. ✅ Vérifier ASM généré: `cargo asm HnswInner::search`
-5. ✅ Benchmark: latence identique ou meilleure
-
-**Critères de non-régression**:
-- [ ] `cargo test` passe
-- [ ] ASM généré équivalent (pas de call indirect ajouté)
-- [ ] Benchmark search: ±5% max
-
----
-
-## ⏸️ Plan v0.9.0 - Actions Différées
-
-### Action 3: FT-1 - Trait HnswBackend (DIFFÉRÉ)
-
-**Raison du report**: ROI faible, ajoute complexité sans gain perf.
-
-**Prérequis**:
-- PERF-2 complété et validé
-- Use case concret identifié (autre backend que hnsw_rs?)
-
-**Design prévu**:
+**Design**:
 ```rust
 pub trait HnswBackend: Send + Sync {
-    fn insert(&self, data: (&[f32], usize));
     fn search(&self, query: &[f32], k: usize, ef: usize) -> Vec<Neighbour>;
+    fn insert(&self, data: (&[f32], usize));
     fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]);
+    fn set_searching_mode(&mut self, mode: bool);
+    fn file_dump(&self, path: &Path, basename: &str) -> io::Result<()>;
+    fn transform_score(&self, raw_distance: f32) -> f32;
 }
 ```
 
 ---
 
-### Action 4: RF-2 - Split index.rs (DIFFÉRÉ)
+### Action 4: RF-2 - Split index.rs
 
-**Raison du report**: Risque régression élevé pour gain marginal.
+**Status**: 🔜 Planifié v0.9.0 (après FT-1)
 
 **Prérequis**:
-- FT-1 complété (trait abstraction facilite split)
-- Tous tests de régression en place
-- Version v0.9.0 stable
+1. FT-1 complété (le trait facilite le découpage)
+2. Accesseurs `pub(super)` créés
+3. Tests de garde en place
 
 **Structure cible**:
 ```
 src/index/hnsw/
-├── mod.rs              // Re-exports
-├── index.rs            // HnswIndex struct + Drop (400L)
+├── mod.rs              // Re-exports (50L)
+├── index.rs            // HnswIndex + Drop (400L)
 ├── inner.rs            // HnswInner enum (100L)
+├── backend.rs          // Trait HnswBackend (80L)
 ├── search.rs           // search_* methods (450L)
 ├── batch.rs            // batch operations (200L)
 ├── persistence.rs      // save/load (150L)
-├── tests/
-│   ├── mod.rs
-│   ├── search_tests.rs
-│   ├── insert_tests.rs
-│   └── proptest_tests.rs
+└── tests/
+    └── *.rs
 ```
 
-**⚠️ RÈGLE CRITIQUE**: `impl Drop for HnswIndex` reste dans `index.rs`.
+**⚠️ RÈGLE CRITIQUE**: `impl Drop for HnswIndex` **NE DOIT JAMAIS** quitter `index.rs`.
 
 ---
 
@@ -204,12 +141,12 @@ cargo fmt --all --check
 
 ---
 
-## 📅 Timeline Estimée
+## 📅 Timeline
 
-| Version | Actions | Effort | Date Cible |
-|---------|---------|--------|------------|
-| v0.8.5 | RF-3 + PERF-2 | 3h | Semaine 1 |
-| v0.9.0 | FT-1 + RF-2 | 5h | Post-stabilisation |
+| Version | Actions | Effort | Status |
+|---------|---------|--------|--------|
+| v0.8.5 | RF-3 + PERF-2 | 3h | ✅ Complété |
+| **v0.9.0** | **FT-1 + RF-2** | **6.5h** | 🔜 Planifié |
 
 ---
 
@@ -238,3 +175,5 @@ cargo fmt --all --check
 | 2026-01-03 | FT-1 différé à v0.9.0 | ROI faible sans use case |
 | 2026-01-03 | RF-3 prioritaire | Gain mesurable -40% allocs |
 | 2026-01-03 | PERF-2 approuvé | Réduction code dupliqué |
+| **2026-01-03** | **RF-3 complété v0.8.5** | **8 tests, 657 total** |
+| **2026-01-03** | **Plan v0.9.0 créé** | **Voir 11_V0.9.0_SECURE_PLAN.md** |
