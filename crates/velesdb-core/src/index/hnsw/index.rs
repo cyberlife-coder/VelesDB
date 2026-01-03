@@ -621,6 +621,33 @@ impl HnswIndex {
         reranked
     }
 
+    /// Prepares vectors for batch insertion: validates dimensions and registers IDs.
+    ///
+    /// Returns a vector of (`internal_index`, vector) pairs ready for insertion.
+    /// Duplicates are automatically skipped.
+    fn prepare_batch_insert<I>(&self, vectors: I) -> Vec<(usize, Vec<f32>)>
+    where
+        I: IntoIterator<Item = (u64, Vec<f32>)>,
+    {
+        let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
+        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
+
+        for (id, vector) in vectors {
+            assert_eq!(
+                vector.len(),
+                self.dimension,
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                vector.len()
+            );
+            if let Some(idx) = self.mappings.register(id) {
+                to_insert.push((idx, vector));
+            }
+        }
+
+        to_insert
+    }
+
     /// Inserts multiple vectors in parallel using rayon.
     ///
     /// This method is optimized for bulk insertions and can significantly
@@ -654,22 +681,8 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, Vec<f32>)>,
     {
-        let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
-
-        // Pre-register all IDs first (lock-free with ShardedMappings)
-        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
-        for (id, vector) in vectors {
-            assert_eq!(
-                vector.len(),
-                self.dimension,
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            );
-            if let Some(idx) = self.mappings.register(id) {
-                to_insert.push((idx, vector));
-            }
-        }
+        // RF-2.5: Use helper for validation and ID registration
+        let to_insert = self.prepare_batch_insert(vectors);
 
         // Prepare references for hnsw_rs parallel_insert: &[(&Vec<T>, usize)]
         let data_refs: Vec<(&Vec<f32>, usize)> =
@@ -726,23 +739,8 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, Vec<f32>)>,
     {
-        let vectors: Vec<(u64, Vec<f32>)> = vectors.into_iter().collect();
-
-        // Step 1: Pre-register all IDs (lock-free with DashMap)
-        let mut to_insert: Vec<(usize, Vec<f32>)> = Vec::with_capacity(vectors.len());
-        for (id, vector) in vectors {
-            assert_eq!(
-                vector.len(),
-                self.dimension,
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            );
-            if let Some(idx) = self.mappings.register(id) {
-                to_insert.push((idx, vector));
-            }
-        }
-
+        // RF-2.5: Use helper for validation and ID registration
+        let to_insert = self.prepare_batch_insert(vectors);
         let count = to_insert.len();
         if count == 0 {
             return 0;
