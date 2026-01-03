@@ -70,6 +70,49 @@ fn bench_hnsw_insert_parallel(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark HNSW fast insert mode (no vector storage overhead).
+fn bench_hnsw_insert_fast(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hnsw_insert_fast");
+
+    let count = 1000_u64;
+    let dim = 768;
+    group.throughput(Throughput::Elements(count));
+
+    // Standard mode (with vector storage)
+    group.bench_with_input(
+        BenchmarkId::new("standard", format!("{count}x{dim}d")),
+        &count,
+        |b, &count| {
+            b.iter(|| {
+                let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                for i in 0..count {
+                    let vector = generate_vector(dim, i);
+                    index.insert(i, &vector);
+                }
+                black_box(index.len())
+            });
+        },
+    );
+
+    // Fast mode (no vector storage)
+    group.bench_with_input(
+        BenchmarkId::new("fast_insert", format!("{count}x{dim}d")),
+        &count,
+        |b, &count| {
+            b.iter(|| {
+                let index = HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine);
+                for i in 0..count {
+                    let vector = generate_vector(dim, i);
+                    index.insert(i, &vector);
+                }
+                black_box(index.len())
+            });
+        },
+    );
+
+    group.finish();
+}
+
 /// Benchmark HNSW index search latency.
 fn bench_hnsw_search_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_search_latency");
@@ -270,6 +313,7 @@ criterion_group!(
     benches,
     bench_hnsw_insert,
     bench_hnsw_insert_parallel,
+    bench_hnsw_insert_fast,
     bench_hnsw_search_latency,
     bench_hnsw_search_throughput,
     bench_collection_search,
