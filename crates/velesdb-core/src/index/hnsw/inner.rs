@@ -34,9 +34,13 @@ pub(super) enum HnswInner {
 // ============================================================================
 // RF-1: HnswOps - Common HNSW operations consolidated into impl block
 // ============================================================================
+// Note: A dispatch macro cannot be used here because the enum variants have
+// different generic types (DistCosine, DistL2, DistDot) which Rust cannot
+// unify in a single match arm binding.
 
 impl HnswInner {
     /// Searches the HNSW graph and returns raw neighbors with distances.
+    #[inline]
     pub(super) fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<Neighbour> {
         match self {
             Self::Cosine(hnsw) => hnsw.search(query, k, ef_search),
@@ -144,5 +148,52 @@ impl super::backend::HnswBackend for HnswInner {
     #[inline]
     fn transform_score(&self, raw_distance: f32) -> f32 {
         HnswInner::transform_score(self, raw_distance)
+    }
+}
+
+// ============================================================================
+// Tests (must be at end of file per clippy::items_after_test_module)
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test search works for all distance metrics
+    #[test]
+    fn test_hnsw_inner_search_all_metrics() {
+        let indices = [
+            HnswInner::Cosine(Hnsw::new(16, 100, 16, 4, DistCosine)),
+            HnswInner::Euclidean(Hnsw::new(16, 100, 16, 4, DistL2)),
+            HnswInner::DotProduct(Hnsw::new(16, 100, 16, 4, DistDot)),
+        ];
+
+        for index in &indices {
+            let query = vec![0.5_f32; 4];
+            let results = index.search(&query, 3, 32);
+            assert!(results.is_empty());
+        }
+    }
+
+    /// Test insert works for `HnswInner`
+    #[test]
+    fn test_hnsw_inner_insert() {
+        let index = HnswInner::Cosine(Hnsw::new(16, 100, 16, 4, DistCosine));
+        let vector = vec![0.1_f32; 4];
+        index.insert((&vector, 0));
+        let results = index.search(&vector, 1, 32);
+        assert_eq!(results.len(), 1);
+    }
+
+    /// Test `transform_score` for different metrics
+    #[test]
+    fn test_hnsw_inner_transform_score() {
+        let cosine = HnswInner::Cosine(Hnsw::new(16, 100, 16, 4, DistCosine));
+        let euclidean = HnswInner::Euclidean(Hnsw::new(16, 100, 16, 4, DistL2));
+        let dot = HnswInner::DotProduct(Hnsw::new(16, 100, 16, 4, DistDot));
+
+        assert!((cosine.transform_score(0.5) - 0.5).abs() < 0.001);
+        assert!((euclidean.transform_score(0.5) - 0.5).abs() < 0.001);
+        assert!((dot.transform_score(0.5) - (-0.5)).abs() < 0.001);
     }
 }
