@@ -5,12 +5,11 @@
 //!
 //! # Performance characteristics
 //!
-//! # Note
+//! - **Lock-free reads**: O(1) lookups without blocking
+//! - **Sharded writes**: Minimal contention on parallel insertions
+//! - **Atomic counter**: Lock-free index allocation
 //!
-//! This module is prepared for EPIC-A migration but not yet integrated
-//! into `HnswIndex`. The `#[allow(dead_code)]` is temporary until migration.
-
-#![allow(dead_code)]
+//! # EPIC-A.1: Integrated into `HnswIndex`
 
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -60,6 +59,7 @@ impl ShardedMappings {
     ///
     /// Use this when the expected number of vectors is known upfront.
     #[must_use]
+    #[allow(dead_code)] // API completeness - useful for batch operations
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             id_to_idx: DashMap::with_capacity(capacity),
@@ -98,6 +98,7 @@ impl ShardedMappings {
     ///
     /// Vector of (id, idx) pairs for successfully registered IDs.
     /// IDs that already exist are skipped.
+    #[allow(dead_code)] // API completeness - useful for batch operations
     pub fn register_batch(&self, ids: &[u64]) -> Vec<(u64, usize)> {
         let mut results = Vec::with_capacity(ids.len());
 
@@ -144,12 +145,14 @@ impl ShardedMappings {
 
     /// Returns true if no IDs are registered.
     #[must_use]
+    #[allow(dead_code)] // API completeness
     pub fn is_empty(&self) -> bool {
         self.id_to_idx.is_empty()
     }
 
     /// Checks if an ID is registered.
     #[must_use]
+    #[allow(dead_code)] // API completeness
     pub fn contains(&self, id: u64) -> bool {
         self.id_to_idx.contains_key(&id)
     }
@@ -157,8 +160,25 @@ impl ShardedMappings {
     /// Returns an iterator over all (id, idx) pairs.
     ///
     /// Note: This acquires read locks on shards during iteration.
+    #[allow(dead_code)] // API completeness - useful for debugging
     pub fn iter(&self) -> impl Iterator<Item = (u64, usize)> + '_ {
         self.id_to_idx.iter().map(|r| (*r.key(), *r.value()))
+    }
+
+    /// Returns the next available internal index (total inserted count).
+    ///
+    /// This is a monotonic counter that never decreases, even after removals.
+    /// Useful for calculating tombstone count.
+    #[must_use]
+    pub fn next_idx(&self) -> usize {
+        self.next_idx.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Clears all mappings and resets the index counter.
+    pub fn clear(&self) {
+        self.id_to_idx.clear();
+        self.idx_to_id.clear();
+        self.next_idx.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Creates mappings from existing data (for deserialization).

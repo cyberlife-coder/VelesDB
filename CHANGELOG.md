@@ -5,6 +5,43 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] - 2026-01-04
+
+### 🧹 HNSW Vacuum & Dead Code Cleanup
+
+#### Added
+
+- **HNSW Vacuum/Rebuild** - New maintenance API for HNSW index optimization
+  - `HnswIndex::tombstone_count()` - Returns count of soft-deleted entries
+  - `HnswIndex::tombstone_ratio()` - Returns fragmentation ratio (0.0-1.0)
+  - `HnswIndex::needs_vacuum()` - Returns true if fragmentation >20%
+  - `HnswIndex::vacuum()` - Rebuilds index, eliminating all tombstones
+  - `VacuumError` - Error type for vacuum operations
+
+- **ShardedMappings API** - New utility methods for maintenance
+  - `next_idx()` - Returns total inserted count (monotonic counter)
+  - `clear()` - Clears all mappings and resets counter
+
+- **ShardedVectors API** - New utility method
+  - `clear()` - Clears all vectors from all shards
+
+#### Removed
+
+- **Dead code cleanup** - Removed unused orphan files from HNSW module
+  - Deleted `batch.rs` (empty file)
+  - Deleted `search.rs` (empty file)
+  - Deleted `wrapper.rs` (unused `HnswSafeWrapper`)
+
+#### Changed
+
+- **Targeted `#[allow(dead_code)]`** - Replaced module-wide annotations with targeted function-level annotations in `sharded_mappings.rs` and `sharded_vectors.rs` for API completeness
+
+#### Documentation
+
+- **Expert Improvement Plan** - Added `docs/internal/13_EXPERT_IMPROVEMENT_PLAN.md` with multi-expert analysis (Hardware, Algorithmic, Performance)
+
+---
+
 ## [0.8.6] - 2026-01-03
 
 ### 🔧 Bug Fixes & Documentation

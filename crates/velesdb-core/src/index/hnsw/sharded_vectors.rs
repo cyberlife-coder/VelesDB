@@ -10,14 +10,7 @@
 //! - **Hash-based routing**: O(1) shard selection
 //! - **Independent locks**: Writes to different shards don't block each other
 //!
-//! # EPIC-A.2: TS-ARCH-002
-//!
-//! # Note
-//!
-//! This module is prepared for EPIC-A migration but not yet integrated
-//! into `HnswIndex`. The `#[allow(dead_code)]` is temporary until migration.
-
-#![allow(dead_code)]
+//! # EPIC-A.2: Integrated into `HnswIndex`
 
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
@@ -51,7 +44,8 @@ struct VectorShard {
 pub struct ShardedVectors {
     /// 16 independent shards, each with its own lock.
     shards: [RwLock<VectorShard>; NUM_SHARDS],
-    /// Vector dimension
+    /// Vector dimension (kept for future validation)
+    #[allow(dead_code)]
     dimension: usize,
 }
 
@@ -127,6 +121,7 @@ impl ShardedVectors {
     /// The returned guard holds the shard read lock.
     /// For SIMD operations, prefer `with_vector` to avoid lifetime issues.
     #[must_use]
+    #[allow(dead_code)] // API completeness
     pub fn contains(&self, idx: usize) -> bool {
         let shard_idx = Self::shard_index(idx);
         let shard = self.shards[shard_idx].read();
@@ -136,6 +131,7 @@ impl ShardedVectors {
     /// Executes a function with a reference to the vector.
     ///
     /// This is useful for SIMD operations that need a reference.
+    #[allow(dead_code)] // API completeness - useful for SIMD ops
     pub fn with_vector<F, R>(&self, idx: usize, f: F) -> Option<R>
     where
         F: FnOnce(&[f32]) -> R,
@@ -146,6 +142,7 @@ impl ShardedVectors {
     }
 
     /// Removes a vector by index.
+    #[allow(dead_code)] // API completeness
     pub fn remove(&self, idx: usize) -> Option<Vec<f32>> {
         let shard_idx = Self::shard_index(idx);
         let mut shard = self.shards[shard_idx].write();
@@ -164,9 +161,17 @@ impl ShardedVectors {
         self.shards.iter().all(|s| s.read().vectors.is_empty())
     }
 
+    /// Clears all vectors from all shards.
+    pub fn clear(&self) {
+        for shard in &self.shards {
+            shard.write().vectors.clear();
+        }
+    }
+
     /// Collects all indices and vectors.
     ///
     /// Warning: This acquires all shard locks sequentially.
+    #[allow(dead_code)] // API completeness - prefer collect_for_parallel
     pub fn iter_all(&self) -> Vec<(usize, Vec<f32>)> {
         let mut result = Vec::new();
         for shard in &self.shards {
@@ -181,6 +186,7 @@ impl ShardedVectors {
     /// Computes a function over all vectors in parallel-safe manner.
     ///
     /// Useful for brute-force search where we need to iterate all vectors.
+    #[allow(dead_code)] // API completeness - prefer collect_for_parallel
     pub fn for_each_parallel<F>(&self, mut f: F)
     where
         F: FnMut(usize, &[f32]),
@@ -283,6 +289,7 @@ impl ShardedVectors {
     /// This method holds read locks on all shards during the collection phase.
     /// The returned Vec contains owned data copied from the shards.
     #[must_use]
+    #[allow(dead_code)] // API completeness
     pub fn snapshot_indices(&self) -> Vec<usize> {
         let mut indices = Vec::with_capacity(self.len());
         for shard in &self.shards {
