@@ -110,6 +110,22 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
         },
     );
 
+    // Turbo mode (aggressive params for max throughput)
+    group.bench_with_input(
+        BenchmarkId::new("turbo", format!("{count}x{dim}d")),
+        &count,
+        |b, &count| {
+            b.iter(|| {
+                let index = HnswIndex::new_turbo(dim, DistanceMetric::Cosine);
+                for i in 0..count {
+                    let vector = generate_vector(dim, i);
+                    index.insert(i, &vector);
+                }
+                black_box(index.len())
+            });
+        },
+    );
+
     group.finish();
 }
 
