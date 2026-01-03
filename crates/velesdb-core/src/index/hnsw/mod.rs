@@ -10,6 +10,7 @@
 
 mod backend;
 mod index;
+mod inner;
 mod mappings;
 mod params;
 mod sharded_mappings;
