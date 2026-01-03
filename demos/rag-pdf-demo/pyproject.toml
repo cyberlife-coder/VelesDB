@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "VelesDB Team", email = "team@velesdb.com"}
+    {name = "VelesDB Team", email = "contact@wiscale.fr"}
 ]
 keywords = ["rag", "velesdb", "pdf", "embeddings", "vector-search"]
 

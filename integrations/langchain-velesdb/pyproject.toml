@@ -9,7 +9,7 @@ description = "LangChain integration for VelesDB vector database"
 readme = "README.md"
 license = {text = "Elastic-2.0"}
 authors = [
-    {name = "VelesDB Team", email = "contact@velesdb.io"}
+    {name = "VelesDB Team", email = "contact@wiscale.fr"}
 ]
 keywords = ["langchain", "velesdb", "vector-database", "embeddings", "rag"]
 classifiers = [

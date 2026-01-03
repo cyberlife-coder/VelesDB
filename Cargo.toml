@@ -24,7 +24,7 @@ homepage = "https://velesdb.com"
 documentation = "https://docs.velesdb.com"
 keywords = ["vector-database", "search", "embeddings", "ann", "hnsw"]
 categories = ["database", "data-structures", "algorithms"]
-authors = ["VelesDB Team <team@velesdb.com>"]
+authors = ["VelesDB Team <contact@wiscale.fr>"]
 
 [workspace.dependencies]
 # Async runtime

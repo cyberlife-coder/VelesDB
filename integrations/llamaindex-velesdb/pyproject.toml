@@ -10,7 +10,7 @@ readme = "README.md"
 license = "ELv2"
 requires-python = ">=3.9"
 authors = [
-    { name = "VelesDB Team" }
+    { name = "VelesDB Team", email = "contact@wiscale.fr" }
 ]
 keywords = ["velesdb", "llamaindex", "vector-store", "embeddings", "rag"]
 classifiers = [

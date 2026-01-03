@@ -108,7 +108,7 @@ Aller dans : **Repository → Settings → Secrets and variables → Actions**
 | `APPLE_DEVELOPER_ID_APPLICATION` | Identity complète | `Developer ID Application: VelesDB Inc (ABCD1234)` |
 | `APPLE_CERTIFICATE_BASE64` | Certificat .p12 encodé base64 | `MIIKrA...` |
 | `APPLE_CERTIFICATE_PASSWORD` | Mot de passe du .p12 | `MyP12Pass` |
-| `APPLE_ID` | Email Apple Developer | `developer@velesdb.com` |
+| `APPLE_ID` | Email Apple Developer | `contact@wiscale.fr` |
 | `APPLE_ID_PASSWORD` | **App-specific password** | `xxxx-xxxx-xxxx-xxxx` |
 | `APPLE_TEAM_ID` | Team ID (10 caractères) | `ABCD1234EF` |
 

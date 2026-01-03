@@ -9,7 +9,7 @@ description = "A high-performance vector database for AI applications"
 readme = "README.md"
 license = { text = "Elastic License 2.0 (ELv2)" }
 authors = [
-    { name = "VelesDB Team", email = "contact@velesdb.io" }
+    { name = "VelesDB Team", email = "contact@wiscale.fr" }
 ]
 keywords = ["vector-database", "embeddings", "similarity-search", "ai", "machine-learning"]
 classifiers = [
