@@ -751,17 +751,21 @@ impl HnswIndex {
         count
     }
 
-    /// Inserts multiple vectors sequentially with optimized lock acquisition.
+    /// Inserts multiple vectors sequentially (DEPRECATED).
     ///
-    /// This method is optimized for bulk insertions when parallel processing
-    /// is not desired or available. It acquires the HNSW lock once for the
-    /// entire batch, reducing lock overhead from 3N to N+2 lock operations.
+    /// # Deprecated
     ///
-    /// # Performance
+    /// **Use [`insert_batch_parallel`] instead** - it's 15x faster (29k/s vs 1.9k/s).
     ///
-    /// - **Single-vector insert**: 3 lock acquisitions per vector (mappings, vectors, inner)
-    /// - **Batch sequential**: 1 lock acquisition for entire batch on `inner`
-    /// - **Expected improvement**: ~50% faster than N individual `insert()` calls
+    /// This method exists for backward compatibility only. The theoretical use cases
+    /// (rayon/tokio conflicts) have not materialized in practice.
+    ///
+    /// # Performance Comparison
+    ///
+    /// | Method | Throughput | Recommendation |
+    /// |--------|------------|----------------|
+    /// | `insert_batch_parallel` | **29.3k/s** | ✅ Use this |
+    /// | `insert_batch_sequential` | 1.9k/s | ❌ Deprecated |
     ///
     /// # Arguments
     ///
@@ -770,18 +774,10 @@ impl HnswIndex {
     /// # Returns
     ///
     /// Number of vectors successfully inserted (duplicates are skipped).
-    ///
-    /// # Panics
-    ///
-    /// Panics if any vector has a dimension different from the index dimension.
-    ///
-    /// # When to Use
-    ///
-    /// - Use `insert_batch_parallel` for maximum throughput on multi-core systems
-    /// - Use `insert_batch_sequential` when:
-    ///   - Running in single-threaded context
-    ///   - Rayon thread pool conflicts with async runtime
-    ///   - Deterministic insertion order is required
+    #[deprecated(
+        since = "0.8.6",
+        note = "Use insert_batch_parallel instead - 15x faster (29k/s vs 1.9k/s)"
+    )]
     pub fn insert_batch_sequential<I>(&self, vectors: I) -> usize
     where
         I: IntoIterator<Item = (u64, Vec<f32>)>,
@@ -1373,10 +1369,11 @@ mod tests {
     }
 
     // =========================================================================
-    // QW-3: insert_batch_sequential Tests
+    // QW-3: insert_batch_sequential Tests (deprecated - kept for backward compat)
     // =========================================================================
 
     #[test]
+    #[allow(deprecated)]
     fn test_hnsw_insert_batch_sequential() {
         // Arrange
         let index = HnswIndex::new(3, DistanceMetric::Cosine);
@@ -1403,6 +1400,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_hnsw_insert_batch_sequential_skips_duplicates() {
         // Arrange
         let index = HnswIndex::new(3, DistanceMetric::Cosine);
@@ -1421,6 +1419,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_hnsw_insert_batch_sequential_empty() {
         // Arrange
         let index = HnswIndex::new(3, DistanceMetric::Cosine);
@@ -1435,6 +1434,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     #[should_panic(expected = "Vector dimension mismatch")]
     fn test_hnsw_insert_batch_sequential_wrong_dimension() {
         // Arrange
@@ -2692,7 +2692,8 @@ mod tests {
                     })
                     .collect();
 
-                let count = index.insert_batch_sequential(batch);
+                // Use parallel insert (recommended API)
+                let count = index.insert_batch_parallel(batch);
 
                 prop_assert_eq!(count, batch_size, "Batch insert count mismatch");
                 prop_assert_eq!(index.len(), batch_size, "Index len mismatch after batch");
