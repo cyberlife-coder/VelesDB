@@ -18,7 +18,7 @@ use crate::distance::DistanceMetric;
 /// # Performance Note
 ///
 /// For bulk insertions, prefer batch methods like [`HnswIndex::insert_batch_parallel`]
-/// or [`HnswIndex::insert_batch_sequential`] over calling [`insert`] in a loop.
+/// or [`HnswIndex::insert_batch_sequential`] over calling [`Self::insert`] in a loop.
 /// Individual inserts incur per-call lock overhead that batch methods avoid.
 pub trait VectorIndex: Send + Sync {
     /// Inserts a vector into the index.

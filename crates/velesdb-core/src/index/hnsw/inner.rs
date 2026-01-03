@@ -7,6 +7,12 @@
 use hnsw_rs::prelude::*;
 use std::path::Path;
 
+/// Number of layers in the HNSW graph (`hnsw_rs` default).
+///
+/// This controls the hierarchical structure depth. 16 is the standard value
+/// that provides good performance for most datasets.
+const NB_LAYER: usize = 16;
+
 /// Internal HNSW index wrapper to handle different distance metrics.
 ///
 /// # Safety Note on `'static` Lifetime
@@ -54,21 +60,21 @@ impl HnswInner {
             DistanceMetric::Cosine => Self::Cosine(Hnsw::new(
                 max_connections,
                 max_elements,
-                16,
+                NB_LAYER,
                 ef_construction,
                 DistCosine,
             )),
             DistanceMetric::Euclidean => Self::Euclidean(Hnsw::new(
                 max_connections,
                 max_elements,
-                16,
+                NB_LAYER,
                 ef_construction,
                 DistL2,
             )),
             DistanceMetric::DotProduct => Self::DotProduct(Hnsw::new(
                 max_connections,
                 max_elements,
-                16,
+                NB_LAYER,
                 ef_construction,
                 DistDot,
             )),
@@ -76,14 +82,14 @@ impl HnswInner {
             DistanceMetric::Hamming => Self::Hamming(Hnsw::new(
                 max_connections,
                 max_elements,
-                16,
+                NB_LAYER,
                 ef_construction,
                 DistL2,
             )),
             DistanceMetric::Jaccard => Self::Jaccard(Hnsw::new(
                 max_connections,
                 max_elements,
-                16,
+                NB_LAYER,
                 ef_construction,
                 DistL2,
             )),

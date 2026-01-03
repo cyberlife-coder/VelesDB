@@ -81,7 +81,7 @@ pub fn dot_product_simd(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// # Algorithm
 ///
-/// Computes sqrt(sum((a[i] - b[i])²)) using SIMD for the squared differences.
+/// Computes `sqrt(sum((a[i] - b[i])²))` using SIMD for the squared differences.
 ///
 /// # Panics
 ///

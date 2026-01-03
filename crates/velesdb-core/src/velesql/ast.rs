@@ -206,7 +206,7 @@ impl Column {
 /// A condition in a WHERE clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Condition {
-    /// Vector similarity search: vector NEAR [metric] $param
+    /// Vector similarity search: `vector NEAR [metric] $param`
     VectorSearch(VectorSearch),
     /// Comparison: column op value
     Comparison(Comparison),
