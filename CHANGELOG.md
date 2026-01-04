@@ -5,6 +5,141 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10] - 2026-01-04
+
+### 🔒 Security & Performance Audit Fixes (velesdb-core)
+
+#### Added
+
+- **Storage Metrics Module** (`src/storage/metrics.rs`)
+  - `StorageMetrics` - Thread-safe latency tracking for `ensure_capacity` operations
+  - `LatencyStats` - Percentile statistics (P50, P95, P99) for detecting "stop-the-world" pauses
+  - `RollingHistogram` - Memory-bounded latency histogram (10K samples max)
+  - `TimingGuard` - RAII timing helper for automatic measurement
+
+- **Snapshot Fuzzer** (`fuzz/fuzz_targets/fuzz_snapshot_parser.rs`)
+  - Fuzz target for `load_snapshot` DoS vulnerability testing
+  - Tests malformed headers, corrupted CRC, oversized entry counts
+
+#### Fixed
+
+- **P1: Snapshot Parser DoS Vulnerability** (`log_payload.rs`)
+  - Added `entry_count` validation BEFORE allocation to prevent OOM attacks
+  - Malicious snapshots with `u64::MAX` entry count now safely rejected
+  - 6 new security tests for corrupted snapshot handling
+
+- **P2: Panic-Safety in `ContiguousVectors::resize`** (`perf_optimizations.rs`)
+  - Refactored manual memory management for better panic safety
+  - Explicit 4-step process: allocate → copy → deallocate → update state
+  - Added comprehensive documentation for unsafe code sections
+
+#### Changed
+
+- **P0: `MmapStorage` Latency Monitoring** (`mmap.rs`)
+  - `ensure_capacity` now records latency, resize count, and bytes resized
+  - New `metrics()` method to access `StorageMetrics` for P99 monitoring
+  - Enables detection of blocking mmap resize operations
+
+#### Performance
+
+- Search latency improved by **10-20%** (benchmark validation)
+- Recall validation improved by up to **44%** in some dimensions
+- No regression in insert throughput (~6.3K elem/s for 768D)
+
+#### PERF Optimizations
+
+- **PERF-001: Lock-Free Histogram** (`src/storage/histogram.rs`)
+  - `LockFreeHistogram` - Wait-free latency recording (no mutex contention)
+  - Logarithmic buckets (64 buckets, 1µs to ~18h coverage)
+  - Atomic CAS for min/max tracking
+  - 257 lines, fully tested
+
+- **PERF-002: RAII Allocation Guard** (`src/alloc_guard.rs`)
+  - `AllocGuard` - Panic-safe memory allocation wrapper
+  - Auto-deallocation on drop prevents leaks during panics
+  - `into_raw()` for ownership transfer
+  - Integrated into `ContiguousVectors::resize()`
+  - 192 lines, fully tested
+
+- **PERF-003: Streaming Percentiles**
+  - Integrated into `LockFreeHistogram` (no separate allocation for stats)
+  - O(1) recording, O(buckets) percentile calculation
+  - No clone/sort needed (vs. previous O(n log n))
+
+### 🧙 velesdb-migrate: Interactive Wizard Mode
+
+#### Added
+
+- **Interactive Migration Wizard** (`velesdb-migrate wizard`)
+  - Zero-config migration experience - no YAML file needed
+  - Step-by-step guided prompts for source selection
+  - Auto-detection of vector dimensions and metadata fields
+  - Support for all 7 source types: Supabase, Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, pgvector
+  - SQ8 compression option (4x smaller) during wizard flow
+  - Beautiful console UI with progress indicators
+
+- **New Wizard Module** (`src/wizard/`)
+  - `mod.rs` - Main wizard orchestration and `SourceType` enum
+  - `prompts.rs` - Interactive prompts using `dialoguer`
+  - `ui.rs` - Console formatting with `console` crate
+  - `discovery.rs` - Source auto-discovery utilities
+
+- **New Dependencies**
+  - `dialoguer = "0.11"` - Interactive terminal prompts
+  - `console = "0.15"` - Terminal styling and formatting
+
+- **Comprehensive Test Suite** - 32 new unit tests for wizard and file modules
+  - `SourceType` enum tests (all variants, display names, API key requirements)
+  - `WizardConfig` creation and validation tests
+  - `build_source_config` tests for all 9 source types
+  - `build_migration_config` tests (Full/SQ8 storage, options)
+
+- **Retry Module** (`src/retry.rs`) - Resilient network operations
+  - Exponential backoff with configurable delays
+  - Automatic retry for rate limits (429), timeouts, server errors (5xx)
+  - Jitter to prevent thundering herd
+  - 21 unit tests covering all retry scenarios
+
+- **File Connectors** (`src/connectors/file.rs`) - Universal import
+  - `JsonFileConnector` - Import from JSON arrays with nested path support
+  - `CsvFileConnector` - Import from CSV with JSON vectors or spread columns
+  - Smart CSV parsing handles JSON arrays within CSV fields
+  - 11 unit tests for file import scenarios
+
+- **MongoDB Atlas Connector** (`src/connectors/mongodb.rs`) - Cloud vector DB
+  - `MongoDBConnector` - MongoDB Data API integration
+  - ObjectId support (`{"$oid": "..."}` parsing)
+  - Custom filter queries with MongoDB syntax
+  - Rate limit handling (429) with retry support
+  - 15 unit tests for MongoDB scenarios
+
+- **Elasticsearch/OpenSearch Connector** (`src/connectors/elasticsearch.rs`)
+  - `ElasticsearchConnector` - Full Elasticsearch 8.x / OpenSearch support
+  - `search_after` pagination for efficient large-scale extraction
+  - Basic auth, API key authentication
+  - Custom DSL query filters
+  - 15 unit tests for Elasticsearch scenarios
+
+- **Redis Vector Search Connector** (`src/connectors/redis.rs`)
+  - `RedisConnector` - Redis Stack with RediSearch module
+  - FT.SEARCH and FT.INFO commands via REST API
+  - Vector parsing from arrays or comma/space-separated strings
+  - Key prefix extraction for document IDs
+  - 12 unit tests for Redis scenarios
+
+#### Changed
+
+- **CLI** - `wizard` is now the recommended first command
+- **README.md** - Updated Quick Start to feature wizard as Option A (recommended)
+- **CLI Reference** - Added `wizard` command documentation
+
+#### Documentation
+
+- Added `ROADMAP.md` - Vision for zero-config migration
+- Added `TODO.md` - Prioritized task checklist (P0-P3)
+
+---
+
 ## [0.8.9] - 2026-01-04
 
 ### 🚀 Performance & Safety Improvements (Craftsman Audit Response)

@@ -1,0 +1,22 @@
+# MongoDB Atlas Vector Search migration configuration
+# Documentation: https://docs.velesdb.com/migrate/mongodb
+
+source:
+  type: mongodb
+  data_api_url: "https://data.mongodb-api.com/app/YOUR_APP_ID/endpoint/data/v1"
+  api_key: "${MONGODB_API_KEY}"
+  database: "vectors"
+  collection: "embeddings"
+  vector_field: "embedding"
+  id_field: "_id"
+  # Optional: filter documents
+  # filter: {"status": "active"}
+
+destination:
+  type: velesdb
+  path: "./velesdb_data"
+  collection: "mongodb_vectors"
+
+options:
+  batch_size: 100
+  storage: full  # or "sq8" for 4x compression

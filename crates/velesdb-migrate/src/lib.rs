@@ -54,10 +54,13 @@ pub mod config;
 pub mod connectors;
 pub mod error;
 pub mod pipeline;
+pub mod retry;
 pub mod transform;
+pub mod wizard;
 
 pub use config::{MigrationConfig, MigrationOptions, SourceConfig};
 pub use connectors::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 pub use error::{Error, Result};
 pub use pipeline::{MigrationStats, Pipeline};
 pub use transform::Transformer;
+pub use wizard::Wizard;

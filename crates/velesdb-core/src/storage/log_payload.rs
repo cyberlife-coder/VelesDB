@@ -243,14 +243,28 @@ impl LogPayloadStorage {
         );
 
         // Read entry count
-        #[allow(clippy::cast_possible_truncation)] // Entry count won't exceed usize on any platform
-        let entry_count = u64::from_le_bytes(
+        let entry_count_u64 = u64::from_le_bytes(
             data[13..21]
                 .try_into()
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid entry count"))?,
-        ) as usize;
+        );
+
+        // P1 Audit: Validate entry_count BEFORE conversion to prevent DoS via huge values
+        // Max reasonable entry count: data.len() / 16 (minimum entry size)
+        // This check prevents both overflow and OOM attacks
+        let max_possible_entries = data.len().saturating_sub(25) / 16; // header(21) + crc(4) = 25
+        if entry_count_u64 > max_possible_entries as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Entry count exceeds data size",
+            ));
+        }
+
+        #[allow(clippy::cast_possible_truncation)] // Validated above
+        let entry_count = entry_count_u64 as usize;
 
         // Validate size: header(21) + entries(entry_count * 16) + crc(4)
+        // Safe: entry_count is validated to not cause overflow
         let expected_size = 21 + entry_count * 16 + 4;
         if data.len() != expected_size {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Size mismatch"));
@@ -779,5 +793,165 @@ mod tests {
         // and should be > 0 (some data was written)
         let wal_pos = u64::from_le_bytes(data[5..13].try_into().unwrap());
         assert!(wal_pos > 0, "WAL position should be recorded");
+    }
+
+    // -------------------------------------------------------------------------
+    // P1 Audit: Snapshot Security Tests (DoS Prevention)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_snapshot_malicious_entry_count_dos_prevention() {
+        // Arrange - Create a malicious snapshot with huge entry_count
+        // This is a DoS attack vector: claiming millions of entries → OOM
+        let temp = TempDir::new().expect("Failed to create temp dir");
+        let snapshot_path = temp.path().join("payloads.snapshot");
+
+        // Create malicious snapshot: valid header but entry_count = u64::MAX
+        let mut malicious_data = Vec::new();
+        malicious_data.extend_from_slice(b"VSNP"); // Magic
+        malicious_data.push(1); // Version
+        malicious_data.extend_from_slice(&0u64.to_le_bytes()); // WAL pos
+        malicious_data.extend_from_slice(&u64::MAX.to_le_bytes()); // MALICIOUS: huge entry_count
+                                                                   // Add fake CRC (will fail anyway)
+        malicious_data.extend_from_slice(&0u32.to_le_bytes());
+
+        std::fs::create_dir_all(temp.path()).expect("Create dir failed");
+        std::fs::write(&snapshot_path, &malicious_data).expect("Write failed");
+
+        // Also create an empty WAL so storage can be created
+        let wal_path = temp.path().join("payloads.log");
+        std::fs::write(&wal_path, []).expect("Create WAL failed");
+
+        // Act - Should NOT crash or OOM, should fall back to WAL
+        let result = LogPayloadStorage::new(temp.path());
+
+        // Assert - Storage should be created (via WAL fallback), no panic/OOM
+        assert!(
+            result.is_ok(),
+            "Should handle malicious snapshot gracefully"
+        );
+        let storage = result.unwrap();
+        assert_eq!(storage.ids().len(), 0); // Empty because WAL is empty
+    }
+
+    #[test]
+    fn test_snapshot_truncated_data() {
+        // Arrange - Create a truncated snapshot (header only, no entries/CRC)
+        let temp = TempDir::new().expect("Failed to create temp dir");
+        let snapshot_path = temp.path().join("payloads.snapshot");
+
+        let mut truncated_data = Vec::new();
+        truncated_data.extend_from_slice(b"VSNP"); // Magic
+        truncated_data.push(1); // Version
+        truncated_data.extend_from_slice(&100u64.to_le_bytes()); // WAL pos
+        truncated_data.extend_from_slice(&10u64.to_le_bytes()); // 10 entries claimed
+                                                                // No entries, no CRC - truncated!
+
+        std::fs::create_dir_all(temp.path()).expect("Create dir failed");
+        std::fs::write(&snapshot_path, &truncated_data).expect("Write failed");
+        let wal_path = temp.path().join("payloads.log");
+        std::fs::write(&wal_path, []).expect("Create WAL failed");
+
+        // Act & Assert - Should handle truncated data gracefully
+        let result = LogPayloadStorage::new(temp.path());
+        assert!(
+            result.is_ok(),
+            "Should handle truncated snapshot gracefully"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_wrong_magic() {
+        // Arrange - Create snapshot with wrong magic bytes
+        let temp = TempDir::new().expect("Failed to create temp dir");
+        let snapshot_path = temp.path().join("payloads.snapshot");
+
+        let mut bad_magic = Vec::new();
+        bad_magic.extend_from_slice(b"HACK"); // Wrong magic
+        bad_magic.push(1);
+        bad_magic.extend_from_slice(&0u64.to_le_bytes());
+        bad_magic.extend_from_slice(&0u64.to_le_bytes());
+        bad_magic.extend_from_slice(&0u32.to_le_bytes());
+
+        std::fs::create_dir_all(temp.path()).expect("Create dir failed");
+        std::fs::write(&snapshot_path, &bad_magic).expect("Write failed");
+        let wal_path = temp.path().join("payloads.log");
+        std::fs::write(&wal_path, []).expect("Create WAL failed");
+
+        // Act & Assert - Should reject and fall back to WAL
+        let result = LogPayloadStorage::new(temp.path());
+        assert!(result.is_ok(), "Should handle wrong magic gracefully");
+    }
+
+    #[test]
+    fn test_snapshot_unsupported_version() {
+        // Arrange - Create snapshot with future version
+        let temp = TempDir::new().expect("Failed to create temp dir");
+        let snapshot_path = temp.path().join("payloads.snapshot");
+
+        let mut future_version = Vec::new();
+        future_version.extend_from_slice(b"VSNP");
+        future_version.push(255); // Future version
+        future_version.extend_from_slice(&0u64.to_le_bytes());
+        future_version.extend_from_slice(&0u64.to_le_bytes());
+        future_version.extend_from_slice(&0u32.to_le_bytes());
+
+        std::fs::create_dir_all(temp.path()).expect("Create dir failed");
+        std::fs::write(&snapshot_path, &future_version).expect("Write failed");
+        let wal_path = temp.path().join("payloads.log");
+        std::fs::write(&wal_path, []).expect("Create WAL failed");
+
+        // Act & Assert - Should reject and fall back to WAL
+        let result = LogPayloadStorage::new(temp.path());
+        assert!(
+            result.is_ok(),
+            "Should handle unsupported version gracefully"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_random_garbage() {
+        // Arrange - Create snapshot with random garbage data
+        let temp = TempDir::new().expect("Failed to create temp dir");
+        let snapshot_path = temp.path().join("payloads.snapshot");
+
+        // Random garbage
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let garbage: Vec<u8> = (0..100).map(|i| (i * 17 + 31) as u8).collect();
+
+        std::fs::create_dir_all(temp.path()).expect("Create dir failed");
+        std::fs::write(&snapshot_path, &garbage).expect("Write failed");
+        let wal_path = temp.path().join("payloads.log");
+        std::fs::write(&wal_path, []).expect("Create WAL failed");
+
+        // Act & Assert - Should handle garbage gracefully
+        let result = LogPayloadStorage::new(temp.path());
+        assert!(result.is_ok(), "Should handle garbage data gracefully");
+    }
+
+    #[test]
+    fn test_snapshot_entry_count_overflow() {
+        // Arrange - Create snapshot where entry_count * 16 would overflow usize
+        let temp = TempDir::new().expect("Failed to create temp dir");
+        let snapshot_path = temp.path().join("payloads.snapshot");
+
+        // entry_count that would cause overflow when multiplied by 16
+        let overflow_count = (usize::MAX / 16) as u64 + 1;
+
+        let mut overflow_data = Vec::new();
+        overflow_data.extend_from_slice(b"VSNP");
+        overflow_data.push(1);
+        overflow_data.extend_from_slice(&0u64.to_le_bytes());
+        overflow_data.extend_from_slice(&overflow_count.to_le_bytes());
+        overflow_data.extend_from_slice(&0u32.to_le_bytes());
+
+        std::fs::create_dir_all(temp.path()).expect("Create dir failed");
+        std::fs::write(&snapshot_path, &overflow_data).expect("Write failed");
+        let wal_path = temp.path().join("payloads.log");
+        std::fs::write(&wal_path, []).expect("Create WAL failed");
+
+        // Act & Assert - Should NOT panic on overflow, should fall back to WAL
+        let result = LogPayloadStorage::new(temp.path());
+        assert!(result.is_ok(), "Should handle overflow gracefully");
     }
 }

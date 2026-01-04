@@ -1,0 +1,19 @@
+# JSON File migration configuration
+# Documentation: https://docs.velesdb.com/migrate/json
+
+source:
+  type: json_file
+  path: "./vectors.json"
+  vector_field: "embedding"
+  id_field: "id"
+  # Optional: path to array in JSON (e.g., "data.items")
+  # array_path: "vectors"
+
+destination:
+  type: velesdb
+  path: "./velesdb_data"
+  collection: "json_vectors"
+
+options:
+  batch_size: 1000
+  storage: sq8  # 4x compression recommended for large imports
