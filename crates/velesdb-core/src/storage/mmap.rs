@@ -2,6 +2,14 @@
 //!
 //! Uses a combination of an index file (ID -> offset) and a data file (raw vectors).
 //! Also implements a simple WAL for durability.
+//!
+//! # P2 Optimization: Aggressive Pre-allocation
+//!
+//! To minimize blocking during `ensure_capacity` (which requires a write lock),
+//! we use aggressive pre-allocation:
+//! - Initial size: 16MB (vs 64KB before) - handles most small-medium datasets
+//! - Growth factor: 2x minimum with 64MB floor - fewer resize operations
+//! - Explicit `reserve_capacity()` for bulk imports
 
 use super::guard::VectorSliceGuard;
 use super::traits::VectorStorage;
@@ -38,8 +46,17 @@ pub struct MmapStorage {
 }
 
 impl MmapStorage {
-    const INITIAL_SIZE: u64 = 64 * 1024; // 64KB initial size
-    const MIN_GROWTH: u64 = 1024 * 1024; // Minimum 1MB growth
+    /// P2: Increased from 64KB to 16MB for better initial capacity.
+    /// This handles most small-medium datasets without any resize operations.
+    const INITIAL_SIZE: u64 = 16 * 1024 * 1024; // 16MB initial size
+
+    /// P2: Increased from 1MB to 64MB minimum growth.
+    /// Fewer resize operations = fewer blocking write locks.
+    const MIN_GROWTH: u64 = 64 * 1024 * 1024; // Minimum 64MB growth
+
+    /// P2: Growth factor for exponential pre-allocation.
+    /// Each resize at least doubles capacity for amortized O(1) growth.
+    const GROWTH_FACTOR: u64 = 2;
 
     /// Creates a new `MmapStorage` or opens an existing one.
     ///
@@ -111,17 +128,33 @@ impl MmapStorage {
     }
 
     /// Ensures the memory map is large enough to hold data at `offset`.
+    ///
+    /// # P2 Optimization
+    ///
+    /// Uses aggressive pre-allocation to minimize blocking:
+    /// - Exponential growth (2x) for amortized O(1)
+    /// - 64MB minimum growth to reduce resize frequency
+    /// - For 1M vectors × 768D × 4 bytes = 3GB, only ~6 resizes needed
     fn ensure_capacity(&mut self, required_len: usize) -> io::Result<()> {
         let mut mmap = self.mmap.write();
         if mmap.len() < required_len {
-            // Flush current mmap before unmapping (handled by drop, but explicit flush is good)
+            // Flush current mmap before unmapping
             mmap.flush()?;
 
-            // Calculate new size
+            // P2: Aggressive pre-allocation strategy
+            // Calculate new size with exponential growth
             let current_len = mmap.len() as u64;
-            let needed_growth = (required_len as u64).saturating_sub(current_len);
-            let growth = std::cmp::max(needed_growth, std::cmp::max(Self::MIN_GROWTH, current_len));
-            let new_len = current_len + growth;
+            let required_u64 = required_len as u64;
+
+            // Option 1: Double current size (exponential growth)
+            let doubled = current_len.saturating_mul(Self::GROWTH_FACTOR);
+            // Option 2: Required + MIN_GROWTH headroom
+            let with_headroom = required_u64.saturating_add(Self::MIN_GROWTH);
+            // Option 3: Just the minimum growth
+            let min_growth = current_len.saturating_add(Self::MIN_GROWTH);
+
+            // Take the maximum to ensure both sufficient space and good amortization
+            let new_len = doubled.max(with_headroom).max(min_growth).max(required_u64);
 
             // Resize file
             self.data_file.set_len(new_len)?;
@@ -130,6 +163,41 @@ impl MmapStorage {
             *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
         }
         Ok(())
+    }
+
+    /// Pre-allocates storage capacity for a known number of vectors.
+    ///
+    /// Call this before bulk imports to avoid blocking resize operations
+    /// during insertion. This is especially useful when the final dataset
+    /// size is known in advance.
+    ///
+    /// # P2 Optimization
+    ///
+    /// This allows users to pre-allocate once and avoid all resize locks
+    /// during bulk import operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector_count` - Expected number of vectors to store
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Pre-allocate for 1 million vectors before bulk import
+    /// storage.reserve_capacity(1_000_000)?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file operations fail.
+    pub fn reserve_capacity(&mut self, vector_count: usize) -> io::Result<()> {
+        let vector_size = self.dimension * std::mem::size_of::<f32>();
+        let required_len = vector_count.saturating_mul(vector_size);
+
+        // Add 10% headroom for safety
+        let with_headroom = required_len.saturating_add(required_len / 10);
+
+        self.ensure_capacity(with_headroom)
     }
 
     /// Compacts the storage by rewriting only active vectors.
