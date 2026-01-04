@@ -780,8 +780,8 @@ let hybrid_results = app.velesdb().hybrid_search(
 
 - [VelesDB Documentation](https://github.com/cyberlife-coder/VelesDB)
 - [Tauri v2 Guide](https://v2.tauri.app/)
-- [tauri-plugin-velesdb API](../../integrations/tauri-plugin-velesdb/README.md)
-- [Complete Example Code](../../examples/tauri-rag-app/)
+- [tauri-plugin-velesdb API](../../crates/tauri-plugin-velesdb/README.md)
+- [Complete Example Code](../../demos/tauri-rag-app/)
 
 ---
 

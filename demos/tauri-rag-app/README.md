@@ -31,7 +31,7 @@ cargo install tauri-cli
 
 ```bash
 # Clone this example
-cd examples/tauri-rag-app
+cd demos/tauri-rag-app
 
 # Install frontend dependencies
 npm install
