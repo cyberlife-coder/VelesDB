@@ -58,8 +58,8 @@ tempfile = "3.10"
 # Linux .deb package configuration (cargo-deb)
 # =============================================================================
 [package.metadata.deb]
-maintainer = "VelesDB Team <contact@wiscale.fr>"
-copyright = "2024-2025, VelesDB Team"
+maintainer = "Julien Lange <contact@wiscale.fr>"
+copyright = "2024-2025, Julien Lange (WiScale France)"
 license-file = ["../../LICENSE", "0"]
 extended-description = """VelesDB is a high-performance vector database written in Rust.
 Features:

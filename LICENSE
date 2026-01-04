@@ -81,6 +81,8 @@ The "Licensor" is Wiscale France.
 
 The "Software" is the software the Licensor makes available under these terms, VelesDB Core.
 
+The "Author" is Julien Lange.
+
 "You" refers to the individual or entity agreeing to these terms.
 
 "Your company" is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.
@@ -100,7 +102,7 @@ Access includes, without limitation, access through an API, SDK, web interface, 
 
 ## Licensing FAQ (VelesDB Core — Elastic License 2.0)
 
-This FAQ is provided for convenience only and does not replace the LICENSE terms. If in doubt, contact the Licensor (Wiscale France) for a Premium license.
+This FAQ is provided for convenience only and does not replace the LICENSE terms. If in doubt, contact the Licensor (Wiscale France - contact@wiscale.fr) for a Premium license.
 
 ### 1) Can I use VelesDB Core in production?
 Yes. Production use is permitted, including commercial production use, as long as you comply with the license limitations (notably: no Hosted or Managed Service).

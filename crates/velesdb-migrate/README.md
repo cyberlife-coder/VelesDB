@@ -741,7 +741,7 @@ All connectors automatically detect vector dimensions:
 
 ## 🇫🇷 About
 
-Developed by **Wiscale France** (Julien Lange).
+Developed by **Julien Lange** (WiScale France).
 
 Part of the VelesDB project — **Vector Search in Microseconds**.
 
