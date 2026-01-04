@@ -84,20 +84,9 @@ pub fn prefetch_vector(vector: &[f32]) {
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
         }
     }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // SAFETY: prefetch is a hint instruction that cannot fault
-        unsafe {
-            use std::arch::aarch64::_prefetch;
-            use std::arch::aarch64::{_PREFETCH_LOCALITY3, _PREFETCH_READ};
-            _prefetch(
-                vector.as_ptr().cast::<i8>(),
-                _PREFETCH_READ,
-                _PREFETCH_LOCALITY3,
-            );
-        }
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    // Note: aarch64 prefetch intrinsics are unstable (rust-lang/rust#117217)
+    // Using no-op until stabilized
+    #[cfg(not(target_arch = "x86_64"))]
     {
         // No-op for unsupported architectures
         let _ = vector;
