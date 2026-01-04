@@ -14,25 +14,40 @@ VelesDB utilise **3 workflows GitHub Actions** :
 
 ## Publier une Release
 
-### 1. Préparer la version
+### 1. Bump version (automatisé)
 
-```bash
-# Mettre à jour la version dans Cargo.toml (workspace)
-# version = "0.8.6"
+```powershell
+# Preview changes (dry run)
+.\scripts\bump-version.ps1 -Version "0.9.0" -DryRun
 
-# Mettre à jour CHANGELOG.md
+# Apply changes to all 9 package files
+.\scripts\bump-version.ps1 -Version "0.9.0"
 ```
 
-### 2. Commit et tag
+Le script `bump-version.ps1` met à jour automatiquement :
+- `Cargo.toml` (workspace)
+- `sdks/typescript/package.json`
+- `crates/velesdb-python/pyproject.toml`
+- `crates/velesdb-wasm/pkg/package.json`
+- `crates/tauri-plugin-velesdb/guest-js/package.json`
+- `integrations/langchain/pyproject.toml`
+- `integrations/llamaindex/pyproject.toml`
+- `demos/rag-pdf-demo/pyproject.toml`
+
+### 2. Mettre à jour CHANGELOG.md
+
+Ajouter une section pour la nouvelle version avec les changements.
+
+### 3. Commit et tag
 
 ```bash
 git add -A
-git commit -m "release: v0.8.6"
-git tag v0.8.6
-git push origin main v0.8.6
+git commit -m "chore(release): bump version to 0.9.0"
+git tag -a v0.9.0 -m "v0.9.0 - Description"
+git push origin main --tags
 ```
 
-### 3. Le workflow `release.yml` publie automatiquement
+### 4. Le workflow `release.yml` publie automatiquement
 
 | Destination | Package |
 |-------------|---------|
@@ -41,7 +56,7 @@ git push origin main v0.8.6
 | **PyPI** | velesdb |
 | **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk |
 
-### 4. Vérifier le déploiement
+### 5. Vérifier le déploiement
 
 - GitHub Actions : https://github.com/cyberlife-coder/VelesDB/actions
 - GitHub Releases : https://github.com/cyberlife-coder/VelesDB/releases
