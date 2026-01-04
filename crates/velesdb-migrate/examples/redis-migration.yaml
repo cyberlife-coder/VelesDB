@@ -1,0 +1,21 @@
+# Redis Vector Search migration configuration
+# Documentation: https://docs.velesdb.com/migrate/redis
+
+source:
+  type: redis
+  url: "redis://localhost:6379"
+  # password: "${REDIS_PASSWORD}"
+  index: "vectors_idx"
+  vector_field: "embedding"
+  key_prefix: "doc:"
+  # Optional: RediSearch filter
+  # filter: "@status:{active}"
+
+destination:
+  type: velesdb
+  path: "./velesdb_data"
+  collection: "redis_vectors"
+
+options:
+  batch_size: 100
+  storage: full
