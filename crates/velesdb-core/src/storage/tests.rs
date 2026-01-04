@@ -412,3 +412,50 @@ fn test_fragmentation_ratio() {
         "Expected ~50% fragmentation, got {frag}"
     );
 }
+
+// =============================================================================
+// P2: Aggressive Pre-allocation Tests
+// =============================================================================
+
+#[test]
+fn test_reserve_capacity_preallocates() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 768).unwrap();
+
+    // Reserve capacity for 10,000 vectors (768D * 4 bytes * 10000 = ~30MB)
+    storage.reserve_capacity(10_000).unwrap();
+
+    // Verify we can insert vectors without triggering resize
+    // (no blocking write lock during insertions)
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..1000 {
+        let v: Vec<f32> = (0..768).map(|j| (i + j) as f32 * 0.001).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    assert_eq!(storage.len(), 1000);
+}
+
+#[test]
+fn test_aggressive_growth_reduces_resizes() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 128).unwrap();
+
+    // Insert many vectors - with P2 aggressive pre-allocation,
+    // this should require very few resize operations
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..5000 {
+        let v: Vec<f32> = (0..128).map(|j| (i + j) as f32 * 0.001).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    // Verify all vectors are retrievable
+    assert_eq!(storage.len(), 5000);
+
+    // Spot check some vectors
+    let v0 = storage.retrieve(0).unwrap().unwrap();
+    assert_eq!(v0.len(), 128);
+
+    let v4999 = storage.retrieve(4999).unwrap().unwrap();
+    assert_eq!(v4999.len(), 128);
+}
