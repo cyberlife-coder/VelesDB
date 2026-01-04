@@ -216,11 +216,11 @@ Get-ChildItem -Recurse -Include "*.md" -Exclude "node_modules","target",".venv",
 
 ---
 
-## 🔧 Phase 5 : Vérification des builds (11 composants)
+## Phase 5 : Vérification des builds (11 composants)
 
 **Objectif** : S'assurer que tous les packages peuvent être buildés
 
-### 🦀 Rust Crates (crates.io) - 5 crates publiables
+### Rust Crates (crates.io) - 6 crates publiables
 
 // turbo
 ```powershell
@@ -233,6 +233,7 @@ cargo publish -p velesdb-core --dry-run
 cargo publish -p velesdb-server --dry-run
 cargo publish -p velesdb-cli --dry-run
 cargo publish -p velesdb-migrate --dry-run
+cargo publish -p velesdb-mobile --dry-run
 cargo publish -p tauri-plugin-velesdb --dry-run
 ```
 
@@ -430,11 +431,12 @@ cargo check --all-features
 - [ ] Documentation mise à jour (README, benchmarks, etc.)
 - [ ] Dry-run des builds réussi pour chaque composant
 
-### Après le tag - crates.io (5 crates)
+### Après le tag - crates.io (6 crates)
 - [ ] 🦀 velesdb-core publié
 - [ ] 🌐 velesdb-server publié
 - [ ] 💻 velesdb-cli publié
 - [ ] 🔄 velesdb-migrate publié
+- [ ] 📱 velesdb-mobile publié
 - [ ] 🖥️ tauri-plugin-velesdb publié
 
 ### Après le tag - PyPI (3 packages)
@@ -467,6 +469,33 @@ cargo check --all-features
 ### Erreur PyPI "version already exists"
 → Idem. Vérifier si maturin a déjà publié.
 
+### Erreur PyPI "OIDC/token conflict"
+→ Le workflow `release.yml` utilise `password: ${{ secrets.PYPI_API_TOKEN }}`.
+**NE PAS** ajouter `permissions: id-token: write` en même temps, cela crée un conflit.
+Utiliser soit OIDC (Trusted Publishers), soit le token API, pas les deux.
+
+### Erreur aarch64 "stdarch_aarch64_prefetch unstable"
+→ Les intrinsics prefetch aarch64 nécessitent nightly Rust ([#117217](https://github.com/rust-lang/rust/issues/117217)).
+Solution : désactiver le prefetch pour aarch64 dans `simd.rs` (no-op).
+
+### Fix après tag (recreate tag)
+Si un fix est nécessaire après avoir créé le tag :
+```powershell
+# 1. Commit le fix
+git add -A && git commit -m "fix: description"
+
+# 2. Push le fix
+git push origin main
+
+# 3. Supprimer l'ancien tag local et remote
+git tag -d vX.Y.Z
+git push origin :refs/tags/vX.Y.Z
+
+# 4. Recréer le tag sur le nouveau commit
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
 ### Build mobile échoue
 → Vérifier que les targets sont installés :
 ```powershell
@@ -475,3 +504,10 @@ rustup target add aarch64-apple-ios aarch64-linux-android armv7-linux-androideab
 
 ### WASM build échoue
 → Installer wasm-pack : `cargo install wasm-pack`
+
+### Fichiers résiduels après reorganisation dossiers
+Si `git status` montre des dossiers non trackés après un rename/move :
+```powershell
+# Supprimer les vestiges
+Remove-Item -Path "chemin/ancien-dossier" -Recurse -Force
+```
