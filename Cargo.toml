@@ -15,7 +15,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.8.8"
+version = "0.8.9"
 edition = "2021"
 rust-version = "1.83"
 license-file = "LICENSE"
@@ -24,7 +24,7 @@ homepage = "https://velesdb.com"
 documentation = "https://docs.velesdb.com"
 keywords = ["vector-database", "search", "embeddings", "ann", "hnsw"]
 categories = ["database", "data-structures", "algorithms"]
-authors = ["VelesDB Team <contact@wiscale.fr>"]
+authors = ["Julien Lange <contact@wiscale.fr>"]
 
 [workspace.dependencies]
 # Async runtime

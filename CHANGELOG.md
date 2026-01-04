@@ -5,6 +5,37 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9] - 2026-01-04
+
+### 🚀 Performance & Safety Improvements (Craftsman Audit Response)
+
+#### Added
+
+- **P0: Snapshot System for LogPayloadStorage** - Fast cold-start recovery
+  - `create_snapshot()` - Creates binary snapshot of index with CRC32 validation
+  - `should_create_snapshot()` - Heuristic for automatic snapshot triggers
+  - Snapshot format: magic bytes + version + WAL position + entries + checksum
+  - Reduces cold-start from O(N) to O(1) by loading snapshot + delta WAL replay
+
+- **P1: Safety Tests for ManuallyDrop Pattern**
+  - `test_field_order_io_holder_after_inner` - Compile-time check using `offset_of!`
+  - `test_manuallydrop_pattern_integrity` - Verifies Drop impl correctness
+  - `test_load_and_drop_safety` - Stress-tests load/drop cycle for self-referential safety
+
+- **P2: Aggressive Pre-allocation for MmapStorage**
+  - `reserve_capacity(vector_count)` - Pre-allocate before bulk imports
+  - Increased `INITIAL_SIZE` from 64KB to 16MB
+  - Increased `MIN_GROWTH` from 1MB to 64MB
+  - Added `GROWTH_FACTOR=2` for exponential growth (amortized O(1))
+
+#### Changed
+
+- **MmapStorage** - Fewer blocking resize operations during bulk insertions
+  - Before: ~20 resizes for 1M vectors × 768D
+  - After: ~6 resizes (3x fewer blocking operations)
+
+---
+
 ## [0.8.8] - 2026-01-04
 
 ### 🔧 Release Pipeline Fixes & Technical Audit
