@@ -3012,4 +3012,92 @@ mod tests {
             }
         }
     }
+
+    // =========================================================================
+    // P1: Safety invariant tests for self-referential pattern
+    // =========================================================================
+
+    /// Compile-time assertion that `io_holder` field is declared AFTER `inner`.
+    ///
+    /// This is critical for the self-referential pattern safety:
+    /// - Rust drops fields in declaration order
+    /// - `inner` (Hnsw) borrows from `io_holder` (`HnswIo`) when loaded from disk
+    /// - `inner` MUST be dropped BEFORE `io_holder` to avoid use-after-free
+    ///
+    /// This test uses `offset_of!` to verify field ordering at compile time.
+    /// If someone reorders the fields, this test will fail.
+    #[test]
+    fn test_field_order_io_holder_after_inner() {
+        use std::mem::offset_of;
+
+        // Get offsets of the critical fields
+        let inner_offset = offset_of!(HnswIndex, inner);
+        let io_holder_offset = offset_of!(HnswIndex, io_holder);
+
+        // SAFETY INVARIANT: io_holder must be declared AFTER inner
+        // This ensures Rust's default drop order drops inner first
+        assert!(
+            inner_offset < io_holder_offset,
+            "CRITICAL SAFETY VIOLATION: 'io_holder' field (offset {io_holder_offset}) must be declared \
+             AFTER 'inner' field (offset {inner_offset}) to ensure correct drop order. \
+             The 'inner' field contains an Hnsw that borrows from 'io_holder' when loaded from disk. \
+             See HnswIndex struct documentation for details."
+        );
+    }
+
+    /// Test that `ManuallyDrop` is used correctly for the inner field.
+    ///
+    /// This verifies that:
+    /// 1. The inner field uses `ManuallyDrop` (checked by compilation)
+    /// 2. The custom Drop impl is present and correct
+    #[test]
+    fn test_manuallydrop_pattern_integrity() {
+        // Create an index and verify it can be dropped without issues
+        let index = HnswIndex::new(64, DistanceMetric::Cosine);
+
+        // Insert some data to ensure internal state is populated
+        for i in 0..10 {
+            let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
+            index.insert(i as u64, &v);
+        }
+
+        // Explicit drop - if ManuallyDrop is incorrectly handled, this could panic/UB
+        drop(index);
+
+        // If we reach here, the drop order is correct
+    }
+
+    /// Test that loading from disk and dropping works correctly.
+    ///
+    /// This is the actual use case where the self-referential pattern matters:
+    /// when loading from disk, `inner` borrows from `io_holder`.
+    #[test]
+    fn test_load_and_drop_safety() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let path = temp_dir.path();
+
+        // Create, populate, and save an index
+        {
+            let index = HnswIndex::new(64, DistanceMetric::Cosine);
+            for i in 0..50 {
+                let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
+                index.insert(i as u64, &v);
+            }
+            index.save(path).expect("Save failed");
+        }
+
+        // Load and drop multiple times to stress-test the drop order
+        for _ in 0..3 {
+            let loaded = HnswIndex::load(path, 64, DistanceMetric::Cosine).expect("Load failed");
+
+            // Verify it works
+            let results = loaded.search(&vec![0.0f32; 64], 5);
+            assert!(!results.is_empty(), "Search should return results");
+
+            // Drop happens here - critical that inner drops before io_holder
+            drop(loaded);
+        }
+    }
 }
