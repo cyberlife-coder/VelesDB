@@ -34,6 +34,11 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 | **Weaviate** | ✅ Ready | GraphQL | All classes & properties |
 | **Milvus** | ✅ Ready | REST API v2 | Zilliz Cloud compatible |
 | **ChromaDB** | ✅ Ready | REST API | Tenant/database support |
+| **JSON File** | ✅ Ready | Local file | Universal import from exports |
+| **CSV File** | ✅ Ready | Local file | Spreadsheet/ML pipeline import |
+| **MongoDB Atlas** | ✅ Ready | Data API | Vector Search with ObjectId support |
+| **Elasticsearch** | ✅ Ready | REST API | OpenSearch compatible, search_after pagination |
+| **Redis** | ✅ Ready | REST API | Redis Stack with RediSearch, FT.SEARCH |
 
 ---
 
@@ -50,6 +55,39 @@ cargo install --path crates/velesdb-migrate --features postgres
 ```
 
 ### Basic Usage
+
+#### Option A: Interactive Wizard (Recommended) ⚡
+
+**Zero configuration needed!** The wizard guides you through the entire migration:
+
+```bash
+velesdb-migrate wizard
+```
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║         🚀 VELESDB MIGRATION WIZARD                           ║
+║         Migrate your vectors in under 60 seconds              ║
+╚═══════════════════════════════════════════════════════════════╝
+
+? Where are your vectors stored?
+  ❯ Supabase (PostgreSQL + pgvector)
+    Qdrant
+    Pinecone
+    ...
+
+? Supabase Project URL: https://xyz.supabase.co
+? API Key: ****
+
+🔍 Connecting...
+✅ Found: documents (14,053 vectors, 1536D)
+
+? Start migration? [Y/n]
+
+✅ Migration Complete! (4.9s, 2,867 vec/s)
+```
+
+#### Option B: Config File (Advanced)
 
 ```bash
 # 1. Generate config template for your source
@@ -405,18 +443,19 @@ options:
 ## 🔧 CLI Reference
 
 ```
-velesdb-migrate 0.7.0
+velesdb-migrate 0.8.9
 Migrate vectors from other databases to VelesDB
 
 USAGE:
     velesdb-migrate [OPTIONS] [COMMAND]
 
 COMMANDS:
+    wizard    Interactive migration wizard (recommended)
     run       Run migration from config file
     validate  Validate configuration file
     schema    Show schema from source database
     init      Generate example configuration
-    detect    Auto-detect schema and generate config (NEW!)
+    detect    Auto-detect schema and generate config
 
 OPTIONS:
     -c, --config <FILE>     Configuration file path

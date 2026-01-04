@@ -45,6 +45,7 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod alloc_guard;
 pub mod collection;
 pub mod column_store;
 pub mod config;

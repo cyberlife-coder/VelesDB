@@ -459,3 +459,93 @@ fn test_aggressive_growth_reduces_resizes() {
     let v4999 = storage.retrieve(4999).unwrap().unwrap();
     assert_eq!(v4999.len(), 128);
 }
+
+// =============================================================================
+// P3 Audit: Metrics Tracking Tests
+// =============================================================================
+
+#[test]
+fn test_metrics_tracking_ensure_capacity() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 768).unwrap();
+
+    // Insert vectors that will trigger resize
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..100 {
+        let v: Vec<f32> = (0..768).map(|j| (i + j) as f32 * 0.001).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    // Check metrics were recorded
+    let stats = storage.metrics().ensure_capacity_latency_stats();
+    assert!(
+        stats.count > 0,
+        "Should have recorded ensure_capacity calls"
+    );
+}
+
+#[test]
+fn test_metrics_resize_count() {
+    let dir = tempdir().unwrap();
+    // Use 768D vectors (3072 bytes each) - need ~5500 vectors to exceed 16MB
+    let mut storage = MmapStorage::new(dir.path(), 768).unwrap();
+
+    // Force resize by exceeding initial 16MB capacity
+    // 768 * 4 = 3072 bytes per vector
+    // 16MB / 3072 = ~5461 vectors fit in initial capacity
+    // Insert 6000 to trigger resize
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..6000 {
+        let v: Vec<f32> = (0..768).map(|j| (i + j) as f32 * 0.001).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    // Should have triggered at least one resize
+    assert!(
+        storage.metrics().resize_count() >= 1,
+        "Should have triggered at least one resize, got {}",
+        storage.metrics().resize_count()
+    );
+}
+
+#[test]
+fn test_metrics_bytes_resized() {
+    let dir = tempdir().unwrap();
+    // Use 768D vectors to exceed 16MB initial capacity
+    let mut storage = MmapStorage::new(dir.path(), 768).unwrap();
+
+    // Force resize
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..6000 {
+        let v: Vec<f32> = (0..768).map(|j| (i + j) as f32 * 0.001).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    // Should have recorded bytes resized
+    assert!(
+        storage.metrics().total_bytes_resized() > 0,
+        "Should have recorded bytes resized, got {}",
+        storage.metrics().total_bytes_resized()
+    );
+}
+
+#[test]
+fn test_metrics_latency_percentiles() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 64).unwrap();
+
+    // Generate enough operations to have meaningful percentiles
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..1000 {
+        let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.001).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    let stats = storage.metrics().ensure_capacity_latency_stats();
+
+    // Should have reasonable percentile values
+    // P50 <= P95 <= P99 <= max
+    assert!(stats.p50_us <= stats.p95_us, "P50 should be <= P95");
+    assert!(stats.p95_us <= stats.p99_us, "P95 should be <= P99");
+    assert!(stats.p99_us <= stats.max_us, "P99 should be <= max");
+}

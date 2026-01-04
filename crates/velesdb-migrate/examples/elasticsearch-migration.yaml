@@ -1,0 +1,25 @@
+# Elasticsearch/OpenSearch migration configuration
+# Documentation: https://docs.velesdb.com/migrate/elasticsearch
+
+source:
+  type: elasticsearch
+  url: "http://localhost:9200"
+  index: "vectors"
+  vector_field: "embedding"
+  id_field: "_id"
+  # Optional authentication
+  # username: "elastic"
+  # password: "${ES_PASSWORD}"
+  # Or API key
+  # api_key: "${ES_API_KEY}"
+  # Optional: filter query
+  # query: {"term": {"status": "active"}}
+
+destination:
+  type: velesdb
+  path: "./velesdb_data"
+  collection: "es_vectors"
+
+options:
+  batch_size: 100
+  storage: full

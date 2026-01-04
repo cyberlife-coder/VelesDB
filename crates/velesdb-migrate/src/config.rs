@@ -41,6 +41,21 @@ pub enum SourceConfig {
     /// `ChromaDB` vector database.
     #[serde(rename = "chromadb")]
     ChromaDB(ChromaDBConfig),
+    /// JSON file import.
+    #[serde(rename = "json_file")]
+    JsonFile(crate::connectors::json_file::JsonFileConfig),
+    /// CSV file import.
+    #[serde(rename = "csv_file")]
+    CsvFile(crate::connectors::csv_file::CsvFileConfig),
+    /// MongoDB Atlas Vector Search.
+    #[serde(rename = "mongodb")]
+    MongoDB(crate::connectors::mongodb::MongoDBConfig),
+    /// Elasticsearch/OpenSearch with vector search.
+    #[serde(rename = "elasticsearch")]
+    Elasticsearch(crate::connectors::elasticsearch::ElasticsearchConfig),
+    /// Redis Vector Search (Redis Stack).
+    #[serde(rename = "redis")]
+    Redis(crate::connectors::redis::RedisConfig),
 }
 
 /// `PostgreSQL` pgvector configuration.

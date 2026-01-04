@@ -12,6 +12,7 @@
 //! - Explicit `reserve_capacity()` for bulk imports
 
 use super::guard::VectorSliceGuard;
+use super::metrics::StorageMetrics;
 use super::traits::VectorStorage;
 
 use memmap2::MmapMut;
@@ -21,6 +22,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
 /// Memory-mapped file storage for vectors.
 ///
@@ -43,6 +46,8 @@ pub struct MmapStorage {
     mmap: RwLock<MmapMut>,
     /// Next available offset in the data file
     next_offset: AtomicUsize,
+    /// P0 Audit: Metrics for monitoring `ensure_capacity` latency
+    metrics: Arc<StorageMetrics>,
 }
 
 impl MmapStorage {
@@ -124,6 +129,7 @@ impl MmapStorage {
             data_file,
             mmap: RwLock::new(mmap),
             next_offset: AtomicUsize::new(next_offset),
+            metrics: Arc::new(StorageMetrics::new()),
         })
     }
 
@@ -135,7 +141,16 @@ impl MmapStorage {
     /// - Exponential growth (2x) for amortized O(1)
     /// - 64MB minimum growth to reduce resize frequency
     /// - For 1M vectors × 768D × 4 bytes = 3GB, only ~6 resizes needed
+    ///
+    /// # P0 Audit: Latency Monitoring
+    ///
+    /// This operation is instrumented to track latency. Monitor P99 latency
+    /// via `metrics()` to detect "stop-the-world" pauses during large resizes.
     fn ensure_capacity(&mut self, required_len: usize) -> io::Result<()> {
+        let start = Instant::now();
+        let mut did_resize = false;
+        let mut bytes_resized = 0u64;
+
         let mut mmap = self.mmap.write();
         if mmap.len() < required_len {
             // Flush current mmap before unmapping
@@ -161,7 +176,15 @@ impl MmapStorage {
 
             // Remap
             *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
+
+            did_resize = true;
+            bytes_resized = new_len.saturating_sub(current_len);
         }
+
+        // P0 Audit: Record latency metrics
+        self.metrics
+            .record_ensure_capacity(start.elapsed(), did_resize, bytes_resized);
+
         Ok(())
     }
 
@@ -198,6 +221,28 @@ impl MmapStorage {
         let with_headroom = required_len.saturating_add(required_len / 10);
 
         self.ensure_capacity(with_headroom)
+    }
+
+    /// Returns a reference to the storage metrics.
+    ///
+    /// # P0 Audit: Latency Monitoring
+    ///
+    /// Use this to monitor `ensure_capacity` latency, especially P99.
+    /// High P99 latency indicates "stop-the-world" pauses during mmap resizes.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let storage = MmapStorage::new(path, 768)?;
+    /// // ... perform operations ...
+    /// let stats = storage.metrics().ensure_capacity_latency_stats();
+    /// if stats.p99_exceeds(Duration::from_millis(100)) {
+    ///     warn!("High P99 latency detected: {:?}", stats.p99());
+    /// }
+    /// ```
+    #[must_use]
+    pub fn metrics(&self) -> &StorageMetrics {
+        &self.metrics
     }
 
     /// Compacts the storage by rewriting only active vectors.
