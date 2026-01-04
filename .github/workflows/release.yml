@@ -128,7 +128,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          for crate in velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile; do
+          for crate in velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb; do
             echo "📦 Publishing $crate..."
             cargo publish -p $crate --allow-dirty 2>/dev/null || echo "⏭️ $crate already published"
             sleep 20
