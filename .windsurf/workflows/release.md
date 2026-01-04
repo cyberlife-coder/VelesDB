@@ -93,15 +93,15 @@ cargo deny check
 | `crates/velesdb-wasm/Cargo.toml` | 🌍 WASM | `version.workspace = true` ✅ |
 | `crates/velesdb-migrate/Cargo.toml` | 🔄 Migrate | `version.workspace = true` ✅ |
 | `crates/velesdb-mobile/Cargo.toml` | 📱 Mobile | `version.workspace = true` ✅ |
-| `integrations/tauri-plugin-velesdb/Cargo.toml` | 🖥️ Tauri | `version.workspace = true` ✅ |
+| `crates/tauri-plugin-velesdb/Cargo.toml` | 🖥️ Tauri | `version.workspace = true` ✅ |
 
 ### Fichiers Python (pyproject.toml) - 3 packages
 
 | Fichier | Composant | PyPI Name |
 |---------|-----------|-----------|
 | `crates/velesdb-python/pyproject.toml` | 🐍 Python | `velesdb` |
-| `integrations/langchain-velesdb/pyproject.toml` | 🦜 LangChain | `langchain-velesdb` |
-| `integrations/llamaindex-velesdb/pyproject.toml` | 🦙 LlamaIndex | `llama-index-vector-stores-velesdb` |
+| `integrations/langchain/pyproject.toml` | 🦜 LangChain | `langchain-velesdb` |
+| `integrations/llamaindex/pyproject.toml` | 🦙 LlamaIndex | `llama-index-vector-stores-velesdb` |
 
 ### Fichiers JavaScript/TypeScript (package.json) - 2 packages
 
@@ -119,7 +119,7 @@ Write-Host "=== Rust Crates ===" -ForegroundColor Cyan
 Get-Content Cargo.toml | Select-String 'version = "\d'
 
 Write-Host "`n=== Python Packages ===" -ForegroundColor Yellow
-Get-ChildItem -Path "crates/velesdb-python","integrations/langchain-velesdb","integrations/llamaindex-velesdb" -Filter "pyproject.toml" -Recurse |
+Get-ChildItem -Path "crates/velesdb-python","integrations/langchain","integrations/llamaindex" -Filter "pyproject.toml" -Recurse |
   ForEach-Object { Write-Host $_.FullName; Get-Content $_ | Select-String 'version\s*=' | Select-Object -First 1 }
 
 Write-Host "`n=== npm Packages ===" -ForegroundColor Green
@@ -245,13 +245,13 @@ maturin build --release
 cd ../..
 
 # 2. langchain-velesdb
-cd integrations/langchain-velesdb
+cd integrations/langchain
 pip install build
 python -m build --sdist
 cd ../..
 
 # 3. llamaindex-velesdb
-cd integrations/llamaindex-velesdb
+cd integrations/llamaindex
 python -m build --sdist
 cd ../..
 ```
@@ -299,8 +299,8 @@ rustup target list --installed | Select-String "ios|android"
 cargo build --release -p tauri-plugin-velesdb
 
 # JavaScript guest bindings (si applicable)
-if (Test-Path "integrations/tauri-plugin-velesdb/guest-js") {
-    cd integrations/tauri-plugin-velesdb/guest-js
+if (Test-Path "crates/tauri-plugin-velesdb/guest-js") {
+    cd crates/tauri-plugin-velesdb/guest-js
     npm install
     npm run build
     cd ../../..
