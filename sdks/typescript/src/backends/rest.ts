@@ -23,6 +23,11 @@ interface ApiResponse<T> {
   };
 }
 
+/** Batch search response structure */
+interface BatchSearchResponse {
+  results: Array<{ results: SearchResult[] }>;
+}
+
 /**
  * REST Backend
  * 
