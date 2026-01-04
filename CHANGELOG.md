@@ -5,6 +5,33 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] - 2026-01-04
+
+### 🔧 Release Pipeline Fixes & Technical Audit
+
+#### Fixed
+
+- **PyPI Publishing** - Added missing `PYPI_API_TOKEN` secret to release workflow
+- **TypeScript SDK** - Added missing `BatchSearchResponse` type definition
+- **SDK WASM Dependency** - Updated `@wiscale/velesdb-wasm` dependency to `^0.8.8`
+- **crates.io Publishing** - Removed non-existent `tauri-plugin-velesdb` from publish list
+- **Flaky Tests** - Fixed HNSW recall issues in filter tests by adding more vectors
+
+#### Changed
+
+- **Technical Audit Phase 1-3** - Consolidated all audit improvements
+  - Phase 1: `HnswSafeWrapper` for self-referential pattern safety
+  - Phase 2: Zero-copy half-precision distance calculations
+  - Phase 3: Split collection module into `types.rs`/`search.rs`/`core.rs`
+- **ShardedVectors API** - Now accepts dimension parameter and slice-based insert
+- **Release Workflow** - Added OIDC permission for PyPI Trusted Publishers
+
+#### Documentation
+
+- Added `docs/TECHNICAL_AUDIT_REPORT_2026_01.md` with full audit findings
+
+---
+
 ## [0.8.7] - 2026-01-04
 
 ### 🧹 HNSW Vacuum & Dead Code Cleanup
