@@ -210,9 +210,9 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | **📜 TypeScript** | **[typescript-sdk](sdks/typescript)** | Node.js & Browser SDK | `npm i @wiscale/velesdb` |
 | **🌍 WASM** | **[velesdb-wasm](crates/velesdb-wasm)** | Browser-side vector search | `npm i @wiscale/velesdb-wasm` |
 | **📱 Mobile** | **[velesdb-mobile](crates/velesdb-mobile)** | iOS (Swift) & Android (Kotlin) | [Build instructions](#-mobile-build) |
-| **🖥️ Desktop** | **[tauri-plugin](integrations/tauri-plugin-velesdb)** | Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
-| **🦜 LangChain** | **[langchain-velesdb](integrations/langchain-velesdb)** | Official VectorStore | `pip install langchain-velesdb` |
-| **🦙 LlamaIndex** | **[llamaindex-velesdb](integrations/llamaindex-velesdb)** | Document indexing | `pip install llama-index-vector-stores-velesdb` |
+| **🖥️ Desktop** | **[tauri-plugin](crates/tauri-plugin-velesdb)** | Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
+| **🦜 LangChain** | **[langchain-velesdb](integrations/langchain)** | Official VectorStore | `pip install langchain-velesdb` |
+| **🦙 LlamaIndex** | **[llamaindex-velesdb](integrations/llamaindex)** | Document indexing | `pip install llama-index-vector-stores-velesdb` |
 | **🔄 Migration** | **[velesdb-migrate](crates/velesdb-migrate)** | From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
 
 ---
@@ -1029,7 +1029,7 @@ const hybrid = await invoke('plugin:velesdb|hybrid_search', {
 });
 ```
 
-See [tauri-plugin-velesdb](./integrations/tauri-plugin-velesdb) for full documentation.
+See [tauri-plugin-velesdb](./crates/tauri-plugin-velesdb) for full documentation.
 
 ---
 

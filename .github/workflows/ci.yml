@@ -98,12 +98,12 @@ jobs:
 
       - name: Install LlamaIndex integration
         run: |
-          cd integrations/llamaindex-velesdb
+          cd integrations/llamaindex
           pip install -e ".[dev]" || pip install pytest pytest-asyncio
 
       - name: Run LlamaIndex tests
         run: |
-          cd integrations/llamaindex-velesdb
+          cd integrations/llamaindex
           python -m pytest tests/ -v --tb=short || echo "Tests skipped (velesdb not installed)"
 
   # ===========================================================================

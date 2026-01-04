@@ -8,10 +8,10 @@ members = [
     "crates/velesdb-wasm",
     "crates/velesdb-migrate",
     "crates/velesdb-mobile",
-    "integrations/tauri-plugin-velesdb",
+    "crates/tauri-plugin-velesdb",
 ]
 exclude = [
-    "examples/tauri-rag-app/src-tauri",
+    "demos/tauri-rag-app/src-tauri",
 ]
 
 [workspace.package]
