@@ -267,8 +267,21 @@ impl ContiguousVectors {
     }
 
     /// Resizes the internal buffer.
+    ///
+    /// # P2 Audit + PERF-002: Panic-Safety with RAII Guard
+    ///
+    /// This function uses `AllocGuard` for panic-safe allocation:
+    /// 1. New buffer is allocated via RAII guard (auto-freed on panic)
+    /// 2. Data is copied to new buffer
+    /// 3. Guard ownership is transferred (no auto-free)
+    /// 4. Old buffer is deallocated
+    /// 5. State is updated atomically
+    ///
+    /// If panic occurs during copy, the guard ensures new buffer is freed.
     #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
     fn resize(&mut self, new_capacity: usize) {
+        use crate::alloc_guard::AllocGuard;
+
         if new_capacity <= self.capacity {
             return;
         }
@@ -276,25 +289,38 @@ impl ContiguousVectors {
         let old_layout = Self::layout(self.dimension, self.capacity);
         let new_layout = Self::layout(self.dimension, new_capacity);
 
-        // SAFETY: Layouts are valid
-        // We use realloc if possible, or alloc + copy + dealloc
+        // Step 1: Allocate new buffer with RAII guard (PERF-002)
+        // If panic occurs before into_raw(), memory is automatically freed
+        let guard = AllocGuard::new(new_layout).unwrap_or_else(|| {
+            panic!(
+                "Failed to allocate {} bytes for ContiguousVectors resize",
+                new_layout.size()
+            )
+        });
 
-        let new_data = unsafe { alloc(new_layout).cast::<f32>() };
-        assert!(!new_data.is_null(), "Failed to resize ContiguousVectors");
+        let new_data: *mut f32 = guard.cast();
 
-        // Copy existing data
+        // Step 2: Copy existing data to new buffer
+        // If this panics, guard drops and frees new_data automatically
         let copy_count = self.count;
         if copy_count > 0 {
             let copy_size = copy_count * self.dimension;
+            // SAFETY: Both pointers are valid, non-overlapping, and properly aligned
             unsafe {
                 ptr::copy_nonoverlapping(self.data, new_data, copy_size);
             }
         }
 
+        // Step 3: Transfer ownership - guard won't free on drop anymore
+        let _ = guard.into_raw();
+
+        // Step 4: Deallocate old buffer
+        // SAFETY: self.data was allocated with old_layout
         unsafe {
             dealloc(self.data.cast::<u8>(), old_layout);
         }
 
+        // Step 5: Update state (all-or-nothing)
         self.data = new_data;
         self.capacity = new_capacity;
     }
@@ -631,5 +657,100 @@ mod tests {
 
         // Act - Index == count should panic (off by one)
         let _ = unsafe { cv.get_unchecked(2) };
+    }
+
+    // =========================================================================
+    // P2 Audit: Resize panic-safety tests
+    // =========================================================================
+
+    #[test]
+    fn test_resize_preserves_data_integrity() {
+        // Arrange
+        let mut cv = ContiguousVectors::new(64, 16);
+        let vectors: Vec<Vec<f32>> = (0..10)
+            .map(|i| (0..64).map(|j| (i * 64 + j) as f32).collect())
+            .collect();
+
+        for v in &vectors {
+            cv.push(v);
+        }
+
+        // Act - Force resize by adding more vectors
+        for i in 10..100 {
+            let v: Vec<f32> = (0..64).map(|j| (i * 64 + j) as f32).collect();
+            cv.push(&v);
+        }
+
+        // Assert - Original vectors should be intact
+        for (i, expected) in vectors.iter().enumerate() {
+            let actual = cv.get(i).expect("Vector should exist");
+            assert_eq!(
+                actual,
+                expected.as_slice(),
+                "Vector {i} corrupted after resize"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resize_multiple_times() {
+        // Arrange - Start with minimal capacity
+        let mut cv = ContiguousVectors::new(128, 16);
+
+        // Act - Trigger multiple resizes
+        for i in 0..500 {
+            let v: Vec<f32> = (0..128).map(|j| (i * 128 + j) as f32).collect();
+            cv.push(&v);
+        }
+
+        // Assert
+        assert_eq!(cv.len(), 500);
+        assert!(cv.capacity() >= 500);
+
+        // Verify first and last vectors
+        let first = cv.get(0).unwrap();
+        assert!((first[0] - 0.0).abs() < f32::EPSILON);
+
+        let last = cv.get(499).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        let expected = (499 * 128) as f32;
+        assert!((last[0] - expected).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_drop_after_resize_no_leak() {
+        // Arrange - Create and resize multiple times
+        for _ in 0..10 {
+            let mut cv = ContiguousVectors::new(256, 8);
+
+            // Trigger multiple resizes
+            for i in 0..100 {
+                let v: Vec<f32> = (0..256).map(|j| (i + j) as f32).collect();
+                cv.push(&v);
+            }
+
+            // cv is dropped here - should not leak memory
+        }
+
+        // If we get here without memory issues, the test passes
+        // Note: In a real scenario, use tools like valgrind or miri to verify
+    }
+
+    #[test]
+    fn test_ensure_capacity_idempotent() {
+        // Arrange
+        let mut cv = ContiguousVectors::new(64, 100);
+        cv.push(&vec![1.0; 64]);
+
+        let initial_capacity = cv.capacity();
+
+        // Act - Call ensure_capacity multiple times with same value
+        cv.ensure_capacity(50);
+        cv.ensure_capacity(50);
+        cv.ensure_capacity(50);
+
+        // Assert - Capacity should not change
+        assert_eq!(cv.capacity(), initial_capacity);
+        assert_eq!(cv.len(), 1);
     }
 }

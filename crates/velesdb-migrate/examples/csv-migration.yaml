@@ -1,0 +1,21 @@
+# CSV File migration configuration
+# Documentation: https://docs.velesdb.com/migrate/csv
+
+source:
+  type: csv_file
+  path: "./vectors.csv"
+  vector_field: "embedding"  # Column with JSON array or spread columns
+  id_field: "id"
+  has_header: true
+  delimiter: ","
+  # For spread vectors: dim_0, dim_1, dim_2...
+  # vector_columns_prefix: "dim_"
+
+destination:
+  type: velesdb
+  path: "./velesdb_data"
+  collection: "csv_vectors"
+
+options:
+  batch_size: 1000
+  storage: sq8

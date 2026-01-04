@@ -35,3 +35,10 @@ path = "fuzz_targets/fuzz_distance_metrics.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_snapshot_parser"
+path = "fuzz_targets/fuzz_snapshot_parser.rs"
+test = false
+doc = false
+bench = false

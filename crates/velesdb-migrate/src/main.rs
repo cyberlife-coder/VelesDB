@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use velesdb_migrate::{MigrationConfig, Pipeline};
+use velesdb_migrate::{MigrationConfig, Pipeline, Wizard};
 
 #[derive(Parser)]
 #[command(name = "velesdb-migrate")]
@@ -41,6 +41,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Interactive migration wizard (recommended)
+    Wizard,
+
     /// Run migration from config file
     Run {
         /// Configuration file path
@@ -118,6 +121,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     match cli.command {
+        Some(Commands::Wizard) => {
+            run_wizard().await?;
+        }
         Some(Commands::Run { config }) => {
             run_migration(&config, cli.dry_run, cli.batch_size).await?;
         }
@@ -161,6 +167,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_wizard() -> anyhow::Result<()> {
+    let wizard = Wizard::new();
+    wizard.run().await.map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 async fn run_migration(
