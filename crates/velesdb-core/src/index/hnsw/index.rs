@@ -342,6 +342,13 @@ impl HnswIndex {
             return self.search_brute_force(query, k);
         }
 
+        // For very small collections (≤100 vectors), use brute-force to guarantee 100% recall
+        // HNSW graph may not be fully connected with so few nodes, causing missed results
+        // Only use brute-force if vector storage is enabled (not in fast-insert mode)
+        if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
+            return self.search_brute_force(query, k);
+        }
+
         let ef_search = quality.ef_search(k);
         let inner = self.inner.read();
 
