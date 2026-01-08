@@ -130,6 +130,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.len() == 0
     }
 
+    /// Computes the distance between two vectors using this index's distance engine.
+    ///
+    /// This is useful for brute-force search operations.
+    #[inline]
+    #[must_use]
+    pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        self.distance.distance(a, b)
+    }
+
     /// Inserts a vector into the index.
     ///
     /// # Arguments
