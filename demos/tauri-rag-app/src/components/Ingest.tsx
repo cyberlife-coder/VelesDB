@@ -76,7 +76,7 @@ export function Ingest({ onComplete }: IngestProps) {
   return (
     <div className="space-y-6">
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">
+        <label className="block text-sm font-medium text-dark-200 mb-2">
           Paste your text content
         </label>
         <textarea
@@ -84,7 +84,7 @@ export function Ingest({ onComplete }: IngestProps) {
           onChange={(e) => setText(e.target.value)}
           rows={10}
           placeholder="Paste your document text here..."
-          className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none font-mono text-sm"
+          className="w-full px-4 py-3 bg-dark-900/70 border border-dark-700 rounded-lg text-white placeholder-dark-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all resize-none font-mono text-sm"
         />
       </div>
 
@@ -92,7 +92,7 @@ export function Ingest({ onComplete }: IngestProps) {
         <button
           onClick={handleIngest}
           disabled={loading || !text.trim()}
-          className="flex-1 px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+          className="flex-1 px-6 py-3 bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 disabled:bg-dark-700 disabled:text-dark-500 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 shadow-md shadow-primary-500/20"
         >
           {loading ? (
             <>
@@ -109,7 +109,7 @@ export function Ingest({ onComplete }: IngestProps) {
         <button
           onClick={handleClear}
           disabled={loading}
-          className="px-6 py-3 bg-red-500/20 hover:bg-red-500/30 text-red-400 font-medium rounded-lg transition-colors flex items-center gap-2"
+          className="px-6 py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 font-medium rounded-lg transition-colors flex items-center gap-2"
         >
           <Trash2 className="w-5 h-5" />
           Clear Index
@@ -117,12 +117,12 @@ export function Ingest({ onComplete }: IngestProps) {
       </div>
 
       {error && (
-        <p className="text-red-400 text-sm">{error}</p>
+        <p className="text-rose-400 text-sm">{error}</p>
       )}
 
       {chunks.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-green-400">
+          <div className="flex items-center gap-2 text-emerald-300">
             <CheckCircle className="w-5 h-5" />
             <span>Successfully ingested {chunks.length} chunks</span>
           </div>
@@ -130,13 +130,13 @@ export function Ingest({ onComplete }: IngestProps) {
             {chunks.map((chunk) => (
               <div
                 key={chunk.id}
-                className="p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-sm"
+                className="p-3 bg-dark-900/60 border border-dark-800 rounded-lg text-sm"
               >
-                <div className="flex items-center gap-2 text-slate-400 mb-1">
+                <div className="flex items-center gap-2 text-dark-300 mb-1">
                   <FileText className="w-4 h-4" />
                   <span>Chunk #{chunk.id}</span>
                 </div>
-                <p className="text-slate-300 line-clamp-2">
+                <p className="text-dark-100 line-clamp-2">
                   {chunk.text}
                 </p>
               </div>

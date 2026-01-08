@@ -16,6 +16,9 @@ tauri-plugin-velesdb = { path = "../../../crates/tauri-plugin-velesdb" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+# ML embeddings for semantic search
+fastembed = "4"
+tokio = { version = "1", features = ["sync"] }
 
 [features]
 default = ["custom-protocol"]

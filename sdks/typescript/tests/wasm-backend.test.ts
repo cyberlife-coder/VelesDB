@@ -31,8 +31,8 @@ const mockWasmModule = {
   VectorStore: MockVectorStore,
 };
 
-// Mock the dynamic import
-vi.mock('velesdb-wasm', () => mockWasmModule);
+// Mock the dynamic import - must match the import path in wasm.ts
+vi.mock('@wiscale/velesdb-wasm', () => mockWasmModule);
 
 describe('WasmBackend', () => {
   let backend: WasmBackend;

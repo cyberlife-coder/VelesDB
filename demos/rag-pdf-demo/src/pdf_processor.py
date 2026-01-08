@@ -166,10 +166,10 @@ class PDFProcessor:
             chunk_index: Index of the chunk
 
         Returns:
-            Unique string ID
+            Unique string ID (full MD5 hash for collision resistance)
         """
         content = f"{document_name}:{page_number}:{chunk_index}"
-        return hashlib.md5(content.encode()).hexdigest()[:16]
+        return hashlib.md5(content.encode()).hexdigest()  # Full 32 chars
 
     def process_pdf(self, pdf_path: Path) -> list[ChunkData]:
         """

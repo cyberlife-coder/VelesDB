@@ -348,6 +348,29 @@ export class WasmBackend implements IVelesDBBackend {
     );
   }
 
+  async isEmpty(collectionName: string): Promise<boolean> {
+    this.ensureInitialized();
+
+    const collection = this.collections.get(collectionName);
+    if (!collection) {
+      throw new NotFoundError(`Collection '${collectionName}'`);
+    }
+
+    return collection.store.is_empty();
+  }
+
+  async flush(collectionName: string): Promise<void> {
+    this.ensureInitialized();
+
+    const collection = this.collections.get(collectionName);
+    if (!collection) {
+      throw new NotFoundError(`Collection '${collectionName}'`);
+    }
+
+    // WASM runs in-memory, flush is a no-op
+    // Real persistence would require IndexedDB or similar
+  }
+
   async close(): Promise<void> {
     for (const [, data] of this.collections) {
       data.store.free();

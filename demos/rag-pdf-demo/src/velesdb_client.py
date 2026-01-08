@@ -1,5 +1,6 @@
 """VelesDB REST API client."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -17,19 +18,33 @@ class VelesDBClient:
     """Async client for VelesDB REST API with persistent connection."""
 
     _client: httpx.AsyncClient | None = None
+    _lock: asyncio.Lock | None = None
+    _lock_init: bool = False  # Flag to ensure single init
 
     def __init__(self, base_url: str | None = None, timeout: float = 30.0):
         settings = get_settings()
         self.base_url = base_url or settings.velesdb_url
         self.timeout = timeout
+        # Initialize lock once at first instance creation
+        if not VelesDBClient._lock_init:
+            VelesDBClient._lock = asyncio.Lock()
+            VelesDBClient._lock_init = True
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        """Get the async lock (initialized at first instance)."""
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+        return cls._lock
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create persistent HTTP client."""
-        if VelesDBClient._client is None or VelesDBClient._client.is_closed:
-            VelesDBClient._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=self.timeout
-            )
+        """Get or create persistent HTTP client (thread-safe)."""
+        async with self._get_lock():
+            if VelesDBClient._client is None or VelesDBClient._client.is_closed:
+                VelesDBClient._client = httpx.AsyncClient(
+                    base_url=self.base_url,
+                    timeout=self.timeout
+                )
         return VelesDBClient._client
 
     async def health_check(self) -> bool:
@@ -147,26 +162,40 @@ class VelesDBClient:
         response.raise_for_status()
         return response.json()
 
-    async def delete_by_filter(
+    async def delete_point(
         self,
         collection: str,
-        filter_: dict[str, Any]
+        point_id: int
     ) -> dict[str, Any]:
         """
-        Delete points matching a filter.
+        Delete a single point by ID.
 
         Args:
             collection: Collection name
-            filter_: Metadata filter
+            point_id: Point ID to delete
 
         Returns:
             Delete result
         """
         client = await self._get_client()
-        response = await client.post(
-            f"/collections/{collection}/points/delete",
-            json={"filter": filter_}
+        response = await client.delete(
+            f"/collections/{collection}/points/{point_id}"
         )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_collection(self, name: str) -> dict[str, Any]:
+        """
+        Delete an entire collection.
+        
+        Args:
+            name: Collection name
+            
+        Returns:
+            Delete result
+        """
+        client = await self._get_client()
+        response = await client.delete(f"/collections/{name}")
         response.raise_for_status()
         return response.json()
 

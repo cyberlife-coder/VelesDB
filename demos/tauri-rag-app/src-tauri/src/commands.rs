@@ -1,7 +1,114 @@
 //! Tauri commands for RAG operations
 
+use crate::embeddings;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri_plugin_velesdb::VelesDbExt;
+
+/// Counter for unique chunk IDs (persists across ingestions)
+static NEXT_CHUNK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn get_next_chunk_id() -> u64 {
+    NEXT_CHUNK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
+
+fn reset_chunk_id_counter() {
+    NEXT_CHUNK_ID.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Persistent storage for chunk texts
+#[derive(Serialize, Deserialize, Default)]
+struct ChunkStore {
+    chunks: HashMap<u64, String>,
+    next_id: u64,
+}
+
+/// In-memory storage for chunk texts (synced to disk)
+static CHUNK_TEXTS: Mutex<Option<HashMap<u64, String>>> = Mutex::new(None);
+static DATA_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn get_data_path() -> PathBuf {
+    let guard = DATA_PATH.lock().unwrap_or_else(|p| p.into_inner());
+    guard.clone().unwrap_or_else(|| PathBuf::from("./velesdb_data/chunks.json"))
+}
+
+fn set_data_path(path: PathBuf) {
+    let mut guard = DATA_PATH.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = Some(path);
+}
+
+fn get_chunk_texts() -> std::sync::MutexGuard<'static, Option<HashMap<u64, String>>> {
+    CHUNK_TEXTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Load chunks from disk on startup
+fn load_chunks_from_disk() -> HashMap<u64, String> {
+    let path = get_data_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(store) = serde_json::from_str::<ChunkStore>(&content) {
+                // Restore the ID counter
+                NEXT_CHUNK_ID.store(store.next_id, std::sync::atomic::Ordering::SeqCst);
+                return store.chunks;
+            }
+        }
+    }
+    HashMap::new()
+}
+
+/// Save chunks to disk
+fn save_chunks_to_disk() {
+    let guard = get_chunk_texts();
+    if let Some(chunks) = guard.as_ref() {
+        let store = ChunkStore {
+            chunks: chunks.clone(),
+            next_id: NEXT_CHUNK_ID.load(std::sync::atomic::Ordering::SeqCst),
+        };
+        
+        let path = get_data_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        
+        if let Ok(json) = serde_json::to_string_pretty(&store) {
+            let _ = fs::write(&path, json);
+        }
+    }
+}
+
+fn store_chunk_text(id: u64, text: String) {
+    let mut guard = get_chunk_texts();
+    if guard.is_none() {
+        *guard = Some(load_chunks_from_disk());
+    }
+    if let Some(map) = guard.as_mut() {
+        map.insert(id, text);
+    }
+    drop(guard);
+    save_chunks_to_disk();
+}
+
+fn get_chunk_text(id: u64) -> String {
+    let mut guard = get_chunk_texts();
+    if guard.is_none() {
+        *guard = Some(load_chunks_from_disk());
+    }
+    guard
+        .as_ref()
+        .and_then(|map| map.get(&id))
+        .cloned()
+        .unwrap_or_else(|| format!("Chunk {id}"))
+}
+
+fn clear_chunk_texts() {
+    let mut guard = get_chunk_texts();
+    *guard = Some(HashMap::new());
+    drop(guard);
+    save_chunks_to_disk();
+}
 
 /// Document chunk with text and embedding
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,34 +155,7 @@ fn chunk_text(text: &str, chunk_size: usize) -> Vec<String> {
     chunks
 }
 
-/// Generate a simple embedding (placeholder - use a real model in production)
-/// 
-/// In production, use:
-/// - `rust-bert` for local transformers
-/// - `candle` for efficient inference
-/// - External API (OpenAI, Cohere, etc.)
-fn generate_embedding(text: &str) -> Vec<f32> {
-    // Simple hash-based embedding for demo purposes
-    // Replace with real embedding model in production!
-    let mut embedding = vec![0.0_f32; 128];
-    
-    for (i, c) in text.chars().enumerate() {
-        let idx = i % 128;
-        embedding[idx] += (c as u32 as f32) / 1000.0;
-    }
-    
-    // Normalize
-    let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for val in &mut embedding {
-            *val /= norm;
-        }
-    }
-    
-    embedding
-}
-
-/// Ingest text and create embeddings
+/// Ingest text and create embeddings using ML model
 #[tauri::command]
 pub async fn ingest_text(
     app: tauri::AppHandle,
@@ -84,16 +164,24 @@ pub async fn ingest_text(
 ) -> Result<Vec<Chunk>, String> {
     let chunk_size = chunk_size.unwrap_or(500);
     let chunks = chunk_text(&text, chunk_size);
+    
+    if chunks.is_empty() {
+        return Ok(vec![]);
+    }
+    
+    // Generate embeddings for all chunks using ML model
+    let embeddings = embeddings::embed_batch(chunks.clone()).await?;
+    
+    let db = app.velesdb();
     let mut result = Vec::new();
 
-    let db = app.velesdb();
+    for (chunk_text, embedding) in chunks.iter().zip(embeddings.iter()) {
+        let id = get_next_chunk_id();
 
-    for (i, chunk_text) in chunks.iter().enumerate() {
-        let id = i as u64;
-        let embedding = generate_embedding(chunk_text);
-
-        db.insert(id, &embedding)
+        db.insert(id, embedding)
             .map_err(|e| format!("Insert error: {e}"))?;
+
+        store_chunk_text(id, chunk_text.clone());
 
         result.push(Chunk {
             id,
@@ -105,7 +193,7 @@ pub async fn ingest_text(
     Ok(result)
 }
 
-/// Search for similar chunks
+/// Search for similar chunks using semantic embeddings
 #[tauri::command]
 pub async fn search(
     app: tauri::AppHandle,
@@ -115,7 +203,8 @@ pub async fn search(
     let start = std::time::Instant::now();
     let k = k.unwrap_or(5);
 
-    let query_embedding = generate_embedding(&query);
+    // Generate query embedding using ML model
+    let query_embedding = embeddings::embed_text(&query).await?;
     let db = app.velesdb();
 
     let results = db
@@ -126,7 +215,7 @@ pub async fn search(
         .iter()
         .map(|(id, score)| Chunk {
             id: *id,
-            text: format!("Chunk {id}"), // In real app, retrieve from storage
+            text: get_chunk_text(*id),  // Retrieve actual text from storage
             score: Some(*score),
         })
         .collect();
@@ -147,8 +236,20 @@ pub async fn get_stats(app: tauri::AppHandle) -> Result<IndexStats, String> {
 
     Ok(IndexStats {
         total_chunks: db.len(),
-        dimension: db.dimension(),
+        dimension: embeddings::EMBEDDING_DIM,
     })
+}
+
+/// Get embedding model status
+#[tauri::command]
+pub async fn get_model_status() -> Result<embeddings::ModelStatus, String> {
+    Ok(embeddings::get_status().await)
+}
+
+/// Preload the embedding model (call at startup)
+#[tauri::command]
+pub async fn preload_model() -> Result<(), String> {
+    embeddings::preload().await
 }
 
 /// Clear the index
@@ -156,5 +257,7 @@ pub async fn get_stats(app: tauri::AppHandle) -> Result<IndexStats, String> {
 pub async fn clear_index(app: tauri::AppHandle) -> Result<(), String> {
     let db = app.velesdb();
     db.clear();
+    clear_chunk_texts();  // Also clear stored texts
+    reset_chunk_id_counter();  // Reset ID counter
     Ok(())
 }

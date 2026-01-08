@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-velesdb"
-version = "0.8.10"
+version = "0.8.11"
 description = "LangChain integration for VelesDB vector database"
 readme = "README.md"
-license = {text = "Elastic-2.0"}
+license = {text = "MIT"}
 authors = [
     {name = "VelesDB Team", email = "contact@wiscale.fr"}
 ]
@@ -15,7 +15,7 @@ keywords = ["langchain", "velesdb", "vector-database", "embeddings", "rag"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -26,7 +26,7 @@ classifiers = [
 requires-python = ">=3.9"
 dependencies = [
     "langchain-core>=0.1.0",
-    "velesdb>=0.1.0",
+    "velesdb>=0.8.0",
 ]
 
 [project.optional-dependencies]

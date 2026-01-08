@@ -83,18 +83,66 @@ class TestRAGEngine:
 
     @pytest.mark.asyncio
     async def test_delete_document(self):
-        """Test document deletion."""
+        """Test document deletion - should delete all chunks from VelesDB."""
         from src.rag_engine import RAGEngine
         
-        with patch("src.rag_engine.VelesDBClient") as mock_velesdb:
+        with patch("src.rag_engine.VelesDBClient") as mock_velesdb, \
+             patch("src.rag_engine.EmbeddingService") as mock_embeddings:
+            
+            # Setup mocks
             mock_velesdb_instance = MagicMock()
-            mock_velesdb_instance.delete_by_filter = AsyncMock(return_value={"deleted": 5})
+            mock_velesdb_instance.collection_exists = AsyncMock(return_value=True)
+            mock_velesdb_instance.get_collection_info = AsyncMock(return_value={"point_count": 0})
+            mock_velesdb_instance.search = AsyncMock(return_value={"results": []})
+            # delete_point should be called for each chunk
+            mock_velesdb_instance.delete_point = AsyncMock(return_value={"deleted": True})
             mock_velesdb.return_value = mock_velesdb_instance
             
+            mock_embeddings_instance = MagicMock()
+            mock_embeddings_instance.dimension = 384
+            mock_embeddings.return_value = mock_embeddings_instance
+            
             engine = RAGEngine()
+            # Manually add a document to the registry with chunk IDs
+            engine._documents["test.pdf"] = {
+                "name": "test.pdf",
+                "pages": 1,
+                "chunks": 3,
+                "chunk_ids": [123, 456, 789]  # Track chunk IDs for deletion
+            }
+            
             result = await engine.delete_document("test.pdf")
             
-            assert result["deleted"] > 0
+            # Should have deleted 3 chunks
+            assert result["deleted"] == 3
+            # delete_point should have been called 3 times
+            assert mock_velesdb_instance.delete_point.call_count == 3
+            # Document should be removed from registry
+            assert "test.pdf" not in engine._documents
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_document(self):
+        """Test deleting a document that doesn't exist."""
+        from src.rag_engine import RAGEngine
+        
+        with patch("src.rag_engine.VelesDBClient") as mock_velesdb, \
+             patch("src.rag_engine.EmbeddingService") as mock_embeddings:
+            
+            mock_velesdb_instance = MagicMock()
+            mock_velesdb_instance.collection_exists = AsyncMock(return_value=True)
+            mock_velesdb_instance.get_collection_info = AsyncMock(return_value={"point_count": 0})
+            mock_velesdb_instance.search = AsyncMock(return_value={"results": []})
+            mock_velesdb.return_value = mock_velesdb_instance
+            
+            mock_embeddings_instance = MagicMock()
+            mock_embeddings_instance.dimension = 384
+            mock_embeddings.return_value = mock_embeddings_instance
+            
+            engine = RAGEngine()
+            result = await engine.delete_document("nonexistent.pdf")
+            
+            # Should return 0 deleted
+            assert result["deleted"] == 0
 
 
 class TestRAGEngineIntegration:

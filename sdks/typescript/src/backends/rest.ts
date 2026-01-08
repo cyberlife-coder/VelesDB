@@ -413,6 +413,40 @@ export class RestBackend implements IVelesDBBackend {
     return response.data?.results ?? [];
   }
 
+  async isEmpty(collection: string): Promise<boolean> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ is_empty: boolean }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/empty`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.is_empty ?? true;
+  }
+
+  async flush(collection: string): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/flush`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
   async close(): Promise<void> {
     this._initialized = false;
   }

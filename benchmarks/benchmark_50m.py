@@ -578,6 +578,8 @@ Requirements:
         "qdrant": qdrant_results
     }
     
+    # Path traversal acceptable: Internal benchmark script with controlled CLI args
+    # snyk-disable-next-line PathTraversal
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
     
