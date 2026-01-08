@@ -15,11 +15,12 @@ pub type NodeId = usize;
 #[derive(Debug)]
 pub struct Layer {
     /// Adjacency list: node_id -> list of neighbor node_ids
-    neighbors: Vec<RwLock<Vec<NodeId>>>,
+    pub(super) neighbors: Vec<RwLock<Vec<NodeId>>>,
 }
 
 impl Layer {
-    fn new(capacity: usize) -> Self {
+    /// Creates a new layer with the given capacity.
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             neighbors: (0..capacity).map(|_| RwLock::new(Vec::new())).collect(),
         }
@@ -39,7 +40,8 @@ impl Layer {
         }
     }
 
-    fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
+    /// Sets the neighbors for a node.
+    pub(super) fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
         if node_id < self.neighbors.len() {
             *self.neighbors[node_id].write() = neighbors;
         }
@@ -59,27 +61,27 @@ impl Layer {
 /// * `D` - Distance engine (CPU, SIMD, or GPU)
 pub struct NativeHnsw<D: DistanceEngine> {
     /// Distance computation engine
-    distance: D,
+    pub(super) distance: D,
     /// Vector data storage (node_id -> vector)
-    vectors: RwLock<Vec<Vec<f32>>>,
+    pub(super) vectors: RwLock<Vec<Vec<f32>>>,
     /// Hierarchical layers (layer 0 = bottom, dense connections)
-    layers: RwLock<Vec<Layer>>,
+    pub(super) layers: RwLock<Vec<Layer>>,
     /// Entry point for search (highest layer node)
-    entry_point: RwLock<Option<NodeId>>,
+    pub(super) entry_point: RwLock<Option<NodeId>>,
     /// Maximum layer for entry point
-    max_layer: AtomicUsize,
+    pub(super) max_layer: AtomicUsize,
     /// Number of elements in the index
-    count: AtomicUsize,
+    pub(super) count: AtomicUsize,
     /// Simple PRNG state for layer selection
-    rng_state: AtomicU64,
+    pub(super) rng_state: AtomicU64,
     /// Maximum connections per node (M parameter)
-    max_connections: usize,
+    pub(super) max_connections: usize,
     /// Maximum connections at layer 0 (M0 = 2*M)
-    max_connections_0: usize,
+    pub(super) max_connections_0: usize,
     /// ef_construction parameter
-    ef_construction: usize,
+    pub(super) ef_construction: usize,
     /// Level multiplier for layer selection (1/ln(M))
-    level_mult: f64,
+    pub(super) level_mult: f64,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
