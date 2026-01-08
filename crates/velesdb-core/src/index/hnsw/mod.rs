@@ -1,32 +1,56 @@
 //! HNSW (Hierarchical Navigable Small World) index implementation.
 //!
-//! This module is organized into submodules:
+//! This module provides high-performance approximate nearest neighbor search
+//! based on the HNSW algorithm.
+//!
+//! # Available Implementations
+//!
+//! - **Default (`hnsw_rs`)**: Battle-tested, full API
+//! - **Native (`native-hnsw` feature)**: 1.5x faster search, ~99% recall parity
+//!
+//! # Feature Flags
+//!
+//! - `native-hnsw`: Use native implementation instead of `hnsw_rs`
+//!
+//! # Module Organization
+//!
 //! - `params`: Index parameters and search quality profiles
-//! - `mappings`: ID <-> index mappings (legacy, RwLock-based)
-//! - `sharded_mappings`: Lock-free concurrent mappings (EPIC-A.1)
-//! - `index`: Main `HnswIndex` implementation
-//! - `vector_store`: Contiguous vector storage for cache locality
-//! - `backend`: FT-1 trait abstraction for HNSW operations
+//! - `native`: Native HNSW implementation with SIMD distance calculations
+//! - `index`: Main `HnswIndex` implementation (default)
 
+// ============================================================================
+// Core modules (always available)
+// ============================================================================
 mod backend;
 mod index;
 mod inner;
 mod mappings;
 pub mod native;
+mod native_index;
+mod native_inner;
 mod params;
 mod persistence;
 mod sharded_mappings;
 mod sharded_vectors;
 mod vector_store;
 
-// FT-1: Re-export prepared for RF-2 (index.rs split). Will be used after RF-2.
-#[allow(unused_imports)]
-pub use backend::HnswBackend;
-pub use index::HnswIndex;
+// ============================================================================
+// Tests
+// ============================================================================
+#[cfg(test)]
+mod parity_tests;
+
+// ============================================================================
+// Public API
+// ============================================================================
 pub use params::{HnswParams, SearchQuality};
 
-// Prepared for EPIC-A migration - uncomment when integrating into HnswIndex
-// pub use sharded_mappings::ShardedMappings;
-// pub use sharded_vectors::ShardedVectors;
+// Default: hnsw_rs-based implementation
+pub use index::HnswIndex;
 
-// HnswMappings is internal only, not re-exported
+#[allow(unused_imports)]
+pub use backend::HnswBackend;
+
+// Native HNSW implementation (opt-in via feature flag)
+#[cfg(feature = "native-hnsw")]
+pub use native_index::NativeHnswIndex;
