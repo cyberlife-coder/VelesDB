@@ -94,6 +94,9 @@ version = "2.7"
 [features]
 default = []
 gpu = ["wgpu", "pollster", "bytemuck"]
+# Use native HNSW implementation instead of hnsw_rs
+# Provides ~99% recall parity with hnsw_rs while removing external dependency
+native-hnsw = []
 
 [dev-dependencies]
 criterion = { workspace = true }
