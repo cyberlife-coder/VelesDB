@@ -13,7 +13,10 @@ mod index;
 mod inner;
 mod mappings;
 pub mod native;
+mod native_inner;
 mod params;
+#[cfg(test)]
+mod parity_tests;
 mod persistence;
 mod sharded_mappings;
 mod sharded_vectors;
