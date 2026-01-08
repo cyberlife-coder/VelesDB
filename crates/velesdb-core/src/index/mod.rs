@@ -4,6 +4,8 @@
 //! nearest neighbor (ANN) search and full-text search.
 
 mod bm25;
+#[cfg(test)]
+mod bm25_tests;
 pub mod hnsw;
 
 pub use bm25::{Bm25Index, Bm25Params};

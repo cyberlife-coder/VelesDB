@@ -38,7 +38,13 @@ mod vector_store;
 // Tests
 // ============================================================================
 #[cfg(test)]
+mod backend_tests;
+#[cfg(test)]
 mod index_tests;
+#[cfg(test)]
+mod mappings_tests;
+#[cfg(test)]
+mod params_tests;
 #[cfg(test)]
 mod parity_tests;
 #[cfg(test)]
