@@ -23,8 +23,14 @@ mod ast;
 #[cfg(test)]
 mod ast_tests;
 mod cache;
+#[cfg(test)]
+mod cache_tests;
 mod error;
+#[cfg(test)]
+mod error_tests;
 mod explain;
+#[cfg(test)]
+mod explain_tests;
 mod parser;
 #[cfg(test)]
 mod parser_tests;
