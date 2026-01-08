@@ -26,19 +26,8 @@ roaring = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
 
-# HNSW index - Legacy hnsw_rs library (optional since v0.8.12)
-# Native HNSW is now the default (1.2x faster search, 1.07x faster parallel insert)
-# Use feature "legacy-hnsw" to fall back to hnsw_rs if needed
-[dependencies.hnsw_rs]
-version = "0.3"
-default-features = false
-optional = true
-
-[target.'cfg(target_arch = "x86_64")'.dependencies.hnsw_rs]
-version = "0.3"
-default-features = false
-features = ["simdeez_f"]
-optional = true
+# HNSW: Native implementation only (v1.0+)
+# hnsw_rs dependency removed - native HNSW is 1.2x faster
 
 [dependencies.uuid]
 version = "1.7"
@@ -94,15 +83,10 @@ version = "2.7"
 version = "2.7"
 
 [features]
-# Native HNSW is now the default (v0.8.12+)
-# Use "legacy-hnsw" feature to fall back to hnsw_rs if needed
-default = ["native-hnsw"]
+# Native HNSW is the only implementation (v1.0+)
+# hnsw_rs dependency has been removed
+default = []
 gpu = ["wgpu", "pollster", "bytemuck"]
-# Native HNSW implementation (default since v0.8.12)
-# Benefits: 1.2x faster search, 1.07x faster parallel insert, ~99% recall parity
-native-hnsw = []
-# Legacy hnsw_rs backend (for compatibility or comparison)
-legacy-hnsw = ["dep:hnsw_rs"]
 
 [dev-dependencies]
 criterion = { workspace = true }
