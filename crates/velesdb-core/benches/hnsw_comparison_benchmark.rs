@@ -1,6 +1,6 @@
-//! Benchmark comparing Native HNSW vs hnsw_rs performance.
+//! Benchmark comparing Native HNSW vs `hnsw_rs` performance.
 //!
-//! Run with: cargo bench --bench hnsw_comparison_benchmark
+//! Run with: `cargo bench --bench hnsw_comparison_benchmark`
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use velesdb_core::index::hnsw::native::{NativeHnsw, SimdDistance};
@@ -23,7 +23,9 @@ fn generate_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
                 .map(|j| {
                     let mut hasher = DefaultHasher::new();
                     (i * dim + j).hash(&mut hasher);
-                    (hasher.finish() as f32 / u64::MAX as f32) * 2.0 - 1.0
+                    #[allow(clippy::cast_precision_loss)]
+                    let val = (hasher.finish() as f32 / u64::MAX as f32) * 2.0 - 1.0;
+                    val
                 })
                 .collect()
         })
