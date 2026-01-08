@@ -116,6 +116,16 @@ impl NativeHnswInner {
     pub fn metric(&self) -> DistanceMetric {
         self.metric
     }
+
+    /// Computes the distance between two vectors using the index's distance metric.
+    ///
+    /// This is useful for brute-force search where we need to compute distances
+    /// outside of the HNSW graph traversal.
+    #[inline]
+    #[must_use]
+    pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        self.inner.compute_distance(a, b)
+    }
 }
 
 // ============================================================================

@@ -348,6 +348,56 @@ impl NativeHnswIndex {
             .map(|q| self.search_with_quality(q, k, quality))
             .collect()
     }
+
+    /// Brute-force exact nearest neighbor search with parallel execution.
+    ///
+    /// Computes distances to all vectors in the index and returns the k nearest.
+    /// This provides 100% recall but O(n) complexity.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector
+    /// * `k` - Number of nearest neighbors to return
+    ///
+    /// # Returns
+    ///
+    /// Vector of (id, distance) tuples sorted by distance.
+    ///
+    /// # Use Cases
+    ///
+    /// - **Recall validation**: Compare HNSW results against brute-force
+    /// - **Small datasets**: When n < 10k, brute-force may be faster
+    /// - **Critical accuracy**: When 100% recall is required
+    #[must_use]
+    pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+        use rayon::prelude::*;
+
+        // Collect all vectors for parallel iteration
+        let vectors_snapshot = self.vectors.collect_for_parallel();
+
+        if vectors_snapshot.is_empty() {
+            return Vec::new();
+        }
+
+        // Get distance calculator from inner
+        let inner = self.inner.read();
+
+        // Compute distances in parallel
+        let mut results: Vec<(u64, f32)> = vectors_snapshot
+            .par_iter()
+            .filter_map(|(idx, vec)| {
+                let id = self.mappings.get_id(*idx)?;
+                let distance = inner.compute_distance(query, vec);
+                Some((id, distance))
+            })
+            .collect();
+
+        // Sort by distance (ascending for most metrics)
+        self.metric.sort_results(&mut results);
+
+        results.truncate(k);
+        results
+    }
 }
 
 impl VectorIndex for NativeHnswIndex {
@@ -471,5 +521,47 @@ mod tests {
         let results = <NativeHnswIndex as VectorIndex>::search(&index, &vec![0.1; 32], 1);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, 1); // ID should be 1
+    }
+
+    #[test]
+    fn test_native_index_brute_force_search() {
+        let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+
+        // Insert vectors with distinct values
+        for i in 0..100u64 {
+            let vec: Vec<f32> = (0..32u64).map(|j| (i * 32 + j) as f32 * 0.001).collect();
+            index.insert(i, &vec);
+        }
+
+        // Query should be closest to vector 0
+        let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.001).collect();
+        let results = index.brute_force_search_parallel(&query, 5);
+
+        // Should return exactly k results
+        assert_eq!(results.len(), 5);
+        // First result should be ID 0 (closest to query)
+        assert_eq!(results[0].0, 0);
+        // Results should be sorted by distance
+        for i in 1..results.len() {
+            assert!(results[i].1 >= results[i - 1].1, "Results not sorted");
+        }
+    }
+
+    #[test]
+    fn test_native_index_brute_force_empty() {
+        let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+        let query = vec![0.0; 32];
+        let results = index.brute_force_search_parallel(&query, 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_native_index_brute_force_k_larger_than_size() {
+        let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+        index.insert(1, &vec![0.1; 32]);
+        index.insert(2, &vec![0.2; 32]);
+
+        let results = index.brute_force_search_parallel(&vec![0.0; 32], 10);
+        assert_eq!(results.len(), 2); // Only 2 vectors in index
     }
 }
