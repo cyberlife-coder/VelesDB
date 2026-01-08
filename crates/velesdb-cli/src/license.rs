@@ -101,8 +101,10 @@ impl LicenseInfo {
         use chrono::{DateTime, Utc};
         #[allow(clippy::cast_possible_wrap)]
         let timestamp = self.expires_at as i64;
-        DateTime::<Utc>::from_timestamp(timestamp, 0)
-            .map_or_else(|| "Unknown".to_string(), |dt| dt.format("%Y-%m-%d").to_string())
+        DateTime::<Utc>::from_timestamp(timestamp, 0).map_or_else(
+            || "Unknown".to_string(),
+            |dt| dt.format("%Y-%m-%d").to_string(),
+        )
     }
 }
 
