@@ -1,39 +1,28 @@
 # Native HNSW Implementation
 
-VelesDB includes a **native HNSW implementation** that provides significant performance improvements over the external `hnsw_rs` library.
+`VelesDB` includes a **custom native HNSW implementation** — the only HNSW backend since v1.0.
 
-> **🎉 v0.8.12+**: Native HNSW is now the **DEFAULT** — no feature flag needed!
+> **🎉 v1.0**: `hnsw_rs` dependency **completely removed**. Native HNSW is now the only implementation.
 
-## Performance Comparison
+## Performance
 
 *Benchmarked January 8, 2026 — Intel Core i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0*
 
-| Operation | Native HNSW | hnsw_rs | Improvement |
-|-----------|-------------|---------|-------------|
-| **Search (100 queries)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
-| **Parallel Insert (5k)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
+| Operation | Native HNSW | External libs | Improvement |
+|-----------|-------------|---------------|-------------|
+| **Search (100 queries)** | 26.9 ms | ~32 ms | **1.2x faster** ✅ |
+| **Parallel Insert (5k)** | 1.47 s | ~1.6 s | **1.07x faster** ✅ |
 | **Recall** | ~99% | baseline | Parity ✓ |
 
-> **Key insight**: Native HNSW excels at **search operations** — the most critical path for production workloads. The 20% improvement on search latency directly benefits RAG pipelines and real-time applications.
+> **Key insight**: Native HNSW excels at **search operations** — the most critical path for production workloads.
 
-## Feature Flags (v0.8.12+)
+## Usage (v1.0+)
 
-### Default: Native HNSW
-
-Native HNSW is enabled by default. No configuration needed:
+No feature flags needed. Native HNSW is the only implementation:
 
 ```toml
 [dependencies]
-velesdb-core = "0.8.12"  # Native HNSW by default
-```
-
-### Legacy: hnsw_rs (for compatibility)
-
-If you need to fall back to `hnsw_rs` for compatibility:
-
-```toml
-[dependencies]
-velesdb-core = { version = "0.8.12", default-features = false, features = ["legacy-hnsw"] }
+velesdb-core = "1.0"
 ```
 
 ## API
