@@ -169,7 +169,7 @@ LIMIT 10
 | **GPU Acceleration** | 🔜 (wgpu roadmap) | ❌ | ✅ | N/A | ❌ |
 | **Recall@10** | **96-100%*** | ~99% | ~99% | ~99% | 100% |
 
-> *96%+ HighRecall mode (100K vectors) • 100% with Perfect mode • [GPU roadmap](docs/GPU_ACCELERATION_ROADMAP.md)
+> *96%+ HighRecall mode (100K vectors) • 100% with Perfect mode
 
 ### 📊 Benchmark: VelesDB Local Performance
 
@@ -192,7 +192,7 @@ LIMIT 10
 | **RAM** | 64 GB DDR5 |
 | **OS** | Windows 11 Professional |
 | **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v0.8.10 |
+| **VelesDB** | v0.8.11 |
 | **SIMD** | AVX-512 enabled |
 
 </details>
