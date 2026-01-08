@@ -20,15 +20,26 @@
 //! | 256 < d ≤768| 16-24 | 200-400         | 128-256   |
 //! | d > 768     | 24-32 | 300-600         | 256-512   |
 
-use super::inner::HnswInner;
 use super::params::{HnswParams, SearchQuality};
 use super::sharded_mappings::ShardedMappings;
 use super::sharded_vectors::ShardedVectors;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
-use hnsw_rs::hnswio::HnswIo;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
+
+// Backend selection based on feature flags
+#[cfg(feature = "legacy-hnsw")]
+use super::inner::HnswInner;
+#[cfg(feature = "legacy-hnsw")]
+use hnsw_rs::hnswio::HnswIo;
+
+#[cfg(not(feature = "legacy-hnsw"))]
+use super::native_inner::NativeHnswInner as HnswInner;
+
+// Placeholder for native persistence (no HnswIo needed)
+#[cfg(not(feature = "legacy-hnsw"))]
+type HnswIo = ();
 
 /// HNSW index for efficient approximate nearest neighbor search.
 ///
@@ -67,6 +78,11 @@ use std::mem::ManuallyDrop;
 /// **Note**: The `ouroboros` crate cannot be used here because `hnsw_rs::Hnsw`
 /// has an invariant lifetime parameter, which is incompatible with self-referential
 /// struct crates that require covariant lifetimes.
+///
+/// # Feature Flags (v0.8.12+)
+///
+/// - `native-hnsw` (default): Uses native HNSW implementation (faster, no deps)
+/// - `legacy-hnsw`: Uses `hnsw_rs` library for compatibility
 ///
 /// # Why Not Unsafe Alternatives?
 ///
@@ -243,9 +259,37 @@ impl HnswIndex {
     /// # Errors
     ///
     /// Returns an error if saving fails.
+    #[cfg(feature = "legacy-hnsw")]
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
-        // RF-2.3: Delegate to persistence module
+        // RF-2.3: Delegate to persistence module (legacy hnsw_rs)
         super::persistence::save_index(path.as_ref(), &self.inner, &self.mappings)
+    }
+
+    /// Saves the HNSW index and ID mappings to the specified directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if saving fails.
+    #[cfg(not(feature = "legacy-hnsw"))]
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
+        use std::fs;
+        use std::io::BufWriter;
+        let path = path.as_ref();
+        fs::create_dir_all(path)?;
+
+        // Save native HNSW index
+        let inner = self.inner.read();
+        inner.file_dump(path, "hnsw")?;
+
+        // Save mappings using bincode (same format as legacy)
+        let mappings_path = path.join("id_mappings.bin");
+        let file = fs::File::create(mappings_path)?;
+        let writer = BufWriter::new(file);
+        let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
+        bincode::serialize_into(writer, &(id_to_idx, idx_to_id, next_idx))
+            .map_err(std::io::Error::other)?;
+
+        Ok(())
     }
 
     /// Loads the HNSW index and ID mappings from the specified directory.
@@ -258,12 +302,13 @@ impl HnswIndex {
     /// # Errors
     ///
     /// Returns an error if loading fails (missing files, corrupted data, etc.).
+    #[cfg(feature = "legacy-hnsw")]
     pub fn load<P: AsRef<std::path::Path>>(
         path: P,
         dimension: usize,
         metric: DistanceMetric,
     ) -> std::io::Result<Self> {
-        // RF-2.3: Delegate to persistence module
+        // RF-2.3: Delegate to persistence module (legacy hnsw_rs)
         let loaded = super::persistence::load_index(path.as_ref(), metric)?;
 
         Ok(Self {
@@ -271,9 +316,47 @@ impl HnswIndex {
             metric,
             inner: RwLock::new(ManuallyDrop::new(loaded.inner)),
             mappings: loaded.mappings,
-            vectors: ShardedVectors::new(dimension), // Note: vectors not restored from disk
-            enable_vector_storage: true,             // Default: full functionality
+            vectors: ShardedVectors::new(dimension),
+            enable_vector_storage: true,
             io_holder: Some(loaded.io_holder),
+        })
+    }
+
+    /// Loads the HNSW index and ID mappings from the specified directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading fails (missing files, corrupted data, etc.).
+    #[cfg(not(feature = "legacy-hnsw"))]
+    pub fn load<P: AsRef<std::path::Path>>(
+        path: P,
+        dimension: usize,
+        metric: DistanceMetric,
+    ) -> std::io::Result<Self> {
+        use std::collections::HashMap;
+        use std::fs;
+        use std::io::BufReader;
+        let path = path.as_ref();
+
+        // Load native HNSW index
+        let inner = HnswInner::file_load(path, "hnsw", metric)?;
+
+        // Load mappings using bincode (same format as legacy)
+        let mappings_path = path.join("id_mappings.bin");
+        let file = fs::File::open(mappings_path)?;
+        let reader = BufReader::new(file);
+        let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
+            bincode::deserialize_from(reader).map_err(std::io::Error::other)?;
+        let mappings = ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx);
+
+        Ok(Self {
+            dimension,
+            metric,
+            inner: RwLock::new(ManuallyDrop::new(inner)),
+            mappings,
+            vectors: ShardedVectors::new(dimension),
+            enable_vector_storage: true,
+            io_holder: None,
         })
     }
 

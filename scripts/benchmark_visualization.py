@@ -34,6 +34,19 @@ RESULTS_100K_768D = [
     BenchmarkResult("Perfect", 2048, 100.0, 18.0),
 ]
 
+@dataclass
+class NativeVsHnswRsResult:
+    operation: str
+    native_ms: float
+    hnsw_rs_ms: float
+
+# Native HNSW vs hnsw_rs comparison - January 8, 2026
+# 5,000 vectors, 128D, Euclidean distance
+NATIVE_VS_HNSW_RS = [
+    NativeVsHnswRsResult("Search (100q)", 26.9, 32.4),
+    NativeVsHnswRsResult("Parallel Insert", 1470.0, 1570.0),  # in ms for consistency
+]
+
 def create_recall_latency_chart(results: List[BenchmarkResult], title: str, filename: str):
     """Create a recall vs latency chart with annotations."""
     
@@ -118,6 +131,59 @@ def create_comparison_chart(results_10k: List[BenchmarkResult],
     plt.close()
     print(f"✅ Comparison chart saved: {filename}")
 
+def create_native_hnsw_comparison(results: List[NativeVsHnswRsResult], filename: str):
+    """Create a bar chart comparing Native HNSW vs hnsw_rs."""
+    
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    operations = [r.operation for r in results]
+    native_times = [r.native_ms for r in results]
+    hnsw_rs_times = [r.hnsw_rs_ms for r in results]
+    
+    x = np.arange(len(operations))
+    width = 0.35
+    
+    bars1 = ax.bar(x - width/2, native_times, width, label='Native HNSW', color='#2563eb')
+    bars2 = ax.bar(x + width/2, hnsw_rs_times, width, label='hnsw_rs', color='#dc2626')
+    
+    # Add percentage improvement labels
+    for i, (native, hnsw) in enumerate(zip(native_times, hnsw_rs_times)):
+        improvement = ((hnsw - native) / hnsw) * 100
+        ax.annotate(f'{improvement:.0f}% faster', 
+                   xy=(x[i] - width/2, native + max(native_times) * 0.02),
+                   ha='center', fontsize=10, fontweight='bold', color='#16a34a')
+    
+    ax.set_ylabel('Time (ms)', fontsize=14, fontweight='bold')
+    ax.set_title('VelesDB Native HNSW vs hnsw_rs\n(5K vectors, 128D, Euclidean)', 
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(operations, fontsize=12)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels on bars
+    for bar in bars1:
+        height = bar.get_height()
+        ax.annotate(f'{height:.1f}ms' if height < 100 else f'{height/1000:.2f}s',
+                   xy=(bar.get_x() + bar.get_width()/2, height),
+                   xytext=(0, 3), textcoords="offset points",
+                   ha='center', va='bottom', fontsize=9)
+    
+    for bar in bars2:
+        height = bar.get_height()
+        ax.annotate(f'{height:.1f}ms' if height < 100 else f'{height/1000:.2f}s',
+                   xy=(bar.get_x() + bar.get_width()/2, height),
+                   xytext=(0, 3), textcoords="offset points",
+                   ha='center', va='bottom', fontsize=9)
+    
+    fig.text(0.99, 0.01, 'VelesDB Core v0.8.12 - January 8, 2026', fontsize=8, 
+             ha='right', va='bottom', alpha=0.5, style='italic')
+    
+    plt.tight_layout()
+    plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"✅ Native HNSW comparison chart saved: {filename}")
+
 def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
     """Show how ef_search affects both recall and latency."""
     
@@ -190,6 +256,11 @@ if __name__ == "__main__":
         RESULTS_10K_128D,
         RESULTS_100K_768D,
         os.path.join(charts_dir, "recall_comparison.png")
+    )
+    
+    create_native_hnsw_comparison(
+        NATIVE_VS_HNSW_RS,
+        os.path.join(charts_dir, "native_hnsw_comparison.png")
     )
     
     print("\n✅ All charts generated successfully!")

@@ -1,6 +1,6 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: January 3, 2026 (v0.8.5)*
+*Last updated: January 8, 2026 (v0.8.12)*
 
 ---
 
@@ -103,6 +103,39 @@ let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
 | 1M vectors | **<50ms** | ≥95% | 🎯 Target |
 
 > Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+
+---
+
+## 🆕 v0.8.12 Native HNSW Implementation
+
+VelesDB now includes a **custom Native HNSW implementation** based on 2024-2026 research papers (Flash Method, VSAG Framework).
+
+### Native vs hnsw_rs Comparison
+
+*Benchmarked January 8, 2026 — 5,000 vectors, 128D, Euclidean distance*
+
+| Operation | Native HNSW | hnsw_rs | Improvement |
+|-----------|-------------|---------|-------------|
+| **Search (100 queries)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
+| **Parallel Insert (5k)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
+| **Recall** | ~99% | baseline | Parity ✓ |
+
+### Why Native HNSW?
+
+- **No external dependency** — Full control over graph construction and search
+- **SIMD-optimized distances** — Custom AVX2/SSE implementations
+- **Lock-free reads** — Concurrent search without blocking
+- **Future-ready** — Foundation for int8 quantized graph traversal
+
+```bash
+# Enable Native HNSW
+cargo build --features native-hnsw
+
+# Run comparison benchmark
+cargo bench --bench hnsw_comparison_benchmark
+```
+
+📖 Full guide: [docs/reference/NATIVE_HNSW.md](reference/NATIVE_HNSW.md)
 
 ---
 

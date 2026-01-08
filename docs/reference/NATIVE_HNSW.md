@@ -2,21 +2,38 @@
 
 VelesDB includes a **native HNSW implementation** that provides significant performance improvements over the external `hnsw_rs` library.
 
+> **🎉 v0.8.12+**: Native HNSW is now the **DEFAULT** — no feature flag needed!
+
 ## Performance Comparison
+
+*Benchmarked January 8, 2026 — Intel Core i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0*
 
 | Operation | Native HNSW | hnsw_rs | Improvement |
 |-----------|-------------|---------|-------------|
-| **Search (100 queries)** | 27.5 ms | 41.5 ms | **1.5x faster** |
-| **Parallel Insert (5k)** | 1.42 s | 1.90 s | **1.3x faster** |
+| **Search (100 queries)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
+| **Parallel Insert (5k)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
 | **Recall** | ~99% | baseline | Parity ✓ |
 
-## Feature Flag
+> **Key insight**: Native HNSW excels at **search operations** — the most critical path for production workloads. The 20% improvement on search latency directly benefits RAG pipelines and real-time applications.
 
-The native implementation is available via the `native-hnsw` feature flag:
+## Feature Flags (v0.8.12+)
+
+### Default: Native HNSW
+
+Native HNSW is enabled by default. No configuration needed:
 
 ```toml
 [dependencies]
-velesdb-core = { version = "0.9", features = ["native-hnsw"] }
+velesdb-core = "0.8.12"  # Native HNSW by default
+```
+
+### Legacy: hnsw_rs (for compatibility)
+
+If you need to fall back to `hnsw_rs` for compatibility:
+
+```toml
+[dependencies]
+velesdb-core = { version = "0.8.12", default-features = false, features = ["legacy-hnsw"] }
 ```
 
 ## API
@@ -146,6 +163,33 @@ Run the comparison benchmark:
 ```bash
 cargo bench --bench hnsw_comparison_benchmark
 ```
+
+## Removing hnsw_rs Dependency
+
+The Native HNSW implementation is now **production-ready** and can fully replace `hnsw_rs`:
+
+### Current Status
+
+| Capability | Native HNSW | hnsw_rs | Status |
+|------------|-------------|---------|--------|
+| Insert | ✅ | ✅ | Parity |
+| Batch Insert | ✅ Parallel | ✅ Sequential | Native faster |
+| Search | ✅ 1.2x faster | ✅ | Native faster |
+| Recall | ~99% | baseline | Parity |
+| Persistence | ✅ | ✅ | Parity |
+| Brute-force | ✅ | ✅ | Parity |
+
+### Migration Path
+
+1. **Test with feature flag**: `cargo test --features native-hnsw`
+2. **Benchmark your workload**: `cargo bench --bench hnsw_comparison_benchmark`
+3. **Full migration**: Make `native-hnsw` the default in a future release
+
+### Files to Update for Full Migration
+
+- `Cargo.toml`: Make `hnsw_rs` optional
+- `src/index/hnsw/index.rs`: Use `NativeHnswInner` by default
+- `src/index/hnsw/mod.rs`: Export `NativeHnswIndex` as `HnswIndex`
 
 ## Future Optimizations
 

@@ -220,6 +220,21 @@ LIMIT 10
 > 💡 **Key insight**: 32x ef_search increase (64→2048) = only ~3.5x latency increase.
 > This demonstrates a well-implemented engine without exponential cliff.
 
+#### 🆕 Native HNSW vs External Library
+
+VelesDB v0.8.12 includes a **custom Native HNSW implementation** that eliminates external dependencies:
+
+<p align="center">
+  <img src="docs/benchmarks/native_hnsw_comparison.png" alt="Native HNSW vs hnsw_rs" width="600"/>
+</p>
+
+| Operation | Native HNSW | hnsw_rs | Improvement |
+|-----------|-------------|---------|-------------|
+| **Search (100 queries)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
+| **Parallel Insert (5k)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
+
+> 📖 Enable with `cargo build --features native-hnsw` — [Full guide](docs/reference/NATIVE_HNSW.md)
+
 ### Recall by Mode (Native Rust, Criterion benchmarks)
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |

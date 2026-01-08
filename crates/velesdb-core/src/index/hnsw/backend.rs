@@ -10,9 +10,20 @@
 //!
 //! The trait mirrors the existing `HnswInner` impl methods, ensuring backward
 //! compatibility while providing abstraction benefits.
+//!
+//! # Feature Flags
+//!
+//! - `native-hnsw` (default): Uses `NativeNeighbour` from native implementation
+//! - `legacy-hnsw`: Uses `hnsw_rs::Neighbour` for backward compatibility
 
-use hnsw_rs::prelude::Neighbour;
 use std::path::Path;
+
+// Use NativeNeighbour by default, hnsw_rs::Neighbour only with legacy-hnsw feature
+#[cfg(feature = "legacy-hnsw")]
+use hnsw_rs::prelude::Neighbour;
+
+#[cfg(not(feature = "legacy-hnsw"))]
+use super::native::NativeNeighbour as Neighbour;
 
 /// Trait for HNSW backend operations.
 ///

@@ -1157,9 +1157,10 @@ fn test_recall_quality_minimum_threshold() {
 }
 
 // =========================================================================
-// FT-1: Tests for HnswBackend trait implementation
+// FT-1: Tests for HnswBackend trait implementation (legacy-hnsw only)
 // =========================================================================
 
+#[cfg(feature = "legacy-hnsw")]
 #[test]
 fn test_hnsw_inner_implements_backend_trait() {
     // HnswBackend imported at top of file
@@ -1177,6 +1178,7 @@ fn test_hnsw_inner_implements_backend_trait() {
     assert!(!results.is_empty(), "Trait search should return results");
 }
 
+#[cfg(feature = "legacy-hnsw")]
 #[test]
 fn test_hnsw_backend_transform_score() {
     // HnswBackend imported at top of file

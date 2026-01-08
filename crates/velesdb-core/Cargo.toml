@@ -26,18 +26,19 @@ roaring = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
 
-# HNSW index - High-performance approximate nearest neighbor search
-# - simdeez_f: AVX2/SSE SIMD for x86_64 (significantly faster)
-# - On ARM64 (Apple Silicon): uses fallback without SIMD
-# Native HNSW available via "native-hnsw" feature (1.5x faster search)
+# HNSW index - Legacy hnsw_rs library (optional since v0.8.12)
+# Native HNSW is now the default (1.2x faster search, 1.07x faster parallel insert)
+# Use feature "legacy-hnsw" to fall back to hnsw_rs if needed
 [dependencies.hnsw_rs]
 version = "0.3"
 default-features = false
+optional = true
 
 [target.'cfg(target_arch = "x86_64")'.dependencies.hnsw_rs]
 version = "0.3"
 default-features = false
 features = ["simdeez_f"]
+optional = true
 
 [dependencies.uuid]
 version = "1.7"
@@ -93,11 +94,15 @@ version = "2.7"
 version = "2.7"
 
 [features]
-default = []
+# Native HNSW is now the default (v0.8.12+)
+# Use "legacy-hnsw" feature to fall back to hnsw_rs if needed
+default = ["native-hnsw"]
 gpu = ["wgpu", "pollster", "bytemuck"]
-# Use native HNSW implementation instead of hnsw_rs
-# Benefits: 1.5x faster search, 1.3x faster parallel insert, ~99% recall parity
+# Native HNSW implementation (default since v0.8.12)
+# Benefits: 1.2x faster search, 1.07x faster parallel insert, ~99% recall parity
 native-hnsw = []
+# Legacy hnsw_rs backend (for compatibility or comparison)
+legacy-hnsw = ["dep:hnsw_rs"]
 
 [dev-dependencies]
 criterion = { workspace = true }
