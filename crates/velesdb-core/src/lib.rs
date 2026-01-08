@@ -48,21 +48,35 @@
 pub mod alloc_guard;
 pub mod collection;
 pub mod column_store;
+#[cfg(test)]
+mod column_store_tests;
 pub mod config;
+#[cfg(test)]
+mod config_tests;
 pub mod distance;
 pub mod error;
 pub mod filter;
+#[cfg(test)]
+mod filter_tests;
 pub mod gpu;
 pub mod half_precision;
 pub mod index;
 pub mod metrics;
+#[cfg(test)]
+mod metrics_tests;
 pub mod perf_optimizations;
 pub mod point;
 pub mod quantization;
+#[cfg(test)]
+mod quantization_tests;
 pub mod simd;
 pub mod simd_avx512;
+#[cfg(test)]
+mod simd_avx512_tests;
 pub mod simd_dispatch;
 pub mod simd_explicit;
+#[cfg(test)]
+mod simd_explicit_tests;
 pub mod storage;
 pub mod vector_ref;
 pub mod velesql;
