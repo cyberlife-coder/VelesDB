@@ -158,6 +158,12 @@ export interface IVelesDBBackend {
     params?: Record<string, unknown>
   ): Promise<SearchResult[]>;
   
+  /** Check if collection is empty */
+  isEmpty(collection: string): Promise<boolean>;
+  
+  /** Flush pending changes to disk */
+  flush(collection: string): Promise<void>;
+  
   /** Close/cleanup the backend */
   close(): Promise<void>;
 }

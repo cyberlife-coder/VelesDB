@@ -83,9 +83,51 @@ VelesDBVectorStore(
 
 | Method | Description |
 |--------|-------------|
+| **Core Operations** | |
 | `add(nodes)` | Add nodes with embeddings |
+| `add_bulk(nodes)` | Bulk insert (2-3x faster for large batches) |
 | `delete(ref_doc_id)` | Delete by document ID |
+| `get_nodes(node_ids)` | Retrieve nodes by their IDs |
+| `flush()` | Flush pending changes to disk |
+| **Search** | |
 | `query(query)` | Query with vector |
+| `batch_query(queries)` | Batch query multiple vectors in parallel |
+| `hybrid_query(query_str, query_embedding, ...)` | Hybrid vector+BM25 search |
+| `text_query(query_str, ...)` | Full-text BM25 search |
+| `velesql(query_str, params)` | Execute VelesQL query |
+| **Utilities** | |
+| `get_collection_info()` | Get collection metadata |
+| `is_empty()` | Check if collection is empty |
+
+## Advanced Features
+
+### Hybrid Search (Vector + BM25)
+
+```python
+from llamaindex_velesdb import VelesDBVectorStore
+
+vector_store = VelesDBVectorStore(path="./velesdb_data")
+
+# Hybrid search combining semantic and keyword matching
+results = vector_store.hybrid_query(
+    query_str="machine learning optimization",
+    query_embedding=embedding_model.get_query_embedding("machine learning optimization"),
+    similarity_top_k=10,
+    vector_weight=0.7  # 70% vector, 30% BM25
+)
+for node in results.nodes:
+    print(node.text)
+```
+
+### Full-Text Search (BM25)
+
+```python
+# Pure keyword-based search without embeddings
+results = vector_store.text_query(
+    query_str="VelesDB performance",
+    similarity_top_k=5
+)
+```
 
 ## Performance
 
@@ -106,6 +148,6 @@ VelesDBVectorStore(
 
 ## License
 
-Elastic License 2.0 (ELv2)
+MIT License (this integration)
 
-See [LICENSE](../../LICENSE) for details.
+VelesDB Core is licensed under ELv2. See [LICENSE](./LICENSE) for details.

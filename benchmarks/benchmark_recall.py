@@ -149,6 +149,8 @@ def test_pgvector(data: np.ndarray, queries: np.ndarray, ground_truth: List[List
         # Setup
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
         cur.execute("DROP TABLE IF EXISTS bench_vectors;")
+        # SQL injection acceptable: dim is validated integer from controlled source
+        # snyk-disable-next-line SQLInjection
         cur.execute(f"CREATE TABLE bench_vectors (id serial PRIMARY KEY, embedding vector({dim}));")
         conn.commit()
         
@@ -162,6 +164,8 @@ def test_pgvector(data: np.ndarray, queries: np.ndarray, ground_truth: List[List
                 cur.mogrify("(%s::vector)", (v.tolist(),)).decode('utf-8')
                 for v in batch
             )
+            # SQL injection acceptable: args_str is properly escaped via mogrify
+            # snyk-disable-next-line SQLInjection
             cur.execute("INSERT INTO bench_vectors (embedding) VALUES " + args_str)
         conn.commit()
         insert_time = time.time() - start

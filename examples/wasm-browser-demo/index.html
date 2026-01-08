@@ -4,69 +4,127 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VelesDB WASM Demo - Vector Search in Browser</title>
+    <meta name="description" content="Interactive demo of VelesDB vector database running entirely in the browser via WebAssembly. No server required.">
+    <meta property="og:title" content="VelesDB WASM Demo">
+    <meta property="og:description" content="Vector search in the browser - No server required">
+    <meta property="og:type" content="website">
+    <link rel="icon" type="image/png" href="../../docs/assets/velesdb-icon.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .gradient-bg {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        :root {
+            --dark-950: #020617;
+            --dark-900: #0f172a;
+            --dark-800: #1e293b;
+            --dark-700: #334155;
+            --primary-500: #0ea5e9;
+            --primary-400: #38bdf8;
+            --accent-500: #d946ef;
+        }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #e2e8f0;
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(14, 165, 233, 0.12), transparent 45%),
+                radial-gradient(circle at 80% 0%, rgba(217, 70, 239, 0.1), transparent 50%),
+                linear-gradient(135deg, #050c1d 0%, #020617 60%, #050c1d 100%);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary-500) 0%, var(--accent-500) 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+        }
+        .glass-card {
+            background: linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(8, 14, 30, 0.9));
+            border: 1px solid rgba(56, 189, 248, 0.15);
+            border-radius: 1rem;
+            box-shadow: 0 20px 50px rgba(2, 6, 23, 0.6);
+            backdrop-filter: blur(12px);
+        }
+        .stat-card {
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid rgba(56, 189, 248, 0.15);
+            border-radius: 0.75rem;
+        }
+        .pulse-glow {
+            animation: pulse-glow 2s ease-in-out infinite;
+        }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 5px rgba(14, 165, 233, 0.4); }
+            50% { box-shadow: 0 0 20px rgba(14, 165, 233, 0.6); }
         }
     </style>
 </head>
-<body class="bg-gray-900 text-white min-h-screen">
+<body class="min-h-screen text-white">
     <div class="container mx-auto px-4 py-8">
         <!-- Header -->
         <header class="text-center mb-12">
-            <h1 class="text-4xl font-bold mb-4 gradient-bg bg-clip-text text-transparent">
-                VelesDB WASM Demo
-            </h1>
-            <p class="text-gray-400 text-lg">
+            <div class="flex items-center justify-center gap-4 mb-4">
+                <img src="../../docs/assets/velesdb-icon.png" alt="VelesDB" class="w-12 h-12">
+                <h1 class="text-4xl font-bold gradient-text text-transparent">
+                    VelesDB WASM Demo
+                </h1>
+            </div>
+            <p class="text-slate-400 text-lg">
                 Vector search in the browser - No server required
             </p>
+            <div class="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-sky-900/30 rounded-full text-sm">
+                <span class="text-yellow-400">⚡</span>
+                <span>100% client-side</span>
+                <span class="text-slate-600">|</span>
+                <span class="text-green-400">Privacy-first</span>
+                <span class="text-slate-600">|</span>
+                <span class="text-sky-400">Offline capable</span>
+            </div>
         </header>
 
         <!-- Status -->
-        <div id="status" class="mb-8 p-4 rounded-lg bg-gray-800 text-center">
+        <div id="status" class="mb-8 p-4 rounded-lg glass-card text-center">
             <span class="text-yellow-400">⏳ Loading WASM module...</span>
         </div>
 
         <!-- Controls -->
         <div class="grid md:grid-cols-2 gap-8 mb-8">
             <!-- Insert Panel -->
-            <div class="bg-gray-800 rounded-lg p-6">
+            <div class="glass-card p-6">
                 <h2 class="text-xl font-semibold mb-4 flex items-center">
                     <span class="mr-2">📥</span> Insert Vectors
                 </h2>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm text-gray-400 mb-2">Number of vectors</label>
+                        <label class="block text-sm text-slate-300 mb-2">Number of vectors</label>
                         <input type="number" id="vectorCount" value="1000" min="10" max="100000"
-                            class="w-full bg-gray-700 rounded px-4 py-2 text-white focus:ring-2 focus:ring-purple-500 outline-none">
+                            class="w-full bg-dark-900/70 border border-dark-700 rounded px-4 py-2 text-white focus:ring-2 focus:ring-primary-500 outline-none transition-all">
                     </div>
                     <div>
-                        <label class="block text-sm text-gray-400 mb-2">Dimensions</label>
+                        <label class="block text-sm text-slate-300 mb-2">Dimensions</label>
                         <input type="number" id="dimensions" value="128" min="2" max="2048"
-                            class="w-full bg-gray-700 rounded px-4 py-2 text-white focus:ring-2 focus:ring-purple-500 outline-none">
+                            class="w-full bg-dark-900/70 border border-dark-700 rounded px-4 py-2 text-white focus:ring-2 focus:ring-primary-500 outline-none transition-all">
                     </div>
                     <button id="insertBtn" onclick="insertVectors()" disabled
-                        class="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded px-4 py-3 font-semibold transition">
+                        class="w-full bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 disabled:bg-dark-700 disabled:text-dark-500 disabled:cursor-not-allowed rounded px-4 py-3 font-semibold transition shadow-md shadow-primary-500/20">
                         Generate & Insert
                     </button>
                 </div>
             </div>
 
             <!-- Search Panel -->
-            <div class="bg-gray-800 rounded-lg p-6">
+            <div className="glass-card p-6">
                 <h2 class="text-xl font-semibold mb-4 flex items-center">
                     <span class="mr-2">🔍</span> Search Vectors
                 </h2>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm text-gray-400 mb-2">Top K results</label>
+                        <label class="block text-sm text-slate-300 mb-2">Top K results</label>
                         <input type="number" id="topK" value="10" min="1" max="100"
-                            class="w-full bg-gray-700 rounded px-4 py-2 text-white focus:ring-2 focus:ring-purple-500 outline-none">
+                            class="w-full bg-dark-900/70 border border-dark-700 rounded px-4 py-2 text-white focus:ring-2 focus:ring-primary-500 outline-none transition-all">
                     </div>
                     <button id="searchBtn" onclick="searchVectors()" disabled
-                        class="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded px-4 py-3 font-semibold transition">
+                        class="w-full bg-gradient-to-r from-primary-500 to-accent-500 hover:from-primary-400 hover:to-accent-400 disabled:bg-dark-700 disabled:text-dark-500 disabled:cursor-not-allowed rounded px-4 py-3 font-semibold transition shadow-md shadow-accent-500/20">
                         Search Random Query
+                    </button>
+                    <button id="clearBtn" onclick="clearStore()" disabled
+                        class="w-full bg-rose-500/10 hover:bg-rose-500/20 disabled:bg-dark-700 disabled:text-dark-500 disabled:cursor-not-allowed rounded px-4 py-3 font-semibold transition mt-2 text-rose-300">
+                        🗑️ Clear Index
                     </button>
                 </div>
             </div>
@@ -74,43 +132,60 @@
 
         <!-- Stats -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <div class="bg-gray-800 rounded-lg p-4 text-center">
-                <div class="text-2xl font-bold text-purple-400" id="statVectors">0</div>
-                <div class="text-sm text-gray-400">Vectors</div>
+            <div class="stat-card p-4 text-center">
+                <div class="text-2xl font-bold text-primary-300" id="statVectors">0</div>
+                <div class="text-sm text-slate-400">Vectors</div>
             </div>
-            <div class="bg-gray-800 rounded-lg p-4 text-center">
-                <div class="text-2xl font-bold text-blue-400" id="statDimensions">-</div>
-                <div class="text-sm text-gray-400">Dimensions</div>
+            <div class="stat-card p-4 text-center">
+                <div class="text-2xl font-bold text-accent-300" id="statDimensions">-</div>
+                <div class="text-sm text-slate-400">Dimensions</div>
             </div>
-            <div class="bg-gray-800 rounded-lg p-4 text-center">
-                <div class="text-2xl font-bold text-green-400" id="statInsertTime">-</div>
-                <div class="text-sm text-gray-400">Insert Time</div>
+            <div class="stat-card p-4 text-center">
+                <div class="text-2xl font-bold text-emerald-300" id="statInsertTime">-</div>
+                <div class="text-sm text-slate-400">Insert Time</div>
             </div>
-            <div class="bg-gray-800 rounded-lg p-4 text-center">
-                <div class="text-2xl font-bold text-yellow-400" id="statSearchTime">-</div>
-                <div class="text-sm text-gray-400">Search Time</div>
+            <div class="stat-card p-4 text-center">
+                <div class="text-2xl font-bold text-amber-300" id="statSearchTime">-</div>
+                <div class="text-sm text-slate-400">Search Time</div>
             </div>
         </div>
 
         <!-- Results -->
-        <div class="bg-gray-800 rounded-lg p-6">
+        <div class="bg-slate-800 rounded-lg p-6">
             <h2 class="text-xl font-semibold mb-4 flex items-center">
                 <span class="mr-2">📊</span> Search Results
             </h2>
-            <div id="results" class="font-mono text-sm text-gray-300 overflow-x-auto">
-                <p class="text-gray-500 italic">No search results yet. Insert vectors first, then search.</p>
+            <div id="results" class="font-mono text-sm text-slate-200 overflow-x-auto">
+                <p class="text-dark-400 italic">No search results yet. Insert vectors first, then search.</p>
             </div>
         </div>
 
         <!-- Footer -->
         <footer class="mt-12 text-center text-gray-500 text-sm">
-            <p>Powered by <a href="https://github.com/cyberlife-coder/VelesDB" class="text-purple-400 hover:underline">VelesDB</a></p>
+            <p>Powered by <a href="https://github.com/cyberlife-coder/VelesDB" class="text-sky-400 hover:underline">VelesDB</a></p>
             <p class="mt-2">WASM build • No server required • 100% client-side</p>
         </footer>
     </div>
 
     <script type="module">
-        import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@0.2.0/velesdb_wasm.js';
+        // WASM module - using latest version with fallback
+        const WASM_CDN_PRIMARY = 'https://unpkg.com/velesdb-wasm@latest/velesdb_wasm.js';
+        const WASM_CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/velesdb-wasm@latest/velesdb_wasm.js';
+        
+        let init, VectorStore;
+        
+        async function loadWasmModule() {
+            try {
+                const module = await import(WASM_CDN_PRIMARY);
+                init = module.default;
+                VectorStore = module.VectorStore;
+            } catch (e) {
+                console.warn('Primary CDN failed, trying fallback...', e);
+                const module = await import(WASM_CDN_FALLBACK);
+                init = module.default;
+                VectorStore = module.VectorStore;
+            }
+        }
 
         let store = null;
         let currentDimensions = 128;
@@ -144,18 +219,35 @@
 
             const elapsed = performance.now() - startTime;
 
-            document.getElementById('statVectors').textContent = store.len.toLocaleString();
+            // Note: store.len might be a property or method depending on WASM bindings
+            const vectorCount = typeof store.len === 'function' ? store.len() : store.len;
+            document.getElementById('statVectors').textContent = vectorCount.toLocaleString();
             document.getElementById('statDimensions').textContent = dims;
             document.getElementById('statInsertTime').textContent = elapsed.toFixed(2) + 'ms';
             document.getElementById('searchBtn').disabled = false;
+            document.getElementById('clearBtn').disabled = false;
 
             document.getElementById('results').innerHTML = 
                 `<p class="text-green-400">✅ Inserted ${count.toLocaleString()} vectors in ${elapsed.toFixed(2)}ms</p>
                  <p class="text-gray-400 mt-2">Average: ${(elapsed / count * 1000).toFixed(2)}µs per vector</p>`;
         };
 
+        window.clearStore = function() {
+            if (store) {
+                store = new VectorStore(currentDimensions, 'cosine');
+                document.getElementById('statVectors').textContent = '0';
+                document.getElementById('statInsertTime').textContent = '-';
+                document.getElementById('statSearchTime').textContent = '-';
+                document.getElementById('searchBtn').disabled = true;
+                document.getElementById('clearBtn').disabled = true;
+                document.getElementById('results').innerHTML = 
+                    '<p class="text-gray-500 italic">Index cleared. Insert vectors to start.</p>';
+            }
+        };
+
         window.searchVectors = async function() {
-            if (!store || store.len === 0) {
+            const vectorCount = typeof store.len === 'function' ? store.len() : store.len;
+            if (!store || vectorCount === 0) {
                 alert('Please insert vectors first');
                 return;
             }
@@ -182,7 +274,7 @@
             results.forEach((result, index) => {
                 const [id, score] = result;
                 html += `<tr class="border-t border-gray-700">
-                    <td class="py-2 text-purple-400">#${index + 1}</td>
+                    <td class="py-2 text-sky-400">#${index + 1}</td>
                     <td class="py-2">${id.toString()}</td>
                     <td class="py-2 text-green-400">${score.toFixed(6)}</td>
                 </tr>`;
@@ -195,6 +287,10 @@
         // Initialize WASM
         async function initWasm() {
             try {
+                document.getElementById('status').innerHTML = 
+                    '<span class="text-yellow-400">⏳ Loading WASM module from CDN...</span>';
+                
+                await loadWasmModule();
                 await init();
                 store = new VectorStore(128, 'cosine');
                 
@@ -203,7 +299,8 @@
                 document.getElementById('insertBtn').disabled = false;
             } catch (error) {
                 document.getElementById('status').innerHTML = 
-                    `<span class="text-red-400">❌ Failed to load WASM: ${error.message}</span>`;
+                    `<span class="text-red-400">❌ Failed to load WASM: ${error.message}</span>
+                     <p class="text-gray-500 text-sm mt-2">Try refreshing the page or check your internet connection.</p>`;
                 console.error('WASM init error:', error);
             }
         }

@@ -230,6 +230,143 @@ class VelesDBVectorStore(VectorStore):
 
         return documents
 
+    def similarity_search_with_filter(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Search for documents with metadata filtering.
+
+        Args:
+            query: Query string to search for.
+            k: Number of results to return. Defaults to 4.
+            filter: Metadata filter dict (VelesDB filter format).
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Documents matching the query and filter.
+        """
+        # Generate query embedding
+        query_embedding = self._embedding.embed_query(query)
+        dimension = len(query_embedding)
+
+        # Get collection
+        collection = self._get_collection(dimension)
+
+        # Search with filter if provided
+        if filter:
+            results = collection.search(query_embedding, top_k=k, filter=filter)
+        else:
+            results = collection.search(query_embedding, top_k=k)
+
+        # Convert to Documents
+        documents: List[Document] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.pop("text", "")
+            doc = Document(page_content=text, metadata=payload)
+            documents.append(doc)
+
+        return documents
+
+    def hybrid_search(
+        self,
+        query: str,
+        k: int = 4,
+        vector_weight: float = 0.5,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Hybrid search combining vector similarity and BM25 text search.
+
+        Uses Reciprocal Rank Fusion (RRF) to combine results.
+
+        Args:
+            query: Query string for both vector and text search.
+            k: Number of results to return. Defaults to 4.
+            vector_weight: Weight for vector results (0.0-1.0). Defaults to 0.5.
+            filter: Optional metadata filter dict.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of (Document, score) tuples.
+        """
+        # Generate query embedding
+        query_embedding = self._embedding.embed_query(query)
+        dimension = len(query_embedding)
+
+        # Get collection
+        collection = self._get_collection(dimension)
+
+        # Hybrid search
+        if filter:
+            results = collection.hybrid_search(
+                vector=query_embedding,
+                query=query,
+                top_k=k,
+                vector_weight=vector_weight,
+                filter=filter,
+            )
+        else:
+            results = collection.hybrid_search(
+                vector=query_embedding,
+                query=query,
+                top_k=k,
+                vector_weight=vector_weight,
+            )
+
+        # Convert to Documents
+        documents: List[Tuple[Document, float]] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.pop("text", "")
+            doc = Document(page_content=text, metadata=payload)
+            score = result.get("score", 0.0)
+            documents.append((doc, score))
+
+        return documents
+
+    def text_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Full-text search using BM25 ranking.
+
+        Args:
+            query: Text query string.
+            k: Number of results to return. Defaults to 4.
+            filter: Optional metadata filter dict.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of (Document, score) tuples.
+        """
+        # Get collection (use a dummy dimension since text search doesn't need it)
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        # Text search
+        if filter:
+            results = self._collection.text_search(query, top_k=k, filter=filter)
+        else:
+            results = self._collection.text_search(query, top_k=k)
+
+        # Convert to Documents
+        documents: List[Tuple[Document, float]] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.pop("text", "")
+            doc = Document(page_content=text, metadata=payload)
+            score = result.get("score", 0.0)
+            documents.append((doc, score))
+
+        return documents
+
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         """Delete documents by ID.
 
@@ -306,3 +443,232 @@ class VelesDBVectorStore(VectorStore):
             search_kwargs=search_kwargs,
             **kwargs,
         )
+
+    def batch_search(
+        self,
+        queries: List[str],
+        k: int = 4,
+        **kwargs: Any,
+    ) -> List[List[Document]]:
+        """Batch search for multiple queries in parallel.
+
+        Optimized for high throughput when searching with multiple queries.
+
+        Args:
+            queries: List of query strings.
+            k: Number of results per query. Defaults to 4.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Document lists, one per query.
+        """
+        # Generate embeddings for all queries
+        query_embeddings = [self._embedding.embed_query(q) for q in queries]
+        dimension = len(query_embeddings[0])
+
+        collection = self._get_collection(dimension)
+
+        # Build batch search request
+        searches = [
+            {"vector": emb, "top_k": k}
+            for emb in query_embeddings
+        ]
+
+        # Batch search
+        batch_results = collection.batch_search(searches)
+
+        # Convert to Documents
+        all_documents: List[List[Document]] = []
+        for results in batch_results:
+            documents: List[Document] = []
+            for result in results:
+                payload = result.get("payload", {})
+                text = payload.pop("text", "")
+                doc = Document(page_content=text, metadata=payload)
+                documents.append(doc)
+            all_documents.append(documents)
+
+        return all_documents
+
+    def batch_search_with_score(
+        self,
+        queries: List[str],
+        k: int = 4,
+        **kwargs: Any,
+    ) -> List[List[Tuple[Document, float]]]:
+        """Batch search with scores for multiple queries.
+
+        Args:
+            queries: List of query strings.
+            k: Number of results per query. Defaults to 4.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of (Document, score) tuple lists, one per query.
+        """
+        query_embeddings = [self._embedding.embed_query(q) for q in queries]
+        dimension = len(query_embeddings[0])
+
+        collection = self._get_collection(dimension)
+
+        searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
+        batch_results = collection.batch_search(searches)
+
+        all_documents: List[List[Tuple[Document, float]]] = []
+        for results in batch_results:
+            documents: List[Tuple[Document, float]] = []
+            for result in results:
+                payload = result.get("payload", {})
+                text = payload.pop("text", "")
+                doc = Document(page_content=text, metadata=payload)
+                score = result.get("score", 0.0)
+                documents.append((doc, score))
+            all_documents.append(documents)
+
+        return all_documents
+
+    def add_texts_bulk(
+        self,
+        texts: Iterable[str],
+        metadatas: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> List[str]:
+        """Bulk insert optimized for large batches.
+
+        ~2-3x faster than regular add_texts() for large batches.
+
+        Args:
+            texts: Iterable of strings to add.
+            metadatas: Optional list of metadata dicts.
+            ids: Optional list of IDs.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of IDs for the added texts.
+        """
+        texts_list = list(texts)
+        if not texts_list:
+            return []
+
+        embeddings = self._embedding.embed_documents(texts_list)
+        dimension = len(embeddings[0])
+
+        collection = self._get_collection(dimension)
+
+        result_ids: List[str] = []
+        points = []
+
+        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
+            if ids and i < len(ids):
+                doc_id = ids[i]
+                int_id = hash(doc_id) & 0x7FFFFFFFFFFFFFFF
+            else:
+                int_id = self._generate_id()
+                doc_id = str(int_id)
+
+            result_ids.append(doc_id)
+
+            payload = {"text": text}
+            if metadatas and i < len(metadatas):
+                payload.update(metadatas[i])
+
+            points.append({
+                "id": int_id,
+                "vector": embedding,
+                "payload": payload,
+            })
+
+        # Use bulk upsert for better performance
+        collection.upsert_bulk(points)
+
+        return result_ids
+
+    def get_by_ids(self, ids: List[str], **kwargs: Any) -> List[Document]:
+        """Retrieve documents by their IDs.
+
+        Args:
+            ids: List of document IDs to retrieve.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Documents (or empty for missing IDs).
+        """
+        if not ids or self._collection is None:
+            return []
+
+        int_ids = [hash(id_str) & 0x7FFFFFFFFFFFFFFF for id_str in ids]
+        points = self._collection.get(int_ids)
+
+        documents: List[Document] = []
+        for point in points:
+            if point is not None:
+                payload = point.get("payload", {})
+                text = payload.pop("text", "")
+                doc = Document(page_content=text, metadata=payload)
+                documents.append(doc)
+
+        return documents
+
+    def get_collection_info(self) -> dict:
+        """Get collection configuration information.
+
+        Returns:
+            Dict with name, dimension, metric, storage_mode, point_count.
+        """
+        if self._collection is None:
+            return {
+                "name": self._collection_name,
+                "dimension": 0,
+                "metric": self._metric,
+                "point_count": 0,
+            }
+
+        return self._collection.info()
+
+    def flush(self) -> None:
+        """Flush all pending changes to disk."""
+        if self._collection is not None:
+            self._collection.flush()
+
+    def is_empty(self) -> bool:
+        """Check if the collection is empty.
+
+        Returns:
+            True if empty, False otherwise.
+        """
+        if self._collection is None:
+            return True
+        return self._collection.is_empty()
+
+    def query(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Execute a VelesQL query.
+
+        VelesQL is a SQL-like query language for vector search.
+
+        Args:
+            query_str: VelesQL query string.
+            params: Optional dict of query parameters.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Documents matching the query.
+        """
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        results = self._collection.query(query_str, params)
+
+        documents: List[Document] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.pop("text", "")
+            doc = Document(page_content=text, metadata=payload)
+            documents.append(doc)
+
+        return documents

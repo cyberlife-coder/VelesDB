@@ -181,13 +181,52 @@ LIMIT 10
 | **HNSW Search** | **~105µs** | p50 latency (10K) |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
 
+### 📈 Recall vs Latency Curves
+
+<details>
+<summary><b>🔬 Benchmark Configuration (January 7, 2026)</b></summary>
+
+| Component | Specification |
+|-----------|---------------|
+| **CPU** | Intel Core i9-14900KF (24 cores) |
+| **RAM** | 64 GB DDR5 |
+| **OS** | Windows 11 Professional |
+| **Rust** | 1.92.0 (stable) |
+| **VelesDB** | v0.8.10 |
+| **SIMD** | AVX-512 enabled |
+
+</details>
+
+#### Recall vs Latency (10K vectors / 128D)
+
+<p align="center">
+  <img src="docs/benchmarks/recall_latency_10k_128d.png" alt="Recall vs Latency 10K/128D" width="700"/>
+</p>
+
+| Mode | ef_search | Recall@10 | Latency P50 | Status |
+|------|-----------|-----------|-------------|--------|
+| Fast | 64 | 85.5% | 0.58ms | ⚠️ |
+| **Balanced** | 128 | **96.1%** | 1.02ms | ✅ Production |
+| Accurate | 256 | 98.5% | 1.56ms | ✅ |
+| HighRecall | 1024 | 99.1% | 3.19ms | ✅ |
+| **Perfect** | 2048 | **100.0%** | 2.00ms | ✅ Guaranteed |
+
+#### ef_search Scaling Behavior
+
+<p align="center">
+  <img src="docs/benchmarks/ef_scaling_10k_128d.png" alt="ef_search Scaling" width="700"/>
+</p>
+
+> 💡 **Key insight**: 32x ef_search increase (64→2048) = only ~3.5x latency increase.
+> This demonstrates a well-implemented engine without exponential cliff.
+
 ### Recall by Mode (Native Rust, Criterion benchmarks)
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **95.8%** | 0.88ms | ✅ |
-| **10K/128D** | HighRecall | 1024 | **99.4%** | 3.0ms | ✅ |
-| **10K/128D** | Perfect | 2048 | **100.0%** | 0.61ms | ✅ |
+| **10K/128D** | Balanced | 128 | **96.1%** | 1.02ms | ✅ |
+| **10K/128D** | HighRecall | 1024 | **99.1%** | 3.19ms | ✅ |
+| **10K/128D** | Perfect | 2048 | **100.0%** | 2.00ms | ✅ |
 | **100K/768D** | HighRecall | 1024 | **97.0%** | 71.5ms | ✅ ≥95% |
 | **100K/768D** | Perfect | 2048 | **100.0%** | 55.4ms | ✅ |
 
@@ -318,7 +357,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.7.2-amd64.deb
+sudo dpkg -i velesdb-0.8.10-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -414,7 +453,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.7.2"}
+# {"status":"healthy","version":"0.8.10"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -1122,7 +1161,7 @@ velesdb-cli info ./data
 
 **REPL Session:**
 ```
-VelesQL REPL v0.7.2
+VelesQL REPL v0.8.10
 Type 'help' for commands, 'quit' to exit.
 
 velesql> SELECT * FROM documents WHERE category = 'tech' LIMIT 5;
@@ -1268,7 +1307,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v0.7.2 ✅ (Current)
+### v0.8.10 ✅ (Current)
 - [x] **⚡ SIMD 32-wide Unrolling** - 12-17% latency reduction on vector ops
 - [x] **Pre-normalized Vectors** - `cosine_similarity_normalized()` ~40% faster
 - [x] **OpenAI Embedding Support** - Benchmarks for 1536D and 3072D dimensions

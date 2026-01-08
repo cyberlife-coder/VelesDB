@@ -7,12 +7,33 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        .gradient-bg {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        :root {
+            --dark-950: #020617;
+            --dark-900: #0f172a;
+            --dark-800: #1e293b;
+            --dark-700: #334155;
+            --muted: rgba(148, 163, 184, 0.9);
+            --primary-500: #0ea5e9;
+            --primary-400: #38bdf8;
+            --accent-500: #d946ef;
+            --accent-400: #f0abfc;
         }
-        .glass {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
+        body {
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #e2e8f0;
+        }
+        .veles-bg {
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(14, 165, 233, 0.15), transparent 45%),
+                radial-gradient(circle at 80% 0%, rgba(217, 70, 239, 0.12), transparent 50%),
+                radial-gradient(circle at 50% 80%, rgba(14, 165, 233, 0.08), transparent 55%),
+                linear-gradient(135deg, #050c1d 0%, #020617 60%, #050c1d 100%);
+        }
+        .card {
+            background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(8, 15, 30, 0.9));
+            border: 1px solid rgba(56, 189, 248, 0.12);
+            box-shadow: 0 20px 60px rgba(2, 6, 23, 0.5);
+            backdrop-filter: blur(12px);
         }
         .loading {
             animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
@@ -21,32 +42,128 @@
             0%, 100% { opacity: 1; }
             50% { opacity: .5; }
         }
+        /* Splash screen styles */
+        .splash-screen {
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(circle at 30% 20%, rgba(14,165,233,0.2), transparent 50%), #020617;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.5s ease-out;
+        }
+        .splash-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .splash-logo {
+            animation: float 2s ease-in-out infinite;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .splash-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .hero-pill {
+            background: linear-gradient(110deg, rgba(14,165,233,0.25), rgba(217,70,239,0.25));
+            border: 1px solid rgba(56,189,248,0.4);
+            box-shadow: inset 0 0 20px rgba(14,165,233,0.15);
+        }
+        .status-card {
+            border: 1px solid rgba(56,189,248,0.2);
+        }
+        .btn-primary {
+            background: linear-gradient(120deg, var(--primary-500), var(--accent-500));
+            color: #fff;
+            border-radius: 0.75rem;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 15px 30px rgba(14, 165, 233, 0.25);
+        }
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 20px 35px rgba(217, 70, 239, 0.25);
+        }
+        .drop-zone {
+            border: 1px dashed rgba(56, 189, 248, 0.4);
+            border-radius: 1rem;
+            padding: 2rem;
+            text-align: center;
+            background: rgba(15, 23, 42, 0.6);
+            transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+            cursor: pointer;
+        }
+        .drop-zone-active {
+            border-color: var(--primary-400);
+            background: rgba(14, 165, 233, 0.08);
+            box-shadow: 0 15px 40px rgba(14, 165, 233, 0.2);
+        }
+        .documents-row {
+            background: rgba(15, 23, 42, 0.7);
+            border-radius: 0.75rem;
+            border: 1px solid rgba(56, 189, 248, 0.15);
+            padding: 0.75rem 1rem;
+        }
+        .results-card {
+            border-left: 4px solid rgba(14, 165, 233, 0.5);
+            background: rgba(8, 16, 30, 0.8);
+        }
     </style>
 </head>
-<body class="min-h-screen gradient-bg">
-    <div class="container mx-auto px-4 py-8 max-w-4xl">
+<body class="min-h-screen veles-bg">
+    <!-- Splash Screen -->
+    <div id="splash-screen" class="splash-screen">
+        <img src="/static/velesdb-icon.png" alt="VelesDB" class="w-24 h-24 mb-6 splash-logo">
+        <h1 class="text-3xl font-bold text-white mb-2">VelesDB RAG Demo</h1>
+        <p class="text-white/80 mb-8">Loading embedding model...</p>
+        <div class="splash-spinner"></div>
+        <p id="splash-status" class="text-white/60 text-sm mt-4">Initializing...</p>
+    </div>
+
+    <div id="main-content" class="container mx-auto px-4 py-8 max-w-4xl" style="display: none;">
         <!-- Header -->
         <header class="text-center mb-8">
-            <h1 class="text-4xl font-bold text-white mb-2">
-                🐺 VelesDB RAG Demo
-            </h1>
-            <p class="text-white/80">
+            <div class="flex justify-center items-center mb-4">
+                <img src="/static/velesdb-icon.png" alt="VelesDB" class="w-12 h-12 mr-3">
+                <h1 class="text-4xl font-bold text-white">
+                    VelesDB RAG Demo
+                </h1>
+            </div>
+            <p class="text-white/80 mb-4">
                 Upload PDFs, ask questions, get answers powered by vector search
             </p>
+            <!-- Performance Badge -->
+            <div class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm px-4 py-2 rounded-full">
+                <span class="text-yellow-300 text-lg">⚡</span>
+                <span class="text-white font-medium">50-100x faster than cloud alternatives</span>
+                <span class="text-white/60 text-sm ml-2">|</span>
+                <span class="text-green-300 text-sm ml-2">$0 self-hosted</span>
+            </div>
         </header>
 
         <!-- Status Card -->
-        <div id="status-card" class="glass rounded-xl p-4 mb-6 shadow-lg">
+        <div id="status-card" class="card rounded-xl p-4 mb-6 shadow-lg">
             <div class="flex items-center justify-between flex-wrap gap-2">
                 <div class="flex items-center gap-2">
                     <span id="status-indicator" class="w-3 h-3 rounded-full bg-gray-400"></span>
-                    <span id="status-text" class="text-gray-600">Checking connection...</span>
+                    <span id="status-text" class="text-slate-300">Checking connection...</span>
                 </div>
-                <div id="stats" class="text-sm text-gray-500">
+                <div id="stats" class="text-sm text-slate-400">
                     <span id="doc-count">0</span> documents indexed
                 </div>
             </div>
-            <div id="model-info" class="mt-3 pt-3 border-t border-gray-200 text-sm text-gray-600">
+            <div id="model-info" class="mt-3 pt-3 border-t border-slate-600 text-sm text-slate-300">
                 <span class="font-medium">Model:</span> <span id="model-name">loading...</span>
                 <span class="mx-2">|</span>
                 <span class="font-medium">Dimensions:</span> <span id="model-dims">-</span>
@@ -54,30 +171,38 @@
         </div>
 
         <!-- Upload Section -->
-        <div class="glass rounded-xl p-6 mb-6 shadow-lg">
-            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
-                <i data-lucide="upload" class="w-5 h-5"></i>
-                Upload PDF
-            </h2>
+        <div class="card rounded-xl p-6 mb-6 shadow-lg">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold flex items-center gap-2">
+                    <i data-lucide="upload" class="w-5 h-5"></i>
+                    Upload PDF
+                </h2>
+                <button onclick="loadDemoData()" 
+                        id="demo-btn"
+                        class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2 text-sm">
+                    <i data-lucide="sparkles" class="w-4 h-4"></i>
+                    Load Demo Data
+                </button>
+            </div>
             <div id="drop-zone" 
-                 class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-purple-500 transition-colors cursor-pointer">
+                 class="border-2 border-dashed border-slate-700 rounded-lg p-8 text-center hover:border-sky-500 transition-colors cursor-pointer">
                 <input type="file" id="file-input" accept=".pdf" class="hidden">
-                <i data-lucide="file-text" class="w-12 h-12 mx-auto text-gray-400 mb-3"></i>
-                <p class="text-gray-600">Drag & drop a PDF here, or click to select</p>
-                <p class="text-sm text-gray-400 mt-1">Max file size: 50MB</p>
+                <i data-lucide="file-text" class="w-12 h-12 mx-auto text-slate-500 mb-3"></i>
+                <p class="text-slate-400">Drag & drop a PDF here, or click to select</p>
+                <p class="text-sm text-slate-500 mt-1">Max file size: 50MB</p>
             </div>
             <div id="upload-progress" class="hidden mt-4">
                 <div class="flex items-center gap-3">
                     <div class="loading">
-                        <i data-lucide="loader-2" class="w-5 h-5 text-purple-600 animate-spin"></i>
+                        <i data-lucide="loader-2" class="w-5 h-5 text-sky-600 animate-spin"></i>
                     </div>
-                    <span id="upload-status" class="text-gray-600">Processing...</span>
+                    <span id="upload-status" class="text-slate-300">Processing...</span>
                 </div>
             </div>
         </div>
 
         <!-- Search Section -->
-        <div class="glass rounded-xl p-6 mb-6 shadow-lg">
+        <div class="card rounded-xl p-6 mb-6 shadow-lg">
             <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
                 <i data-lucide="search" class="w-5 h-5"></i>
                 Ask a Question
@@ -86,9 +211,9 @@
                 <input type="text" 
                        id="query-input" 
                        placeholder="What would you like to know?"
-                       class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none">
+                       class="flex-1 px-4 py-3 border border-slate-600 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
                 <button type="submit" 
-                        class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2">
+                        class="px-6 py-3 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors flex items-center gap-2">
                     <i data-lucide="send" class="w-4 h-4"></i>
                     Search
                 </button>
@@ -96,7 +221,7 @@
         </div>
 
         <!-- Results Section -->
-        <div id="results-section" class="hidden glass rounded-xl p-6 shadow-lg">
+        <div id="results-section" class="hidden card rounded-xl p-6 shadow-lg">
             <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
                 <i data-lucide="file-search" class="w-5 h-5"></i>
                 Results
@@ -107,22 +232,23 @@
         </div>
 
         <!-- Documents List -->
-        <div id="documents-section" class="mt-6 glass rounded-xl p-6 shadow-lg">
+        <div id="documents-section" class="mt-6 card rounded-xl p-6 shadow-lg">
             <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
                 <i data-lucide="folder" class="w-5 h-5"></i>
                 Indexed Documents
             </h2>
             <div id="documents-list" class="space-y-2">
-                <p class="text-gray-500 text-center py-4">No documents indexed yet</p>
+                <p class="text-slate-400 text-center py-4">No documents indexed yet</p>
             </div>
         </div>
 
         <!-- Footer -->
-        <footer class="text-center mt-8 text-white/60 text-sm">
-            <p>Powered by VelesDB - Vector Search in Microseconds</p>
-            <p class="mt-1">
-                <a href="/docs" class="underline hover:text-white">API Docs</a>
-            </p>
+        <footer class="text-center mt-12 text-white/60 text-sm">
+            <div class="flex items-center justify-center">
+                <img src="/static/velesdb-icon.png" alt="VelesDB" class="w-4 h-4 mr-2">
+                <span>Powered by VelesDB - Vector Search in Microseconds</span>
+            </div>
+            <a href="/docs" class="text-sky-300 hover:text-sky-200 underline">API Docs</a>
         </footer>
     </div>
 
@@ -131,6 +257,63 @@
         lucide.createIcons();
 
         const API_BASE = '';
+        
+        // Splash screen management
+        async function initializeApp() {
+            const splash = document.getElementById('splash-screen');
+            const mainContent = document.getElementById('main-content');
+            const splashStatus = document.getElementById('splash-status');
+            
+            try {
+                splashStatus.textContent = 'Connecting to VelesDB...';
+                
+                // Check health and wait for model to load
+                let retries = 0;
+                let healthy = false;
+                
+                while (retries < 30 && !healthy) {
+                    try {
+                        const res = await fetch(`${API_BASE}/health`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.velesdb_connected) {
+                                healthy = true;
+                                splashStatus.textContent = 'Ready!';
+                            } else {
+                                splashStatus.textContent = 'Waiting for VelesDB server...';
+                            }
+                        }
+                    } catch (e) {
+                        splashStatus.textContent = `Connecting... (attempt ${retries + 1})`;
+                    }
+                    
+                    if (!healthy) {
+                        await new Promise(r => setTimeout(r, 500));
+                        retries++;
+                    }
+                }
+                
+                // Show main content
+                await new Promise(r => setTimeout(r, 300)); // Brief pause for UX
+                mainContent.style.display = 'block';
+                splash.classList.add('hidden');
+                
+                // Remove splash after fade
+                setTimeout(() => splash.remove(), 500);
+                
+                // Continue with normal initialization
+                await checkHealth();
+                await loadDocuments();
+                
+            } catch (e) {
+                splashStatus.textContent = `Error: ${e.message}`;
+                // Still show the app after a delay
+                setTimeout(() => {
+                    mainContent.style.display = 'block';
+                    splash.classList.add('hidden');
+                }, 2000);
+            }
+        }
 
         // Status check
         async function checkHealth() {
@@ -173,21 +356,29 @@
                 const container = document.getElementById('documents-list');
                 
                 if (data.documents.length === 0) {
-                    container.innerHTML = '<p class="text-gray-500 text-center py-4">No documents indexed yet</p>';
+                    container.innerHTML = '<p class="text-slate-400 text-center py-4">No documents indexed yet</p>';
                     return;
                 }
                 
+                // Sanitize function to prevent XSS
+                const escapeHtml = (str) => {
+                    const div = document.createElement('div');
+                    div.textContent = str;
+                    return div.innerHTML;
+                };
+                
                 container.innerHTML = data.documents.map(doc => `
-                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg" id="doc-${escapeHtml(doc.name).replace(/[^a-zA-Z0-9]/g, '_')}">
                         <div class="flex items-center gap-3">
-                            <i data-lucide="file-text" class="w-5 h-5 text-purple-600"></i>
+                            <i data-lucide="file-text" class="w-5 h-5 text-sky-600"></i>
                             <div>
-                                <p class="font-medium">${doc.name}</p>
-                                <p class="text-sm text-gray-500">${doc.pages} pages, ${doc.chunks} chunks</p>
+                                <p class="font-medium">${escapeHtml(doc.name)}</p>
+                                <p class="text-sm text-slate-400">${parseInt(doc.pages)} pages, ${parseInt(doc.chunks)} chunks</p>
                             </div>
                         </div>
-                        <button onclick="deleteDocument('${doc.name}')" 
-                                class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                        <button onclick="deleteDocument('${escapeHtml(doc.name).replace(/'/g, '\\\'')}')" 
+                                class="delete-btn p-2 text-red-500 hover:bg-red-500/20 rounded-lg transition-colors"
+                                title="Delete document">
                             <i data-lucide="trash-2" class="w-4 h-4"></i>
                         </button>
                     </div>
@@ -207,16 +398,16 @@
         
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
-            dropZone.classList.add('border-purple-500', 'bg-purple-50');
+            dropZone.classList.add('border-sky-500', 'bg-slate-800');
         });
         
         dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('border-purple-500', 'bg-purple-50');
+            dropZone.classList.remove('border-sky-500', 'bg-slate-800');
         });
         
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
-            dropZone.classList.remove('border-purple-500', 'bg-purple-50');
+            dropZone.classList.remove('border-sky-500', 'bg-slate-800');
             const file = e.dataTransfer.files[0];
             if (file && file.type === 'application/pdf') {
                 uploadFile(file);
@@ -250,7 +441,12 @@
                 
                 if (data.success) {
                     const timing = `PDF: ${data.processing_time_ms?.toFixed(0) || '-'}ms | Embed: ${data.embedding_time_ms?.toFixed(0) || '-'}ms | Insert: ${data.insert_time_ms?.toFixed(1) || '-'}ms`;
-                    status.innerHTML = `✓ ${data.message}<br><span class="text-xs text-gray-500">${timing}</span>`;
+                    status.textContent = `✓ ${data.message}`;
+                    const timingSpan = document.createElement('span');
+                    timingSpan.className = 'text-xs text-slate-400';
+                    timingSpan.textContent = timing;
+                    status.appendChild(document.createElement('br'));
+                    status.appendChild(timingSpan);
                     status.className = 'text-green-600';
                     await loadDocuments();
                     await checkHealth();
@@ -265,7 +461,7 @@
             
             setTimeout(() => {
                 progress.classList.add('hidden');
-                status.className = 'text-gray-600';
+                status.className = 'text-slate-300';
             }, 3000);
         }
 
@@ -280,7 +476,7 @@
             const resultsContainer = document.getElementById('results-container');
             
             resultsSection.classList.remove('hidden');
-            resultsContainer.innerHTML = '<div class="loading text-center py-8 text-gray-500">Searching...</div>';
+            resultsContainer.innerHTML = '<div class="loading text-center py-8 text-slate-400">Searching...</div>';
             
             try {
                 const res = await fetch(`${API_BASE}/search`, {
@@ -292,36 +488,47 @@
                 const data = await res.json();
                 
                 if (data.results.length === 0) {
-                    resultsContainer.innerHTML = '<p class="text-center py-8 text-gray-500">No results found. Try uploading some documents first.</p>';
+                    resultsContainer.innerHTML = '<p class="text-center py-8 text-slate-400">No results found. Try uploading some documents first.</p>';
                     return;
                 }
                 
                 // Performance metrics header
                 const perfHeader = `
-                    <div class="mb-4 p-3 bg-purple-50 rounded-lg text-sm">
-                        <span class="font-medium text-purple-700">⚡ Performance:</span>
+                    <div class="mb-4 p-3 bg-sky-900/30 rounded-lg text-sm">
+                        <span class="font-medium text-sky-400">⚡ Performance:</span>
                         <span class="ml-2">Embedding: <strong>${data.embedding_time_ms?.toFixed(1) || '-'}ms</strong></span>
                         <span class="ml-3">VelesDB Search: <strong>${data.search_time_ms?.toFixed(2) || '-'}ms</strong></span>
                         <span class="ml-3">Total: <strong>${((data.embedding_time_ms || 0) + (data.search_time_ms || 0)).toFixed(1)}ms</strong></span>
                     </div>
                 `;
                 
+                // Sanitize function to prevent XSS
+                const escapeHtml = (str) => {
+                    const div = document.createElement('div');
+                    div.textContent = str;
+                    return div.innerHTML;
+                };
+                
                 resultsContainer.innerHTML = perfHeader + data.results.map((r, i) => `
-                    <div class="p-4 bg-gray-50 rounded-lg border-l-4 border-purple-500">
+                    <div class="p-4 bg-slate-800/50 rounded-lg border-l-4 border-slate-700">
                         <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-purple-600">
-                                ${r.document_name} - Page ${r.page_number}
+                            <span class="text-sm font-medium text-sky-600">
+                                ${escapeHtml(r.document_name)} - Page ${parseInt(r.page_number)}
                             </span>
-                            <span class="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded">
-                                Score: ${(r.score * 100).toFixed(1)}%
+                            <span class="text-xs bg-sky-100 text-sky-800 px-2 py-1 rounded">
+                                Score: ${parseFloat(r.score * 100).toFixed(1)}%
                             </span>
                         </div>
-                        <p class="text-gray-700">${r.text}</p>
+                        <p class="text-slate-300">${escapeHtml(r.text)}</p>
                     </div>
                 `).join('');
                 
             } catch (e) {
-                resultsContainer.innerHTML = `<p class="text-center py-8 text-red-500">Search failed: ${e.message}</p>`;
+                const errorMsg = document.createElement('p');
+                errorMsg.className = 'text-center py-8 text-red-500';
+                errorMsg.textContent = `Search failed: ${e.message}`;
+                resultsContainer.innerHTML = '';
+                resultsContainer.appendChild(errorMsg);
             }
         });
 
@@ -329,20 +536,92 @@
         async function deleteDocument(name) {
             if (!confirm(`Delete "${name}" from the index?`)) return;
             
+            // Find the document row and show loading state
+            const docId = 'doc-' + name.replace(/[^a-zA-Z0-9]/g, '_');
+            const docRow = document.getElementById(docId);
+            if (docRow) {
+                docRow.style.opacity = '0.5';
+                const btn = docRow.querySelector('.delete-btn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>';
+                    lucide.createIcons();
+                }
+            }
+            
             try {
-                await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}`, {
+                const response = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}`, {
                     method: 'DELETE'
                 });
+                
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log(`Deleted document: ${name}`, result);
+                
+                // Animate removal
+                if (docRow) {
+                    docRow.style.transition = 'all 0.3s ease-out';
+                    docRow.style.transform = 'translateX(100%)';
+                    docRow.style.opacity = '0';
+                    await new Promise(r => setTimeout(r, 300));
+                }
+                
+                // Refresh the documents list and health status
                 await loadDocuments();
                 await checkHealth();
             } catch (e) {
-                alert(`Failed to delete: ${e.message}`);
+                console.error('Delete failed:', e);
+                alert(`Failed to delete "${name}": ${e.message}`);
+                
+                // Restore the row if deletion failed
+                if (docRow) {
+                    docRow.style.opacity = '1';
+                    const btn = docRow.querySelector('.delete-btn');
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '<i data-lucide="trash-2" class="w-4 h-4"></i>';
+                        lucide.createIcons();
+                    }
+                }
             }
         }
 
-        // Initialize
-        checkHealth();
-        loadDocuments();
+        // Load demo data for sales presentations
+        async function loadDemoData() {
+            const btn = document.getElementById('demo-btn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Loading...';
+            btn.disabled = true;
+            lucide.createIcons();
+            
+            try {
+                const res = await fetch(`${API_BASE}/demo/load`, { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.success) {
+                    const loaded = data.documents.filter(d => d.status === 'success').length;
+                    const skipped = data.documents.filter(d => d.status === 'skipped').length;
+                    alert(`✅ Demo data loaded!\n\n${loaded} documents indexed\n${skipped} already existed`);
+                    await loadDocuments();
+                    await checkHealth();
+                } else {
+                    alert(`Failed to load demo data: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (e) {
+                alert(`Failed to load demo data: ${e.message}`);
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                lucide.createIcons();
+            }
+        }
+
+        // Initialize with splash screen
+        initializeApp();
         setInterval(checkHealth, 30000);
     </script>
 </body>

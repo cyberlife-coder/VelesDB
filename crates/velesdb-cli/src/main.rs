@@ -11,6 +11,7 @@
 //!   `velesdb import ./data.jsonl --collection docs`
 
 mod import;
+mod license;
 mod repl;
 mod session;
 
@@ -185,6 +186,34 @@ enum Commands {
         /// Show progress bar
         #[arg(long, default_value = "true")]
         progress: bool,
+    },
+
+    /// License management commands
+    License {
+        #[command(subcommand)]
+        action: LicenseAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum LicenseAction {
+    /// Show current license status
+    Show,
+
+    /// Activate a license key
+    Activate {
+        /// License key from email (format: base64_payload.base64_signature)
+        key: String,
+    },
+
+    /// Verify a license key without activating it
+    Verify {
+        /// License key to verify
+        key: String,
+
+        /// Public key for verification (base64 encoded)
+        #[arg(short, long)]
+        public_key: String,
     },
 }
 
@@ -413,6 +442,112 @@ fn main() -> anyhow::Result<()> {
                 "  Throughput:       {:.0} records/sec",
                 stats.records_per_sec()
             );
+        }
+        Commands::License { action } => {
+            use colored::Colorize;
+
+            match action {
+                LicenseAction::Show => {
+                    match license::load_license_key() {
+                        Ok(key) => {
+                            // Try to get public key from environment
+                            let public_key = std::env::var("VELESDB_LICENSE_PUBLIC_KEY")
+                                .unwrap_or_else(|_| {
+                                    println!("{}", "⚠️  Warning: VELESDB_LICENSE_PUBLIC_KEY not set in environment".yellow());
+                                    println!("   Set it with: export VELESDB_LICENSE_PUBLIC_KEY=<base64_key>");
+                                    println!("   Using embedded development key for validation...\n");
+                                    // Development fallback key (same as velesdb-premium)
+                                    "MCowBQYDK2VwAyEADevelopmentKeyReplaceMeInProd==".to_string()
+                                });
+
+                            match license::validate_license(&key, &public_key) {
+                                Ok(info) => {
+                                    license::display_license_info(&info);
+                                }
+                                Err(e) => {
+                                    println!(
+                                        "{} {}",
+                                        "❌ License validation failed:".red().bold(),
+                                        e
+                                    );
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            println!("{}", "❌ No license found".red().bold());
+                            println!("\n{}", "To activate a license:".cyan());
+                            println!("  velesdb license activate <license_key>");
+                            println!("\n{}", "License keys are stored in:".cyan());
+                            if let Ok(path) = license::get_license_config_path() {
+                                println!("  {}", path.display());
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                LicenseAction::Activate { key } => {
+                    // Try to get public key from environment
+                    let public_key =
+                        std::env::var("VELESDB_LICENSE_PUBLIC_KEY").unwrap_or_else(|_| {
+                            println!(
+                                "{}",
+                                "⚠️  Warning: VELESDB_LICENSE_PUBLIC_KEY not set in environment"
+                                    .yellow()
+                            );
+                            println!(
+                                "   Set it with: export VELESDB_LICENSE_PUBLIC_KEY=<base64_key>"
+                            );
+                            println!("   Using embedded development key for validation...\n");
+                            "MCowBQYDK2VwAyEADevelopmentKeyReplaceMeInProd==".to_string()
+                        });
+
+                    // Validate the license first
+                    match license::validate_license(&key, &public_key) {
+                        Ok(info) => {
+                            // Save the license
+                            license::save_license_key(&key)?;
+
+                            println!("{}", "✅ License activated successfully!".green().bold());
+                            println!();
+                            license::display_license_info(&info);
+
+                            if let Ok(path) = license::get_license_config_path() {
+                                println!("{}", "License saved to:".cyan());
+                                println!("  {}", path.display());
+                            }
+                        }
+                        Err(e) => {
+                            println!("{} {}", "❌ License activation failed:".red().bold(), e);
+                            println!("\n{}", "Please check:".yellow());
+                            println!("  • License key format is correct (base64_payload.base64_signature)");
+                            println!("  • License has not expired");
+                            println!(
+                                "  • Public key is correctly set in VELESDB_LICENSE_PUBLIC_KEY"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                LicenseAction::Verify { key, public_key } => {
+                    match license::validate_license(&key, &public_key) {
+                        Ok(info) => {
+                            println!("{}", "✅ License is VALID".green().bold());
+                            println!();
+                            license::display_license_info(&info);
+                        }
+                        Err(e) => {
+                            println!("{} {}", "❌ License verification failed:".red().bold(), e);
+                            println!("\n{}", "Possible reasons:".yellow());
+                            println!("  • Invalid signature (license may have been tampered with)");
+                            println!("  • Wrong public key");
+                            println!("  • License has expired");
+                            println!("  • Malformed license format");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
         }
     }
 
