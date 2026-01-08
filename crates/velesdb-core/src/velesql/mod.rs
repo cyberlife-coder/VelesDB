@@ -20,10 +20,14 @@
 //! ```
 
 mod ast;
+#[cfg(test)]
+mod ast_tests;
 mod cache;
 mod error;
 mod explain;
 mod parser;
+#[cfg(test)]
+mod parser_tests;
 
 pub use ast::*;
 pub use cache::{CacheStats, QueryCache};

@@ -1,8 +1,6 @@
 //! Tests for parser module
 
-#[cfg(test)]
-mod tests {
-use super::parser::*;
+use super::*;
 
 // ========== Basic SELECT tests ==========
 
@@ -133,9 +131,8 @@ fn test_parse_and_condition() {
 
 #[test]
 fn test_parse_or_condition() {
-    let query =
-        Parser::parse("SELECT * FROM docs WHERE category = 'tech' OR category = 'science'")
-            .unwrap();
+    let query = Parser::parse("SELECT * FROM docs WHERE category = 'tech' OR category = 'science'")
+        .unwrap();
     match query.select.where_clause {
         Some(Condition::Or(_, _)) => {}
         _ => panic!("Expected OR condition"),
@@ -161,8 +158,7 @@ fn test_parse_vector_with_filter() {
 
 #[test]
 fn test_parse_in_condition() {
-    let query =
-        Parser::parse("SELECT * FROM docs WHERE category IN ('tech', 'science')").unwrap();
+    let query = Parser::parse("SELECT * FROM docs WHERE category IN ('tech', 'science')").unwrap();
     match query.select.where_clause {
         Some(Condition::In(c)) => {
             assert_eq!(c.column, "category");
@@ -298,5 +294,4 @@ fn test_parse_with_clause_float_value() {
     let with = query.select.with_clause.expect("Expected WITH clause");
     let value = with.get("threshold").expect("Expected threshold option");
     assert_eq!(value.as_float(), Some(0.95));
-}
 }
