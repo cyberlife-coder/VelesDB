@@ -464,11 +464,7 @@ fn main() -> anyhow::Result<()> {
                                 license::display_license_info(&info);
                             }
                             Err(e) => {
-                                println!(
-                                    "{} {}",
-                                    "❌ License validation failed:".red().bold(),
-                                    e
-                                );
+                                println!("{} {}", "❌ License validation failed:".red().bold(), e);
                                 std::process::exit(1);
                             }
                         }
