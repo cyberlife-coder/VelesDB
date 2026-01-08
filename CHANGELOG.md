@@ -5,6 +5,15 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.12] - 2026-01-08
+
+### 🔧 Patch Release: CI/CD Fixes
+
+- **Clippy pedantic compliance** - Fixed all pedantic lint warnings
+- **Cargo fmt** - Applied consistent formatting across codebase
+
+---
+
 ## [0.8.11] - 2026-01-08
 
 ### 🚀 Major Release: Performance, Ecosystem Parity & License Management
