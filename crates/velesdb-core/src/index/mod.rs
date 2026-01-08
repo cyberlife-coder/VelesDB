@@ -4,7 +4,7 @@
 //! nearest neighbor (ANN) search and full-text search.
 
 mod bm25;
-mod hnsw;
+pub mod hnsw;
 
 pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};

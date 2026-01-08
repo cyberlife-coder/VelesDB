@@ -55,6 +55,7 @@ impl Default for ShardedVectors {
     }
 }
 
+#[allow(dead_code)] // API prepared for future use
 impl ShardedVectors {
     /// Creates new empty sharded vector storage with specified dimension.
     #[must_use]

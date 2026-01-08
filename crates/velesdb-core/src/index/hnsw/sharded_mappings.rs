@@ -139,6 +139,7 @@ impl ShardedMappings {
 
     /// Returns the number of registered IDs.
     #[must_use]
+    #[allow(dead_code)] // Used by NativeHnswIndex
     pub fn len(&self) -> usize {
         self.id_to_idx.len()
     }
@@ -170,11 +171,13 @@ impl ShardedMappings {
     /// This is a monotonic counter that never decreases, even after removals.
     /// Useful for calculating tombstone count.
     #[must_use]
+    #[allow(dead_code)] // API completeness
     pub fn next_idx(&self) -> usize {
         self.next_idx.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Clears all mappings and resets the index counter.
+    #[allow(dead_code)] // API completeness
     pub fn clear(&self) {
         self.id_to_idx.clear();
         self.idx_to_id.clear();
