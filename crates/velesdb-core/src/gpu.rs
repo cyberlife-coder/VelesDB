@@ -24,6 +24,10 @@
 #[path = "gpu/gpu_backend.rs"]
 mod gpu_backend;
 
+#[cfg(all(test, feature = "gpu"))]
+#[path = "gpu/gpu_backend_tests.rs"]
+mod gpu_backend_tests;
+
 #[cfg(feature = "gpu")]
 pub use gpu_backend::GpuAccelerator;
 
