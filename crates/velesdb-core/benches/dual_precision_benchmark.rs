@@ -1,4 +1,4 @@
-//! Benchmark: NativeHnsw vs DualPrecisionHnsw
+//! Benchmark: `NativeHnsw` vs `DualPrecisionHnsw`
 //!
 //! Compares the original float32 implementation with the new
 //! dual-precision (int8 traversal + float32 re-ranking) approach.
