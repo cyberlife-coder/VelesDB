@@ -52,7 +52,7 @@ fn bench_search_latency(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("NativeHnsw_float32", format!("{num_vectors}x{dim}d")),
         &(),
-        |b, _| {
+        |b, ()| {
             b.iter(|| {
                 let results = native_hnsw.search(black_box(&query), k, ef_search);
                 black_box(results)
@@ -64,7 +64,7 @@ fn bench_search_latency(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("DualPrecision_int8", format!("{num_vectors}x{dim}d")),
         &(),
-        |b, _| {
+        |b, ()| {
             b.iter(|| {
                 let results = dual_hnsw.search(black_box(&query), k, ef_search);
                 black_box(results)
@@ -103,7 +103,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("insert_native", "1000x768"),
         &(),
-        |b, _| {
+        |b, ()| {
             b.iter(|| {
                 let engine = SimdDistance::new(DistanceMetric::Euclidean);
                 let hnsw = NativeHnsw::new(engine, 32, 200, num_vectors);
@@ -118,7 +118,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("insert_dual_precision", "1000x768"),
         &(),
-        |b, _| {
+        |b, ()| {
             b.iter(|| {
                 let engine = SimdDistance::new(DistanceMetric::Euclidean);
                 let mut hnsw = DualPrecisionHnsw::new(engine, dim, 32, 200, num_vectors);
@@ -150,7 +150,7 @@ fn bench_quantized_distance(c: &mut Criterion) {
     let q2 = quantizer.quantize(&v2);
 
     // Benchmark float32 distance (baseline)
-    group.bench_with_input(BenchmarkId::new("float32_euclidean", dim), &(), |b, _| {
+    group.bench_with_input(BenchmarkId::new("float32_euclidean", dim), &(), |b, ()| {
         b.iter(|| {
             let dist: f32 = v1
                 .iter()
@@ -163,7 +163,7 @@ fn bench_quantized_distance(c: &mut Criterion) {
     });
 
     // Benchmark int8 quantized distance
-    group.bench_with_input(BenchmarkId::new("int8_quantized", dim), &(), |b, _| {
+    group.bench_with_input(BenchmarkId::new("int8_quantized", dim), &(), |b, ()| {
         b.iter(|| {
             let dist = quantizer.distance_l2_quantized(black_box(&q1), black_box(&q2));
             black_box(dist)
@@ -174,7 +174,7 @@ fn bench_quantized_distance(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("asymmetric_f32_vs_i8", dim),
         &(),
-        |b, _| {
+        |b, ()| {
             b.iter(|| {
                 let dist = quantizer.distance_l2_asymmetric(black_box(&v1), black_box(&q2));
                 black_box(dist)
