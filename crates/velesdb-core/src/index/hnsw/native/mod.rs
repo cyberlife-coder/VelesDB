@@ -37,11 +37,15 @@
 #![allow(clippy::unused_self)]
 
 mod distance;
+mod dual_precision;
 mod graph;
+mod quantization;
 mod search;
 
 pub use distance::{CpuDistance, DistanceEngine, SimdDistance};
+pub use dual_precision::DualPrecisionHnsw;
 pub use graph::{Layer, NativeHnsw, NodeId};
+pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use search::SearchResult;
 
 #[cfg(test)]
