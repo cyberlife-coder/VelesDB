@@ -42,13 +42,21 @@ mod backend_tests;
 #[cfg(test)]
 mod index_tests;
 #[cfg(test)]
+mod inner_tests;
+#[cfg(test)]
 mod mappings_tests;
 #[cfg(test)]
 mod params_tests;
 #[cfg(test)]
 mod parity_tests;
 #[cfg(test)]
+mod persistence_tests;
+#[cfg(test)]
+mod sharded_mappings_tests;
+#[cfg(test)]
 mod sharded_vectors_tests;
+#[cfg(test)]
+mod vector_store_tests;
 
 // ============================================================================
 // Public API
