@@ -38,7 +38,11 @@ mod vector_store;
 // Tests
 // ============================================================================
 #[cfg(test)]
+mod index_tests;
+#[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod sharded_vectors_tests;
 
 // ============================================================================
 // Public API
