@@ -19,12 +19,12 @@ interface ResultsProps {
 export function Results({ results }: ResultsProps) {
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between text-sm text-slate-400">
+      <div className="flex items-center justify-between text-sm text-dark-300">
         <span>
           Found {results.chunks.length} relevant chunks for "{results.query}"
         </span>
         <span className="flex items-center gap-1">
-          <Zap className="w-4 h-4 text-yellow-400" />
+          <Zap className="w-4 h-4 text-yellow-300" />
           {results.time_ms.toFixed(2)}ms
         </span>
       </div>
@@ -33,23 +33,23 @@ export function Results({ results }: ResultsProps) {
         {results.chunks.map((chunk, index) => (
           <div
             key={chunk.id}
-            className="p-4 bg-slate-800 border border-slate-700 rounded-lg hover:border-slate-600 transition-colors"
+            className="p-4 bg-dark-900/70 border border-dark-800 rounded-lg hover:border-primary-500/50 transition-colors"
           >
             <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-2 text-sm text-slate-400">
+              <div className="flex items-center gap-2 text-sm text-dark-300">
                 <FileText className="w-4 h-4" />
                 <span>Chunk #{chunk.id}</span>
               </div>
               {chunk.score !== undefined && (
-                <span className="px-2 py-1 text-xs font-medium bg-blue-500/20 text-blue-400 rounded">
+                <span className="px-2 py-1 text-xs font-medium bg-primary-500/20 text-primary-200 rounded">
                   {(chunk.score * 100).toFixed(1)}% match
                 </span>
               )}
             </div>
-            <p className="mt-2 text-slate-200 leading-relaxed">
+            <p className="mt-2 text-dark-100 leading-relaxed">
               {chunk.text}
             </p>
-            <div className="mt-3 text-xs text-slate-500">
+            <div className="mt-3 text-xs text-dark-500">
               Rank #{index + 1}
             </div>
           </div>
@@ -57,7 +57,7 @@ export function Results({ results }: ResultsProps) {
       </div>
 
       {results.chunks.length === 0 && (
-        <div className="text-center py-8 text-slate-400">
+        <div className="text-center py-8 text-dark-400">
           No results found. Try ingesting some documents first.
         </div>
       )}

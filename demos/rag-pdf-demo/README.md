@@ -65,21 +65,55 @@ pytest
 # Start the API server
 uvicorn src.main:app --reload --port 8000
 
-# Open browser
-start http://localhost:8000
+# Open browser (try these URLs in order if first doesn't work):
+start http://127.0.0.1:8000        # ✅ Most reliable
+start http://localhost:8000        # 🔄 May fail on some systems
 ```
+
+### 🔧 Troubleshooting Connection Issues
+
+**If you see "ERR_CONNECTION_REFUSED" or "This site can't be reached":**
+
+1. **Try 127.0.0.1 instead of localhost:**
+   - Use `http://127.0.0.1:8000` instead of `http://localhost:8000`
+   - This bypasses DNS resolution and works on all systems
+
+2. **Check if servers are running:**
+   ```bash
+   # Check VelesDB Server (port 8080)
+   curl http://127.0.0.1:8080
+   
+   # Check FastAPI Demo (port 8000)
+   curl http://127.0.0.1:8000/health
+   ```
+
+3. **Verify ports are not blocked:**
+   ```bash
+   netstat -ano | findstr ":8000"
+   netstat -ano | findstr ":8080"
+   ```
+
+4. **Common causes:**
+   - **Windows Firewall** blocking localhost connections
+   - **Antivirus software** interfering with local ports
+   - **Corporate VPN** redirecting traffic
+   - **DNS resolution** issues with "localhost"
+
+5. **Alternative URLs to try:**
+   - `http://127.0.0.1:8000/docs` - Swagger API documentation
+   - `http://127.0.0.1:8000/health` - Health check endpoint
 
 ## 📖 API Endpoints
 
 ### Upload PDF
 ```bash
-curl -X POST "http://localhost:8000/documents/upload" \
+curl -X POST "http://127.0.0.1:8000/documents/upload" \
   -F "file=@document.pdf"
 ```
 
 ### Search Documents
 ```bash
-curl -X POST "http://localhost:8000/search" \
+curl -X POST "http://127.0.0.1:8000/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "What is machine learning?", "top_k": 5}'
 ```
@@ -97,12 +131,12 @@ curl -X POST "http://localhost:8000/search" \
 
 ### List Documents
 ```bash
-curl "http://localhost:8000/documents"
+curl "http://127.0.0.1:8000/documents"
 ```
 
 ### Health Check
 ```bash
-curl "http://localhost:8000/health"
+curl "http://127.0.0.1:8000/health"
 ```
 
 **Response:**
@@ -226,6 +260,64 @@ rag-pdf-demo/
 ├── pyproject.toml
 ├── .env.example
 └── README.md
+```
+
+## 🗄️ Data Persistence & Cleanup
+
+### ⚠️ Important: Data is Persistent!
+
+**VelesDB stores data on disk by default** - when you stop the demo, **all documents remain indexed** in:
+```
+./rag-data/rag_documents/
+├── config.json      # Collection metadata
+├── vectors.dat      # Vector embeddings (16MB+)
+├── vectors.idx      # Vector index
+└── vectors.wal      # Write-ahead log
+```
+
+### 🧹 Complete Cleanup Options
+
+#### Option 1: Delete Collection (Recommended)
+```bash
+# Delete the entire collection from VelesDB
+curl -X DELETE "http://127.0.0.1:8080/collections/rag_documents"
+
+# Or restart with fresh data directory
+.\target\release\velesdb-server.exe --data-dir ./rag-data-fresh
+```
+
+#### Option 2: Manual File Cleanup
+```bash
+# Stop VelesDB Server first (Ctrl+C)
+# Then delete the data directory
+Remove-Item .\rag-data -Recurse -Force
+
+# Restart for fresh start
+.\target\release\velesdb-server.exe --data-dir ./rag-data
+```
+
+#### Option 3: Individual Document Deletion
+```bash
+# Via web interface: Click trash icon next to document
+# Or via API:
+curl -X POST "http://127.0.0.1:8000/documents/delete" \
+  -H "Content-Type: application/json" \
+  -d '{"document_name": "your-document.pdf"}'
+```
+
+### 📊 Storage Usage
+- **PDF documents**: Not stored (only processed)
+- **Text chunks**: Stored in VelesDB as payloads
+- **Embeddings**: 384 dimensions × 4 bytes = ~1.5KB per chunk
+- **Index overhead**: ~20-30% additional storage
+
+### 🔍 Check Current Storage
+```bash
+# Check collection size
+curl "http://127.0.0.1:8080/collections/rag_documents"
+
+# Check disk usage
+dir .\rag-data\rag_documents
 ```
 
 ## 🔬 Technical Details

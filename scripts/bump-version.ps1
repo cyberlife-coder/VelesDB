@@ -97,6 +97,43 @@ $FilesToUpdate = @(
         Pattern = 'version = "\d+\.\d+\.\d+"'
         Replacement = "version = `"$Version`""
         Description = "RAG demo"
+    },
+    # Inter-crate dependencies (velesdb-core version in other crates)
+    @{
+        Path = "crates/velesdb-server/Cargo.toml"
+        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
+        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
+        Description = "velesdb-server -> core dep"
+    },
+    @{
+        Path = "crates/velesdb-python/Cargo.toml"
+        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
+        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
+        Description = "velesdb-python -> core dep"
+    },
+    @{
+        Path = "crates/velesdb-cli/Cargo.toml"
+        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
+        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
+        Description = "velesdb-cli -> core dep"
+    },
+    @{
+        Path = "crates/velesdb-migrate/Cargo.toml"
+        Pattern = 'velesdb-core = \{ version = "\d+\.\d+\.\d+", path = "\.\./velesdb-core" \}'
+        Replacement = "velesdb-core = { version = `"$Version`", path = `"../velesdb-core`" }"
+        Description = "velesdb-migrate -> core dep"
+    },
+    @{
+        Path = "crates/velesdb-mobile/Cargo.toml"
+        Pattern = 'velesdb-core = \{ path = "\.\./velesdb-core", version = "\d+\.\d+\.\d+" \}'
+        Replacement = "velesdb-core = { path = `"../velesdb-core`", version = `"$Version`" }"
+        Description = "velesdb-mobile -> core dep"
+    },
+    @{
+        Path = "crates/tauri-plugin-velesdb/Cargo.toml"
+        Pattern = 'velesdb-core = \{ path = "\.\./\.\./crates/velesdb-core", version = "\d+\.\d+\.\d+" \}'
+        Replacement = "velesdb-core = { path = `"../../crates/velesdb-core`", version = `"$Version`" }"
+        Description = "tauri-plugin -> core dep"
     }
 )
 

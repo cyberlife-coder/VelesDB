@@ -247,3 +247,222 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             similarities=similarities,
             ids=ids,
         )
+
+    def hybrid_query(
+        self,
+        query_str: str,
+        query_embedding: List[float],
+        similarity_top_k: int = 10,
+        vector_weight: float = 0.5,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Hybrid search combining vector similarity and BM25 text search.
+
+        Uses Reciprocal Rank Fusion (RRF) to combine results.
+
+        Args:
+            query_str: Text query for BM25 search.
+            query_embedding: Query embedding vector.
+            similarity_top_k: Number of results to return.
+            vector_weight: Weight for vector results (0.0-1.0). Defaults to 0.5.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Query result with nodes and similarities.
+        """
+        dimension = len(query_embedding)
+        collection = self._get_collection(dimension)
+
+        results = collection.hybrid_search(
+            vector=query_embedding,
+            query=query_str,
+            top_k=similarity_top_k,
+            vector_weight=vector_weight,
+        )
+
+        nodes: List[TextNode] = []
+        similarities: List[float] = []
+        ids: List[str] = []
+
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")
+            node_id = payload.get("node_id", str(result.get("id", "")))
+            score = result.get("score", 0.0)
+
+            metadata = {
+                k: v for k, v in payload.items()
+                if k not in ("text", "node_id")
+            }
+
+            node = TextNode(
+                text=text,
+                id_=node_id,
+                metadata=metadata,
+            )
+
+            nodes.append(node)
+            similarities.append(score)
+            ids.append(node_id)
+
+        return VectorStoreQueryResult(
+            nodes=nodes,
+            similarities=similarities,
+            ids=ids,
+        )
+
+    def text_query(
+        self,
+        query_str: str,
+        similarity_top_k: int = 10,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Full-text search using BM25 ranking.
+
+        Args:
+            query_str: Text query string.
+            similarity_top_k: Number of results to return.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Query result with nodes and similarities.
+        """
+        if self._collection is None:
+            return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+
+        results = self._collection.text_search(query_str, top_k=similarity_top_k)
+
+        nodes: List[TextNode] = []
+        similarities: List[float] = []
+        ids: List[str] = []
+
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")
+            node_id = payload.get("node_id", str(result.get("id", "")))
+            score = result.get("score", 0.0)
+
+            metadata = {
+                k: v for k, v in payload.items()
+                if k not in ("text", "node_id")
+            }
+
+            node = TextNode(
+                text=text,
+                id_=node_id,
+                metadata=metadata,
+            )
+
+            nodes.append(node)
+            similarities.append(score)
+            ids.append(node_id)
+
+        return VectorStoreQueryResult(
+            nodes=nodes,
+            similarities=similarities,
+            ids=ids,
+        )
+
+    def batch_query(
+        self,
+        queries: List[VectorStoreQuery],
+        **kwargs: Any,
+    ) -> List[VectorStoreQueryResult]:
+        """Batch query with multiple embeddings in parallel."""
+        if not queries:
+            return []
+
+        first_emb = queries[0].query_embedding
+        if first_emb is None:
+            return [VectorStoreQueryResult(nodes=[], similarities=[], ids=[]) 
+                    for _ in queries]
+
+        dimension = len(first_emb)
+        collection = self._get_collection(dimension)
+
+        searches = [{"vector": q.query_embedding, "top_k": q.similarity_top_k or 10}
+                    for q in queries if q.query_embedding is not None]
+
+        batch_results = collection.batch_search(searches)
+
+        all_results: List[VectorStoreQueryResult] = []
+        for res_list in batch_results:
+            n_list, s_list, i_list = [], [], []
+            for r in res_list:
+                p = r.get("payload", {})
+                nid = p.get("node_id", str(r.get("id", "")))
+                n_list.append(TextNode(text=p.get("text", ""), id_=nid,
+                    metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
+                s_list.append(r.get("score", 0.0))
+                i_list.append(nid)
+            all_results.append(VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list))
+        return all_results
+
+    def add_bulk(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
+        """Bulk insert optimized for large batches."""
+        if not nodes:
+            return []
+        first_emb = nodes[0].get_embedding()
+        if first_emb is None:
+            raise ValueError("Nodes must have embeddings")
+        collection = self._get_collection(len(first_emb))
+
+        points, result_ids = [], []
+        for node in nodes:
+            emb = node.get_embedding()
+            if emb is None:
+                continue
+            nid = node.node_id
+            result_ids.append(nid)
+            payload = {"text": node.get_content(), "node_id": nid}
+            if hasattr(node, "metadata") and node.metadata:
+                payload.update({k: v for k, v in node.metadata.items() 
+                               if isinstance(v, (str, int, float, bool))})
+            points.append({"id": hash(nid) & 0x7FFFFFFFFFFFFFFF, "vector": emb, "payload": payload})
+        if points:
+            collection.upsert_bulk(points)
+        return result_ids
+
+    def get_nodes(self, node_ids: List[str], **kwargs: Any) -> List[TextNode]:
+        """Retrieve nodes by their IDs."""
+        if not node_ids or self._collection is None:
+            return []
+        int_ids = [hash(nid) & 0x7FFFFFFFFFFFFFFF for nid in node_ids]
+        points = self._collection.get(int_ids)
+        result = []
+        for pt in points:
+            if pt:
+                p = pt.get("payload", {})
+                result.append(TextNode(text=p.get("text", ""), id_=p.get("node_id", ""),
+                    metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
+        return result
+
+    def get_collection_info(self) -> dict:
+        """Get collection configuration information."""
+        if self._collection is None:
+            return {"name": self.collection_name, "dimension": 0, "metric": self.metric, "point_count": 0}
+        return self._collection.info()
+
+    def flush(self) -> None:
+        """Flush all pending changes to disk."""
+        if self._collection is not None:
+            self._collection.flush()
+
+    def is_empty(self) -> bool:
+        """Check if the collection is empty."""
+        return self._collection is None or self._collection.is_empty()
+
+    def velesql(self, query_str: str, params: Optional[dict] = None, **kwargs: Any) -> VectorStoreQueryResult:
+        """Execute a VelesQL query."""
+        if self._collection is None:
+            return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+        results = self._collection.query(query_str, params)
+        n_list, s_list, i_list = [], [], []
+        for r in results:
+            p = r.get("payload", {})
+            nid = p.get("node_id", str(r.get("id", "")))
+            n_list.append(TextNode(text=p.get("text", ""), id_=nid,
+                metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
+            s_list.append(r.get("score", 0.0))
+            i_list.append(nid)
+        return VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list)

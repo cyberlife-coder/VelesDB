@@ -23,4 +23,4 @@ Example:
 from langchain_velesdb.vectorstore import VelesDBVectorStore
 
 __all__ = ["VelesDBVectorStore"]
-__version__ = "0.8.5"
+__version__ = "0.8.10"

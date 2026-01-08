@@ -1,5 +1,6 @@
 """FastAPI application for RAG demo."""
 
+import json
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -111,9 +112,17 @@ async def upload_document(file: UploadFile = File(...)):
             detail="Only PDF files are supported"
         )
     
+    # Check file size (max 50MB)
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is 50MB, got {len(content) / (1024*1024):.1f}MB"
+        )
+    
     # Save uploaded file temporarily
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = Path(tmp.name)
     
@@ -193,6 +202,50 @@ async def delete_document(document_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/demo/load")
+async def load_demo_data():
+    """Load pre-configured demo documents for sales presentations."""
+    if rag_engine is None:
+        raise HTTPException(status_code=503, detail="Service not ready")
+    
+    demo_file = static_path / "demo_data.json"
+    if not demo_file.exists():
+        raise HTTPException(status_code=404, detail="Demo data not found")
+    
+    try:
+        with open(demo_file, "r", encoding="utf-8") as f:
+            demo_data = json.load(f)
+        
+        results = []
+        for doc in demo_data.get("documents", []):
+            doc_name = doc["name"]
+            content = doc["content"]
+            
+            # Skip if already loaded
+            existing_docs = await rag_engine.list_documents()
+            if any(d["name"] == doc_name for d in existing_docs):
+                results.append({"name": doc_name, "status": "skipped", "reason": "already exists"})
+                continue
+            
+            # Ingest as text document
+            result = await rag_engine.ingest_text(content, doc_name)
+            results.append({
+                "name": doc_name,
+                "status": "success" if result["success"] else "failed",
+                "chunks": result.get("chunks_created", 0)
+            })
+        
+        return {
+            "success": True,
+            "message": f"Loaded {len(results)} demo documents",
+            "documents": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
+    # Note: Using host="0.0.0.0" allows connections from localhost, 127.0.0.1, and local IP
+    # If localhost doesn't work, try http://127.0.0.1:8000 instead
     uvicorn.run(app, host="0.0.0.0", port=8000)

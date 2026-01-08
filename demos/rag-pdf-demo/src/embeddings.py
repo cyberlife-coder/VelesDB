@@ -61,22 +61,41 @@ class EmbeddingService:
             texts: List of texts to embed
 
         Returns:
-            List of embeddings
+            List of embeddings (same length as input, empty texts get zero vector)
         """
         if not texts:
             return []
 
-        # Filter out empty texts
-        valid_texts = [t for t in texts if t and t.strip()]
-
+        results = []
+        valid_indices = []
+        valid_texts = []
+        
+        # Track which texts are valid
+        for i, t in enumerate(texts):
+            if t and t.strip():
+                valid_indices.append(i)
+                valid_texts.append(t)
+        
         if not valid_texts:
-            return []
+            # All texts were empty, return zero vectors
+            return [[0.0] * self.dimension for _ in texts]
 
+        # Generate embeddings for valid texts
         embeddings = self.model.encode(
             valid_texts,
             normalize_embeddings=True,
             convert_to_numpy=True,
             show_progress_bar=len(valid_texts) > 10
         )
+        
+        # Map back to original indices, fill empty texts with zero vector
+        embedding_map = {idx: emb.tolist() for idx, emb in zip(valid_indices, embeddings)}
+        zero_vector = [0.0] * self.dimension
+        
+        for i in range(len(texts)):
+            if i in embedding_map:
+                results.append(embedding_map[i])
+            else:
+                results.append(zero_vector)
 
-        return embeddings.tolist()
+        return results

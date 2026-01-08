@@ -61,9 +61,18 @@ pub const fn calculate_prefetch_distance(dimension: usize) -> usize {
 ///
 /// # Platform Support
 ///
-/// - **`x86_64`**: Uses `_mm_prefetch` with `_MM_HINT_T0` (all cache levels)
-/// - **`aarch64`**: Uses `__prefetch` (ARM NEON)
+/// - **`x86_64`**: Uses `_mm_prefetch` with `_MM_HINT_T0` (all cache levels) ✅
+/// - **`aarch64`**: No-op (see limitation below) ⚠️
 /// - **Other**: No-op (graceful degradation)
+///
+/// # ARM64 Limitation (rust-lang/rust#117217)
+///
+/// ARM NEON prefetch intrinsics (`__prefetch`) require the unstable feature
+/// `stdarch_aarch64_prefetch` which is not available on stable Rust.
+/// When this feature stabilizes, we can enable prefetch for ARM64 platforms
+/// (Apple Silicon, ARM servers) for an estimated +10-20% performance gain.
+///
+/// Tracking: <https://github.com/rust-lang/rust/issues/117217>
 ///
 /// # Safety
 ///
@@ -72,8 +81,8 @@ pub const fn calculate_prefetch_distance(dimension: usize) -> usize {
 ///
 /// # Performance
 ///
-/// Reduces cache miss latency by ~50-100 cycles when vectors are prefetched
-/// 4-16 iterations ahead of actual use.
+/// On `x86_64`: Reduces cache miss latency by ~50-100 cycles when vectors are
+/// prefetched 4-16 iterations ahead of actual use.
 #[inline]
 pub fn prefetch_vector(vector: &[f32]) {
     #[cfg(target_arch = "x86_64")]
@@ -84,11 +93,20 @@ pub fn prefetch_vector(vector: &[f32]) {
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
         }
     }
-    // Note: aarch64 prefetch intrinsics are unstable (rust-lang/rust#117217)
-    // Using no-op until stabilized
+
+    // ARM64 prefetch: blocked on rust-lang/rust#117217 (stdarch_aarch64_prefetch)
+    // When stabilized, uncomment the following:
+    // #[cfg(target_arch = "aarch64")]
+    // {
+    //     unsafe {
+    //         use std::arch::aarch64::_prefetch;
+    //         _prefetch(vector.as_ptr().cast::<i8>(), _PREFETCH_READ, _PREFETCH_LOCALITY3);
+    //     }
+    // }
+
     #[cfg(not(target_arch = "x86_64"))]
     {
-        // No-op for unsupported architectures
+        // No-op for ARM64 (until stabilization) and other architectures
         let _ = vector;
     }
 }

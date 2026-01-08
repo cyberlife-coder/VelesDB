@@ -1,4 +1,4 @@
-# 🦀 Tauri RAG App with VelesDB
+# VelesDB RAG Desktop App
 
 Build a local **Retrieval-Augmented Generation (RAG)** desktop application using:
 - **Tauri 2.0** - Rust-based desktop framework

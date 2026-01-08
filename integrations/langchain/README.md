@@ -77,22 +77,76 @@ VelesDBVectorStore(
 
 #### Methods
 
+**Core Operations:**
 - `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
+- `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (2-3x faster for large batches)
+- `delete(ids)` - Delete documents by ID
+- `get_by_ids(ids)` - Retrieve documents by their IDs
+- `flush()` - Flush pending changes to disk
+
+**Search:**
 - `similarity_search(query, k=4)` - Search for similar documents
 - `similarity_search_with_score(query, k=4)` - Search with similarity scores
-- `delete(ids)` - Delete documents by ID
+- `similarity_search_with_filter(query, k=4, filter=None)` - Search with metadata filtering
+- `batch_search(queries, k=4)` - Batch search multiple queries in parallel
+- `batch_search_with_score(queries, k=4)` - Batch search with scores
+- `hybrid_search(query, k=4, vector_weight=0.5, filter=None)` - Hybrid vector+BM25 search
+- `text_search(query, k=4, filter=None)` - Full-text BM25 search
+- `query(velesql_str, params=None)` - Execute VelesQL query
+
+**Utilities:**
 - `as_retriever(**kwargs)` - Convert to LangChain retriever
 - `from_texts(texts, embedding, ...)` - Create store from texts (class method)
+- `get_collection_info()` - Get collection metadata (name, dimension, point_count)
+- `is_empty()` - Check if collection is empty
+
+## Advanced Features
+
+### Hybrid Search (Vector + BM25)
+
+```python
+# Combine vector similarity with keyword matching
+results = vectorstore.hybrid_search(
+    query="machine learning performance",
+    k=5,
+    vector_weight=0.7  # 70% vector, 30% BM25
+)
+for doc, score in results:
+    print(f"{score:.3f}: {doc.page_content}")
+```
+
+### Full-Text Search (BM25)
+
+```python
+# Pure keyword-based search
+results = vectorstore.text_search("VelesDB Rust", k=5)
+for doc, score in results:
+    print(f"{score:.3f}: {doc.page_content}")
+```
+
+### Metadata Filtering
+
+```python
+# Search with filters
+results = vectorstore.similarity_search_with_filter(
+    query="database",
+    k=5,
+    filter={"condition": {"type": "eq", "field": "category", "value": "tech"}}
+)
+```
 
 ## Features
 
 - **High Performance**: VelesDB's Rust backend delivers microsecond latencies
-- **SIMD Optimized**: Hardware-accelerated vector operations
+- **SIMD Optimized**: Hardware-accelerated vector operations  
+- **Hybrid Search**: Combine vector similarity with BM25 text matching
+- **Full-Text Search**: BM25 ranking for keyword queries
+- **Metadata Filtering**: Filter results by document attributes
 - **Simple Setup**: Single binary, no external dependencies
 - **Full LangChain Compatibility**: Works with all LangChain chains and agents
 
 ## License
 
-Elastic License 2.0 (ELv2)
+MIT License (this integration)
 
 See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.

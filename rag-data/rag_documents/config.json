@@ -1,0 +1,7 @@
+{
+  "name": "rag_documents",
+  "dimension": 384,
+  "metric": "Cosine",
+  "point_count": 0,
+  "storage_mode": "full"
+}

@@ -188,6 +188,25 @@ const results = await db.query(
 );
 ```
 
+### `db.isEmpty(collection)` (v0.8.11+)
+
+Check if a collection is empty.
+
+```typescript
+const empty = await db.isEmpty('documents');
+if (empty) {
+  console.log('No vectors in collection');
+}
+```
+
+### `db.flush(collection)` (v0.8.11+)
+
+Flush pending changes to disk.
+
+```typescript
+await db.flush('documents');
+```
+
 ### `db.close()`
 
 Close the client and release resources.
@@ -219,4 +238,6 @@ try {
 
 ## License
 
-Elastic License 2.0 (ELv2) - See [LICENSE](../../LICENSE) for details.
+MIT License - See [LICENSE](./LICENSE) for details.
+
+VelesDB Core is licensed under ELv2 (source available).

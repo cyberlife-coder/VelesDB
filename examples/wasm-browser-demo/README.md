@@ -28,7 +28,7 @@ Then visit http://localhost:8080
 
 ## Live Demo
 
-Try it online: [CodeSandbox Demo](https://codesandbox.io/p/sandbox/velesdb-wasm-demo)
+Open `index.html` directly in your browser - no build step required!
 
 ## How it Works
 
@@ -57,17 +57,18 @@ Typical results on modern hardware:
 
 ```html
 <script type="module">
-  import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@0.2.0/velesdb_wasm.js';
+  import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@latest/velesdb_wasm.js';
 
   await init();
   
   const store = new VectorStore(768, 'cosine');
-  store.insert(1, new Float32Array([0.1, 0.2, ...]));
+  store.insert(1n, new Float32Array([0.1, 0.2, ...]));  // Note: ID is BigInt
   
   const results = store.search(query, 10);
+  // results: Array of [id: BigInt, score: number]
 </script>
 ```
 
 ## License
 
-BSL-1.1 (Business Source License)
+ELv2 (Elastic License 2.0)

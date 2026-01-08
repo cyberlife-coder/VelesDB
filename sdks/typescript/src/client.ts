@@ -343,6 +343,27 @@ export class VelesDB {
   }
 
   /**
+   * Check if a collection is empty
+   * 
+   * @param collection - Collection name
+   * @returns true if empty, false otherwise
+   */
+  async isEmpty(collection: string): Promise<boolean> {
+    this.ensureInitialized();
+    return this.backend.isEmpty(collection);
+  }
+
+  /**
+   * Flush pending changes to disk
+   * 
+   * @param collection - Collection name
+   */
+  async flush(collection: string): Promise<void> {
+    this.ensureInitialized();
+    await this.backend.flush(collection);
+  }
+
+  /**
    * Close the client and release resources
    */
   async close(): Promise<void> {

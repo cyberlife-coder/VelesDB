@@ -179,5 +179,266 @@ class TestVelesDBVectorStore:
         assert isinstance(results, list)
 
 
+class TestVelesDBVectorStoreAdvanced:
+    """Tests for advanced VelesDBVectorStore features (hybrid, text search)."""
+
+    def test_similarity_search_with_filter(self, temp_db_path, embeddings):
+        """Test similarity search with metadata filter."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_filter",
+        )
+
+        vectorstore.add_texts(
+            ["Python programming", "VelesDB database", "Machine learning"],
+            metadatas=[
+                {"category": "language"},
+                {"category": "database"},
+                {"category": "ai"},
+            ],
+        )
+
+        # Test with filter - should not raise
+        results = vectorstore.similarity_search_with_filter(
+            query="programming",
+            k=2,
+            filter={"condition": {"type": "eq", "field": "category", "value": "language"}},
+        )
+
+        assert isinstance(results, list)
+        assert len(results) <= 2
+
+    def test_hybrid_search(self, temp_db_path, embeddings):
+        """Test hybrid search combining vector and BM25."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_hybrid",
+        )
+
+        vectorstore.add_texts([
+            "VelesDB is a high-performance vector database",
+            "Python is a programming language",
+            "Machine learning uses embeddings",
+        ])
+
+        # Test hybrid search - should return (doc, score) tuples
+        results = vectorstore.hybrid_search(
+            query="vector database performance",
+            k=2,
+            vector_weight=0.7,
+        )
+
+        assert isinstance(results, list)
+        for item in results:
+            assert isinstance(item, tuple)
+            assert len(item) == 2
+            doc, score = item
+            assert isinstance(doc, Document)
+            assert isinstance(score, float)
+
+    def test_hybrid_search_with_filter(self, temp_db_path, embeddings):
+        """Test hybrid search with metadata filter."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_hybrid_filter",
+        )
+
+        vectorstore.add_texts(
+            ["Fast database", "Slow database", "Fast language"],
+            metadatas=[
+                {"type": "database"},
+                {"type": "database"},
+                {"type": "language"},
+            ],
+        )
+
+        results = vectorstore.hybrid_search(
+            query="fast",
+            k=2,
+            vector_weight=0.5,
+            filter={"condition": {"type": "eq", "field": "type", "value": "database"}},
+        )
+
+        assert isinstance(results, list)
+
+    def test_text_search(self, temp_db_path, embeddings):
+        """Test full-text BM25 search."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_text",
+        )
+
+        vectorstore.add_texts([
+            "VelesDB offers microsecond latency",
+            "Python is great for data science",
+            "Vector databases power AI applications",
+        ])
+
+        # Text search should return (doc, score) tuples
+        results = vectorstore.text_search("VelesDB latency", k=2)
+
+        assert isinstance(results, list)
+        for item in results:
+            assert isinstance(item, tuple)
+            doc, score = item
+            assert isinstance(doc, Document)
+            assert isinstance(score, float)
+
+    def test_text_search_on_uninitialized_collection(self, temp_db_path, embeddings):
+        """Test text search raises error on uninitialized collection."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_text_empty",
+        )
+
+        # Should raise ValueError since collection not initialized
+        with pytest.raises(ValueError, match="Collection not initialized"):
+            vectorstore.text_search("query", k=2)
+
+
+class TestVelesDBVectorStoreBatch:
+    """Tests for batch operations (batch_search, add_texts_bulk)."""
+
+    def test_batch_search(self, temp_db_path, embeddings):
+        """Test batch search with multiple queries."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_batch",
+        )
+
+        vectorstore.add_texts([
+            "VelesDB is fast",
+            "Python is great",
+            "Machine learning rocks",
+        ])
+
+        # Batch search with multiple queries
+        queries = ["database", "programming", "AI"]
+        results = vectorstore.batch_search(queries, k=2)
+
+        assert isinstance(results, list)
+        assert len(results) == 3  # One result list per query
+        for query_results in results:
+            assert isinstance(query_results, list)
+            assert len(query_results) <= 2
+
+    def test_batch_search_with_scores(self, temp_db_path, embeddings):
+        """Test batch search returns scores."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_batch_scores",
+        )
+
+        vectorstore.add_texts(["Hello", "World", "Test"])
+
+        results = vectorstore.batch_search_with_score(["greeting", "planet"], k=2)
+
+        assert len(results) == 2
+        for query_results in results:
+            for doc, score in query_results:
+                assert isinstance(doc, Document)
+                assert isinstance(score, float)
+
+    def test_add_texts_bulk(self, temp_db_path, embeddings):
+        """Test bulk insert optimized for large batches."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_bulk",
+        )
+
+        # Generate many texts
+        texts = [f"Document number {i}" for i in range(100)]
+        
+        ids = vectorstore.add_texts_bulk(texts)
+
+        assert len(ids) == 100
+
+    def test_get_by_ids(self, temp_db_path, embeddings):
+        """Test retrieving documents by their IDs."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_get",
+        )
+
+        ids = vectorstore.add_texts(["Doc A", "Doc B", "Doc C"])
+
+        # Get by IDs
+        docs = vectorstore.get_by_ids(ids[:2])
+
+        assert len(docs) == 2
+        for doc in docs:
+            assert isinstance(doc, Document)
+
+    def test_collection_info(self, temp_db_path, embeddings):
+        """Test getting collection information."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_info",
+        )
+
+        vectorstore.add_texts(["Test document"])
+
+        info = vectorstore.get_collection_info()
+
+        assert isinstance(info, dict)
+        assert "name" in info
+        assert "dimension" in info
+        assert "point_count" in info
+
+    def test_flush(self, temp_db_path, embeddings):
+        """Test flushing changes to disk."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_flush",
+        )
+
+        vectorstore.add_texts(["Test"])
+        
+        # Flush should not raise
+        vectorstore.flush()
+
+    def test_is_empty(self, temp_db_path, embeddings):
+        """Test checking if collection is empty."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_empty_check",
+        )
+
+        # Before adding - should be empty (or raise if not initialized)
+        vectorstore.add_texts(["Test"])
+        
+        assert vectorstore.is_empty() is False
+
+    def test_velesql_query(self, temp_db_path, embeddings):
+        """Test VelesQL query execution."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_velesql",
+        )
+
+        vectorstore.add_texts(
+            ["Tech article about databases"],
+            metadatas=[{"category": "tech"}],
+        )
+
+        # VelesQL query
+        results = vectorstore.query("SELECT * FROM vectors WHERE category = 'tech' LIMIT 5")
+
+        assert isinstance(results, list)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

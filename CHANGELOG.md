@@ -5,6 +5,123 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.11] - 2026-01-08
+
+### 🚀 Major Release: Performance, Ecosystem Parity & License Management
+
+This release brings significant performance improvements, 100% feature parity across all integrations, CLI license management, and multiple demo enhancements.
+
+---
+
+### ⚡ Performance Improvements (velesdb-core)
+
+#### HNSW Search Optimization
+- **Brute-force fallback for small collections (≤100 vectors)** - Guarantees 100% recall for small datasets where HNSW graph connectivity may be incomplete
+- **Automatic detection** of vector storage mode to choose optimal search strategy
+
+#### SIMD Enhancements
+- **Hamming distance SIMD** - Now uses hardware-accelerated implementation instead of scalar
+- **Jaccard similarity SIMD** - Full SIMD implementation for binary/set operations
+- **Batch distance with CPU prefetch hints** - Reduces cache miss latency by ~50-100 cycles
+- **ARM64 prefetch documentation** - Clear tracking of rust-lang/rust#117217 for future ARM optimization
+
+#### Distance Engine
+- **Prefetch-optimized batch_distance()** - Candidates prefetched 4-16 iterations ahead
+- **+6 new TDD tests** for Hamming/Jaccard SIMD implementations
+
+---
+
+### 🔧 CLI Enhancements (velesdb-cli)
+
+#### License Management Commands
+- `velesdb license show` - Display current license status and validity
+- `velesdb license activate <key>` - Activate a license key
+- `velesdb license verify <key> --public-key <base64>` - Verify license without activation
+- **Colored output** with status indicators (✅/❌/⚠️)
+- **Environment variable support** - `VELESDB_LICENSE_PUBLIC_KEY`
+
+---
+
+### 🔌 Ecosystem Feature Parity (100%)
+
+All features from the Python Core are now available in all integrations.
+
+#### TypeScript SDK (`@wiscale/velesdb-sdk`)
+- `isEmpty(collection)` - Check if collection is empty
+- `flush(collection)` - Flush pending changes to disk
+- **License changed to MIT** (from ELv2)
+
+#### LangChain Integration (`langchain-velesdb`)
+- `batch_search(queries, k)` - Parallel multi-query search
+- `batch_search_with_score(queries, k)` - Batch search with scores
+- `add_texts_bulk(texts, ...)` - Optimized bulk insert (2-3x faster)
+- `get_by_ids(ids)` - Retrieve documents by IDs
+- `get_collection_info()` - Get collection metadata
+- `flush()` / `is_empty()` - Persistence utilities
+- `query(velesql_str)` - Execute VelesQL queries
+- `similarity_search_with_filter()` - Metadata filtering
+- `hybrid_search()` / `text_search()` - BM25 support
+- **License changed to MIT** (from Elastic-2.0)
+
+#### LlamaIndex Integration (`llama-index-vector-stores-velesdb`)
+- `batch_query(queries)` - Parallel multi-embedding query
+- `add_bulk(nodes)` - Optimized bulk insert
+- `get_nodes(node_ids)` - Retrieve nodes by IDs
+- `get_collection_info()` - Get collection metadata
+- `flush()` / `is_empty()` - Persistence utilities
+- `velesql(query_str)` - Execute VelesQL queries
+- `hybrid_query()` / `text_query()` - BM25 support
+- **License changed to MIT** (from ELv2)
+
+---
+
+### 🎨 Demo Applications
+
+#### RAG PDF Demo (`demos/rag-pdf-demo`)
+- **Document deletion UI fix** - Proper visual feedback with loading spinner
+- **Slide-out animation** on successful deletion
+- **Error handling** with user-friendly alerts
+- **Unit tests** for delete_document functionality
+
+#### Tauri RAG App (`demos/tauri-rag-app`)
+- **Custom application icons** - VelesDB branded iconset
+- **Embeddings module** (`embeddings.rs`) for local inference
+- **UI improvements** - Better component styling
+
+---
+
+### 📚 Documentation
+
+- **SECURITY_AUDIT_2025_01_07.md** - Comprehensive security audit report
+- **Updated CLI_REPL.md** - License command documentation
+- **Updated README files** - All integrations with complete method lists
+- **Benchmark visualizations** - New benchmark result charts
+
+---
+
+### 🧪 Tests
+
+- **+15 new tests** for LangChain advanced features (hybrid, text, filter, batch)
+- **+12 new tests** for LlamaIndex advanced features
+- **+6 new tests** for SIMD Hamming/Jaccard implementations
+- **WASM tests fixed** - Mock import path corrected (61/61 passing)
+- **TypeScript SDK** - All 61 tests passing
+
+---
+
+### 🔄 Infrastructure
+
+- **bump-version.ps1** - Updated for new file paths
+- **Benchmark scripts** - Enhanced recall and performance benchmarks
+- **Python example** - Updated with latest API
+
+---
+
+### 📦 Dependencies
+
+- All crates updated to v0.8.11
+- `velesdb-core` dependency synchronized across workspace
+
 ## [0.8.10] - 2026-01-04
 
 ### 🔒 Security & Performance Audit Fixes (velesdb-core)

@@ -1,6 +1,6 @@
 {
   "name": "@wiscale/tauri-plugin-velesdb",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "description": "TypeScript bindings for the VelesDB Tauri plugin - Vector search in desktop apps",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
