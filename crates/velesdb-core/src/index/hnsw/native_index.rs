@@ -128,10 +128,20 @@ impl NativeHnswIndex {
 
     /// Loads the index from disk.
     ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the index directory
+    /// * `_dimension` - Ignored (read from metadata) - for API compatibility
+    /// * `_metric` - Ignored (read from metadata) - for API compatibility
+    ///
     /// # Errors
     ///
     /// Returns an error if file operations fail or data is corrupted.
-    pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+    pub fn load<P: AsRef<Path>>(
+        path: P,
+        _dimension: usize,
+        _metric: DistanceMetric,
+    ) -> std::io::Result<Self> {
         let path = path.as_ref();
 
         // Load metadata
@@ -290,8 +300,53 @@ impl NativeHnswIndex {
     }
 
     /// Sets searching mode (no-op for native implementation).
-    pub fn set_searching_mode(&self, _mode: bool) {
+    ///
+    /// This method exists for API compatibility with `HnswIndex`.
+    /// The native implementation doesn't require mode switching.
+    #[allow(clippy::unused_self)]
+    pub fn set_searching_mode(&self) {
         // No-op - native implementation doesn't need this
+    }
+
+    /// Parallel batch insert - API compatible with `HnswIndex`.
+    ///
+    /// # Returns
+    ///
+    /// Number of vectors inserted.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn insert_batch_parallel<I>(&self, items: I) -> usize
+    where
+        I: IntoIterator<Item = (u64, Vec<f32>)>,
+    {
+        let items: Vec<_> = items.into_iter().collect();
+        let count = items.len();
+        self.insert_batch(items.as_slice());
+        count
+    }
+
+    /// Batch search with parallel execution.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - Slice of query vector slices
+    /// * `k` - Number of nearest neighbors per query
+    /// * `quality` - Search quality profile
+    ///
+    /// # Returns
+    ///
+    /// Vector of results for each query.
+    pub fn search_batch_parallel(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        quality: SearchQuality,
+    ) -> Vec<Vec<(u64, f32)>> {
+        use rayon::prelude::*;
+
+        queries
+            .par_iter()
+            .map(|q| self.search_with_quality(q, k, quality))
+            .collect()
     }
 }
 
@@ -383,8 +438,8 @@ mod tests {
         // Save
         index.save(dir.path()).unwrap();
 
-        // Load
-        let loaded = NativeHnswIndex::load(dir.path()).unwrap();
+        // Load (dimension and metric are ignored, read from metadata)
+        let loaded = NativeHnswIndex::load(dir.path(), 32, DistanceMetric::Cosine).unwrap();
 
         assert_eq!(loaded.dimension(), 32);
         assert_eq!(loaded.metric(), DistanceMetric::Cosine);

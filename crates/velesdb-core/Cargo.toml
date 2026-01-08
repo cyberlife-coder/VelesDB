@@ -29,6 +29,7 @@ toml = { workspace = true }
 # HNSW index - High-performance approximate nearest neighbor search
 # - simdeez_f: AVX2/SSE SIMD for x86_64 (significantly faster)
 # - On ARM64 (Apple Silicon): uses fallback without SIMD
+# Native HNSW available via "native-hnsw" feature (1.5x faster search)
 [dependencies.hnsw_rs]
 version = "0.3"
 default-features = false
@@ -95,7 +96,7 @@ version = "2.7"
 default = []
 gpu = ["wgpu", "pollster", "bytemuck"]
 # Use native HNSW implementation instead of hnsw_rs
-# Provides ~99% recall parity with hnsw_rs while removing external dependency
+# Benefits: 1.5x faster search, 1.3x faster parallel insert, ~99% recall parity
 native-hnsw = []
 
 [dev-dependencies]
@@ -179,4 +180,8 @@ harness = false
 
 [[bench]]
 name = "dual_precision_benchmark"
+harness = false
+
+[[bench]]
+name = "hnsw_comparison_benchmark"
 harness = false
