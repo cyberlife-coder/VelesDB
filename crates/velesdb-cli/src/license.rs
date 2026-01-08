@@ -99,10 +99,10 @@ impl LicenseInfo {
     /// Format expiration date as human-readable string
     pub fn expires_at_formatted(&self) -> String {
         use chrono::{DateTime, Utc};
-        let dt = DateTime::<Utc>::from_timestamp(self.expires_at as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
-        dt
+        #[allow(clippy::cast_possible_wrap)]
+        let timestamp = self.expires_at as i64;
+        DateTime::<Utc>::from_timestamp(timestamp, 0)
+            .map_or_else(|| "Unknown".to_string(), |dt| dt.format("%Y-%m-%d").to_string())
     }
 }
 
@@ -275,7 +275,7 @@ mod tests {
             key: "TEST-KEY".to_string(),
             tier: LicenseTier::Professional,
             organization: "Test Corp".to_string(),
-            expires_at: 1000000, // Very old timestamp
+            expires_at: 1_000_000, // Very old timestamp
             max_instances: 1,
             features: vec![],
         };

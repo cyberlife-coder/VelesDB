@@ -448,42 +448,39 @@ fn main() -> anyhow::Result<()> {
 
             match action {
                 LicenseAction::Show => {
-                    match license::load_license_key() {
-                        Ok(key) => {
-                            // Try to get public key from environment
-                            let public_key = std::env::var("VELESDB_LICENSE_PUBLIC_KEY")
-                                .unwrap_or_else(|_| {
-                                    println!("{}", "⚠️  Warning: VELESDB_LICENSE_PUBLIC_KEY not set in environment".yellow());
-                                    println!("   Set it with: export VELESDB_LICENSE_PUBLIC_KEY=<base64_key>");
-                                    println!("   Using embedded development key for validation...\n");
-                                    // Development fallback key (same as velesdb-premium)
-                                    "MCowBQYDK2VwAyEADevelopmentKeyReplaceMeInProd==".to_string()
-                                });
+                    if let Ok(key) = license::load_license_key() {
+                        // Try to get public key from environment
+                        let public_key = std::env::var("VELESDB_LICENSE_PUBLIC_KEY")
+                            .unwrap_or_else(|_| {
+                                println!("{}", "⚠️  Warning: VELESDB_LICENSE_PUBLIC_KEY not set in environment".yellow());
+                                println!("   Set it with: export VELESDB_LICENSE_PUBLIC_KEY=<base64_key>");
+                                println!("   Using embedded development key for validation...\n");
+                                // Development fallback key (same as velesdb-premium)
+                                "MCowBQYDK2VwAyEADevelopmentKeyReplaceMeInProd==".to_string()
+                            });
 
-                            match license::validate_license(&key, &public_key) {
-                                Ok(info) => {
-                                    license::display_license_info(&info);
-                                }
-                                Err(e) => {
-                                    println!(
-                                        "{} {}",
-                                        "❌ License validation failed:".red().bold(),
-                                        e
-                                    );
-                                    std::process::exit(1);
-                                }
+                        match license::validate_license(&key, &public_key) {
+                            Ok(info) => {
+                                license::display_license_info(&info);
+                            }
+                            Err(e) => {
+                                println!(
+                                    "{} {}",
+                                    "❌ License validation failed:".red().bold(),
+                                    e
+                                );
+                                std::process::exit(1);
                             }
                         }
-                        Err(_) => {
-                            println!("{}", "❌ No license found".red().bold());
-                            println!("\n{}", "To activate a license:".cyan());
-                            println!("  velesdb license activate <license_key>");
-                            println!("\n{}", "License keys are stored in:".cyan());
-                            if let Ok(path) = license::get_license_config_path() {
-                                println!("  {}", path.display());
-                            }
-                            std::process::exit(1);
+                    } else {
+                        println!("{}", "❌ No license found".red().bold());
+                        println!("\n{}", "To activate a license:".cyan());
+                        println!("  velesdb license activate <license_key>");
+                        println!("\n{}", "License keys are stored in:".cyan());
+                        if let Ok(path) = license::get_license_config_path() {
+                            println!("  {}", path.display());
                         }
+                        std::process::exit(1);
                     }
                 }
                 LicenseAction::Activate { key } => {
