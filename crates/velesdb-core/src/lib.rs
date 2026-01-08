@@ -46,6 +46,8 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod alloc_guard;
+#[cfg(test)]
+mod alloc_guard_tests;
 pub mod collection;
 pub mod column_store;
 #[cfg(test)]
@@ -54,18 +56,28 @@ pub mod config;
 #[cfg(test)]
 mod config_tests;
 pub mod distance;
+#[cfg(test)]
+mod distance_tests;
 pub mod error;
+#[cfg(test)]
+mod error_tests;
 pub mod filter;
 #[cfg(test)]
 mod filter_tests;
 pub mod gpu;
+#[cfg(test)]
+mod gpu_tests;
 pub mod half_precision;
+#[cfg(test)]
+mod half_precision_tests;
 pub mod index;
 pub mod metrics;
 #[cfg(test)]
 mod metrics_tests;
 pub mod perf_optimizations;
 pub mod point;
+#[cfg(test)]
+mod point_tests;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
