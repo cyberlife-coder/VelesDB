@@ -172,18 +172,20 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     }
 
     /// Dual-precision search implementation.
+    ///
+    /// Currently uses float32 for graph traversal (fast with SIMD) and
+    /// re-ranks with exact float32 distances from stored vectors.
+    ///
+    /// Future optimization: use quantized int8 for traversal to reduce
+    /// memory bandwidth during graph exploration.
     fn search_dual_precision(
         &self,
         query: &[f32],
         k: usize,
         ef_search: usize,
     ) -> Vec<(NodeId, f32)> {
-        let quantizer = self.quantizer.as_ref().unwrap();
-        let store = self.quantized_store.as_ref().unwrap();
-
-        // Step 1: Get more candidates than needed using standard search
-        // (We could optimize this to use quantized distances in graph traversal,
-        // but that requires deeper integration with NativeHnsw internals)
+        // Step 1: Get more candidates than needed using graph traversal
+        // TODO: Future optimization - use quantized distances for traversal
         let rerank_k = (ef_search * 2).max(k * 4);
         let candidates = self.inner.search(query, rerank_k, ef_search);
 
@@ -191,21 +193,20 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             return candidates;
         }
 
-        // Step 2: Re-rank using exact float32 distances
-        // This ensures accuracy while benefiting from quantized graph traversal
+        // Step 2: Re-rank using EXACT float32 distances
+        // This is the key to dual-precision: approximate traversal + exact rerank
+        let vectors = self.inner.vectors.read();
         let mut reranked: Vec<(NodeId, f32)> = candidates
             .iter()
             .filter_map(|&(node_id, _approx_dist)| {
-                // Get exact distance from float32 vectors
-                // In a more optimized version, we'd store float32 vectors separately
-                // and use quantized for traversal only
-                let quantized_slice = store.get_slice(node_id)?;
-                let approx_dist = quantizer.distance_l2_asymmetric_slice(query, quantized_slice);
-                Some((node_id, approx_dist))
+                // Get exact distance from original float32 vectors
+                let vec = vectors.get(node_id)?;
+                let exact_dist = self.inner.compute_distance(query, vec);
+                Some((node_id, exact_dist))
             })
             .collect();
 
-        // Sort by distance
+        // Sort by exact distance
         reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Return top k
