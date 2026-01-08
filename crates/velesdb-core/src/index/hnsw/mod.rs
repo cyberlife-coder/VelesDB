@@ -13,6 +13,7 @@ mod index;
 mod inner;
 mod mappings;
 pub mod native;
+mod native_index;
 mod native_inner;
 mod params;
 #[cfg(test)]
@@ -27,6 +28,10 @@ mod vector_store;
 pub use backend::HnswBackend;
 pub use index::HnswIndex;
 pub use params::{HnswParams, SearchQuality};
+
+// Native HNSW implementation (independent of hnsw_rs)
+#[cfg(feature = "native-hnsw")]
+pub use native_index::NativeHnswIndex;
 
 // Prepared for EPIC-A migration - uncomment when integrating into HnswIndex
 // pub use sharded_mappings::ShardedMappings;
