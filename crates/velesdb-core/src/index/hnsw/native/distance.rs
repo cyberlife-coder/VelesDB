@@ -33,6 +33,7 @@ pub struct CpuDistance {
 }
 
 impl CpuDistance {
+    /// Creates a new CPU distance engine with the given metric.
     #[must_use]
     pub fn new(metric: DistanceMetric) -> Self {
         Self { metric }
@@ -63,6 +64,7 @@ pub struct SimdDistance {
 }
 
 impl SimdDistance {
+    /// Creates a new SIMD-accelerated distance engine with the given metric.
     #[must_use]
     pub fn new(metric: DistanceMetric) -> Self {
         Self { metric }

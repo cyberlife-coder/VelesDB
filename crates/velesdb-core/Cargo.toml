@@ -173,3 +173,7 @@ required-features = ["gpu"]
 [[bench]]
 name = "recall_comprehensive"
 harness = false
+
+[[bench]]
+name = "dual_precision_benchmark"
+harness = false
