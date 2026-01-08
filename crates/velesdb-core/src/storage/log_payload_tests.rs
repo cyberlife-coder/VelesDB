@@ -1,7 +1,7 @@
 //! Tests for `log_payload` module
 
-use super::log_payload::*;
-
+use super::log_payload::{LogPayloadStorage, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
+use super::traits::PayloadStorage;
 
 use serde_json::json;
 use tempfile::TempDir;

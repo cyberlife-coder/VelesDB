@@ -21,6 +21,8 @@ mod traits;
 #[cfg(test)]
 mod histogram_tests;
 #[cfg(test)]
+mod log_payload_tests;
+#[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]
 mod tests;
