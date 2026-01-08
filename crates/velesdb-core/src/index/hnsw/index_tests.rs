@@ -5,7 +5,6 @@
     clippy::redundant_closure_for_method_calls
 )]
 
-use super::backend::HnswBackend;
 use super::index::{HnswIndex, VacuumError};
 use super::params::{HnswParams, SearchQuality};
 use crate::distance::DistanceMetric;
@@ -1154,54 +1153,6 @@ fn test_recall_quality_minimum_threshold() {
         "Recall@{k} should be >= 80% for HighRecall, got {:.1}%",
         recall * 100.0
     );
-}
-
-// =========================================================================
-// FT-1: Tests for HnswBackend trait implementation (legacy-hnsw only)
-// =========================================================================
-
-#[cfg(feature = "legacy-hnsw")]
-#[test]
-fn test_hnsw_inner_implements_backend_trait() {
-    // HnswBackend imported at top of file
-
-    let index = HnswIndex::new(8, DistanceMetric::Cosine);
-    index.insert(1, &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    index.insert(2, &[0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-
-    let inner = index.inner_read();
-
-    // Use trait method via HnswBackend
-    let query = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let results = HnswBackend::search(&**inner, &query, 2, 100);
-
-    assert!(!results.is_empty(), "Trait search should return results");
-}
-
-#[cfg(feature = "legacy-hnsw")]
-#[test]
-fn test_hnsw_backend_transform_score() {
-    // HnswBackend imported at top of file
-
-    let cosine_index = HnswIndex::new(4, DistanceMetric::Cosine);
-    let euclidean_index = HnswIndex::new(4, DistanceMetric::Euclidean);
-    let dot_index = HnswIndex::new(4, DistanceMetric::DotProduct);
-
-    let cosine_inner = cosine_index.inner_read();
-    let euclidean_inner = euclidean_index.inner_read();
-    let dot_inner = dot_index.inner_read();
-
-    // Cosine: (1.0 - distance).clamp(0.0, 1.0)
-    let cosine_score = HnswBackend::transform_score(&**cosine_inner, 0.3);
-    assert!((cosine_score - 0.7).abs() < 0.01);
-
-    // Euclidean: raw distance
-    let euclidean_score = HnswBackend::transform_score(&**euclidean_inner, 0.5);
-    assert!((euclidean_score - 0.5).abs() < 0.01);
-
-    // DotProduct: -distance
-    let dot_score = HnswBackend::transform_score(&**dot_inner, 0.5);
-    assert!((dot_score - (-0.5)).abs() < 0.01);
 }
 
 // =========================================================================

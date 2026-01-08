@@ -20,6 +20,7 @@
 //! | 256 < d ≤768| 16-24 | 200-400         | 128-256   |
 //! | d > 768     | 24-32 | 300-600         | 256-512   |
 
+use super::native_inner::NativeHnswInner as HnswInner;
 use super::params::{HnswParams, SearchQuality};
 use super::sharded_mappings::ShardedMappings;
 use super::sharded_vectors::ShardedVectors;
@@ -28,17 +29,7 @@ use crate::index::VectorIndex;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
 
-// Backend selection based on feature flags
-#[cfg(feature = "legacy-hnsw")]
-use super::inner::HnswInner;
-#[cfg(feature = "legacy-hnsw")]
-use hnsw_rs::hnswio::HnswIo;
-
-#[cfg(not(feature = "legacy-hnsw"))]
-use super::native_inner::NativeHnswInner as HnswInner;
-
-// Placeholder for native persistence (no HnswIo needed)
-#[cfg(not(feature = "legacy-hnsw"))]
+// Native persistence - no HnswIo needed (v1.0+)
 type HnswIo = ();
 
 /// HNSW index for efficient approximate nearest neighbor search.
@@ -259,18 +250,6 @@ impl HnswIndex {
     /// # Errors
     ///
     /// Returns an error if saving fails.
-    #[cfg(feature = "legacy-hnsw")]
-    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
-        // RF-2.3: Delegate to persistence module (legacy hnsw_rs)
-        super::persistence::save_index(path.as_ref(), &self.inner, &self.mappings)
-    }
-
-    /// Saves the HNSW index and ID mappings to the specified directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if saving fails.
-    #[cfg(not(feature = "legacy-hnsw"))]
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
         use std::fs;
         use std::io::BufWriter;
@@ -281,7 +260,7 @@ impl HnswIndex {
         let inner = self.inner.read();
         inner.file_dump(path, "hnsw")?;
 
-        // Save mappings using bincode (same format as legacy)
+        // Save mappings using bincode
         let mappings_path = path.join("id_mappings.bin");
         let file = fs::File::create(mappings_path)?;
         let writer = BufWriter::new(file);
@@ -294,40 +273,9 @@ impl HnswIndex {
 
     /// Loads the HNSW index and ID mappings from the specified directory.
     ///
-    /// # Safety
-    ///
-    /// This function uses unsafe code to handle the self-referential pattern
-    /// required by `hnsw_rs`. See `persistence::load_index` for details.
-    ///
     /// # Errors
     ///
     /// Returns an error if loading fails (missing files, corrupted data, etc.).
-    #[cfg(feature = "legacy-hnsw")]
-    pub fn load<P: AsRef<std::path::Path>>(
-        path: P,
-        dimension: usize,
-        metric: DistanceMetric,
-    ) -> std::io::Result<Self> {
-        // RF-2.3: Delegate to persistence module (legacy hnsw_rs)
-        let loaded = super::persistence::load_index(path.as_ref(), metric)?;
-
-        Ok(Self {
-            dimension,
-            metric,
-            inner: RwLock::new(ManuallyDrop::new(loaded.inner)),
-            mappings: loaded.mappings,
-            vectors: ShardedVectors::new(dimension),
-            enable_vector_storage: true,
-            io_holder: Some(loaded.io_holder),
-        })
-    }
-
-    /// Loads the HNSW index and ID mappings from the specified directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if loading fails (missing files, corrupted data, etc.).
-    #[cfg(not(feature = "legacy-hnsw"))]
     pub fn load<P: AsRef<std::path::Path>>(
         path: P,
         dimension: usize,
@@ -341,7 +289,7 @@ impl HnswIndex {
         // Load native HNSW index
         let inner = HnswInner::file_load(path, "hnsw", metric)?;
 
-        // Load mappings using bincode (same format as legacy)
+        // Load mappings using bincode
         let mappings_path = path.join("id_mappings.bin");
         let file = fs::File::open(mappings_path)?;
         let reader = BufReader::new(file);
@@ -1281,18 +1229,6 @@ impl VectorIndex for HnswIndex {
 
     fn metric(&self) -> DistanceMetric {
         self.metric
-    }
-}
-
-// ============================================================================
-// Test helpers - expose internals for external test module
-// ============================================================================
-#[cfg(test)]
-#[allow(private_interfaces)]
-impl HnswIndex {
-    /// Returns a read guard to the inner HNSW index (test only).
-    pub(crate) fn inner_read(&self) -> parking_lot::RwLockReadGuard<'_, ManuallyDrop<HnswInner>> {
-        self.inner.read()
     }
 }
 

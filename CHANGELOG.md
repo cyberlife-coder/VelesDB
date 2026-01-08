@@ -5,6 +5,28 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-01-08
+
+### 🎉 v1.0 Release: Native HNSW Only
+
+**Breaking change**: `hnsw_rs` dependency completely removed.
+
+#### Removed
+- `hnsw_rs` dependency - native implementation is now the only backend
+- `legacy-hnsw` feature flag - no longer needed
+- `native-hnsw` feature flag - native is now always used
+- `inner.rs`, `persistence.rs` - legacy hnsw_rs wrappers
+- Legacy tests: `backend_tests.rs`, `inner_tests.rs`, `parity_tests.rs`, `persistence_tests.rs`
+
+#### Benefits
+- **1.2x faster search** - 26.9ms vs 32.4ms (100 queries, 5K vectors)
+- **1.07x faster parallel insert** - 1.47s vs 1.57s (5K vectors)
+- **~99% recall parity** - No accuracy loss
+- **Zero external HNSW dependencies** - Full control over implementation
+- **Smaller binary** - No hnsw_rs compilation
+
+---
+
 ## [0.8.12] - 2026-01-08
 
 ### 🚀 Major Change: Native HNSW Now Default

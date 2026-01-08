@@ -1,28 +1,16 @@
-//! FT-1: HNSW Backend Trait Abstraction
+//! HNSW Backend Trait Abstraction
 //!
 //! This module defines the `HnswBackend` trait that abstracts HNSW graph operations,
 //! enabling:
-//! - Decoupling from the specific `hnsw_rs` implementation
 //! - Mock backends for testing
-//! - Future alternative backend implementations
+//! - Custom backend implementations
 //!
-//! # Design Rationale
+//! # Native Implementation (v1.0+)
 //!
-//! The trait mirrors the existing `HnswInner` impl methods, ensuring backward
-//! compatibility while providing abstraction benefits.
-//!
-//! # Feature Flags
-//!
-//! - `native-hnsw` (default): Uses `NativeNeighbour` from native implementation
-//! - `legacy-hnsw`: Uses `hnsw_rs::Neighbour` for backward compatibility
+//! Uses `NativeNeighbour` from the native HNSW implementation.
 
 use std::path::Path;
 
-// Use NativeNeighbour by default, hnsw_rs::Neighbour only with legacy-hnsw feature
-#[cfg(feature = "legacy-hnsw")]
-use hnsw_rs::prelude::Neighbour;
-
-#[cfg(not(feature = "legacy-hnsw"))]
 use super::native::NativeNeighbour as Neighbour;
 
 /// Trait for HNSW backend operations.

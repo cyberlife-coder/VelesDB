@@ -3,24 +3,21 @@
 //! This module provides high-performance approximate nearest neighbor search
 //! based on the HNSW algorithm.
 //!
-//! # Available Implementations (v0.8.12+)
+//! # Native Implementation (v1.0+)
 //!
-//! - **Native (default)**: 1.2x faster search, ~99% recall parity
-//! - **Legacy (`legacy-hnsw` feature)**: Uses `hnsw_rs` library for compatibility
-//!
-//! # Feature Flags
-//!
-//! - `native-hnsw` (default): Use native HNSW implementation
-//! - `legacy-hnsw`: Fall back to `hnsw_rs` library
+//! `VelesDB` uses a custom native HNSW implementation that is:
+//! - **1.2x faster search** than external libraries
+//! - **1.07x faster parallel insert**
+//! - **~99% recall parity** with no accuracy loss
 //!
 //! # Module Organization
 //!
 //! - `params`: Index parameters and search quality profiles
-//! - `native`: Native HNSW implementation with SIMD distance calculations
-//! - `index`: Main `HnswIndex` implementation
+//! - `native`: Core HNSW graph with SIMD distance calculations
+//! - `index`: Main `HnswIndex` API
 
 // ============================================================================
-// Core modules (always available)
+// Core modules
 // ============================================================================
 mod backend;
 mod index;
@@ -32,14 +29,6 @@ mod params;
 mod sharded_mappings;
 mod sharded_vectors;
 mod vector_store;
-
-// ============================================================================
-// Legacy hnsw_rs modules (only with legacy-hnsw feature)
-// ============================================================================
-#[cfg(feature = "legacy-hnsw")]
-mod inner;
-#[cfg(feature = "legacy-hnsw")]
-mod persistence;
 
 // ============================================================================
 // Tests
@@ -57,26 +46,17 @@ mod sharded_vectors_tests;
 #[cfg(test)]
 mod vector_store_tests;
 
-// Legacy tests (only with legacy-hnsw feature)
-#[cfg(all(test, feature = "legacy-hnsw"))]
-mod backend_tests;
-#[cfg(all(test, feature = "legacy-hnsw"))]
-mod inner_tests;
-#[cfg(all(test, feature = "legacy-hnsw"))]
-mod parity_tests;
-#[cfg(all(test, feature = "legacy-hnsw"))]
-mod persistence_tests;
-
 // ============================================================================
 // Public API
 // ============================================================================
 pub use params::{HnswParams, SearchQuality};
 
-// Main HnswIndex - works with both native and legacy backends
+/// Main HNSW index for vector search operations.
 pub use index::HnswIndex;
 
+/// HNSW backend trait for custom implementations.
 #[allow(unused_imports)]
 pub use backend::HnswBackend;
 
-// Native HNSW implementation (always available)
+/// Native HNSW index with direct access to underlying graph.
 pub use native_index::NativeHnswIndex;
