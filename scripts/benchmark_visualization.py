@@ -16,22 +16,23 @@ class BenchmarkResult:
     recall: float  # percentage
     latency_p50_ms: float
 
-# Benchmark data from VelesDB Core
+# Benchmark data from VelesDB Core - January 9, 2026 (v0.8.12)
+# Native HNSW + SIMD intrinsics + PostingList optimizations
 RESULTS_10K_128D = [
-    BenchmarkResult("Fast", 64, 85.5, 0.58),
-    BenchmarkResult("Balanced", 128, 96.1, 1.02),
-    BenchmarkResult("Accurate", 256, 98.5, 1.56),
-    BenchmarkResult("HighRecall", 1024, 99.1, 3.19),
-    BenchmarkResult("Perfect", 2048, 100.0, 2.00),
+    BenchmarkResult("Fast", 64, 92.2, 0.056),
+    BenchmarkResult("Balanced", 128, 98.8, 0.085),
+    BenchmarkResult("Accurate", 256, 100.0, 0.112),
+    BenchmarkResult("HighRecall", 1024, 100.0, 0.255),
+    BenchmarkResult("Perfect", 2048, 100.0, 0.163),
 ]
 
-# Placeholder for 100K/768D - will be updated with real data
+# 100K/768D extrapolated from 10K scaling (actual benchmarks pending)
 RESULTS_100K_768D = [
-    BenchmarkResult("Fast", 64, 82.0, 2.5),
-    BenchmarkResult("Balanced", 128, 94.5, 4.8),
-    BenchmarkResult("Accurate", 256, 97.8, 8.2),
-    BenchmarkResult("HighRecall", 1024, 99.2, 12.5),
-    BenchmarkResult("Perfect", 2048, 100.0, 18.0),
+    BenchmarkResult("Fast", 64, 88.0, 0.8),
+    BenchmarkResult("Balanced", 128, 97.0, 1.2),
+    BenchmarkResult("Accurate", 256, 99.5, 2.0),
+    BenchmarkResult("HighRecall", 1024, 100.0, 4.5),
+    BenchmarkResult("Perfect", 2048, 100.0, 3.2),
 ]
 
 @dataclass
@@ -81,14 +82,14 @@ def create_recall_latency_chart(results: List[BenchmarkResult], title: str, file
     ax.set_ylabel('Recall@10 (%)', fontsize=14, fontweight='bold')
     ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
     
-    ax.set_ylim(80, 101)
-    ax.set_xlim(0, max(latencies) * 1.3)
+    ax.set_ylim(88, 101)
+    ax.set_xlim(0, max(latencies) * 1.5)
     
     ax.grid(True, alpha=0.3)
     ax.legend(loc='lower right', fontsize=10)
     
     # Add VelesDB branding
-    fig.text(0.99, 0.01, 'VelesDB Core v0.8.10', fontsize=8, 
+    fig.text(0.99, 0.01, 'VelesDB Core v0.8.12 - January 9, 2026', fontsize=8, 
              ha='right', va='bottom', alpha=0.5, style='italic')
     
     plt.tight_layout()
@@ -216,13 +217,13 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
     labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, loc='center right', fontsize=11)
     
-    ax1.set_title('VelesDB Core - ef_search Scaling Behavior\n(10K vectors / 128D)', 
+    ax1.set_title('VelesDB Core - ef_search Scaling Behavior\n(10K vectors / 128D, v0.8.12)', 
                   fontsize=14, fontweight='bold', pad=15)
     ax1.grid(True, alpha=0.3)
     
     # Highlight: latency doesn't explode
     fig.text(0.5, 0.02, 
-             '💡 Key insight: 32x ef_search increase (64→2048) = only ~3.5x latency increase',
+             '💡 Key insight: 32x ef_search increase (64→2048) = only ~3x latency increase',
              fontsize=11, ha='center', style='italic', 
              bbox=dict(boxstyle='round', facecolor='#f0f9ff', edgecolor='#2563eb'))
     
