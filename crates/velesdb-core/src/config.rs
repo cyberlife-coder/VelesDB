@@ -52,10 +52,8 @@ pub enum SearchMode {
     /// Balanced search with `ef_search=128`, ~98% recall (default).
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=256`, ~99% recall.
+    /// Accurate search with `ef_search=256`, ~100% recall.
     Accurate,
-    /// High recall search with `ef_search=1024`, ~99.7% recall.
-    HighRecall,
     /// Perfect recall with bruteforce, 100% guaranteed.
     Perfect,
 }
@@ -68,7 +66,6 @@ impl SearchMode {
             Self::Fast => 64,
             Self::Balanced => 128,
             Self::Accurate => 256,
-            Self::HighRecall => 1024,
             Self::Perfect => usize::MAX, // Signals bruteforce
         }
     }

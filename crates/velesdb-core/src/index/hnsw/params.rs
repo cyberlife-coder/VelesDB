@@ -58,7 +58,7 @@ impl HnswParams {
 
     /// Creates parameters optimized for a specific dataset size.
     ///
-    /// **GUARANTEES ≥95% recall** up to 1M vectors for `HighRecall` mode.
+    /// **GUARANTEES ≥95% recall** up to 1M vectors.
     ///
     /// # Parameters by Scale
     ///
@@ -280,18 +280,15 @@ impl HnswParams {
 /// Search quality profile controlling the recall/latency tradeoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SearchQuality {
-    /// Fast search with `ef_search=64`.
+    /// Fast search with `ef_search=64`. ~92% recall, lowest latency.
     Fast,
-    /// Balanced search with `ef_search=128`.
+    /// Balanced search with `ef_search=128`. ~99% recall, production default.
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=256`.
+    /// Accurate search with `ef_search=256`. ~100% recall.
     Accurate,
-    /// High recall search with `ef_search=1024` (was 512, improved for ~99.7% recall).
-    HighRecall,
-    /// Perfect recall mode with `ef_search=2048+` for guaranteed 100% recall.
-    /// Uses very large candidate pool with exact SIMD re-ranking.
-    /// Best for applications where accuracy is more important than latency.
+    /// Perfect recall mode with `ef_search=2048` for guaranteed 100% recall.
+    /// Uses large candidate pool with exact SIMD re-ranking.
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),
@@ -305,9 +302,6 @@ impl SearchQuality {
             Self::Fast => 64.max(k * 2),
             Self::Balanced => 128.max(k * 4),
             Self::Accurate => 256.max(k * 8),
-            // HighRecall: increased from 512 to 1024 for ~99.7% recall
-            Self::HighRecall => 1024.max(k * 32),
-            // Perfect: very large pool for 100% recall guarantee
             Self::Perfect => 2048.max(k * 50),
             Self::Custom(ef) => (*ef).max(k),
         }

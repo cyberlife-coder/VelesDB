@@ -1104,7 +1104,7 @@ fn test_search_batch_parallel_large_batch() {
 #[test]
 #[allow(clippy::cast_precision_loss)]
 fn test_recall_quality_minimum_threshold() {
-    // Ensure recall@10 >= 90% for HighRecall quality on small dataset
+    // Ensure recall@10 >= 90% for Accurate quality on small dataset
     let dim = 64;
     let n = 500;
     let k = 10;
@@ -1142,7 +1142,7 @@ fn test_recall_quality_minimum_threshold() {
     let ground_truth: Vec<u64> = distances.iter().take(k).map(|(id, _)| *id).collect();
 
     // HNSW search
-    let results = index.search_with_quality(&query, k, SearchQuality::HighRecall);
+    let results = index.search_with_quality(&query, k, SearchQuality::Accurate);
     let result_ids: std::collections::HashSet<u64> = results.iter().map(|(id, _)| *id).collect();
     let gt_set: std::collections::HashSet<u64> = ground_truth.iter().copied().collect();
 
@@ -1150,7 +1150,7 @@ fn test_recall_quality_minimum_threshold() {
 
     assert!(
         recall >= 0.8,
-        "Recall@{k} should be >= 80% for HighRecall, got {:.1}%",
+        "Recall@{k} should be >= 80% for Accurate, got {:.1}%",
         recall * 100.0
     );
 }

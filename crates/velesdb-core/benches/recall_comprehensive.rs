@@ -101,14 +101,12 @@ fn bench_comprehensive(c: &mut Criterion) {
             SearchQuality::Fast,
             SearchQuality::Balanced,
             SearchQuality::Accurate,
-            SearchQuality::HighRecall,
             SearchQuality::Perfect,
         ] {
             let (quality_name, ef) = match quality {
                 SearchQuality::Fast => ("Fast", 64),
                 SearchQuality::Balanced => ("Balanced", 128),
                 SearchQuality::Accurate => ("Accurate", 256),
-                SearchQuality::HighRecall => ("HighRecall", 1024),
                 SearchQuality::Perfect => ("Perfect", 2048),
                 SearchQuality::Custom(e) => ("Custom", e),
             };
@@ -144,14 +142,14 @@ fn bench_comprehensive(c: &mut Criterion) {
 
         println!("  {}", "-".repeat(55));
 
-        // Criterion benchmark for HighRecall mode
+        // Criterion benchmark for Accurate mode
         let mut group = c.benchmark_group(format!("native_{}", label.replace('/', "_")));
         group.sample_size(20);
 
-        group.bench_function(BenchmarkId::new("search_highrecall", label), |b| {
+        group.bench_function(BenchmarkId::new("search_accurate", label), |b| {
             b.iter(|| {
                 for query in &queries {
-                    let results = index.search_with_quality(query, 10, SearchQuality::HighRecall);
+                    let results = index.search_with_quality(query, 10, SearchQuality::Accurate);
                     black_box(results);
                 }
             });

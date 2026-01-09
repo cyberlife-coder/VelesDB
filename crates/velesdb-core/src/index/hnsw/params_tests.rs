@@ -170,9 +170,7 @@ fn test_search_quality_ef_search_high_k() {
     assert_eq!(SearchQuality::Fast.ef_search(100), 200); // 100 * 2
     assert_eq!(SearchQuality::Balanced.ef_search(50), 200); // 50 * 4
     assert_eq!(SearchQuality::Accurate.ef_search(40), 320); // 40 * 8
-                                                            // HighRecall now uses 1024 base (was 512) for better recall
-    assert_eq!(SearchQuality::HighRecall.ef_search(10), 1024); // max(1024, 10*32=320)
-    assert_eq!(SearchQuality::HighRecall.ef_search(50), 1600); // max(1024, 50*32=1600)
+    assert_eq!(SearchQuality::Perfect.ef_search(50), 2500); // max(2048, 50*50=2500)
 }
 
 #[test]
