@@ -212,11 +212,15 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **98.8%** | 85µs | ✅ |
-| **10K/128D** | Accurate | 256 | **100%** | 112µs | ✅ |
-| **10K/128D** | Perfect | 2048 | **100%** | 163µs | ✅ |
+| **10K/128D** | Balanced | 128 | **97.2%** | 0.29ms | ✅ |
+| **10K/128D** | Accurate | 256 | **99.7%** | 0.47ms | ✅ |
+| **10K/128D** | Perfect | 2048 | **100%** | 2.42ms | ✅ |
+| **100K/768D** | Accurate | 256 | 66.2% | 16.5ms | ⚠️ |
+| **100K/768D** | Perfect | 2048 | **100%** | **74ms** | ✅ |
 
 > *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
+> 
+> **Note**: For 100K+ vectors with high dimensions (768D), use Perfect mode or increase `ef_search` for reliable recall.
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
