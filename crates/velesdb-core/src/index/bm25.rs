@@ -1,4 +1,6 @@
 //! BM25 full-text search index for hybrid search.
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::unwrap_or_default)]
 //!
 //! This module implements the BM25 (Best Matching 25) algorithm for full-text search,
 //! enabling hybrid search combining vector similarity with keyword matching.

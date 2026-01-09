@@ -89,6 +89,7 @@ pub mod simd_dispatch;
 pub mod simd_explicit;
 #[cfg(test)]
 mod simd_explicit_tests;
+pub mod simd_native;
 pub mod storage;
 pub mod vector_ref;
 pub mod velesql;

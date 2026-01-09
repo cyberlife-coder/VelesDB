@@ -1,4 +1,7 @@
 //! Adaptive posting list for BM25 inverted index.
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::default_trait_access)]
+#![allow(clippy::cast_possible_truncation)]
 //!
 //! This module provides a hybrid posting list that automatically switches between:
 //! - `FxHashSet<u32>` for low-cardinality terms (< 1000 docs)
