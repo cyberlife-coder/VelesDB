@@ -17,7 +17,7 @@ crate-type = ["cdylib", "staticlib", "lib"]
 name = "velesdb_mobile"
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core", version = "1.0.0" }
+velesdb-core = { path = "../velesdb-core", version = "1.0.1" }
 uniffi = { version = "0.28", features = ["tokio"] }
 tokio = { version = "1.42", features = ["rt-multi-thread"] }
 thiserror = "2.0"
