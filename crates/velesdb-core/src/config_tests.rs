@@ -14,7 +14,6 @@ mod tests {
         assert_eq!(SearchMode::Fast.ef_search(), 64);
         assert_eq!(SearchMode::Balanced.ef_search(), 128);
         assert_eq!(SearchMode::Accurate.ef_search(), 256);
-        assert_eq!(SearchMode::HighRecall.ef_search(), 1024);
         assert_eq!(SearchMode::Perfect.ef_search(), usize::MAX);
     }
 
@@ -30,14 +29,14 @@ mod tests {
     #[test]
     fn test_search_mode_serialization() {
         // Arrange
-        let mode = SearchMode::HighRecall;
+        let mode = SearchMode::Accurate;
 
         // Act
         let json = serde_json::to_string(&mode).expect("serialize");
         let deserialized: SearchMode = serde_json::from_str(&json).expect("deserialize");
 
         // Assert
-        assert_eq!(json, "\"high_recall\"");
+        assert_eq!(json, "\"accurate\"");
         assert_eq!(deserialized, mode);
     }
 
@@ -111,7 +110,7 @@ default_mode = "fast"
         // Arrange
         let toml = r#"
 [search]
-default_mode = "high_recall"
+default_mode = "accurate"
 ef_search = 512
 max_results = 500
 query_timeout_ms = 60000
@@ -143,7 +142,7 @@ format = "json"
         let config = VelesConfig::from_toml(toml).expect("parse");
 
         // Assert
-        assert_eq!(config.search.default_mode, SearchMode::HighRecall);
+        assert_eq!(config.search.default_mode, SearchMode::Accurate);
         assert_eq!(config.search.ef_search, Some(512));
         assert_eq!(config.search.max_results, 500);
         assert_eq!(config.hnsw.m, Some(48));

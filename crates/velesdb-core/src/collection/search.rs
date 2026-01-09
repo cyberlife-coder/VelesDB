@@ -101,7 +101,6 @@ impl Collection {
             0..=64 => crate::SearchQuality::Fast,
             65..=128 => crate::SearchQuality::Balanced,
             129..=256 => crate::SearchQuality::Accurate,
-            257..=1024 => crate::SearchQuality::HighRecall,
             _ => crate::SearchQuality::Perfect,
         };
 

@@ -49,8 +49,7 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 
 | Metric | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
-| **Search Latency** | **71µs** | 50-100ms |
-| **10 Retrievals** | **0.7ms total** | 500ms-1s total |
+| **Search Latency (p50)** | **71µs** | 50-100ms |
 | **Time to First Token** | **< 1ms** | 50-100ms+ |
 
 ### 🏢 Coming From Another Vector DB?
@@ -126,7 +125,7 @@ LIMIT 10
 | **GPU Acceleration** | 🔜 (wgpu roadmap) | ❌ | ✅ | N/A | ❌ |
 | **Recall@10** | **96-100%*** | ~99% | ~99% | ~99% | 100% |
 
-> *96%+ HighRecall mode (100K vectors) • 100% with Perfect mode
+> *92%+ Fast mode • 99%+ Balanced mode • 100% with Perfect mode
 
 ### 📊 Benchmark: VelesDB Local Performance
 
@@ -186,7 +185,6 @@ LIMIT 10
 | Fast | 64 | 92.2% | 56µs | ✅ |
 | **Balanced** | 128 | **98.8%** | 85µs | ✅ Production |
 | Accurate | 256 | 100.0% | 112µs | ✅ |
-| HighRecall | 1024 | 100.0% | 255µs | ✅ |
 | **Perfect** | 2048 | **100.0%** | 163µs | ✅ Guaranteed |
 
 #### ef_search Scaling Behavior
@@ -215,10 +213,8 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
 | **10K/128D** | Balanced | 128 | **98.8%** | 85µs | ✅ |
-| **10K/128D** | HighRecall | 1024 | **100.0%** | 255µs | ✅ |
-| **10K/128D** | Perfect | 2048 | **100.0%** | 163µs | ✅ |
-| **100K/768D** | HighRecall | 1024 | **97.0%** | 71µs | ✅ ≥95% |
-| **100K/768D** | Perfect | 2048 | **100.0%** | 55µs | ✅ |
+| **10K/128D** | Accurate | 256 | **100%** | 112µs | ✅ |
+| **10K/128D** | Perfect | 2048 | **100%** | 163µs | ✅ |
 
 > *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
 
@@ -683,7 +679,6 @@ curl -X POST http://localhost:8080/query \
 | Fast | 92.2% | 56µs | Real-time, high throughput |
 | Balanced | 98.8% | 85µs | Production recommended |
 | Accurate | 100% | 112µs | High precision |
-| HighRecall | 100% | 255µs | Very high precision |
 | **Perfect** | **100%** | 163µs | Brute-force SIMD |
 
 ### 🛠️ Optimizations Under the Hood

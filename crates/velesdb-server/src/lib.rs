@@ -215,7 +215,6 @@ fn mode_to_ef_search(mode: &str) -> Option<usize> {
         "fast" => Some(64),
         "balanced" => Some(128),
         "accurate" => Some(256),
-        "high_recall" | "highrecall" => Some(1024),
         "perfect" => Some(usize::MAX), // Will trigger brute-force
         _ => None,
     }

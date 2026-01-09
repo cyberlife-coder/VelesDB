@@ -6,11 +6,10 @@
 //! # Quality Profiles
 //!
 //! The index supports different quality profiles for search:
-//! - `Fast`: `ef_search=64`, ~89% recall, lowest latency
-//! - `Balanced`: `ef_search=128`, ~98% recall, good tradeoff (default)
-//! - `Accurate`: `ef_search=256`, ~99% recall, high precision
-//! - `HighRecall`: `ef_search=1024`, ~99.7% recall, very high precision
-//! - `Perfect`: `ef_search=2048+`, 100% recall, maximum accuracy
+//! - `Fast`: `ef_search=64`, ~92% recall, lowest latency
+//! - `Balanced`: `ef_search=128`, ~99% recall, good tradeoff (default)
+//! - `Accurate`: `ef_search=256`, ~100% recall, high precision
+//! - `Perfect`: `ef_search=2048`, 100% recall, maximum accuracy
 //!
 //! # Recommended Parameters by Vector Dimension
 //!
@@ -350,10 +349,9 @@ impl HnswIndex {
     ///
     /// # Quality Profiles
     ///
-    /// - `Fast`: ~90% recall, lowest latency
-    /// - `Balanced`: ~98% recall, good tradeoff (default)
-    /// - `Accurate`: ~99% recall, high precision
-    /// - `HighRecall`: ~99.6% recall, very high precision
+    /// - `Fast`: ~92% recall, lowest latency
+    /// - `Balanced`: ~99% recall, good tradeoff (default)
+    /// - `Accurate`: ~100% recall, high precision
     /// - `Perfect`: 100% recall guaranteed via SIMD re-ranking
     ///
     /// # Panics
@@ -652,7 +650,7 @@ impl HnswIndex {
         // 1. Get candidates from HNSW with specified quality
         // Avoid recursion if initial_quality is Perfect
         let actual_quality = if matches!(initial_quality, SearchQuality::Perfect) {
-            SearchQuality::HighRecall
+            SearchQuality::Accurate
         } else {
             initial_quality
         };

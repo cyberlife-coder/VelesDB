@@ -223,10 +223,9 @@ fn parse_mode(value: &str) -> Result<SearchMode, String> {
         "fast" => Ok(SearchMode::Fast),
         "balanced" => Ok(SearchMode::Balanced),
         "accurate" => Ok(SearchMode::Accurate),
-        "high_recall" | "highrecall" => Ok(SearchMode::HighRecall),
         "perfect" => Ok(SearchMode::Perfect),
         _ => Err(format!(
-            "Invalid mode '{}'. Valid: fast, balanced, accurate, high_recall, perfect",
+            "Invalid mode '{}'. Valid: fast, balanced, accurate, perfect",
             value
         )),
     }
