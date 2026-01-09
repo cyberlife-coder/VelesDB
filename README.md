@@ -54,7 +54,7 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 | Metric | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
 | **Search Latency** | **71µs** | 50-100ms |
-| **10 Retrievals** | **1.1ms total** | 500ms-1s total |
+| **10 Retrievals** | **0.7ms total** | 500ms-1s total |
 | **Time to First Token** | **Instant** | Noticeable delay |
 
 ### 🏢 Coming From Another Vector DB?
@@ -64,7 +64,7 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 | **Pinecone** | No API keys, no cloud costs, 100x faster locally |
 | **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile |
 | **Milvus** | Zero config vs complex cluster setup |
-| **pgvector** | Purpose-built for vectors, 400x faster search |
+| **pgvector** | Purpose-built for vectors, 700x faster search |
 | **ChromaDB** | Production-grade Rust vs Python prototype |
 
 ```sql
@@ -92,8 +92,8 @@ Les bases vectorielles traditionnelles ajoutent **50-100ms de latence** par requ
 
 | Métrique | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
-| **Latence Recherche** | **105µs** | 50-100ms |
-| **10 Récupérations** | **1.1ms total** | 500ms-1s total |
+| **Latence Recherche** | **71µs** | 50-100ms |
+| **10 Récupérations** | **0.7ms total** | 500ms-1s total |
 | **Time to First Token** | **Instantané** | Délai perceptible |
 
 ### 🏢 Vous Venez d'une Autre Base Vectorielle ?
@@ -103,7 +103,7 @@ Les bases vectorielles traditionnelles ajoutent **50-100ms de latence** par requ
 | **Pinecone** | Pas de clés API, pas de coûts cloud, 100x plus rapide en local |
 | **Qdrant** | Binaire unique (15Mo vs 100Mo+), WASM/Mobile natif |
 | **Milvus** | Zéro config vs configuration cluster complexe |
-| **pgvector** | Conçu pour les vecteurs, recherche 400x plus rapide |
+| **pgvector** | Conçu pour les vecteurs, recherche 700x plus rapide |
 | **ChromaDB** | Rust production-grade vs prototype Python |
 
 ```sql
@@ -303,7 +303,7 @@ VelesDB is designed for **on-prem and edge deployments** where data sovereignty 
 |-----------|---------|------------------|
 | **Data Sovereignty** | ✅ 100% local | ❌ Data in cloud |
 | **Air-Gapped** | ✅ Single binary, no internet | ❌ Requires connectivity |
-| **Latency** | ✅ 2.5ms embedded | ❌ 50-100ms network |
+| **Latency** | ✅ 71µs embedded | ❌ 50-100ms network |
 | **GDPR/HIPAA** | ✅ Full control | ⚠️ Shared responsibility |
 | **Audit Trail** | ✅ Local logs | ⚠️ Provider-dependent |
 
@@ -372,7 +372,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.8.10-amd64.deb
+sudo dpkg -i velesdb-0.8.12-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -468,7 +468,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.8.10"}
+# {"status":"healthy","version":"0.8.12"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -689,31 +689,31 @@ curl -X POST http://localhost:8080/query \
 ### 🔥 Core Vector Operations (768D - BERT/OpenAI dimensions)
 
 | Operation | Latency | Throughput | vs. Naive |
-|-----------|---------|------------|-----------|
-| **Dot Product** | **35 ns** | **28M ops/sec** | 🚀 **8x faster** |
-| **Euclidean** | **44 ns** | **22M ops/sec** | 🚀 **6x faster** |
-| **Cosine** | **82 ns** | **12M ops/sec** | 🚀 **3.4x faster** |
+|-----------|---------|------------|----------|
+| **Dot Product (1536D)** | **66 ns** | **15M ops/sec** | 🚀 **8x faster** |
+| **Euclidean (768D)** | **45 ns** | **22M ops/sec** | 🚀 **6x faster** |
+| **Cosine (768D)** | **70 ns** | **14M ops/sec** | 🚀 **4x faster** |
 | **Hamming (Binary)**| **6 ns** | **164M ops/sec** | 🚀 **10x faster** |
 
 ### 📊 System Performance (10K Vectors, Local)
 
 | Benchmark | Result | Details |
 |-----------|--------|---------|
-| **HNSW Search** | **128 µs** | p50 latency |
+| **HNSW Search** | **71 µs** | p50 latency |
 | **VelesQL Parsing**| **570 ns** | Simple SELECT |
 | **VelesQL Cache Hit**| **49 ns** | HashMap pre-allocation |
 | **Recall@10** | **100%** | Perfect mode (brute-force SIMD) |
-| **BM25 Search** | **7.9 µs** | 1K documents |
+| **BM25 Search** | **28 µs** | Adaptive PostingList |
 
 ### 🎯 Search Quality (Recall)
 
 | Mode | Recall@10 | Latency | Use Case |
 |------|-----------|---------|----------|
-| Fast | 90.6% | ~7ms | Real-time, high throughput |
-| Balanced | 98.2% | ~12ms | Production recommended |
-| Accurate | 99.3% | ~18ms | High precision |
-| HighRecall | 99.8% | ~37ms | Very high precision |
-| **Perfect** | **100%** | ~55ms | **Guaranteed accuracy (brute-force SIMD)** |
+| Fast | 92.2% | 56µs | Real-time, high throughput |
+| Balanced | 98.8% | 85µs | Production recommended |
+| Accurate | 100% | 112µs | High precision |
+| HighRecall | 100% | 255µs | Very high precision |
+| **Perfect** | **100%** | 163µs | **Guaranteed accuracy (brute-force SIMD)** |
 
 ### 🛠️ Optimizations Under the Hood
 
@@ -764,9 +764,9 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 ### 🎯 Why Choose VelesDB?
 
 #### ⚡ Extreme Latency
-- **~35-82ns** per vector distance (768D)
-- **128µs** HNSW search p50 on 10K vectors
-- **SIMD-optimized** (AVX-512, AVX2, NEON)
+- **~66ns** per vector distance (1536D with native intrinsics)
+- **71µs** HNSW search p50 on 10K vectors
+- **SIMD-optimized** (AVX-512, AVX2, NEON native intrinsics)
 
 #### 📝 SQL-Native Queries (VelesQL)
 ```sql
