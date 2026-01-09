@@ -36,13 +36,23 @@
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::unused_self)]
 
+mod backend_adapter;
 mod distance;
+mod dual_precision;
 mod graph;
+mod quantization;
 mod search;
 
-pub use distance::{CpuDistance, DistanceEngine, SimdDistance};
+pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
+pub use distance::{CpuDistance, DistanceEngine, NativeSimdDistance, SimdDistance};
+pub use dual_precision::DualPrecisionHnsw;
 pub use graph::{Layer, NativeHnsw, NodeId};
+pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use search::SearchResult;
 
+#[cfg(test)]
+mod backend_adapter_tests;
+#[cfg(test)]
+mod dual_precision_tests;
 #[cfg(test)]
 mod tests;

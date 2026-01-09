@@ -3,12 +3,12 @@
 //! This module contains memory-mapped file storage implementation for vectors
 //! and log-structured storage for metadata payloads.
 //!
-//! # Module Structure
+//! # Public Types
 //!
-//! - [`traits`]: Storage traits (`VectorStorage`, `PayloadStorage`)
-//! - [`mmap`]: Memory-mapped vector storage (`MmapStorage`)
-//! - [`log_payload`]: Log-structured payload storage (`LogPayloadStorage`)
-//! - [`guard`]: Zero-copy vector slice guard (`VectorSliceGuard`)
+//! - [`VectorStorage`], [`PayloadStorage`]: Storage traits
+//! - [`MmapStorage`]: Memory-mapped vector storage
+//! - [`LogPayloadStorage`]: Log-structured payload storage
+//! - [`VectorSliceGuard`]: Zero-copy vector slice guard
 //! - [`metrics`]: Storage operation metrics (P0 audit - latency monitoring)
 
 mod guard;
@@ -18,6 +18,10 @@ pub mod metrics;
 mod mmap;
 mod traits;
 
+#[cfg(test)]
+mod histogram_tests;
+#[cfg(test)]
+mod log_payload_tests;
 #[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]

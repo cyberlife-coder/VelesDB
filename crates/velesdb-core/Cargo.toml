@@ -26,17 +26,8 @@ roaring = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
 
-# HNSW index - High-performance approximate nearest neighbor search
-# - simdeez_f: AVX2/SSE SIMD for x86_64 (significantly faster)
-# - On ARM64 (Apple Silicon): uses fallback without SIMD
-[dependencies.hnsw_rs]
-version = "0.3"
-default-features = false
-
-[target.'cfg(target_arch = "x86_64")'.dependencies.hnsw_rs]
-version = "0.3"
-default-features = false
-features = ["simdeez_f"]
+# HNSW: Native implementation only (v1.0+)
+# hnsw_rs dependency removed - native HNSW is 1.2x faster
 
 [dependencies.uuid]
 version = "1.7"
@@ -92,6 +83,8 @@ version = "2.7"
 version = "2.7"
 
 [features]
+# Native HNSW is the only implementation (v1.0+)
+# hnsw_rs dependency has been removed
 default = []
 gpu = ["wgpu", "pollster", "bytemuck"]
 
@@ -172,4 +165,12 @@ required-features = ["gpu"]
 
 [[bench]]
 name = "recall_comprehensive"
+harness = false
+
+[[bench]]
+name = "dual_precision_benchmark"
+harness = false
+
+[[bench]]
+name = "hnsw_comparison_benchmark"
 harness = false

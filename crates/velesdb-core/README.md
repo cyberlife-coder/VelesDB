@@ -9,7 +9,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: HNSW index with explicit SIMD (4x faster than auto-vectorized)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (71µs search, 66ns distance)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
@@ -186,13 +186,11 @@ db.create_collection_with_options(
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **95.8%** | 0.88ms | ✅ |
-| **10K/128D** | HighRecall | 1024 | **99.4%** | 3.0ms | ✅ |
-| **10K/128D** | Perfect | 2048 | **100.0%** | 0.61ms | ✅ |
-| **100K/768D** | HighRecall | 1024 | **97.0%** | 71.5ms | ✅ ≥95% |
-| **100K/768D** | Perfect | 2048 | **100.0%** | 55.4ms | ✅ |
+| **10K/128D** | Balanced | 128 | **98.8%** | 85µs | ✅ |
+| **10K/128D** | Accurate | 256 | **100%** | 112µs | ✅ |
+| **10K/128D** | Perfect | 2048 | **100%** | 163µs | ✅ |
 
-> *Latency P50 = median over 100 queries. ≥95% recall guaranteed for HighRecall mode.*
+> *Latency P50 = median over 100 queries.*
 
 > 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 
@@ -356,7 +354,7 @@ use velesdb_core::{
 use velesdb_core::{
     HnswIndex,          // HNSW index
     HnswParams,         // Index parameters
-    SearchQuality,      // Fast, Balanced, Accurate, HighRecall
+    SearchQuality,      // Fast, Balanced, Accurate, Perfect
 };
 
 // Filtering

@@ -1,4 +1,6 @@
 //! BM25 full-text search index for hybrid search.
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::unwrap_or_default)]
 //!
 //! This module implements the BM25 (Best Matching 25) algorithm for full-text search,
 //! enabling hybrid search combining vector similarity with keyword matching.
@@ -17,6 +19,12 @@
 //! - `k1` = 1.2 (term frequency saturation)
 //! - `b` = 0.75 (document length normalization)
 //!
+//! # Performance (v0.9+)
+//!
+//! - **Adaptive PostingList**: Uses `FxHashSet` for rare terms, `RoaringBitmap` for frequent terms
+//! - **Automatic promotion**: Terms with 1000+ docs switch to compressed Roaring representation
+//! - **Efficient unions**: O(min(n,m)) for Roaring vs O(n+m) for HashSet
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -30,8 +38,9 @@
 //! // Returns [(1, score)] - document 1 matches "rust"
 //! ```
 
+use super::posting_list::PostingList;
 use parking_lot::RwLock;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 /// BM25 tuning parameters.
 #[derive(Debug, Clone, Copy)]
@@ -60,12 +69,18 @@ struct Document {
 /// BM25 full-text search index.
 ///
 /// Thread-safe inverted index for efficient full-text search.
+///
+/// # Performance (v0.9+)
+///
+/// Uses adaptive `PostingList` that automatically switches between:
+/// - `FxHashSet` for rare terms (< 1000 docs) - fast insert/lookup
+/// - `RoaringBitmap` for frequent terms (≥ 1000 docs) - compressed, fast unions
 #[allow(clippy::cast_precision_loss)] // BM25 scoring uses f32 approximations
 pub struct Bm25Index {
     /// BM25 parameters
     params: Bm25Params,
-    /// Inverted index: term -> set of document IDs (`FxHashSet` for faster lookup)
-    inverted_index: RwLock<FxHashMap<String, FxHashSet<u64>>>,
+    /// Inverted index: term -> adaptive posting list (auto-promotes to Roaring)
+    inverted_index: RwLock<FxHashMap<String, PostingList>>,
     /// Document storage: id -> Document
     documents: RwLock<FxHashMap<u64, Document>>,
     /// Total number of documents
@@ -96,7 +111,7 @@ impl Bm25Index {
     /// Tokenizes text into lowercase terms.
     ///
     /// Simple whitespace + punctuation tokenizer.
-    fn tokenize(text: &str) -> Vec<String> {
+    pub(crate) fn tokenize(text: &str) -> Vec<String> {
         text.to_lowercase()
             .split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty() && s.len() > 1) // Skip single chars
@@ -131,11 +146,17 @@ impl Bm25Index {
             length: doc_length,
         };
 
-        // Update inverted index (use doc.term_freqs since we moved it)
+        // Update inverted index with adaptive PostingList
+        // PostingList auto-promotes to Roaring when cardinality exceeds threshold
+        #[allow(clippy::cast_possible_truncation)] // Doc IDs typically fit in u32
+        let id_u32 = id as u32;
         {
             let mut inv_idx = self.inverted_index.write();
             for term in doc.term_freqs.keys() {
-                inv_idx.entry(term.clone()).or_default().insert(id);
+                inv_idx
+                    .entry(term.clone())
+                    .or_insert_with(PostingList::new)
+                    .insert(id_u32);
             }
         }
 
@@ -173,12 +194,14 @@ impl Bm25Index {
 
         if let Some(doc) = doc {
             // Remove from inverted index
+            #[allow(clippy::cast_possible_truncation)]
+            let id_u32 = id as u32;
             {
                 let mut inv_idx = self.inverted_index.write();
                 for term in doc.term_freqs.keys() {
-                    if let Some(doc_set) = inv_idx.get_mut(term) {
-                        doc_set.remove(&id);
-                        if doc_set.is_empty() {
+                    if let Some(posting_list) = inv_idx.get_mut(term) {
+                        posting_list.remove(id_u32);
+                        if posting_list.is_empty() {
                             inv_idx.remove(term);
                         }
                     }
@@ -240,7 +263,7 @@ impl Bm25Index {
             let idf_cache: FxHashMap<&str, f32> = query_terms
                 .iter()
                 .map(|term| {
-                    let df = inv_idx.get(term).map_or(0, FxHashSet::len);
+                    let df = inv_idx.get(term).map_or(0, PostingList::len);
                     let idf_val = if df == 0 {
                         0.0
                     } else {
@@ -251,16 +274,18 @@ impl Bm25Index {
                 })
                 .collect();
 
-            // Collect and score candidates in one pass
-            let candidates: FxHashSet<u64> = query_terms
-                .iter()
-                .filter_map(|term| inv_idx.get(term))
-                .flat_map(|s| s.iter().copied())
-                .collect();
+            // Collect candidates using PostingList union (efficient for Roaring)
+            let mut candidate_union = PostingList::new();
+            for term in &query_terms {
+                if let Some(posting_list) = inv_idx.get(term) {
+                    candidate_union = candidate_union.union(posting_list);
+                }
+            }
 
-            candidates
-                .into_iter()
-                .filter_map(|doc_id| {
+            candidate_union
+                .iter()
+                .filter_map(|doc_id_u32| {
+                    let doc_id = u64::from(doc_id_u32);
                     let doc = docs.get(&doc_id)?;
                     let score =
                         Self::score_document_fast(doc, &query_terms, &idf_cache, k1, b, avgdl);
@@ -343,321 +368,5 @@ impl Bm25Index {
 impl Default for Bm25Index {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// =============================================================================
-// Tests (TDD)
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // =========================================================================
-    // Basic functionality tests
-    // =========================================================================
-
-    #[test]
-    fn test_bm25_index_creation() {
-        let index = Bm25Index::new();
-        assert!(index.is_empty());
-        assert_eq!(index.len(), 0);
-        assert_eq!(index.term_count(), 0);
-    }
-
-    #[test]
-    fn test_bm25_index_with_custom_params() {
-        let params = Bm25Params { k1: 1.5, b: 0.5 };
-        let index = Bm25Index::with_params(params);
-        assert!((index.params.k1 - 1.5).abs() < f32::EPSILON);
-        assert!((index.params.b - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_add_single_document() {
-        let index = Bm25Index::new();
-        index.add_document(1, "hello world");
-
-        assert_eq!(index.len(), 1);
-        assert!(!index.is_empty());
-        assert!(index.term_count() >= 2); // "hello" and "world"
-    }
-
-    #[test]
-    fn test_add_multiple_documents() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust programming language");
-        index.add_document(2, "python programming language");
-        index.add_document(3, "java programming");
-
-        assert_eq!(index.len(), 3);
-    }
-
-    #[test]
-    fn test_remove_document() {
-        let index = Bm25Index::new();
-        index.add_document(1, "hello world");
-        index.add_document(2, "goodbye world");
-
-        assert_eq!(index.len(), 2);
-
-        let removed = index.remove_document(1);
-        assert!(removed);
-        assert_eq!(index.len(), 1);
-
-        // Removing again should return false
-        let removed_again = index.remove_document(1);
-        assert!(!removed_again);
-    }
-
-    #[test]
-    fn test_update_document() {
-        let index = Bm25Index::new();
-        index.add_document(1, "original text");
-        index.add_document(1, "updated text"); // Same ID
-
-        assert_eq!(index.len(), 1); // Still one document
-    }
-
-    // =========================================================================
-    // Tokenization tests
-    // =========================================================================
-
-    #[test]
-    fn test_tokenize_basic() {
-        let tokens = Bm25Index::tokenize("Hello World");
-        assert_eq!(tokens, vec!["hello", "world"]);
-    }
-
-    #[test]
-    fn test_tokenize_punctuation() {
-        let tokens = Bm25Index::tokenize("Hello, World! How are you?");
-        assert_eq!(tokens, vec!["hello", "world", "how", "are", "you"]);
-    }
-
-    #[test]
-    fn test_tokenize_single_chars_filtered() {
-        let tokens = Bm25Index::tokenize("I am a test");
-        // Single characters should be filtered out
-        assert!(!tokens.contains(&"i".to_string()));
-        assert!(!tokens.contains(&"a".to_string()));
-        assert!(tokens.contains(&"am".to_string()));
-        assert!(tokens.contains(&"test".to_string()));
-    }
-
-    #[test]
-    fn test_tokenize_empty() {
-        let tokens = Bm25Index::tokenize("");
-        assert!(tokens.is_empty());
-    }
-
-    // =========================================================================
-    // Search tests
-    // =========================================================================
-
-    #[test]
-    fn test_search_single_term() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust programming language");
-        index.add_document(2, "python programming language");
-        index.add_document(3, "rust is fast");
-
-        let results = index.search("rust", 10);
-
-        // Documents 1 and 3 should match
-        assert_eq!(results.len(), 2);
-        let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
-        assert!(ids.contains(&1));
-        assert!(ids.contains(&3));
-    }
-
-    #[test]
-    fn test_search_multiple_terms() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust programming language fast");
-        index.add_document(2, "python programming language");
-        index.add_document(3, "rust systems programming");
-
-        let results = index.search("rust programming", 10);
-
-        // All docs match "programming", docs 1 and 3 also match "rust"
-        assert!(!results.is_empty());
-
-        // Doc 1 should score highest (matches both "rust" and "programming")
-        // Actually doc 3 also matches both, let's check they're both high
-        let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
-        assert!(ids.contains(&1));
-        assert!(ids.contains(&3));
-    }
-
-    #[test]
-    fn test_search_no_match() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust programming");
-        index.add_document(2, "python programming");
-
-        let results = index.search("javascript", 10);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_search_empty_query() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust programming");
-
-        let results = index.search("", 10);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_search_empty_index() {
-        let index = Bm25Index::new();
-        let results = index.search("rust", 10);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_search_limit_k() {
-        let index = Bm25Index::new();
-        for i in 1..=100 {
-            index.add_document(i, &format!("document number {i} about rust"));
-        }
-
-        let results = index.search("rust", 5);
-        assert_eq!(results.len(), 5);
-    }
-
-    #[test]
-    fn test_search_scores_sorted_descending() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust");
-        index.add_document(2, "rust rust"); // Higher TF
-        index.add_document(3, "rust rust rust");
-
-        let results = index.search("rust", 10);
-
-        // Scores should be sorted descending
-        for window in results.windows(2) {
-            assert!(window[0].1 >= window[1].1);
-        }
-    }
-
-    // =========================================================================
-    // BM25 scoring tests
-    // =========================================================================
-
-    #[test]
-    fn test_idf_common_term() {
-        let index = Bm25Index::new();
-        // "programming" appears in all documents
-        index.add_document(1, "rust programming");
-        index.add_document(2, "python programming");
-        index.add_document(3, "java programming");
-
-        // "rust" appears in 1 document
-        let results = index.search("rust", 10);
-        assert_eq!(results.len(), 1);
-
-        // "programming" appears in all - should have lower IDF but still return results
-        let results = index.search("programming", 10);
-        assert_eq!(results.len(), 3);
-    }
-
-    #[test]
-    fn test_longer_documents_normalized() {
-        let index = Bm25Index::new();
-        // Short document with "rust"
-        index.add_document(1, "rust");
-        // Long document with "rust" once among many other words
-        index.add_document(
-            2,
-            "rust is a systems programming language that runs blazingly fast",
-        );
-
-        let results = index.search("rust", 10);
-
-        // Both should match
-        assert_eq!(results.len(), 2);
-        // The short document should score higher (more concentrated term)
-        assert_eq!(results[0].0, 1);
-    }
-
-    // =========================================================================
-    // Edge cases
-    // =========================================================================
-
-    #[test]
-    fn test_special_characters() {
-        let index = Bm25Index::new();
-        index.add_document(1, "hello@world.com is an email");
-
-        let results = index.search("hello", 10);
-        assert_eq!(results.len(), 1);
-
-        let results = index.search("world", 10);
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn test_numbers_in_text() {
-        let index = Bm25Index::new();
-        index.add_document(1, "version 2.0 released in 2024");
-
-        let results = index.search("2024", 10);
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn test_unicode_text() {
-        let index = Bm25Index::new();
-        index.add_document(1, "café résumé naïve");
-
-        let results = index.search("café", 10);
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn test_duplicate_terms_in_query() {
-        let index = Bm25Index::new();
-        index.add_document(1, "rust programming");
-
-        // Query with duplicate terms
-        let results = index.search("rust rust rust", 10);
-        assert_eq!(results.len(), 1);
-    }
-
-    // =========================================================================
-    // Thread safety tests
-    // =========================================================================
-
-    #[test]
-    fn test_concurrent_reads() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let index = Arc::new(Bm25Index::new());
-
-        // Add documents
-        for i in 1..=100 {
-            index.add_document(i, &format!("document {i} about rust programming"));
-        }
-
-        // Spawn multiple reader threads
-        let handles: Vec<_> = (0..4)
-            .map(|_| {
-                let idx = Arc::clone(&index);
-                thread::spawn(move || {
-                    for _ in 0..100 {
-                        let results = idx.search("rust", 10);
-                        assert!(!results.is_empty());
-                    }
-                })
-            })
-            .collect();
-
-        for handle in handles {
-            handle.join().expect("Thread panicked");
-        }
     }
 }

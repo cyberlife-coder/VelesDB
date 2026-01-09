@@ -179,7 +179,7 @@ pub struct SearchRequest {
     /// Number of results to return.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
-    /// Search mode preset: fast, balanced, accurate, high_recall, perfect.
+    /// Search mode preset: fast, balanced, accurate, perfect.
     /// Overrides ef_search with predefined values.
     #[serde(default)]
     #[schema(example = "balanced")]
@@ -215,7 +215,6 @@ fn mode_to_ef_search(mode: &str) -> Option<usize> {
         "fast" => Some(64),
         "balanced" => Some(128),
         "accurate" => Some(256),
-        "high_recall" | "highrecall" => Some(1024),
         "perfect" => Some(usize::MAX), // Will trigger brute-force
         _ => None,
     }

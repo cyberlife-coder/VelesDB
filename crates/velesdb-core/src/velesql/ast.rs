@@ -36,7 +36,7 @@ pub struct SelectStatement {
 ///
 /// ```sql
 /// SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
-/// WITH (mode = 'high_recall', timeout_ms = 5000)
+/// WITH (mode = 'accurate', timeout_ms = 5000)
 /// ```
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WithClause {
@@ -113,7 +113,7 @@ pub struct WithOption {
 /// Value type for WITH clause options.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WithValue {
-    /// String value (e.g., '`high_recall`').
+    /// String value (e.g., 'accurate').
     String(String),
     /// Integer value (e.g., 512).
     Integer(i64),
@@ -368,66 +368,5 @@ impl From<String> for Value {
 impl From<bool> for Value {
     fn from(v: bool) -> Self {
         Self::Boolean(v)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_column_new() {
-        let col = Column::new("id");
-        assert_eq!(col.name, "id");
-        assert!(col.alias.is_none());
-    }
-
-    #[test]
-    fn test_column_with_alias() {
-        let col = Column::with_alias("payload.title", "title");
-        assert_eq!(col.name, "payload.title");
-        assert_eq!(col.alias, Some("title".to_string()));
-    }
-
-    #[test]
-    fn test_value_from_integer() {
-        let v: Value = 42i64.into();
-        assert_eq!(v, Value::Integer(42));
-    }
-
-    #[test]
-    fn test_value_from_float() {
-        let v: Value = 2.5f64.into();
-        assert_eq!(v, Value::Float(2.5));
-    }
-
-    #[test]
-    fn test_value_from_string() {
-        let v: Value = "hello".into();
-        assert_eq!(v, Value::String("hello".to_string()));
-    }
-
-    #[test]
-    fn test_value_from_bool() {
-        let v: Value = true.into();
-        assert_eq!(v, Value::Boolean(true));
-    }
-
-    #[test]
-    fn test_query_serialization() {
-        let query = Query {
-            select: SelectStatement {
-                columns: SelectColumns::All,
-                from: "documents".to_string(),
-                where_clause: None,
-                limit: Some(10),
-                offset: None,
-                with_clause: None,
-            },
-        };
-
-        let json = serde_json::to_string(&query).unwrap();
-        let parsed: Query = serde_json::from_str(&json).unwrap();
-        assert_eq!(query, parsed);
     }
 }

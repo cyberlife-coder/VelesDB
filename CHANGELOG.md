@@ -5,9 +5,60 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-01-08
+
+### 🎉 v1.0 Release: Native HNSW Only
+
+**Breaking change**: `hnsw_rs` dependency completely removed.
+
+#### Removed
+- `hnsw_rs` dependency - native implementation is now the only backend
+- `legacy-hnsw` feature flag - no longer needed
+- `native-hnsw` feature flag - native is now always used
+- `inner.rs`, `persistence.rs` - legacy hnsw_rs wrappers
+- Legacy tests: `backend_tests.rs`, `inner_tests.rs`, `parity_tests.rs`, `persistence_tests.rs`
+
+#### Benefits
+- **1.2x faster search** - 26.9ms vs 32.4ms (100 queries, 5K vectors)
+- **1.07x faster parallel insert** - 1.47s vs 1.57s (5K vectors)
+- **~99% recall parity** - No accuracy loss
+- **Zero external HNSW dependencies** - Full control over implementation
+- **Smaller binary** - No hnsw_rs compilation
+
+---
+
 ## [0.8.12] - 2026-01-08
 
-### 🔧 Patch Release: CI/CD Fixes
+### 🚀 Major Change: Native HNSW Now Default
+
+**Breaking change**: Native HNSW implementation is now the default backend.
+
+#### What Changed
+- **`native-hnsw` feature is now default** - No configuration needed
+- **`hnsw_rs` is now optional** - Use `legacy-hnsw` feature to fall back
+- **1.2x faster search** - 26.9ms vs 32.4ms on 100 queries (5K vectors)
+- **1.07x faster parallel insert** - 1.47s vs 1.57s (5K vectors)
+- **~99% recall parity** - No accuracy loss
+
+#### Migration
+```toml
+# Before (v0.8.11)
+velesdb-core = { version = "0.8.11", features = ["native-hnsw"] }
+
+# After (v0.8.12+) - Native is default, no feature needed
+velesdb-core = "0.8.12"
+
+# To use legacy hnsw_rs (if needed for compatibility)
+velesdb-core = { version = "0.8.12", default-features = false, features = ["legacy-hnsw"] }
+```
+
+#### Files Changed
+- `Cargo.toml` - `hnsw_rs` now optional, `native-hnsw` default
+- `mod.rs` - Conditional compilation for legacy modules
+- `index.rs` - Backend selection via cfg(feature)
+- `backend.rs` - Uses `NativeNeighbour` by default
+
+### 🔧 Other Fixes
 
 - **Clippy pedantic compliance** - Fixed all pedantic lint warnings
 - **Cargo fmt** - Applied consistent formatting across codebase

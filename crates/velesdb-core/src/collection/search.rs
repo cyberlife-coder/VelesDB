@@ -6,6 +6,26 @@ use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+/// Wrapper for f32 to implement Ord for `BinaryHeap` in hybrid search.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct OrderedFloat(f32);
+
+impl Eq for OrderedFloat {}
+
+impl PartialOrd for OrderedFloat {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedFloat {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .partial_cmp(&other.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
 impl Collection {
     /// Searches for the k nearest neighbors of the query vector.
     ///
@@ -81,7 +101,6 @@ impl Collection {
             0..=64 => crate::SearchQuality::Fast,
             65..=128 => crate::SearchQuality::Balanced,
             129..=256 => crate::SearchQuality::Accurate,
-            257..=1024 => crate::SearchQuality::HighRecall,
             _ => crate::SearchQuality::Perfect,
         };
 
@@ -577,6 +596,12 @@ impl Collection {
     /// * `k` - Maximum number of results to return
     /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
     ///
+    /// # Performance (v0.9+)
+    ///
+    /// - **Streaming RRF**: `BinaryHeap` maintains top-k during fusion (O(n log k) vs O(n log n))
+    /// - **Vector-first gating**: Text search limited to 2k candidates for efficiency
+    /// - **`FxHashMap`**: Faster hashing for score aggregation
+    ///
     /// # Errors
     ///
     /// Returns an error if the query vector dimension doesn't match.
@@ -587,6 +612,9 @@ impl Collection {
         k: usize,
         vector_weight: Option<f32>,
     ) -> Result<Vec<SearchResult>> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
         let config = self.config.read();
         if vector_query.len() != config.dimension {
             return Err(Error::DimensionMismatch {
@@ -605,9 +633,13 @@ impl Collection {
         // Get BM25 text search results
         let text_results = self.text_index.search(text_query, k * 2);
 
-        // Perf: Apply RRF (Reciprocal Rank Fusion) with FxHashMap for faster hashing
-        // RRF score = 1 / (rank + 60) - the constant 60 is standard
-        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+        // Perf: Apply RRF with FxHashMap for faster hashing
+        // RRF score = weight / (rank + 60) - the constant 60 is standard (Cormack et al.)
+        let mut fused_scores: rustc_hash::FxHashMap<u64, f32> =
+            rustc_hash::FxHashMap::with_capacity_and_hasher(
+                vector_results.len() + text_results.len(),
+                rustc_hash::FxBuildHasher,
+            );
 
         // Add vector scores with RRF
         #[allow(clippy::cast_precision_loss)]
@@ -623,17 +655,23 @@ impl Collection {
             *fused_scores.entry(*id).or_insert(0.0) += rrf_score;
         }
 
-        // Perf: Use partial sort for top-k instead of full sort
-        let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
-        if scored_ids.len() > k {
-            scored_ids.select_nth_unstable_by(k, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            scored_ids.truncate(k);
-            scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Perf: Streaming top-k with BinaryHeap (O(n log k) vs O(n log n) for full sort)
+        // Use min-heap of size k: always keep the k highest scores
+        let mut top_k: BinaryHeap<Reverse<(OrderedFloat, u64)>> = BinaryHeap::with_capacity(k + 1);
+
+        for (id, score) in fused_scores {
+            top_k.push(Reverse((OrderedFloat(score), id)));
+            if top_k.len() > k {
+                top_k.pop(); // Remove smallest
+            }
         }
+
+        // Extract and sort descending
+        let mut scored_ids: Vec<(u64, f32)> = top_k
+            .into_iter()
+            .map(|Reverse((OrderedFloat(s), id))| (id, s))
+            .collect();
+        scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Fetch full point data
         let vector_storage = self.vector_storage.read();

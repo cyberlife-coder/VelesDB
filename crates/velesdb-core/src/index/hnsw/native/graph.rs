@@ -15,11 +15,12 @@ pub type NodeId = usize;
 #[derive(Debug)]
 pub struct Layer {
     /// Adjacency list: node_id -> list of neighbor node_ids
-    neighbors: Vec<RwLock<Vec<NodeId>>>,
+    pub(super) neighbors: Vec<RwLock<Vec<NodeId>>>,
 }
 
 impl Layer {
-    fn new(capacity: usize) -> Self {
+    /// Creates a new layer with the given capacity.
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             neighbors: (0..capacity).map(|_| RwLock::new(Vec::new())).collect(),
         }
@@ -39,7 +40,8 @@ impl Layer {
         }
     }
 
-    fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
+    /// Sets the neighbors for a node.
+    pub(super) fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
         if node_id < self.neighbors.len() {
             *self.neighbors[node_id].write() = neighbors;
         }
@@ -59,27 +61,30 @@ impl Layer {
 /// * `D` - Distance engine (CPU, SIMD, or GPU)
 pub struct NativeHnsw<D: DistanceEngine> {
     /// Distance computation engine
-    distance: D,
+    pub(super) distance: D,
     /// Vector data storage (node_id -> vector)
-    vectors: RwLock<Vec<Vec<f32>>>,
+    pub(super) vectors: RwLock<Vec<Vec<f32>>>,
     /// Hierarchical layers (layer 0 = bottom, dense connections)
-    layers: RwLock<Vec<Layer>>,
+    pub(super) layers: RwLock<Vec<Layer>>,
     /// Entry point for search (highest layer node)
-    entry_point: RwLock<Option<NodeId>>,
+    pub(super) entry_point: RwLock<Option<NodeId>>,
     /// Maximum layer for entry point
-    max_layer: AtomicUsize,
+    pub(super) max_layer: AtomicUsize,
     /// Number of elements in the index
-    count: AtomicUsize,
+    pub(super) count: AtomicUsize,
     /// Simple PRNG state for layer selection
-    rng_state: AtomicU64,
+    pub(super) rng_state: AtomicU64,
     /// Maximum connections per node (M parameter)
-    max_connections: usize,
+    pub(super) max_connections: usize,
     /// Maximum connections at layer 0 (M0 = 2*M)
-    max_connections_0: usize,
+    pub(super) max_connections_0: usize,
     /// ef_construction parameter
-    ef_construction: usize,
+    pub(super) ef_construction: usize,
     /// Level multiplier for layer selection (1/ln(M))
-    level_mult: f64,
+    pub(super) level_mult: f64,
+    /// VAMANA alpha parameter for neighbor diversification (default: 1.0)
+    /// Higher values (1.1-1.2) increase graph diversity for better recall at scale
+    pub(super) alpha: f32,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -113,7 +118,55 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             max_connections_0,
             ef_construction,
             level_mult,
+            alpha: 1.0, // Default: standard HNSW behavior
         }
+    }
+
+    /// Creates a new native HNSW index with VAMANA-style diversification.
+    ///
+    /// # Arguments
+    ///
+    /// * `distance` - Distance computation engine
+    /// * `max_connections` - M parameter
+    /// * `ef_construction` - Construction-time ef
+    /// * `max_elements` - Initial capacity
+    /// * `alpha` - Diversification parameter (1.0 = standard, 1.1-1.2 = more diverse)
+    ///
+    /// # VAMANA Algorithm
+    ///
+    /// Higher alpha values favor neighbors that are more spread out in the vector space,
+    /// improving recall on large datasets (100K+) at the cost of slightly more graph edges.
+    #[must_use]
+    pub fn with_alpha(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        alpha: f32,
+    ) -> Self {
+        let max_connections_0 = max_connections * 2;
+        let level_mult = 1.0 / (max_connections as f64).ln();
+
+        Self {
+            distance,
+            vectors: RwLock::new(Vec::with_capacity(max_elements)),
+            layers: RwLock::new(vec![Layer::new(max_elements)]),
+            entry_point: RwLock::new(None),
+            max_layer: AtomicUsize::new(0),
+            count: AtomicUsize::new(0),
+            rng_state: AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
+            max_connections,
+            max_connections_0,
+            ef_construction,
+            level_mult,
+            alpha,
+        }
+    }
+
+    /// Returns the alpha diversification parameter.
+    #[must_use]
+    pub fn get_alpha(&self) -> f32 {
+        self.alpha
     }
 
     /// Returns the number of elements in the index.
@@ -126,6 +179,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Computes the distance between two vectors using this index's distance engine.
+    ///
+    /// This is useful for brute-force search operations.
+    #[inline]
+    #[must_use]
+    pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        self.distance.distance(a, b)
     }
 
     /// Inserts a vector into the index.
@@ -251,6 +313,72 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         candidates.into_iter().take(k).collect()
     }
 
+    /// Multi-entry point search for improved recall on hard queries.
+    ///
+    /// Uses multiple entry points to explore different regions of the graph,
+    /// improving recall on datasets with clusters or hard queries.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector
+    /// * `k` - Number of neighbors to return
+    /// * `ef_search` - Search expansion factor
+    /// * `num_probes` - Number of entry points to use (2-4 recommended)
+    ///
+    /// # Returns
+    ///
+    /// Vector of (node_id, distance) pairs, sorted by distance.
+    #[must_use]
+    pub fn search_multi_entry(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+        num_probes: usize,
+    ) -> Vec<(NodeId, f32)> {
+        let entry_point = *self.entry_point.read();
+        let Some(ep) = entry_point else {
+            return Vec::new();
+        };
+
+        let count = self.count.load(Ordering::Relaxed);
+        if count == 0 {
+            return Vec::new();
+        }
+
+        let max_layer = self.max_layer.load(Ordering::Relaxed);
+
+        // Get primary entry point via standard HNSW traversal
+        let mut current_ep = ep;
+        for layer_idx in (1..=max_layer).rev() {
+            current_ep = self.search_layer_single(query, current_ep, layer_idx);
+        }
+
+        // Generate additional random entry points for diversity
+        let mut entry_points = vec![current_ep];
+        if num_probes > 1 && count > 10 {
+            let mut state = self.rng_state.load(Ordering::Relaxed);
+            for _ in 1..num_probes.min(4) {
+                // Simple xorshift for random selection
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let random_id = (state as usize) % count;
+                if !entry_points.contains(&random_id) {
+                    entry_points.push(random_id);
+                }
+            }
+            self.rng_state.store(state, Ordering::Relaxed);
+        }
+
+        // Search from all entry points - use full ef_search budget
+        // Multiple entry points expand search coverage, not reduce ef
+        let candidates = self.search_layer(query, entry_points, ef_search, 0);
+
+        // Return top k
+        candidates.into_iter().take(k).collect()
+    }
+
     // =========================================================================
     // Private helper methods
     // =========================================================================
@@ -303,6 +431,13 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         best
     }
 
+    /// Search a single layer with ef candidates.
+    ///
+    /// # Performance Optimizations (v0.9+)
+    ///
+    /// - **FxHashSet**: Faster visited set (FNV-1a hash vs SipHash)
+    /// - **Cached lock**: Single vectors lock acquisition for entire search
+    /// - **Early termination**: Break when candidate distance exceeds result threshold
     fn search_layer(
         &self,
         query: &[f32],
@@ -310,15 +445,18 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         ef: usize,
         layer: usize,
     ) -> Vec<(NodeId, f32)> {
+        use rustc_hash::FxHashSet;
         use std::cmp::Reverse;
-        use std::collections::HashSet;
 
-        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut visited: FxHashSet<NodeId> = FxHashSet::default();
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedFloat, NodeId)> = BinaryHeap::new();
 
+        // Perf: Cache vectors read lock for entire search (avoids repeated lock acquisition)
+        let vectors = self.vectors.read();
+
         for ep in entry_points {
-            let dist = self.distance.distance(query, &self.get_vector(ep));
+            let dist = self.distance.distance(query, &vectors[ep]);
             candidates.push(Reverse((OrderedFloat(dist), ep)));
             results.push((OrderedFloat(dist), ep));
             visited.insert(ep);
@@ -335,7 +473,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             for neighbor in neighbors {
                 if visited.insert(neighbor) {
-                    let dist = self.distance.distance(query, &self.get_vector(neighbor));
+                    let dist = self.distance.distance(query, &vectors[neighbor]);
                     let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
 
                     if dist < furthest || results.len() < ef {
@@ -357,14 +495,26 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         result_vec
     }
 
-    /// Heuristic neighbor selection from Malkov & Yashunin paper.
+    /// VAMANA-style neighbor selection with alpha diversification.
+    ///
+    /// Based on DiskANN/VAMANA algorithm (Subramanya et al., 2019).
     ///
     /// This algorithm selects neighbors that are:
     /// 1. Close to the query point
     /// 2. Diverse (not clustered together)
     ///
-    /// The heuristic improves recall by ensuring the graph has good coverage
-    /// of the search space around each node.
+    /// # Alpha Parameter
+    ///
+    /// - `alpha = 1.0`: Standard HNSW heuristic (Malkov & Yashunin)
+    /// - `alpha > 1.0`: More aggressive diversification (VAMANA-style)
+    ///   - Values 1.1-1.2 improve recall on large datasets (100K+)
+    ///   - Higher alpha = more diverse but potentially more edges
+    ///
+    /// # Algorithm
+    ///
+    /// For each candidate c with distance d(q,c) to query:
+    /// - Accept c if: α × d(q,c) < d(c,s) for all selected neighbors s
+    /// - This ensures neighbors are spread out in vector space
     fn select_neighbors(
         &self,
         _query: &[f32], // Not used directly - distances to query are in candidates
@@ -380,7 +530,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return candidates.iter().map(|(id, _)| *id).collect();
         }
 
-        // Heuristic selection: prefer diverse neighbors
+        // VAMANA-style heuristic selection with alpha diversification
         let mut selected: Vec<NodeId> = Vec::with_capacity(max_neighbors);
         let mut selected_vecs: Vec<Vec<f32>> = Vec::with_capacity(max_neighbors);
 
@@ -391,15 +541,17 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             let candidate_vec = self.get_vector(candidate_id);
 
-            // Check if this candidate is "good" - closer to query than to any selected neighbor
-            // This ensures diversity: we don't select candidates that are clustered together
-            let is_good = selected_vecs.iter().all(|selected_vec| {
+            // VAMANA condition: α × d(q,c) <= d(c,s) for all selected s
+            // With alpha=1.0: standard HNSW heuristic (<=)
+            // With alpha>1.0: more selective, favors diversity
+            let is_diverse = selected_vecs.iter().all(|selected_vec| {
                 let dist_to_selected = self.distance.distance(&candidate_vec, selected_vec);
-                // Candidate is good if it's closer to query than to existing selected neighbors
-                candidate_dist <= dist_to_selected
+                // Candidate is diverse if α × dist_to_query <= dist_to_selected
+                // Using <= to match original HNSW behavior when alpha=1.0
+                self.alpha * candidate_dist <= dist_to_selected
             });
 
-            if is_good || selected.is_empty() {
+            if is_diverse || selected.is_empty() {
                 selected.push(candidate_id);
                 selected_vecs.push(candidate_vec);
             }

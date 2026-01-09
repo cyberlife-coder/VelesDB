@@ -4,16 +4,28 @@ description: Gestion des branches Git (feature, bugfix, release)
 
 # Workflow : Git Flow VelesDB
 
+## ⚠️ RÈGLE CRITIQUE
+
+**La branche `main` est PROTÉGÉE sur GitHub avec PR obligatoire.**
+- JAMAIS de push direct sur `main`
+- Toujours passer par une Pull Request
+- Les features passent TOUJOURS par `develop` d'abord
+
 ## Structure des branches
 
 ```
-main          ← Production, stable, tagged
-├── develop   ← Intégration, prochaine release
-├── feature/* ← Nouvelles fonctionnalités
-├── bugfix/*  ← Corrections de bugs
-├── hotfix/*  ← Corrections urgentes (depuis main)
-└── release/* ← Préparation release
+main (PROTÉGÉE - PR obligatoire)
+  └── develop (intégration)
+        ├── feature/A
+        ├── feature/B
+        ├── bugfix/X
+        └── ...
 ```
+
+**Flow standard :**
+1. `develop` → `feature/*` (développement)
+2. `feature/*` → `develop` (merge local ou PR)
+3. `develop` → `main` (PR obligatoire + tag de version)
 
 ---
 
@@ -64,6 +76,8 @@ git commit -m "fix(module): description du fix"
 
 ## 3. Hotfix urgent (production)
 
+**⚠️ Même pour les hotfixes, main est protégée - PR obligatoire**
+
 1. Depuis main :
 ```powershell
 git checkout main
@@ -71,16 +85,29 @@ git pull origin main
 git checkout -b hotfix/description-urgente
 ```
 
-2. Corriger rapidement
+2. Corriger rapidement avec tests
 
-3. Merger dans main ET develop :
+3. Pousser la branche hotfix :
+```powershell
+git push -u origin hotfix/description-urgente
+```
+
+4. **Créer une PR sur GitHub** : `hotfix/*` → `main`
+   - Marquer comme "urgent" si applicable
+
+5. Après merge de la PR, ajouter le tag :
 ```powershell
 git checkout main
-git merge hotfix/description-urgente
+git pull origin main
 git tag -a vX.Y.Z -m "Hotfix vX.Y.Z"
+git push origin vX.Y.Z
+```
 
+6. Synchroniser develop :
+```powershell
 git checkout develop
-git merge hotfix/description-urgente
+git pull origin main
+git push origin develop
 ```
 
 ---
@@ -109,15 +136,17 @@ git branch -d feature/nom-de-la-feature
 
 ---
 
-## 5. Préparer une release
+## 5. Préparer une release (vers main)
 
-1. Créer la branche release :
+**⚠️ RAPPEL: main est protégée - PR obligatoire**
+
+1. S'assurer que `develop` est prêt :
 ```powershell
 git checkout develop
-git checkout -b release/vX.Y.0
+git pull origin develop
 ```
 
-2. Mettre à jour la version dans `Cargo.toml`
+2. Mettre à jour la version dans `Cargo.toml` (tous les crates)
 
 3. Mettre à jour `CHANGELOG.md`
 
@@ -127,18 +156,28 @@ git checkout -b release/vX.Y.0
 cargo test --all-features --release
 ```
 
-5. Merger dans main :
+5. Pousser develop :
 ```powershell
-git checkout main
-git merge release/vX.Y.0
-git tag -a vX.Y.0 -m "Release vX.Y.0"
-git push origin main --tags
+git push origin develop
 ```
 
-6. Merger dans develop :
+6. **Créer une Pull Request sur GitHub** : `develop` → `main`
+   - Titre: `Release vX.Y.Z`
+   - Description: Résumé des changements (copier depuis CHANGELOG)
+
+7. Après merge de la PR, ajouter le tag :
+```powershell
+git checkout main
+git pull origin main
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+8. Synchroniser develop avec main :
 ```powershell
 git checkout develop
-git merge release/vX.Y.0
+git pull origin main
+git push origin develop
 ```
 
 ---

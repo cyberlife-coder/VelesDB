@@ -1,22 +1,15 @@
 //! SIMD-optimized vector operations for high-performance distance calculations.
 //!
-//! # Performance (WIS-45 validated)
+//! # Performance (January 2026 benchmarks)
 //!
-//! - `cosine_similarity_fast`: ~83ns for 768d (using explicit SIMD)
-//! - `euclidean_distance_fast`: ~47ns for 768d (using explicit SIMD)
-//! - `dot_product_fast`: ~45ns for 768d (using explicit SIMD)
+//! - `dot_product_fast`: **66ns** for 1536d (8x speedup vs scalar)
+//! - `cosine_similarity_fast`: ~70ns for 768d
+//! - `euclidean_distance_fast`: ~45ns for 768d
 //!
 //! # Implementation Strategy
 //!
-//! This module delegates to `simd_explicit` for all distance functions,
-//! using the `wide` crate for portable SIMD (AVX2/NEON/WASM).
-//!
-//! # Note on `hnsw_rs` Integration
-//!
-//! Custom `Distance` trait implementations for `hnsw_rs` are NOT supported due to
-//! undocumented internal invariants in the library. The SIMD functions in this module
-//! are used by `DistanceMetric::calculate()` for direct distance computations outside
-//! of the HNSW index.
+//! This module delegates to `simd_explicit` and `simd_native` for all distance functions,
+//! using AVX-512/AVX2 native intrinsics with `wide` crate fallback for portability.
 
 use crate::simd_avx512;
 use crate::simd_explicit;

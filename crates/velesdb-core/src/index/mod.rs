@@ -4,7 +4,12 @@
 //! nearest neighbor (ANN) search and full-text search.
 
 mod bm25;
-mod hnsw;
+#[cfg(test)]
+mod bm25_tests;
+pub mod hnsw;
+mod posting_list;
+#[cfg(test)]
+mod posting_list_tests;
 
 pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};
@@ -17,7 +22,7 @@ use crate::distance::DistanceMetric;
 ///
 /// # Performance Note
 ///
-/// For bulk insertions, prefer batch methods like [`HnswIndex::insert_batch_parallel`]
+/// For bulk insertions, prefer batch methods like `HnswIndex::insert_batch_parallel()`
 /// over calling [`Self::insert`] in a loop.
 /// Individual inserts incur per-call lock overhead that batch methods avoid.
 pub trait VectorIndex: Send + Sync {
@@ -31,7 +36,7 @@ pub trait VectorIndex: Send + Sync {
     /// # Performance Warning (PERF-2)
     ///
     /// This method acquires locks for each insertion. For bulk loading, use:
-    /// - [`HnswIndex::insert_batch_parallel`] - Best for all batches
+    /// - `HnswIndex::insert_batch_parallel()` - Best for all batches
     ///
     /// Calling `insert()` in a loop incurs ~3x lock overhead per vector compared
     /// to batch methods which acquire locks once for the entire batch.
