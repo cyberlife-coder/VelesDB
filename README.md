@@ -9,9 +9,6 @@
   <em>Microsecond Vector Search • Local Context • Zero Latency</em>
 </h3>
 
-<p align="center">
-  <a href="#-english">🇬🇧 English</a> • <a href="#-français">🇫🇷 Français</a>
-</p>
 
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/actions"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&style=flat-square" alt="Build Status"></a>
@@ -38,8 +35,7 @@
 
 ---
 
-<a name="-english"></a>
-## 🇬🇧 English: The Agentic Memory Engine
+## 🚀 The Agentic Memory Engine
 
 ### 🎯 The Problem We Solve
 
@@ -69,45 +65,6 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 
 ```sql
 -- Migrate in minutes. Same SQL patterns you know.
-SELECT * FROM documents 
-WHERE vector NEAR $query 
-  AND category = 'tech' 
-LIMIT 10
-```
-
----
-
-<a name="-français"></a>
-## 🇫🇷 Français : Le Moteur de Mémoire Agentique
-
-### 🎯 Le Problème Que Nous Résolvons
-
-> **"Mon agent RAG met 200ms par récupération de contexte. Les utilisateurs perçoivent le délai."**
-
-Les bases vectorielles traditionnelles ajoutent **50-100ms de latence** par requête. Pour un agent IA qui récupère le contexte 10+ fois par conversation, c'est **1+ seconde de délai** avant le premier token.
-
-### 💡 La Solution VelesDB
-
-**VelesDB offre une récupération sub-milliseconde** en s'exécutant directement dans votre application — pas de round-trips réseau, pas de surcharge cluster.
-
-| Métrique | VelesDB | Cloud Vector DBs |
-| :--- | :--- | :--- |
-| **Latence Recherche** | **71µs** | 50-100ms |
-| **10 Récupérations** | **0.7ms total** | 500ms-1s total |
-| **Time to First Token** | **< 1ms** | 50-100ms+ |
-
-### 🏢 Vous Venez d'une Autre Base Vectorielle ?
-
-| Si vous utilisez... | Avantage VelesDB |
-| :--- | :--- |
-| **Pinecone** | Pas de clés API, pas de coûts cloud, 100x plus rapide en local |
-| **Qdrant** | Binaire unique (15Mo vs 100Mo+), WASM/Mobile natif |
-| **Milvus** | Zéro config vs configuration cluster complexe |
-| **pgvector** | Conçu pour les vecteurs, recherche 700x plus rapide |
-| **ChromaDB** | Rust production-grade vs prototype Python |
-
-```sql
--- Migrez en quelques minutes. Les mêmes patterns SQL que vous connaissez.
 SELECT * FROM documents 
 WHERE vector NEAR $query 
   AND category = 'tech' 
