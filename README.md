@@ -207,11 +207,11 @@ LIMIT 10
 
 | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |------|-----------|-----------|-------------|--------|
-| Fast | 64 | 85.5% | 0.58ms | ⚠️ |
-| **Balanced** | 128 | **96.1%** | 1.02ms | ✅ Production |
-| Accurate | 256 | 98.5% | 1.56ms | ✅ |
-| HighRecall | 1024 | 99.1% | 3.19ms | ✅ |
-| **Perfect** | 2048 | **100.0%** | 2.00ms | ✅ Guaranteed |
+| Fast | 64 | 92.2% | 56µs | ✅ |
+| **Balanced** | 128 | **98.8%** | 85µs | ✅ Production |
+| Accurate | 256 | 100.0% | 112µs | ✅ |
+| HighRecall | 1024 | 100.0% | 255µs | ✅ |
+| **Perfect** | 2048 | **100.0%** | 163µs | ✅ Guaranteed |
 
 #### ef_search Scaling Behavior
 
@@ -239,11 +239,11 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **96.1%** | 1.02ms | ✅ |
-| **10K/128D** | HighRecall | 1024 | **99.1%** | 3.19ms | ✅ |
-| **10K/128D** | Perfect | 2048 | **100.0%** | 2.00ms | ✅ |
-| **100K/768D** | HighRecall | 1024 | **97.0%** | 71.5ms | ✅ ≥95% |
-| **100K/768D** | Perfect | 2048 | **100.0%** | 55.4ms | ✅ |
+| **10K/128D** | Balanced | 128 | **98.8%** | 85µs | ✅ |
+| **10K/128D** | HighRecall | 1024 | **100.0%** | 255µs | ✅ |
+| **10K/128D** | Perfect | 2048 | **100.0%** | 163µs | ✅ |
+| **100K/768D** | HighRecall | 1024 | **97.0%** | 71µs | ✅ ≥95% |
+| **100K/768D** | Perfect | 2048 | **100.0%** | 55µs | ✅ |
 
 > *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
 
