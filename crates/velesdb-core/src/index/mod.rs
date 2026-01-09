@@ -7,6 +7,9 @@ mod bm25;
 #[cfg(test)]
 mod bm25_tests;
 pub mod hnsw;
+mod posting_list;
+#[cfg(test)]
+mod posting_list_tests;
 
 pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};
