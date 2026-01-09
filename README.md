@@ -21,8 +21,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/⚡_Search-105µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
-  <img src="https://img.shields.io/badge/🏎️_SIMD-36ns-blue?style=for-the-badge" alt="SIMD Distance"/>
+  <img src="https://img.shields.io/badge/⚡_Search-71µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_SIMD-66ns-blue?style=for-the-badge" alt="SIMD Distance"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
   <img src="https://img.shields.io/badge/🎯_Recall-96%25+-success?style=for-the-badge" alt="Recall ≥95%"/>
 </p>
@@ -53,7 +53,7 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 
 | Metric | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
-| **Search Latency** | **105µs** | 50-100ms |
+| **Search Latency** | **71µs** | 50-100ms |
 | **10 Retrievals** | **1.1ms total** | 500ms-1s total |
 | **Time to First Token** | **Instant** | Noticeable delay |
 
@@ -121,8 +121,8 @@ LIMIT 10
 <table align="center">
 <tr>
 <td align="center" width="25%">
-<h3>🏎️ 128µs Search</h3>
-<p>HNSW + AVX-512 SIMD.<br/><strong>400x faster than pgvector</strong></p>
+<h3>🏎️ 71µs Search</h3>
+<p>Native HNSW + AVX-512 SIMD.<br/><strong>700x faster than pgvector</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📝 SQL You Know</h3>
@@ -160,7 +160,7 @@ LIMIT 10
 | Metric | 🐺 **VelesDB** | Qdrant | Milvus | Pinecone | pgvector |
 |--------|---------------|--------|--------|----------|----------|
 | **Architecture** | **Single Binary** | Container | Cluster | SaaS | Postgres Ext |
-| **Search Latency** | **~105µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
+| **Search Latency** | **~71µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
 | **Setup Time** | **< 1 min** | 5-10 min | 30+ min | 5 min | 15+ min |
 | **Binary Size** | **15 MB** | 100+ MB | GBs | N/A | Extension |
 | **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
@@ -177,14 +177,16 @@ LIMIT 10
 
 | Operation | VelesDB (Core) | Details |
 |-----------|----------------|---------|
-| **SIMD Dot Product** | **35ns** | AVX-512 optimized |
-| **HNSW Search** | **~105µs** | p50 latency (10K) |
+| **SIMD Dot Product** | **66ns** | AVX-512/AVX2 native intrinsics (1536d) |
+| **HNSW Search** | **~71µs** | p50 latency (10K) |
+| **BM25 Text Search** | **28µs** | Adaptive PostingList |
+| **Hybrid Search** | **58µs** | Vector + BM25 fusion |
 | **VelesQL Parse** | **570ns** | Zero-allocation |
 
 ### 📈 Recall vs Latency Curves
 
 <details>
-<summary><b>🔬 Benchmark Configuration (January 7, 2026)</b></summary>
+<summary><b>🔬 Benchmark Configuration (January 9, 2026)</b></summary>
 
 | Component | Specification |
 |-----------|---------------|
@@ -192,7 +194,7 @@ LIMIT 10
 | **RAM** | 64 GB DDR5 |
 | **OS** | Windows 11 Professional |
 | **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v0.8.11 |
+| **VelesDB** | v0.8.12 |
 | **SIMD** | AVX-512 enabled |
 
 </details>
@@ -220,20 +222,18 @@ LIMIT 10
 > 💡 **Key insight**: 32x ef_search increase (64→2048) = only ~3.5x latency increase.
 > This demonstrates a well-implemented engine without exponential cliff.
 
-#### 🆕 Native HNSW vs External Library
+#### 🆕 Native HNSW Implementation (v0.8.12+)
 
-VelesDB v0.8.12 includes a **custom Native HNSW implementation** that eliminates external dependencies:
+VelesDB now uses a **custom Native HNSW implementation** with zero external dependencies:
 
-<p align="center">
-  <img src="docs/benchmarks/native_hnsw_comparison.png" alt="Native HNSW vs hnsw_rs" width="600"/>
-</p>
+| Feature | Details |
+|---------|---------|
+| **SIMD Distance** | AVX-512/AVX2/NEON native intrinsics |
+| **Adaptive PostingList** | FxHashSet → RoaringBitmap auto-promotion |
+| **Prefetch Hints** | Software cache prefetching for large vectors |
+| **Parallel Insert** | Lock-free sharded vector storage |
 
-| Operation | Native HNSW | hnsw_rs | Improvement |
-|-----------|-------------|---------|-------------|
-| **Search (100 queries)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
-| **Parallel Insert (5k)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
-
-> 📖 Enable with `cargo build --features native-hnsw` — [Full guide](docs/reference/NATIVE_HNSW.md)
+> 📖 [Full architecture guide](docs/reference/NATIVE_HNSW.md)
 
 ### Recall by Mode (Native Rust, Criterion benchmarks)
 
