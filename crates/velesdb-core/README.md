@@ -9,7 +9,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: HNSW index with explicit SIMD (4x faster than auto-vectorized)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (71µs search, 66ns distance)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
