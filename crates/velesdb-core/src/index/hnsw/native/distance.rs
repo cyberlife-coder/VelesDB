@@ -106,6 +106,52 @@ impl DistanceEngine for SimdDistance {
     }
 }
 
+/// Native SIMD distance computation using core::arch intrinsics.
+///
+/// Uses AVX-512 native intrinsics on x86_64, NEON on ARM.
+/// Based on arXiv:2505.07621 "Bang for the Buck" recommendations.
+pub struct NativeSimdDistance {
+    metric: DistanceMetric,
+}
+
+impl NativeSimdDistance {
+    /// Creates a new native SIMD distance engine.
+    #[must_use]
+    pub fn new(metric: DistanceMetric) -> Self {
+        Self { metric }
+    }
+}
+
+impl DistanceEngine for NativeSimdDistance {
+    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.metric {
+            DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
+            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
+            DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
+            // Fall back to existing SIMD for Hamming/Jaccard
+            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(a, b),
+            DistanceMetric::Jaccard => 1.0 - crate::simd::jaccard_similarity_fast(a, b),
+        }
+    }
+
+    fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
+        match self.metric {
+            DistanceMetric::DotProduct => {
+                // Use optimized batch with prefetch
+                crate::simd_native::batch_dot_product_native(candidates, query)
+                    .into_iter()
+                    .map(|d| -d)
+                    .collect()
+            }
+            _ => candidates.iter().map(|c| self.distance(query, c)).collect(),
+        }
+    }
+
+    fn metric(&self) -> DistanceMetric {
+        self.metric
+    }
+}
+
 // =============================================================================
 // Scalar implementations (baseline for comparison)
 // =============================================================================
@@ -353,5 +399,49 @@ mod tests {
 
         let distances = simd.batch_distance(&query, &candidates);
         assert!(distances.is_empty(), "Empty candidates should return empty");
+    }
+
+    // =========================================================================
+    // Tests for NativeSimdDistance (AVX-512/NEON intrinsics)
+    // =========================================================================
+
+    #[test]
+    fn test_native_simd_matches_simd() {
+        let simd = SimdDistance::new(DistanceMetric::Cosine);
+        let native = super::NativeSimdDistance::new(DistanceMetric::Cosine);
+
+        let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
+        let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
+
+        let simd_dist = simd.distance(&a, &b);
+        let native_dist = native.distance(&a, &b);
+
+        assert!(
+            (simd_dist - native_dist).abs() < 1e-3,
+            "Native SIMD should match SIMD: simd={simd_dist}, native={native_dist}"
+        );
+    }
+
+    #[test]
+    fn test_native_simd_euclidean() {
+        let native = super::NativeSimdDistance::new(DistanceMetric::Euclidean);
+
+        let a = vec![0.0, 0.0, 0.0, 0.0];
+        let b = vec![3.0, 4.0, 0.0, 0.0];
+
+        let dist = native.distance(&a, &b);
+        assert!((dist - 5.0).abs() < 1e-5, "3-4-5 triangle: got {dist}");
+    }
+
+    #[test]
+    fn test_native_simd_dot_product() {
+        let native = super::NativeSimdDistance::new(DistanceMetric::DotProduct);
+
+        let a: Vec<f32> = (0..128).map(|i| i as f32 * 0.1).collect();
+        let b: Vec<f32> = (0..128).map(|i| (128 - i) as f32 * 0.1).collect();
+
+        let dist = native.distance(&a, &b);
+        // DotProduct distance is negative dot product
+        assert!(dist < 0.0, "DotProduct distance should be negative");
     }
 }

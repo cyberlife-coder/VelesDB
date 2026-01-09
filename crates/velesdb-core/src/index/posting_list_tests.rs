@@ -57,16 +57,21 @@ fn test_automatic_promotion_to_large() {
     assert!(!pl.is_large());
 
     // Insert enough elements to trigger promotion
-    for i in 0..PROMOTION_THRESHOLD as u32 {
+    #[allow(clippy::cast_possible_truncation)]
+    for i in 0..(PROMOTION_THRESHOLD as u32) {
         pl.insert(i);
     }
 
-    assert!(pl.is_large(), "Should promote to Large after {} inserts", PROMOTION_THRESHOLD);
+    assert!(
+        pl.is_large(),
+        "Should promote to Large after {PROMOTION_THRESHOLD} inserts"
+    );
     assert_eq!(pl.len(), PROMOTION_THRESHOLD);
 
     // Verify all elements are still accessible
-    for i in 0..PROMOTION_THRESHOLD as u32 {
-        assert!(pl.contains(i), "Should contain {} after promotion", i);
+    #[allow(clippy::cast_possible_truncation)]
+    for i in 0..(PROMOTION_THRESHOLD as u32) {
+        assert!(pl.contains(i), "Should contain {i} after promotion");
     }
 }
 
@@ -78,7 +83,7 @@ fn test_iter_small() {
     pl.insert(3);
 
     let mut collected: Vec<u32> = pl.iter().collect();
-    collected.sort();
+    collected.sort_unstable();
     assert_eq!(collected, vec![1, 2, 3]);
 }
 
@@ -90,7 +95,7 @@ fn test_iter_large() {
     pl.insert(300);
 
     let mut collected: Vec<u32> = pl.iter().collect();
-    collected.sort();
+    collected.sort_unstable();
     assert_eq!(collected, vec![100, 200, 300]);
 }
 
@@ -108,7 +113,7 @@ fn test_union_small_small() {
     assert!(!union.is_large()); // Still small
 
     let mut collected: Vec<u32> = union.iter().collect();
-    collected.sort();
+    collected.sort_unstable();
     assert_eq!(collected, vec![1, 2, 3]);
 }
 
@@ -125,7 +130,10 @@ fn test_union_promotes_when_large_combined() {
     }
 
     let union = a.union(&b);
-    assert!(union.is_large(), "Union should promote to Large when combined size >= threshold");
+    assert!(
+        union.is_large(),
+        "Union should promote to Large when combined size >= threshold"
+    );
     assert_eq!(union.len(), 1100); // 0..1100 unique
 }
 
@@ -160,7 +168,7 @@ fn test_union_small_large() {
     assert!(union.is_large()); // Inherits Large from operand
 
     let mut collected: Vec<u32> = union.iter().collect();
-    collected.sort();
+    collected.sort_unstable();
     assert_eq!(collected, vec![1, 2, 3]);
 }
 
