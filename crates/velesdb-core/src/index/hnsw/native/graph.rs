@@ -314,6 +314,13 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         best
     }
 
+    /// Search a single layer with ef candidates.
+    ///
+    /// # Performance Optimizations (v0.9+)
+    ///
+    /// - **FxHashSet**: Faster visited set (FNV-1a hash vs SipHash)
+    /// - **Cached lock**: Single vectors lock acquisition for entire search
+    /// - **Early termination**: Break when candidate distance exceeds result threshold
     fn search_layer(
         &self,
         query: &[f32],
@@ -321,15 +328,18 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         ef: usize,
         layer: usize,
     ) -> Vec<(NodeId, f32)> {
+        use rustc_hash::FxHashSet;
         use std::cmp::Reverse;
-        use std::collections::HashSet;
 
-        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut visited: FxHashSet<NodeId> = FxHashSet::default();
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedFloat, NodeId)> = BinaryHeap::new();
 
+        // Perf: Cache vectors read lock for entire search (avoids repeated lock acquisition)
+        let vectors = self.vectors.read();
+
         for ep in entry_points {
-            let dist = self.distance.distance(query, &self.get_vector(ep));
+            let dist = self.distance.distance(query, &vectors[ep]);
             candidates.push(Reverse((OrderedFloat(dist), ep)));
             results.push((OrderedFloat(dist), ep));
             visited.insert(ep);
@@ -346,7 +356,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             for neighbor in neighbors {
                 if visited.insert(neighbor) {
-                    let dist = self.distance.distance(query, &self.get_vector(neighbor));
+                    let dist = self.distance.distance(query, &vectors[neighbor]);
                     let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
 
                     if dist < furthest || results.len() < ef {
