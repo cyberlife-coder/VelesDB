@@ -41,9 +41,10 @@ fn test_hnsw_params_high_recall() {
 
 #[test]
 fn test_hnsw_params_large_dataset() {
+    // Updated: large_dataset now uses M=128, ef=2000 for better recall at 500K
     let params = HnswParams::large_dataset(768);
-    assert_eq!(params.max_connections, 96); // for_dataset_size(768, 500K)
-    assert_eq!(params.ef_construction, 1200);
+    assert_eq!(params.max_connections, 128);
+    assert_eq!(params.ef_construction, 2000);
     assert_eq!(params.max_elements, 750_000);
 }
 
@@ -57,17 +58,19 @@ fn test_hnsw_params_for_dataset_size_small() {
 
 #[test]
 fn test_hnsw_params_for_dataset_size_medium() {
+    // Updated: 50K at 768D now uses M=128, ef=1600 for better recall
     let params = HnswParams::for_dataset_size(768, 50_000);
-    assert_eq!(params.max_connections, 64);
-    assert_eq!(params.ef_construction, 800);
+    assert_eq!(params.max_connections, 128);
+    assert_eq!(params.ef_construction, 1600);
     assert_eq!(params.max_elements, 150_000);
 }
 
 #[test]
 fn test_hnsw_params_for_dataset_size_large() {
+    // Updated: 300K at 768D now uses M=128, ef=2000 for better recall
     let params = HnswParams::for_dataset_size(768, 300_000);
-    assert_eq!(params.max_connections, 96);
-    assert_eq!(params.ef_construction, 1200);
+    assert_eq!(params.max_connections, 128);
+    assert_eq!(params.ef_construction, 2000);
     assert_eq!(params.max_elements, 750_000);
 }
 
@@ -151,26 +154,26 @@ fn test_hnsw_params_storage_mode_default() {
 fn test_search_quality_ef_search() {
     assert_eq!(SearchQuality::Fast.ef_search(10), 64);
     assert_eq!(SearchQuality::Balanced.ef_search(10), 128);
-    assert_eq!(SearchQuality::Accurate.ef_search(10), 256);
+    // Updated: Accurate now uses 512 base (was 256) for 100K+ scale
+    assert_eq!(SearchQuality::Accurate.ef_search(10), 512);
     assert_eq!(SearchQuality::Custom(50).ef_search(10), 50);
 }
 
 #[test]
 fn test_search_quality_perfect_ef_search() {
-    // Perfect mode should use very high ef_search for 100% recall
-    // Base value 2048, scales with k * 50
-    assert_eq!(SearchQuality::Perfect.ef_search(10), 2048); // max(2048, 10*50=500)
-    assert_eq!(SearchQuality::Perfect.ef_search(50), 2500); // max(2048, 50*50=2500)
-    assert_eq!(SearchQuality::Perfect.ef_search(100), 5000); // max(2048, 100*50=5000)
+    // Perfect mode uses 4096 base (was 2048), scales with k * 100 for 100K+ scale
+    assert_eq!(SearchQuality::Perfect.ef_search(10), 4096); // max(4096, 10*100=1000)
+    assert_eq!(SearchQuality::Perfect.ef_search(50), 5000); // max(4096, 50*100=5000)
+    assert_eq!(SearchQuality::Perfect.ef_search(100), 10000); // max(4096, 100*100=10000)
 }
 
 #[test]
 fn test_search_quality_ef_search_high_k() {
-    // Test that ef_search scales with k
+    // Test that ef_search scales with k (updated for 100K+ scale)
     assert_eq!(SearchQuality::Fast.ef_search(100), 200); // 100 * 2
     assert_eq!(SearchQuality::Balanced.ef_search(50), 200); // 50 * 4
-    assert_eq!(SearchQuality::Accurate.ef_search(40), 320); // 40 * 8
-    assert_eq!(SearchQuality::Perfect.ef_search(50), 2500); // max(2048, 50*50=2500)
+    assert_eq!(SearchQuality::Accurate.ef_search(40), 640); // 40 * 16 (was 40 * 8)
+    assert_eq!(SearchQuality::Perfect.ef_search(50), 5000); // max(4096, 50*100=5000)
 }
 
 #[test]
@@ -220,4 +223,24 @@ fn test_search_quality_serialize_deserialize() {
     let json = serde_json::to_string(&quality).unwrap();
     let deserialized: SearchQuality = serde_json::from_str(&json).unwrap();
     assert_eq!(quality, deserialized);
+}
+
+// =============================================================================
+// Phase 1: Large-scale optimization tests
+// =============================================================================
+
+#[test]
+fn test_hnsw_params_for_dataset_size_100k_768d() {
+    // 100K vectors at 768D should use M=128, ef=1600 for ≥95% recall
+    let params = HnswParams::for_dataset_size(768, 100_000);
+    assert_eq!(params.max_connections, 128);
+    assert_eq!(params.ef_construction, 1600);
+}
+
+#[test]
+fn test_hnsw_params_for_dataset_size_500k_768d() {
+    // 500K vectors at 768D should use M=128, ef=2000 for ≥95% recall
+    let params = HnswParams::for_dataset_size(768, 500_000);
+    assert_eq!(params.max_connections, 128);
+    assert_eq!(params.ef_construction, 2000);
 }

@@ -36,7 +36,7 @@ pub struct SelectStatement {
 ///
 /// ```sql
 /// SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
-/// WITH (mode = 'high_recall', timeout_ms = 5000)
+/// WITH (mode = 'accurate', timeout_ms = 5000)
 /// ```
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WithClause {
@@ -113,7 +113,7 @@ pub struct WithOption {
 /// Value type for WITH clause options.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WithValue {
-    /// String value (e.g., '`high_recall`').
+    /// String value (e.g., 'accurate').
     String(String),
     /// Integer value (e.g., 512).
     Integer(i64),

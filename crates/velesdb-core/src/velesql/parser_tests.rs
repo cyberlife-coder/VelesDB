@@ -246,14 +246,13 @@ fn test_parse_case_insensitive() {
 
 #[test]
 fn test_parse_with_clause_single_option() {
-    let query = Parser::parse(
-        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'high_recall')",
-    )
-    .unwrap();
+    let query =
+        Parser::parse("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'accurate')")
+            .unwrap();
     let with = query.select.with_clause.expect("Expected WITH clause");
     assert_eq!(with.options.len(), 1);
     assert_eq!(with.options[0].key, "mode");
-    assert_eq!(with.get_mode(), Some("high_recall"));
+    assert_eq!(with.get_mode(), Some("accurate"));
 }
 
 #[test]
@@ -277,9 +276,9 @@ fn test_parse_with_clause_boolean_option() {
 
 #[test]
 fn test_parse_with_clause_identifier_value() {
-    let query = Parser::parse("SELECT * FROM docs LIMIT 10 WITH (mode = high_recall)").unwrap();
+    let query = Parser::parse("SELECT * FROM docs LIMIT 10 WITH (mode = accurate)").unwrap();
     let with = query.select.with_clause.expect("Expected WITH clause");
-    assert_eq!(with.get_mode(), Some("high_recall"));
+    assert_eq!(with.get_mode(), Some("accurate"));
 }
 
 #[test]

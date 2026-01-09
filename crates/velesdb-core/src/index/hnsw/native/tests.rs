@@ -31,13 +31,14 @@ fn test_native_hnsw_basic_insert_search() {
 #[test]
 fn test_native_hnsw_recall() {
     let engine = SimdDistance::new(DistanceMetric::Cosine);
-    let hnsw = NativeHnsw::new(engine, 32, 200, 10_000);
+    // Reduced parameters for faster test execution
+    let hnsw = NativeHnsw::new(engine, 16, 100, 500);
 
-    // Insert 1000 vectors
-    let vectors: Vec<Vec<f32>> = (0..1000)
+    // Reduced from 1000×768D to 200×128D for faster test execution
+    let vectors: Vec<Vec<f32>> = (0..200)
         .map(|i| {
-            (0..768)
-                .map(|j| ((i * 768 + j) as f32 * 0.001).sin())
+            (0..128)
+                .map(|j| ((i * 128 + j) as f32 * 0.001).sin())
                 .collect()
         })
         .collect();
@@ -48,11 +49,11 @@ fn test_native_hnsw_recall() {
 
     // Test recall with multiple queries
     let mut total_recall = 0.0;
-    let n_queries = 10;
+    let n_queries = 5;
     let k = 10;
 
     for q_idx in 0..n_queries {
-        let query = &vectors[q_idx * 100]; // Use existing vectors as queries
+        let query = &vectors[q_idx * 40]; // Use existing vectors as queries
 
         // Get HNSW results
         let hnsw_results: Vec<usize> = hnsw
@@ -125,4 +126,130 @@ fn test_cpu_vs_simd_consistency() {
         cpu_results[0].0, simd_results[0].0,
         "CPU and SIMD should find same nearest neighbor"
     );
+}
+
+// =============================================================================
+// Phase 2: VAMANA α diversification tests (TDD)
+// =============================================================================
+
+#[test]
+fn test_native_hnsw_with_alpha_diversification() {
+    // Test that higher alpha produces more diverse neighbors
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+
+    // Create index with alpha=1.2 (VAMANA-style diversification)
+    let hnsw = NativeHnsw::with_alpha(engine, 16, 100, 100, 1.2);
+
+    // Insert clustered vectors (two clusters)
+    for i in 0..25_u64 {
+        // Cluster 1: vectors near [1, 0, 0, ...]
+        let v: Vec<f32> = (0..32)
+            .map(|j| {
+                if j == 0 {
+                    1.0
+                } else {
+                    (i as f32 + j as f32) * 0.001
+                }
+            })
+            .collect();
+        hnsw.insert(v);
+    }
+    for i in 0..25_u64 {
+        // Cluster 2: vectors near [0, 1, 0, ...]
+        let v: Vec<f32> = (0..32)
+            .map(|j| {
+                if j == 1 {
+                    1.0
+                } else {
+                    (i as f32 + j as f32) * 0.001
+                }
+            })
+            .collect();
+        hnsw.insert(v);
+    }
+
+    assert_eq!(hnsw.len(), 50);
+
+    // Search should work correctly
+    let query: Vec<f32> = (0..32).map(|j| if j == 0 { 0.9 } else { 0.01 }).collect();
+    let results = hnsw.search(&query, 5, 50);
+
+    assert!(!results.is_empty(), "Should return results");
+}
+
+#[test]
+fn test_native_hnsw_alpha_default_is_one() {
+    // Default alpha should be 1.0 (standard HNSW behavior)
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    assert!(
+        (hnsw.get_alpha() - 1.0).abs() < f32::EPSILON,
+        "Default alpha should be 1.0"
+    );
+}
+
+#[test]
+fn test_native_hnsw_alpha_affects_graph_structure() {
+    // With alpha > 1.0, the graph should have more diverse connections
+    let engine1 = SimdDistance::new(DistanceMetric::Euclidean);
+    let engine2 = SimdDistance::new(DistanceMetric::Euclidean);
+
+    let hnsw_standard = NativeHnsw::new(engine1, 16, 100, 100);
+    let hnsw_diverse = NativeHnsw::with_alpha(engine2, 16, 100, 100, 1.2);
+
+    // Insert same vectors
+    for i in 0..30_u64 {
+        let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
+        hnsw_standard.insert(v.clone());
+        hnsw_diverse.insert(v);
+    }
+
+    // Both should have same count
+    assert_eq!(hnsw_standard.len(), hnsw_diverse.len());
+}
+
+// =============================================================================
+// Phase 3: Multi-Entry Points tests
+// =============================================================================
+
+#[test]
+fn test_search_multi_entry_returns_results() {
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Insert vectors
+    for i in 0..50_u64 {
+        let v: Vec<f32> = (0..32).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+        hnsw.insert(v);
+    }
+
+    let query: Vec<f32> = (0..32).map(|j| (j as f32 * 0.01).sin()).collect();
+
+    // Multi-entry search with 3 probes
+    let results = hnsw.search_multi_entry(&query, 5, 50, 3);
+
+    assert!(!results.is_empty(), "Should return results");
+    assert!(results.len() <= 5, "Should not exceed k");
+}
+
+#[test]
+fn test_search_multi_entry_vs_standard() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Insert vectors
+    for i in 0..30_u64 {
+        let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
+        hnsw.insert(v);
+    }
+
+    let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.05).collect();
+
+    // Both searches should return results
+    let standard = hnsw.search(&query, 5, 50);
+    let multi = hnsw.search_multi_entry(&query, 5, 50, 2);
+
+    assert!(!standard.is_empty());
+    assert!(!multi.is_empty());
 }

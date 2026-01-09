@@ -791,7 +791,7 @@ impl HnswIndex {
     ///
     /// # Deprecated
     ///
-    /// **Use [`insert_batch_parallel`] instead** - it's 15x faster (29k/s vs 1.9k/s).
+    /// **Use [`Self::insert_batch_parallel`] instead** - it's 15x faster (29k/s vs 1.9k/s).
     ///
     /// This method exists for backward compatibility only. The theoretical use cases
     /// (rayon/tokio conflicts) have not materialized in practice.
@@ -1038,7 +1038,7 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`VacuumError::VectorStorageDisabled`] if the index was created
+    /// Returns `VacuumError::VectorStorageDisabled` if the index was created
     /// with `new_fast_insert()` mode, which disables vector storage.
     ///
     /// # Example
