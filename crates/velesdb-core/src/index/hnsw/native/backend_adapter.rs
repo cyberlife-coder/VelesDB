@@ -360,6 +360,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             max_connections_0,
             ef_construction,
             level_mult,
+            alpha: 1.0, // Default: standard HNSW behavior for loaded indices
         })
     }
 }

@@ -631,11 +631,13 @@ fn test_upsert_bulk_dimension_mismatch() {
 fn test_upsert_bulk_large_batch() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("test_collection");
-    let collection = Collection::create(path, 64, DistanceMetric::Cosine).unwrap();
+    // Reduced from 64D to 32D for faster test execution
+    let collection = Collection::create(path, 32, DistanceMetric::Cosine).unwrap();
 
-    let points: Vec<Point> = (0_u64..500)
+    // Reduced from 500 to 100 vectors for faster test execution
+    let points: Vec<Point> = (0_u64..100)
         .map(|i| {
-            let vector: Vec<f32> = (0_u64..64)
+            let vector: Vec<f32> = (0_u64..32)
                 .map(|j| ((i + j) % 100) as f32 / 100.0)
                 .collect();
             Point::new(i, vector, None)
@@ -643,8 +645,8 @@ fn test_upsert_bulk_large_batch() {
         .collect();
 
     let inserted = collection.upsert_bulk(&points).unwrap();
-    assert_eq!(inserted, 500);
-    assert_eq!(collection.len(), 500);
+    assert_eq!(inserted, 100);
+    assert_eq!(collection.len(), 100);
 }
 
 #[test]

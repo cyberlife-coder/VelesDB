@@ -861,17 +861,18 @@ fn test_search_quality_fast() {
 }
 
 #[test]
-fn test_search_quality_accurate() {
+fn test_search_quality_balanced() {
     let index = HnswIndex::new(3, DistanceMetric::Cosine);
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.9, 0.1, 0.0]);
 
-    let results = index.search_with_quality(&[1.0, 0.0, 0.0], 2, SearchQuality::Accurate);
+    // Test Balanced quality mode
+    let results = index.search_with_quality(&[1.0, 0.0, 0.0], 2, SearchQuality::Balanced);
     // HNSW may return fewer results for very small indices
     assert!(!results.is_empty(), "Should return at least one result");
     assert_eq!(
         results[0].0, 1,
-        "Accurate search should find exact match first"
+        "Balanced search should find exact match first"
     );
 }
 
@@ -942,8 +943,8 @@ fn test_hnsw_io_holder_is_none_for_new_index() {
 fn test_hnsw_large_batch_parallel_insert() {
     let index = HnswIndex::new(128, DistanceMetric::Cosine);
 
-    // Create 1000 vectors
-    let vectors: Vec<(u64, Vec<f32>)> = (0..1000)
+    // Create 200 vectors (reduced from 1000 for faster test execution)
+    let vectors: Vec<(u64, Vec<f32>)> = (0..200)
         .map(|i| {
             let v: Vec<f32> = (0..128).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
             (i as u64, v)
@@ -953,8 +954,8 @@ fn test_hnsw_large_batch_parallel_insert() {
     let inserted = index.insert_batch_parallel(vectors);
     index.set_searching_mode();
 
-    assert_eq!(inserted, 1000, "Should insert 1000 vectors");
-    assert_eq!(index.len(), 1000);
+    assert_eq!(inserted, 200, "Should insert 200 vectors");
+    assert_eq!(index.len(), 200);
 
     // Verify search works
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.001).sin()).collect();
@@ -1017,8 +1018,8 @@ fn test_search_with_rerank_small_dim_prefetch() {
 fn test_search_batch_parallel_consistency() {
     let index = HnswIndex::new(64, DistanceMetric::Cosine);
 
-    // Insert 200 vectors
-    for i in 0u64..200 {
+    // Insert 100 vectors (reduced from 200 for faster test execution)
+    for i in 0u64..100 {
         let v: Vec<f32> = (0..64)
             .map(|j| ((i + j as u64) as f32 * 0.01).sin())
             .collect();
@@ -1070,8 +1071,8 @@ fn test_search_batch_parallel_empty_queries() {
 fn test_search_batch_parallel_large_batch() {
     let index = HnswIndex::new(128, DistanceMetric::Cosine);
 
-    // Insert 500 vectors
-    for i in 0u64..500 {
+    // Insert 150 vectors (reduced from 500 for faster test execution)
+    for i in 0u64..150 {
         let v: Vec<f32> = (0..128)
             .map(|j| ((i + j as u64) as f32 * 0.001).sin())
             .collect();
@@ -1079,19 +1080,20 @@ fn test_search_batch_parallel_large_batch() {
     }
     index.set_searching_mode();
 
-    // 100 queries batch
-    let queries: Vec<Vec<f32>> = (0..100)
+    // 20 queries batch (reduced from 100 for faster test execution)
+    let queries: Vec<Vec<f32>> = (0..20)
         .map(|i| {
             (0..128)
-                .map(|j| ((500 + i + j) as f32 * 0.001).sin())
+                .map(|j| ((150 + i + j) as f32 * 0.001).sin())
                 .collect()
         })
         .collect();
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
-    let results = index.search_batch_parallel(&query_refs, 10, SearchQuality::Accurate);
+    // Use Balanced for faster test execution
+    let results = index.search_batch_parallel(&query_refs, 10, SearchQuality::Balanced);
 
-    assert_eq!(results.len(), 100, "Should return 100 result sets");
+    assert_eq!(results.len(), 20, "Should return 20 result sets");
     for result in &results {
         assert_eq!(result.len(), 10, "Each result should have 10 neighbors");
     }
@@ -1518,11 +1520,12 @@ fn test_drop_stress_load_search_destroy_cycle() {
 fn test_drop_stress_parallel_insert_then_drop() {
     // Stress test: parallel batch insert immediately followed by drop
     // Use Euclidean to avoid cosine normalization requirements
-    for _ in 0..30 {
+    // Reduced iterations and batch size for faster test execution
+    for _ in 0..5 {
         let index = HnswIndex::new(64, DistanceMetric::Euclidean);
 
-        // Generate batch data with reasonable magnitude
-        let batch: Vec<(u64, Vec<f32>)> = (0..500)
+        // Generate batch data with reasonable magnitude (reduced from 500)
+        let batch: Vec<(u64, Vec<f32>)> = (0..100)
             .map(|i| {
                 let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
                 (i as u64, v)

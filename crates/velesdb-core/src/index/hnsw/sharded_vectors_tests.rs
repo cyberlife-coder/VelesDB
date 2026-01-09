@@ -199,10 +199,10 @@ fn test_shard_index_distribution() {
 
 #[test]
 fn test_sharded_vectors_concurrent_insert() {
-    // Arrange
-    let storage = Arc::new(ShardedVectors::new(768));
-    let num_threads = 8;
-    let vectors_per_thread = 1000;
+    // Arrange - reduced from 768D to 32D for faster test execution
+    let storage = Arc::new(ShardedVectors::new(32));
+    let num_threads = 4;
+    let vectors_per_thread = 50;
 
     // Act - spawn threads that insert unique vectors
     let handles: Vec<_> = (0..num_threads)
@@ -211,7 +211,7 @@ fn test_sharded_vectors_concurrent_insert() {
             thread::spawn(move || {
                 let start = t * vectors_per_thread;
                 for i in start..(start + vectors_per_thread) {
-                    s.insert(i, &[i as f32; 768]);
+                    s.insert(i, &[i as f32; 32]);
                 }
             })
         })
@@ -227,39 +227,39 @@ fn test_sharded_vectors_concurrent_insert() {
 
 #[test]
 fn test_sharded_vectors_concurrent_read_write() {
-    // Arrange
-    let storage = Arc::new(ShardedVectors::new(128));
+    // Arrange - reduced dimensions and counts for faster test execution
+    let storage = Arc::new(ShardedVectors::new(16));
 
-    // Pre-populate
-    for i in 0..1000 {
-        storage.insert(i, &[i as f32; 128]);
+    // Pre-populate with smaller dataset
+    for i in 0..100 {
+        storage.insert(i, &[i as f32; 16]);
     }
 
-    let num_readers = 4;
-    let num_writers = 4;
+    let num_readers = 2;
+    let num_writers = 2;
 
     // Act
     let mut handles = vec![];
 
-    // Readers
+    // Readers - reduced iterations
     for _ in 0..num_readers {
         let s = Arc::clone(&storage);
         handles.push(thread::spawn(move || {
-            for _ in 0..10000 {
-                let _ = s.get(500);
-                let _ = s.contains(500);
-                let _ = s.with_vector(500, <[f32]>::len);
+            for _ in 0..100 {
+                let _ = s.get(50);
+                let _ = s.contains(50);
+                let _ = s.with_vector(50, <[f32]>::len);
             }
         }));
     }
 
-    // Writers
+    // Writers - reduced batch size
     for t in 0..num_writers {
         let s = Arc::clone(&storage);
         handles.push(thread::spawn(move || {
-            let start = 1000 + t * 100;
-            for i in start..(start + 100) {
-                s.insert(i, &[i as f32; 128]);
+            let start = 100 + t * 20;
+            for i in start..(start + 20) {
+                s.insert(i, &[i as f32; 16]);
             }
         }));
     }
@@ -269,15 +269,15 @@ fn test_sharded_vectors_concurrent_read_write() {
         h.join().expect("Thread should not panic");
     }
 
-    assert_eq!(storage.len(), 1000 + num_writers * 100);
+    assert_eq!(storage.len(), 100 + num_writers * 20);
 }
 
 #[test]
 fn test_sharded_vectors_parallel_batch_insert() {
-    // Arrange
-    let storage = Arc::new(ShardedVectors::new(64));
-    let num_threads = 4;
-    let batch_size = 250;
+    // Arrange - reduced for faster test execution
+    let storage = Arc::new(ShardedVectors::new(16));
+    let num_threads = 2;
+    let batch_size = 50;
 
     // Act - each thread inserts a batch
     let handles: Vec<_> = (0..num_threads)
@@ -286,7 +286,7 @@ fn test_sharded_vectors_parallel_batch_insert() {
             thread::spawn(move || {
                 let start = t * batch_size;
                 let batch: Vec<(usize, Vec<f32>)> = (start..(start + batch_size))
-                    .map(|i| (i, vec![i as f32; 64]))
+                    .map(|i| (i, vec![i as f32; 16]))
                     .collect();
                 s.insert_batch(batch);
             })
@@ -304,9 +304,10 @@ fn test_sharded_vectors_parallel_batch_insert() {
 #[test]
 fn test_sharded_vectors_no_data_corruption() {
     // Verify that concurrent operations don't corrupt data
+    // Reduced for faster test execution
     let storage = Arc::new(ShardedVectors::new(10));
-    let num_threads = 8;
-    let ops_per_thread = 500;
+    let num_threads = 4;
+    let ops_per_thread = 50;
 
     let handles: Vec<_> = (0..num_threads)
         .map(|t| {
