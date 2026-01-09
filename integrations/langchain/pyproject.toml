@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-velesdb"
-version = "1.0.0"
+version = "1.0.1"
 description = "LangChain integration for VelesDB vector database"
 readme = "README.md"
 license = {text = "MIT"}
