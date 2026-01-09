@@ -55,11 +55,11 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 | :--- | :--- | :--- |
 | **Search Latency** | **71µs** | 50-100ms |
 | **10 Retrievals** | **0.7ms total** | 500ms-1s total |
-| **Time to First Token** | **Instant** | Noticeable delay |
+| **Time to First Token** | **< 1ms** | 50-100ms+ |
 
 ### 🏢 Coming From Another Vector DB?
 
-| If you use... | VelesDB advantage |
+| If you use... | VelesDB difference |
 | :--- | :--- |
 | **Pinecone** | No API keys, no cloud costs, 100x faster locally |
 | **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile |
@@ -94,7 +94,7 @@ Les bases vectorielles traditionnelles ajoutent **50-100ms de latence** par requ
 | :--- | :--- | :--- |
 | **Latence Recherche** | **71µs** | 50-100ms |
 | **10 Récupérations** | **0.7ms total** | 500ms-1s total |
-| **Time to First Token** | **Instantané** | Délai perceptible |
+| **Time to First Token** | **< 1ms** | 50-100ms+ |
 
 ### 🏢 Vous Venez d'une Autre Base Vectorielle ?
 
@@ -141,12 +141,12 @@ LIMIT 10
 
 ---
 
-## 🎯 Perfect For / Idéal Pour
+## 🎯 Use Cases
 
-| Use Case | Why VelesDB Wins |
+| Use Case | VelesDB Feature |
 | :--- | :--- |
-| **RAG Pipelines** | Sub-ms retrieval = faster Time to First Token |
-| **AI Agents** | Embedded memory with instant context switching |
+| **RAG Pipelines** | Sub-ms retrieval |
+| **AI Agents** | Embedded memory, local context |
 | **Desktop Apps (Tauri/Electron)** | Single binary, no server needed |
 | **Mobile AI (iOS/Android)** | Native SDKs with 32x memory compression |
 | **Browser-side Search** | WASM module, zero backend |
@@ -219,8 +219,7 @@ LIMIT 10
   <img src="docs/benchmarks/ef_scaling_10k_128d.png" alt="ef_search Scaling" width="700"/>
 </p>
 
-> 💡 **Key insight**: 32x ef_search increase (64→2048) = only ~3.5x latency increase.
-> This demonstrates a well-implemented engine without exponential cliff.
+> 32x ef_search increase (64→2048) = ~3x latency increase.
 
 #### 🆕 Native HNSW Implementation (v0.8.12+)
 
@@ -279,7 +278,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 ## ✨ Features
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
-- ⚡ **Blazing Fast Search** — SIMD-optimized similarity (AVX-512/AVX2/NEON)
+- ⚡ **SIMD-optimized Search** — AVX-512/AVX2/NEON accelerated similarity
 - 🎯 **≥95% Recall Guaranteed** — Adaptive HNSW params up to 1M vectors
 - 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (roadmap)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
@@ -297,7 +296,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 
 ## 🔐 On-Premises & Edge Deployment
 
-VelesDB is designed for **on-prem and edge deployments** where data sovereignty matters:
+VelesDB supports **on-prem and edge deployments** with full data control:
 
 | Advantage | VelesDB | Cloud Vector DBs |
 |-----------|---------|------------------|
@@ -307,12 +306,12 @@ VelesDB is designed for **on-prem and edge deployments** where data sovereignty 
 | **GDPR/HIPAA** | ✅ Full control | ⚠️ Shared responsibility |
 | **Audit Trail** | ✅ Local logs | ⚠️ Provider-dependent |
 
-**Perfect for:**
-- 🏥 Healthcare (HIPAA) — Patient embeddings stay on-site
-- 🏦 Finance (PCI-DSS) — Transaction vectors never leave your network
-- 🏭 Manufacturing — Air-gapped factory floor AI
-- 🤖 Robotics — Microsecond latency for real-time decisions
-- 📱 Edge/IoT — Single binary deploys anywhere
+**Applicable sectors:**
+- 🏥 Healthcare (HIPAA) — Patient embeddings on-site
+- 🏦 Finance (PCI-DSS) — Transaction vectors local
+- 🏭 Manufacturing — Air-gapped environments
+- 🤖 Robotics — Low-latency requirements
+- 📱 Edge/IoT — Single binary deployment
 
 ```bash
 # Deploy on-prem in seconds
@@ -345,7 +344,7 @@ curl -X POST http://localhost:8080/collections/fingerprints/points \
   -d '{"points": [{"id": 1, "vector": [1, 0, 1, 0, ...]}]}'
 ```
 
-**Why Hamming?** Compare 64 bits in a single CPU operation (XOR + popcount) — orders of magnitude faster than floating-point comparisons.
+**Hamming** compares 64 bits in a single CPU operation (XOR + popcount).
 
 #### 🏷️ Set Similarity with Jaccard
 
@@ -360,7 +359,7 @@ curl -X POST http://localhost:8080/collections \
 # [1,1,0,0,...] = user likes categories 0,1 but not 2,3
 ```
 
-**Why Jaccard?** Measures overlap between sets — perfect for "users who liked X also liked Y".
+**Jaccard** measures overlap between sets. Used for collaborative filtering ("users who liked X also liked Y").
 
 ---
 
@@ -681,10 +680,6 @@ curl -X POST http://localhost:8080/query \
 
 ## ⚡ Performance
 
-<p align="center">
-  <strong>🏆 Obsessive Performance Engineering 🏆</strong><br/>
-  <em>Every nanosecond counts. Every allocation matters.</em>
-</p>
 
 ### 🔥 Core Vector Operations (768D - BERT/OpenAI dimensions)
 
@@ -713,7 +708,7 @@ curl -X POST http://localhost:8080/query \
 | Balanced | 98.8% | 85µs | Production recommended |
 | Accurate | 100% | 112µs | High precision |
 | HighRecall | 100% | 255µs | Very high precision |
-| **Perfect** | **100%** | 163µs | **Guaranteed accuracy (brute-force SIMD)** |
+| **Perfect** | **100%** | 163µs | Brute-force SIMD |
 
 ### 🛠️ Optimizations Under the Hood
 
@@ -721,7 +716,7 @@ curl -X POST http://localhost:8080/query \
 - **Prefetch**: CPU cache warming for HNSW traversal (+12% throughput)
 - **Contiguous Layout**: 64-byte aligned memory for cache efficiency
 - **Batch WAL**: Single disk write per batch import
-- **Zero-Copy**: Memory-mapped files for instant startup
+- **Zero-Copy**: Memory-mapped files for fast startup
 
 > 📊 Full benchmarks: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
@@ -761,16 +756,16 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 | **License** | **ELv2** | Apache 2.0 | Apache 2.0 | Closed | PostgreSQL |
 | **Best For** | **Embedded / Edge / Speed** | Multimodal / Lakehouse | Scale / Cloud | Managed SaaS | Relational + Vector |
 
-### 🎯 Why Choose VelesDB?
+### 🎯 VelesDB Characteristics
 
-#### ⚡ Extreme Latency
+#### ⚡ Low Latency
 - **~66ns** per vector distance (1536D with native intrinsics)
 - **71µs** HNSW search p50 on 10K vectors
 - **SIMD-optimized** (AVX-512, AVX2, NEON native intrinsics)
 
 #### 📝 SQL-Native Queries (VelesQL)
 ```sql
--- Clean, familiar syntax - no JSON DSL to learn
+-- SQL-like syntax
 SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
 ```
 
