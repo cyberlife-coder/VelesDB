@@ -17,6 +17,12 @@
 //! - `k1` = 1.2 (term frequency saturation)
 //! - `b` = 0.75 (document length normalization)
 //!
+//! # Performance (v0.9+)
+//!
+//! - **Adaptive PostingList**: Uses `FxHashSet` for rare terms, `RoaringBitmap` for frequent terms
+//! - **Automatic promotion**: Terms with 1000+ docs switch to compressed Roaring representation
+//! - **Efficient unions**: O(min(n,m)) for Roaring vs O(n+m) for HashSet
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -30,8 +36,9 @@
 //! // Returns [(1, score)] - document 1 matches "rust"
 //! ```
 
+use super::posting_list::PostingList;
 use parking_lot::RwLock;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 /// BM25 tuning parameters.
 #[derive(Debug, Clone, Copy)]
@@ -60,12 +67,18 @@ struct Document {
 /// BM25 full-text search index.
 ///
 /// Thread-safe inverted index for efficient full-text search.
+///
+/// # Performance (v0.9+)
+///
+/// Uses adaptive `PostingList` that automatically switches between:
+/// - `FxHashSet` for rare terms (< 1000 docs) - fast insert/lookup
+/// - `RoaringBitmap` for frequent terms (≥ 1000 docs) - compressed, fast unions
 #[allow(clippy::cast_precision_loss)] // BM25 scoring uses f32 approximations
 pub struct Bm25Index {
     /// BM25 parameters
     params: Bm25Params,
-    /// Inverted index: term -> set of document IDs (`FxHashSet` for faster lookup)
-    inverted_index: RwLock<FxHashMap<String, FxHashSet<u64>>>,
+    /// Inverted index: term -> adaptive posting list (auto-promotes to Roaring)
+    inverted_index: RwLock<FxHashMap<String, PostingList>>,
     /// Document storage: id -> Document
     documents: RwLock<FxHashMap<u64, Document>>,
     /// Total number of documents
@@ -131,11 +144,17 @@ impl Bm25Index {
             length: doc_length,
         };
 
-        // Update inverted index (use doc.term_freqs since we moved it)
+        // Update inverted index with adaptive PostingList
+        // PostingList auto-promotes to Roaring when cardinality exceeds threshold
+        #[allow(clippy::cast_possible_truncation)] // Doc IDs typically fit in u32
+        let id_u32 = id as u32;
         {
             let mut inv_idx = self.inverted_index.write();
             for term in doc.term_freqs.keys() {
-                inv_idx.entry(term.clone()).or_default().insert(id);
+                inv_idx
+                    .entry(term.clone())
+                    .or_insert_with(PostingList::new)
+                    .insert(id_u32);
             }
         }
 
@@ -173,12 +192,14 @@ impl Bm25Index {
 
         if let Some(doc) = doc {
             // Remove from inverted index
+            #[allow(clippy::cast_possible_truncation)]
+            let id_u32 = id as u32;
             {
                 let mut inv_idx = self.inverted_index.write();
                 for term in doc.term_freqs.keys() {
-                    if let Some(doc_set) = inv_idx.get_mut(term) {
-                        doc_set.remove(&id);
-                        if doc_set.is_empty() {
+                    if let Some(posting_list) = inv_idx.get_mut(term) {
+                        posting_list.remove(id_u32);
+                        if posting_list.is_empty() {
                             inv_idx.remove(term);
                         }
                     }
@@ -240,7 +261,7 @@ impl Bm25Index {
             let idf_cache: FxHashMap<&str, f32> = query_terms
                 .iter()
                 .map(|term| {
-                    let df = inv_idx.get(term).map_or(0, FxHashSet::len);
+                    let df = inv_idx.get(term).map_or(0, PostingList::len);
                     let idf_val = if df == 0 {
                         0.0
                     } else {
@@ -251,16 +272,18 @@ impl Bm25Index {
                 })
                 .collect();
 
-            // Collect and score candidates in one pass
-            let candidates: FxHashSet<u64> = query_terms
-                .iter()
-                .filter_map(|term| inv_idx.get(term))
-                .flat_map(|s| s.iter().copied())
-                .collect();
+            // Collect candidates using PostingList union (efficient for Roaring)
+            let mut candidate_union = PostingList::new();
+            for term in &query_terms {
+                if let Some(posting_list) = inv_idx.get(term) {
+                    candidate_union = candidate_union.union(posting_list);
+                }
+            }
 
-            candidates
-                .into_iter()
-                .filter_map(|doc_id| {
+            candidate_union
+                .iter()
+                .filter_map(|doc_id_u32| {
+                    let doc_id = u64::from(doc_id_u32);
                     let doc = docs.get(&doc_id)?;
                     let score =
                         Self::score_document_fast(doc, &query_terms, &idf_cache, k1, b, avgdl);
