@@ -188,14 +188,33 @@ LIMIT 10
 <details>
 <summary><b>🔬 Benchmark Configuration (January 9, 2026)</b></summary>
 
+**Hardware:**
 | Component | Specification |
 |-----------|---------------|
-| **CPU** | Intel Core i9-14900KF (24 cores) |
-| **RAM** | 64 GB DDR5 |
-| **OS** | Windows 11 Professional |
+| **CPU** | Intel Core i9-14900KF (24 cores, 32 threads) |
+| **RAM** | 64 GB DDR5-5600 |
+| **Storage** | NVMe SSD (Samsung 990 Pro) |
+| **OS** | Windows 11 Professional 24H2 |
+
+**Software:**
+| Component | Version |
+|-----------|---------|
 | **Rust** | 1.92.0 (stable) |
 | **VelesDB** | v0.8.12 |
 | **SIMD** | AVX-512 enabled |
+| **Criterion** | 0.5.1 |
+
+**Test Conditions:**
+- **No network**: All benchmarks run locally, no HTTP/REST overhead
+- **No Docker**: Native binary execution, no container overhead
+- **Warm cache**: 3 warmup iterations before measurement
+- **Single process**: No concurrent load during benchmarks
+- **Release build**: `cargo bench --release`
+
+**What is measured:**
+- **SIMD Distance**: `cargo bench --bench simd_benchmark` — raw vector operations
+- **HNSW Search**: `cargo bench --bench recall_benchmark` — 100 queries on 10K vectors
+- **BM25 Search**: `cargo bench --bench bm25_benchmark` — text search on 1K documents
 
 </details>
 
