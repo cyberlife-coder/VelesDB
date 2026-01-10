@@ -5,6 +5,45 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-01-XX
+
+### 🚀 SOTA 2026 Performance Optimizations (EPIC-CORE-003)
+
+Major performance release based on arXiv research 2025-2026.
+
+#### Added
+
+- **Trigram Index** (`crates/velesdb-core/src/index/trigram/`)
+  - `TrigramIndex` with Roaring Bitmaps for LIKE/ILIKE acceleration
+  - `extract_trigrams()` with UTF-8 support and padding
+  - `search_like_ranked()` with Jaccard scoring and threshold pruning
+  - Target: 22-128x speedup on pattern matching
+
+- **Caching Layer** (`crates/velesdb-core/src/cache/`)
+  - `LruCache<K,V>` - Thread-safe O(1) LRU cache with stats
+  - `BloomFilter` - Probabilistic existence check (FPR < 10%)
+  - `CacheStats` - Hit/miss/eviction tracking
+
+- **Column Compression** (`crates/velesdb-core/src/compression/`)
+  - `DictionaryEncoder<V>` - Encode repeated values as compact codes
+  - `CompressionStats` - Ratio monitoring and memory tracking
+  - Batch encode/decode operations
+
+#### Tests
+
+- 28 TDD tests for Trigram Index
+- 13 TDD tests for LRU Cache
+- 7 TDD tests for Bloom Filter
+- 12 TDD tests for Dictionary Encoding
+
+#### References
+
+- arXiv:2601.01937 - Vector Search Multi-Tier Storage (Jan 2026)
+- arXiv:2310.11703v2 - VDB Survey Storage & Retrieval (Jun 2025)
+- arXiv:2501.17788v3 - WARP Multi-Vector Retrieval (Jul 2025)
+
+---
+
 ## [1.2.0] - 2025-01-XX
 
 ### 🗄️ Metadata-Only Collections & LIKE/ILIKE Filters (EPIC-CORE-002)
