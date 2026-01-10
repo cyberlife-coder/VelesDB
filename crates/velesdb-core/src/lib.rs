@@ -48,10 +48,12 @@
 pub mod alloc_guard;
 #[cfg(test)]
 mod alloc_guard_tests;
+pub mod cache;
 pub mod collection;
 pub mod column_store;
 #[cfg(test)]
 mod column_store_tests;
+pub mod compression;
 pub mod config;
 #[cfg(test)]
 mod config_tests;
