@@ -262,10 +262,16 @@ impl From<crate::velesql::Condition> for Condition {
                 }
             }
             crate::velesql::Condition::Like(lk) => {
-                // VelesQL LIKE is case-sensitive (ILIKE support to be added in parser)
-                Self::Like {
-                    field: lk.column,
-                    pattern: lk.pattern,
+                if lk.case_insensitive {
+                    Self::ILike {
+                        field: lk.column,
+                        pattern: lk.pattern,
+                    }
+                } else {
+                    Self::Like {
+                        field: lk.column,
+                        pattern: lk.pattern,
+                    }
                 }
             }
         }
