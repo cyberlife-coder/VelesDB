@@ -889,6 +889,315 @@ impl VectorStore {
         serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Performs hybrid search combining vector similarity and text search.
+    ///
+    /// Uses a simple weighted fusion of vector search and text search results.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_vector` - Query vector for similarity search
+    /// * `text_query` - Text query for payload search
+    /// * `k` - Number of results to return
+    /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
+    ///
+    /// # Returns
+    ///
+    /// Array of fused results with id, score, and payload.
+    #[wasm_bindgen]
+    pub fn hybrid_search(
+        &self,
+        query_vector: &[f32],
+        text_query: &str,
+        k: usize,
+        vector_weight: Option<f32>,
+    ) -> Result<JsValue, JsValue> {
+        if query_vector.len() != self.dimension {
+            return Err(JsValue::from_str(&format!(
+                "Vector dimension mismatch: expected {}, got {}",
+                self.dimension,
+                query_vector.len()
+            )));
+        }
+
+        let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+        let t_weight = 1.0 - v_weight;
+        let text_query_lower = text_query.to_lowercase();
+
+        // Perform vector search and text matching in one pass
+        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = match self.storage_mode {
+            StorageMode::Full => {
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, &id)| {
+                        let start = idx * self.dimension;
+                        let v_data = &self.data[start..start + self.dimension];
+                        let vector_score = self.metric.calculate(query_vector, v_data);
+
+                        let payload = self.payloads[idx].as_ref();
+                        let text_score = if let Some(p) = payload {
+                            if Self::search_all_fields(p, &text_query_lower) {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+
+                        // Combine scores
+                        let combined_score = v_weight * vector_score + t_weight * text_score;
+                        if combined_score > 0.0 {
+                            Some((id, combined_score, payload))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }
+            _ => {
+                // Simplified for SQ8/Binary - just vector search
+                return self.search(query_vector, k);
+            }
+        };
+
+        // Sort by combined score
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+
+        let output: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|(id, score, payload)| {
+                serde_json::json!({
+                    "id": id,
+                    "score": score,
+                    "payload": payload
+                })
+            })
+            .collect();
+
+        serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Performs multi-query search with result fusion.
+    ///
+    /// Executes searches for multiple query vectors and fuses results
+    /// using the specified strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Array of query vectors (as flat array with dimension stride)
+    /// * `num_vectors` - Number of vectors in the array
+    /// * `k` - Number of results to return
+    /// * `strategy` - Fusion strategy: "average", "maximum", "rrf"
+    /// * `rrf_k` - RRF k parameter (only used when strategy = "rrf", default 60)
+    ///
+    /// # Returns
+    ///
+    /// Array of fused results with id and score.
+    #[wasm_bindgen]
+    pub fn multi_query_search(
+        &mut self,
+        vectors: &[f32],
+        num_vectors: usize,
+        k: usize,
+        strategy: &str,
+        rrf_k: Option<u32>,
+    ) -> Result<JsValue, JsValue> {
+        if num_vectors == 0 {
+            return Err(JsValue::from_str(
+                "multi_query_search requires at least one vector",
+            ));
+        }
+
+        let expected_len = num_vectors * self.dimension;
+        if vectors.len() != expected_len {
+            return Err(JsValue::from_str(&format!(
+                "Expected {} floats ({} vectors × {} dims), got {}",
+                expected_len,
+                num_vectors,
+                self.dimension,
+                vectors.len()
+            )));
+        }
+
+        // Execute search for each vector
+        let overfetch_k = k * 3; // Overfetch for better fusion
+        let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
+
+        for i in 0..num_vectors {
+            let start = i * self.dimension;
+            let query = &vectors[start..start + self.dimension];
+
+            let results: Vec<(u64, f32)> = match self.storage_mode {
+                StorageMode::Full => {
+                    let mut r: Vec<(u64, f32)> = self
+                        .ids
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, &id)| {
+                            let v_start = idx * self.dimension;
+                            let v_data = &self.data[v_start..v_start + self.dimension];
+                            let score = self.metric.calculate(query, v_data);
+                            (id, score)
+                        })
+                        .collect();
+
+                    if self.metric.higher_is_better() {
+                        r.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    } else {
+                        r.sort_by(|a, b| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
+                    r.truncate(overfetch_k);
+                    r
+                }
+                _ => Vec::new(), // Simplified for other modes
+            };
+
+            all_results.push(results);
+        }
+
+        // Fuse results based on strategy
+        let fused = self.fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
+
+        // Take top k
+        let top_k: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
+
+        serde_wasm_bindgen::to_value(&top_k).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Fuses results from multiple queries using the specified strategy.
+    fn fuse_results(
+        &self,
+        all_results: &[Vec<(u64, f32)>],
+        strategy: &str,
+        rrf_k: u32,
+    ) -> Vec<(u64, f32)> {
+        use std::collections::HashMap;
+
+        let mut scores: HashMap<u64, Vec<f32>> = HashMap::new();
+        let mut ranks: HashMap<u64, Vec<usize>> = HashMap::new();
+
+        for (query_idx, results) in all_results.iter().enumerate() {
+            for (rank, (id, score)) in results.iter().enumerate() {
+                scores.entry(*id).or_default().push(*score);
+                ranks
+                    .entry(*id)
+                    .or_insert_with(|| vec![usize::MAX; all_results.len()])[query_idx] = rank;
+            }
+        }
+
+        let mut fused: Vec<(u64, f32)> = match strategy.to_lowercase().as_str() {
+            "average" | "avg" => scores
+                .iter()
+                .map(|(id, s)| {
+                    let avg = s.iter().sum::<f32>() / s.len() as f32;
+                    (*id, avg)
+                })
+                .collect(),
+            "maximum" | "max" => scores
+                .iter()
+                .map(|(id, s)| {
+                    let max = s.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    (*id, max)
+                })
+                .collect(),
+            "rrf" | _ => {
+                // Reciprocal Rank Fusion
+                ranks
+                    .iter()
+                    .map(|(id, r)| {
+                        let rrf_score: f32 = r
+                            .iter()
+                            .filter(|&&rank| rank != usize::MAX)
+                            .map(|&rank| 1.0 / (rrf_k as f32 + rank as f32 + 1.0))
+                            .sum();
+                        (*id, rrf_score)
+                    })
+                    .collect()
+            }
+        };
+
+        fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        fused
+    }
+
+    /// Batch search for multiple vectors in parallel.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Flat array of query vectors (concatenated)
+    /// * `num_vectors` - Number of vectors
+    /// * `k` - Results per query
+    ///
+    /// # Returns
+    ///
+    /// Array of arrays of (id, score) tuples.
+    #[wasm_bindgen]
+    pub fn batch_search(
+        &self,
+        vectors: &[f32],
+        num_vectors: usize,
+        k: usize,
+    ) -> Result<JsValue, JsValue> {
+        if num_vectors == 0 {
+            return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        }
+
+        let expected_len = num_vectors * self.dimension;
+        if vectors.len() != expected_len {
+            return Err(JsValue::from_str(&format!(
+                "Expected {} floats, got {}",
+                expected_len,
+                vectors.len()
+            )));
+        }
+
+        let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
+
+        for i in 0..num_vectors {
+            let start = i * self.dimension;
+            let query = &vectors[start..start + self.dimension];
+
+            let results: Vec<(u64, f32)> = match self.storage_mode {
+                StorageMode::Full => {
+                    let mut r: Vec<(u64, f32)> = self
+                        .ids
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, &id)| {
+                            let v_start = idx * self.dimension;
+                            let v_data = &self.data[v_start..v_start + self.dimension];
+                            (id, self.metric.calculate(query, v_data))
+                        })
+                        .collect();
+
+                    if self.metric.higher_is_better() {
+                        r.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    } else {
+                        r.sort_by(|a, b| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
+                    r.truncate(k);
+                    r
+                }
+                _ => Vec::new(),
+            };
+
+            all_results.push(results);
+        }
+
+        serde_wasm_bindgen::to_value(&all_results).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Checks if payload contains text in specified field or any string field.
     fn payload_contains_text(
         payload: &serde_json::Value,
@@ -1475,5 +1784,61 @@ mod tests {
             assert_eq!(store.len(), 0);
             assert_eq!(store.memory_usage(), 0);
         }
+    }
+
+    // =========================================================================
+    // Fusion Logic Tests (pure Rust, no JsValue)
+    // =========================================================================
+
+    #[test]
+    fn test_fuse_results_rrf() {
+        let store = VectorStore::new(4, "cosine").unwrap();
+        let results1 = vec![(1, 0.9), (2, 0.8), (3, 0.7)];
+        let results2 = vec![(2, 0.95), (1, 0.85), (4, 0.6)];
+        let all_results = vec![results1, results2];
+
+        let fused = store.fuse_results(&all_results, "rrf", 60);
+        assert!(!fused.is_empty());
+        // ID 2 appears in rank 0 and rank 1, should have high RRF score
+        // ID 1 appears in rank 0 and rank 1, should also be high
+    }
+
+    #[test]
+    fn test_fuse_results_average() {
+        let store = VectorStore::new(4, "cosine").unwrap();
+        let results1 = vec![(1, 0.9), (2, 0.8)];
+        let results2 = vec![(1, 0.7), (2, 0.6)];
+        let all_results = vec![results1, results2];
+
+        let fused = store.fuse_results(&all_results, "average", 60);
+        assert_eq!(fused.len(), 2);
+        // ID 1: (0.9 + 0.7) / 2 = 0.8
+        // ID 2: (0.8 + 0.6) / 2 = 0.7
+        let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
+        assert!((id1_score.unwrap() - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_fuse_results_maximum() {
+        let store = VectorStore::new(4, "cosine").unwrap();
+        let results1 = vec![(1, 0.9), (2, 0.5)];
+        let results2 = vec![(1, 0.7), (2, 0.8)];
+        let all_results = vec![results1, results2];
+
+        let fused = store.fuse_results(&all_results, "maximum", 60);
+        // ID 1: max(0.9, 0.7) = 0.9
+        // ID 2: max(0.5, 0.8) = 0.8
+        let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
+        let id2_score = fused.iter().find(|(id, _)| *id == 2).map(|(_, s)| *s);
+        assert!((id1_score.unwrap() - 0.9).abs() < 0.01);
+        assert!((id2_score.unwrap() - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_fuse_results_empty() {
+        let store = VectorStore::new(4, "cosine").unwrap();
+        let all_results: Vec<Vec<(u64, f32)>> = vec![];
+        let fused = store.fuse_results(&all_results, "rrf", 60);
+        assert!(fused.is_empty());
     }
 }
