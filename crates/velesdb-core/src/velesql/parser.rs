@@ -4,9 +4,9 @@ use pest::Parser as PestParser;
 use pest_derive::Parser;
 
 use super::ast::{
-    BetweenCondition, Column, CompareOp, Comparison, Condition, InCondition, IsNullCondition,
-    LikeCondition, MatchCondition, Query, SelectColumns, SelectStatement, Value, VectorExpr,
-    VectorSearch, WithClause, WithOption, WithValue,
+    BetweenCondition, Column, CompareOp, Comparison, Condition, FusionConfig, InCondition,
+    IsNullCondition, LikeCondition, MatchCondition, Query, SelectColumns, SelectStatement, Value,
+    VectorExpr, VectorFusedSearch, VectorSearch, WithClause, WithOption, WithValue,
 };
 use super::error::{ParseError, ParseErrorKind};
 
@@ -202,6 +202,7 @@ impl Parser {
                 let cond = Self::parse_or_expr(inner)?;
                 Ok(Condition::Group(Box::new(cond)))
             }
+            Rule::vector_fused_search => Self::parse_vector_fused_search(inner),
             Rule::vector_search => Self::parse_vector_search(inner),
             Rule::match_expr => Self::parse_match_expr(inner),
             Rule::in_expr => Self::parse_in_expr(inner),
@@ -230,6 +231,79 @@ impl Parser {
             vector.ok_or_else(|| ParseError::syntax(0, "", "Expected vector expression"))?;
 
         Ok(Condition::VectorSearch(VectorSearch { vector }))
+    }
+
+    fn parse_vector_fused_search(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut vectors = Vec::new();
+        let mut fusion = FusionConfig::default();
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::vector_array => {
+                    for vec_value in inner.into_inner() {
+                        if vec_value.as_rule() == Rule::vector_value {
+                            vectors.push(Self::parse_vector_value(vec_value)?);
+                        }
+                    }
+                }
+                Rule::fusion_clause => {
+                    fusion = Self::parse_fusion_clause(inner);
+                }
+                _ => {}
+            }
+        }
+
+        if vectors.is_empty() {
+            return Err(ParseError::syntax(
+                0,
+                "",
+                "Expected at least one vector in NEAR_FUSED",
+            ));
+        }
+
+        Ok(Condition::VectorFusedSearch(VectorFusedSearch {
+            vectors,
+            fusion,
+        }))
+    }
+
+    fn parse_fusion_clause(pair: pest::iterators::Pair<Rule>) -> FusionConfig {
+        let mut strategy = "rrf".to_string();
+        let mut params = std::collections::HashMap::new();
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::fusion_strategy => {
+                    strategy = inner.into_inner().next().map_or_else(
+                        || "rrf".to_string(),
+                        |s| s.as_str().trim_matches('\'').to_string(),
+                    );
+                }
+                Rule::fusion_params => {
+                    for param in inner.into_inner() {
+                        if param.as_rule() == Rule::fusion_param_list {
+                            for fp in param.into_inner() {
+                                if fp.as_rule() == Rule::fusion_param {
+                                    let mut fp_inner = fp.into_inner();
+                                    if let (Some(key), Some(val)) =
+                                        (fp_inner.next(), fp_inner.next())
+                                    {
+                                        let key_str = key.as_str().to_string();
+                                        let val_f64 = val.as_str().parse::<f64>().unwrap_or(0.0);
+                                        params.insert(key_str, val_f64);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        FusionConfig { strategy, params }
     }
 
     fn parse_vector_value(pair: pest::iterators::Pair<Rule>) -> Result<VectorExpr, ParseError> {

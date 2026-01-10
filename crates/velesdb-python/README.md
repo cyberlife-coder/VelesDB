@@ -9,10 +9,12 @@ Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) - a hi
 ## Features
 
 - **Vector Similarity Search**: HNSW index with SIMD-optimized distance calculations
+- **Multi-Query Fusion**: Native MQG support with RRF/Weighted fusion strategies ⭐ NEW
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **Persistent Storage**: Memory-mapped files for efficient disk I/O
 - **Metadata Support**: Store and retrieve JSON payloads with vectors
 - **NumPy Integration**: Native support for NumPy arrays
+- **Type Hints**: Full `.pyi` stub file for IDE autocompletion
 
 ## Installation
 
@@ -106,6 +108,26 @@ results = collection.search(vector=[...], top_k=10)
 batch_results = collection.batch_search(
     vectors=[[0.1, 0.2, ...], [0.3, 0.4, ...]],
     top_k=5
+)
+
+# Multi-query fusion search (MQG pipelines) ⭐ NEW
+from velesdb import FusionStrategy
+
+results = collection.multi_query_search(
+    vectors=[query1, query2, query3],  # Multiple reformulations
+    top_k=10,
+    fusion=FusionStrategy.rrf(k=60)  # RRF, average, maximum, or weighted
+)
+
+# Weighted fusion (like SearchXP scoring)
+results = collection.multi_query_search(
+    vectors=[v1, v2, v3],
+    top_k=10,
+    fusion=FusionStrategy.weighted(
+        avg_weight=0.6,
+        max_weight=0.3,
+        hit_weight=0.1
+    )
 )
 
 # Text search (BM25)

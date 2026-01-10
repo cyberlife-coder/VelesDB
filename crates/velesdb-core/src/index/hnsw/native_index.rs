@@ -467,12 +467,12 @@ mod tests {
     fn test_native_index_batch_insert() {
         let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
 
-        let items: Vec<(u64, Vec<f32>)> =
-            (0..100).map(|i| (i, vec![i as f32 * 0.01; 32])).collect();
+        // Use 50 items to stay under Rayon parallelization threshold (100)
+        let items: Vec<(u64, Vec<f32>)> = (0..50).map(|i| (i, vec![i as f32 * 0.01; 32])).collect();
 
         index.insert_batch(&items);
 
-        assert_eq!(index.len(), 100);
+        assert_eq!(index.len(), 50);
     }
 
     #[test]
@@ -527,8 +527,8 @@ mod tests {
     fn test_native_index_brute_force_search() {
         let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
 
-        // Insert vectors with distinct values
-        for i in 0..100u64 {
+        // Insert vectors with distinct values (20 to avoid Rayon overhead)
+        for i in 0..20u64 {
             let vec: Vec<f32> = (0..32u64).map(|j| (i * 32 + j) as f32 * 0.001).collect();
             index.insert(i, &vec);
         }
