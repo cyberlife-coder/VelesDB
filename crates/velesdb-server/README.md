@@ -128,6 +128,26 @@ curl -X POST http://localhost:8080/collections/documents/search/batch \
     ]
   }'
 
+# Multi-query fusion search (MQG for RAG) ⭐ NEW v1.1.0
+curl -X POST http://localhost:8080/collections/documents/search/multi \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vectors": [[0.1, 0.2, ...], [0.3, 0.4, ...], [0.5, 0.6, ...]],
+    "top_k": 10,
+    "fusion": "rrf",
+    "fusion_params": {"k": 60}
+  }'
+
+# Weighted fusion strategy
+curl -X POST http://localhost:8080/collections/documents/search/multi \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vectors": [[...], [...], [...]],
+    "top_k": 10,
+    "fusion": "weighted",
+    "fusion_params": {"avgWeight": 0.6, "maxWeight": 0.3, "hitWeight": 0.1}
+  }'
+
 # VelesQL query
 curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
