@@ -309,6 +309,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands::batch_search,
             commands::text_search,
             commands::hybrid_search,
+            commands::multi_query_search,
             commands::query,
         ])
         .setup(move |app, _api| {

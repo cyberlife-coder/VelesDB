@@ -10,6 +10,7 @@ A Tauri plugin for **VelesDB** - Vector search in desktop applications.
 - 🚀 **Fast Vector Search** - Microsecond latency similarity search
 - 📝 **Text Search** - BM25 full-text search across payloads
 - 🔀 **Hybrid Search** - Combined vector + text with RRF fusion
+- 🔄 **Multi-Query Fusion** - MQG support with RRF/Weighted strategies ⭐ NEW
 - 🗃️ **Collection Management** - Create, list, and delete collections
 - 📊 **VelesQL** - SQL-like query language
 - 🔒 **Local-First** - All data stays on the user's device
@@ -122,6 +123,36 @@ const hybridResults = await invoke('plugin:velesdb|hybrid_search', {
   }
 });
 
+// Multi-query fusion search (MQG) ⭐ NEW
+const mqResults = await invoke('plugin:velesdb|multi_query_search', {
+  request: {
+    collection: 'documents',
+    vectors: [
+      [0.1, 0.2, /* ... query 1 */],
+      [0.3, 0.4, /* ... query 2 */],
+      [0.5, 0.6, /* ... query 3 */]
+    ],
+    topK: 10,
+    fusion: 'rrf',  // 'rrf', 'average', 'maximum', 'weighted'
+    fusionParams: { k: 60 }  // RRF parameter
+  }
+});
+
+// Weighted fusion (like SearchXP scoring)
+const weightedResults = await invoke('plugin:velesdb|multi_query_search', {
+  request: {
+    collection: 'documents',
+    vectors: [[...], [...], [...]],
+    topK: 10,
+    fusion: 'weighted',
+    fusionParams: {
+      avgWeight: 0.6,
+      maxWeight: 0.3,
+      hitWeight: 0.1
+    }
+  }
+});
+
 // VelesQL query
 const queryResults = await invoke('plugin:velesdb|query', {
   request: {
@@ -149,6 +180,7 @@ await invoke('plugin:velesdb|delete_collection', { name: 'documents' });
 | `delete_points` | Delete points by IDs |
 | `search` | Vector similarity search |
 | `batch_search` | Batch vector search (multiple queries) |
+| `multi_query_search` | **Multi-query fusion search** ⭐ NEW |
 | `text_search` | BM25 full-text search |
 | `hybrid_search` | Combined vector + text search |
 | `query` | Execute VelesQL query |

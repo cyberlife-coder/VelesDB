@@ -256,6 +256,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
 - ⚡ **SIMD-optimized Search** — AVX-512/AVX2/NEON accelerated similarity
 - 🎯 **≥95% Recall Guaranteed** — Adaptive HNSW params up to 1M vectors
+- 🔀 **Multi-Query Fusion** — Native MQG with RRF/Weighted strategies ⭐ NEW
 - 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (roadmap)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
 - 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale

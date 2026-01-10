@@ -192,6 +192,32 @@ pub struct QueryRequest {
     pub params: std::collections::HashMap<String, serde_json::Value>,
 }
 
+/// Request for multi-query fusion search.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiQuerySearchRequest {
+    /// Collection name.
+    pub collection: String,
+    /// List of query vectors.
+    pub vectors: Vec<Vec<f32>>,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Fusion strategy: "rrf", "average", "maximum", "weighted".
+    #[serde(default = "default_fusion")]
+    pub fusion: String,
+    /// Fusion parameters (e.g., {"k": 60} for RRF, {"avgWeight": 0.6, ...} for weighted).
+    #[serde(default)]
+    pub fusion_params: Option<serde_json::Value>,
+    /// Optional metadata filter.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+fn default_fusion() -> String {
+    "rrf".to_string()
+}
+
 /// Search result.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -669,6 +695,99 @@ pub async fn query<R: Runtime>(
             let search_results = coll
                 .execute_query(&parsed, &request.params)
                 .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
+
+            Ok(search_results
+                .into_iter()
+                .map(|r| SearchResult {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect::<Vec<_>>())
+        })
+        .map_err(CommandError::from)?;
+
+    Ok(SearchResponse {
+        results,
+        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+/// Multi-query fusion search combining results from multiple query vectors.
+#[command]
+#[allow(clippy::cast_possible_truncation)]
+pub async fn multi_query_search<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: MultiQuerySearchRequest,
+) -> std::result::Result<SearchResponse, CommandError> {
+    use velesdb_core::fusion::FusionStrategy;
+
+    let start = std::time::Instant::now();
+
+    // Parse fusion strategy
+    let fusion_strategy = match request.fusion.to_lowercase().as_str() {
+        "rrf" => {
+            let k = request
+                .fusion_params
+                .as_ref()
+                .and_then(|p| p.get("k"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(60) as u32;
+            FusionStrategy::RRF { k }
+        }
+        "average" => FusionStrategy::Average,
+        "maximum" => FusionStrategy::Maximum,
+        "weighted" => {
+            let params = request.fusion_params.as_ref();
+            let avg_weight = params
+                .and_then(|p| p.get("avgWeight").or_else(|| p.get("avg_weight")))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.6) as f32;
+            let max_weight = params
+                .and_then(|p| p.get("maxWeight").or_else(|| p.get("max_weight")))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.3) as f32;
+            let hit_weight = params
+                .and_then(|p| p.get("hitWeight").or_else(|| p.get("hit_weight")))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.1) as f32;
+            FusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            }
+        }
+        _ => FusionStrategy::RRF { k: 60 },
+    };
+
+    let filter = request.filter.clone();
+
+    let results = state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            // Convert vectors to slices
+            let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
+
+            let parsed_filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = filter
+            {
+                Some(
+                    serde_json::from_value(filter_json.clone())
+                        .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?,
+                )
+            } else {
+                None
+            };
+
+            let search_results = coll.multi_query_search(
+                &vector_refs,
+                request.top_k,
+                fusion_strategy,
+                parsed_filter.as_ref(),
+            )?;
 
             Ok(search_results
                 .into_iter()
