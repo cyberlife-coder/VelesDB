@@ -6726,6 +6726,7 @@ dependencies = [
  "dashmap",
  "figment",
  "half",
+ "indexmap 2.12.1",
  "memmap2",
  "parking_lot",
  "pest",

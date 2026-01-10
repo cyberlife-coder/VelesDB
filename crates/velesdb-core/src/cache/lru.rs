@@ -1,13 +1,21 @@
 //! LRU Cache implementation for VelesDB.
 //!
-//! Thread-safe LRU cache with statistics tracking.
+//! Thread-safe LRU cache with O(1) operations using IndexMap.
 //! Based on arXiv:2310.11703v2 recommendations.
+//!
+//! # Performance (US-CORE-003-14)
+//!
+//! | Operation | Complexity | Notes |
+//! |-----------|------------|-------|
+//! | insert | O(1) | Amortized |
+//! | get | O(1) | With recency update |
+//! | remove | O(1) | swap_remove |
+//! | eviction | O(1) | shift_remove from front |
 
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for hit rate calculation
 
+use indexmap::IndexMap;
 use parking_lot::RwLock;
-use rustc_hash::FxHashMap;
-use std::collections::VecDeque;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -36,6 +44,9 @@ impl CacheStats {
 }
 
 /// Thread-safe LRU cache with O(1) operations.
+///
+/// Uses `IndexMap` internally which preserves insertion order
+/// and provides O(1) access, making move-to-back operations efficient.
 pub struct LruCache<K, V>
 where
     K: Hash + Eq + Clone,
@@ -44,18 +55,12 @@ where
     /// Maximum capacity.
     capacity: usize,
     /// Internal data protected by `RwLock`.
-    inner: RwLock<LruInner<K, V>>,
+    /// IndexMap preserves insertion order (front = LRU, back = MRU).
+    inner: RwLock<IndexMap<K, V>>,
     /// Statistics (atomic for lock-free reads).
     hits: AtomicU64,
     misses: AtomicU64,
     evictions: AtomicU64,
-}
-
-struct LruInner<K, V> {
-    /// Key -> Value map.
-    map: FxHashMap<K, V>,
-    /// Order queue (front = LRU, back = MRU).
-    order: VecDeque<K>,
 }
 
 impl<K, V> LruCache<K, V>
@@ -68,10 +73,7 @@ where
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            inner: RwLock::new(LruInner {
-                map: FxHashMap::default(),
-                order: VecDeque::with_capacity(capacity),
-            }),
+            inner: RwLock::new(IndexMap::with_capacity(capacity)),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
@@ -87,69 +89,86 @@ where
     /// Get the current number of entries.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.read().map.len()
+        self.inner.read().len()
     }
 
     /// Check if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.read().map.is_empty()
+        self.inner.read().is_empty()
     }
 
     /// Insert a key-value pair, evicting LRU entry if at capacity.
+    ///
+    /// O(1) amortized complexity.
     pub fn insert(&self, key: K, value: V) {
         let mut inner = self.inner.write();
 
-        // Check if key already exists
-        if inner.map.contains_key(&key) {
-            // Update value and move to back (MRU)
-            inner.map.insert(key.clone(), value);
-            self.move_to_back(&mut inner.order, &key);
+        // Check if key already exists - if so, remove and re-insert to move to back
+        if inner.shift_remove(&key).is_some() {
+            // Key existed, just re-insert at back
+            inner.insert(key, value);
             return;
         }
 
-        // Evict if at capacity
-        if inner.map.len() >= self.capacity {
-            if let Some(evicted_key) = inner.order.pop_front() {
-                inner.map.remove(&evicted_key);
+        // Evict LRU (front) if at capacity
+        if inner.len() >= self.capacity {
+            // shift_remove(0) removes the first element (LRU)
+            if inner.shift_remove_index(0).is_some() {
                 self.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
 
-        // Insert new entry
-        inner.map.insert(key.clone(), value);
-        inner.order.push_back(key);
+        // Insert new entry at back (MRU)
+        inner.insert(key, value);
     }
 
     /// Get a value by key, updating recency.
+    ///
+    /// O(1) complexity with read lock for lookup, write lock for recency update.
     #[must_use]
     pub fn get(&self, key: &K) -> Option<V> {
-        let mut inner = self.inner.write();
+        // Fast path: read lock to check existence and get value
+        let value = {
+            let inner = self.inner.read();
+            inner.get(key).cloned()
+        };
 
-        if let Some(value) = inner.map.get(key).cloned() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            self.move_to_back(&mut inner.order, key);
-            Some(value)
-        } else {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            None
+        match value {
+            Some(v) => {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                // Update recency: remove and re-insert at back
+                self.move_to_back(key, &v);
+                Some(v)
+            }
+            None => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
         }
     }
 
+    /// Get a value without updating recency (peek).
+    ///
+    /// O(1) complexity with only read lock.
+    #[must_use]
+    pub fn peek(&self, key: &K) -> Option<V> {
+        let inner = self.inner.read();
+        inner.get(key).cloned()
+    }
+
     /// Remove a key from the cache.
+    ///
+    /// O(1) complexity using swap_remove (doesn't preserve order of other elements).
     pub fn remove(&self, key: &K) {
         let mut inner = self.inner.write();
-
-        if inner.map.remove(key).is_some() {
-            inner.order.retain(|k| k != key);
-        }
+        inner.swap_remove(key);
     }
 
     /// Clear all entries.
     pub fn clear(&self) {
         let mut inner = self.inner.write();
-        inner.map.clear();
-        inner.order.clear();
+        inner.clear();
     }
 
     /// Get cache statistics.
@@ -162,12 +181,14 @@ where
         }
     }
 
-    /// Move a key to the back of the order queue (most recently used).
-    fn move_to_back(&self, order: &mut VecDeque<K>, key: &K) {
+    /// Move a key to the back (most recently used).
+    /// O(1) amortized using shift_remove + insert.
+    fn move_to_back(&self, key: &K, value: &V) {
+        let mut inner = self.inner.write();
         // Remove from current position
-        order.retain(|k| k != key);
-        // Add to back
-        order.push_back(key.clone());
+        inner.shift_remove(key);
+        // Re-insert at back
+        inner.insert(key.clone(), value.clone());
     }
 }
 
