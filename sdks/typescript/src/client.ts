@@ -113,11 +113,36 @@ export class VelesDB {
       throw new ValidationError('Collection name must be a non-empty string');
     }
     
-    if (!config.dimension || config.dimension <= 0) {
-      throw new ValidationError('Dimension must be a positive integer');
+    // Dimension is required for vector collections, not for metadata_only
+    const isMetadataOnly = config.collectionType === 'metadata_only';
+    if (!isMetadataOnly && (!config.dimension || config.dimension <= 0)) {
+      throw new ValidationError('Dimension must be a positive integer for vector collections');
     }
 
     await this.backend.createCollection(name, config);
+  }
+
+  /**
+   * Create a metadata-only collection (no vectors, just payload data)
+   * 
+   * Useful for storing reference data that can be JOINed with vector collections.
+   * 
+   * @param name - Collection name
+   * 
+   * @example
+   * ```typescript
+   * await db.createMetadataCollection('products');
+   * await db.insertMetadata('products', { id: 'P001', name: 'Widget', price: 99 });
+   * ```
+   */
+  async createMetadataCollection(name: string): Promise<void> {
+    this.ensureInitialized();
+    
+    if (!name || typeof name !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+
+    await this.backend.createCollection(name, { collectionType: 'metadata_only' });
   }
 
   /**

@@ -136,6 +136,8 @@ export class RestBackend implements IVelesDBBackend {
       name,
       dimension: config.dimension,
       metric: config.metric ?? 'cosine',
+      storage_mode: config.storageMode ?? 'full',
+      collection_type: config.collectionType ?? 'vector',
       description: config.description,
     });
 
