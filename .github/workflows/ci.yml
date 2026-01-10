@@ -79,7 +79,9 @@ jobs:
           prefix-key: "test"
 
       - name: Run tests
-        run: cargo test --all-features --workspace
+        run: cargo test --all-features --workspace -- --test-threads=1
+        env:
+          RUST_TEST_THREADS: 1
 
   # ===========================================================================
   # Python Integration Tests (LlamaIndex)

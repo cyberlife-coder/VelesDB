@@ -90,6 +90,8 @@ VelesDBVectorStore(
 - `similarity_search_with_filter(query, k=4, filter=None)` - Search with metadata filtering
 - `batch_search(queries, k=4)` - Batch search multiple queries in parallel
 - `batch_search_with_score(queries, k=4)` - Batch search with scores
+- `multi_query_search(queries, k=4, fusion="rrf", ...)` - **Multi-query fusion search** ⭐ NEW
+- `multi_query_search_with_score(queries, k=4, ...)` - Multi-query search with fused scores
 - `hybrid_search(query, k=4, vector_weight=0.5, filter=None)` - Hybrid vector+BM25 search
 - `text_search(query, k=4, filter=None)` - Full-text BM25 search
 - `query(velesql_str, params=None)` - Execute VelesQL query
@@ -101,6 +103,47 @@ VelesDBVectorStore(
 - `is_empty()` - Check if collection is empty
 
 ## Advanced Features
+
+### Multi-Query Fusion (MQG) ⭐ NEW
+
+Search with multiple query reformulations and fuse results using various strategies.
+Perfect for RAG pipelines using Multiple Query Generation (MQG).
+
+```python
+# Basic usage with RRF (Reciprocal Rank Fusion)
+results = vectorstore.multi_query_search(
+    queries=["travel to Greece", "Greek vacation", "Athens trip"],
+    k=10,
+)
+
+# With weighted fusion (like SearchXP's scoring)
+results = vectorstore.multi_query_search(
+    queries=["travel Greece", "vacation Mediterranean"],
+    k=10,
+    fusion="weighted",
+    fusion_params={
+        "avg_weight": 0.6,   # Average score weight
+        "max_weight": 0.3,   # Maximum score weight  
+        "hit_weight": 0.1,   # Hit ratio weight
+    }
+)
+
+# Get fused scores
+results_with_scores = vectorstore.multi_query_search_with_score(
+    queries=["query1", "query2", "query3"],
+    k=5,
+    fusion="rrf",
+    fusion_params={"k": 60}  # RRF parameter
+)
+for doc, score in results_with_scores:
+    print(f"{score:.3f}: {doc.page_content}")
+```
+
+**Fusion Strategies:**
+- `"rrf"` - Reciprocal Rank Fusion (default, robust to score scale differences)
+- `"average"` - Mean score across all queries
+- `"maximum"` - Maximum score from any query
+- `"weighted"` - Custom combination of avg, max, and hit ratio
 
 ### Hybrid Search (Vector + BM25)
 
@@ -139,6 +182,7 @@ results = vectorstore.similarity_search_with_filter(
 
 - **High Performance**: VelesDB's Rust backend delivers microsecond latencies
 - **SIMD Optimized**: Hardware-accelerated vector operations  
+- **Multi-Query Fusion**: Native support for MQG pipelines with RRF/Weighted fusion ⭐ NEW
 - **Hybrid Search**: Combine vector similarity with BM25 text matching
 - **Full-Text Search**: BM25 ranking for keyword queries
 - **Metadata Filtering**: Filter results by document attributes
