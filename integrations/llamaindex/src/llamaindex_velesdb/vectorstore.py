@@ -452,6 +452,28 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         """Check if the collection is empty."""
         return self._collection is None or self._collection.is_empty()
 
+    def create_metadata_collection(self, name: str) -> None:
+        """Create a metadata-only collection (no vectors).
+
+        Useful for storing reference data that can be JOINed with
+        vector collections (VelesDB Premium feature).
+
+        Args:
+            name: Collection name.
+        """
+        db = self._get_db()
+        db.create_metadata_collection(name)
+
+    def is_metadata_only(self) -> bool:
+        """Check if the current collection is metadata-only.
+
+        Returns:
+            True if metadata-only, False if vector collection.
+        """
+        if self._collection is None:
+            return False
+        return self._collection.is_metadata_only()
+
     def velesql(self, query_str: str, params: Optional[dict] = None, **kwargs: Any) -> VectorStoreQueryResult:
         """Execute a VelesQL query."""
         if self._collection is None:
