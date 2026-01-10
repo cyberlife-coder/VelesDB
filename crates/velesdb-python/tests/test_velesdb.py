@@ -545,6 +545,93 @@ class TestDistanceMetrics:
             assert info["metric"] == expected
 
 
+class TestMetadataOnlyCollections:
+    """Tests for metadata-only collections (US-CORE-002-02)."""
+
+    def test_create_metadata_collection(self, temp_db_path):
+        """Test creating a metadata-only collection."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("products")
+        
+        assert collection is not None
+        assert collection.name == "products"
+        assert collection.is_metadata_only()
+
+    def test_metadata_collection_info(self, temp_db_path):
+        """Test metadata-only collection info."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("catalog")
+        
+        info = collection.info()
+        assert info["name"] == "catalog"
+        assert info["metadata_only"] is True
+
+    def test_upsert_metadata(self, temp_db_path):
+        """Test inserting metadata-only points."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("items")
+        
+        count = collection.upsert_metadata([
+            {"id": 1, "payload": {"name": "Widget", "price": 9.99}},
+            {"id": 2, "payload": {"name": "Gadget", "price": 19.99}},
+        ])
+        
+        assert count == 2
+        assert not collection.is_empty()
+
+    def test_get_metadata_points(self, temp_db_path):
+        """Test retrieving metadata-only points."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("products")
+        
+        collection.upsert_metadata([
+            {"id": 1, "payload": {"name": "Product A", "price": 10.0}},
+            {"id": 2, "payload": {"name": "Product B", "price": 20.0}},
+        ])
+        
+        points = collection.get([1, 2])
+        
+        assert len(points) == 2
+        assert points[0] is not None
+        assert points[0]["id"] == 1
+        assert points[0]["payload"]["name"] == "Product A"
+
+    def test_delete_metadata_points(self, temp_db_path):
+        """Test deleting metadata-only points."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("items")
+        
+        collection.upsert_metadata([
+            {"id": 1, "payload": {"name": "Item 1"}},
+            {"id": 2, "payload": {"name": "Item 2"}},
+        ])
+        
+        collection.delete([1])
+        
+        points = collection.get([1, 2])
+        assert points[0] is None
+        assert points[1] is not None
+
+    def test_metadata_collection_search_raises_error(self, temp_db_path):
+        """Test that vector search on metadata-only collection raises error."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("no_vectors")
+        
+        collection.upsert_metadata([
+            {"id": 1, "payload": {"text": "hello"}},
+        ])
+        
+        with pytest.raises(RuntimeError):
+            collection.search([1.0, 0.0, 0.0, 0.0], top_k=10)
+
+    def test_vector_collection_not_metadata_only(self, temp_db_path):
+        """Test that regular vector collection is not metadata-only."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("vectors", dimension=4)
+        
+        assert not collection.is_metadata_only()
+
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
