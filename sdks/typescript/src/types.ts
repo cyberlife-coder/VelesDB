@@ -24,10 +24,13 @@ export interface VelesDBConfig {
   timeout?: number;
 }
 
+/** Collection type */
+export type CollectionType = 'vector' | 'metadata_only';
+
 /** Collection configuration */
 export interface CollectionConfig {
-  /** Vector dimension (e.g., 768 for BERT, 1536 for GPT) */
-  dimension: number;
+  /** Vector dimension (e.g., 768 for BERT, 1536 for GPT). Required for vector collections. */
+  dimension?: number;
   /** Distance metric (default: 'cosine') */
   metric?: DistanceMetric;
   /** Storage mode for vector quantization (default: 'full')
@@ -36,6 +39,8 @@ export interface CollectionConfig {
    * - 'binary': 1-bit binary quantization, 32x memory reduction (edge/IoT)
    */
   storageMode?: StorageMode;
+  /** Collection type: 'vector' (default) or 'metadata_only' */
+  collectionType?: CollectionType;
   /** Optional collection description */
   description?: string;
 }
