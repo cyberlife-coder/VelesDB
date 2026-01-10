@@ -23,4 +23,6 @@ pub use lru::{CacheStats, LruCache};
 #[cfg(test)]
 mod deadlock_tests;
 #[cfg(test)]
+mod performance_tests;
+#[cfg(test)]
 mod tests;
