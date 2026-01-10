@@ -15,9 +15,11 @@
 //! 3. `LruCache.inner` (RwLock)
 
 mod bloom;
+mod lockfree;
 mod lru;
 
 pub use bloom::BloomFilter;
+pub use lockfree::{LockFreeCacheStats, LockFreeLruCache};
 pub use lru::{CacheStats, LruCache};
 
 #[cfg(test)]
