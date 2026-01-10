@@ -76,6 +76,30 @@ export interface SearchOptions {
   includeVectors?: boolean;
 }
 
+/** Fusion strategy for multi-query search */
+export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted';
+
+/** Multi-query search options */
+export interface MultiQuerySearchOptions {
+  /** Number of results to return (default: 10) */
+  k?: number;
+  /** Fusion strategy (default: 'rrf') */
+  fusion?: FusionStrategy;
+  /** Fusion parameters */
+  fusionParams?: {
+    /** RRF k parameter (default: 60) */
+    k?: number;
+    /** Weighted fusion: average weight (default: 0.6) */
+    avgWeight?: number;
+    /** Weighted fusion: max weight (default: 0.3) */
+    maxWeight?: number;
+    /** Weighted fusion: hit weight (default: 0.1) */
+    hitWeight?: number;
+  };
+  /** Filter expression (optional) */
+  filter?: Record<string, unknown>;
+}
+
 /** Search result */
 export interface SearchResult {
   /** Document ID */
@@ -156,6 +180,13 @@ export interface IVelesDBBackend {
   query(
     queryString: string,
     params?: Record<string, unknown>
+  ): Promise<SearchResult[]>;
+
+  /** Multi-query fusion search */
+  multiQuerySearch(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
   ): Promise<SearchResult[]>;
   
   /** Check if collection is empty */

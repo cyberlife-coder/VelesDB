@@ -10,6 +10,7 @@ import type {
   SearchOptions,
   SearchResult,
   IVelesDBBackend,
+  MultiQuerySearchOptions,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -340,6 +341,53 @@ export class VelesDB {
     }
 
     return this.backend.query(queryString, params);
+  }
+
+  /**
+   * Multi-query fusion search combining results from multiple query vectors
+   * 
+   * Ideal for RAG pipelines using Multiple Query Generation (MQG).
+   * 
+   * @param collection - Collection name
+   * @param vectors - Array of query vectors
+   * @param options - Search options (k, fusion strategy, fusionParams, filter)
+   * @returns Fused search results
+   * 
+   * @example
+   * ```typescript
+   * // RRF fusion (default)
+   * const results = await db.multiQuerySearch('docs', [emb1, emb2, emb3], {
+   *   k: 10,
+   *   fusion: 'rrf',
+   *   fusionParams: { k: 60 }
+   * });
+   * 
+   * // Weighted fusion
+   * const results = await db.multiQuerySearch('docs', [emb1, emb2], {
+   *   k: 10,
+   *   fusion: 'weighted',
+   *   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
+   * });
+   * ```
+   */
+  async multiQuerySearch(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    if (!Array.isArray(vectors) || vectors.length === 0) {
+      throw new ValidationError('Vectors must be a non-empty array');
+    }
+
+    for (const v of vectors) {
+      if (!Array.isArray(v) && !(v instanceof Float32Array)) {
+        throw new ValidationError('Each vector must be an array or Float32Array');
+      }
+    }
+
+    return this.backend.multiQuerySearch(collection, vectors, options);
   }
 
   /**
