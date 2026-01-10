@@ -63,6 +63,8 @@ pub mod error;
 mod error_tests;
 pub mod filter;
 #[cfg(test)]
+mod filter_like_tests;
+#[cfg(test)]
 mod filter_tests;
 pub mod fusion;
 pub mod gpu;
