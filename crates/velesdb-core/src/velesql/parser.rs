@@ -414,6 +414,14 @@ impl Parser {
             .as_str()
             .to_string();
 
+        // Parse LIKE or ILIKE operator
+        let like_op = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected LIKE or ILIKE"))?
+            .as_str()
+            .to_uppercase();
+        let case_insensitive = like_op == "ILIKE";
+
         let pattern = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected pattern"))?
@@ -421,7 +429,11 @@ impl Parser {
             .trim_matches('\'')
             .to_string();
 
-        Ok(Condition::Like(LikeCondition { column, pattern }))
+        Ok(Condition::Like(LikeCondition {
+            column,
+            pattern,
+            case_insensitive,
+        }))
     }
 
     fn parse_is_null_expr(pair: pest::iterators::Pair<Rule>) -> Result<Condition, ParseError> {
