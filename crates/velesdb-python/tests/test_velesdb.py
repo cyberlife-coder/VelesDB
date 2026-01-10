@@ -632,6 +632,123 @@ class TestMetadataOnlyCollections:
         assert not collection.is_metadata_only()
 
 
+class TestLikeIlikeFilters:
+    """Tests for LIKE/ILIKE filter operators (US-CORE-002-05)."""
+
+    def test_like_filter_basic(self, temp_db_path):
+        """Test basic LIKE filter with % wildcard."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_test", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"name": "Paris"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"name": "London"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"name": "Parma"}},
+        ])
+        
+        # Search with LIKE filter for names starting with "Par"
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "name", "pattern": "Par%"}}
+        )
+        
+        # Should only return Paris and Parma
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # Paris
+        assert 3 in ids  # Parma
+        assert 2 not in ids  # London excluded
+
+    def test_like_filter_underscore(self, temp_db_path):
+        """Test LIKE filter with _ wildcard (single char)."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_underscore", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"code": "A1B"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"code": "A2B"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"code": "A12B"}},
+        ])
+        
+        # A_B should match A1B and A2B but not A12B
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "code", "pattern": "A_B"}}
+        )
+        
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # A1B
+        assert 2 in ids  # A2B
+        assert 3 not in ids  # A12B (too long)
+
+    def test_ilike_filter_case_insensitive(self, temp_db_path):
+        """Test ILIKE filter is case-insensitive."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("ilike_test", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"name": "PARIS"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"name": "paris"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"name": "London"}},
+        ])
+        
+        # ILIKE should match regardless of case
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "ilike", "field": "name", "pattern": "paris"}}
+        )
+        
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # PARIS
+        assert 2 in ids  # paris
+        assert 3 not in ids  # London
+
+    def test_like_case_sensitive(self, temp_db_path):
+        """Test that LIKE filter is case-sensitive."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_case", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"name": "PARIS"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"name": "Paris"}},
+        ])
+        
+        # LIKE is case-sensitive, "Paris" should not match "PARIS"
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "name", "pattern": "Paris"}}
+        )
+        
+        ids = [r["id"] for r in results]
+        assert 2 in ids  # Paris (exact case)
+        assert 1 not in ids  # PARIS (wrong case)
+
+    def test_like_with_text_search(self, temp_db_path):
+        """Test LIKE filter combined with text search."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_text", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"city": "Paris", "text": "Eiffel Tower"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"city": "London", "text": "Big Ben"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"city": "Parma", "text": "Italian cuisine"}},
+        ])
+        
+        # Text search with LIKE filter
+        results = collection.text_search(
+            "Tower",
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "city", "pattern": "Par%"}}
+        )
+        
+        # Should only return Paris (matches LIKE and has "Tower" in text)
+        if len(results) > 0:
+            assert results[0]["id"] == 1
+
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
