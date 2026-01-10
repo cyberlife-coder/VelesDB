@@ -1,10 +1,12 @@
 # =============================================================================
-# VelesDB Core - Continuous Integration Workflow
+# VelesDB Core - Continuous Integration Workflow (Optimized)
 # =============================================================================
-# Stratégie optimisée :
-# - PR/push (non-main) : lint + tests rapides + security (léger)
-# - Push sur main : + coverage complète + benchmarks (complet)
-# - Tag v* : géré par release.yml (pas de duplication)
+# Stratégie ultra-optimisée pour réduire les coûts GitHub Actions :
+# - Jobs parallèles (lint, test, security en même temps)
+# - Cache unifié et partagé entre jobs
+# - Outils pré-compilés via taiki-e/install-action
+# - Path filtering agressif
+# - PR: validation minimale | main: coverage + benchmarks complets
 # =============================================================================
 
 name: CI
@@ -12,24 +14,34 @@ name: CI
 on:
   push:
     branches: [main, develop]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [main, develop]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+# Annuler les runs précédents pour la même branche/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_VERSION: "1.83"
 
 jobs:
   # ===========================================================================
-  # Lint & Format (toujours)
+  # Lint & Format (parallèle avec test et security)
   # ===========================================================================
   lint:
     name: Lint & Format
@@ -39,17 +51,19 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.83'
+          toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt, clippy
 
-      - name: Install system dependencies (for Tauri plugin)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "lint"
+          shared-key: "velesdb-ci"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -58,69 +72,69 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
 
   # ===========================================================================
-  # Tests unitaires (toujours)
+  # Tests unitaires (parallèle avec lint et security)
   # ===========================================================================
   test:
     name: Tests
     runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Install system dependencies (for Tauri plugin)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "test"
+          shared-key: "velesdb-ci"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
         run: cargo test --all-features --workspace
 
   # ===========================================================================
-  # Python Integration Tests (LlamaIndex)
-  # ===========================================================================
-  python-integrations:
-    name: Python Integrations
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install LlamaIndex integration
-        run: |
-          cd integrations/llamaindex
-          pip install -e ".[dev]" || pip install pytest pytest-asyncio
-
-      - name: Run LlamaIndex tests
-        run: |
-          cd integrations/llamaindex
-          python -m pytest tests/ -v --tb=short || echo "Tests skipped (velesdb not installed)"
-
-  # ===========================================================================
-  # Security Audit (toujours)
+  # Security Audit (parallèle - outils pré-compilés)
   # ===========================================================================
   security:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      
+
+      - uses: taiki-e/install-action@cargo-audit
+
       - name: Run security audit
         run: cargo audit --ignore RUSTSEC-2024-0320 || true
-        # Note: Some warnings for unmaintained crates are expected
+
+  # ===========================================================================
+  # Python Integration Tests (uniquement si integrations/ modifié)
+  # ===========================================================================
+  python-integrations:
+    name: Python Integrations
+    runs-on: ubuntu-latest
+    needs: test
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+      contains(github.event.pull_request.changed_files, 'integrations/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install & Test LlamaIndex integration
+        run: |
+          cd integrations/llamaindex
+          pip install -e ".[dev]" 2>/dev/null || pip install pytest pytest-asyncio
+          python -m pytest tests/ -v --tb=short 2>/dev/null || echo "Tests skipped"
 
   # ===========================================================================
   # Coverage (main seulement)
@@ -135,19 +149,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: llvm-tools-preview
 
-      - name: Install system dependencies (for Tauri plugin)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "coverage"
+          shared-key: "velesdb-ci"
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage report
         run: |
@@ -155,53 +170,14 @@ jobs:
             --exclude velesdb-python \
             --lcov --output-path lcov.info
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Generate HTML report
-        run: |
-          cargo llvm-cov --all-features --workspace \
-            --exclude velesdb-python \
-            --html --output-dir coverage-html
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage-html/
-          retention-days: 30
-
   # ===========================================================================
-  # Build check (PR seulement, main fait le coverage)
-  # ===========================================================================
-  build-check:
-    name: Build Check
-    runs-on: ubuntu-latest
-    needs: lint
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install system dependencies (for Tauri plugin)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: "build"
-
-      - name: Build check
-        run: cargo check --all-features --workspace
-
-  # ===========================================================================
-  # Benchmarks (main seulement)
+  # Benchmarks (main seulement - rapides uniquement)
   # ===========================================================================
   benchmark:
     name: Benchmarks
@@ -212,37 +188,34 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Install system dependencies (for Tauri plugin)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "bench"
+          shared-key: "velesdb-ci"
 
-      - name: Run benchmarks (excluding slow scalability tests)
+      - name: Run fast benchmarks only
         run: |
-          # Run only fast benchmarks - scalability_benchmark is excluded (takes hours)
-          # Run manually with: cargo bench --bench scalability_benchmark
           cargo bench -p velesdb-core \
-            --bench bm25_benchmark \
-            --bench column_filter_benchmark \
-            --bench filter_benchmark \
             --bench simd_benchmark \
-            --bench velesql_benchmark \
+            --bench filter_benchmark \
             -- --noplot
 
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
           path: target/criterion/
-          retention-days: 30
+          retention-days: 7
 
   # ===========================================================================
-  # Summary
+  # Summary (léger)
   # ===========================================================================
   ci-success:
     name: CI Success
@@ -250,12 +223,9 @@ jobs:
     needs: [lint, test, security]
     if: always()
     steps:
-      - name: Check all jobs
+      - name: Check results
         run: |
-          if [ "${{ needs.lint.result }}" != "success" ] || \
-             [ "${{ needs.test.result }}" != "success" ] || \
-             [ "${{ needs.security.result }}" != "success" ]; then
-            echo "❌ CI failed"
-            exit 1
-          fi
-          echo "✅ CI passed"
+          [[ "${{ needs.lint.result }}" == "success" ]] && \
+          [[ "${{ needs.test.result }}" == "success" ]] && \
+          [[ "${{ needs.security.result }}" == "success" ]] && \
+          echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }
