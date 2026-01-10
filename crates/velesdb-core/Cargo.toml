@@ -179,3 +179,7 @@ harness = false
 [[bench]]
 name = "trigram_benchmark"
 harness = false
+
+[[bench]]
+name = "concurrency_benchmark"
+harness = false
