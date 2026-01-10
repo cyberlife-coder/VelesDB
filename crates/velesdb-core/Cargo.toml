@@ -175,3 +175,7 @@ harness = false
 [[bench]]
 name = "hnsw_comparison_benchmark"
 harness = false
+
+[[bench]]
+name = "trigram_benchmark"
+harness = false

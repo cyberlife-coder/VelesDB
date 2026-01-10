@@ -10,9 +10,11 @@ pub mod hnsw;
 mod posting_list;
 #[cfg(test)]
 mod posting_list_tests;
+pub mod trigram;
 
 pub use bm25::{Bm25Index, Bm25Params};
 pub use hnsw::{HnswIndex, HnswParams, SearchQuality};
+pub use trigram::{extract_trigrams, TrigramIndex};
 
 use crate::distance::DistanceMetric;
 
