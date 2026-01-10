@@ -76,6 +76,18 @@ pub enum Error {
     /// Indicates an unexpected internal error. Please report if encountered.
     #[error("[VELES-013] Internal error: {0}")]
     Internal(String),
+
+    /// Vector not allowed on metadata-only collection (VELES-014).
+    #[error("[VELES-014] Vector not allowed on metadata-only collection '{0}'")]
+    VectorNotAllowed(String),
+
+    /// Search not supported on metadata-only collection (VELES-015).
+    #[error("[VELES-015] Vector search not supported on metadata-only collection '{0}'. Use query() instead.")]
+    SearchNotSupported(String),
+
+    /// Vector required for vector collection (VELES-016).
+    #[error("[VELES-016] Vector required for collection '{0}' (not metadata-only)")]
+    VectorRequired(String),
 }
 
 impl Error {
@@ -96,6 +108,9 @@ impl Error {
             Self::Io(_) => "VELES-011",
             Self::Serialization(_) => "VELES-012",
             Self::Internal(_) => "VELES-013",
+            Self::VectorNotAllowed(_) => "VELES-014",
+            Self::SearchNotSupported(_) => "VELES-015",
+            Self::VectorRequired(_) => "VELES-016",
         }
     }
 
