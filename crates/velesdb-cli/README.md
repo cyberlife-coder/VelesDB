@@ -131,6 +131,28 @@ SELECT * FROM docs WHERE author IS NOT NULL LIMIT 10;
 SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
 ```
 
+#### Multi-Query Fusion (MQG) ⭐ NEW v1.1.0
+
+```sql
+-- RRF fusion with multiple query vectors (ideal for RAG pipelines)
+SELECT * FROM documents 
+WHERE VECTOR NEAR_FUSED [$v1, $v2, $v3]
+WITH (fusion = 'rrf', k = 60)
+LIMIT 10;
+
+-- Weighted fusion strategy
+SELECT * FROM documents 
+WHERE VECTOR NEAR_FUSED [$query1, $query2]
+WITH (fusion = 'weighted', avg_weight = 0.6, max_weight = 0.3, hit_weight = 0.1)
+LIMIT 10;
+
+-- Average/Maximum fusion
+SELECT * FROM documents 
+WHERE VECTOR NEAR_FUSED $vectors
+WITH (fusion = 'average')
+LIMIT 10;
+```
+
 #### Combined Queries (Vector + Metadata + Text)
 
 ```sql
