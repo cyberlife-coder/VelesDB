@@ -5,118 +5,16 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - 2026-01-10
+## [1.1.0] - 2026-01-XX (develop)
 
-### 🚀 SOTA 2026 Performance Optimizations (EPIC-CORE-003)
+### 🚀 Major Feature Release: EPIC-CORE-001 + EPIC-CORE-002 + EPIC-CORE-003
 
-Major performance release based on arXiv research 2025-2026.
-
-#### Added
-
-- **Trigram Index** (`crates/velesdb-core/src/index/trigram/`)
-  - `TrigramIndex` with Roaring Bitmaps for LIKE/ILIKE acceleration
-  - `extract_trigrams()` with UTF-8 support and padding
-  - `search_like_ranked()` with Jaccard scoring and threshold pruning
-  - SIMD multi-architecture support (AVX-512/AVX2/NEON)
-  - Target: 22-128x speedup on pattern matching
-
-- **Caching Layer** (`crates/velesdb-core/src/cache/`)
-  - `LruCache<K,V>` - Thread-safe LRU cache with IndexMap (O(1) lookup)
-  - `LockFreeLruCache<K,V>` - Two-tier cache with DashMap L1 (lock-free)
-  - `BloomFilter` - Probabilistic existence check (FPR < 10%)
-  - `CacheStats`, `LockFreeCacheStats` - Hit/miss/eviction tracking
-
-- **Column Compression** (`crates/velesdb-core/src/compression/`)
-  - `DictionaryEncoder<V>` - Encode repeated values as compact codes
-  - `CompressionStats` - Ratio monitoring and memory tracking
-  - Batch encode/decode operations
-
-- **Thread-Safety & Concurrency** (`crates/velesdb-core/src/cache/`)
-  - Lock hierarchy documentation to prevent deadlocks
-  - Bounded eviction to avoid infinite loops under contention
-  - `parking_lot::RwLock` for fair scheduling
-
-#### Performance
-
-| Component | Metric | Value |
-|-----------|--------|-------|
-| LockFreeLruCache L1 | Read latency | ~50ns (lock-free) |
-| LruCache | Operations | O(1) with IndexMap |
-| Trigram SIMD | Extraction | 2-4x faster than scalar |
-| BloomFilter | Contains check | O(k) with k hash functions |
-
-#### Tests
-
-- 28 TDD tests for Trigram Index
-- 8 TDD tests for Thread-Safety (TrigramIndex)
-- 13 TDD tests for LRU Cache
-- 11 TDD tests for LockFreeLruCache
-- 5 TDD tests for LRU O(1) Optimization
-- 6 TDD tests for Deadlock Detection
-- 7 TDD tests for Cache Performance
-- 7 TDD tests for Bloom Filter
-- 12 TDD tests for Dictionary Encoding
-- **Total: 107 tests**
-
-#### References
-
-- arXiv:2601.01937 - Vector Search Multi-Tier Storage (Jan 2026)
-- arXiv:2310.11703v2 - VDB Survey Storage & Retrieval (Jun 2025)
-- arXiv:2501.17788v3 - WARP Multi-Vector Retrieval (Jul 2025)
-- arXiv:2508.15694 - GoVector I/O-efficient caching (2026)
+This release includes Multi-Query Fusion, Metadata-Only Collections, LIKE/ILIKE filters, 
+and SOTA 2026 performance optimizations.
 
 ---
 
-## [1.2.0] - 2025-01-XX
-
-### 🗄️ Metadata-Only Collections & LIKE/ILIKE Filters (EPIC-CORE-002)
-
-Major feature release: Collections metadata-only et opérateurs LIKE/ILIKE pour filtres avancés.
-
-#### Added
-
-- **Metadata-Only Collections** (`crates/velesdb-core`)
-  - `CollectionType` enum: `Vector` (default), `MetadataOnly`
-  - `Database::create_collection_typed()` - Create typed collections
-  - `Collection::create_metadata_only()` - Shortcut for metadata collections
-  - `Collection::upsert_metadata()` - Insert metadata-only points (no vectors)
-  - `Collection::is_metadata_only()` - Check collection type
-  - `Point::metadata_only()` - Create metadata-only point
-  - No HNSW index created for metadata-only collections (memory efficient)
-  - Error handling: `VectorNotAllowed`, `SearchNotSupported`
-
-- **LIKE/ILIKE Filter Operators** (`crates/velesdb-core/src/filter.rs`)
-  - `Condition::Like { field, pattern }` - Case-sensitive SQL LIKE
-  - `Condition::ILike { field, pattern }` - Case-insensitive ILIKE
-  - Wildcards: `%` (zero or more chars), `_` (single char)
-  - Escaped wildcards: `\%`, `\_` for literal matching
-  - Dynamic programming implementation for efficient matching
-
-- **VelesQL ILIKE Support** (`crates/velesdb-core/src/velesql/`)
-  - `SELECT * FROM docs WHERE title ILIKE '%pattern%'` syntax
-  - `LikeCondition.case_insensitive` field in AST
-  - Grammar updated to support both LIKE and ILIKE keywords
-
-- **Python Bindings** (`crates/velesdb-python`)
-  - `Database.create_metadata_collection(name)` method
-  - `Collection.is_metadata_only()` method
-  - `Collection.upsert_metadata(points)` method
-  - `metadata_only` field in `Collection.info()`
-  - LIKE/ILIKE filters via JSON filter format
-
-#### Tests
-
-- 13 TDD tests for metadata-only collections
-- 26 TDD tests for LIKE/ILIKE filter operators
-- 29 parser tests including ILIKE
-- 7 Python tests for metadata-only bindings
-- 5 Python tests for LIKE/ILIKE filters
-
----
-
-## [1.1.0] - 2026-01-10
-
-### 🚀 Multi-Query Fusion (EPIC-CORE-001)
+### � Multi-Query Fusion (EPIC-CORE-001)
 
 Major feature release: Native Multi-Query Generation (MQG) support for RAG pipelines.
 
@@ -154,6 +52,79 @@ Major feature release: Native Multi-Query Generation (MQG) support for RAG pipel
 - Multi-query fusion adds ~10-15% overhead vs. N sequential searches
 - RRF fusion: O(n log n) merge complexity
 - Weighted fusion: O(n) linear scan
+
+---
+
+### 🗄️ Metadata-Only Collections & LIKE/ILIKE Filters (EPIC-CORE-002)
+
+#### Added
+
+- **Metadata-Only Collections** (`crates/velesdb-core`)
+  - `CollectionType` enum: `Vector` (default), `MetadataOnly`
+  - `Database::create_collection_typed()` - Create typed collections
+  - `Collection::upsert_metadata()` - Insert metadata-only points (no vectors)
+  - No HNSW index created for metadata-only collections (memory efficient)
+
+- **LIKE/ILIKE Filter Operators** (`crates/velesdb-core/src/filter.rs`)
+  - `Condition::Like { field, pattern }` - Case-sensitive SQL LIKE
+  - `Condition::ILike { field, pattern }` - Case-insensitive ILIKE
+  - Wildcards: `%` (zero or more chars), `_` (single char)
+
+- **VelesQL ILIKE Support** (`crates/velesdb-core/src/velesql/`)
+  - `SELECT * FROM docs WHERE title ILIKE '%pattern%'` syntax
+
+#### Tests (EPIC-CORE-002)
+
+- 13 TDD tests for metadata-only collections
+- 26 TDD tests for LIKE/ILIKE filter operators
+- 29 parser tests including ILIKE
+
+---
+
+### 🚀 SOTA 2026 Performance Optimizations (EPIC-CORE-003)
+
+#### Added
+
+- **Trigram Index** (`crates/velesdb-core/src/index/trigram/`)
+  - `TrigramIndex` with Roaring Bitmaps for LIKE/ILIKE acceleration
+  - `search_like_ranked()` with Jaccard scoring and threshold pruning
+  - SIMD multi-architecture support (AVX-512/AVX2/NEON)
+  - Target: 22-128x speedup on pattern matching
+
+- **Caching Layer** (`crates/velesdb-core/src/cache/`)
+  - `LruCache<K,V>` - Thread-safe LRU cache with IndexMap
+  - `LockFreeLruCache<K,V>` - Two-tier cache with DashMap L1 (lock-free)
+  - `BloomFilter` - Probabilistic existence check (FPR < 10%)
+
+- **Column Compression** (`crates/velesdb-core/src/compression/`)
+  - `DictionaryEncoder<V>` - Encode repeated values as compact codes
+
+- **Thread-Safety & Concurrency**
+  - Lock hierarchy documentation to prevent deadlocks
+  - `parking_lot::RwLock` for fair scheduling
+
+#### Performance (EPIC-CORE-003)
+
+| Component | Metric | Value |
+|-----------|--------|-------|
+| LockFreeLruCache L1 | Read latency | ~50ns (lock-free) |
+| LruCache | Operations | O(1) with IndexMap |
+| Trigram SIMD | Extraction | 2-4x faster than scalar |
+
+#### Tests (EPIC-CORE-003)
+
+- 28 TDD tests for Trigram Index
+- 8 TDD tests for Thread-Safety
+- 24 TDD tests for LRU/LockFree Cache
+- 13 TDD tests for Deadlock/Performance
+- 7 TDD tests for Bloom Filter
+- 12 TDD tests for Dictionary Encoding
+- **Total EPIC-CORE-003: 107 tests**
+
+#### References
+
+- arXiv:2601.01937 - Vector Search Multi-Tier Storage (Jan 2026)
+- arXiv:2310.11703v2 - VDB Survey (Jun 2025)
 
 ---
 
