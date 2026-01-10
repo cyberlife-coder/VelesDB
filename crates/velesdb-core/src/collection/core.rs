@@ -1,6 +1,6 @@
 //! Core Collection implementation (Lifecycle & CRUD).
 
-use super::types::{Collection, CollectionConfig};
+use super::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::index::{Bm25Index, HnswIndex, VectorIndex};
@@ -56,6 +56,7 @@ impl Collection {
             metric,
             point_count: 0,
             storage_mode,
+            metadata_only: false,
         };
 
         // Initialize persistent storages
@@ -87,6 +88,89 @@ impl Collection {
         collection.save_config()?;
 
         Ok(collection)
+    }
+
+    /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the collection directory
+    /// * `name` - Name of the collection
+    /// * `collection_type` - Type of collection to create
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_typed(
+        path: PathBuf,
+        name: &str,
+        collection_type: &CollectionType,
+    ) -> Result<Self> {
+        match collection_type {
+            CollectionType::Vector {
+                dimension,
+                metric,
+                storage_mode,
+            } => Self::create_with_options(path, *dimension, *metric, *storage_mode),
+            CollectionType::MetadataOnly => Self::create_metadata_only(path, name),
+        }
+    }
+
+    /// Creates a new metadata-only collection (no vectors, no HNSW index).
+    ///
+    /// Metadata-only collections are optimized for storing reference data,
+    /// catalogs, and other non-vector data. They support CRUD operations
+    /// and `VelesQL` queries on payload, but NOT vector search.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_metadata_only(path: PathBuf, name: &str) -> Result<Self> {
+        std::fs::create_dir_all(&path)?;
+
+        let config = CollectionConfig {
+            name: name.to_string(),
+            dimension: 0,                   // No vector dimension
+            metric: DistanceMetric::Cosine, // Default, not used
+            point_count: 0,
+            storage_mode: StorageMode::Full, // Default, not used
+            metadata_only: true,
+        };
+
+        // For metadata-only, we only need payload storage
+        // Vector storage with dimension 0 won't allocate space
+        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, 0).map_err(Error::Io)?));
+
+        let payload_storage = Arc::new(RwLock::new(
+            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+        ));
+
+        // Create minimal HNSW index (won't be used)
+        let index = Arc::new(HnswIndex::new(0, DistanceMetric::Cosine));
+
+        // BM25 index for full-text search (still useful for metadata-only)
+        let text_index = Arc::new(Bm25Index::new());
+
+        let collection = Self {
+            path,
+            config: Arc::new(RwLock::new(config)),
+            vector_storage,
+            payload_storage,
+            index,
+            text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        collection.save_config()?;
+
+        Ok(collection)
+    }
+
+    /// Returns true if this is a metadata-only collection.
+    #[must_use]
+    pub fn is_metadata_only(&self) -> bool {
+        self.config.read().metadata_only
     }
 
     /// Opens an existing collection from the specified path.
@@ -157,13 +241,27 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if any point has a mismatched dimension.
+    /// Returns an error if any point has a mismatched dimension, or if
+    /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
         let config = self.config.read();
         let dimension = config.dimension;
         let storage_mode = config.storage_mode;
+        let metadata_only = config.metadata_only;
+        let name = config.name.clone();
         drop(config);
+
+        // Reject vectors on metadata-only collections
+        if metadata_only {
+            for point in &points {
+                if !point.vector.is_empty() {
+                    return Err(Error::VectorNotAllowed(name));
+                }
+            }
+            // Delegate to upsert_metadata for metadata-only collections
+            return self.upsert_metadata(points);
+        }
 
         // Validate dimensions first
         for point in &points {
@@ -242,6 +340,47 @@ impl Collection {
         vector_storage.flush().map_err(Error::Io)?;
         payload_storage.flush().map_err(Error::Io)?;
         self.index.save(&self.path).map_err(Error::Io)?;
+
+        Ok(())
+    }
+
+    /// Inserts or updates metadata-only points (no vectors).
+    ///
+    /// This method is for metadata-only collections. Points should have
+    /// empty vectors and only contain payload data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn upsert_metadata(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
+        let points: Vec<Point> = points.into_iter().collect();
+
+        let mut payload_storage = self.payload_storage.write();
+
+        for point in &points {
+            // Store Payload (metadata-only points must have payload)
+            if let Some(payload) = &point.payload {
+                payload_storage
+                    .store(point.id, payload)
+                    .map_err(Error::Io)?;
+
+                // Update BM25 Text Index for full-text search
+                let text = Self::extract_text_from_payload(payload);
+                if !text.is_empty() {
+                    self.text_index.add_document(point.id, &text);
+                }
+            } else {
+                let _ = payload_storage.delete(point.id);
+                self.text_index.remove_document(point.id);
+            }
+        }
+
+        // Update point count
+        let mut config = self.config.write();
+        config.point_count = payload_storage.ids().len();
+
+        // Auto-flush for durability
+        payload_storage.flush().map_err(Error::Io)?;
 
         Ok(())
     }
@@ -336,24 +475,39 @@ impl Collection {
     /// Retrieves points by their IDs.
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
-        let vector_storage = self.vector_storage.read();
+        let config = self.config.read();
+        let is_metadata_only = config.metadata_only;
+        drop(config);
+
         let payload_storage = self.payload_storage.read();
 
-        ids.iter()
-            .map(|&id| {
-                // Retrieve vector
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-
-                // Retrieve payload
-                let payload = payload_storage.retrieve(id).ok().flatten();
-
-                Some(Point {
-                    id,
-                    vector,
-                    payload,
+        if is_metadata_only {
+            // For metadata-only collections, only retrieve payload
+            ids.iter()
+                .map(|&id| {
+                    let payload = payload_storage.retrieve(id).ok().flatten()?;
+                    Some(Point {
+                        id,
+                        vector: Vec::new(),
+                        payload: Some(payload),
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        } else {
+            // For vector collections, retrieve both vector and payload
+            let vector_storage = self.vector_storage.read();
+            ids.iter()
+                .map(|&id| {
+                    let vector = vector_storage.retrieve(id).ok().flatten()?;
+                    let payload = payload_storage.retrieve(id).ok().flatten();
+                    Some(Point {
+                        id,
+                        vector,
+                        payload,
+                    })
+                })
+                .collect()
+        }
     }
 
     /// Deletes points by their IDs.
@@ -362,17 +516,35 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
-        let mut vector_storage = self.vector_storage.write();
+        let config = self.config.read();
+        let is_metadata_only = config.metadata_only;
+        drop(config);
+
         let mut payload_storage = self.payload_storage.write();
 
-        for &id in ids {
-            vector_storage.delete(id).map_err(Error::Io)?;
-            payload_storage.delete(id).map_err(Error::Io)?;
-            self.index.remove(id);
-        }
+        if is_metadata_only {
+            // For metadata-only collections, only delete from payload storage
+            for &id in ids {
+                payload_storage.delete(id).map_err(Error::Io)?;
+                self.text_index.remove_document(id);
+            }
 
-        let mut config = self.config.write();
-        config.point_count = vector_storage.len();
+            let mut config = self.config.write();
+            config.point_count = payload_storage.ids().len();
+        } else {
+            // For vector collections, delete from all stores
+            let mut vector_storage = self.vector_storage.write();
+
+            for &id in ids {
+                vector_storage.delete(id).map_err(Error::Io)?;
+                payload_storage.delete(id).map_err(Error::Io)?;
+                self.index.remove(id);
+                self.text_index.remove_document(id);
+            }
+
+            let mut config = self.config.write();
+            config.point_count = vector_storage.len();
+        }
 
         Ok(())
     }

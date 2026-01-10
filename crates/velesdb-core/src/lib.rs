@@ -48,10 +48,12 @@
 pub mod alloc_guard;
 #[cfg(test)]
 mod alloc_guard_tests;
+pub mod cache;
 pub mod collection;
 pub mod column_store;
 #[cfg(test)]
 mod column_store_tests;
+pub mod compression;
 pub mod config;
 #[cfg(test)]
 mod config_tests;
@@ -62,6 +64,8 @@ pub mod error;
 #[cfg(test)]
 mod error_tests;
 pub mod filter;
+#[cfg(test)]
+mod filter_like_tests;
 #[cfg(test)]
 mod filter_tests;
 pub mod fusion;
@@ -97,7 +101,7 @@ pub mod velesql;
 
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
-pub use collection::Collection;
+pub use collection::{Collection, CollectionType};
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
@@ -237,6 +241,94 @@ impl Database {
         let collection_path = self.data_dir.join(name);
         if collection_path.exists() {
             std::fs::remove_dir_all(collection_path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    /// * `collection_type` - Type of collection to create
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use velesdb_core::{Database, CollectionType, DistanceMetric, StorageMode};
+    ///
+    /// let db = Database::open("./data")?;
+    ///
+    /// // Create a metadata-only collection
+    /// db.create_collection_typed("products", CollectionType::MetadataOnly)?;
+    ///
+    /// // Create a vector collection
+    /// db.create_collection_typed("embeddings", CollectionType::Vector {
+    ///     dimension: 768,
+    ///     metric: DistanceMetric::Cosine,
+    ///     storage_mode: StorageMode::Full,
+    /// })?;
+    /// ```
+    pub fn create_collection_typed(
+        &self,
+        name: &str,
+        collection_type: &CollectionType,
+    ) -> Result<()> {
+        let mut collections = self.collections.write();
+
+        if collections.contains_key(name) {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+
+        let collection_path = self.data_dir.join(name);
+        let collection = Collection::create_typed(collection_path, name, collection_type)?;
+        collections.insert(name.to_string(), collection);
+
+        Ok(())
+    }
+
+    /// Loads existing collections from disk.
+    ///
+    /// Call this after opening a database to load previously created collections.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if collection directories cannot be read.
+    pub fn load_collections(&self) -> Result<()> {
+        let mut collections = self.collections.write();
+
+        for entry in std::fs::read_dir(&self.data_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                let config_path = path.join("config.json");
+                if config_path.exists() {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        collections.entry(name)
+                    {
+                        match Collection::open(path) {
+                            Ok(collection) => {
+                                entry.insert(collection);
+                            }
+                            Err(err) => {
+                                eprintln!("Warning: Failed to load collection: {err}");
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())

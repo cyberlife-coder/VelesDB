@@ -188,8 +188,36 @@ fn test_parse_like_condition() {
         Some(Condition::Like(c)) => {
             assert_eq!(c.column, "title");
             assert_eq!(c.pattern, "%rust%");
+            assert!(!c.case_insensitive); // LIKE is case-sensitive
         }
         _ => panic!("Expected LIKE condition"),
+    }
+}
+
+#[test]
+fn test_parse_ilike_condition() {
+    let query = Parser::parse("SELECT * FROM docs WHERE title ILIKE '%Rust%'").unwrap();
+    match query.select.where_clause {
+        Some(Condition::Like(c)) => {
+            assert_eq!(c.column, "title");
+            assert_eq!(c.pattern, "%Rust%");
+            assert!(c.case_insensitive); // ILIKE is case-insensitive
+        }
+        _ => panic!("Expected ILIKE condition"),
+    }
+}
+
+#[test]
+fn test_parse_ilike_lowercase() {
+    // ILIKE keyword should work regardless of case
+    let query = Parser::parse("SELECT * FROM docs WHERE name ilike 'test%'").unwrap();
+    match query.select.where_clause {
+        Some(Condition::Like(c)) => {
+            assert_eq!(c.column, "name");
+            assert_eq!(c.pattern, "test%");
+            assert!(c.case_insensitive);
+        }
+        _ => panic!("Expected ILIKE condition"),
     }
 }
 

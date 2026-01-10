@@ -33,9 +33,15 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query vector dimension doesn't match the collection.
+    /// Returns an error if the query vector dimension doesn't match the collection,
+    /// or if this is a metadata-only collection (use `query()` instead).
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
+
+        // Metadata-only collections don't support vector search
+        if config.metadata_only {
+            return Err(Error::SearchNotSupported(config.name.clone()));
+        }
 
         if query.len() != config.dimension {
             return Err(Error::DimensionMismatch {
