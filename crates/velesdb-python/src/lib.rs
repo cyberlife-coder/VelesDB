@@ -31,7 +31,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use velesdb_core::{Database as CoreDatabase, DistanceMetric, Point, StorageMode};
+use velesdb_core::{
+    Database as CoreDatabase, DistanceMetric, FusionStrategy as CoreFusionStrategy, Point,
+    StorageMode,
+};
 
 /// Extracts a vector from a PyObject, supporting both Python lists and NumPy arrays.
 ///
@@ -63,6 +66,123 @@ fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
     Err(PyValueError::new_err(
         "Vector must be a Python list or numpy array of floats",
     ))
+}
+
+/// Fusion strategy for combining results from multiple vector searches.
+///
+/// Example:
+///     >>> # Average fusion
+///     >>> strategy = FusionStrategy.average()
+///     >>> # RRF with default k=60
+///     >>> strategy = FusionStrategy.rrf()
+///     >>> # Weighted fusion
+///     >>> strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
+#[pyclass]
+#[derive(Clone)]
+pub struct FusionStrategy {
+    inner: CoreFusionStrategy,
+}
+
+#[pymethods]
+impl FusionStrategy {
+    /// Create an Average fusion strategy.
+    ///
+    /// Computes the mean score for each document across all queries.
+    ///
+    /// Returns:
+    ///     FusionStrategy: Average fusion strategy
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.average()
+    #[staticmethod]
+    fn average() -> Self {
+        Self {
+            inner: CoreFusionStrategy::Average,
+        }
+    }
+
+    /// Create a Maximum fusion strategy.
+    ///
+    /// Takes the maximum score for each document across all queries.
+    ///
+    /// Returns:
+    ///     FusionStrategy: Maximum fusion strategy
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.maximum()
+    #[staticmethod]
+    fn maximum() -> Self {
+        Self {
+            inner: CoreFusionStrategy::Maximum,
+        }
+    }
+
+    /// Create a Reciprocal Rank Fusion (RRF) strategy.
+    ///
+    /// Uses position-based scoring: score = Σ 1/(k + rank)
+    /// This is robust to score scale differences between queries.
+    ///
+    /// Args:
+    ///     k: Ranking constant (default: 60). Lower k gives more weight to top ranks.
+    ///
+    /// Returns:
+    ///     FusionStrategy: RRF fusion strategy
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.rrf()  # k=60
+    ///     >>> strategy = FusionStrategy.rrf(k=30)  # More emphasis on top ranks
+    #[staticmethod]
+    #[pyo3(signature = (k = 60))]
+    fn rrf(k: u32) -> Self {
+        Self {
+            inner: CoreFusionStrategy::RRF { k },
+        }
+    }
+
+    /// Create a Weighted fusion strategy.
+    ///
+    /// Combines average score, maximum score, and hit ratio with custom weights.
+    /// Formula: score = avg_weight * avg + max_weight * max + hit_weight * hit_ratio
+    ///
+    /// Args:
+    ///     avg_weight: Weight for average score (0.0-1.0)
+    ///     max_weight: Weight for maximum score (0.0-1.0)
+    ///     hit_weight: Weight for hit ratio (0.0-1.0)
+    ///
+    /// Returns:
+    ///     FusionStrategy: Weighted fusion strategy
+    ///
+    /// Raises:
+    ///     ValueError: If weights don't sum to 1.0 or are negative
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.weighted(
+    ///     ...     avg_weight=0.6,
+    ///     ...     max_weight=0.3,
+    ///     ...     hit_weight=0.1
+    ///     ... )
+    #[staticmethod]
+    #[pyo3(signature = (avg_weight, max_weight, hit_weight))]
+    fn weighted(avg_weight: f32, max_weight: f32, hit_weight: f32) -> PyResult<Self> {
+        CoreFusionStrategy::weighted(avg_weight, max_weight, hit_weight)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(format!("{e}")))
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.inner {
+            CoreFusionStrategy::Average => "FusionStrategy.average()".to_string(),
+            CoreFusionStrategy::Maximum => "FusionStrategy.maximum()".to_string(),
+            CoreFusionStrategy::RRF { k } => format!("FusionStrategy.rrf(k={k})"),
+            CoreFusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            } => format!(
+                "FusionStrategy.weighted(avg_weight={avg_weight}, max_weight={max_weight}, hit_weight={hit_weight})"
+            ),
+        }
+    }
 }
 
 /// VelesDB Database - the main entry point for interacting with VelesDB.
@@ -828,6 +948,151 @@ impl Collection {
             Ok(py_results)
         })
     }
+
+    /// Multi-query search with result fusion.
+    ///
+    /// Executes parallel searches for multiple query vectors and fuses
+    /// the results using the specified fusion strategy. Ideal for Multiple
+    /// Query Generation (MQG) pipelines.
+    ///
+    /// Args:
+    ///     vectors: List of query vectors (Python lists or numpy arrays)
+    ///     top_k: Number of results to return after fusion (default: 10)
+    ///     fusion: FusionStrategy instance (default: RRF with k=60)
+    ///     filter: Optional filter dictionary
+    ///
+    /// Returns:
+    ///     List of fused search results with 'id', 'score', and 'payload'
+    ///
+    /// Example:
+    ///     >>> # Search with 4 query reformulations using RRF
+    ///     >>> results = collection.multi_query_search(
+    ///     ...     vectors=[query1, query2, query3, query4],
+    ///     ...     top_k=10,
+    ///     ...     fusion=FusionStrategy.rrf()
+    ///     ... )
+    ///     >>> # Or with weighted fusion
+    ///     >>> results = collection.multi_query_search(
+    ///     ...     vectors=[q1, q2],
+    ///     ...     fusion=FusionStrategy.weighted(0.6, 0.3, 0.1)
+    ///     ... )
+    #[pyo3(signature = (vectors, top_k = 10, fusion = None, filter = None))]
+    fn multi_query_search(
+        &self,
+        vectors: Vec<PyObject>,
+        top_k: usize,
+        fusion: Option<FusionStrategy>,
+        filter: Option<PyObject>,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            // Extract all vectors
+            let mut query_vectors: Vec<Vec<f32>> = Vec::with_capacity(vectors.len());
+            for v in &vectors {
+                query_vectors.push(extract_vector(py, v)?);
+            }
+
+            // Default fusion strategy
+            let fusion_strategy = fusion
+                .map(|f| f.inner)
+                .unwrap_or(CoreFusionStrategy::RRF { k: 60 });
+
+            // Parse filter if provided
+            let filter_obj = match filter {
+                Some(f) => {
+                    let json_str = py
+                        .import("json")?
+                        .call_method1("dumps", (f,))?
+                        .extract::<String>()?;
+                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
+                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
+                    Some(filter)
+                }
+                None => None,
+            };
+
+            // Prepare query refs for core
+            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+
+            let results = self
+                .inner
+                .multi_query_search(&query_refs, top_k, fusion_strategy, filter_obj.as_ref())
+                .map_err(|e| PyRuntimeError::new_err(format!("Multi-query search failed: {e}")))?;
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|r| {
+                    let mut result = HashMap::new();
+                    result.insert("id".to_string(), r.point.id.into_py(py));
+                    result.insert("score".to_string(), r.score.into_py(py));
+
+                    let payload_py = match &r.point.payload {
+                        Some(p) => json_to_python(py, p),
+                        None => py.None(),
+                    };
+                    result.insert("payload".to_string(), payload_py);
+
+                    result
+                })
+                .collect();
+
+            Ok(py_results)
+        })
+    }
+
+    /// Multi-query search returning only IDs and fused scores.
+    ///
+    /// Faster variant of multi_query_search that skips fetching vector
+    /// and payload data. Use when you only need document IDs.
+    ///
+    /// Args:
+    ///     vectors: List of query vectors
+    ///     top_k: Number of results (default: 10)
+    ///     fusion: FusionStrategy instance (default: RRF)
+    ///
+    /// Returns:
+    ///     List of dicts with 'id' and 'score'
+    ///
+    /// Example:
+    ///     >>> ids = collection.multi_query_search_ids([q1, q2], top_k=100)
+    #[pyo3(signature = (vectors, top_k = 10, fusion = None))]
+    fn multi_query_search_ids(
+        &self,
+        vectors: Vec<PyObject>,
+        top_k: usize,
+        fusion: Option<FusionStrategy>,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let mut query_vectors: Vec<Vec<f32>> = Vec::with_capacity(vectors.len());
+            for v in &vectors {
+                query_vectors.push(extract_vector(py, v)?);
+            }
+
+            let fusion_strategy = fusion
+                .map(|f| f.inner)
+                .unwrap_or(CoreFusionStrategy::RRF { k: 60 });
+
+            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+
+            let results = self
+                .inner
+                .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Multi-query search IDs failed: {e}"))
+                })?;
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|(id, score)| {
+                    let mut result = HashMap::new();
+                    result.insert("id".to_string(), id.into_py(py));
+                    result.insert("score".to_string(), score.into_py(py));
+                    result
+                })
+                .collect();
+
+            Ok(py_results)
+        })
+    }
 }
 
 /// Search result from a vector query.
@@ -943,6 +1208,7 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Database>()?;
     m.add_class::<Collection>()?;
     m.add_class::<SearchResult>()?;
+    m.add_class::<FusionStrategy>()?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -440,5 +440,190 @@ class TestVelesDBVectorStoreBatch:
         assert isinstance(results, list)
 
 
+class TestMultiQuerySearch:
+    """Tests for multi_query_search functionality (EPIC-CORE-001)."""
+
+    def test_multi_query_search_basic(self, temp_db_path, embeddings):
+        """Test basic multi-query search with default RRF fusion."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg",
+        )
+
+        vectorstore.add_texts([
+            "Travel to Greece for ancient history",
+            "Beach vacation in Thailand",
+            "Mountain hiking in Switzerland",
+            "Cultural tour of Japan",
+        ])
+
+        # Multi-query search with reformulations
+        results = vectorstore.multi_query_search(
+            queries=["Greece travel", "Greek vacation", "Athens trip"],
+            k=3,
+        )
+
+        assert len(results) <= 3
+        assert all(isinstance(doc, Document) for doc in results)
+
+    def test_multi_query_search_with_rrf(self, temp_db_path, embeddings):
+        """Test multi-query search with explicit RRF fusion."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_rrf",
+        )
+
+        vectorstore.add_texts([
+            "Python programming tutorial",
+            "JavaScript web development",
+            "Rust systems programming",
+        ])
+
+        results = vectorstore.multi_query_search(
+            queries=["Python coding", "Python tutorial"],
+            k=2,
+            fusion="rrf",
+            fusion_params={"k": 60},
+        )
+
+        assert len(results) <= 2
+
+    def test_multi_query_search_with_weighted(self, temp_db_path, embeddings):
+        """Test multi-query search with weighted fusion."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_weighted",
+        )
+
+        vectorstore.add_texts([
+            "Machine learning algorithms",
+            "Deep learning neural networks",
+            "Natural language processing",
+        ])
+
+        results = vectorstore.multi_query_search(
+            queries=["ML algorithms", "machine learning"],
+            k=2,
+            fusion="weighted",
+            fusion_params={
+                "avg_weight": 0.6,
+                "max_weight": 0.3,
+                "hit_weight": 0.1,
+            },
+        )
+
+        assert len(results) <= 2
+
+    def test_multi_query_search_with_score(self, temp_db_path, embeddings):
+        """Test multi-query search returning scores."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_score",
+        )
+
+        vectorstore.add_texts([
+            "Database optimization techniques",
+            "SQL query performance",
+        ])
+
+        results = vectorstore.multi_query_search_with_score(
+            queries=["database performance", "SQL optimization"],
+            k=2,
+        )
+
+        assert len(results) <= 2
+        for doc, score in results:
+            assert isinstance(doc, Document)
+            assert isinstance(score, float)
+            assert 0.0 <= score <= 1.0
+
+    def test_multi_query_search_with_filter(self, temp_db_path, embeddings):
+        """Test multi-query search with metadata filter."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_filter",
+        )
+
+        vectorstore.add_texts(
+            ["Travel to France", "Travel to Italy", "Business trip to Germany"],
+            metadatas=[
+                {"type": "leisure"},
+                {"type": "leisure"},
+                {"type": "business"},
+            ],
+        )
+
+        results = vectorstore.multi_query_search(
+            queries=["Europe travel", "European vacation"],
+            k=5,
+            filter={"condition": {"type": "eq", "field": "type", "value": "leisure"}},
+        )
+
+        # Should only return leisure travel docs
+        assert len(results) <= 2
+
+    def test_multi_query_search_empty_queries(self, temp_db_path, embeddings):
+        """Test multi-query search with empty queries list."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_empty",
+        )
+
+        vectorstore.add_texts(["Some document"])
+
+        results = vectorstore.multi_query_search(queries=[], k=5)
+
+        assert results == []
+
+    def test_multi_query_search_average_fusion(self, temp_db_path, embeddings):
+        """Test multi-query search with average fusion strategy."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_avg",
+        )
+
+        vectorstore.add_texts([
+            "Cloud computing services",
+            "AWS infrastructure",
+            "Azure cloud platform",
+        ])
+
+        results = vectorstore.multi_query_search(
+            queries=["cloud services", "cloud computing"],
+            k=2,
+            fusion="average",
+        )
+
+        assert len(results) <= 2
+
+    def test_multi_query_search_maximum_fusion(self, temp_db_path, embeddings):
+        """Test multi-query search with maximum fusion strategy."""
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_mqg_max",
+        )
+
+        vectorstore.add_texts([
+            "API design best practices",
+            "REST API documentation",
+        ])
+
+        results = vectorstore.multi_query_search(
+            queries=["API design", "REST API"],
+            k=2,
+            fusion="maximum",
+        )
+
+        assert len(results) <= 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -206,6 +206,10 @@ impl From<crate::velesql::Condition> for Condition {
                 // Vector search is handled separately by the query engine
                 Self::And { conditions: vec![] } // Identity for AND
             }
+            crate::velesql::Condition::VectorFusedSearch(_) => {
+                // Fused vector search is handled separately by the query engine
+                Self::And { conditions: vec![] } // Identity for AND
+            }
             crate::velesql::Condition::Match(m) => Self::Contains {
                 field: m.column,
                 value: m.query,

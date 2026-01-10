@@ -395,11 +395,11 @@ class TestBatchSearch:
         ])
         
         queries = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
+            {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2},
+            {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 2},
         ]
         
-        batch_results = collection.batch_search(queries, top_k=2)
+        batch_results = collection.batch_search(queries)
         
         assert len(batch_results) == 2  # One result list per query
         assert len(batch_results[0]) <= 2
@@ -417,7 +417,7 @@ class TestBatchSearch:
         
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         
-        batch_results = collection.batch_search([], top_k=5)
+        batch_results = collection.batch_search([])
         assert batch_results == []
 
     def test_batch_search_single_query(self, temp_db_path):
@@ -430,7 +430,7 @@ class TestBatchSearch:
             {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
         ])
         
-        batch_results = collection.batch_search([[1.0, 0.0, 0.0, 0.0]], top_k=2)
+        batch_results = collection.batch_search([{"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2}])
         
         assert len(batch_results) == 1
         assert batch_results[0][0]["id"] == 1
@@ -529,13 +529,20 @@ class TestDistanceMetrics:
         """Test creating collections with all supported metrics."""
         db = velesdb.Database(temp_db_path)
         
-        metrics = ["cosine", "euclidean", "dot", "hamming", "jaccard"]
+        # Map input metric to expected output (some are normalized)
+        metrics = {
+            "cosine": "cosine",
+            "euclidean": "euclidean",
+            "dot": "dotproduct",  # "dot" is normalized to "dotproduct" internally
+            "hamming": "hamming",
+            "jaccard": "jaccard",
+        }
         
-        for metric in metrics:
+        for metric, expected in metrics.items():
             collection = db.create_collection(f"metric_{metric}", dimension=4, metric=metric)
             assert collection is not None
             info = collection.info()
-            assert info["metric"] == metric
+            assert info["metric"] == expected
 
 
 class TestEdgeCases:
@@ -563,6 +570,199 @@ class TestEdgeCases:
         
         with pytest.raises(ValueError):
             collection.upsert([{"id": 1}])
+
+
+class TestFusionStrategy:
+    """Tests for FusionStrategy class (US-CORE-001-03)."""
+
+    def test_fusion_strategy_average(self):
+        """Test FusionStrategy.average() creation."""
+        strategy = velesdb.FusionStrategy.average()
+        assert strategy is not None
+        assert "average" in repr(strategy).lower()
+
+    def test_fusion_strategy_maximum(self):
+        """Test FusionStrategy.maximum() creation."""
+        strategy = velesdb.FusionStrategy.maximum()
+        assert strategy is not None
+        assert "maximum" in repr(strategy).lower()
+
+    def test_fusion_strategy_rrf_default(self):
+        """Test FusionStrategy.rrf() with default k."""
+        strategy = velesdb.FusionStrategy.rrf()
+        assert strategy is not None
+        assert "rrf" in repr(strategy).lower()
+        assert "k=60" in repr(strategy)
+
+    def test_fusion_strategy_rrf_custom_k(self):
+        """Test FusionStrategy.rrf() with custom k."""
+        strategy = velesdb.FusionStrategy.rrf(k=30)
+        assert strategy is not None
+        assert "k=30" in repr(strategy)
+
+    def test_fusion_strategy_weighted(self):
+        """Test FusionStrategy.weighted() with valid weights."""
+        strategy = velesdb.FusionStrategy.weighted(
+            avg_weight=0.6,
+            max_weight=0.3,
+            hit_weight=0.1
+        )
+        assert strategy is not None
+        assert "weighted" in repr(strategy).lower()
+
+    def test_fusion_strategy_weighted_invalid_sum(self):
+        """Test FusionStrategy.weighted() with weights not summing to 1."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted(
+                avg_weight=0.5,
+                max_weight=0.3,
+                hit_weight=0.1  # Sum = 0.9
+            )
+
+    def test_fusion_strategy_weighted_negative(self):
+        """Test FusionStrategy.weighted() with negative weights."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted(
+                avg_weight=-0.1,
+                max_weight=0.6,
+                hit_weight=0.5
+            )
+
+
+class TestMultiQuerySearch:
+    """Tests for multi_query_search method (US-CORE-001-03)."""
+
+    def test_multi_query_search_basic(self, temp_db_path):
+        """Test basic multi-query search."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_test", dimension=4)
+
+        # Insert test data
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+            {"id": 3, "vector": [0.5, 0.5, 0.0, 0.0]},
+            {"id": 4, "vector": [0.7, 0.7, 0.0, 0.0]},
+        ])
+
+        # Multi-query search with 2 queries
+        results = collection.multi_query_search(
+            vectors=[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+            top_k=3
+        )
+
+        assert len(results) <= 3
+        assert all("id" in r and "score" in r for r in results)
+
+    def test_multi_query_search_with_rrf(self, temp_db_path):
+        """Test multi-query search with RRF fusion."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_rrf", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+            {"id": 3, "vector": [0.5, 0.5, 0.0, 0.0]},
+        ])
+
+        strategy = velesdb.FusionStrategy.rrf(k=60)
+        results = collection.multi_query_search(
+            vectors=[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+            top_k=3,
+            fusion=strategy
+        )
+
+        assert len(results) == 3
+        ids = [r["id"] for r in results]
+        assert 1 in ids
+        assert 2 in ids
+        assert 3 in ids
+
+    def test_multi_query_search_with_weighted(self, temp_db_path):
+        """Test multi-query search with weighted fusion."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_weighted", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+        ])
+
+        strategy = velesdb.FusionStrategy.weighted(0.6, 0.3, 0.1)
+        results = collection.multi_query_search(
+            vectors=[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+            top_k=2,
+            fusion=strategy
+        )
+
+        assert len(results) == 2
+
+    def test_multi_query_search_single_vector(self, temp_db_path):
+        """Test multi-query search with single vector."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_single", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0]},
+        ])
+
+        results = collection.multi_query_search(
+            vectors=[[1.0, 0.0, 0.0, 0.0]],
+            top_k=2
+        )
+
+        assert len(results) == 2
+        assert results[0]["id"] == 1  # Most similar
+
+    def test_multi_query_search_with_filter(self, temp_db_path):
+        """Test multi-query search with metadata filter."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_filter", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"category": "A"}},
+            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"category": "B"}},
+            {"id": 3, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"category": "A"}},
+        ])
+
+        results = collection.multi_query_search(
+            vectors=[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+            top_k=10,
+            filter={"condition": {"type": "eq", "field": "category", "value": "A"}}
+        )
+
+        # Only docs with category A
+        for r in results:
+            assert r["id"] in [1, 3]
+
+    def test_multi_query_search_ids(self, temp_db_path):
+        """Test multi_query_search_ids returns only IDs and scores."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_ids", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+        ])
+
+        results = collection.multi_query_search_ids(
+            vectors=[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+            top_k=2
+        )
+
+        assert len(results) == 2
+        for r in results:
+            assert "id" in r
+            assert "score" in r
+            # multi_query_search_ids should not return payload
+            assert "payload" not in r or r.get("payload") is None
 
 
 if __name__ == "__main__":
