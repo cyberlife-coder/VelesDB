@@ -64,6 +64,7 @@ mod error_tests;
 pub mod filter;
 #[cfg(test)]
 mod filter_tests;
+pub mod fusion;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
@@ -112,6 +113,7 @@ pub use config::{
     ConfigError, HnswConfig, LimitsConfig, LoggingConfig, QuantizationConfig, SearchConfig,
     SearchMode, ServerConfig, StorageConfig, VelesConfig,
 };
+pub use fusion::{FusionError, FusionStrategy};
 pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
     precision_at_k, recall_at_k, LatencyStats,

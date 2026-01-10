@@ -2,6 +2,7 @@
 #![allow(clippy::cast_precision_loss, clippy::float_cmp)]
 
 use super::sharded_vectors::{ShardedVectors, NUM_SHARDS};
+use serial_test::serial;
 use std::sync::Arc;
 use std::thread;
 
@@ -373,6 +374,7 @@ fn test_sharded_vectors_collect_for_parallel_empty() {
 }
 
 #[test]
+#[serial]
 fn test_sharded_vectors_par_map_computes_correctly() {
     use rayon::prelude::*;
 
@@ -398,6 +400,7 @@ fn test_sharded_vectors_par_map_computes_correctly() {
 }
 
 #[test]
+#[serial]
 fn test_sharded_vectors_par_filter_map_works() {
     use rayon::prelude::*;
 

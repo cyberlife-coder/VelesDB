@@ -93,6 +93,7 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
+serial_test = "3.1"
 
 [[bench]]
 name = "search_benchmark"
