@@ -5,6 +5,53 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-01-XX
+
+### 🗄️ Metadata-Only Collections & LIKE/ILIKE Filters (EPIC-CORE-002)
+
+Major feature release: Collections metadata-only et opérateurs LIKE/ILIKE pour filtres avancés.
+
+#### Added
+
+- **Metadata-Only Collections** (`crates/velesdb-core`)
+  - `CollectionType` enum: `Vector` (default), `MetadataOnly`
+  - `Database::create_collection_typed()` - Create typed collections
+  - `Collection::create_metadata_only()` - Shortcut for metadata collections
+  - `Collection::upsert_metadata()` - Insert metadata-only points (no vectors)
+  - `Collection::is_metadata_only()` - Check collection type
+  - `Point::metadata_only()` - Create metadata-only point
+  - No HNSW index created for metadata-only collections (memory efficient)
+  - Error handling: `VectorNotAllowed`, `SearchNotSupported`
+
+- **LIKE/ILIKE Filter Operators** (`crates/velesdb-core/src/filter.rs`)
+  - `Condition::Like { field, pattern }` - Case-sensitive SQL LIKE
+  - `Condition::ILike { field, pattern }` - Case-insensitive ILIKE
+  - Wildcards: `%` (zero or more chars), `_` (single char)
+  - Escaped wildcards: `\%`, `\_` for literal matching
+  - Dynamic programming implementation for efficient matching
+
+- **VelesQL ILIKE Support** (`crates/velesdb-core/src/velesql/`)
+  - `SELECT * FROM docs WHERE title ILIKE '%pattern%'` syntax
+  - `LikeCondition.case_insensitive` field in AST
+  - Grammar updated to support both LIKE and ILIKE keywords
+
+- **Python Bindings** (`crates/velesdb-python`)
+  - `Database.create_metadata_collection(name)` method
+  - `Collection.is_metadata_only()` method
+  - `Collection.upsert_metadata(points)` method
+  - `metadata_only` field in `Collection.info()`
+  - LIKE/ILIKE filters via JSON filter format
+
+#### Tests
+
+- 13 TDD tests for metadata-only collections
+- 26 TDD tests for LIKE/ILIKE filter operators
+- 29 parser tests including ILIKE
+- 7 Python tests for metadata-only bindings
+- 5 Python tests for LIKE/ILIKE filters
+
+---
+
 ## [1.1.0] - 2026-01-10
 
 ### 🚀 Multi-Query Fusion (EPIC-CORE-001)
