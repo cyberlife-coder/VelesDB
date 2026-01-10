@@ -45,10 +45,33 @@ impl Point {
         Self::new(id, vector, None)
     }
 
+    /// Creates a metadata-only point (no vector, only payload).
+    ///
+    /// Used for metadata-only collections that don't store vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier
+    /// * `payload` - Metadata (JSON value)
+    #[must_use]
+    pub fn metadata_only(id: u64, payload: JsonValue) -> Self {
+        Self {
+            id,
+            vector: Vec::new(), // Empty vector
+            payload: Some(payload),
+        }
+    }
+
     /// Returns the dimension of the vector.
     #[must_use]
     pub fn dimension(&self) -> usize {
         self.vector.len()
+    }
+
+    /// Returns true if this point has no vector (metadata-only).
+    #[must_use]
+    pub fn is_metadata_only(&self) -> bool {
+        self.vector.is_empty()
     }
 }
 

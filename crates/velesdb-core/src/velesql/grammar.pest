@@ -76,8 +76,9 @@ value_list = { value ~ ("," ~ value)* }
 // BETWEEN expression: column BETWEEN value AND value
 between_expr = { identifier ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
 
-// LIKE expression: column LIKE 'pattern'
-like_expr = { identifier ~ ^"LIKE" ~ string }
+// LIKE / ILIKE expression: column LIKE 'pattern' or column ILIKE 'pattern'
+like_expr = { identifier ~ like_op ~ string }
+like_op = { ^"ILIKE" | ^"LIKE" }
 
 // IS NULL / IS NOT NULL
 is_null_expr = { identifier ~ ^"IS" ~ not_kw? ~ ^"NULL" }

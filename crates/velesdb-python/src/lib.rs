@@ -306,6 +306,44 @@ impl Database {
             .delete_collection(name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to delete collection: {}", e)))
     }
+
+    /// Create a metadata-only collection (no vectors, no HNSW index).
+    ///
+    /// Metadata-only collections are optimized for storing reference data,
+    /// catalogs, and other non-vector data. They support CRUD operations
+    /// and VelesQL queries on payload, but NOT vector search.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///
+    /// Returns:
+    ///     Collection instance
+    ///
+    /// Example:
+    ///     >>> products = db.create_metadata_collection("products")
+    ///     >>> products.upsert_metadata([
+    ///     ...     {"id": 1, "payload": {"name": "Widget", "price": 9.99}}
+    ///     ... ])
+    #[pyo3(signature = (name))]
+    fn create_metadata_collection(&self, name: &str) -> PyResult<Collection> {
+        use velesdb_core::CollectionType;
+
+        self.inner
+            .create_collection_typed(name, &CollectionType::MetadataOnly)
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
+            })?;
+
+        let collection = self
+            .inner
+            .get_collection(name)
+            .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
+
+        Ok(Collection {
+            inner: Arc::new(collection),
+            name: name.to_string(),
+        })
+    }
 }
 
 /// A vector collection in VelesDB.
@@ -329,7 +367,7 @@ impl Collection {
     /// Get collection configuration info.
     ///
     /// Returns:
-    ///     Dict with name, dimension, metric, storage_mode, and point_count
+    ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
     fn info(&self) -> PyResult<HashMap<String, PyObject>> {
         Python::with_gil(|py| {
             let config = self.inner.config();
@@ -347,8 +385,24 @@ impl Collection {
                     .into_py(py),
             );
             info.insert("point_count".to_string(), config.point_count.into_py(py));
+            info.insert(
+                "metadata_only".to_string(),
+                config.metadata_only.into_py(py),
+            );
             Ok(info)
         })
+    }
+
+    /// Check if this is a metadata-only collection.
+    ///
+    /// Returns:
+    ///     bool: True if this collection stores only metadata (no vectors)
+    ///
+    /// Example:
+    ///     >>> if collection.is_metadata_only():
+    ///     ...     collection.upsert_metadata([...])
+    fn is_metadata_only(&self) -> bool {
+        self.inner.is_metadata_only()
     }
 
     /// Insert or update vectors in the collection.
@@ -408,7 +462,60 @@ impl Collection {
             let count = core_points.len();
             self.inner
                 .upsert(core_points)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert: {}", e)))?;
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert: {e}")))?;
+
+            Ok(count)
+        })
+    }
+
+    /// Insert or update metadata-only points (no vectors).
+    ///
+    /// This method is for metadata-only collections. Points should have
+    /// 'id' and 'payload' fields, but NO 'vector' field.
+    ///
+    /// Args:
+    ///     points: List of point dicts with 'id' and 'payload'
+    ///
+    /// Example:
+    ///     >>> collection.upsert_metadata([
+    ///     ...     {"id": 1, "payload": {"name": "Product A", "price": 99.99}},
+    ///     ...     {"id": 2, "payload": {"name": "Product B", "price": 149.99}}
+    ///     ... ])
+    #[pyo3(signature = (points))]
+    fn upsert_metadata(&self, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
+        Python::with_gil(|py| {
+            let mut core_points = Vec::with_capacity(points.len());
+
+            for point_dict in points {
+                let id: u64 = point_dict
+                    .get("id")
+                    .ok_or_else(|| PyValueError::new_err("Point missing 'id' field"))?
+                    .extract(py)?;
+
+                let payload: serde_json::Value = match point_dict.get("payload") {
+                    Some(p) => {
+                        let dict: HashMap<String, PyObject> =
+                            p.extract(py).ok().unwrap_or_default();
+                        let json_map: serde_json::Map<String, serde_json::Value> = dict
+                            .into_iter()
+                            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+                            .collect();
+                        serde_json::Value::Object(json_map)
+                    }
+                    None => {
+                        return Err(PyValueError::new_err(
+                            "Metadata-only point must have 'payload' field",
+                        ))
+                    }
+                };
+
+                core_points.push(Point::metadata_only(id, payload));
+            }
+
+            let count = core_points.len();
+            self.inner
+                .upsert_metadata(core_points)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to upsert_metadata: {e}")))?;
 
             Ok(count)
         })

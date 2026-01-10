@@ -10,13 +10,76 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Type of collection: Vector-based or Metadata-only.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use velesdb_core::{CollectionType, DistanceMetric, StorageMode};
+///
+/// // Vector collection (standard)
+/// let vector_type = CollectionType::Vector {
+///     dimension: 768,
+///     metric: DistanceMetric::Cosine,
+///     storage_mode: StorageMode::Full,
+/// };
+///
+/// // Metadata-only collection (no vectors)
+/// let metadata_type = CollectionType::MetadataOnly;
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CollectionType {
+    /// Standard vector collection with HNSW index.
+    Vector {
+        /// Vector dimension (e.g., 768 for BERT embeddings).
+        dimension: usize,
+        /// Distance metric for similarity calculations.
+        metric: DistanceMetric,
+        /// Storage mode for vector quantization.
+        storage_mode: StorageMode,
+    },
+    /// Metadata-only collection (no vectors, no HNSW index).
+    ///
+    /// Ideal for reference tables, catalogs, and metadata storage.
+    /// Supports CRUD operations and `VelesQL` queries on payload.
+    /// Does NOT support vector search operations.
+    MetadataOnly,
+}
+
+impl Default for CollectionType {
+    fn default() -> Self {
+        Self::Vector {
+            dimension: 768,
+            metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
+        }
+    }
+}
+
+impl CollectionType {
+    /// Returns true if this is a metadata-only collection.
+    #[must_use]
+    pub const fn is_metadata_only(&self) -> bool {
+        matches!(self, Self::MetadataOnly)
+    }
+
+    /// Returns the dimension if this is a vector collection.
+    #[must_use]
+    pub const fn dimension(&self) -> Option<usize> {
+        match self {
+            Self::Vector { dimension, .. } => Some(*dimension),
+            Self::MetadataOnly => None,
+        }
+    }
+}
+
 /// Metadata for a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionConfig {
     /// Name of the collection.
     pub name: String,
 
-    /// Vector dimension.
+    /// Vector dimension (0 for metadata-only collections).
     pub dimension: usize,
 
     /// Distance metric.
@@ -28,6 +91,10 @@ pub struct CollectionConfig {
     /// Storage mode for vectors (Full, SQ8, Binary).
     #[serde(default)]
     pub storage_mode: StorageMode,
+
+    /// Whether this is a metadata-only collection.
+    #[serde(default)]
+    pub metadata_only: bool,
 }
 
 /// A collection of vectors with associated metadata.

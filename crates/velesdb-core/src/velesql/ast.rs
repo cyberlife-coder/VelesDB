@@ -361,13 +361,16 @@ pub struct BetweenCondition {
     pub high: Value,
 }
 
-/// LIKE condition: column LIKE pattern
+/// LIKE/ILIKE condition: column LIKE pattern or column ILIKE pattern
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LikeCondition {
     /// Column name.
     pub column: String,
     /// Pattern (with % and _ wildcards).
     pub pattern: String,
+    /// True for ILIKE (case-insensitive), false for LIKE (case-sensitive).
+    #[serde(default)]
+    pub case_insensitive: bool,
 }
 
 /// IS NULL condition.
