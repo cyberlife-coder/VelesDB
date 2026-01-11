@@ -637,7 +637,7 @@ fn main() -> anyhow::Result<()> {
             };
 
             // Convert to slices
-            let query_refs: Vec<&[f32]> = parsed_vectors.iter().map(|v| v.as_slice()).collect();
+            let query_refs: Vec<&[f32]> = parsed_vectors.iter().map(Vec::as_slice).collect();
 
             // Execute multi-query search
             let results = col

@@ -989,7 +989,7 @@ pub async fn multi_query_search(
     };
 
     // Convert vectors to slices
-    let query_refs: Vec<&[f32]> = req.vectors.iter().map(|v| v.as_slice()).collect();
+    let query_refs: Vec<&[f32]> = req.vectors.iter().map(Vec::as_slice).collect();
 
     // Execute multi-query search (4th arg: optional filter)
     let results = match collection.multi_query_search(&query_refs, req.top_k, strategy, None) {

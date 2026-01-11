@@ -3,6 +3,11 @@
 //! Measures performance scaling and contention under concurrent access.
 //! Run with: cargo bench --bench concurrency_benchmark
 
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::doc_markdown)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::sync::Arc;
 use std::thread;
