@@ -85,6 +85,23 @@ velesdb import data.jsonl --database ./my_vectors --collection documents --dimen
 velesdb import embeddings.csv --database ./my_vectors --collection docs --dimension 384
 ```
 
+### Create Metadata-Only Collection ⭐ NEW v1.1.0
+
+```bash
+# Create a collection for metadata storage (no vectors)
+velesdb create-metadata-collection ./my_vectors my_metadata
+```
+
+### Get Point by ID ⭐ NEW v1.1.0
+
+```bash
+# Get a point by ID (JSON output)
+velesdb get ./my_vectors documents 42
+
+# Get with table output
+velesdb get ./my_vectors documents 42 --format table
+```
+
 ### Multi-Query Fusion Search ⭐ NEW v1.1.0
 
 ```bash

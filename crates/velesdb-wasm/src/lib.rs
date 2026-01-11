@@ -134,6 +134,32 @@ impl VectorStore {
         })
     }
 
+    /// Creates a metadata-only store (no vectors, only payloads).
+    ///
+    /// Useful for storing auxiliary data without vector embeddings.
+    #[wasm_bindgen]
+    pub fn new_metadata_only() -> VectorStore {
+        Self {
+            ids: Vec::new(),
+            data: Vec::new(),
+            data_sq8: Vec::new(),
+            data_binary: Vec::new(),
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
+            payloads: Vec::new(),
+            dimension: 0,
+            metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
+        }
+    }
+
+    /// Returns true if this is a metadata-only store.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn is_metadata_only(&self) -> bool {
+        self.dimension == 0
+    }
+
     /// Creates a new vector store with specified storage mode for memory optimization.
     ///
     /// # Arguments
