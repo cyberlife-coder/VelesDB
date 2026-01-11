@@ -162,12 +162,14 @@ Cross-component feature parity ensuring all VelesDB features are available every
 | Feature | Core | Mobile | WASM | CLI | TS SDK | LangChain | LlamaIndex |
 |---------|------|--------|------|-----|--------|-----------|------------|
 | multi_query_search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| hybrid_search | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ |
-| batch_search | ✅ | - | ✅ | - | ✅ | ✅ | ✅ |
-| text_search | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ |
+| hybrid_search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| batch_search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| text_search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | LIKE/ILIKE | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hamming/Jaccard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| metadata_only | ✅ | ✅ | - | - | ✅ | ✅ | ✅ |
+| metadata_only | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| get_by_id | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| FusionStrategy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ---
 

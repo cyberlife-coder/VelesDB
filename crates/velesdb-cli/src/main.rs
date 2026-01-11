@@ -194,6 +194,31 @@ enum Commands {
         action: LicenseAction,
     },
 
+    /// Create a metadata-only collection (no vectors)
+    CreateMetadataCollection {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+    },
+
+    /// Get a point by ID
+    Get {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Point ID to retrieve
+        id: u64,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "json")]
+        format: String,
+    },
+
     /// Perform multi-query search with fusion
     MultiSearch {
         /// Path to database directory
@@ -653,6 +678,57 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                     println!("\n  Total: {} result(s)\n", results.len());
+                }
+            }
+        }
+        Commands::CreateMetadataCollection { path, name } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            db.create_collection_typed(&name, &velesdb_core::CollectionType::MetadataOnly)?;
+
+            println!(
+                "{} Collection '{}' created (metadata-only)",
+                "✅".green(),
+                name.cyan()
+            );
+        }
+        Commands::Get {
+            path,
+            collection,
+            id,
+            format,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let col = db
+                .get_collection(&collection)
+                .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+
+            let points = col.get(&[id]);
+
+            if format == "json" {
+                if let Some(point) = points.into_iter().flatten().next() {
+                    let output = serde_json::json!({
+                        "id": point.id,
+                        "vector": point.vector,
+                        "payload": point.payload
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    println!("null");
+                }
+            } else {
+                if let Some(point) = points.into_iter().flatten().next() {
+                    println!("\n{}", "Point Found".bold().underline());
+                    println!("  ID: {}", point.id.to_string().green());
+                    println!("  Vector: [{} dimensions]", point.vector.len());
+                    if let Some(payload) = &point.payload {
+                        println!("  Payload: {}", payload);
+                    }
+                } else {
+                    println!("{} Point with ID {} not found", "❌".red(), id);
                 }
             }
         }

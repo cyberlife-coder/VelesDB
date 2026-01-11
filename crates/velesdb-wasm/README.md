@@ -104,6 +104,10 @@ class VectorStore {
   multi_query_search(vectors: Float32Array, num_vectors: number, k: number, strategy?: string, rrf_k?: number): Array<[bigint, number]>;
   hybrid_search(vector: Float32Array, text_query: string, k: number, vector_weight?: number, field?: string): Array<{id, score, payload}>;
   batch_search(vectors: Float32Array, num_vectors: number, k: number): Array<Array<[bigint, number]>>;
+  
+  // Metadata-only store
+  static new_metadata_only(): VectorStore;
+  readonly is_metadata_only: boolean;
 }
 ```
 
