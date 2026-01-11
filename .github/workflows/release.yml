@@ -180,6 +180,7 @@ jobs:
         with:
           packages-dir: crates/velesdb-python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
 
   # ===========================================================================
   # 5. Publish to npm (WASM + SDK)
