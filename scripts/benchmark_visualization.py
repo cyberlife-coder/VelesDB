@@ -16,23 +16,21 @@ class BenchmarkResult:
     recall: float  # percentage
     latency_p50_ms: float
 
-# Benchmark data from VelesDB Core - January 9, 2026 (v0.8.12)
-# Native HNSW + SIMD intrinsics + PostingList optimizations
+# Benchmark data from VelesDB Core - January 11, 2026 (v1.1.0)
+# Native HNSW + SIMD intrinsics + Lock-Free Cache + Trigram Index
 RESULTS_10K_128D = [
-    BenchmarkResult("Fast", 64, 92.2, 0.056),
-    BenchmarkResult("Balanced", 128, 98.8, 0.085),
-    BenchmarkResult("Accurate", 256, 100.0, 0.112),
-    BenchmarkResult("HighRecall", 1024, 100.0, 0.255),
-    BenchmarkResult("Perfect", 2048, 100.0, 0.163),
+    BenchmarkResult("Fast", 64, 92.2, 0.036),
+    BenchmarkResult("Balanced", 128, 98.8, 0.057),
+    BenchmarkResult("Accurate", 256, 100.0, 0.130),
+    BenchmarkResult("Perfect", 2048, 100.0, 0.200),
 ]
 
 # 100K/768D extrapolated from 10K scaling (actual benchmarks pending)
 RESULTS_100K_768D = [
-    BenchmarkResult("Fast", 64, 88.0, 0.8),
-    BenchmarkResult("Balanced", 128, 97.0, 1.2),
-    BenchmarkResult("Accurate", 256, 99.5, 2.0),
-    BenchmarkResult("HighRecall", 1024, 100.0, 4.5),
-    BenchmarkResult("Perfect", 2048, 100.0, 3.2),
+    BenchmarkResult("Fast", 64, 88.0, 0.6),
+    BenchmarkResult("Balanced", 128, 97.0, 0.9),
+    BenchmarkResult("Accurate", 256, 99.5, 1.5),
+    BenchmarkResult("Perfect", 2048, 100.0, 2.5),
 ]
 
 @dataclass
@@ -89,7 +87,7 @@ def create_recall_latency_chart(results: List[BenchmarkResult], title: str, file
     ax.legend(loc='lower right', fontsize=10)
     
     # Add VelesDB branding
-    fig.text(0.99, 0.01, 'VelesDB Core v0.8.12 - January 9, 2026', fontsize=8, 
+    fig.text(0.99, 0.01, 'VelesDB Core v1.1.0 - January 11, 2026', fontsize=8, 
              ha='right', va='bottom', alpha=0.5, style='italic')
     
     plt.tight_layout()
@@ -177,7 +175,7 @@ def create_native_hnsw_comparison(results: List[NativeVsHnswRsResult], filename:
                    xytext=(0, 3), textcoords="offset points",
                    ha='center', va='bottom', fontsize=9)
     
-    fig.text(0.99, 0.01, 'VelesDB Core v0.8.12 - January 8, 2026', fontsize=8, 
+    fig.text(0.99, 0.01, 'VelesDB Core v1.1.0 - January 11, 2026', fontsize=8, 
              ha='right', va='bottom', alpha=0.5, style='italic')
     
     plt.tight_layout()
@@ -217,7 +215,7 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
     labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, loc='center right', fontsize=11)
     
-    ax1.set_title('VelesDB Core - ef_search Scaling Behavior\n(10K vectors / 128D, v0.8.12)', 
+    ax1.set_title('VelesDB Core - ef_search Scaling Behavior\n(10K vectors / 128D, v1.1.0)', 
                   fontsize=14, fontweight='bold', pad=15)
     ax1.grid(True, alpha=0.3)
     
