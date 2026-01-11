@@ -11,6 +11,7 @@ import type {
   VectorDocument,
   SearchOptions,
   SearchResult,
+  MultiQuerySearchOptions,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -135,6 +136,8 @@ export class RestBackend implements IVelesDBBackend {
       name,
       dimension: config.dimension,
       metric: config.metric ?? 'cosine',
+      storage_mode: config.storageMode ?? 'full',
+      collection_type: config.collectionType ?? 'vector',
       description: config.description,
     });
 
@@ -407,6 +410,39 @@ export class RestBackend implements IVelesDBBackend {
     );
 
     if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.results ?? [];
+  }
+
+  async multiQuerySearch(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    const formattedVectors = vectors.map(v => 
+      v instanceof Float32Array ? Array.from(v) : v
+    );
+
+    const response = await this.request<{ results: SearchResult[] }>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/search/multi`,
+      {
+        vectors: formattedVectors,
+        top_k: options?.k ?? 10,
+        fusion: options?.fusion ?? 'rrf',
+        fusion_params: options?.fusionParams ?? { k: 60 },
+        filter: options?.filter,
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
       throw new VelesDBError(response.error.message, response.error.code);
     }
 

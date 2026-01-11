@@ -24,10 +24,13 @@ export interface VelesDBConfig {
   timeout?: number;
 }
 
+/** Collection type */
+export type CollectionType = 'vector' | 'metadata_only';
+
 /** Collection configuration */
 export interface CollectionConfig {
-  /** Vector dimension (e.g., 768 for BERT, 1536 for GPT) */
-  dimension: number;
+  /** Vector dimension (e.g., 768 for BERT, 1536 for GPT). Required for vector collections. */
+  dimension?: number;
   /** Distance metric (default: 'cosine') */
   metric?: DistanceMetric;
   /** Storage mode for vector quantization (default: 'full')
@@ -36,6 +39,8 @@ export interface CollectionConfig {
    * - 'binary': 1-bit binary quantization, 32x memory reduction (edge/IoT)
    */
   storageMode?: StorageMode;
+  /** Collection type: 'vector' (default) or 'metadata_only' */
+  collectionType?: CollectionType;
   /** Optional collection description */
   description?: string;
 }
@@ -74,6 +79,30 @@ export interface SearchOptions {
   filter?: Record<string, unknown>;
   /** Include vectors in results (default: false) */
   includeVectors?: boolean;
+}
+
+/** Fusion strategy for multi-query search */
+export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted';
+
+/** Multi-query search options */
+export interface MultiQuerySearchOptions {
+  /** Number of results to return (default: 10) */
+  k?: number;
+  /** Fusion strategy (default: 'rrf') */
+  fusion?: FusionStrategy;
+  /** Fusion parameters */
+  fusionParams?: {
+    /** RRF k parameter (default: 60) */
+    k?: number;
+    /** Weighted fusion: average weight (default: 0.6) */
+    avgWeight?: number;
+    /** Weighted fusion: max weight (default: 0.3) */
+    maxWeight?: number;
+    /** Weighted fusion: hit weight (default: 0.1) */
+    hitWeight?: number;
+  };
+  /** Filter expression (optional) */
+  filter?: Record<string, unknown>;
 }
 
 /** Search result */
@@ -156,6 +185,13 @@ export interface IVelesDBBackend {
   query(
     queryString: string,
     params?: Record<string, unknown>
+  ): Promise<SearchResult[]>;
+
+  /** Multi-query fusion search */
+  multiQuerySearch(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
   ): Promise<SearchResult[]>;
   
   /** Check if collection is empty */

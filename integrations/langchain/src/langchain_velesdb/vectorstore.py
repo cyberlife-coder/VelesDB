@@ -55,8 +55,12 @@ class VelesDBVectorStore(VectorStore):
             embedding: Embedding model to use for vectorizing text.
             path: Path to VelesDB database directory. Defaults to "./velesdb_data".
             collection_name: Name of the collection. Defaults to "langchain".
-            metric: Distance metric ("cosine", "euclidean", "dot").
-                Defaults to "cosine".
+            metric: Distance metric. Defaults to "cosine".
+                - "cosine": Cosine similarity (default)
+                - "euclidean": Euclidean distance (L2)
+                - "dot": Dot product (inner product)
+                - "hamming": Hamming distance (for binary vectors)
+                - "jaccard": Jaccard similarity (for binary vectors)
             storage_mode: Storage mode ("full", "sq8", "binary").
                 - "full": Full f32 precision (default)
                 - "sq8": 8-bit scalar quantization (4x memory reduction)
@@ -641,6 +645,28 @@ class VelesDBVectorStore(VectorStore):
             return True
         return self._collection.is_empty()
 
+    def create_metadata_collection(self, name: str) -> None:
+        """Create a metadata-only collection (no vectors).
+
+        Useful for storing reference data that can be JOINed with
+        vector collections (VelesDB Premium feature).
+
+        Args:
+            name: Collection name.
+        """
+        db = self._get_db()
+        db.create_metadata_collection(name)
+
+    def is_metadata_only(self) -> bool:
+        """Check if the current collection is metadata-only.
+
+        Returns:
+            True if metadata-only, False if vector collection.
+        """
+        if self._collection is None:
+            return False
+        return self._collection.is_metadata_only()
+
     def query(
         self,
         query_str: str,
@@ -672,3 +698,145 @@ class VelesDBVectorStore(VectorStore):
             documents.append(doc)
 
         return documents
+
+    def multi_query_search(
+        self,
+        queries: List[str],
+        k: int = 4,
+        fusion: str = "rrf",
+        fusion_params: Optional[dict] = None,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Multi-query search with result fusion.
+
+        Executes parallel searches for multiple query strings and fuses
+        the results using the specified fusion strategy. Ideal for
+        Multiple Query Generation (MQG) pipelines.
+
+        Args:
+            queries: List of query strings (reformulations of user query).
+            k: Number of results to return after fusion. Defaults to 4.
+            fusion: Fusion strategy - "average", "maximum", "rrf", or "weighted".
+                Defaults to "rrf".
+            fusion_params: Optional parameters for fusion strategy:
+                - For "rrf": {"k": 60} (ranking constant)
+                - For "weighted": {"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
+            filter: Optional metadata filter dict.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Documents with fused ranking.
+
+        Example:
+            >>> # With MultiQueryRetriever pattern
+            >>> reformulations = ["travel to Greece", "vacation Greece", "Greek trip"]
+            >>> results = vectorstore.multi_query_search(
+            ...     queries=reformulations,
+            ...     k=10,
+            ...     fusion="weighted",
+            ...     fusion_params={"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
+            ... )
+        """
+        if not queries:
+            return []
+
+        query_embeddings = [self._embedding.embed_query(q) for q in queries]
+        dimension = len(query_embeddings[0])
+
+        collection = self._get_collection(dimension)
+        fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
+
+        results = collection.multi_query_search(
+            vectors=query_embeddings,
+            top_k=k,
+            fusion=fusion_strategy,
+            filter=filter,
+        )
+
+        documents: List[Document] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.pop("text", "")
+            doc = Document(page_content=text, metadata=payload)
+            documents.append(doc)
+
+        return documents
+
+    def multi_query_search_with_score(
+        self,
+        queries: List[str],
+        k: int = 4,
+        fusion: str = "rrf",
+        fusion_params: Optional[dict] = None,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Multi-query search with fused scores.
+
+        Args:
+            queries: List of query strings.
+            k: Number of results. Defaults to 4.
+            fusion: Fusion strategy. Defaults to "rrf".
+            fusion_params: Optional fusion parameters.
+            filter: Optional metadata filter.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of (Document, fused_score) tuples.
+        """
+        if not queries:
+            return []
+
+        query_embeddings = [self._embedding.embed_query(q) for q in queries]
+        dimension = len(query_embeddings[0])
+
+        collection = self._get_collection(dimension)
+        fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
+
+        results = collection.multi_query_search(
+            vectors=query_embeddings,
+            top_k=k,
+            fusion=fusion_strategy,
+            filter=filter,
+        )
+
+        documents: List[Tuple[Document, float]] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.pop("text", "")
+            doc = Document(page_content=text, metadata=payload)
+            score = result.get("score", 0.0)
+            documents.append((doc, score))
+
+        return documents
+
+    def _build_fusion_strategy(
+        self,
+        fusion: str,
+        fusion_params: Optional[dict] = None,
+    ) -> "velesdb.FusionStrategy":
+        """Build a FusionStrategy from string name and params."""
+        params = fusion_params or {}
+
+        if fusion == "average":
+            return velesdb.FusionStrategy.average()
+        elif fusion == "maximum":
+            return velesdb.FusionStrategy.maximum()
+        elif fusion == "rrf":
+            k = params.get("k", 60)
+            return velesdb.FusionStrategy.rrf(k=k)
+        elif fusion == "weighted":
+            avg_weight = params.get("avg_weight", 0.6)
+            max_weight = params.get("max_weight", 0.3)
+            hit_weight = params.get("hit_weight", 0.1)
+            return velesdb.FusionStrategy.weighted(
+                avg_weight=avg_weight,
+                max_weight=max_weight,
+                hit_weight=hit_weight,
+            )
+        else:
+            raise ValueError(
+                f"Unknown fusion strategy '{fusion}'. "
+                "Use 'average', 'maximum', 'rrf', or 'weighted'."
+            )

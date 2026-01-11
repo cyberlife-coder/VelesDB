@@ -85,6 +85,51 @@ velesdb import data.jsonl --database ./my_vectors --collection documents --dimen
 velesdb import embeddings.csv --database ./my_vectors --collection docs --dimension 384
 ```
 
+### Create Metadata-Only Collection ⭐ NEW v1.1.0
+
+```bash
+# Create a collection for metadata storage (no vectors)
+velesdb create-metadata-collection ./my_vectors my_metadata
+```
+
+### Get Point by ID ⭐ NEW v1.1.0
+
+```bash
+# Get a point by ID (JSON output)
+velesdb get ./my_vectors documents 42
+
+# Get with table output
+velesdb get ./my_vectors documents 42 --format table
+```
+
+### Multi-Query Fusion Search ⭐ NEW v1.1.0
+
+```bash
+# Multi-query search with RRF fusion (default)
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[0.1, 0.2, ...], [0.3, 0.4, ...]]' \
+  --top-k 10 \
+  --strategy rrf
+
+# With different fusion strategies
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...], [...]]' \
+  --strategy average
+
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...], [...]]' \
+  --strategy maximum
+
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...], [...]]' \
+  --strategy weighted
+
+# Output as JSON
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...]]' \
+  --format json
+```
+
 ### VelesQL Queries
 
 #### Vector Search
@@ -129,6 +174,28 @@ SELECT * FROM docs WHERE author IS NOT NULL LIMIT 10;
 
 -- Full-text search (BM25)
 SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
+```
+
+#### Multi-Query Fusion (MQG) ⭐ NEW v1.1.0
+
+```sql
+-- RRF fusion with multiple query vectors (ideal for RAG pipelines)
+SELECT * FROM documents 
+WHERE VECTOR NEAR_FUSED [$v1, $v2, $v3]
+WITH (fusion = 'rrf', k = 60)
+LIMIT 10;
+
+-- Weighted fusion strategy
+SELECT * FROM documents 
+WHERE VECTOR NEAR_FUSED [$query1, $query2]
+WITH (fusion = 'weighted', avg_weight = 0.6, max_weight = 0.3, hit_weight = 0.1)
+LIMIT 10;
+
+-- Average/Maximum fusion
+SELECT * FROM documents 
+WHERE VECTOR NEAR_FUSED $vectors
+WITH (fusion = 'average')
+LIMIT 10;
 ```
 
 #### Combined Queries (Vector + Metadata + Text)

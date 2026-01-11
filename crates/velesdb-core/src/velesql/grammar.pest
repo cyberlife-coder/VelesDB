@@ -35,6 +35,7 @@ and_expr = { primary_expr ~ (^"AND" ~ primary_expr)* }
 
 primary_expr = {
     "(" ~ or_expr ~ ")" |
+    vector_fused_search |
     vector_search |
     match_expr |
     in_expr |
@@ -49,6 +50,19 @@ primary_expr = {
 vector_search = { 
     ^"vector" ~ ^"NEAR" ~ vector_value 
 }
+
+// Multi-vector fusion search: vector NEAR_FUSED [v1, v2, ...] USING FUSION 'strategy' (params)
+vector_fused_search = {
+    ^"vector" ~ ^"NEAR_FUSED" ~ vector_array ~ fusion_clause?
+}
+vector_array = { "[" ~ vector_value ~ ("," ~ vector_value)* ~ "]" }
+fusion_clause = { ^"USING" ~ ^"FUSION" ~ fusion_strategy ~ fusion_params? }
+fusion_strategy = { string }
+fusion_params = { "(" ~ fusion_param_list ~ ")" }
+fusion_param_list = { fusion_param ~ ("," ~ fusion_param)* }
+fusion_param = { identifier ~ "=" ~ fusion_param_value }
+fusion_param_value = { float | integer }
+
 vector_value = { vector_literal | parameter }
 vector_literal = { "[" ~ float ~ ("," ~ float)* ~ "]" }
 
@@ -62,8 +76,9 @@ value_list = { value ~ ("," ~ value)* }
 // BETWEEN expression: column BETWEEN value AND value
 between_expr = { identifier ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
 
-// LIKE expression: column LIKE 'pattern'
-like_expr = { identifier ~ ^"LIKE" ~ string }
+// LIKE / ILIKE expression: column LIKE 'pattern' or column ILIKE 'pattern'
+like_expr = { identifier ~ like_op ~ string }
+like_op = { ^"ILIKE" | ^"LIKE" }
 
 // IS NULL / IS NOT NULL
 is_null_expr = { identifier ~ ^"IS" ~ not_kw? ~ ^"NULL" }

@@ -189,7 +189,7 @@ impl QueryPlan {
         filter_conditions: &mut Vec<String>,
     ) {
         match condition {
-            Condition::VectorSearch(_) => {
+            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => {
                 *has_vector_search = true;
             }
             Condition::Comparison(cmp) => {

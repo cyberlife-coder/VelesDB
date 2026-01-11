@@ -129,6 +129,29 @@ pub enum Condition {
         /// Condition to negate
         condition: Box<Condition>,
     },
+    /// SQL LIKE pattern matching (case-sensitive).
+    ///
+    /// Supports wildcards:
+    /// - `%` matches zero or more characters
+    /// - `_` matches exactly one character
+    /// - `\%` matches a literal `%`
+    /// - `\_` matches a literal `_`
+    Like {
+        /// Field name
+        field: String,
+        /// Pattern with SQL wildcards
+        pattern: String,
+    },
+    /// SQL ILIKE pattern matching (case-insensitive).
+    ///
+    /// Same as LIKE but ignores case.
+    #[serde(rename = "ilike")]
+    ILike {
+        /// Field name
+        field: String,
+        /// Pattern with SQL wildcards
+        pattern: String,
+    },
 }
 
 impl From<crate::velesql::Condition> for Condition {
@@ -206,6 +229,10 @@ impl From<crate::velesql::Condition> for Condition {
                 // Vector search is handled separately by the query engine
                 Self::And { conditions: vec![] } // Identity for AND
             }
+            crate::velesql::Condition::VectorFusedSearch(_) => {
+                // Fused vector search is handled separately by the query engine
+                Self::And { conditions: vec![] } // Identity for AND
+            }
             crate::velesql::Condition::Match(m) => Self::Contains {
                 field: m.column,
                 value: m.query,
@@ -235,10 +262,16 @@ impl From<crate::velesql::Condition> for Condition {
                 }
             }
             crate::velesql::Condition::Like(lk) => {
-                // Simplified: treat LIKE as contains for now
-                Self::Contains {
-                    field: lk.column,
-                    value: lk.pattern.replace('%', ""),
+                if lk.case_insensitive {
+                    Self::ILike {
+                        field: lk.column,
+                        pattern: lk.pattern,
+                    }
+                } else {
+                    Self::Like {
+                        field: lk.column,
+                        pattern: lk.pattern,
+                    }
                 }
             }
         }
@@ -355,6 +388,33 @@ impl Condition {
         }
     }
 
+    /// Creates a LIKE condition for SQL-style pattern matching (case-sensitive).
+    ///
+    /// # Wildcards
+    ///
+    /// - `%` matches zero or more characters
+    /// - `_` matches exactly one character
+    /// - `\%` matches a literal `%`
+    /// - `\_` matches a literal `_`
+    #[must_use]
+    pub fn like(field: impl Into<String>, pattern: impl Into<String>) -> Self {
+        Self::Like {
+            field: field.into(),
+            pattern: pattern.into(),
+        }
+    }
+
+    /// Creates an ILIKE condition for SQL-style pattern matching (case-insensitive).
+    ///
+    /// Same as LIKE but ignores case when matching.
+    #[must_use]
+    pub fn ilike(field: impl Into<String>, pattern: impl Into<String>) -> Self {
+        Self::ILike {
+            field: field.into(),
+            pattern: pattern.into(),
+        }
+    }
+
     /// Evaluates the condition against a payload.
     #[must_use]
     pub fn matches(&self, payload: &Value) -> bool {
@@ -386,6 +446,10 @@ impl Condition {
             Self::And { conditions } => conditions.iter().all(|c| c.matches(payload)),
             Self::Or { conditions } => conditions.iter().any(|c| c.matches(payload)),
             Self::Not { condition } => !condition.matches(payload),
+            Self::Like { field, pattern } => get_field(payload, field)
+                .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
+            Self::ILike { field, pattern } => get_field(payload, field)
+                .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
         }
     }
 }
@@ -428,4 +492,97 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
         _ => 0,
     }
+}
+
+/// SQL LIKE pattern matching implementation.
+///
+/// Supports:
+/// - `%` matches zero or more characters
+/// - `_` matches exactly one character
+/// - `\%` matches a literal `%`
+/// - `\_` matches a literal `_`
+///
+/// # Arguments
+///
+/// * `text` - The string to match against
+/// * `pattern` - The SQL LIKE pattern
+/// * `case_insensitive` - If true, performs case-insensitive matching (ILIKE)
+fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
+    let (text, pattern) = if case_insensitive {
+        (text.to_lowercase(), pattern.to_lowercase())
+    } else {
+        (text.to_string(), pattern.to_string())
+    };
+
+    like_match_impl(text.as_bytes(), pattern.as_bytes())
+}
+
+/// Recursive implementation of LIKE matching using dynamic programming approach.
+fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
+    let m = text.len();
+    let n = pattern.len();
+
+    // dp[i][j] = true if text[0..i] matches pattern[0..j]
+    let mut dp = vec![vec![false; n + 1]; m + 1];
+
+    // Empty pattern matches empty text
+    dp[0][0] = true;
+
+    // Handle patterns starting with % (can match empty string)
+    let mut j = 0;
+    while j < n {
+        if pattern[j] == b'%' {
+            dp[0][j + 1] = dp[0][j];
+            j += 1;
+        } else if pattern[j] == b'\\' && j + 1 < n {
+            // Escaped character - skip both
+            break;
+        } else {
+            break;
+        }
+    }
+
+    let mut pi = 0;
+    while pi < n {
+        let (pat_char, pat_len) = if pattern[pi] == b'\\' && pi + 1 < n {
+            // Escaped character: \% or \_
+            (Some(pattern[pi + 1]), 2)
+        } else if pattern[pi] == b'%' {
+            (None, 1) // % wildcard
+        } else if pattern[pi] == b'_' {
+            (Some(0), 1) // _ wildcard (0 means "match any single char")
+        } else {
+            (Some(pattern[pi]), 1)
+        };
+
+        for ti in 0..=m {
+            match pat_char {
+                None => {
+                    // % matches zero or more characters
+                    // dp[ti][pi+1] is true if any dp[k][pi] is true for k <= ti
+                    if ti == 0 {
+                        dp[ti][pi + pat_len] = dp[ti][pi];
+                    } else {
+                        dp[ti][pi + pat_len] = dp[ti][pi] || dp[ti - 1][pi + pat_len];
+                    }
+                }
+                Some(0) => {
+                    // _ matches exactly one character
+                    if ti > 0 {
+                        dp[ti][pi + pat_len] = dp[ti - 1][pi];
+                    }
+                }
+                Some(c) => {
+                    // Literal character match
+                    if ti > 0 && text[ti - 1] == c {
+                        dp[ti][pi + pat_len] = dp[ti - 1][pi];
+                    }
+                }
+            }
+        }
+
+        pi += pat_len;
+    }
+
+    dp[m][n]
 }

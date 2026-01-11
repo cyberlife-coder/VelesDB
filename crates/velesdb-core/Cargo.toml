@@ -51,6 +51,9 @@ version = "1.5"
 [dependencies.rustc-hash]
 version = "2.0"
 
+[dependencies.indexmap]
+version = "2.7"
+
 # Lock-free concurrent HashMap for high-throughput parallel operations
 [dependencies.dashmap]
 version = "5.5"
@@ -93,6 +96,7 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
+serial_test = "3.1"
 
 [[bench]]
 name = "search_benchmark"
@@ -173,4 +177,12 @@ harness = false
 
 [[bench]]
 name = "hnsw_comparison_benchmark"
+harness = false
+
+[[bench]]
+name = "trigram_benchmark"
+harness = false
+
+[[bench]]
+name = "concurrency_benchmark"
 harness = false

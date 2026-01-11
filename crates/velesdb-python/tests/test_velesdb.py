@@ -395,11 +395,11 @@ class TestBatchSearch:
         ])
         
         queries = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
+            {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2},
+            {"vector": [0.0, 1.0, 0.0, 0.0], "top_k": 2},
         ]
         
-        batch_results = collection.batch_search(queries, top_k=2)
+        batch_results = collection.batch_search(queries)
         
         assert len(batch_results) == 2  # One result list per query
         assert len(batch_results[0]) <= 2
@@ -417,7 +417,7 @@ class TestBatchSearch:
         
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         
-        batch_results = collection.batch_search([], top_k=5)
+        batch_results = collection.batch_search([])
         assert batch_results == []
 
     def test_batch_search_single_query(self, temp_db_path):
@@ -430,7 +430,7 @@ class TestBatchSearch:
             {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
         ])
         
-        batch_results = collection.batch_search([[1.0, 0.0, 0.0, 0.0]], top_k=2)
+        batch_results = collection.batch_search([{"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2}])
         
         assert len(batch_results) == 1
         assert batch_results[0][0]["id"] == 1
@@ -529,13 +529,224 @@ class TestDistanceMetrics:
         """Test creating collections with all supported metrics."""
         db = velesdb.Database(temp_db_path)
         
-        metrics = ["cosine", "euclidean", "dot", "hamming", "jaccard"]
+        # Map input metric to expected output (some are normalized)
+        metrics = {
+            "cosine": "cosine",
+            "euclidean": "euclidean",
+            "dot": "dotproduct",  # "dot" is normalized to "dotproduct" internally
+            "hamming": "hamming",
+            "jaccard": "jaccard",
+        }
         
-        for metric in metrics:
+        for metric, expected in metrics.items():
             collection = db.create_collection(f"metric_{metric}", dimension=4, metric=metric)
             assert collection is not None
             info = collection.info()
-            assert info["metric"] == metric
+            assert info["metric"] == expected
+
+
+class TestMetadataOnlyCollections:
+    """Tests for metadata-only collections (US-CORE-002-02)."""
+
+    def test_create_metadata_collection(self, temp_db_path):
+        """Test creating a metadata-only collection."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("products")
+        
+        assert collection is not None
+        assert collection.name == "products"
+        assert collection.is_metadata_only()
+
+    def test_metadata_collection_info(self, temp_db_path):
+        """Test metadata-only collection info."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("catalog")
+        
+        info = collection.info()
+        assert info["name"] == "catalog"
+        assert info["metadata_only"] is True
+
+    def test_upsert_metadata(self, temp_db_path):
+        """Test inserting metadata-only points."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("items")
+        
+        count = collection.upsert_metadata([
+            {"id": 1, "payload": {"name": "Widget", "price": 9.99}},
+            {"id": 2, "payload": {"name": "Gadget", "price": 19.99}},
+        ])
+        
+        assert count == 2
+        assert not collection.is_empty()
+
+    def test_get_metadata_points(self, temp_db_path):
+        """Test retrieving metadata-only points."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("products")
+        
+        collection.upsert_metadata([
+            {"id": 1, "payload": {"name": "Product A", "price": 10.0}},
+            {"id": 2, "payload": {"name": "Product B", "price": 20.0}},
+        ])
+        
+        points = collection.get([1, 2])
+        
+        assert len(points) == 2
+        assert points[0] is not None
+        assert points[0]["id"] == 1
+        assert points[0]["payload"]["name"] == "Product A"
+
+    def test_delete_metadata_points(self, temp_db_path):
+        """Test deleting metadata-only points."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("items")
+        
+        collection.upsert_metadata([
+            {"id": 1, "payload": {"name": "Item 1"}},
+            {"id": 2, "payload": {"name": "Item 2"}},
+        ])
+        
+        collection.delete([1])
+        
+        points = collection.get([1, 2])
+        assert points[0] is None
+        assert points[1] is not None
+
+    def test_metadata_collection_search_raises_error(self, temp_db_path):
+        """Test that vector search on metadata-only collection raises error."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_metadata_collection("no_vectors")
+        
+        collection.upsert_metadata([
+            {"id": 1, "payload": {"text": "hello"}},
+        ])
+        
+        with pytest.raises(RuntimeError):
+            collection.search([1.0, 0.0, 0.0, 0.0], top_k=10)
+
+    def test_vector_collection_not_metadata_only(self, temp_db_path):
+        """Test that regular vector collection is not metadata-only."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("vectors", dimension=4)
+        
+        assert not collection.is_metadata_only()
+
+
+class TestLikeIlikeFilters:
+    """Tests for LIKE/ILIKE filter operators (US-CORE-002-05)."""
+
+    def test_like_filter_basic(self, temp_db_path):
+        """Test basic LIKE filter with % wildcard."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_test", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"name": "Paris"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"name": "London"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"name": "Parma"}},
+        ])
+        
+        # Search with LIKE filter for names starting with "Par"
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "name", "pattern": "Par%"}}
+        )
+        
+        # Should only return Paris and Parma
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # Paris
+        assert 3 in ids  # Parma
+        assert 2 not in ids  # London excluded
+
+    def test_like_filter_underscore(self, temp_db_path):
+        """Test LIKE filter with _ wildcard (single char)."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_underscore", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"code": "A1B"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"code": "A2B"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"code": "A12B"}},
+        ])
+        
+        # A_B should match A1B and A2B but not A12B
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "code", "pattern": "A_B"}}
+        )
+        
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # A1B
+        assert 2 in ids  # A2B
+        assert 3 not in ids  # A12B (too long)
+
+    def test_ilike_filter_case_insensitive(self, temp_db_path):
+        """Test ILIKE filter is case-insensitive."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("ilike_test", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"name": "PARIS"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"name": "paris"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"name": "London"}},
+        ])
+        
+        # ILIKE should match regardless of case
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "ilike", "field": "name", "pattern": "paris"}}
+        )
+        
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # PARIS
+        assert 2 in ids  # paris
+        assert 3 not in ids  # London
+
+    def test_like_case_sensitive(self, temp_db_path):
+        """Test that LIKE filter is case-sensitive."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_case", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"name": "PARIS"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"name": "Paris"}},
+        ])
+        
+        # LIKE is case-sensitive, "Paris" should not match "PARIS"
+        results = collection.search(
+            [1.0, 0.0, 0.0, 0.0],
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "name", "pattern": "Paris"}}
+        )
+        
+        ids = [r["id"] for r in results]
+        assert 2 in ids  # Paris (exact case)
+        assert 1 not in ids  # PARIS (wrong case)
+
+    def test_like_with_text_search(self, temp_db_path):
+        """Test LIKE filter combined with text search."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("like_text", dimension=4)
+        
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"city": "Paris", "text": "Eiffel Tower"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"city": "London", "text": "Big Ben"}},
+            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"city": "Parma", "text": "Italian cuisine"}},
+        ])
+        
+        # Text search with LIKE filter
+        results = collection.text_search(
+            "Tower",
+            top_k=10,
+            filter={"condition": {"type": "like", "field": "city", "pattern": "Par%"}}
+        )
+        
+        # Should only return Paris (matches LIKE and has "Tower" in text)
+        if len(results) > 0:
+            assert results[0]["id"] == 1
 
 
 class TestEdgeCases:
@@ -563,6 +774,199 @@ class TestEdgeCases:
         
         with pytest.raises(ValueError):
             collection.upsert([{"id": 1}])
+
+
+class TestFusionStrategy:
+    """Tests for FusionStrategy class (US-CORE-001-03)."""
+
+    def test_fusion_strategy_average(self):
+        """Test FusionStrategy.average() creation."""
+        strategy = velesdb.FusionStrategy.average()
+        assert strategy is not None
+        assert "average" in repr(strategy).lower()
+
+    def test_fusion_strategy_maximum(self):
+        """Test FusionStrategy.maximum() creation."""
+        strategy = velesdb.FusionStrategy.maximum()
+        assert strategy is not None
+        assert "maximum" in repr(strategy).lower()
+
+    def test_fusion_strategy_rrf_default(self):
+        """Test FusionStrategy.rrf() with default k."""
+        strategy = velesdb.FusionStrategy.rrf()
+        assert strategy is not None
+        assert "rrf" in repr(strategy).lower()
+        assert "k=60" in repr(strategy)
+
+    def test_fusion_strategy_rrf_custom_k(self):
+        """Test FusionStrategy.rrf() with custom k."""
+        strategy = velesdb.FusionStrategy.rrf(k=30)
+        assert strategy is not None
+        assert "k=30" in repr(strategy)
+
+    def test_fusion_strategy_weighted(self):
+        """Test FusionStrategy.weighted() with valid weights."""
+        strategy = velesdb.FusionStrategy.weighted(
+            avg_weight=0.6,
+            max_weight=0.3,
+            hit_weight=0.1
+        )
+        assert strategy is not None
+        assert "weighted" in repr(strategy).lower()
+
+    def test_fusion_strategy_weighted_invalid_sum(self):
+        """Test FusionStrategy.weighted() with weights not summing to 1."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted(
+                avg_weight=0.5,
+                max_weight=0.3,
+                hit_weight=0.1  # Sum = 0.9
+            )
+
+    def test_fusion_strategy_weighted_negative(self):
+        """Test FusionStrategy.weighted() with negative weights."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted(
+                avg_weight=-0.1,
+                max_weight=0.6,
+                hit_weight=0.5
+            )
+
+
+class TestMultiQuerySearch:
+    """Tests for multi_query_search method (US-CORE-001-03)."""
+
+    def test_multi_query_search_basic(self, temp_db_path):
+        """Test basic multi-query search."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_test", dimension=4)
+
+        # Insert test data
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+            {"id": 3, "vector": [0.5, 0.5, 0.0, 0.0]},
+            {"id": 4, "vector": [0.7, 0.7, 0.0, 0.0]},
+        ])
+
+        # Multi-query search with 2 queries
+        results = collection.multi_query_search(
+            vectors=[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+            top_k=3
+        )
+
+        assert len(results) <= 3
+        assert all("id" in r and "score" in r for r in results)
+
+    def test_multi_query_search_with_rrf(self, temp_db_path):
+        """Test multi-query search with RRF fusion."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_rrf", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+            {"id": 3, "vector": [0.5, 0.5, 0.0, 0.0]},
+        ])
+
+        strategy = velesdb.FusionStrategy.rrf(k=60)
+        results = collection.multi_query_search(
+            vectors=[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+            top_k=3,
+            fusion=strategy
+        )
+
+        assert len(results) == 3
+        ids = [r["id"] for r in results]
+        assert 1 in ids
+        assert 2 in ids
+        assert 3 in ids
+
+    def test_multi_query_search_with_weighted(self, temp_db_path):
+        """Test multi-query search with weighted fusion."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_weighted", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+        ])
+
+        strategy = velesdb.FusionStrategy.weighted(0.6, 0.3, 0.1)
+        results = collection.multi_query_search(
+            vectors=[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+            top_k=2,
+            fusion=strategy
+        )
+
+        assert len(results) == 2
+
+    def test_multi_query_search_single_vector(self, temp_db_path):
+        """Test multi-query search with single vector."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_single", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0]},
+        ])
+
+        results = collection.multi_query_search(
+            vectors=[[1.0, 0.0, 0.0, 0.0]],
+            top_k=2
+        )
+
+        assert len(results) == 2
+        assert results[0]["id"] == 1  # Most similar
+
+    def test_multi_query_search_with_filter(self, temp_db_path):
+        """Test multi-query search with metadata filter."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_filter", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"category": "A"}},
+            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"category": "B"}},
+            {"id": 3, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"category": "A"}},
+        ])
+
+        results = collection.multi_query_search(
+            vectors=[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+            top_k=10,
+            filter={"condition": {"type": "eq", "field": "category", "value": "A"}}
+        )
+
+        # Only docs with category A
+        for r in results:
+            assert r["id"] in [1, 3]
+
+    def test_multi_query_search_ids(self, temp_db_path):
+        """Test multi_query_search_ids returns only IDs and scores."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("mqg_ids", dimension=4)
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+        ])
+
+        results = collection.multi_query_search_ids(
+            vectors=[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+            top_k=2
+        )
+
+        assert len(results) == 2
+        for r in results:
+            assert "id" in r
+            assert "score" in r
+            # multi_query_search_ids should not return payload
+            assert "payload" not in r or r.get("payload") is None
 
 
 if __name__ == "__main__":

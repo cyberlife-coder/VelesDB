@@ -208,6 +208,8 @@ impl Column {
 pub enum Condition {
     /// Vector similarity search: `vector NEAR [metric] $param`
     VectorSearch(VectorSearch),
+    /// Multi-vector fused search: `vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'`
+    VectorFusedSearch(VectorFusedSearch),
     /// Comparison: column op value
     Comparison(Comparison),
     /// IN operator: column IN (values)
@@ -238,6 +240,68 @@ pub enum Condition {
 pub struct VectorSearch {
     /// Vector expression (literal or parameter).
     pub vector: VectorExpr,
+}
+
+/// Multi-vector fused search condition.
+///
+/// Allows searching with multiple vectors and fusing results.
+///
+/// # Example
+///
+/// ```sql
+/// SELECT * FROM docs WHERE vector NEAR_FUSED [$v1, $v2, $v3]
+///     USING FUSION 'rrf' (k = 60)
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VectorFusedSearch {
+    /// List of vector expressions (literals or parameters).
+    pub vectors: Vec<VectorExpr>,
+    /// Fusion strategy configuration.
+    pub fusion: FusionConfig,
+}
+
+/// Configuration for multi-vector fusion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FusionConfig {
+    /// Fusion strategy name: "average", "maximum", "rrf", "weighted".
+    pub strategy: String,
+    /// Strategy-specific parameters.
+    pub params: std::collections::HashMap<String, f64>,
+}
+
+impl Default for FusionConfig {
+    fn default() -> Self {
+        Self {
+            strategy: "rrf".to_string(),
+            params: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl FusionConfig {
+    /// Creates a new RRF fusion config with default k=60.
+    #[must_use]
+    pub fn rrf() -> Self {
+        let mut params = std::collections::HashMap::new();
+        params.insert("k".to_string(), 60.0);
+        Self {
+            strategy: "rrf".to_string(),
+            params,
+        }
+    }
+
+    /// Creates a weighted fusion config.
+    #[must_use]
+    pub fn weighted(avg_weight: f64, max_weight: f64, hit_weight: f64) -> Self {
+        let mut params = std::collections::HashMap::new();
+        params.insert("avg_weight".to_string(), avg_weight);
+        params.insert("max_weight".to_string(), max_weight);
+        params.insert("hit_weight".to_string(), hit_weight);
+        Self {
+            strategy: "weighted".to_string(),
+            params,
+        }
+    }
 }
 
 /// Vector expression in a NEAR clause.
@@ -297,13 +361,16 @@ pub struct BetweenCondition {
     pub high: Value,
 }
 
-/// LIKE condition: column LIKE pattern
+/// LIKE/ILIKE condition: column LIKE pattern or column ILIKE pattern
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LikeCondition {
     /// Column name.
     pub column: String,
     /// Pattern (with % and _ wildcards).
     pub pattern: String,
+    /// True for ILIKE (case-insensitive), false for LIKE (case-sensitive).
+    #[serde(default)]
+    pub case_insensitive: bool,
 }
 
 /// IS NULL condition.

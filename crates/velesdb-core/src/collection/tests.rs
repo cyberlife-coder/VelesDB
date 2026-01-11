@@ -1174,3 +1174,241 @@ fn test_text_search_with_filter() {
     assert!(ids.contains(&1));
     assert!(ids.contains(&3));
 }
+
+// =========================================================================
+// Tests for multi_query_search (US-CORE-001-02)
+// =========================================================================
+
+#[test]
+fn test_multi_query_search_basic() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::without_payload(1, vec![1.0, 0.0, 0.0]),
+        Point::without_payload(2, vec![0.0, 1.0, 0.0]),
+        Point::without_payload(3, vec![0.0, 0.0, 1.0]),
+        Point::without_payload(4, vec![0.7, 0.7, 0.0]),
+        Point::without_payload(5, vec![0.5, 0.5, 0.5]),
+    ];
+    collection.upsert(points).unwrap();
+
+    // Search with 2 query vectors
+    let q1 = vec![1.0, 0.0, 0.0];
+    let q2 = vec![0.0, 1.0, 0.0];
+
+    let results = collection
+        .multi_query_search(&[&q1, &q2], 3, crate::fusion::FusionStrategy::Average, None)
+        .unwrap();
+
+    assert!(!results.is_empty());
+    assert!(results.len() <= 3);
+
+    // Doc 4 (0.7, 0.7, 0.0) should score well as it's similar to both queries
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(ids.contains(&4), "Doc 4 should be in results: {ids:?}");
+}
+
+#[test]
+fn test_multi_query_search_with_rrf() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::without_payload(1, vec![1.0, 0.0, 0.0]),
+        Point::without_payload(2, vec![0.9, 0.1, 0.0]),
+        Point::without_payload(3, vec![0.0, 1.0, 0.0]),
+        Point::without_payload(4, vec![0.1, 0.9, 0.0]),
+    ];
+    collection.upsert(points).unwrap();
+
+    let q1 = vec![1.0, 0.0, 0.0];
+    let q2 = vec![0.0, 1.0, 0.0];
+
+    let results = collection
+        .multi_query_search(
+            &[&q1, &q2],
+            4,
+            crate::fusion::FusionStrategy::RRF { k: 60 },
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(results.len(), 4);
+    // All docs should be present
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+    assert!(ids.contains(&4));
+}
+
+#[test]
+fn test_multi_query_search_with_weighted() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::without_payload(1, vec![1.0, 0.0, 0.0]),
+        Point::without_payload(2, vec![0.0, 1.0, 0.0]),
+        Point::without_payload(3, vec![0.5, 0.5, 0.0]),
+    ];
+    collection.upsert(points).unwrap();
+
+    let q1 = vec![1.0, 0.0, 0.0];
+    let q2 = vec![0.0, 1.0, 0.0];
+    let q3 = vec![0.5, 0.5, 0.0];
+
+    let results = collection
+        .multi_query_search(
+            &[&q1, &q2, &q3],
+            3,
+            crate::fusion::FusionStrategy::Weighted {
+                avg_weight: 0.6,
+                max_weight: 0.3,
+                hit_weight: 0.1,
+            },
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(results.len(), 3);
+    // Doc 3 appears high in all queries, should have good weighted score
+}
+
+#[test]
+fn test_multi_query_search_single_vector() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::without_payload(1, vec![1.0, 0.0, 0.0]),
+        Point::without_payload(2, vec![0.9, 0.1, 0.0]),
+    ];
+    collection.upsert(points).unwrap();
+
+    let q1 = vec![1.0, 0.0, 0.0];
+
+    // Single vector should work like regular search
+    let results = collection
+        .multi_query_search(&[&q1], 2, crate::fusion::FusionStrategy::Average, None)
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].point.id, 1);
+}
+
+#[test]
+fn test_multi_query_search_empty_vectors_error() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let empty: &[&[f32]] = &[];
+    let result =
+        collection.multi_query_search(empty, 10, crate::fusion::FusionStrategy::Average, None);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_multi_query_search_dimension_mismatch() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let q1 = vec![1.0, 0.0, 0.0];
+    let q2 = vec![0.0, 1.0]; // Wrong dimension
+
+    let result = collection.multi_query_search(
+        &[&q1, &q2],
+        10,
+        crate::fusion::FusionStrategy::Average,
+        None,
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_multi_query_search_max_vectors_limit() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    // Create 11 vectors (exceeds limit of 10)
+    let vectors: Vec<Vec<f32>> = (0..11).map(|_| vec![1.0, 0.0, 0.0]).collect();
+    let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+
+    let result =
+        collection.multi_query_search(&refs, 10, crate::fusion::FusionStrategy::Average, None);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_multi_query_search_with_filter() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::new(1, vec![1.0, 0.0, 0.0], Some(json!({"category": "A"}))),
+        Point::new(2, vec![0.9, 0.1, 0.0], Some(json!({"category": "B"}))),
+        Point::new(3, vec![0.0, 1.0, 0.0], Some(json!({"category": "A"}))),
+        Point::new(4, vec![0.1, 0.9, 0.0], Some(json!({"category": "B"}))),
+    ];
+    collection.upsert(points).unwrap();
+
+    let q1 = vec![1.0, 0.0, 0.0];
+    let q2 = vec![0.0, 1.0, 0.0];
+    let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "A"));
+
+    let results = collection
+        .multi_query_search(
+            &[&q1, &q2],
+            10,
+            crate::fusion::FusionStrategy::RRF { k: 60 },
+            Some(&filter),
+        )
+        .unwrap();
+
+    // Only docs with category A should be returned
+    assert!(!results.is_empty());
+    for r in &results {
+        let ids = [1u64, 3u64];
+        assert!(ids.contains(&r.point.id), "Only A category docs expected");
+    }
+}
+
+#[test]
+fn test_multi_query_search_ids() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test_collection");
+    let collection = Collection::create(path, 3, DistanceMetric::Cosine).unwrap();
+
+    let points = vec![
+        Point::without_payload(1, vec![1.0, 0.0, 0.0]),
+        Point::without_payload(2, vec![0.0, 1.0, 0.0]),
+        Point::without_payload(3, vec![0.5, 0.5, 0.0]),
+    ];
+    collection.upsert(points).unwrap();
+
+    let q1 = vec![1.0, 0.0, 0.0];
+    let q2 = vec![0.0, 1.0, 0.0];
+
+    let results = collection
+        .multi_query_search_ids(&[&q1, &q2], 3, crate::fusion::FusionStrategy::Average)
+        .unwrap();
+
+    assert_eq!(results.len(), 3);
+    // Returns (id, score) tuples
+    let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+}

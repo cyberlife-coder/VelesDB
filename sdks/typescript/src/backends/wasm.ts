@@ -11,6 +11,7 @@ import type {
   VectorDocument,
   SearchOptions,
   SearchResult,
+  MultiQuerySearchOptions,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -344,6 +345,19 @@ export class WasmBackend implements IVelesDBBackend {
     // Use REST backend for VelesQL queries
     throw new VelesDBError(
       'VelesQL queries are not supported in WASM backend. Use REST backend for query support.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async multiQuerySearch(
+    _collection: string,
+    _vectors: Array<number[] | Float32Array>,
+    _options?: MultiQuerySearchOptions
+  ): Promise<SearchResult[]> {
+    // WASM backend doesn't support multi-query fusion
+    // Use REST backend for MQF capabilities
+    throw new VelesDBError(
+      'Multi-query fusion is not supported in WASM backend. Use REST backend for MQF search.',
       'NOT_SUPPORTED'
     );
   }

@@ -33,9 +33,15 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query vector dimension doesn't match the collection.
+    /// Returns an error if the query vector dimension doesn't match the collection,
+    /// or if this is a metadata-only collection (use `query()` instead).
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         let config = self.config.read();
+
+        // Metadata-only collections don't support vector search
+        if config.metadata_only {
+            return Err(Error::SearchNotSupported(config.name.clone()));
+        }
 
         if query.len() != config.dimension {
             return Err(Error::DimensionMismatch {
@@ -909,5 +915,221 @@ impl Collection {
             .collect();
 
         Ok(results)
+    }
+
+    /// Performs multi-query search with result fusion.
+    ///
+    /// This method executes parallel searches for multiple query vectors and fuses
+    /// the results using the specified fusion strategy. Ideal for Multiple Query
+    /// Generation (MQG) pipelines where multiple reformulations of a user query
+    /// are searched simultaneously.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Slice of query vectors (all must have same dimension)
+    /// * `top_k` - Maximum number of results to return after fusion
+    /// * `fusion` - Strategy for combining results (Average, Maximum, RRF, Weighted)
+    /// * `filter` - Optional metadata filter to apply to all queries
+    ///
+    /// # Returns
+    ///
+    /// Vector of `SearchResult` sorted by fused score descending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `vectors` is empty
+    /// - Any vector has incorrect dimension
+    /// - More than 10 vectors are provided (configurable limit)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use velesdb_core::fusion::FusionStrategy;
+    ///
+    /// // Search with 4 query reformulations using weighted fusion
+    /// let results = collection.multi_query_search(
+    ///     &[&query1, &query2, &query3, &query4],
+    ///     10,
+    ///     FusionStrategy::Weighted {
+    ///         avg_weight: 0.6,
+    ///         max_weight: 0.3,
+    ///         hit_weight: 0.1,
+    ///     },
+    ///     None,
+    /// )?;
+    /// ```
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn multi_query_search(
+        &self,
+        vectors: &[&[f32]],
+        top_k: usize,
+        fusion: crate::fusion::FusionStrategy,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        const MAX_VECTORS: usize = 10;
+
+        // Validation: non-empty
+        if vectors.is_empty() {
+            return Err(Error::Config(
+                "multi_query_search requires at least one vector".into(),
+            ));
+        }
+
+        // Validation: max vectors limit
+        if vectors.len() > MAX_VECTORS {
+            return Err(Error::Config(format!(
+                "multi_query_search supports at most {MAX_VECTORS} vectors, got {}",
+                vectors.len()
+            )));
+        }
+
+        // Validation: dimension consistency
+        let config = self.config.read();
+        let dimension = config.dimension;
+        drop(config);
+
+        for vector in vectors {
+            if vector.len() != dimension {
+                return Err(Error::DimensionMismatch {
+                    expected: dimension,
+                    actual: vector.len(),
+                });
+            }
+        }
+
+        // Calculate overfetch factor for better fusion quality
+        let overfetch_k = match top_k {
+            0..=10 => top_k * 20,
+            11..=50 => top_k * 10,
+            51..=100 => top_k * 5,
+            _ => top_k * 2,
+        };
+
+        // Execute parallel batch search
+        let batch_results =
+            self.index
+                .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+
+        // Apply filter if present (pre-fusion filtering)
+        let filtered_results: Vec<Vec<(u64, f32)>> = if let Some(f) = filter {
+            let payload_storage = self.payload_storage.read();
+            batch_results
+                .into_iter()
+                .map(|query_results| {
+                    query_results
+                        .into_iter()
+                        .filter(|(id, _score)| {
+                            if let Ok(Some(payload)) = payload_storage.retrieve(*id) {
+                                f.matches(&payload)
+                            } else {
+                                false
+                            }
+                        })
+                        .collect()
+                })
+                .collect()
+        } else {
+            batch_results
+        };
+
+        // Fuse results using the specified strategy
+        let fused = fusion
+            .fuse(filtered_results)
+            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
+
+        // Fetch full point data for top_k results
+        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.payload_storage.read();
+
+        let results: Vec<SearchResult> = fused
+            .into_iter()
+            .take(top_k)
+            .filter_map(|(id, score)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                };
+
+                Some(SearchResult::new(point, score))
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Performs multi-query search returning only IDs and fused scores.
+    ///
+    /// This is a faster variant of `multi_query_search` that skips fetching
+    /// vector and payload data. Use when you only need document IDs.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Slice of query vectors
+    /// * `top_k` - Maximum number of results
+    /// * `fusion` - Fusion strategy
+    ///
+    /// # Returns
+    ///
+    /// Vector of `(id, fused_score)` tuples sorted by score descending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vectors is empty, exceeds max limit, or has dimension mismatch.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn multi_query_search_ids(
+        &self,
+        vectors: &[&[f32]],
+        top_k: usize,
+        fusion: crate::fusion::FusionStrategy,
+    ) -> Result<Vec<(u64, f32)>> {
+        const MAX_VECTORS: usize = 10;
+
+        if vectors.is_empty() {
+            return Err(Error::Config(
+                "multi_query_search requires at least one vector".into(),
+            ));
+        }
+
+        if vectors.len() > MAX_VECTORS {
+            return Err(Error::Config(format!(
+                "multi_query_search supports at most {MAX_VECTORS} vectors, got {}",
+                vectors.len()
+            )));
+        }
+
+        let config = self.config.read();
+        let dimension = config.dimension;
+        drop(config);
+
+        for vector in vectors {
+            if vector.len() != dimension {
+                return Err(Error::DimensionMismatch {
+                    expected: dimension,
+                    actual: vector.len(),
+                });
+            }
+        }
+
+        let overfetch_k = match top_k {
+            0..=10 => top_k * 20,
+            11..=50 => top_k * 10,
+            51..=100 => top_k * 5,
+            _ => top_k * 2,
+        };
+
+        let batch_results =
+            self.index
+                .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
+
+        let fused = fusion
+            .fuse(batch_results)
+            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
+
+        Ok(fused.into_iter().take(top_k).collect())
     }
 }

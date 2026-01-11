@@ -11,6 +11,7 @@ VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 - 📦 **Zero dependencies** — Single VelesDB binary, no external services
 - 🔒 **Local-first** — All data stays on your machine
 - 🧠 **RAG-ready** — Built for Retrieval-Augmented Generation
+- 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies ⭐ NEW
 
 ## Installation
 
@@ -92,6 +93,7 @@ VelesDBVectorStore(
 | **Search** | |
 | `query(query)` | Query with vector |
 | `batch_query(queries)` | Batch query multiple vectors in parallel |
+| `multi_query_search(embeddings, ...)` | **Multi-query fusion search** ⭐ NEW |
 | `hybrid_query(query_str, query_embedding, ...)` | Hybrid vector+BM25 search |
 | `text_query(query_str, ...)` | Full-text BM25 search |
 | `velesql(query_str, params)` | Execute VelesQL query |
@@ -100,6 +102,46 @@ VelesDBVectorStore(
 | `is_empty()` | Check if collection is empty |
 
 ## Advanced Features
+
+### Multi-Query Fusion (MQG) ⭐ NEW
+
+Search with multiple query embeddings and fuse results using various strategies.
+Perfect for RAG pipelines using Multiple Query Generation (MQG).
+
+```python
+from llamaindex_velesdb import VelesDBVectorStore
+
+vector_store = VelesDBVectorStore(path="./velesdb_data")
+
+# Basic usage with RRF (Reciprocal Rank Fusion)
+results = vector_store.multi_query_search(
+    query_embeddings=[emb1, emb2, emb3],  # Multiple query reformulations
+    similarity_top_k=10,
+    fusion="rrf",
+    fusion_params={"k": 60}
+)
+
+# With weighted fusion (like SearchXP's scoring)
+results = vector_store.multi_query_search(
+    query_embeddings=[emb1, emb2],
+    similarity_top_k=10,
+    fusion="weighted",
+    fusion_params={
+        "avg_weight": 0.6,   # Average score weight
+        "max_weight": 0.3,   # Maximum score weight  
+        "hit_weight": 0.1,   # Hit ratio weight
+    }
+)
+
+for node in results.nodes:
+    print(f"{node.metadata}: {node.text[:50]}...")
+```
+
+**Fusion Strategies:**
+- `"rrf"` - Reciprocal Rank Fusion (default, robust to score scale differences)
+- `"average"` - Mean score across all queries
+- `"maximum"` - Maximum score from any query
+- `"weighted"` - Custom combination of avg, max, and hit ratio
 
 ### Hybrid Search (Vector + BM25)
 

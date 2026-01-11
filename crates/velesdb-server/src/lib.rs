@@ -117,9 +117,9 @@ pub struct CreateCollectionRequest {
     /// Collection name.
     #[schema(example = "documents")]
     pub name: String,
-    /// Vector dimension.
+    /// Vector dimension (required for vector collections, ignored for metadata_only).
     #[schema(example = 768)]
-    pub dimension: usize,
+    pub dimension: Option<usize>,
     /// Distance metric (cosine, euclidean, dot, hamming, jaccard).
     #[serde(default = "default_metric")]
     #[schema(example = "cosine")]
@@ -128,6 +128,14 @@ pub struct CreateCollectionRequest {
     #[serde(default = "default_storage_mode")]
     #[schema(example = "full")]
     pub storage_mode: String,
+    /// Collection type: "vector" (default) or "metadata_only".
+    #[serde(default = "default_collection_type")]
+    #[schema(example = "vector")]
+    pub collection_type: String,
+}
+
+fn default_collection_type() -> String {
+    "vector".to_string()
 }
 
 fn default_metric() -> String {
@@ -294,6 +302,36 @@ fn default_vector_weight() -> f32 {
     0.5
 }
 
+/// Request for multi-query vector search with fusion.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MultiQuerySearchRequest {
+    /// List of query vectors.
+    pub vectors: Vec<Vec<f32>>,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    #[schema(example = 10)]
+    pub top_k: usize,
+    /// Fusion strategy: "average", "maximum", "rrf", "weighted".
+    #[serde(default = "default_fusion_strategy")]
+    #[schema(example = "rrf")]
+    pub strategy: String,
+    /// RRF k parameter (only used when strategy = "rrf").
+    #[serde(default = "default_rrf_k")]
+    #[schema(example = 60)]
+    pub rrf_k: u32,
+    /// Optional metadata filter to apply to results.
+    #[serde(default)]
+    pub filter: Option<serde_json::Value>,
+}
+
+fn default_fusion_strategy() -> String {
+    "rrf".to_string()
+}
+
+fn default_rrf_k() -> u32 {
+    60
+}
+
 /// Request for `VelesQL` query execution.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct QueryRequest {
@@ -423,15 +461,52 @@ pub async fn create_collection(
         }
     };
 
-    match state
-        .db
-        .create_collection_with_options(&req.name, req.dimension, metric, storage_mode)
-    {
+    // Handle collection type
+    let result = match req.collection_type.to_lowercase().as_str() {
+        "metadata_only" | "metadata-only" => {
+            use velesdb_core::CollectionType;
+            state
+                .db
+                .create_collection_typed(&req.name, &CollectionType::MetadataOnly)
+        }
+        "vector" | "" => {
+            let dimension = match req.dimension {
+                Some(d) => d,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: "dimension is required for vector collections".to_string(),
+                        }),
+                    )
+                        .into_response()
+                }
+            };
+            state
+                .db
+                .create_collection_with_options(&req.name, dimension, metric, storage_mode)
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid collection_type: {}. Valid: vector, metadata_only",
+                        req.collection_type
+                    ),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    match result {
         Ok(()) => (
             StatusCode::CREATED,
             Json(serde_json::json!({
                 "message": "Collection created",
-                "name": req.name
+                "name": req.name,
+                "type": req.collection_type
             })),
         )
             .into_response(),
@@ -851,6 +926,97 @@ pub async fn batch_search(
         timing_ms,
     })
     .into_response()
+}
+
+/// Multi-query search with fusion strategies.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search/multi",
+    tag = "search",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = MultiQuerySearchRequest,
+    responses(
+        (status = 200, description = "Multi-query fusion search results", body = SearchResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn multi_query_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<MultiQuerySearchRequest>,
+) -> impl IntoResponse {
+    use velesdb_core::FusionStrategy;
+
+    let collection = match state.db.get_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Collection '{}' not found", name),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    // Parse fusion strategy
+    let strategy = match req.strategy.to_lowercase().as_str() {
+        "average" | "avg" => FusionStrategy::Average,
+        "maximum" | "max" => FusionStrategy::Maximum,
+        "rrf" => FusionStrategy::RRF { k: req.rrf_k },
+        "weighted" => FusionStrategy::Weighted {
+            avg_weight: 0.5,
+            max_weight: 0.3,
+            hit_weight: 0.2,
+        },
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted",
+                        req.strategy
+                    ),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    // Convert vectors to slices
+    let query_refs: Vec<&[f32]> = req.vectors.iter().map(Vec::as_slice).collect();
+
+    // Execute multi-query search (4th arg: optional filter)
+    let results = match collection.multi_query_search(&query_refs, req.top_k, strategy, None) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let response = SearchResponse {
+        results: results
+            .into_iter()
+            .map(|r| SearchResultResponse {
+                id: r.point.id,
+                score: r.score,
+                payload: r.point.payload,
+            })
+            .collect(),
+    };
+
+    Json(response).into_response()
 }
 
 /// Search using BM25 full-text search.
