@@ -8,6 +8,8 @@
 //! This is still faster than VecDeque::retain which was O(n) with higher constant.
 //! For true O(1) LRU, a custom doubly-linked list + HashMap would be needed.
 
+#![allow(clippy::similar_names)]
+
 use std::time::Instant;
 
 use super::LruCache;

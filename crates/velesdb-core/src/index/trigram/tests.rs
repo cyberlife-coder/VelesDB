@@ -12,13 +12,13 @@ fn test_extract_trigrams_simple_ascii() {
 
     // "hello" with padding → "  hello  "
     // Trigrams: "  h", " he", "hel", "ell", "llo", "lo ", "o  "
-    assert!(trigrams.contains(&[b' ', b' ', b'h']));
-    assert!(trigrams.contains(&[b' ', b'h', b'e']));
-    assert!(trigrams.contains(&[b'h', b'e', b'l']));
-    assert!(trigrams.contains(&[b'e', b'l', b'l']));
-    assert!(trigrams.contains(&[b'l', b'l', b'o']));
-    assert!(trigrams.contains(&[b'l', b'o', b' ']));
-    assert!(trigrams.contains(&[b'o', b' ', b' ']));
+    assert!(trigrams.contains(b"  h"));
+    assert!(trigrams.contains(b" he"));
+    assert!(trigrams.contains(b"hel"));
+    assert!(trigrams.contains(b"ell"));
+    assert!(trigrams.contains(b"llo"));
+    assert!(trigrams.contains(b"lo "));
+    assert!(trigrams.contains(b"o  "));
     assert_eq!(trigrams.len(), 7);
 }
 
@@ -29,10 +29,10 @@ fn test_extract_trigrams_short_string() {
 
     // "ab" with padding → "  ab  "
     // Trigrams: "  a", " ab", "ab ", "b  "
-    assert!(trigrams.contains(&[b' ', b' ', b'a']));
-    assert!(trigrams.contains(&[b' ', b'a', b'b']));
-    assert!(trigrams.contains(&[b'a', b'b', b' ']));
-    assert!(trigrams.contains(&[b'b', b' ', b' ']));
+    assert!(trigrams.contains(b"  a"));
+    assert!(trigrams.contains(b" ab"));
+    assert!(trigrams.contains(b"ab "));
+    assert!(trigrams.contains(b"b  "));
 }
 
 #[test]
@@ -41,9 +41,9 @@ fn test_extract_trigrams_single_char() {
 
     // "x" with padding → "  x  "
     // Trigrams: "  x", " x ", "x  "
-    assert!(trigrams.contains(&[b' ', b' ', b'x']));
-    assert!(trigrams.contains(&[b' ', b'x', b' ']));
-    assert!(trigrams.contains(&[b'x', b' ', b' ']));
+    assert!(trigrams.contains(b"  x"));
+    assert!(trigrams.contains(b" x "));
+    assert!(trigrams.contains(b"x  "));
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_extract_trigrams_with_spaces() {
     let trigrams = extract_trigrams("a b");
 
     // Should handle internal spaces
-    assert!(trigrams.contains(&[b'a', b' ', b'b']));
+    assert!(trigrams.contains(b"a b"));
 }
 
 #[test]

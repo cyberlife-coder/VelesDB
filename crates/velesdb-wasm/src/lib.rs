@@ -1128,11 +1128,11 @@ impl VectorStore {
             "maximum" | "max" => scores
                 .iter()
                 .map(|(id, s)| {
-                    let max = s.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let max = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                     (*id, max)
                 })
                 .collect(),
-            "rrf" | _ => {
+            _ => {
                 // Reciprocal Rank Fusion
                 ranks
                     .iter()

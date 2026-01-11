@@ -343,9 +343,9 @@ mod tests {
     fn test_extract_trigrams_simd_basic() {
         let trigrams = extract_trigrams_simd("hello");
         assert!(!trigrams.is_empty());
-        assert!(trigrams.contains(&[b'h', b'e', b'l']));
-        assert!(trigrams.contains(&[b'e', b'l', b'l']));
-        assert!(trigrams.contains(&[b'l', b'l', b'o']));
+        assert!(trigrams.contains(b"hel"));
+        assert!(trigrams.contains(b"ell"));
+        assert!(trigrams.contains(b"llo"));
     }
 
     #[test]
