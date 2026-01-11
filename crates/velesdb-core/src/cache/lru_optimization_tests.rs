@@ -18,6 +18,7 @@ use super::LruCache;
 /// Test that insert performance scales reasonably.
 /// IndexMap shift_remove is O(n) but with low constant.
 #[test]
+#[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_insert_performance_scaling() {
     let sizes = [100, 1_000, 10_000];
     let mut times_per_op = vec![];
@@ -65,6 +66,7 @@ fn test_insert_performance_scaling() {
 /// Test get performance scaling.
 /// Get includes move_to_back which is O(n) with IndexMap.
 #[test]
+#[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_get_performance_scaling() {
     let sizes = [100, 1_000, 10_000];
     let mut times_per_op = vec![];
@@ -146,6 +148,7 @@ fn test_peek_faster_than_get() {
 /// Test eviction performance scaling.
 /// Eviction uses shift_remove_index(0) which is O(n) with IndexMap.
 #[test]
+#[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_eviction_performance_scaling() {
     let sizes = [100, 1_000, 10_000];
     let mut times_per_eviction = vec![];
