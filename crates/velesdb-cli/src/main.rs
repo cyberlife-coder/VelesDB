@@ -193,6 +193,34 @@ enum Commands {
         #[command(subcommand)]
         action: LicenseAction,
     },
+
+    /// Perform multi-query search with fusion
+    MultiSearch {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Query vectors as JSON array of arrays (e.g., '[[1.0, 0.0], [0.0, 1.0]]')
+        vectors: String,
+
+        /// Number of results to return
+        #[arg(short = 'k', long, default_value = "10")]
+        top_k: usize,
+
+        /// Fusion strategy (average, maximum, rrf, weighted)
+        #[arg(short, long, default_value = "rrf")]
+        strategy: String,
+
+        /// RRF k parameter (only for rrf strategy)
+        #[arg(long, default_value = "60")]
+        rrf_k: u32,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -539,6 +567,92 @@ fn main() -> anyhow::Result<()> {
                             std::process::exit(1);
                         }
                     }
+                }
+            }
+        }
+        Commands::MultiSearch {
+            path,
+            collection,
+            vectors,
+            top_k,
+            strategy,
+            rrf_k,
+            format,
+        } => {
+            use colored::Colorize;
+            use velesdb_core::FusionStrategy;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let col = db
+                .get_collection(&collection)
+                .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+
+            // Parse vectors from JSON
+            let parsed_vectors: Vec<Vec<f32>> = serde_json::from_str(&vectors)
+                .map_err(|e| anyhow::anyhow!("Invalid vectors JSON: {}", e))?;
+
+            if parsed_vectors.is_empty() {
+                anyhow::bail!("At least one query vector is required");
+            }
+
+            // Parse fusion strategy
+            let fusion_strategy = match strategy.to_lowercase().as_str() {
+                "average" | "avg" => FusionStrategy::Average,
+                "maximum" | "max" => FusionStrategy::Maximum,
+                "rrf" => FusionStrategy::RRF { k: rrf_k },
+                "weighted" => FusionStrategy::Weighted {
+                    avg_weight: 0.5,
+                    max_weight: 0.3,
+                    hit_weight: 0.2,
+                },
+                _ => anyhow::bail!(
+                    "Invalid strategy '{}'. Valid: average, maximum, rrf, weighted",
+                    strategy
+                ),
+            };
+
+            // Convert to slices
+            let query_refs: Vec<&[f32]> = parsed_vectors.iter().map(|v| v.as_slice()).collect();
+
+            // Execute multi-query search
+            let results = col
+                .multi_query_search(&query_refs, top_k, fusion_strategy, None)
+                .map_err(|e| anyhow::anyhow!("Search failed: {}", e))?;
+
+            if format == "json" {
+                let output: Vec<_> = results
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "id": r.point.id,
+                            "score": r.score,
+                            "payload": r.point.payload
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!(
+                    "\n{} (strategy: {}, {} vectors)",
+                    "Multi-Query Search Results".bold().underline(),
+                    strategy.green(),
+                    parsed_vectors.len()
+                );
+                if results.is_empty() {
+                    println!("  No results found.\n");
+                } else {
+                    for (i, r) in results.iter().enumerate() {
+                        println!(
+                            "  {}. ID: {} (score: {:.4})",
+                            i + 1,
+                            r.point.id.to_string().green(),
+                            r.score
+                        );
+                        if let Some(payload) = &r.point.payload {
+                            println!("     Payload: {}", payload);
+                        }
+                    }
+                    println!("\n  Total: {} result(s)\n", results.len());
                 }
             }
         }
