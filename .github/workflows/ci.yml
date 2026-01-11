@@ -96,7 +96,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
-        run: cargo test --all-features --workspace
+        run: cargo test --all-features --workspace -- --test-threads=1
+        env:
+          RUST_TEST_THREADS: 1
 
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)

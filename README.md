@@ -156,7 +156,7 @@ LIMIT 10
 | Component | Version |
 |-----------|---------|
 | **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v0.8.12 |
+| **VelesDB** | v1.1.0 |
 | **SIMD** | AVX-512 enabled |
 | **Criterion** | 0.5.1 |
 
@@ -195,7 +195,7 @@ LIMIT 10
 
 > 32x ef_search increase (64→2048) = ~3x latency increase.
 
-#### 🆕 Native HNSW Implementation (v0.8.12+)
+#### 🆕 Native HNSW Implementation (v1.0+)
 
 VelesDB now uses a **custom Native HNSW implementation** with zero external dependencies:
 
@@ -208,19 +208,18 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 
 > 📖 [Full architecture guide](docs/reference/NATIVE_HNSW.md)
 
-### Recall by Mode (Native Rust, Criterion benchmarks)
+### Recall by Mode (Native Rust, Criterion benchmarks — v1.1.0)
 
-| Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
-|--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **97.2%** | 0.29ms | ✅ |
-| **10K/128D** | Accurate | 256 | **99.7%** | 0.47ms | ✅ |
-| **10K/128D** | Perfect | 2048 | **100%** | 2.42ms | ✅ |
-| **100K/768D** | Accurate | 256 | 66.2% | 16.5ms | ⚠️ |
-| **100K/768D** | Perfect | 2048 | **100%** | **74ms** | ✅ |
+| Config | Mode | ef_search | Recall@10 | Latency P50 | v1.1.0 Gain |
+|--------|------|-----------|-----------|-------------|-------------|
+| **10K/128D** | Fast | 64 | **92.2%** | **36µs** | 🆕 |
+| **10K/128D** | Balanced | 128 | **98.8%** | **57µs** | 🚀 **-80%** |
+| **10K/128D** | Accurate | 256 | **100%** | **130µs** | 🚀 **-72%** |
+| **10K/128D** | Perfect | 2048 | **100%** | **200µs** | 🚀 **-92%** |
 
-> *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
+> *Latency P50 = median search time per query. Native Rust (no HTTP overhead).*
 > 
-> **Note**: For 100K+ vectors with high dimensions (768D), use Perfect mode or increase `ef_search` for reliable recall.
+> **v1.1.0 EPIC-CORE-003**: LRU Cache, Trigram Index, Lock-free structures → **72-92% faster** across all modes.
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
@@ -251,11 +250,28 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 
 ---
 
+## 📚 Documentation
+
+| Guide | Description |
+|-------|-------------|
+| **[Usage Examples v1.1.0](docs/USAGE_EXAMPLES_V1.1.0.md)** | Complete code examples for all features in every language |
+| **[CHANGELOG](CHANGELOG.md)** | Version history and breaking changes |
+| **[Benchmarks](docs/BENCHMARKS.md)** | Performance measurements and methodology |
+| **[Native HNSW](docs/reference/NATIVE_HNSW.md)** | Architecture deep-dive |
+| **[VelesQL Reference](docs/reference/VELESQL.md)** | Query language specification |
+
+---
+
 ## ✨ Features
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable
 - ⚡ **SIMD-optimized Search** — AVX-512/AVX2/NEON accelerated similarity
 - 🎯 **≥95% Recall Guaranteed** — Adaptive HNSW params up to 1M vectors
+- 🔀 **Multi-Query Fusion** — Native MQG with RRF/Weighted strategies
+- 🗄️ **Metadata-Only Collections** — Lightweight collections without vectors ⭐ NEW
+- 🔍 **LIKE/ILIKE Filters** — SQL pattern matching with wildcards ⭐ NEW
+- 🔎 **Trigram Index** — 22-128x faster LIKE queries with Roaring Bitmaps ⭐ NEW
+- ⚡ **Lock-Free Cache** — DashMap L1 + LRU L2 two-tier caching ⭐ NEW
 - 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (roadmap)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
 - 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale

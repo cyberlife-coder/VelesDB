@@ -38,6 +38,7 @@ use std::sync::Arc;
 use velesdb_core::collection::Collection as CoreCollection;
 use velesdb_core::Database as CoreDatabase;
 use velesdb_core::DistanceMetric as CoreDistanceMetric;
+use velesdb_core::FusionStrategy as CoreFusionStrategy;
 
 // ============================================================================
 // Error Types
@@ -132,6 +133,54 @@ impl From<StorageMode> for velesdb_core::StorageMode {
             StorageMode::Sq8 => velesdb_core::StorageMode::SQ8,
             StorageMode::Binary => velesdb_core::StorageMode::Binary,
         }
+    }
+}
+
+/// Fusion strategy for combining results from multiple vector searches.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum FusionStrategy {
+    /// Average scores across all queries.
+    Average,
+    /// Take the maximum score for each document.
+    Maximum,
+    /// Reciprocal Rank Fusion with configurable k parameter.
+    Rrf {
+        /// RRF k parameter (default: 60). Lower k emphasizes top ranks more.
+        k: u32,
+    },
+    /// Weighted combination of average, maximum, and hit ratio.
+    Weighted {
+        /// Weight for average score (0.0-1.0).
+        avg_weight: f32,
+        /// Weight for maximum score (0.0-1.0).
+        max_weight: f32,
+        /// Weight for hit ratio (0.0-1.0).
+        hit_weight: f32,
+    },
+}
+
+impl From<FusionStrategy> for CoreFusionStrategy {
+    fn from(strategy: FusionStrategy) -> Self {
+        match strategy {
+            FusionStrategy::Average => CoreFusionStrategy::Average,
+            FusionStrategy::Maximum => CoreFusionStrategy::Maximum,
+            FusionStrategy::Rrf { k } => CoreFusionStrategy::RRF { k },
+            FusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            } => CoreFusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            },
+        }
+    }
+}
+
+impl Default for FusionStrategy {
+    fn default() -> Self {
+        Self::Rrf { k: 60 }
     }
 }
 
@@ -250,6 +299,21 @@ impl VelesDatabase {
         Ok(())
     }
 
+    /// Creates a metadata-only collection (no vectors).
+    ///
+    /// Useful for storing reference data, lookups, or auxiliary information
+    /// that doesn't require vector similarity search.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    pub fn create_metadata_collection(&self, name: String) -> Result<(), VelesError> {
+        use velesdb_core::CollectionType;
+        self.inner
+            .create_collection_typed(&name, &CollectionType::MetadataOnly)?;
+        Ok(())
+    }
+
     /// Gets a collection by name.
     ///
     /// Returns `None` if the collection does not exist.
@@ -364,6 +428,55 @@ impl VelesCollection {
     #[allow(clippy::cast_possible_truncation)]
     pub fn dimension(&self) -> u32 {
         self.inner.config().dimension as u32
+    }
+
+    /// Gets points by their IDs.
+    ///
+    /// # Arguments
+    ///
+    /// * `ids` - List of point IDs to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Vector of points found. Missing IDs are silently skipped.
+    pub fn get(&self, ids: Vec<u64>) -> Vec<VelesPoint> {
+        self.inner
+            .get(&ids)
+            .into_iter()
+            .flatten()
+            .map(|p| VelesPoint {
+                id: p.id,
+                vector: p.vector,
+                payload: p.payload.map(|v| v.to_string()),
+            })
+            .collect()
+    }
+
+    /// Gets a single point by ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Point ID to retrieve
+    ///
+    /// # Returns
+    ///
+    /// The point if found, None otherwise.
+    pub fn get_by_id(&self, id: u64) -> Option<VelesPoint> {
+        self.inner
+            .get(&[id])
+            .into_iter()
+            .flatten()
+            .next()
+            .map(|p| VelesPoint {
+                id: p.id,
+                vector: p.vector,
+                payload: p.payload.map(|v| v.to_string()),
+            })
+    }
+
+    /// Checks if this is a metadata-only collection.
+    pub fn is_metadata_only(&self) -> bool {
+        self.inner.config().metadata_only
     }
 
     /// Performs full-text search using BM25.
@@ -637,6 +750,117 @@ impl VelesCollection {
                 .map_err(|e| VelesError::Database {
                     message: format!("Query execution failed: {e}"),
                 })?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Performs multi-query search with result fusion.
+    ///
+    /// Executes parallel searches for multiple query vectors and fuses
+    /// results using the specified strategy. Ideal for Multiple Query
+    /// Generation (MQG) pipelines on mobile.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - List of query vectors
+    /// * `limit` - Maximum number of results after fusion
+    /// * `strategy` - Fusion strategy to use
+    ///
+    /// # Returns
+    ///
+    /// Vector of fused search results sorted by relevance.
+    ///
+    /// # Example
+    ///
+    /// ```swift
+    /// let results = try collection.multiQuerySearch(
+    ///     vectors: [query1, query2, query3],
+    ///     limit: 10,
+    ///     strategy: .rrf(k: 60)
+    /// )
+    /// ```
+    pub fn multi_query_search(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        limit: u32,
+        strategy: FusionStrategy,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        if vectors.is_empty() {
+            return Err(VelesError::Database {
+                message: "multi_query_search requires at least one vector".to_string(),
+            });
+        }
+
+        let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let core_strategy: CoreFusionStrategy = strategy.into();
+
+        let results = self
+            .inner
+            .multi_query_search(
+                &query_refs,
+                usize::try_from(limit).unwrap_or(usize::MAX),
+                core_strategy,
+                None,
+            )
+            .map_err(|e| VelesError::Database {
+                message: format!("Multi-query search failed: {e}"),
+            })?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Performs multi-query search with metadata filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - List of query vectors
+    /// * `limit` - Maximum number of results after fusion
+    /// * `strategy` - Fusion strategy to use
+    /// * `filter_json` - JSON filter string
+    pub fn multi_query_search_with_filter(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        limit: u32,
+        strategy: FusionStrategy,
+        filter_json: String,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        if vectors.is_empty() {
+            return Err(VelesError::Database {
+                message: "multi_query_search requires at least one vector".to_string(),
+            });
+        }
+
+        let filter: velesdb_core::Filter =
+            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
+                message: format!("Invalid filter JSON: {e}"),
+            })?;
+
+        let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let core_strategy: CoreFusionStrategy = strategy.into();
+
+        let results = self
+            .inner
+            .multi_query_search(
+                &query_refs,
+                usize::try_from(limit).unwrap_or(usize::MAX),
+                core_strategy,
+                Some(&filter),
+            )
+            .map_err(|e| VelesError::Database {
+                message: format!("Multi-query search failed: {e}"),
+            })?;
 
         Ok(results
             .into_iter()
@@ -952,5 +1176,287 @@ mod tests {
         }
 
         assert_eq!(db.list_collections().len(), 3);
+    }
+
+    // =========================================================================
+    // FusionStrategy Tests
+    // =========================================================================
+
+    #[test]
+    fn test_fusion_strategy_average_conversion() {
+        let strategy = FusionStrategy::Average;
+        let core: CoreFusionStrategy = strategy.into();
+        assert!(matches!(core, CoreFusionStrategy::Average));
+    }
+
+    #[test]
+    fn test_fusion_strategy_maximum_conversion() {
+        let strategy = FusionStrategy::Maximum;
+        let core: CoreFusionStrategy = strategy.into();
+        assert!(matches!(core, CoreFusionStrategy::Maximum));
+    }
+
+    #[test]
+    fn test_fusion_strategy_rrf_conversion() {
+        let strategy = FusionStrategy::Rrf { k: 30 };
+        let core: CoreFusionStrategy = strategy.into();
+        assert!(matches!(core, CoreFusionStrategy::RRF { k: 30 }));
+    }
+
+    #[test]
+    fn test_fusion_strategy_weighted_conversion() {
+        let strategy = FusionStrategy::Weighted {
+            avg_weight: 0.5,
+            max_weight: 0.3,
+            hit_weight: 0.2,
+        };
+        let core: CoreFusionStrategy = strategy.into();
+        assert!(matches!(
+            core,
+            CoreFusionStrategy::Weighted {
+                avg_weight: _,
+                max_weight: _,
+                hit_weight: _
+            }
+        ));
+    }
+
+    #[test]
+    fn test_fusion_strategy_default() {
+        let strategy = FusionStrategy::default();
+        assert!(matches!(strategy, FusionStrategy::Rrf { k: 60 }));
+    }
+
+    // =========================================================================
+    // Multi-Query Search Tests
+    // =========================================================================
+
+    #[test]
+    fn test_multi_query_search_basic() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("mqs_test".to_string(), 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db.get_collection("mqs_test".to_string()).unwrap().unwrap();
+
+        // Insert test points
+        col.upsert_batch(vec![
+            VelesPoint {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: None,
+            },
+            VelesPoint {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: None,
+            },
+            VelesPoint {
+                id: 3,
+                vector: vec![0.0, 0.0, 1.0, 0.0],
+                payload: None,
+            },
+        ])
+        .unwrap();
+
+        // Multi-query search with 2 vectors
+        let results = col
+            .multi_query_search(
+                vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]],
+                5,
+                FusionStrategy::Rrf { k: 60 },
+            )
+            .unwrap();
+
+        assert!(!results.is_empty());
+        // Both query vectors should find their matching points
+        let ids: Vec<u64> = results.iter().map(|r| r.id).collect();
+        assert!(ids.contains(&1) || ids.contains(&2));
+    }
+
+    #[test]
+    fn test_multi_query_search_all_strategies() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("mqs_strategies".to_string(), 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db
+            .get_collection("mqs_strategies".to_string())
+            .unwrap()
+            .unwrap();
+
+        col.upsert_batch(vec![
+            VelesPoint {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: None,
+            },
+            VelesPoint {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: None,
+            },
+        ])
+        .unwrap();
+
+        let vectors = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.5, 0.5, 0.0, 0.0]];
+
+        // Test all strategies
+        let strategies = [
+            FusionStrategy::Average,
+            FusionStrategy::Maximum,
+            FusionStrategy::Rrf { k: 60 },
+            FusionStrategy::Weighted {
+                avg_weight: 0.5,
+                max_weight: 0.3,
+                hit_weight: 0.2,
+            },
+        ];
+
+        for strategy in strategies {
+            let results = col
+                .multi_query_search(vectors.clone(), 5, strategy)
+                .unwrap();
+            assert!(!results.is_empty(), "Strategy should return results");
+        }
+    }
+
+    #[test]
+    fn test_multi_query_search_empty_vectors_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("mqs_empty".to_string(), 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db.get_collection("mqs_empty".to_string()).unwrap().unwrap();
+
+        let result = col.multi_query_search(vec![], 5, FusionStrategy::Rrf { k: 60 });
+
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Metadata-Only Collection Tests
+    // =========================================================================
+
+    #[test]
+    fn test_create_metadata_collection() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_metadata_collection("meta_test".to_string())
+            .unwrap();
+
+        let col = db.get_collection("meta_test".to_string()).unwrap().unwrap();
+
+        assert!(col.is_metadata_only());
+        assert_eq!(col.dimension(), 0);
+    }
+
+    #[test]
+    fn test_regular_collection_not_metadata_only() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("vector_test".to_string(), 128, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db
+            .get_collection("vector_test".to_string())
+            .unwrap()
+            .unwrap();
+
+        assert!(!col.is_metadata_only());
+    }
+
+    // =========================================================================
+    // Get by ID Tests
+    // =========================================================================
+
+    #[test]
+    fn test_get_by_id_existing() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("get_test".to_string(), 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db.get_collection("get_test".to_string()).unwrap().unwrap();
+
+        col.upsert(VelesPoint {
+            id: 42,
+            vector: vec![1.0, 2.0, 3.0, 4.0],
+            payload: Some(r#"{"name": "test"}"#.to_string()),
+        })
+        .unwrap();
+
+        let result = col.get_by_id(42);
+        assert!(result.is_some());
+        let point = result.unwrap();
+        assert_eq!(point.id, 42);
+        assert_eq!(point.vector, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_get_by_id_missing() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("get_missing".to_string(), 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db
+            .get_collection("get_missing".to_string())
+            .unwrap()
+            .unwrap();
+
+        let result = col.get_by_id(999);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_multiple_ids() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let db = VelesDatabase::open(path).unwrap();
+        db.create_collection("get_multi".to_string(), 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col = db.get_collection("get_multi".to_string()).unwrap().unwrap();
+
+        col.upsert_batch(vec![
+            VelesPoint {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: None,
+            },
+            VelesPoint {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: None,
+            },
+            VelesPoint {
+                id: 3,
+                vector: vec![0.0, 0.0, 1.0, 0.0],
+                payload: None,
+            },
+        ])
+        .unwrap();
+
+        let results = col.get(vec![1, 2, 999]); // 999 doesn't exist
+        assert_eq!(results.len(), 2); // Only 2 found
     }
 }

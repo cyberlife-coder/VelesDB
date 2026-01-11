@@ -572,6 +572,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         selected
     }
 
+    /// Adds a bidirectional connection between nodes.
+    ///
+    /// # Lock Ordering (BUG-CORE-001 fix)
+    ///
+    /// This method respects the global lock order: `vectors` → `layers` → `neighbors`
+    /// to prevent deadlocks with `search_layer()` which also follows this order.
+    ///
+    /// **Critical**: We NEVER hold `layers.read()` while calling `get_vector()`.
+    /// All vector fetches happen BEFORE or AFTER the layers lock is held.
     fn add_bidirectional_connection(
         &self,
         new_node: NodeId,
@@ -579,25 +588,33 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         layer: usize,
         max_conn: usize,
     ) {
-        let layers = self.layers.read();
-        let mut current_neighbors = layers[layer].get_neighbors(neighbor);
+        // BUG-CORE-001 FIX Phase 1: Pre-fetch neighbor vector (vectors lock only)
+        let neighbor_vec = self.get_vector(neighbor);
+
+        // BUG-CORE-001 FIX Phase 2: Get current neighbors (layers lock only, released immediately)
+        let current_neighbors = self.layers.read()[layer].get_neighbors(neighbor);
 
         if current_neighbors.len() < max_conn {
-            current_neighbors.push(new_node);
-            layers[layer].set_neighbors(neighbor, current_neighbors);
+            // Simple case: just add the new node
+            let layers = self.layers.read();
+            let mut neighbors = layers[layer].get_neighbors(neighbor);
+            neighbors.push(new_node);
+            layers[layer].set_neighbors(neighbor, neighbors);
         } else {
-            // Need to prune: keep closest neighbors
-            current_neighbors.push(new_node);
-            let neighbor_vec = self.get_vector(neighbor);
+            // Pruning case: need to compute distances
+            // BUG-CORE-001 FIX Phase 3: Pre-fetch ALL vectors BEFORE acquiring layers lock
+            let mut all_neighbors = current_neighbors.clone();
+            all_neighbors.push(new_node);
 
-            let mut with_dist: Vec<(NodeId, f32)> = current_neighbors
+            let neighbor_vecs: Vec<(NodeId, Vec<f32>)> = all_neighbors
                 .iter()
-                .map(|&n| {
-                    (
-                        n,
-                        self.distance.distance(&neighbor_vec, &self.get_vector(n)),
-                    )
-                })
+                .map(|&n| (n, self.get_vector(n)))
+                .collect();
+
+            // Compute distances (no locks held)
+            let mut with_dist: Vec<(NodeId, f32)> = neighbor_vecs
+                .iter()
+                .map(|(n, n_vec)| (*n, self.distance.distance(&neighbor_vec, n_vec)))
                 .collect();
 
             with_dist.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -606,7 +623,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 .take(max_conn)
                 .map(|(n, _)| n)
                 .collect();
-            layers[layer].set_neighbors(neighbor, pruned);
+
+            // BUG-CORE-001 FIX Phase 4: Now acquire layers lock to write (no vectors lock needed)
+            self.layers.read()[layer].set_neighbors(neighbor, pruned);
         }
     }
 }

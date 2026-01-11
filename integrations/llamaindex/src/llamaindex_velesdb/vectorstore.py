@@ -76,7 +76,12 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         Args:
             path: Path to VelesDB database directory.
             collection_name: Name of the collection.
-            metric: Distance metric ("cosine", "euclidean", "dot").
+            metric: Distance metric.
+                - "cosine": Cosine similarity (default)
+                - "euclidean": Euclidean distance (L2)
+                - "dot": Dot product (inner product)
+                - "hamming": Hamming distance (for binary vectors)
+                - "jaccard": Jaccard similarity (for binary vectors)
             storage_mode: Storage mode ("full", "sq8", "binary").
                 - "full": Full f32 precision (default)
                 - "sq8": 8-bit scalar quantization (4x memory reduction)
@@ -452,6 +457,28 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         """Check if the collection is empty."""
         return self._collection is None or self._collection.is_empty()
 
+    def create_metadata_collection(self, name: str) -> None:
+        """Create a metadata-only collection (no vectors).
+
+        Useful for storing reference data that can be JOINed with
+        vector collections (VelesDB Premium feature).
+
+        Args:
+            name: Collection name.
+        """
+        db = self._get_db()
+        db.create_metadata_collection(name)
+
+    def is_metadata_only(self) -> bool:
+        """Check if the current collection is metadata-only.
+
+        Returns:
+            True if metadata-only, False if vector collection.
+        """
+        if self._collection is None:
+            return False
+        return self._collection.is_metadata_only()
+
     def velesql(self, query_str: str, params: Optional[dict] = None, **kwargs: Any) -> VectorStoreQueryResult:
         """Execute a VelesQL query."""
         if self._collection is None:
@@ -466,3 +493,98 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             s_list.append(r.get("score", 0.0))
             i_list.append(nid)
         return VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list)
+
+    def multi_query_search(
+        self,
+        query_embeddings: List[List[float]],
+        similarity_top_k: int = 10,
+        fusion: str = "rrf",
+        fusion_params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Multi-query fusion search combining results from multiple query embeddings.
+
+        Uses fusion strategies to combine results from multiple query reformulations,
+        ideal for RAG pipelines using Multiple Query Generation (MQG).
+
+        Args:
+            query_embeddings: List of query embedding vectors.
+            similarity_top_k: Number of results to return.
+            fusion: Fusion strategy ("rrf", "average", "maximum", "weighted").
+            fusion_params: Parameters for fusion strategy:
+                - RRF: {"k": 60} (default k=60)
+                - Weighted: {"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
+            **kwargs: Additional arguments.
+
+        Returns:
+            Query result with fused nodes and scores.
+
+        Example:
+            >>> results = vector_store.multi_query_search(
+            ...     query_embeddings=[emb1, emb2, emb3],
+            ...     similarity_top_k=10,
+            ...     fusion="rrf",
+            ...     fusion_params={"k": 60}
+            ... )
+        """
+        if not query_embeddings:
+            return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+
+        dimension = len(query_embeddings[0])
+        collection = self._get_collection(dimension)
+
+        # Build fusion strategy
+        fusion_params = fusion_params or {}
+        if fusion == "rrf":
+            k = fusion_params.get("k", 60)
+            fusion_strategy = velesdb.FusionStrategy.rrf(k=k)
+        elif fusion == "average":
+            fusion_strategy = velesdb.FusionStrategy.average()
+        elif fusion == "maximum":
+            fusion_strategy = velesdb.FusionStrategy.maximum()
+        elif fusion == "weighted":
+            avg_w = fusion_params.get("avg_weight", 0.6)
+            max_w = fusion_params.get("max_weight", 0.3)
+            hit_w = fusion_params.get("hit_weight", 0.1)
+            fusion_strategy = velesdb.FusionStrategy.weighted(
+                avg_weight=avg_w, max_weight=max_w, hit_weight=hit_w
+            )
+        else:
+            fusion_strategy = velesdb.FusionStrategy.rrf(k=60)
+
+        results = collection.multi_query_search(
+            vectors=query_embeddings,
+            top_k=similarity_top_k,
+            fusion=fusion_strategy,
+        )
+
+        nodes: List[TextNode] = []
+        similarities: List[float] = []
+        ids: List[str] = []
+
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")
+            node_id = payload.get("node_id", str(result.get("id", "")))
+            score = result.get("score", 0.0)
+
+            metadata = {
+                k: v for k, v in payload.items()
+                if k not in ("text", "node_id")
+            }
+
+            node = TextNode(
+                text=text,
+                id_=node_id,
+                metadata=metadata,
+            )
+
+            nodes.append(node)
+            similarities.append(score)
+            ids.append(node_id)
+
+        return VectorStoreQueryResult(
+            nodes=nodes,
+            similarities=similarities,
+            ids=ids,
+        )

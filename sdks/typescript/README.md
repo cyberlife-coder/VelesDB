@@ -188,6 +188,41 @@ const results = await db.query(
 );
 ```
 
+### `db.multiQuerySearch(collection, vectors, options)` (v1.1.0+) ⭐ NEW
+
+Multi-query fusion search for RAG pipelines using Multiple Query Generation (MQG).
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `k` | `number` | `10` | Number of results |
+| `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted'` | `'rrf'` | Fusion strategy |
+| `fusionParams` | `object` | `{ k: 60 }` | Strategy-specific parameters |
+| `filter` | `object` | - | Filter expression |
+
+```typescript
+// RRF fusion (default) - best for most RAG use cases
+const results = await db.multiQuerySearch('docs', [emb1, emb2, emb3], {
+  k: 10,
+  fusion: 'rrf',
+  fusionParams: { k: 60 }
+});
+
+// Weighted fusion - like SearchXP scoring
+const results = await db.multiQuerySearch('docs', [emb1, emb2], {
+  k: 10,
+  fusion: 'weighted',
+  fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
+});
+
+// Average/Maximum fusion
+const results = await db.multiQuerySearch('docs', vectors, {
+  k: 10,
+  fusion: 'average'  // or 'maximum'
+});
+```
+
+> **Note:** Multi-query fusion is only available with the REST backend.
+
 ### `db.isEmpty(collection)` (v0.8.11+)
 
 Check if a collection is empty.

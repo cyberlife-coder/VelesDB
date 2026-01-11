@@ -10,6 +10,7 @@ import type {
   SearchOptions,
   SearchResult,
   IVelesDBBackend,
+  MultiQuerySearchOptions,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -112,11 +113,36 @@ export class VelesDB {
       throw new ValidationError('Collection name must be a non-empty string');
     }
     
-    if (!config.dimension || config.dimension <= 0) {
-      throw new ValidationError('Dimension must be a positive integer');
+    // Dimension is required for vector collections, not for metadata_only
+    const isMetadataOnly = config.collectionType === 'metadata_only';
+    if (!isMetadataOnly && (!config.dimension || config.dimension <= 0)) {
+      throw new ValidationError('Dimension must be a positive integer for vector collections');
     }
 
     await this.backend.createCollection(name, config);
+  }
+
+  /**
+   * Create a metadata-only collection (no vectors, just payload data)
+   * 
+   * Useful for storing reference data that can be JOINed with vector collections.
+   * 
+   * @param name - Collection name
+   * 
+   * @example
+   * ```typescript
+   * await db.createMetadataCollection('products');
+   * await db.insertMetadata('products', { id: 'P001', name: 'Widget', price: 99 });
+   * ```
+   */
+  async createMetadataCollection(name: string): Promise<void> {
+    this.ensureInitialized();
+    
+    if (!name || typeof name !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+
+    await this.backend.createCollection(name, { collectionType: 'metadata_only' });
   }
 
   /**
@@ -340,6 +366,53 @@ export class VelesDB {
     }
 
     return this.backend.query(queryString, params);
+  }
+
+  /**
+   * Multi-query fusion search combining results from multiple query vectors
+   * 
+   * Ideal for RAG pipelines using Multiple Query Generation (MQG).
+   * 
+   * @param collection - Collection name
+   * @param vectors - Array of query vectors
+   * @param options - Search options (k, fusion strategy, fusionParams, filter)
+   * @returns Fused search results
+   * 
+   * @example
+   * ```typescript
+   * // RRF fusion (default)
+   * const results = await db.multiQuerySearch('docs', [emb1, emb2, emb3], {
+   *   k: 10,
+   *   fusion: 'rrf',
+   *   fusionParams: { k: 60 }
+   * });
+   * 
+   * // Weighted fusion
+   * const results = await db.multiQuerySearch('docs', [emb1, emb2], {
+   *   k: 10,
+   *   fusion: 'weighted',
+   *   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
+   * });
+   * ```
+   */
+  async multiQuerySearch(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+
+    if (!Array.isArray(vectors) || vectors.length === 0) {
+      throw new ValidationError('Vectors must be a non-empty array');
+    }
+
+    for (const v of vectors) {
+      if (!Array.isArray(v) && !(v instanceof Float32Array)) {
+        throw new ValidationError('Each vector must be an array or Float32Array');
+      }
+    }
+
+    return this.backend.multiQuerySearch(collection, vectors, options);
   }
 
   /**
