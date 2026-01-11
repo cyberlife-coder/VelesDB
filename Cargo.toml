@@ -78,3 +78,4 @@ strip = true
 [profile.bench]
 lto = true
 codegen-units = 1
+
