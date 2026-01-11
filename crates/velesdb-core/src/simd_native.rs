@@ -404,13 +404,8 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
             }
         }
 
-        #[cfg(target_arch = "aarch64")]
-        if i + 4 < candidates.len() {
-            unsafe {
-                use std::arch::aarch64::_prefetch;
-                _prefetch(candidates[i + 4].as_ptr().cast::<i8>(), 0, 3);
-            }
-        }
+        // Note: aarch64 prefetch requires unstable feature, skipped for now
+        // See: https://github.com/rust-lang/rust/issues/117217
 
         results.push(dot_product_native(candidate, query));
     }
