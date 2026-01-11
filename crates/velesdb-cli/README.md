@@ -85,6 +85,34 @@ velesdb import data.jsonl --database ./my_vectors --collection documents --dimen
 velesdb import embeddings.csv --database ./my_vectors --collection docs --dimension 384
 ```
 
+### Multi-Query Fusion Search ⭐ NEW v1.1.0
+
+```bash
+# Multi-query search with RRF fusion (default)
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[0.1, 0.2, ...], [0.3, 0.4, ...]]' \
+  --top-k 10 \
+  --strategy rrf
+
+# With different fusion strategies
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...], [...]]' \
+  --strategy average
+
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...], [...]]' \
+  --strategy maximum
+
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...], [...]]' \
+  --strategy weighted
+
+# Output as JSON
+velesdb multi-search ./my_vectors documents \
+  --vectors '[[...]]' \
+  --format json
+```
+
 ### VelesQL Queries
 
 #### Vector Search

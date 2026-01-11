@@ -156,7 +156,7 @@ LIMIT 10
 | Component | Version |
 |-----------|---------|
 | **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v0.8.12 |
+| **VelesDB** | v1.1.0 |
 | **SIMD** | AVX-512 enabled |
 | **Criterion** | 0.5.1 |
 
@@ -195,7 +195,7 @@ LIMIT 10
 
 > 32x ef_search increase (64→2048) = ~3x latency increase.
 
-#### 🆕 Native HNSW Implementation (v0.8.12+)
+#### 🆕 Native HNSW Implementation (v1.0+)
 
 VelesDB now uses a **custom Native HNSW implementation** with zero external dependencies:
 
