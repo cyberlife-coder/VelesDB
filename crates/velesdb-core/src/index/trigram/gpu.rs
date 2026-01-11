@@ -31,6 +31,7 @@ use std::collections::HashSet;
 
 /// GPU-accelerated trigram index operations.
 #[cfg(feature = "gpu")]
+#[allow(dead_code)]
 pub struct GpuTrigramAccelerator {
     accelerator: GpuAccelerator,
     /// Trigram data uploaded to GPU

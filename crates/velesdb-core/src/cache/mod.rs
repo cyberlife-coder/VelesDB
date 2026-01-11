@@ -1,4 +1,4 @@
-//! Caching layer for VelesDB (SOTA 2026).
+//! Caching layer for `VelesDB` (SOTA 2026).
 //!
 //! Based on arXiv:2310.11703v2 recommendations:
 //! - LRU cache for metadata-only collections

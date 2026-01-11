@@ -44,6 +44,29 @@
 #![warn(clippy::all)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+// SOTA 2026 performance code - allow common numeric casts
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_lossless)]
+// Documentation style preferences
+#![allow(clippy::doc_markdown)]
+// Code style preferences
+#![allow(clippy::single_match_else)]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::unused_self)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::wildcard_imports)]
+#![allow(clippy::ptr_as_ptr)]
+#![allow(clippy::implicit_hasher)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::used_underscore_binding)]
+#![allow(clippy::manual_assert)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::unused_async)]
 
 pub mod alloc_guard;
 #[cfg(test)]

@@ -1,14 +1,15 @@
-//! Optimization Tests for LruCache (US-CORE-003-14)
+//! Optimization Tests for `LruCache` (US-CORE-003-14)
 //!
-//! Validates LruCache performance characteristics.
+//! Validates `LruCache` performance characteristics.
 //!
 //! # Implementation Notes
 //!
-//! IndexMap provides O(1) lookup but O(n) for shift_remove (preserves order).
-//! This is still faster than VecDeque::retain which was O(n) with higher constant.
-//! For true O(1) LRU, a custom doubly-linked list + HashMap would be needed.
+//! `IndexMap` provides O(1) lookup but O(n) for `shift_remove` (preserves order).
+//! This is still faster than `VecDeque::retain` which was O(n) with higher constant.
+//! For true O(1) LRU, a custom doubly-linked list + `HashMap` would be needed.
 
 #![allow(clippy::similar_names)]
+#![allow(clippy::doc_markdown)]
 
 use std::time::Instant;
 
