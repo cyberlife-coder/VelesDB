@@ -43,7 +43,7 @@ pub struct GpuTrigramAccelerator {
 impl GpuTrigramAccelerator {
     /// Create a new GPU trigram accelerator.
     pub async fn new() -> Result<Self, String> {
-        let accelerator = GpuAccelerator::new().await?;
+        let accelerator = GpuAccelerator::new().ok_or("GPU not available")?;
         Ok(Self {
             accelerator,
             trigram_buffer: None,
