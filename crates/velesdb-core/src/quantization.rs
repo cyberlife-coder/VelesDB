@@ -385,6 +385,7 @@ pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -
 // =========================================================================
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[allow(unused_imports)]
 use std::arch::x86_64::*;
 
 /// SIMD-optimized dot product between f32 query and SQ8 quantized vector.
