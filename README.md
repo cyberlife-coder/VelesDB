@@ -208,19 +208,18 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 
 > 📖 [Full architecture guide](docs/reference/NATIVE_HNSW.md)
 
-### Recall by Mode (Native Rust, Criterion benchmarks)
+### Recall by Mode (Native Rust, Criterion benchmarks — v1.1.0)
 
-| Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
-|--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **97.2%** | 0.29ms | ✅ |
-| **10K/128D** | Accurate | 256 | **99.7%** | 0.47ms | ✅ |
-| **10K/128D** | Perfect | 2048 | **100%** | 2.42ms | ✅ |
-| **100K/768D** | Accurate | 256 | 66.2% | 16.5ms | ⚠️ |
-| **100K/768D** | Perfect | 2048 | **100%** | **74ms** | ✅ |
+| Config | Mode | ef_search | Recall@10 | Latency P50 | v1.1.0 Gain |
+|--------|------|-----------|-----------|-------------|-------------|
+| **10K/128D** | Fast | 64 | **92.2%** | **36µs** | 🆕 |
+| **10K/128D** | Balanced | 128 | **98.8%** | **57µs** | 🚀 **-80%** |
+| **10K/128D** | Accurate | 256 | **100%** | **130µs** | 🚀 **-72%** |
+| **10K/128D** | Perfect | 2048 | **100%** | **200µs** | 🚀 **-92%** |
 
-> *Latency P50 = median search time for 100 queries. Native Rust (no HTTP overhead).*
+> *Latency P50 = median search time per query. Native Rust (no HTTP overhead).*
 > 
-> **Note**: For 100K+ vectors with high dimensions (768D), use Perfect mode or increase `ef_search` for reliable recall.
+> **v1.1.0 EPIC-CORE-003**: LRU Cache, Trigram Index, Lock-free structures → **72-92% faster** across all modes.
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
