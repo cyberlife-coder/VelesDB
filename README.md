@@ -251,6 +251,18 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 
 ---
 
+## 📚 Documentation
+
+| Guide | Description |
+|-------|-------------|
+| **[Usage Examples v1.1.0](docs/USAGE_EXAMPLES_V1.1.0.md)** | Complete code examples for all features in every language |
+| **[CHANGELOG](CHANGELOG.md)** | Version history and breaking changes |
+| **[Benchmarks](docs/BENCHMARKS.md)** | Performance measurements and methodology |
+| **[Native HNSW](docs/reference/NATIVE_HNSW.md)** | Architecture deep-dive |
+| **[VelesQL Reference](docs/reference/VELESQL.md)** | Query language specification |
+
+---
+
 ## ✨ Features
 
 - 🚀 **Built in Rust** — Memory-safe, fast, and reliable

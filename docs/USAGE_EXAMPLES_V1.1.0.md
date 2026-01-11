@@ -1,12 +1,12 @@
-# VelesDB v1.1.0 - Guide d'Usage Complet
+# VelesDB v1.1.0 - Complete Usage Guide
 
-> **Document pour revue par les 3 relecteurs**  
-> **Date** : 11 janvier 2026  
+> **Document for review by the 3 reviewers**  
+> **Date** : January 11, 2026  
 > **EPICs** : EPIC-CORE-003 (SOTA Optimizations) + EPIC-CORE-005 (Full Coverage)
 
 ---
 
-## 📋 Table des matières
+## Table of Contents
 
 1. [Multi-Query Fusion (MQG)](#1-multi-query-fusion-mqg)
 2. [Hybrid Search](#2-hybrid-search)
@@ -21,22 +21,22 @@
 
 ## 1. Multi-Query Fusion (MQG)
 
-### Scénario d'usage
-RAG pipeline avec Multiple Query Generation : l'utilisateur pose une question, le LLM génère 3 reformulations, VelesDB fusionne les résultats.
+### Usage Scenario
+RAG pipeline with Multiple Query Generation: the user asks a question, the LLM generates 3 reformulations, VelesDB fuses the results.
 
 ### Rust (Core)
 
 ```rust
 use velesdb_core::{Collection, FusionStrategy};
 
-// Génération de 3 embeddings pour la même question
+// Generation of 3 embeddings for the same question
 let queries = vec![
-    embed("What is VelesDB?"),           // Query originale
+    embed("What is VelesDB?"),           // Original Query
     embed("VelesDB vector database"),     // Reformulation 1
     embed("How does VelesDB work?"),      // Reformulation 2
 ];
 
-// RRF Fusion (recommandé pour RAG)
+// RRF Fusion (recommended for RAG)
 let results = collection.multi_query_search(
     &queries.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
     10,  // top_k
@@ -44,7 +44,7 @@ let results = collection.multi_query_search(
     None,  // no filter
 )?;
 
-// Weighted Fusion (style SearchXP)
+// Weighted Fusion (SearchXP style)
 let results = collection.multi_query_search(
     &query_refs,
     10,
@@ -65,14 +65,14 @@ from velesdb import Database, FusionStrategy
 db = Database("./data")
 collection = db.get_collection("documents")
 
-# Multi-query avec RRF
+# Multi-query with RRF
 results = collection.multi_query_search(
     vectors=[query1, query2, query3],
     top_k=10,
     fusion=FusionStrategy.rrf(k=60)
 )
 
-# Avec filtre
+# With filter
 results = collection.multi_query_search(
     vectors=[query1, query2],
     top_k=10,
@@ -107,7 +107,7 @@ import com.velesdb.mobile.*
 
 val collection = db.getCollection("documents")!!
 
-// Multi-query search avec RRF
+// Multi-query search with RRF
 val results = collection.multiQuerySearch(
     vectors = listOf(query1, query2, query3),
     limit = 10u,
@@ -160,7 +160,7 @@ const results = store.multi_query_search(vectors, 3, 10, 'rrf', 60);
 ### CLI
 
 ```bash
-# Multi-query search avec RRF
+# Multi-query search with RRF
 velesdb multi-search ./data documents \
   --vectors '[[0.1, 0.2, ...], [0.3, 0.4, ...]]' \
   --top-k 10 \
@@ -211,8 +211,8 @@ results = vector_store.multi_query_search(
 
 ## 2. Hybrid Search
 
-### Scénario d'usage
-Recherche combinant similarité vectorielle et recherche textuelle BM25 pour améliorer la pertinence.
+### Usage Scenario
+Combining vector similarity and text search BM25 to improve relevance.
 
 ### Rust
 
@@ -274,8 +274,8 @@ const results = store.hybrid_search(
 
 ## 3. Batch Search
 
-### Scénario d'usage
-Recherche parallèle pour plusieurs requêtes en une seule opération (optimisation I/O).
+### Usage Scenario
+Parallel search for multiple queries in a single operation (I/O optimization).
 
 ### Rust
 
@@ -286,8 +286,8 @@ let searches = vec![
 ];
 
 let all_results = collection.search_batch(&searches)?;
-// all_results[0] = résultats pour v1
-// all_results[1] = résultats pour v2
+// all_results[0] = results for v1
+// all_results[1] = results for v2
 ```
 
 ### Python
@@ -330,8 +330,8 @@ const results = store.batch_search(vectors, 3, 10);  // 3 vectors, top 10
 
 ## 4. Text Search (BM25)
 
-### Scénario d'usage
-Recherche full-text sans vecteurs, idéal pour recherche par mots-clés.
+### Usage Scenario
+Full-text search without vectors, ideal for keyword search.
 
 ### Rust
 
@@ -367,8 +367,8 @@ const results = store.text_search("rust programming", 10, null);
 
 ## 5. LIKE/ILIKE Filters
 
-### Scénario d'usage
-Filtrage par pattern sur les champs texte des métadonnées.
+### Usage Scenario
+Pattern filtering on text fields of metadata.
 
 ### Rust
 
@@ -433,8 +433,8 @@ const results = await db.search('documents', query, {
 
 ## 6. Metadata-Only Collections
 
-### Scénario d'usage
-Stocker des données structurées sans vecteurs (tables de référence, configurations).
+### Usage Scenario
+Storing structured data without vectors (reference tables, configurations).
 
 ### Rust
 
@@ -443,18 +443,18 @@ use velesdb_core::{Database, CollectionType};
 
 let db = Database::open("./data")?;
 
-// Créer une collection metadata-only
+// Create a metadata-only collection
 db.create_collection_typed("settings", &CollectionType::MetadataOnly)?;
 
 let collection = db.get_collection("settings").unwrap();
 
-// Insérer des métadonnées sans vecteur
+// Insert metadata without vector
 collection.upsert_metadata(vec![
     Point::metadata_only(1, json!({"key": "theme", "value": "dark"})),
     Point::metadata_only(2, json!({"key": "language", "value": "fr"})),
 ])?;
 
-// Vérifier le type
+// Check type
 assert!(collection.is_metadata_only());
 ```
 
@@ -463,13 +463,13 @@ assert!(collection.is_metadata_only());
 ```python
 db = Database("./data")
 
-# Créer collection metadata-only
+# Create metadata-only collection
 db.create_metadata_collection("settings")
 
 collection = db.get_collection("settings")
 assert collection.is_metadata_only()
 
-# Insérer métadonnées
+# Insert metadata
 collection.upsert_metadata([
     {"id": 1, "payload": {"key": "theme", "value": "dark"}},
     {"id": 2, "payload": {"key": "language", "value": "fr"}},
@@ -479,7 +479,7 @@ collection.upsert_metadata([
 ### Swift
 
 ```swift
-// Créer collection metadata-only
+// Create metadata-only collection
 try db.createMetadataCollection(name: "settings")
 
 let collection = try db.getCollection(name: "settings")!
@@ -489,17 +489,17 @@ print("Is metadata-only: \(collection.isMetadataOnly())")
 ### CLI
 
 ```bash
-# Créer collection metadata-only
+# Create metadata-only collection
 velesdb create-metadata-collection ./data settings
 ```
 
 ### WASM
 
 ```javascript
-// Créer un store metadata-only
+// Create a metadata-only store
 const store = VectorStore.new_metadata_only();
 
-// Vérifier le type
+// Check type
 console.log(store.is_metadata_only);  // true
 ```
 
@@ -507,22 +507,22 @@ console.log(store.is_metadata_only);  // true
 
 ## 7. Hamming/Jaccard Metrics
 
-### Scénario d'usage
-Similarité pour vecteurs binaires (fingerprints, hash signatures).
+### Usage Scenario
+Similarity for binary vectors (fingerprints, hash signatures).
 
 ### Rust
 
 ```rust
 use velesdb_core::DistanceMetric;
 
-// Créer collection avec métrique Hamming
+// Create collection with Hamming metric
 let collection = db.create_collection(
     "fingerprints",
     128,  // dimension
     DistanceMetric::Hamming,
 )?;
 
-// Ou Jaccard pour similarité d'ensembles
+// Or Jaccard for set similarity
 let collection = db.create_collection(
     "sets",
     256,
@@ -533,14 +533,14 @@ let collection = db.create_collection(
 ### Python
 
 ```python
-# Hamming pour vecteurs binaires
+# Hamming for binary vectors
 collection = db.create_collection(
     "fingerprints",
     dimension=128,
     metric="hamming"
 )
 
-# Jaccard pour similarité d'ensembles
+# Jaccard for set similarity
 collection = db.create_collection(
     "sets",
     dimension=256,
@@ -571,7 +571,7 @@ await db.createCollection('fingerprints', {
 
 ```javascript
 const store = new VectorStore(128, 'hamming');
-// ou
+// or
 const store = new VectorStore(256, 'jaccard');
 ```
 
@@ -584,7 +584,7 @@ const store = new VectorStore(256, 'jaccard');
 ```rust
 use velesdb_core::cache::LruCache;
 
-// Cache thread-safe O(1)
+// Thread-safe O(1) cache
 let cache: LruCache<String, Vec<f32>> = LruCache::new(10000);
 
 cache.insert("key1".to_string(), vec![0.1, 0.2]);
@@ -600,15 +600,15 @@ println!("Hit rate: {:.2}%", stats.hit_rate() * 100.0);
 ```rust
 use velesdb_core::cache::BloomFilter;
 
-// Bloom filter avec 1% FPR
+// Bloom filter with 1% FPR
 let bloom = BloomFilter::new(100000, 0.01);
 
 bloom.insert(&"document_123");
 if bloom.may_contain(&"document_123") {
-    // Peut être présent (vérifier dans le store)
+    // May be present (check in store)
 }
 if !bloom.may_contain(&"unknown") {
-    // Définitivement absent (pas de faux négatifs)
+    // Definitely absent (no false negatives)
 }
 ```
 
@@ -619,22 +619,26 @@ use velesdb_core::compression::DictionaryEncoder;
 
 let mut encoder: DictionaryEncoder<String> = DictionaryEncoder::new();
 
-// Encoder des valeurs répétées
+// Encode repeated values
 let code1 = encoder.encode("France".to_string());
-let code2 = encoder.encode("France".to_string());  // Même code
+let code2 = encoder.encode("France".to_string());  // Same code
 let code3 = encoder.encode("Germany".to_string());
 
-// Décoder
+// Decode
 let value = encoder.decode(code1);  // "France"
 
-// Stats de compression
+// Compression stats
 let stats = encoder.stats();
 println!("Ratio: {:.2}x", stats.compression_ratio);
 ```
 
 ---
 
-## 📊 Matrice de Couverture v1.1.0
+## Coverage Matrix v1.1.0
+
+### Public API Features (100% Coverage)
+
+All public features are available across **all components**:
 
 | Feature | Core | Mobile | WASM | CLI | TS SDK | LangChain | LlamaIndex |
 |---------|:----:|:------:|:----:|:---:|:------:|:---------:|:----------:|
@@ -647,30 +651,38 @@ println!("Ratio: {:.2}x", stats.compression_ratio);
 | metadata_only | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | get_by_id | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | FusionStrategy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| LruCache | ✅ | - | - | - | - | - | - |
-| BloomFilter | ✅ | - | - | - | - | - | - |
-| DictionaryEncoder | ✅ | - | - | - | - | - | - |
-| TrigramIndex | ✅ | - | - | - | - | - | - |
+
+### Internal Core Optimizations (SOTA EPIC-CORE-003)
+
+The following are **internal performance primitives** used by `velesdb-core` to accelerate operations. They are not exposed as public APIs in SDKs because they operate transparently under the hood:
+
+| Internal Component | Purpose | Used By |
+|--------------------|---------|---------|
+| **LruCache** | O(1) query result caching with hit rate tracking | All search operations |
+| **BloomFilter** | Fast negative lookups (1% FPR) to skip disk I/O | Filter evaluation |
+| **DictionaryEncoder** | Column compression for repeated metadata values | ColumnStore filtering |
+| **TrigramIndex** | 22-128x faster LIKE/ILIKE via Roaring Bitmaps | LIKE/ILIKE filters |
+
+> **Note for developers**: These optimizations are automatically used when you call `search()`, `text_search()`, or use LIKE/ILIKE filters. You don't need to manage them manually — they "just work" to make your queries faster.
 
 ---
 
-## ✅ Checklist pour les 3 relecteurs
+## Checklist for the 3 Reviewers
 
-### Relecteur 1 : Fonctionnalités
-- [ ] Tous les exemples de code compilent/s'exécutent
-- [ ] Les signatures d'API sont correctes
-- [ ] Les retours de fonction sont documentés
+### Reviewer 1: Features
+- [ ] All code examples compile/run
+- [ ] API signatures are correct
+- [ ] Function return values are documented
 
-### Relecteur 2 : Documentation
-- [ ] Scénarios d'usage clairs et réalistes
-- [ ] Cohérence entre les langages
-- [ ] Exemples complets et fonctionnels
+### Reviewer 2: Documentation
+- [ ] Clear and realistic usage scenarios
+- [ ] Consistency across languages
+- [ ] Complete and functional examples
 
-### Relecteur 3 : Tests & Couverture
-- [ ] Matrice de couverture 100% verte
-- [ ] Tests TDD présents pour chaque feature
-- [ ] Aucun gap fonctionnel restant
+### Reviewer 3: Tests & Coverage
+- [ ] 100% green coverage matrix
+- [ ] TDD tests present for each feature
+- [ ] No remaining functional gaps
 
 ---
-
-*Document généré le 11/01/2026 pour VelesDB v1.1.0*
+*Document generated on January 11, 2026 for VelesDB v1.1.0*
