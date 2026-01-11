@@ -363,7 +363,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-0.8.12-amd64.deb
+sudo dpkg -i velesdb-1.1.0-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -459,7 +459,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.8.12"}
+# {"status":"healthy","version":"1.1.0"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -928,7 +928,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-velesdb-core = "0.7"
+velesdb-core = "1.1"
 ```
 
 ### Example
@@ -1023,7 +1023,7 @@ Install the plugin in your Tauri project:
 ```toml
 # Cargo.toml (backend)
 [dependencies]
-tauri-plugin-velesdb = "0.1"
+tauri-plugin-velesdb = "1.1"
 ```
 
 ```bash
@@ -1076,7 +1076,7 @@ See [tauri-plugin-velesdb](./crates/tauri-plugin-velesdb) for full documentation
 
 ## 📱 Mobile SDK (iOS & Android)
 
-**NEW in v0.7.0!** Native bindings for mobile platforms via [UniFFI](https://mozilla.github.io/uniffi-rs/).
+Native bindings for mobile platforms via [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
 ### Features
 
@@ -1162,7 +1162,7 @@ velesdb-cli info ./data
 
 **REPL Session:**
 ```
-VelesQL REPL v0.8.10
+VelesQL REPL v1.1.0
 Type 'help' for commands, 'quit' to exit.
 
 velesql> SELECT * FROM documents WHERE category = 'tech' LIMIT 5;
@@ -1308,37 +1308,34 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v0.8.10 ✅ (Current)
-- [x] **⚡ SIMD 32-wide Unrolling** - 12-17% latency reduction on vector ops
-- [x] **Pre-normalized Vectors** - `cosine_similarity_normalized()` ~40% faster
-- [x] **OpenAI Embedding Support** - Benchmarks for 1536D and 3072D dimensions
+### v1.1.0 ✅ (Current - January 2026)
+- [x] **🚀 Native HNSW Implementation** - Zero external dependencies, pure Rust
+- [x] **⚡ Lock-Free Cache** - DashMap L1 + LRU L2 two-tier caching
+- [x] **🔎 Trigram Index** - 22-128x faster LIKE queries with Roaring Bitmaps
+- [x] **🗄️ Metadata-Only Collections** - Lightweight collections without vectors
+- [x] **🔍 LIKE/ILIKE Filters** - SQL pattern matching with wildcards
+- [x] **📦 Published to crates.io, PyPI, npm** - All SDKs available
 
-### v0.7.0
-- [x] **📱 Mobile SDK** - Native iOS (Swift) and Android (Kotlin) bindings via UniFFI
-- [x] **StorageMode IoT** - Memory optimization: Full, SQ8 (4x), Binary (32x)
-- [x] **GitHub Actions Mobile CI** - Automated builds for iOS/Android targets
+### v1.0.0 ✅
+- [x] Production-ready stability
+- [x] Native HNSW with AVX-512/AVX2/NEON SIMD
+- [x] VelesQL SQL-like query language
+- [x] REST API (11 endpoints) with OpenAPI/Swagger
+- [x] Python, TypeScript, WASM, Mobile SDKs
 
-### v0.5.x (Previous)
-- [x] HNSW vector index with auto-tuned parameters
-- [x] REST API (11 endpoints) with OpenAPI/Swagger docs
-- [x] VelesQL query language with complete BNF grammar
-- [x] SIMD-optimized distance calculations (AVX2/SSE/NEON/WASM)
-- [x] Python bindings (PyO3) with NumPy support
-- [x] CLI / REPL for VelesQL
-- [x] **Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
-- [x] **BM25 Full-Text Search** with hybrid search (vector + text)
-- [x] **Tauri Desktop Plugin** for AI-powered desktop apps
-- [x] **WASM Support** for browser-based vector search
-- [x] **Parallel Batch Search** for high-throughput queries
-- [x] **HNSW Prefetch Hints** for reduced memory latency
-- [x] **SQ8 Quantization** with SIMD acceleration
-- [x] **LlamaIndex Integration**
+### v0.7.x - v0.8.x
+- [x] **📱 Mobile SDK** - Native iOS (Swift) and Android (Kotlin) via UniFFI
+- [x] **StorageMode IoT** - Full, SQ8 (4x), Binary (32x) compression
+- [x] **⚡ SIMD 32-wide Unrolling** - 12-17% latency reduction
+- [x] **BM25 Full-Text Search** with hybrid search
+- [x] **Tauri Desktop Plugin** for AI-powered apps
+- [x] **LlamaIndex & LangChain Integrations**
 
-### v1.0.0 (Planned)
-- [ ] Production-ready stability
-- [ ] Publish to crates.io & PyPI
+### v1.2.0 (Planned)
+- [ ] GPU Acceleration (wgpu backend)
 - [ ] Product Quantization (PQ)
 - [ ] Sparse vector support
+- [ ] Distributed mode (Premium)
 
 ---
 
