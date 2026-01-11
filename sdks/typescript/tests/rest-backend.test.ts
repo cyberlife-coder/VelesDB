@@ -84,7 +84,8 @@ describe('RestBackend', () => {
             name: 'test',
             dimension: 128,
             metric: 'cosine',
-            description: undefined,
+            storage_mode: 'full',
+            collection_type: 'vector',
           }),
         })
       );
