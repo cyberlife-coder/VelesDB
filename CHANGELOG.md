@@ -103,13 +103,22 @@ Major feature release: Native Multi-Query Generation (MQG) support for RAG pipel
   - Lock hierarchy documentation to prevent deadlocks
   - `parking_lot::RwLock` for fair scheduling
 
-#### Performance (EPIC-CORE-003)
+#### Performance (EPIC-CORE-003) — Benchmarked January 11, 2026
 
-| Component | Metric | Value |
-|-----------|--------|-------|
-| LockFreeLruCache L1 | Read latency | ~50ns (lock-free) |
-| LruCache | Operations | O(1) with IndexMap |
-| Trigram SIMD | Extraction | 2-4x faster than scalar |
+| Component | Metric | Value | Change vs v1.0 |
+|-----------|--------|-------|----------------|
+| HNSW Fast (ef=64) | Latency P50 | **36µs** | 🆕 new |
+| HNSW Balanced (ef=128) | Latency P50 | **57µs** | 🚀 **-80%** |
+| HNSW Accurate (ef=256) | Latency P50 | **130µs** | 🚀 **-72%** |
+| HNSW Perfect (ef=2048) | Latency P50 | **200µs** | 🚀 **-92%** |
+| LockFreeLruCache L1 | Read latency | ~50ns | (lock-free) |
+| LruCache | Operations | O(1) | IndexMap |
+| Trigram SIMD | Extraction | 2-4x | vs scalar |
+| Jaccard (50% density) | Latency | 165ns | 🚀 **-10%** |
+| Hybrid Search (1K) | Latency | 64µs | stable |
+| BM25 Text Search | Latency | 33µs | stable |
+
+> **Recall@10 (10K/128D)**: Fast=92.2%, Balanced=98.8%, Accurate=100%, Perfect=100%
 
 #### Tests (EPIC-CORE-003)
 
