@@ -85,6 +85,19 @@ let query = cache.parse("SELECT * FROM docs LIMIT 10")?;
 > 
 > **v1.1.0 Performance Gains**: EPIC-CORE-003 optimizations (LRU Cache, Trigram Index, Lock-free structures) delivered **72-92% latency improvements** across all modes.
 
+### ⚠️ Benchmark Interpretation Note
+
+**Criterion benchmarks** measure **batch execution time** (100 queries total). To get **per-query latency**, divide by 100:
+
+| Mode | Criterion Output | Per-Query Latency | Calculation |
+|------|-----------------|-------------------|-------------|
+| Fast | 3.6ms | **36µs** | 3.6ms ÷ 100 |
+| Balanced | 5.7ms | **57µs** | 5.7ms ÷ 100 |
+| Accurate | 13ms | **130µs** | 13ms ÷ 100 |
+| Perfect | 20ms | **200µs** | 20ms ÷ 100 |
+
+When comparing with other vector databases or previous VelesDB versions, always use **per-query latency** for accurate comparison.
+
 ---
 
 ## 🚀 Parallel Performance
