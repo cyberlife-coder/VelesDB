@@ -55,8 +55,12 @@ class VelesDBVectorStore(VectorStore):
             embedding: Embedding model to use for vectorizing text.
             path: Path to VelesDB database directory. Defaults to "./velesdb_data".
             collection_name: Name of the collection. Defaults to "langchain".
-            metric: Distance metric ("cosine", "euclidean", "dot").
-                Defaults to "cosine".
+            metric: Distance metric. Defaults to "cosine".
+                - "cosine": Cosine similarity (default)
+                - "euclidean": Euclidean distance (L2)
+                - "dot": Dot product (inner product)
+                - "hamming": Hamming distance (for binary vectors)
+                - "jaccard": Jaccard similarity (for binary vectors)
             storage_mode: Storage mode ("full", "sq8", "binary").
                 - "full": Full f32 precision (default)
                 - "sq8": 8-bit scalar quantization (4x memory reduction)

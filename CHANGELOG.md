@@ -128,6 +128,49 @@ Major feature release: Native Multi-Query Generation (MQG) support for RAG pipel
 
 ---
 
+### 🔗 Full Coverage Parity (EPIC-CORE-005)
+
+Cross-component feature parity ensuring all VelesDB features are available everywhere.
+
+#### Added
+
+- **velesdb-mobile** (`crates/velesdb-mobile`)
+  - `FusionStrategy` enum with all fusion types
+  - `multi_query_search()` and `multi_query_search_with_filter()`
+  - `create_metadata_collection()` for metadata-only collections
+  - `get()` and `get_by_id()` for point retrieval
+  - `is_metadata_only()` collection type check
+  - **30 TDD tests passing**
+
+- **velesdb-wasm** (`crates/velesdb-wasm`)
+  - `multi_query_search()` with all fusion strategies
+  - `hybrid_search()` combining vector + BM25
+  - `batch_search()` for parallel queries
+  - **35 TDD tests passing**
+
+- **velesdb-cli** (`crates/velesdb-cli`)
+  - `multi-search` command with fusion strategies
+  - JSON and table output formats
+  - RRF k parameter configuration
+
+- **Python Integrations**
+  - Hamming/Jaccard metric documentation
+  - Full metric parity with core
+
+#### Coverage Matrix
+
+| Feature | Core | Mobile | WASM | CLI | TS SDK | LangChain | LlamaIndex |
+|---------|------|--------|------|-----|--------|-----------|------------|
+| multi_query_search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| hybrid_search | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ |
+| batch_search | ✅ | - | ✅ | - | ✅ | ✅ | ✅ |
+| text_search | ✅ | ✅ | ✅ | - | ✅ | ✅ | ✅ |
+| LIKE/ILIKE | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Hamming/Jaccard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| metadata_only | ✅ | ✅ | - | - | ✅ | ✅ | ✅ |
+
+---
+
 ### 🐛 Bug Fixes
 
 - **BUG-CORE-001: Deadlock in parallel HNSW operations**
