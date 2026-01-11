@@ -34,7 +34,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 
 # HTTP client for API-based sources
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+# Use native-tls to avoid ring 0.17.14 compilation issues on aarch64-apple-darwin
+reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
 
 # Database clients
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json"], optional = true }

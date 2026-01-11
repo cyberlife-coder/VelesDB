@@ -107,7 +107,7 @@ export class WasmBackend implements IVelesDBBackend {
 
     return {
       name,
-      dimension: collection.config.dimension,
+      dimension: collection.config.dimension ?? 0,
       metric: collection.config.metric ?? 'cosine',
       count: collection.store.len,
       createdAt: collection.createdAt,
@@ -121,7 +121,7 @@ export class WasmBackend implements IVelesDBBackend {
     for (const [name, data] of this.collections) {
       result.push({
         name,
-        dimension: data.config.dimension,
+        dimension: data.config.dimension ?? 0,
         metric: data.config.metric ?? 'cosine',
         count: data.store.len,
         createdAt: data.createdAt,
