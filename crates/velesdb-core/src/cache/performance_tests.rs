@@ -36,6 +36,7 @@ fn test_lru_cache_eviction_performance() {
 }
 
 #[test]
+#[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_lru_cache_get_performance_with_updates() {
     // Test that get() with recency updates doesn't degrade
     let cache: LruCache<u64, String> = LruCache::new(1000);
@@ -89,6 +90,7 @@ fn test_bloom_filter_scaling() {
 }
 
 #[test]
+#[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_lru_cache_concurrent_throughput() {
     // Measure throughput under concurrent access
     let cache: Arc<LruCache<u64, String>> = Arc::new(LruCache::new(1000));
