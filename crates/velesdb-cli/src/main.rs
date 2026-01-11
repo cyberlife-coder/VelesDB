@@ -719,17 +719,15 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     println!("null");
                 }
-            } else {
-                if let Some(point) = points.into_iter().flatten().next() {
-                    println!("\n{}", "Point Found".bold().underline());
-                    println!("  ID: {}", point.id.to_string().green());
-                    println!("  Vector: [{} dimensions]", point.vector.len());
-                    if let Some(payload) = &point.payload {
-                        println!("  Payload: {}", payload);
-                    }
-                } else {
-                    println!("{} Point with ID {} not found", "❌".red(), id);
+            } else if let Some(point) = points.into_iter().flatten().next() {
+                println!("\n{}", "Point Found".bold().underline());
+                println!("  ID: {}", point.id.to_string().green());
+                println!("  Vector: [{} dimensions]", point.vector.len());
+                if let Some(payload) = &point.payload {
+                    println!("  Payload: {}", payload);
                 }
+            } else {
+                println!("{} Point with ID {} not found", "❌".red(), id);
             }
         }
     }
