@@ -22,8 +22,9 @@ license-file = "LICENSE"
 repository = "https://github.com/cyberlife-coder/velesdb"
 homepage = "https://velesdb.com"
 documentation = "https://docs.velesdb.com"
-keywords = ["vector-database", "search", "embeddings", "ann", "hnsw"]
-categories = ["database", "data-structures", "algorithms"]
+keywords = ["vector-database", "embeddings", "rag", "local-first", "ai-memory", "semantic-search", "hnsw", "sqlite-alternative"]
+categories = ["database", "data-structures", "algorithms", "science"]
+description = "VelesDB: The Local Vector Database for Rust & AI. Microsecond semantic search, zero network latency, runs anywhere."
 authors = ["Julien Lange <contact@wiscale.fr>"]
 
 [workspace.dependencies]
