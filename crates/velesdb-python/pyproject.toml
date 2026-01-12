@@ -5,13 +5,13 @@ build-backend = "maturin"
 [project]
 name = "velesdb"
 version = "1.1.0"
-description = "A high-performance vector database for AI applications"
+description = "VelesDB: The Local Vector Database for Python & AI. Microsecond semantic search, zero network latency."
 readme = "README.md"
 license = { text = "Elastic License 2.0 (ELv2)" }
 authors = [
     { name = "VelesDB Team", email = "contact@wiscale.fr" }
 ]
-keywords = ["vector-database", "embeddings", "similarity-search", "ai", "machine-learning"]
+keywords = ["vector-database", "embeddings", "rag", "local-first", "ai-memory", "semantic-search", "sqlite-alternative", "llm", "langchain", "llamaindex"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

@@ -1363,6 +1363,20 @@ ELv2 is a source-available license that allows free use, modification, and distr
 
 ---
 
+## 🏷️ Show Your Support
+
+Using VelesDB? Add the badge to your project!
+
+[![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square)](https://velesdb.com)
+
+```markdown
+[![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square)](https://velesdb.com)
+```
+
+👉 [More badge options](docs/BADGE.md)
+
+---
+
 <p align="center">
   <strong>Built with ❤️ and 🦀 Rust</strong>
 </p>
