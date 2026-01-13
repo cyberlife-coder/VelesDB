@@ -175,12 +175,44 @@ jobs:
           cd crates/velesdb-python
           maturin build --release --out dist
 
-      - name: Publish to PyPI
+      - name: Publish velesdb to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: crates/velesdb-python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+
+      # LangChain Integration
+      - name: Build & Publish langchain-velesdb
+        run: |
+          cd integrations/langchain
+          pip install build
+          python -m build
+        continue-on-error: true
+
+      - name: Publish langchain-velesdb to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: integrations/langchain/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+        continue-on-error: true
+
+      # LlamaIndex Integration
+      - name: Build & Publish llama-index-vector-stores-velesdb
+        run: |
+          cd integrations/llamaindex
+          pip install build hatchling
+          python -m build
+        continue-on-error: true
+
+      - name: Publish llama-index-vector-stores-velesdb to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: integrations/llamaindex/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+        continue-on-error: true
 
   # ===========================================================================
   # 5. Publish to npm (WASM + SDK)
