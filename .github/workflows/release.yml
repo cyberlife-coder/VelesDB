@@ -227,6 +227,15 @@ jobs:
           npm install && npm run build
           npm publish --access public || echo "⏭️ SDK already published"
 
+      # Tauri Plugin
+      - name: Build & Publish Tauri Plugin
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd crates/tauri-plugin-velesdb/guest-js
+          npm install && npm run build
+          npm publish --access public || echo "⏭️ Tauri plugin already published"
+
   # ===========================================================================
   # 6. Create GitHub Release
   # ===========================================================================
