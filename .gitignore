@@ -5,8 +5,13 @@
 # IDE
 .idea/
 .vscode/
-# .windsurf/ - KEEP workflows versioned!
 *.swp
+
+# Windsurf local config (accessible by Cascade but not pushed)
+.windsurf/
+.epics/
+.research/
+AGENTS.md
 *.swo
 *~
 

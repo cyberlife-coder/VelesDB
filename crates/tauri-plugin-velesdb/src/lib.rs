@@ -299,10 +299,12 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
     Builder::new("velesdb")
         .invoke_handler(tauri::generate_handler![
             commands::create_collection,
+            commands::create_metadata_collection,
             commands::delete_collection,
             commands::list_collections,
             commands::get_collection,
             commands::upsert,
+            commands::upsert_metadata,
             commands::get_points,
             commands::delete_points,
             commands::search,
@@ -311,6 +313,8 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands::hybrid_search,
             commands::multi_query_search,
             commands::query,
+            commands::is_empty,
+            commands::flush,
         ])
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());
