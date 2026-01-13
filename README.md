@@ -18,7 +18,6 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/⚡_Search-70µs-brightgreen?style=for-the-badge" alt="Search Latency"/>
   <img src="https://img.shields.io/badge/🏎️_SIMD-66ns-blue?style=for-the-badge" alt="SIMD Distance"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
   <img src="https://img.shields.io/badge/🎯_Recall-96%25+-success?style=for-the-badge" alt="Recall ≥95%"/>

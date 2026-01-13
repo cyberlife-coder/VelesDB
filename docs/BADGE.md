@@ -22,14 +22,6 @@ Show the world your app runs on **local-first AI memory**! Add the VelesDB badge
 [![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTV2LTEweiIvPjwvc3ZnPg==)](https://velesdb.com)
 ```
 
-### Performance Badge
-
-[![VelesDB 70µs Search](https://img.shields.io/badge/VelesDB-70µs_Search-brightgreen?style=for-the-badge)](https://velesdb.com)
-
-```markdown
-[![VelesDB 70µs Search](https://img.shields.io/badge/VelesDB-70µs_Search-brightgreen?style=for-the-badge)](https://velesdb.com)
-```
-
 ### Local-First Badge
 
 [![Local Vector DB](https://img.shields.io/badge/Local_Vector_DB-VelesDB-orange?style=flat-square)](https://velesdb.com)
