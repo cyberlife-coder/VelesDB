@@ -30,6 +30,34 @@ pub struct CreateCollectionRequest {
     pub storage_mode: String,
 }
 
+/// Request to create a metadata-only collection.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMetadataCollectionRequest {
+    /// Collection name.
+    pub name: String,
+}
+
+/// A metadata-only point to insert (no vector).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataPointInput {
+    /// Point ID.
+    pub id: u64,
+    /// Payload (JSON object).
+    pub payload: serde_json::Value,
+}
+
+/// Request to upsert metadata-only points.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertMetadataRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Metadata points to upsert.
+    pub points: Vec<MetadataPointInput>,
+}
+
 fn default_metric() -> String {
     "cosine".to_string()
 }
@@ -338,6 +366,27 @@ pub async fn create_collection<R: Runtime>(
         .map_err(CommandError::from)
 }
 
+/// Creates a metadata-only collection (no vectors, just payloads).
+#[command]
+pub async fn create_metadata_collection<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: CreateMetadataCollectionRequest,
+) -> std::result::Result<CollectionInfo, CommandError> {
+    state
+        .with_db(|db| {
+            db.create_collection_typed(&request.name, &velesdb_core::CollectionType::MetadataOnly)?;
+            Ok(CollectionInfo {
+                name: request.name.clone(),
+                dimension: 0,
+                metric: "none".to_string(),
+                count: 0,
+                storage_mode: "metadata_only".to_string(),
+            })
+        })
+        .map_err(CommandError::from)
+}
+
 /// Deletes a collection.
 #[command]
 pub async fn delete_collection<R: Runtime>(
@@ -425,6 +474,32 @@ pub async fn upsert<R: Runtime>(
 
             let count = points.len();
             coll.upsert(points)?;
+            Ok(count)
+        })
+        .map_err(CommandError::from)
+}
+
+/// Upserts metadata-only points into a collection.
+#[command]
+pub async fn upsert_metadata<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: UpsertMetadataRequest,
+) -> std::result::Result<usize, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let points: Vec<velesdb_core::Point> = request
+                .points
+                .into_iter()
+                .map(|p| velesdb_core::Point::new(p.id, vec![], Some(p.payload)))
+                .collect();
+
+            let count = points.len();
+            coll.upsert_metadata(points)?;
             Ok(count)
         })
         .map_err(CommandError::from)
@@ -711,6 +786,41 @@ pub async fn query<R: Runtime>(
         results,
         timing_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+/// Checks if a collection is empty.
+#[command]
+pub async fn is_empty<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    name: String,
+) -> std::result::Result<bool, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&name)
+                .ok_or_else(|| Error::CollectionNotFound(name.clone()))?;
+            Ok(coll.is_empty())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Flushes pending changes to disk for a collection.
+#[command]
+pub async fn flush<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    name: String,
+) -> std::result::Result<(), CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&name)
+                .ok_or_else(|| Error::CollectionNotFound(name.clone()))?;
+            coll.flush()?;
+            Ok(())
+        })
+        .map_err(CommandError::from)
 }
 
 /// Multi-query fusion search combining results from multiple query vectors.
