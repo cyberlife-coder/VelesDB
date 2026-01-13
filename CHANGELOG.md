@@ -5,6 +5,39 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-01-13
+
+### 📦 NPM Package Parity Release
+
+This release ensures all VelesDB features are properly exposed in npm packages.
+
+#### Added
+
+- **@wiscale/tauri-plugin-velesdb** - Full v1.1.0 feature parity
+  - `multiQuerySearch()` - Multi-query fusion search with RRF/Average/Maximum/Weighted strategies
+  - `batchSearch()` - Parallel batch search for multiple queries
+  - `getPoints()` - Retrieve points by IDs
+  - `deletePoints()` - Delete points by IDs
+  - `isEmpty()` - Check if collection is empty
+  - `flush()` - Persist pending changes to disk
+  - `createMetadataCollection()` - Create metadata-only collections (no vectors)
+  - `upsertMetadata()` - Insert metadata-only points
+  - `FusionStrategy`, `FusionParams`, and metadata collection types
+  - Full TypeScript type definitions for all v1.1.0 features
+
+#### Fixed
+
+- **@wiscale/tauri-plugin-velesdb** was stuck at v0.6.0 on npm - now v1.1.1 with full parity
+
+#### Version Alignment
+
+All npm packages now at v1.1.1:
+- `@wiscale/velesdb-sdk` - v1.1.1
+- `@wiscale/tauri-plugin-velesdb` - v1.1.1
+- `@wiscale/velesdb-wasm` - v1.1.1
+
+---
+
 ## [1.1.0] - 2026-01-11
 
 ### 🚀 Major Feature Release: EPIC-CORE-001 + EPIC-CORE-002 + EPIC-CORE-003

@@ -41,6 +41,28 @@ export interface CreateCollectionRequest {
   metric?: DistanceMetric;
 }
 
+/** Request to create a metadata-only collection. */
+export interface CreateMetadataCollectionRequest {
+  /** Collection name (unique identifier). */
+  name: string;
+}
+
+/** A metadata-only point to insert (no vector). */
+export interface MetadataPointInput {
+  /** Unique point identifier. */
+  id: number;
+  /** Payload with metadata. */
+  payload: Record<string, unknown>;
+}
+
+/** Request to upsert metadata-only points. */
+export interface UpsertMetadataRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Metadata points to upsert. */
+  points: MetadataPointInput[];
+}
+
 /** Collection information. */
 export interface CollectionInfo {
   /** Collection name. */
@@ -113,6 +135,81 @@ export interface QueryRequest {
   params?: Record<string, unknown>;
 }
 
+/** Request to get points by IDs. */
+export interface GetPointsRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Point IDs to retrieve. */
+  ids: number[];
+}
+
+/** Request to delete points by IDs. */
+export interface DeletePointsRequest {
+  /** Target collection name. */
+  collection: string;
+  /** Point IDs to delete. */
+  ids: number[];
+}
+
+/** Individual search request within a batch. */
+export interface IndividualSearchRequest {
+  /** Query vector. */
+  vector: number[];
+  /** Number of results to return. Default: 10. */
+  topK?: number;
+  /** Optional metadata filter. */
+  filter?: Record<string, unknown>;
+}
+
+/** Request for batch search. */
+export interface BatchSearchRequest {
+  /** Target collection name. */
+  collection: string;
+  /** List of search queries. */
+  searches: IndividualSearchRequest[];
+}
+
+/** Fusion strategy for multi-query search. */
+export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted';
+
+/** Fusion parameters for multi-query search. */
+export interface FusionParams {
+  /** RRF k parameter (default: 60). */
+  k?: number;
+  /** Weighted fusion: average weight (default: 0.6). */
+  avgWeight?: number;
+  /** Weighted fusion: max weight (default: 0.3). */
+  maxWeight?: number;
+  /** Weighted fusion: hit weight (default: 0.1). */
+  hitWeight?: number;
+}
+
+/** Request for multi-query fusion search. */
+export interface MultiQuerySearchRequest {
+  /** Target collection name. */
+  collection: string;
+  /** List of query vectors. */
+  vectors: number[][];
+  /** Number of results to return. Default: 10. */
+  topK?: number;
+  /** Fusion strategy: 'rrf', 'average', 'maximum', 'weighted'. Default: 'rrf'. */
+  fusion?: FusionStrategy;
+  /** Fusion parameters. */
+  fusionParams?: FusionParams;
+  /** Optional metadata filter. */
+  filter?: Record<string, unknown>;
+}
+
+/** Point output for get operations. */
+export interface PointOutput {
+  /** Point ID. */
+  id: number;
+  /** Vector data. */
+  vector: number[];
+  /** Point payload (if any). */
+  payload?: Record<string, unknown>;
+}
+
 /** Search result item. */
 export interface SearchResult {
   /** Point ID. */
@@ -162,6 +259,25 @@ export interface CommandError {
  */
 export async function createCollection(request: CreateCollectionRequest): Promise<CollectionInfo> {
   return invoke<CollectionInfo>('plugin:velesdb|create_collection', { request });
+}
+
+/**
+ * Creates a metadata-only collection (no vectors, just payloads).
+ * 
+ * Useful for storing reference data that can be joined with vector collections.
+ * 
+ * @param request - Collection configuration
+ * @returns Collection info
+ * @throws {CommandError} If collection already exists
+ * 
+ * @example
+ * ```typescript
+ * const info = await createMetadataCollection({ name: 'products' });
+ * console.log(`Created metadata collection: ${info.name}`);
+ * ```
+ */
+export async function createMetadataCollection(request: CreateMetadataCollectionRequest): Promise<CollectionInfo> {
+  return invoke<CollectionInfo>('plugin:velesdb|create_metadata_collection', { request });
 }
 
 /**
@@ -236,6 +352,31 @@ export async function getCollection(name: string): Promise<CollectionInfo> {
  */
 export async function upsert(request: UpsertRequest): Promise<number> {
   return invoke<number>('plugin:velesdb|upsert', { request });
+}
+
+/**
+ * Inserts or updates metadata-only points in a collection.
+ * 
+ * Use this for collections created with createMetadataCollection().
+ * 
+ * @param request - Upsert request with collection name and metadata points
+ * @returns Number of points upserted
+ * @throws {CommandError} If collection doesn't exist or is not metadata-only
+ * 
+ * @example
+ * ```typescript
+ * const count = await upsertMetadata({
+ *   collection: 'products',
+ *   points: [
+ *     { id: 1, payload: { name: 'Widget', price: 99 } },
+ *     { id: 2, payload: { name: 'Gadget', price: 149 } }
+ *   ]
+ * });
+ * console.log(`Upserted ${count} metadata points`);
+ * ```
+ */
+export async function upsertMetadata(request: UpsertMetadataRequest): Promise<number> {
+  return invoke<number>('plugin:velesdb|upsert_metadata', { request });
 }
 
 // ============================================================================
@@ -325,4 +466,137 @@ export async function hybridSearch(request: HybridSearchRequest): Promise<Search
  */
 export async function query(request: QueryRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>('plugin:velesdb|query', { request });
+}
+
+/**
+ * Retrieves points by their IDs.
+ * 
+ * @param request - Get points request with collection name and IDs
+ * @returns Array of points (null for IDs not found)
+ * @throws {CommandError} If collection doesn't exist
+ * 
+ * @example
+ * ```typescript
+ * const points = await getPoints({
+ *   collection: 'documents',
+ *   ids: [1, 2, 3]
+ * });
+ * points.forEach((p, i) => {
+ *   if (p) console.log(`Point ${p.id}: ${p.payload?.title}`);
+ *   else console.log(`Point at index ${i} not found`);
+ * });
+ * ```
+ */
+export async function getPoints(request: GetPointsRequest): Promise<Array<PointOutput | null>> {
+  return invoke<Array<PointOutput | null>>('plugin:velesdb|get_points', { request });
+}
+
+/**
+ * Deletes points by their IDs.
+ * 
+ * @param request - Delete points request with collection name and IDs
+ * @throws {CommandError} If collection doesn't exist
+ * 
+ * @example
+ * ```typescript
+ * await deletePoints({
+ *   collection: 'documents',
+ *   ids: [1, 2, 3]
+ * });
+ * ```
+ */
+export async function deletePoints(request: DeletePointsRequest): Promise<void> {
+  return invoke<void>('plugin:velesdb|delete_points', { request });
+}
+
+/**
+ * Performs batch vector similarity search.
+ * 
+ * @param request - Batch search request with multiple queries
+ * @returns Array of search responses, one per query
+ * @throws {CommandError} If collection doesn't exist
+ * 
+ * @example
+ * ```typescript
+ * const responses = await batchSearch({
+ *   collection: 'documents',
+ *   searches: [
+ *     { vector: embedding1, topK: 5 },
+ *     { vector: embedding2, topK: 10, filter: { category: 'tech' } }
+ *   ]
+ * });
+ * responses.forEach((resp, i) => {
+ *   console.log(`Query ${i}: ${resp.results.length} results in ${resp.timingMs}ms`);
+ * });
+ * ```
+ */
+export async function batchSearch(request: BatchSearchRequest): Promise<SearchResponse[]> {
+  return invoke<SearchResponse[]>('plugin:velesdb|batch_search', { request });
+}
+
+/**
+ * Performs multi-query fusion search combining results from multiple query vectors.
+ * 
+ * Ideal for RAG pipelines using Multiple Query Generation (MQG).
+ * 
+ * @param request - Multi-query search request
+ * @returns Fused search response
+ * @throws {CommandError} If collection doesn't exist or parameters are invalid
+ * 
+ * @example
+ * ```typescript
+ * // RRF fusion (default)
+ * const response = await multiQuerySearch({
+ *   collection: 'documents',
+ *   vectors: [embedding1, embedding2, embedding3],
+ *   topK: 10,
+ *   fusion: 'rrf',
+ *   fusionParams: { k: 60 }
+ * });
+ * 
+ * // Weighted fusion
+ * const response = await multiQuerySearch({
+ *   collection: 'documents',
+ *   vectors: [embedding1, embedding2],
+ *   topK: 10,
+ *   fusion: 'weighted',
+ *   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
+ * });
+ * ```
+ */
+export async function multiQuerySearch(request: MultiQuerySearchRequest): Promise<SearchResponse> {
+  return invoke<SearchResponse>('plugin:velesdb|multi_query_search', { request });
+}
+
+/**
+ * Checks if a collection is empty.
+ * 
+ * @param name - Collection name
+ * @returns true if collection has no points, false otherwise
+ * @throws {CommandError} If collection doesn't exist
+ * 
+ * @example
+ * ```typescript
+ * const empty = await isEmpty('documents');
+ * if (empty) console.log('Collection is empty');
+ * ```
+ */
+export async function isEmpty(name: string): Promise<boolean> {
+  return invoke<boolean>('plugin:velesdb|is_empty', { name });
+}
+
+/**
+ * Flushes pending changes to disk.
+ * 
+ * @param name - Collection name
+ * @throws {CommandError} If collection doesn't exist
+ * 
+ * @example
+ * ```typescript
+ * await flush('documents');
+ * console.log('Changes persisted to disk');
+ * ```
+ */
+export async function flush(name: string): Promise<void> {
+  return invoke<void>('plugin:velesdb|flush', { name });
 }
