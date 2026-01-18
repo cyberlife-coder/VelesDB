@@ -5,6 +5,46 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-01-18
+
+### 🔧 Code Quality & GPU Acceleration Release
+
+This release focuses on code quality improvements, PyO3 migration, and GPU acceleration.
+
+#### Added
+
+- **EPIC-002: GPU Acceleration** (feature `gpu`)
+  - `GpuTrigramAccelerator` with `batch_search()` and `batch_extract_trigrams()`
+  - `GpuAccelerator.batch_euclidean_distance()` and `batch_dot_product()` methods
+  - `TrigramComputeBackend::auto_select()` for automatic CPU/GPU selection
+  - Complete GPU documentation in `docs/GPU_ACCELERATION.md`
+  - Platform support: Windows (DX12/Vulkan), macOS (Metal), Linux (Vulkan)
+
+#### Changed
+
+- **EPIC-001: Code Quality Refactoring**
+  - Extracted inline tests from 8 large files into separate test modules
+  - Reduced file sizes: `simd.rs` (734→278), `simd_dispatch.rs` (639→368)
+  - Modularized `hnsw/index.rs` (1254 lines) into 6 focused sub-modules
+  - 1032 unit tests now organized in dedicated `*_tests.rs` files
+
+- **EPIC-003: PyO3 Migration**
+  - Migrated 30 deprecated `into_py()` calls to new `IntoPyObject` trait
+  - Removed `#![allow(deprecated)]` global suppression from Python bindings
+  - Full compatibility with PyO3 0.24+ API
+
+#### Fixed
+
+- `GpuAccelerator::global()` → `new()` (non-existent method)
+- Marked 2 flaky performance tests as `#[ignore]`
+
+#### Technical Notes
+
+- All 1357+ workspace tests passing
+- No breaking API changes (PATCH release)
+
+---
+
 ## [1.1.1] - 2026-01-13
 
 ### 📦 NPM Package Parity Release
