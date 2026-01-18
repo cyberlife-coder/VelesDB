@@ -1,0 +1,64 @@
+#!/bin/bash
+# =============================================================================
+# VelesDB-Core Pre-push Hook
+# =============================================================================
+# Validation COMPLÈTE avant push vers origin pour économiser les GitHub Actions.
+# Ce hook s'exécute AVANT chaque git push.
+#
+# Pour activer: git config core.hooksPath .githooks
+# =============================================================================
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}"
+echo "═══════════════════════════════════════════════════════════════════"
+echo "  VelesDB-Core Pre-push Validation"
+echo "═══════════════════════════════════════════════════════════════════"
+echo -e "${NC}"
+
+# Détection de la branche cible
+while read local_ref local_sha remote_ref remote_sha; do
+    if [[ "$remote_ref" == *"main"* ]] || [[ "$remote_ref" == *"develop"* ]]; then
+        echo -e "${YELLOW}⚠️  Pushing to protected branch: ${remote_ref}${NC}"
+        echo -e "${YELLOW}   Running full CI validation...${NC}"
+        
+        # 1. Formatting
+        echo -e "\n${YELLOW}📐 Check 1/4: Formatting...${NC}"
+        if ! cargo fmt --all -- --check; then
+            echo -e "${RED}❌ Formatting failed. Run 'cargo fmt --all'${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ Formatting OK${NC}"
+        
+        # 2. Clippy
+        echo -e "\n${YELLOW}📎 Check 2/4: Clippy...${NC}"
+        if ! cargo clippy --all-targets --all-features -- -D warnings; then
+            echo -e "${RED}❌ Clippy found issues${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ Clippy OK${NC}"
+        
+        # 3. Tests
+        echo -e "\n${YELLOW}🧪 Check 3/4: Tests...${NC}"
+        if ! cargo test --all-features --workspace; then
+            echo -e "${RED}❌ Tests failed${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ Tests OK${NC}"
+        
+        # 4. Security (non-blocking)
+        echo -e "\n${YELLOW}🛡️ Check 4/4: Security audit...${NC}"
+        cargo deny check 2>/dev/null || echo -e "${YELLOW}⚠️  Security audit warnings (non-blocking)${NC}"
+        
+        echo -e "\n${GREEN}🎉 Pre-push validation PASSED!${NC}\n"
+    fi
+done
+
+exit 0
