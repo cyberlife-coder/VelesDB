@@ -88,6 +88,14 @@ pub enum Error {
     /// Vector required for vector collection (VELES-016).
     #[error("[VELES-016] Vector required for collection '{0}' (not metadata-only)")]
     VectorRequired(String),
+
+    /// Schema validation error (VELES-017).
+    #[error("[VELES-017] Schema validation error: {0}")]
+    SchemaValidation(String),
+
+    /// Graph operation not supported (VELES-018).
+    #[error("[VELES-018] Graph operation not supported: {0}")]
+    GraphNotSupported(String),
 }
 
 impl Error {
@@ -111,6 +119,8 @@ impl Error {
             Self::VectorNotAllowed(_) => "VELES-014",
             Self::SearchNotSupported(_) => "VELES-015",
             Self::VectorRequired(_) => "VELES-016",
+            Self::SchemaValidation(_) => "VELES-017",
+            Self::GraphNotSupported(_) => "VELES-018",
         }
     }
 

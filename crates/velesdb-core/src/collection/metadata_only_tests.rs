@@ -43,7 +43,9 @@ fn test_collection_type_vector_exists() {
             assert_eq!(metric, DistanceMetric::Cosine);
             assert_eq!(storage_mode, StorageMode::Full);
         }
-        CollectionType::MetadataOnly => panic!("Expected Vector variant"),
+        CollectionType::MetadataOnly | CollectionType::Graph { .. } => {
+            panic!("Expected Vector variant")
+        }
     }
 }
 
