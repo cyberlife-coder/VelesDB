@@ -10,11 +10,12 @@
 //! - **Typed edges**: Relationships with direction and properties
 //! - **Schema support**: Both strict schemas and schemaless mode
 //! - **Vector integration**: Nodes can have associated embeddings
+//! - **Unified storage**: Points and Nodes in the same ID space
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType};
+//! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType, GraphNode, Element};
 //! use std::collections::HashMap;
 //!
 //! // Define a schema with Person and Company nodes
@@ -26,13 +27,21 @@
 //!     .with_node_type(NodeType::new("Company"))
 //!     .with_edge_type(EdgeType::new("WORKS_AT", "Person", "Company"));
 //!
+//! // Create a graph node
+//! let node = GraphNode::new(1, "Person")
+//!     .with_vector(vec![0.1, 0.2, 0.3]);
+//!
 //! // Or use schemaless mode for flexibility
 //! let flexible_schema = GraphSchema::schemaless();
 //! ```
 
+mod node;
 mod schema;
 
 #[cfg(test)]
+mod node_tests;
+#[cfg(test)]
 mod schema_tests;
 
+pub use node::{Element, GraphNode};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
