@@ -36,9 +36,12 @@
 //! ```
 
 mod edge;
+mod edge_concurrent;
 mod node;
 mod schema;
 
+#[cfg(test)]
+mod edge_concurrent_tests;
 #[cfg(test)]
 mod edge_tests;
 #[cfg(test)]
@@ -47,5 +50,6 @@ mod node_tests;
 mod schema_tests;
 
 pub use edge::{EdgeStore, GraphEdge};
+pub use edge_concurrent::ConcurrentEdgeStore;
 pub use node::{Element, GraphNode};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};

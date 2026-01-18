@@ -25,6 +25,7 @@ mod tests;
 mod metadata_only_tests;
 
 pub use graph::{
-    EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType, ValueType,
+    ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
+    ValueType,
 };
 pub use types::{Collection, CollectionConfig, CollectionType};

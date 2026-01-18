@@ -133,8 +133,8 @@ pub mod velesql;
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 pub use collection::{
-    Collection, CollectionType, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema,
-    NodeType, ValueType,
+    Collection, CollectionType, ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge,
+    GraphNode, GraphSchema, NodeType, ValueType,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
