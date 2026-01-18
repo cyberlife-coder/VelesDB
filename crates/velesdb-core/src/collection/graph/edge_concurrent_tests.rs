@@ -1,4 +1,4 @@
-//! Tests for ConcurrentEdgeStore - thread-safety and performance.
+//! Tests for `ConcurrentEdgeStore` - thread-safety and performance.
 
 use super::edge::GraphEdge;
 use super::edge_concurrent::ConcurrentEdgeStore;

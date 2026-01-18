@@ -1,4 +1,4 @@
-//! Benchmarks for EdgeStore and ConcurrentEdgeStore performance.
+//! Benchmarks for `EdgeStore` and `ConcurrentEdgeStore` performance.
 //!
 //! Run with: `cargo bench --package velesdb-core edge_store`
 

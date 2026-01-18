@@ -36,10 +36,12 @@ mod parser;
 mod parser_tests;
 
 pub use ast::*;
+// Re-export match_clause parser functions for benchmarks
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
 pub use explain::{
     FilterPlan, FilterStrategy, IndexType, LimitPlan, OffsetPlan, PlanNode, QueryPlan,
     TableScanPlan, VectorSearchPlan,
 };
+pub use parser::match_clause;
 pub use parser::Parser;

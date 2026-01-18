@@ -49,36 +49,12 @@ impl ConcurrentEdgeStore {
 
     /// Adds an edge to the store (thread-safe).
     ///
-    /// Acquires locks in ascending shard order to prevent deadlocks.
+    /// Edges are stored in the source shard only (for outgoing index).
+    /// No cross-shard locking needed since EdgeStore handles both directions internally.
     pub fn add_edge(&self, edge: GraphEdge) {
-        let source = edge.source();
-        let target = edge.target();
-        let shard_src = self.shard_index(source);
-        let shard_tgt = self.shard_index(target);
-
-        if shard_src == shard_tgt {
-            let mut guard = self.shards[shard_src].write();
-            guard.add_edge(edge);
-        } else {
-            // Acquire locks in ascending order to prevent deadlock
-            let (first, second) = if shard_src < shard_tgt {
-                (shard_src, shard_tgt)
-            } else {
-                (shard_tgt, shard_src)
-            };
-
-            let mut _guard1 = self.shards[first].write();
-            let mut guard2 = self.shards[second].write();
-
-            // Add to the source shard (where outgoing index is maintained)
-            if first == shard_src {
-                drop(_guard1);
-                let mut src_guard = self.shards[shard_src].write();
-                src_guard.add_edge(edge);
-            } else {
-                guard2.add_edge(edge);
-            }
-        }
+        let shard_idx = self.shard_index(edge.source());
+        let mut guard = self.shards[shard_idx].write();
+        guard.add_edge(edge);
     }
 
     /// Gets all outgoing edges from a node (thread-safe).
