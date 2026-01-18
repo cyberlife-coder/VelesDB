@@ -1,6 +1,6 @@
 //! Benchmarks for EdgeStore and ConcurrentEdgeStore performance.
 //!
-//! Run with: cargo bench --package velesdb-core edge_store
+//! Run with: `cargo bench --package velesdb-core edge_store`
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::sync::Arc;
@@ -38,11 +38,13 @@ fn create_concurrent_store_with_edges(num_nodes: u64, avg_degree: u64) -> Concur
 fn bench_get_neighbors(c: &mut Criterion) {
     let mut group = c.benchmark_group("EdgeStore::get_neighbors");
 
-    for degree in [5, 10, 50].iter() {
+    for degree in &[5, 10, 50] {
         let store = create_edge_store_with_edges(1000, *degree);
 
         group.bench_with_input(BenchmarkId::new("degree", degree), degree, |b, _| {
-            b.iter(|| black_box(store.get_outgoing(42)))
+            b.iter(|| {
+                black_box(store.get_outgoing(42));
+            });
         });
     }
     group.finish();
@@ -56,14 +58,14 @@ fn bench_add_edge(c: &mut Criterion) {
         b.iter(|| {
             store.add_edge(GraphEdge::new(id, id % 1000, (id + 1) % 1000, "LINK"));
             id += 1;
-        })
+        });
     });
 }
 
 fn bench_cascade_delete(c: &mut Criterion) {
     let mut group = c.benchmark_group("EdgeStore::cascade_delete");
 
-    for degree in [10, 50, 100].iter() {
+    for degree in &[10, 50, 100] {
         group.bench_with_input(BenchmarkId::new("degree", degree), degree, |b, &degree| {
             b.iter_batched(
                 || {
@@ -79,7 +81,7 @@ fn bench_cascade_delete(c: &mut Criterion) {
                     store.remove_node_edges(0);
                 },
                 criterion::BatchSize::SmallInput,
-            )
+            );
         });
     }
     group.finish();
@@ -89,7 +91,9 @@ fn bench_concurrent_get_neighbors(c: &mut Criterion) {
     let store = Arc::new(create_concurrent_store_with_edges(1000, 10));
 
     c.bench_function("ConcurrentEdgeStore::get_neighbors", |b| {
-        b.iter(|| black_box(store.get_neighbors(42)))
+        b.iter(|| {
+            black_box(store.get_neighbors(42));
+        });
     });
 }
 
@@ -101,18 +105,20 @@ fn bench_concurrent_add_edge(c: &mut Criterion) {
         b.iter(|| {
             store.add_edge(GraphEdge::new(id, id % 1000, (id + 1) % 1000, "LINK"));
             id += 1;
-        })
+        });
     });
 }
 
 fn bench_traverse_bfs(c: &mut Criterion) {
     let mut group = c.benchmark_group("ConcurrentEdgeStore::traverse_bfs");
 
-    for depth in [1, 2, 3].iter() {
+    for depth in &[1, 2, 3] {
         let store = Arc::new(create_concurrent_store_with_edges(1000, 5));
 
         group.bench_with_input(BenchmarkId::new("depth", depth), depth, |b, &depth| {
-            b.iter(|| black_box(store.traverse_bfs(0, depth)))
+            b.iter(|| {
+                black_box(store.traverse_bfs(0, depth));
+            });
         });
     }
     group.finish();
@@ -137,7 +143,7 @@ fn bench_concurrent_parallel_reads(c: &mut Criterion) {
             for h in handles {
                 h.join().unwrap();
             }
-        })
+        });
     });
 }
 
