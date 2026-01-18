@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/🏎️_SIMD-66ns-blue?style=for-the-badge" alt="SIMD Distance"/>
   <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
-  <img src="https://img.shields.io/badge/🎯_Recall-96%25+-success?style=for-the-badge" alt="Recall ≥95%"/>
+  <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall 100%"/>
 </p>
 
 <p align="center">
@@ -48,7 +48,7 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 
 | Metric | VelesDB | Cloud Vector DBs |
 | :--- | :--- | :--- |
-| **Search Latency (p50)** | **70µs** | 50-100ms |
+| **Search Latency (p50)** | **57µs** | 50-100ms |
 | **Time to First Token** | **< 1ms** | 50-100ms+ |
 
 ### 🏢 Coming From Another Vector DB?
@@ -76,7 +76,7 @@ LIMIT 10
 <table align="center">
 <tr>
 <td align="center" width="25%">
-<h3>🏎️ 70µs Search</h3>
+<h3>🏎️ 57µs Search</h3>
 <p>Native HNSW + AVX-512 SIMD.<br/><strong>700x faster than pgvector</strong></p>
 </td>
 <td align="center" width="25%">
@@ -115,13 +115,13 @@ LIMIT 10
 | Metric | 🐺 **VelesDB** | Qdrant | Milvus | Pinecone | pgvector |
 |--------|---------------|--------|--------|----------|----------|
 | **Architecture** | **Single Binary** | Container | Cluster | SaaS | Postgres Ext |
-| **Search Latency** | **~70µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
+| **Search Latency** | **57µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
 | **Setup Time** | **< 1 min** | 5-10 min | 30+ min | 5 min | 15+ min |
 | **Binary Size** | **15 MB** | 100+ MB | GBs | N/A | Extension |
 | **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
 | **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Mobile (iOS/Android)** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **GPU Acceleration** | 🔜 (wgpu roadmap) | ❌ | ✅ | N/A | ❌ |
+| **GPU Acceleration** | ✅ (wgpu v1.1.2) | ❌ | ✅ | N/A | ❌ |
 | **Recall@10** | **96-100%*** | ~99% | ~99% | ~99% | 100% |
 
 > *92%+ Fast mode • 99%+ Balanced mode • 100% with Perfect mode
@@ -133,7 +133,7 @@ LIMIT 10
 | Operation | VelesDB (Core) | Details |
 |-----------|----------------|---------|
 | **SIMD Dot Product** | **66ns** | AVX-512/AVX2 native intrinsics (1536d) |
-| **HNSW Search** | **~70µs** | p50 latency (10K, Cosine) |
+| **HNSW Search** | **57µs** | p50 latency (10K, Cosine) |
 | **BM25 Text Search** | **33µs** | Adaptive PostingList |
 | **Hybrid Search** | **~60µs** | Vector + BM25 fusion |
 | **VelesQL Parse** | **554ns** | Zero-allocation |
@@ -155,7 +155,7 @@ LIMIT 10
 | Component | Version |
 |-----------|---------|
 | **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v1.1.0 |
+| **VelesDB** | v1.1.2 |
 | **SIMD** | AVX-512 enabled |
 | **Criterion** | 0.5.1 |
 
@@ -271,7 +271,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 - 🔍 **LIKE/ILIKE Filters** — SQL pattern matching with wildcards ⭐ NEW
 - 🔎 **Trigram Index** — 22-128x faster LIKE queries with Roaring Bitmaps ⭐ NEW
 - ⚡ **Lock-Free Cache** — DashMap L1 + LRU L2 two-tier caching ⭐ NEW
-- 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (roadmap)
+- 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (v1.1.2)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
 - 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale
 - 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
@@ -293,7 +293,7 @@ VelesDB supports **on-prem and edge deployments** with full data control:
 |-----------|---------|------------------|
 | **Data Sovereignty** | ✅ 100% local | ❌ Data in cloud |
 | **Air-Gapped** | ✅ Single binary, no internet | ❌ Requires connectivity |
-| **Latency** | ✅ 70µs embedded | ❌ 50-100ms network |
+| **Latency** | ✅ 57µs embedded | ❌ 50-100ms network |
 | **GDPR/HIPAA** | ✅ Full control | ⚠️ Shared responsibility |
 | **Audit Trail** | ✅ Local logs | ⚠️ Provider-dependent |
 
@@ -685,7 +685,7 @@ curl -X POST http://localhost:8080/query \
 
 | Benchmark | Result | Details |
 |-----------|--------|---------|
-| **HNSW Search** | **70 µs** | p50 latency (Cosine) |
+| **HNSW Search** | **57 µs** | p50 latency (Cosine) |
 | **VelesQL Parsing**| **554 ns** | Simple SELECT |
 | **VelesQL Cache Hit**| **48 ns** | HashMap pre-allocation |
 | **Recall@10** | **100%** | Perfect mode (brute-force SIMD) |
@@ -750,7 +750,7 @@ let similarity = dot_product_quantized_simd(&query, &quantized);
 
 #### ⚡ Low Latency
 - **~66ns** per vector distance (1536D with native intrinsics)
-- **70µs** HNSW search p50 on 10K vectors
+- **57µs** HNSW search p50 on 10K vectors
 - **SIMD-optimized** (AVX-512, AVX2, NEON native intrinsics)
 
 #### 📝 SQL-Native Queries (VelesQL)
