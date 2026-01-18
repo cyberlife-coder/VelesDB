@@ -1,5 +1,6 @@
 //! Collection types and configuration.
 
+use crate::collection::graph::GraphSchema;
 use crate::distance::DistanceMetric;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
@@ -44,6 +45,19 @@ pub enum CollectionType {
     /// Supports CRUD operations and `VelesQL` queries on payload.
     /// Does NOT support vector search operations.
     MetadataOnly,
+
+    /// Graph collection for knowledge graph storage.
+    ///
+    /// Supports heterogeneous nodes (with optional embeddings) and typed edges.
+    /// Ideal for agentic memory, knowledge graphs, and entity-relationship storage.
+    Graph {
+        /// Optional vector dimension for node embeddings.
+        dimension: Option<usize>,
+        /// Distance metric for similarity (if embeddings are used).
+        metric: DistanceMetric,
+        /// Graph schema (strict or schemaless).
+        schema: GraphSchema,
+    },
 }
 
 impl Default for CollectionType {
@@ -65,10 +79,26 @@ impl CollectionType {
 
     /// Returns the dimension if this is a vector collection.
     #[must_use]
-    pub const fn dimension(&self) -> Option<usize> {
+    pub fn dimension(&self) -> Option<usize> {
         match self {
             Self::Vector { dimension, .. } => Some(*dimension),
+            Self::Graph { dimension, .. } => *dimension,
             Self::MetadataOnly => None,
+        }
+    }
+
+    /// Returns true if this is a graph collection.
+    #[must_use]
+    pub const fn is_graph(&self) -> bool {
+        matches!(self, Self::Graph { .. })
+    }
+
+    /// Returns the graph schema if this is a graph collection.
+    #[must_use]
+    pub fn graph_schema(&self) -> Option<&GraphSchema> {
+        match self {
+            Self::Graph { schema, .. } => Some(schema),
+            _ => None,
         }
     }
 }
