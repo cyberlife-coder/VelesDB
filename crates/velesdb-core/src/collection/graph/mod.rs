@@ -35,13 +35,17 @@
 //! let flexible_schema = GraphSchema::schemaless();
 //! ```
 
+mod edge;
 mod node;
 mod schema;
 
+#[cfg(test)]
+mod edge_tests;
 #[cfg(test)]
 mod node_tests;
 #[cfg(test)]
 mod schema_tests;
 
+pub use edge::{EdgeStore, GraphEdge};
 pub use node::{Element, GraphNode};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};

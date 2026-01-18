@@ -24,5 +24,7 @@ mod tests;
 #[cfg(test)]
 mod metadata_only_tests;
 
-pub use graph::{EdgeType, Element, GraphNode, GraphSchema, NodeType, ValueType};
+pub use graph::{
+    EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType, ValueType,
+};
 pub use types::{Collection, CollectionConfig, CollectionType};
