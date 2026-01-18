@@ -77,3 +77,87 @@ fn test_batch_cosine_multiple_vectors() {
         assert!((results[2] + 1.0).abs() < 0.01, "Expected ~-1.0");
     }
 }
+
+// =========================================================================
+// Euclidean Distance Tests
+// =========================================================================
+
+#[test]
+fn test_batch_euclidean_empty_input() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let results = gpu.batch_euclidean_distance(&[], &[1.0, 0.0, 0.0], 3);
+        assert!(results.is_empty());
+    }
+}
+
+#[test]
+fn test_batch_euclidean_identical_vectors() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let query = vec![1.0, 2.0, 3.0];
+        let vectors = vec![1.0, 2.0, 3.0];
+
+        let results = gpu.batch_euclidean_distance(&vectors, &query, 3);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].abs() < 0.01, "Expected ~0.0, got {}", results[0]);
+    }
+}
+
+#[test]
+fn test_batch_euclidean_known_distance() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let query = vec![0.0, 0.0, 0.0];
+        let vectors = vec![3.0, 4.0, 0.0]; // Distance should be 5.0
+
+        let results = gpu.batch_euclidean_distance(&vectors, &query, 3);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            (results[0] - 5.0).abs() < 0.01,
+            "Expected ~5.0, got {}",
+            results[0]
+        );
+    }
+}
+
+// =========================================================================
+// Dot Product Tests
+// =========================================================================
+
+#[test]
+fn test_batch_dot_product_empty_input() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let results = gpu.batch_dot_product(&[], &[1.0, 0.0, 0.0], 3);
+        assert!(results.is_empty());
+    }
+}
+
+#[test]
+fn test_batch_dot_product_orthogonal() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors = vec![0.0, 1.0, 0.0];
+
+        let results = gpu.batch_dot_product(&vectors, &query, 3);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].abs() < 0.01, "Expected ~0.0, got {}", results[0]);
+    }
+}
+
+#[test]
+fn test_batch_dot_product_parallel() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let query = vec![2.0, 3.0, 4.0];
+        let vectors = vec![2.0, 3.0, 4.0]; // Dot = 4+9+16 = 29
+
+        let results = gpu.batch_dot_product(&vectors, &query, 3);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            (results[0] - 29.0).abs() < 0.01,
+            "Expected ~29.0, got {}",
+            results[0]
+        );
+    }
+}

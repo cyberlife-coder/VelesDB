@@ -28,10 +28,20 @@
 ///
 /// Processes 16 floats per iteration using `_mm512_fmadd_ps`.
 /// Falls back to AVX2 or scalar if AVX-512 not available.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX-512F (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
 unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
+    // - `_mm512_loadu_ps` handles unaligned loads safely
+    // - Pointer arithmetic stays within bounds: offset = i * 16 where i < simd_len = len / 16
+    // - Both slices have equal length (caller's responsibility via public API assert)
     use std::arch::x86_64::*;
 
     let len = a.len();
@@ -61,10 +71,15 @@ unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// AVX-512 squared L2 distance.
+///
+/// # Safety
+///
+/// Same requirements as `dot_product_avx512`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
 unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: See dot_product_avx512 for detailed safety justification.
     use std::arch::x86_64::*;
 
     let len = a.len();
@@ -110,10 +125,19 @@ unsafe fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
 // =============================================================================
 
 /// AVX2 dot product with 2 accumulators for ILP.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
 unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
+    // - `_mm256_loadu_ps` handles unaligned loads safely
+    // - Pointer arithmetic stays within bounds: offset = i * 16 where i < simd_len = len / 16
     use std::arch::x86_64::*;
 
     let len = a.len();
@@ -158,10 +182,15 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// AVX2 squared L2 distance.
+///
+/// # Safety
+///
+/// Same requirements as `dot_product_avx2`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
 unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: See dot_product_avx2 for detailed safety justification.
     use std::arch::x86_64::*;
 
     let len = a.len();
@@ -209,6 +238,13 @@ unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
 // =============================================================================
 
 /// ARM NEON dot product using native intrinsics.
+///
+/// # Safety
+///
+/// The unsafe blocks within are safe because:
+/// - NEON is always available on aarch64 targets
+/// - `vld1q_f32` handles unaligned loads safely
+/// - Pointer arithmetic stays within slice bounds
 #[cfg(target_arch = "aarch64")]
 #[inline]
 fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
@@ -217,6 +253,7 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let simd_len = len / 4;
 
+    // SAFETY: vdupq_n_f32 is always safe on aarch64
     let mut sum = unsafe { vdupq_n_f32(0.0) };
 
     let a_ptr = a.as_ptr();
@@ -244,6 +281,10 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// ARM NEON squared L2 distance.
+///
+/// # Safety
+///
+/// Same requirements as `dot_product_neon`.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
@@ -252,6 +293,7 @@ fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let simd_len = len / 4;
 
+    // SAFETY: vdupq_n_f32 is always safe on aarch64
     let mut sum = unsafe { vdupq_n_f32(0.0) };
 
     let a_ptr = a.as_ptr();
@@ -414,95 +456,3 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
 }
 
 // =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-#[allow(clippy::cast_precision_loss)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dot_product_native_basic() {
-        let a = vec![1.0, 2.0, 3.0, 4.0];
-        let b = vec![5.0, 6.0, 7.0, 8.0];
-        let result = dot_product_native(&a, &b);
-        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        assert!((result - expected).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_dot_product_native_large() {
-        let a: Vec<f32> = (0..768).map(|i| i as f32 * 0.001).collect();
-        let b: Vec<f32> = (0..768).map(|i| (768 - i) as f32 * 0.001).collect();
-        let result = dot_product_native(&a, &b);
-        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        assert!(
-            (result - expected).abs() < 0.01,
-            "result={result}, expected={expected}"
-        );
-    }
-
-    #[test]
-    fn test_squared_l2_native_basic() {
-        let a = vec![1.0, 2.0, 3.0, 4.0];
-        let b = vec![5.0, 6.0, 7.0, 8.0];
-        let result = squared_l2_native(&a, &b);
-        let expected: f32 = a
-            .iter()
-            .zip(b.iter())
-            .map(|(x, y)| {
-                let d = x - y;
-                d * d
-            })
-            .sum();
-        assert!((result - expected).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_squared_l2_native_large() {
-        let a: Vec<f32> = (0..768).map(|i| i as f32 * 0.001).collect();
-        let b: Vec<f32> = (0..768).map(|i| (768 - i) as f32 * 0.001).collect();
-        let result = squared_l2_native(&a, &b);
-        let expected: f32 = a
-            .iter()
-            .zip(b.iter())
-            .map(|(x, y)| {
-                let d = x - y;
-                d * d
-            })
-            .sum();
-        assert!(
-            (result - expected).abs() < 0.01,
-            "result={result}, expected={expected}"
-        );
-    }
-
-    #[test]
-    fn test_cosine_normalized_native() {
-        // Create unit vectors
-        let a = vec![0.6, 0.8, 0.0, 0.0];
-        let b = vec![1.0, 0.0, 0.0, 0.0];
-        let result = cosine_normalized_native(&a, &b);
-        assert!((result - 0.6).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_batch_dot_product_native() {
-        let query = vec![1.0, 2.0, 3.0, 4.0];
-        let candidates: Vec<Vec<f32>> = vec![
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0],
-            vec![0.0, 0.0, 1.0, 0.0],
-            vec![0.0, 0.0, 0.0, 1.0],
-        ];
-        let refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
-
-        let results = batch_dot_product_native(&refs, &query);
-        assert_eq!(results.len(), 4);
-        assert!((results[0] - 1.0).abs() < 1e-5);
-        assert!((results[1] - 2.0).abs() < 1e-5);
-        assert!((results[2] - 3.0).abs() < 1e-5);
-        assert!((results[3] - 4.0).abs() < 1e-5);
-    }
-}

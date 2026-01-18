@@ -55,4 +55,8 @@ mod backend_adapter_tests;
 #[cfg(test)]
 mod dual_precision_tests;
 #[cfg(test)]
+mod graph_tests;
+#[cfg(test)]
+mod quantization_tests;
+#[cfg(test)]
 mod tests;
