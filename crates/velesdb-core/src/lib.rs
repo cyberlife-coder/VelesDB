@@ -103,6 +103,8 @@ pub mod metrics;
 #[cfg(test)]
 mod metrics_tests;
 pub mod perf_optimizations;
+#[cfg(test)]
+mod perf_optimizations_tests;
 pub mod point;
 #[cfg(test)]
 mod point_tests;
@@ -114,10 +116,16 @@ pub mod simd_avx512;
 #[cfg(test)]
 mod simd_avx512_tests;
 pub mod simd_dispatch;
+#[cfg(test)]
+mod simd_dispatch_tests;
 pub mod simd_explicit;
 #[cfg(test)]
 mod simd_explicit_tests;
 pub mod simd_native;
+#[cfg(test)]
+mod simd_native_tests;
+#[cfg(test)]
+mod simd_tests;
 pub mod storage;
 pub mod vector_ref;
 pub mod velesql;

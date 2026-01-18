@@ -15,13 +15,13 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 rust-version = "1.83"
 license-file = "LICENSE"
 repository = "https://github.com/cyberlife-coder/velesdb"
 homepage = "https://velesdb.com"
-documentation = "https://docs.velesdb.com"
+documentation = "https://deepwiki.com/cyberlife-coder/VelesDB"
 keywords = ["vector-database", "embeddings", "rag", "local-first", "ai-memory", "semantic-search", "hnsw", "sqlite-alternative"]
 categories = ["database", "data-structures", "algorithms", "science"]
 description = "VelesDB: The Local Vector Database for Rust & AI. Microsecond semantic search, zero network latency, runs anywhere."
