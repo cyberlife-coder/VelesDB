@@ -189,6 +189,7 @@ fn test_bloom_filter_concurrent_throughput() {
 // ========== Scalability Tests ==========
 
 #[test]
+#[ignore = "Flaky: depends on system load - run manually with --ignored"]
 fn test_lru_cache_thread_scalability() {
     // Test that performance scales with thread count
     let mut throughputs = vec![];

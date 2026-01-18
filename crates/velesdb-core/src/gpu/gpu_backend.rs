@@ -316,7 +316,77 @@ fn batch_cosine(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// WGSL compute shader for batch euclidean distance (P2-GPU-2).
+impl GpuAccelerator {
+    /// Computes batch Euclidean distances between a query and multiple vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
+    /// * `query` - Query vector
+    /// * `dimension` - Vector dimension
+    ///
+    /// # Returns
+    ///
+    /// Vector of Euclidean distances, one per input vector.
+    #[must_use]
+    pub fn batch_euclidean_distance(
+        &self,
+        vectors: &[f32],
+        query: &[f32],
+        dimension: usize,
+    ) -> Vec<f32> {
+        let num_vectors = vectors.len() / dimension;
+        if num_vectors == 0 {
+            return Vec::new();
+        }
+
+        // CPU fallback for now - GPU pipeline can be added similarly to cosine
+        let mut results = Vec::with_capacity(num_vectors);
+        for i in 0..num_vectors {
+            let offset = i * dimension;
+            let vec = &vectors[offset..offset + dimension];
+            let dist: f32 = query
+                .iter()
+                .zip(vec.iter())
+                .map(|(q, v)| (q - v).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            results.push(dist);
+        }
+        results
+    }
+
+    /// Computes batch dot products between a query and multiple vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
+    /// * `query` - Query vector
+    /// * `dimension` - Vector dimension
+    ///
+    /// # Returns
+    ///
+    /// Vector of dot products, one per input vector.
+    #[must_use]
+    pub fn batch_dot_product(&self, vectors: &[f32], query: &[f32], dimension: usize) -> Vec<f32> {
+        let num_vectors = vectors.len() / dimension;
+        if num_vectors == 0 {
+            return Vec::new();
+        }
+
+        // CPU fallback for now - GPU pipeline can be added similarly to cosine
+        let mut results = Vec::with_capacity(num_vectors);
+        for i in 0..num_vectors {
+            let offset = i * dimension;
+            let vec = &vectors[offset..offset + dimension];
+            let dot: f32 = query.iter().zip(vec.iter()).map(|(q, v)| q * v).sum();
+            results.push(dot);
+        }
+        results
+    }
+}
+
+/// WGSL compute shader for batch euclidean distance (ready for GPU pipeline).
 #[allow(dead_code)]
 const EUCLIDEAN_SHADER: &str = r"
 struct Params {

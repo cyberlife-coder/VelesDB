@@ -1,6 +1,5 @@
 #![allow(clippy::useless_conversion)]
 #![allow(clippy::pedantic)] // PyO3 binding code has many style differences
-#![allow(deprecated)] // PyO3 0.24 deprecation warnings - will migrate to IntoPyObject in future
 //! Python bindings for `VelesDB` vector database.
 //!
 //! This module provides a Pythonic interface to VelesDB using PyO3.
@@ -27,6 +26,7 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt; // For into_py_any() helper
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -372,22 +372,23 @@ impl Collection {
         Python::with_gil(|py| {
             let config = self.inner.config();
             let mut info = HashMap::new();
-            info.insert("name".to_string(), config.name.into_py(py));
-            info.insert("dimension".to_string(), config.dimension.into_py(py));
+            info.insert("name".to_string(), to_pyobject(py, config.name.as_str()));
+            info.insert("dimension".to_string(), to_pyobject(py, config.dimension));
             info.insert(
                 "metric".to_string(),
-                format!("{:?}", config.metric).to_lowercase().into_py(py),
+                to_pyobject(py, format!("{:?}", config.metric).to_lowercase()),
             );
             info.insert(
                 "storage_mode".to_string(),
-                format!("{:?}", config.storage_mode)
-                    .to_lowercase()
-                    .into_py(py),
+                to_pyobject(py, format!("{:?}", config.storage_mode).to_lowercase()),
             );
-            info.insert("point_count".to_string(), config.point_count.into_py(py));
+            info.insert(
+                "point_count".to_string(),
+                to_pyobject(py, config.point_count),
+            );
             info.insert(
                 "metadata_only".to_string(),
-                config.metadata_only.into_py(py),
+                to_pyobject(py, config.metadata_only),
             );
             Ok(info)
         })
@@ -601,8 +602,8 @@ impl Collection {
                 .into_iter()
                 .map(|r| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), r.point.id.into_py(py));
-                    result.insert("score".to_string(), r.score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    result.insert("score".to_string(), to_pyobject(py, r.score));
 
                     let payload_py = match &r.point.payload {
                         Some(p) => json_to_python(py, p),
@@ -638,8 +639,8 @@ impl Collection {
                 .map(|opt_point| {
                     opt_point.map(|p| {
                         let mut result = HashMap::new();
-                        result.insert("id".to_string(), p.id.into_py(py));
-                        result.insert("vector".to_string(), p.vector.into_py(py));
+                        result.insert("id".to_string(), to_pyobject(py, p.id));
+                        result.insert("vector".to_string(), to_pyobject(py, p.vector.clone()));
 
                         let payload_py = match &p.payload {
                             Some(payload) => json_to_python(py, payload),
@@ -725,8 +726,8 @@ impl Collection {
                 .into_iter()
                 .map(|r| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), r.point.id.into_py(py));
-                    result.insert("score".to_string(), r.score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    result.insert("score".to_string(), to_pyobject(py, r.score));
 
                     let payload_py = match &r.point.payload {
                         Some(p) => json_to_python(py, p),
@@ -807,8 +808,8 @@ impl Collection {
                 .into_iter()
                 .map(|r| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), r.point.id.into_py(py));
-                    result.insert("score".to_string(), r.score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    result.insert("score".to_string(), to_pyobject(py, r.score));
 
                     let payload_py = match &r.point.payload {
                         Some(p) => json_to_python(py, p),
@@ -903,8 +904,8 @@ impl Collection {
                         .take(k)
                         .map(|r| {
                             let mut result = HashMap::new();
-                            result.insert("id".to_string(), r.point.id.into_py(py));
-                            result.insert("score".to_string(), r.score.into_py(py));
+                            result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                            result.insert("score".to_string(), to_pyobject(py, r.score));
 
                             let payload_py = match &r.point.payload {
                                 Some(p) => json_to_python(py, p),
@@ -978,8 +979,8 @@ impl Collection {
                 .into_iter()
                 .map(|r| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), r.point.id.into_py(py));
-                    result.insert("score".to_string(), r.score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    result.insert("score".to_string(), to_pyobject(py, r.score));
 
                     let payload_py = match &r.point.payload {
                         Some(p) => json_to_python(py, p),
@@ -1039,8 +1040,8 @@ impl Collection {
                 .into_iter()
                 .map(|r| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), r.point.id.into_py(py));
-                    result.insert("score".to_string(), r.score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    result.insert("score".to_string(), to_pyobject(py, r.score));
 
                     let payload_py = match &r.point.payload {
                         Some(p) => json_to_python(py, p),
@@ -1129,8 +1130,8 @@ impl Collection {
                 .into_iter()
                 .map(|r| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), r.point.id.into_py(py));
-                    result.insert("score".to_string(), r.score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    result.insert("score".to_string(), to_pyobject(py, r.score));
 
                     let payload_py = match &r.point.payload {
                         Some(p) => json_to_python(py, p),
@@ -1191,8 +1192,8 @@ impl Collection {
                 .into_iter()
                 .map(|(id, score)| {
                     let mut result = HashMap::new();
-                    result.insert("id".to_string(), id.into_py(py));
-                    result.insert("score".to_string(), score.into_py(py));
+                    result.insert("id".to_string(), to_pyobject(py, id));
+                    result.insert("score".to_string(), to_pyobject(py, score));
                     result
                 })
                 .collect();
@@ -1274,30 +1275,40 @@ fn python_to_json(py: Python<'_>, obj: &PyObject) -> Option<serde_json::Value> {
     None
 }
 
+/// Helper to convert a value to PyObject using IntoPyObject trait.
+/// This replaces the deprecated `into_py` method.
+#[inline]
+fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> PyObject
+where
+    T: IntoPyObjectExt<'py>,
+{
+    value.into_py_any(py).expect("infallible conversion")
+}
+
 fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
     match value {
         serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(b) => b.into_py(py),
+        serde_json::Value::Bool(b) => to_pyobject(py, *b),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                i.into_py(py)
+                to_pyobject(py, i)
             } else if let Some(f) = n.as_f64() {
-                f.into_py(py)
+                to_pyobject(py, f)
             } else {
                 py.None()
             }
         }
-        serde_json::Value::String(s) => s.into_py(py),
+        serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
         serde_json::Value::Array(arr) => {
             let list: Vec<PyObject> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            list.into_py(py)
+            to_pyobject(py, list)
         }
         serde_json::Value::Object(map) => {
             let dict: HashMap<String, PyObject> = map
                 .iter()
                 .map(|(k, v)| (k.clone(), json_to_python(py, v)))
                 .collect();
-            dict.into_py(py)
+            to_pyobject(py, dict)
         }
     }
 }
