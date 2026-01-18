@@ -112,6 +112,13 @@ impl Collection {
                 storage_mode,
             } => Self::create_with_options(path, *dimension, *metric, *storage_mode),
             CollectionType::MetadataOnly => Self::create_metadata_only(path, name),
+            CollectionType::Graph { .. } => {
+                // Graph collections will be implemented in EPIC-004
+                // For now, return an error indicating this is not yet supported
+                Err(crate::Error::GraphNotSupported(
+                    "Graph collection creation not yet implemented".to_string(),
+                ))
+            }
         }
     }
 
