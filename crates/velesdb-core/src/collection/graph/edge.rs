@@ -245,6 +245,21 @@ impl EdgeStore {
             .collect()
     }
 
+    /// Gets incoming edges filtered by label.
+    #[must_use]
+    pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
+        self.get_incoming(node_id)
+            .into_iter()
+            .filter(|e| e.label() == label)
+            .collect()
+    }
+
+    /// Checks if an edge with the given ID exists.
+    #[must_use]
+    pub fn contains_edge(&self, edge_id: u64) -> bool {
+        self.edges.contains_key(&edge_id)
+    }
+
     /// Removes an edge by ID.
     ///
     /// Cleans up both outgoing and incoming indices.
