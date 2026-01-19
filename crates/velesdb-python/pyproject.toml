@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "velesdb"
-version = "1.1.0"
+version = "1.2.0"
 description = "VelesDB: The Local Vector Database for Python & AI. Microsecond semantic search, zero network latency."
 readme = "README.md"
 license = { text = "Elastic License 2.0 (ELv2)" }

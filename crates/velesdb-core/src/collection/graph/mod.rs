@@ -39,6 +39,7 @@ mod edge;
 mod edge_concurrent;
 mod node;
 mod schema;
+mod traversal;
 
 #[cfg(test)]
 mod edge_concurrent_tests;
@@ -53,3 +54,4 @@ pub use edge::{EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use node::{Element, GraphNode};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
+pub use traversal::{TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH};
