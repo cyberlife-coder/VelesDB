@@ -139,14 +139,21 @@ impl ConcurrentEdgeStore {
     }
 
     /// Removes an edge by ID from all shards and the global registry.
+    ///
+    /// # Concurrency Safety
+    ///
+    /// Shard cleanup happens BEFORE registry removal to prevent race conditions
+    /// where another thread could reinsert the same ID while shards still contain
+    /// the old edge data.
     pub fn remove_edge(&self, edge_id: u64) {
-        // Remove from global registry
-        self.edge_ids.write().remove(&edge_id);
-
-        // Remove from all shards (edge may be in multiple shards for cross-shard edges)
+        // Remove from all shards FIRST (edge may be in multiple shards for cross-shard edges)
+        // This prevents race condition where ID is freed before data is cleaned up
         for shard in &self.shards {
             shard.write().remove_edge(edge_id);
         }
+
+        // Remove from global registry AFTER shards are clean
+        self.edge_ids.write().remove(&edge_id);
     }
 
     /// Gets all outgoing edges from a node (thread-safe).
@@ -207,17 +214,6 @@ impl ConcurrentEdgeStore {
             (outgoing, incoming)
         };
 
-        // Phase 1.5: Remove edge IDs from global registry
-        {
-            let mut ids = self.edge_ids.write();
-            for (edge_id, _) in &outgoing_edges {
-                ids.remove(edge_id);
-            }
-            for (edge_id, _) in &incoming_edges {
-                ids.remove(edge_id);
-            }
-        }
-
         // Phase 2: Collect all shards that need cleanup
         let mut shards_to_clean: std::collections::BTreeSet<usize> =
             std::collections::BTreeSet::new();
@@ -256,6 +252,19 @@ impl ConcurrentEdgeStore {
                         guard.remove_edge_outgoing_only(*edge_id);
                     }
                 }
+            }
+        }
+
+        // Phase 5: Remove edge IDs from global registry AFTER shard cleanup
+        // This prevents race condition where another thread could reinsert
+        // the same ID while shards still contain the old edge data
+        {
+            let mut ids = self.edge_ids.write();
+            for (edge_id, _) in &outgoing_edges {
+                ids.remove(edge_id);
+            }
+            for (edge_id, _) in &incoming_edges {
+                ids.remove(edge_id);
             }
         }
     }
