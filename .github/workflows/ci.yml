@@ -40,6 +40,8 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUST_VERSION: "1.83"
+  # Skip Python detection for pyo3 - avoids environment contamination issues
+  PYO3_NO_PYTHON: "1"
 
 jobs:
   # ===========================================================================
