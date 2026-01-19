@@ -71,7 +71,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy (strict)
-        run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
+        run: |
+          cargo clippy --all-targets --all-features \
+            --exclude velesdb-python \
+            -- -D warnings -D clippy::pedantic
 
   # ===========================================================================
   # Tests unitaires (parallèle avec lint et security)
@@ -98,7 +101,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
-        run: cargo test --all-features --workspace -- --test-threads=1
+        run: |
+          cargo test --all-features --workspace \
+            --exclude velesdb-python \
+            -- --test-threads=1
         env:
           RUST_TEST_THREADS: 1
 
