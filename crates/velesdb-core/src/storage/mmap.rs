@@ -278,8 +278,15 @@ impl MmapStorage {
 
         let bytes_reclaimed = ctx.compact()?;
 
-        // Save updated index after compaction
+        // CRITICAL FIX: After compaction, data_file must point to the new file.
+        // CompactionContext::compact() atomically replaces vectors.dat via rename(),
+        // and remaps self.mmap to the new file. However, it cannot update data_file
+        // because it doesn't have access to it. We must reopen data_file here to
+        // ensure future resize operations (ensure_capacity) work on the correct file.
         if bytes_reclaimed > 0 {
+            let data_path = self.path.join("vectors.dat");
+            self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
+
             self.flush()?;
         }
 

@@ -549,3 +549,89 @@ fn test_metrics_latency_percentiles() {
     assert!(stats.p95_us <= stats.p99_us, "P95 should be <= P99");
     assert!(stats.p99_us <= stats.max_us, "P99 should be <= max");
 }
+
+// =============================================================================
+// Regression Tests for Bug Fixes
+// =============================================================================
+
+/// Regression test for: MmapStorage compaction leaves data_file pointing to old file
+///
+/// After compaction, ensure_capacity() uses self.data_file for resizing.
+/// If data_file still points to the old (replaced) file, the next resize
+/// will corrupt data by writing to the wrong file.
+///
+/// This test verifies that after compaction + resize, data remains consistent.
+#[test]
+fn test_compaction_then_resize_data_integrity() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    // Use small vectors to make test fast
+    let dim = 4;
+
+    let mut storage = MmapStorage::new(&path, dim).unwrap();
+
+    // Step 1: Store vectors and delete some to create fragmentation
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0u64..20 {
+        let v: Vec<f32> = (0..dim).map(|j| (i * 10 + j as u64) as f32).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    // Delete half to create fragmentation
+    for i in 0u64..10 {
+        storage.delete(i).unwrap();
+    }
+
+    // Step 2: Compact storage
+    let reclaimed = storage.compact().unwrap();
+    assert!(reclaimed > 0, "Should have reclaimed space");
+
+    // Step 3: After compaction, insert many more vectors to trigger resize
+    // This is the critical part - if data_file wasn't updated, this will corrupt data
+    #[allow(clippy::cast_precision_loss)]
+    for i in 100u64..200 {
+        let v: Vec<f32> = (0..dim).map(|j| (i * 10 + j as u64) as f32).collect();
+        storage.store(i, &v).unwrap();
+    }
+
+    // Step 4: Verify ALL vectors are still readable and correct
+    // Check vectors that survived compaction (10-19)
+    #[allow(clippy::cast_precision_loss)]
+    for i in 10u64..20 {
+        let expected: Vec<f32> = (0..dim).map(|j| (i * 10 + j as u64) as f32).collect();
+        let retrieved = storage.retrieve(i).unwrap();
+        assert_eq!(
+            retrieved,
+            Some(expected),
+            "Vector {i} should be intact after compaction + resize"
+        );
+    }
+
+    // Check newly inserted vectors (100-199)
+    #[allow(clippy::cast_precision_loss)]
+    for i in 100u64..200 {
+        let expected: Vec<f32> = (0..dim).map(|j| (i * 10 + j as u64) as f32).collect();
+        let retrieved = storage.retrieve(i).unwrap();
+        assert_eq!(
+            retrieved,
+            Some(expected),
+            "Vector {i} should be correctly stored after compaction"
+        );
+    }
+
+    // Step 5: Verify persistence - reopen and check again
+    storage.flush().unwrap();
+    drop(storage);
+
+    let storage2 = MmapStorage::new(&path, dim).unwrap();
+    #[allow(clippy::cast_precision_loss)]
+    for i in 10u64..20 {
+        let expected: Vec<f32> = (0..dim).map(|j| (i * 10 + j as u64) as f32).collect();
+        let retrieved = storage2.retrieve(i).unwrap();
+        assert_eq!(
+            retrieved,
+            Some(expected),
+            "Vector {i} should persist correctly after compaction + resize"
+        );
+    }
+}

@@ -198,14 +198,20 @@ impl MobileGraphStore {
     }
 
     /// Removes a node and all connected edges.
+    ///
+    /// # Lock Order
+    ///
+    /// Acquires locks in consistent order: edges → outgoing → incoming → nodes
+    /// to prevent deadlock with concurrent add_edge() calls.
     pub fn remove_node(&self, node_id: u64) {
-        let mut nodes = self.nodes.write().unwrap();
-        nodes.remove(&node_id);
-        drop(nodes);
-
+        // CRITICAL: Acquire locks in consistent order (edges → outgoing → incoming → nodes)
+        // to prevent deadlock with add_edge() which uses (edges → outgoing → incoming)
+        let mut edges = self.edges.write().unwrap();
         let mut outgoing = self.outgoing.write().unwrap();
         let mut incoming = self.incoming.write().unwrap();
-        let mut edges = self.edges.write().unwrap();
+        let mut nodes = self.nodes.write().unwrap();
+
+        nodes.remove(&node_id);
 
         let outgoing_ids: Vec<u64> = outgoing.remove(&node_id).unwrap_or_default();
         for edge_id in outgoing_ids {
@@ -246,16 +252,21 @@ impl MobileGraphStore {
     }
 
     /// Clears all nodes and edges.
+    ///
+    /// # Lock Order
+    ///
+    /// Acquires locks in consistent order: edges → outgoing → incoming → nodes
     pub fn clear(&self) {
-        let mut nodes = self.nodes.write().unwrap();
+        // Consistent lock order: edges → outgoing → incoming → nodes
         let mut edges = self.edges.write().unwrap();
         let mut outgoing = self.outgoing.write().unwrap();
         let mut incoming = self.incoming.write().unwrap();
+        let mut nodes = self.nodes.write().unwrap();
 
-        nodes.clear();
         edges.clear();
         outgoing.clear();
         incoming.clear();
+        nodes.clear();
     }
 }
 
@@ -590,5 +601,59 @@ mod tests {
 
         let missing = store.get_edge(999);
         assert!(missing.is_none());
+    }
+
+    /// Regression test for deadlock between add_edge() and remove_node()
+    ///
+    /// This test verifies that concurrent add_edge and remove_node operations
+    /// do not deadlock due to inconsistent lock ordering.
+    #[test]
+    fn test_concurrent_add_edge_remove_node_no_deadlock() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let store = Arc::new(MobileGraphStore::new());
+
+        // Pre-populate with nodes
+        for i in 0u64..100 {
+            store.add_node(MobileGraphNode {
+                id: i,
+                label: "Node".to_string(),
+                properties_json: None,
+                vector: None,
+            });
+        }
+
+        let store_add = Arc::clone(&store);
+        let store_remove = Arc::clone(&store);
+
+        // Thread 1: continuously add edges
+        let handle_add = thread::spawn(move || {
+            for i in 0u64..50 {
+                let _ = store_add.add_edge(MobileGraphEdge {
+                    id: 1000 + i,
+                    source: i % 100,
+                    target: (i + 1) % 100,
+                    label: "EDGE".to_string(),
+                    properties_json: None,
+                });
+            }
+        });
+
+        // Thread 2: continuously remove nodes
+        let handle_remove = thread::spawn(move || {
+            for i in 50u64..100 {
+                store_remove.remove_node(i);
+            }
+        });
+
+        // If there's a deadlock, these joins will hang (test timeout)
+        handle_add.join().expect("add thread should not panic");
+        handle_remove
+            .join()
+            .expect("remove thread should not panic");
+
+        // Verify store is in consistent state
+        assert!(store.node_count() <= 100);
     }
 }
