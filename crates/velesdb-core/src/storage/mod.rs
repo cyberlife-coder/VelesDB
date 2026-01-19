@@ -19,6 +19,8 @@ pub mod metrics;
 mod mmap;
 mod traits;
 mod vector_bytes;
+#[cfg(test)]
+mod vector_bytes_tests;
 
 #[cfg(test)]
 mod histogram_tests;

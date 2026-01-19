@@ -60,6 +60,10 @@ mod dual_precision_tests;
 #[cfg(test)]
 mod graph_tests;
 #[cfg(test)]
+mod layer_tests;
+#[cfg(test)]
+mod ordered_float_tests;
+#[cfg(test)]
 mod quantization_tests;
 #[cfg(test)]
 mod tests;
