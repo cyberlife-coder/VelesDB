@@ -217,3 +217,44 @@ fn test_parse_node_single_quote_property() {
     // The malformed value should cause an error
     assert!(result.is_err());
 }
+
+// === find_keyword string literal awareness tests (Bug fix) ===
+
+#[test]
+fn test_keyword_inside_string_literal_ignored() {
+    // RETURN inside a string literal should not be matched
+    let result = parse_match_clause("MATCH (n:Person {name: 'RETURN'}) RETURN n");
+    assert!(result.is_ok(), "Should parse correctly: {:?}", result);
+    let clause = result.unwrap();
+    // The pattern should have the full property value
+    assert_eq!(clause.patterns.len(), 1);
+}
+
+#[test]
+fn test_keyword_where_inside_string_literal() {
+    // WHERE inside a string literal should not be matched
+    let result = parse_match_clause("MATCH (n:Person {status: 'WHERE'}) RETURN n");
+    assert!(result.is_ok(), "Should parse correctly: {:?}", result);
+}
+
+// === != and <> operator tests (Bug fix) ===
+
+#[test]
+fn test_where_not_equal_operator() {
+    let result = parse_match_clause("MATCH (n:Person) WHERE n.age != 18 RETURN n");
+    assert!(result.is_ok(), "Should parse != operator: {:?}", result);
+    let clause = result.unwrap();
+    assert!(clause.where_clause.is_some());
+}
+
+#[test]
+fn test_where_diamond_not_equal_operator() {
+    let result = parse_match_clause("MATCH (n:Person) WHERE n.age <> 18 RETURN n");
+    assert!(result.is_ok(), "Should parse <> operator: {:?}", result);
+    let clause = result.unwrap();
+    assert!(clause.where_clause.is_some());
+}
+
+// Note: Full Unicode support in property values requires additional parser work.
+// The current fixes address the specific bugs reported by Devin.
+// Unicode property values are a separate enhancement.

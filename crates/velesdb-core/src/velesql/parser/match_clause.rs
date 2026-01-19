@@ -338,23 +338,53 @@ fn parse_return_clause(input: &str) -> ReturnClause {
     }
 }
 
+/// Finds a keyword in the input string, respecting string literal boundaries.
+/// Uses ASCII-only case-insensitive matching to avoid Unicode index issues.
 fn find_keyword(input: &str, kw: &str) -> Option<usize> {
-    let ui = input.to_uppercase();
-    let uk = kw.to_uppercase();
-    let mut p = 0;
-    while let Some(f) = ui[p..].find(&uk) {
-        let ap = p + f;
-        let bok = ap == 0 || !input.chars().nth(ap - 1).unwrap_or(' ').is_alphanumeric();
-        let aok = ap + kw.len() >= input.len()
-            || !input
-                .chars()
-                .nth(ap + kw.len())
-                .unwrap_or(' ')
-                .is_alphanumeric();
-        if bok && aok {
-            return Some(ap);
-        }
-        p = ap + 1;
+    let bytes = input.as_bytes();
+    let kw_bytes = kw.as_bytes();
+    let kw_len = kw_bytes.len();
+
+    if kw_len == 0 || bytes.len() < kw_len {
+        return None;
     }
+
+    let mut in_string = false;
+    let mut i = 0;
+
+    while i <= bytes.len() - kw_len {
+        let b = bytes[i];
+
+        // Track string literal boundaries
+        if b == b'\'' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
+
+        // Skip if inside a string literal
+        if in_string {
+            i += 1;
+            continue;
+        }
+
+        // Check if keyword matches at this position (ASCII case-insensitive)
+        if bytes[i..i + kw_len]
+            .iter()
+            .zip(kw_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            // Check word boundaries
+            let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            let after_ok = i + kw_len >= bytes.len() || !bytes[i + kw_len].is_ascii_alphanumeric();
+
+            if before_ok && after_ok {
+                return Some(i);
+            }
+        }
+
+        i += 1;
+    }
+
     None
 }
