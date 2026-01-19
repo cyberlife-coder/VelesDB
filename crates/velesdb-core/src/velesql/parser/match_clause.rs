@@ -24,8 +24,13 @@ pub fn parse_match_clause(input: &str) -> Result<MatchClause, ParseError> {
     }
     let patterns = parse_pattern_list(pattern_str)?;
     let where_clause = if let Some(wp) = where_pos {
+        // Validate slice bounds: wp + 5 (after "WHERE") must be <= return_pos
+        let where_end = wp + 5;
+        if where_end > return_pos {
+            return Err(ParseError::syntax(wp, input, "Empty WHERE condition"));
+        }
         Some(parse_where_condition(
-            after_match[wp + 5..return_pos].trim(),
+            after_match[where_end..return_pos].trim(),
         )?)
     } else {
         None
@@ -312,7 +317,8 @@ fn parse_path_pattern(input: &str) -> Result<GraphPattern, ParseError> {
 
 fn find_matching_paren(input: &str, start: usize) -> Result<usize, ParseError> {
     let mut d = 0;
-    for (i, c) in input[start..].chars().enumerate() {
+    // Use char_indices() to get byte indices, not character indices
+    for (i, c) in input[start..].char_indices() {
         match c {
             '(' => d += 1,
             ')' => {
@@ -328,7 +334,12 @@ fn find_matching_paren(input: &str, start: usize) -> Result<usize, ParseError> {
 }
 
 fn parse_where_condition(input: &str) -> Result<Condition, ParseError> {
-    let (col, op, vs) = if let Some(p) = input.find(">=") {
+    // Order matters: check multi-char operators before single-char ones
+    let (col, op, vs) = if let Some(p) = input.find("!=") {
+        (&input[..p], CompareOp::NotEq, input[p + 2..].trim())
+    } else if let Some(p) = input.find("<>") {
+        (&input[..p], CompareOp::NotEq, input[p + 2..].trim())
+    } else if let Some(p) = input.find(">=") {
         (&input[..p], CompareOp::Gte, input[p + 2..].trim())
     } else if let Some(p) = input.find("<=") {
         (&input[..p], CompareOp::Lte, input[p + 2..].trim())
