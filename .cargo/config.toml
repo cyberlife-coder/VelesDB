@@ -3,6 +3,14 @@ lint = "clippy --all-targets --all-features -- -D warnings"
 test-all = "test --all-features"
 
 # =============================================================================
+# Python Environment for PyO3 tests (Windows)
+# =============================================================================
+# Required for velesdb-python tests to find Python standard library
+[env]
+PYTHONHOME = { value = "D:\\Tools\\pinokio\\bin\\miniconda", force = false }
+PYTHONPATH = { value = "D:\\Tools\\pinokio\\bin\\miniconda\\Lib", force = false }
+
+# =============================================================================
 # Multi-Architecture Build Configuration (SOTA 2026)
 # =============================================================================
 # VelesDB supports multiple target architectures with optimized SIMD:
