@@ -4,6 +4,7 @@
 //! `EdgeStore` that uses sharding to reduce lock contention.
 
 use super::edge::{EdgeStore, GraphEdge};
+use crate::error::{Error, Result};
 use parking_lot::RwLock;
 use std::collections::{HashSet, VecDeque};
 
@@ -23,6 +24,8 @@ const DEFAULT_NUM_SHARDS: usize = 64;
 pub struct ConcurrentEdgeStore {
     shards: Vec<RwLock<EdgeStore>>,
     num_shards: usize,
+    /// Global registry of edge IDs for cross-shard duplicate detection.
+    edge_ids: RwLock<HashSet<u64>>,
 }
 
 impl ConcurrentEdgeStore {
@@ -43,7 +46,11 @@ impl ConcurrentEdgeStore {
         let shards = (0..num_shards)
             .map(|_| RwLock::new(EdgeStore::new()))
             .collect();
-        Self { shards, num_shards }
+        Self {
+            shards,
+            num_shards,
+            edge_ids: RwLock::new(HashSet::new()),
+        }
     }
 
     /// Returns the shard index for a given node ID.
@@ -60,14 +67,30 @@ impl ConcurrentEdgeStore {
     ///
     /// When source and target are in different shards, locks are acquired
     /// in ascending shard index order to prevent deadlocks.
-    pub fn add_edge(&self, edge: GraphEdge) {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        let edge_id = edge.id();
+
+        // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
+        // condition where remove_edge could free an ID while we're still inserting.
+        // Lock ordering: edge_ids FIRST, then shards in ascending order.
+        let mut ids = self.edge_ids.write();
+        if ids.contains(&edge_id) {
+            return Err(Error::EdgeExists(edge_id));
+        }
+
         let source_shard = self.shard_index(edge.source());
         let target_shard = self.shard_index(edge.target());
 
+        // Note: EdgeStore's duplicate check is now redundant but kept for safety
         if source_shard == target_shard {
             // Same shard: single lock, EdgeStore handles both indices
             let mut guard = self.shards[source_shard].write();
-            guard.add_edge(edge);
+            guard.add_edge(edge)?;
+            ids.insert(edge_id);
         } else {
             // Different shards: acquire locks in ascending order to prevent deadlock
             let (first_idx, second_idx) = if source_shard < target_shard {
@@ -81,16 +104,53 @@ impl ConcurrentEdgeStore {
 
             // Add to source shard (outgoing index)
             // Add to target shard (incoming index)
+            // Handle errors with proper rollback
             if source_shard < target_shard {
                 // first = source, second = target
-                first_guard.add_edge_outgoing_only(edge.clone());
-                second_guard.add_edge_incoming_only(edge);
+                first_guard.add_edge_outgoing_only(edge.clone())?;
+                if let Err(e) = second_guard.add_edge_incoming_only(edge) {
+                    // Rollback first shard operation
+                    first_guard.remove_edge_outgoing_only(edge_id);
+                    return Err(e);
+                }
             } else {
                 // first = target, second = source
-                second_guard.add_edge_outgoing_only(edge.clone());
-                first_guard.add_edge_incoming_only(edge);
+                second_guard.add_edge_outgoing_only(edge.clone())?;
+                if let Err(e) = first_guard.add_edge_incoming_only(edge) {
+                    // Rollback second shard operation
+                    second_guard.remove_edge_outgoing_only(edge_id);
+                    return Err(e);
+                }
             }
+            // Insert AFTER successful shard mutations
+            ids.insert(edge_id);
         }
+        Ok(())
+    }
+
+    /// Removes an edge by ID from all shards and the global registry.
+    ///
+    /// # Concurrency Safety
+    ///
+    /// Lock ordering: edge_ids FIRST, then shards. This matches add_edge ordering
+    /// to prevent deadlocks. The edge_ids lock is held throughout to prevent
+    /// add_edge from inserting an ID we're about to remove.
+    pub fn remove_edge(&self, edge_id: u64) {
+        // Acquire edge_ids lock FIRST (same ordering as add_edge)
+        let mut ids = self.edge_ids.write();
+
+        // Only proceed if the edge exists in our registry
+        if !ids.contains(&edge_id) {
+            return;
+        }
+
+        // Remove from all shards (edge may be in multiple shards for cross-shard edges)
+        for shard in &self.shards {
+            shard.write().remove_edge(edge_id);
+        }
+
+        // Remove from global registry (still holding lock)
+        ids.remove(&edge_id);
     }
 
     /// Gets all outgoing edges from a node (thread-safe).
@@ -118,11 +178,63 @@ impl ConcurrentEdgeStore {
             .collect()
     }
 
+    /// Gets outgoing edges filtered by label (thread-safe).
+    #[must_use]
+    pub fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
+        self.get_outgoing(node_id)
+            .into_iter()
+            .filter(|e| e.label() == label)
+            .collect()
+    }
+
+    /// Gets incoming edges filtered by label (thread-safe).
+    #[must_use]
+    pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
+        self.get_incoming(node_id)
+            .into_iter()
+            .filter(|e| e.label() == label)
+            .collect()
+    }
+
+    /// Checks if an edge with the given ID exists.
+    #[must_use]
+    pub fn contains_edge(&self, edge_id: u64) -> bool {
+        self.edge_ids.read().contains(&edge_id)
+    }
+
+    /// Gets an edge by ID (searches all shards).
+    ///
+    /// Returns `None` if the edge doesn't exist.
+    #[must_use]
+    pub fn get_edge(&self, edge_id: u64) -> Option<GraphEdge> {
+        // Quick check in registry first
+        if !self.edge_ids.read().contains(&edge_id) {
+            return None;
+        }
+        // Search in shards (edge is stored in source shard)
+        for shard in &self.shards {
+            if let Some(edge) = shard.read().get_edge(edge_id) {
+                return Some(edge.clone());
+            }
+        }
+        None
+    }
+
     /// Removes all edges connected to a node (cascade delete, thread-safe).
     ///
     /// Handles cross-shard cleanup: collects all edges, then removes from all
     /// relevant shards with proper lock ordering to prevent deadlocks.
+    ///
+    /// # Concurrency Safety
+    ///
+    /// Lock ordering: edge_ids FIRST, then shards in ascending order.
+    /// This matches add_edge/remove_edge ordering to prevent deadlocks.
+    /// The edge_ids lock is held throughout to prevent add_edge from
+    /// inserting IDs we're about to remove.
     pub fn remove_node_edges(&self, node_id: u64) {
+        // CRITICAL: Acquire edge_ids lock FIRST (same ordering as add_edge/remove_edge)
+        let mut ids = self.edge_ids.write();
+
         let node_shard = self.shard_index(node_id);
 
         // Phase 1: Collect all edges connected to this node (read-only)
@@ -153,7 +265,7 @@ impl ConcurrentEdgeStore {
             shards_to_clean.insert(self.shard_index(*source));
         }
 
-        // Phase 3: Acquire locks in ascending order and perform cleanup
+        // Phase 3: Acquire shard locks in ascending order and perform cleanup
         // BTreeSet iteration is already sorted ascending
         let mut guards: Vec<_> = shards_to_clean
             .iter()
@@ -179,6 +291,20 @@ impl ConcurrentEdgeStore {
                         guard.remove_edge_outgoing_only(*edge_id);
                     }
                 }
+            }
+        }
+
+        // Phase 5: Remove edge IDs from global registry (still holding lock)
+        // Note: Use a set to deduplicate IDs (self-loops appear in both lists)
+        let mut removed: HashSet<u64> = HashSet::new();
+        for (edge_id, _) in &outgoing_edges {
+            if removed.insert(*edge_id) {
+                ids.remove(edge_id);
+            }
+        }
+        for (edge_id, _) in &incoming_edges {
+            if removed.insert(*edge_id) {
+                ids.remove(edge_id);
             }
         }
     }

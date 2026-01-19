@@ -4,6 +4,7 @@
 //! - `GraphEdge`: A typed relationship between nodes with properties
 //! - `EdgeStore`: Bidirectional index for efficient edge traversal
 
+use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -36,15 +37,24 @@ pub struct GraphEdge {
 
 impl GraphEdge {
     /// Creates a new edge with the given ID, endpoints, and label.
-    #[must_use]
-    pub fn new(id: u64, source: u64, target: u64, label: &str) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidEdgeLabel` if the label is empty or whitespace-only.
+    pub fn new(id: u64, source: u64, target: u64, label: &str) -> Result<Self> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidEdgeLabel(
+                "Edge label cannot be empty or whitespace-only".to_string(),
+            ));
+        }
+        Ok(Self {
             id,
             source,
             target,
-            label: label.to_string(),
+            label: trimmed.to_string(),
             properties: HashMap::new(),
-        }
+        })
     }
 
     /// Adds properties to this edge (builder pattern).
@@ -115,10 +125,19 @@ impl EdgeStore {
     /// Adds an edge to the store.
     ///
     /// Creates bidirectional index entries for efficient traversal.
-    pub fn add_edge(&mut self, edge: GraphEdge) {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    pub fn add_edge(&mut self, edge: GraphEdge) -> Result<()> {
         let id = edge.id();
         let source = edge.source();
         let target = edge.target();
+
+        // Check for duplicate ID
+        if self.edges.contains_key(&id) {
+            return Err(Error::EdgeExists(id));
+        }
 
         // Add to outgoing index
         self.outgoing.entry(source).or_default().push(id);
@@ -128,36 +147,57 @@ impl EdgeStore {
 
         // Store the edge
         self.edges.insert(id, edge);
+        Ok(())
     }
 
     /// Adds an edge with only the outgoing index (for cross-shard storage).
     ///
     /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
     /// The edge is stored and indexed by source node only.
-    pub fn add_edge_outgoing_only(&mut self, edge: GraphEdge) {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    pub fn add_edge_outgoing_only(&mut self, edge: GraphEdge) -> Result<()> {
         let id = edge.id();
         let source = edge.source();
+
+        // Check for duplicate ID
+        if self.edges.contains_key(&id) {
+            return Err(Error::EdgeExists(id));
+        }
 
         // Add to outgoing index only
         self.outgoing.entry(source).or_default().push(id);
 
         // Store the edge
         self.edges.insert(id, edge);
+        Ok(())
     }
 
     /// Adds an edge with only the incoming index (for cross-shard storage).
     ///
     /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
     /// The edge is stored and indexed by target node only.
-    pub fn add_edge_incoming_only(&mut self, edge: GraphEdge) {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    pub fn add_edge_incoming_only(&mut self, edge: GraphEdge) -> Result<()> {
         let id = edge.id();
         let target = edge.target();
+
+        // Check for duplicate ID
+        if self.edges.contains_key(&id) {
+            return Err(Error::EdgeExists(id));
+        }
 
         // Add to incoming index only
         self.incoming.entry(target).or_default().push(id);
 
         // Store the edge
         self.edges.insert(id, edge);
+        Ok(())
     }
 
     /// Returns the total number of edges in the store.
@@ -203,6 +243,21 @@ impl EdgeStore {
             .into_iter()
             .filter(|e| e.label() == label)
             .collect()
+    }
+
+    /// Gets incoming edges filtered by label.
+    #[must_use]
+    pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
+        self.get_incoming(node_id)
+            .into_iter()
+            .filter(|e| e.label() == label)
+            .collect()
+    }
+
+    /// Checks if an edge with the given ID exists.
+    #[must_use]
+    pub fn contains_edge(&self, edge_id: u64) -> bool {
+        self.edges.contains_key(&edge_id)
     }
 
     /// Removes an edge by ID.
