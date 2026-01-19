@@ -475,3 +475,116 @@ fn test_remove_edge_allows_id_reuse() {
         "should be able to reuse ID after remove_edge"
     );
 }
+
+#[test]
+fn test_concurrent_remove_and_add_same_id() {
+    // Regression test for race condition: remove_edge must clean shards
+    // BEFORE removing from registry to prevent duplicate ID insertion
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::new());
+
+    // Add initial edge
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "INITIAL").expect("valid"))
+        .expect("add initial");
+
+    // Spawn multiple threads that try to remove and re-add the same ID
+    let mut handles = vec![];
+    for i in 0..10 {
+        let store_clone = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            // Remove and immediately try to re-add
+            store_clone.remove_edge(100);
+            // Small delay to increase chance of race
+            std::thread::yield_now();
+            let _ = store_clone.add_edge(
+                GraphEdge::new(100, (i * 10) as u64, (i * 10 + 1) as u64, "RETRY").expect("valid"),
+            );
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    // After all operations, we should have at most 1 edge with ID 100
+    // The key invariant: no duplicate IDs should exist
+    assert!(
+        store.edge_count() <= 1,
+        "should have at most 1 edge, got {}",
+        store.edge_count()
+    );
+}
+
+#[test]
+fn test_concurrent_remove_node_edges_and_add() {
+    // Regression test for race condition: remove_node_edges must clean shards
+    // BEFORE removing IDs from registry
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::new());
+
+    // Add multiple edges from node 1
+    for i in 1..=5 {
+        store
+            .add_edge(GraphEdge::new(i, 1, i + 100, "LINK").expect("valid"))
+            .expect("add");
+    }
+    assert_eq!(store.edge_count(), 5);
+
+    // Thread 1: remove all edges from node 1
+    let store1 = Arc::clone(&store);
+    let h1 = thread::spawn(move || {
+        store1.remove_node_edges(1);
+    });
+
+    // Thread 2: try to add edge with ID that might be getting removed
+    let store2 = Arc::clone(&store);
+    let h2 = thread::spawn(move || {
+        std::thread::yield_now();
+        // Try to reuse ID 3 (one of the IDs being removed)
+        let _ = store2.add_edge(GraphEdge::new(3, 50, 51, "NEW").expect("valid"));
+    });
+
+    h1.join().unwrap();
+    h2.join().unwrap();
+
+    // Key invariant: no corruption, edge_count should be consistent
+    let count = store.edge_count();
+    // After remove_node_edges(1), we should have 0 or 1 edge
+    // (1 if thread 2 managed to add after removal completed)
+    assert!(
+        count <= 1,
+        "edge count should be <= 1 after remove_node_edges, got {}",
+        count
+    );
+}
+
+#[test]
+fn test_cross_shard_add_edge_consistency() {
+    // Regression test: cross-shard add_edge should maintain consistency
+    // If we add an edge spanning shards, both indices must be populated
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // Add cross-shard edge: source=100 and target=200 should be in different shards
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "CROSS").expect("valid"))
+        .expect("add cross-shard");
+
+    // Verify outgoing index is populated
+    let outgoing = store.get_outgoing(100);
+    assert_eq!(outgoing.len(), 1, "outgoing index should have 1 edge");
+    assert_eq!(outgoing[0].id(), 1);
+
+    // Verify incoming index is populated
+    let incoming = store.get_incoming(200);
+    assert_eq!(incoming.len(), 1, "incoming index should have 1 edge");
+    assert_eq!(incoming[0].id(), 1);
+
+    // Verify both point to same edge data
+    assert_eq!(outgoing[0].source(), incoming[0].source());
+    assert_eq!(outgoing[0].target(), incoming[0].target());
+}
