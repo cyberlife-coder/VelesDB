@@ -14,7 +14,7 @@ fn create_edge_store_with_edges(num_nodes: u64, avg_degree: u64) -> EdgeStore {
     for node in 0..num_nodes {
         for i in 0..avg_degree {
             let target = (node + i + 1) % num_nodes;
-            store.add_edge(GraphEdge::new(edge_id, node, target, "LINK"));
+            let _ = store.add_edge(GraphEdge::new(edge_id, node, target, "LINK").unwrap());
             edge_id += 1;
         }
     }
@@ -28,7 +28,7 @@ fn create_concurrent_store_with_edges(num_nodes: u64, avg_degree: u64) -> Concur
     for node in 0..num_nodes {
         for i in 0..avg_degree {
             let target = (node + i + 1) % num_nodes;
-            store.add_edge(GraphEdge::new(edge_id, node, target, "LINK"));
+            let _ = store.add_edge(GraphEdge::new(edge_id, node, target, "LINK").unwrap());
             edge_id += 1;
         }
     }
@@ -56,7 +56,7 @@ fn bench_add_edge(c: &mut Criterion) {
         let mut id = 0u64;
 
         b.iter(|| {
-            store.add_edge(GraphEdge::new(id, id % 1000, (id + 1) % 1000, "LINK"));
+            let _ = store.add_edge(GraphEdge::new(id, id % 1000, (id + 1) % 1000, "LINK").unwrap());
             id += 1;
         });
     });
@@ -72,8 +72,8 @@ fn bench_cascade_delete(c: &mut Criterion) {
                     // Setup: create store with node 0 having many edges
                     let mut store = EdgeStore::new();
                     for i in 0..degree {
-                        store.add_edge(GraphEdge::new(i, 0, i + 1, "OUT"));
-                        store.add_edge(GraphEdge::new(degree + i, i + 1, 0, "IN"));
+                        let _ = store.add_edge(GraphEdge::new(i, 0, i + 1, "OUT").unwrap());
+                        let _ = store.add_edge(GraphEdge::new(degree + i, i + 1, 0, "IN").unwrap());
                     }
                     store
                 },
@@ -103,7 +103,7 @@ fn bench_concurrent_add_edge(c: &mut Criterion) {
         let mut id = 0u64;
 
         b.iter(|| {
-            store.add_edge(GraphEdge::new(id, id % 1000, (id + 1) % 1000, "LINK"));
+            let _ = store.add_edge(GraphEdge::new(id, id % 1000, (id + 1) % 1000, "LINK").unwrap());
             id += 1;
         });
     });
