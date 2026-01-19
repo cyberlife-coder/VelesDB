@@ -108,7 +108,23 @@ pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, Pa
         ));
     };
     let mut rel = RelationshipPattern::new(direction);
-    if input.contains('[') && input.contains(']') {
+
+    // Validate bracket matching
+    let has_open = input.contains('[');
+    let has_close = input.contains(']');
+    if has_open != has_close {
+        return Err(ParseError::syntax(
+            0,
+            input,
+            if has_open {
+                "Missing closing ']' in relationship pattern"
+            } else {
+                "Missing opening '[' in relationship pattern"
+            },
+        ));
+    }
+
+    if has_open && has_close {
         let inner = input[is + 1..ie].trim();
         if !inner.is_empty() {
             if let Some(sp) = inner.find('*') {
@@ -186,7 +202,7 @@ fn parse_properties(input: &str) -> Result<HashMap<String, Value>, ParseError> {
 }
 
 fn parse_value(input: &str) -> Result<Value, ParseError> {
-    if input.starts_with('\'') && input.ends_with('\'') {
+    if input.len() >= 2 && input.starts_with('\'') && input.ends_with('\'') {
         Ok(Value::String(input[1..input.len() - 1].to_string()))
     } else if input.eq_ignore_ascii_case("true") {
         Ok(Value::Boolean(true))

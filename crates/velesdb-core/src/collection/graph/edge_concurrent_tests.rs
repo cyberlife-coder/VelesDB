@@ -267,6 +267,62 @@ fn test_with_shards_zero_panics() {
     let _ = ConcurrentEdgeStore::with_shards(0);
 }
 
+// =============================================================================
+// Cross-shard remove_node_edges cleanup test (Bug fix verification)
+// =============================================================================
+
+#[test]
+fn test_remove_node_edges_cross_shard_cleanup() {
+    // Use 64 shards to ensure source and target are in different shards
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // source=100 → shard 36 (100 % 64)
+    // target=200 → shard 8 (200 % 64)
+    store.add_edge(GraphEdge::new(1, 100, 200, "WROTE"));
+
+    // Verify edge exists in both directions
+    assert_eq!(store.get_outgoing(100).len(), 1);
+    assert_eq!(store.get_incoming(200).len(), 1);
+    assert_eq!(store.edge_count(), 1);
+
+    // Remove edges for node 100 (source node)
+    store.remove_node_edges(100);
+
+    // Edge should be completely removed from both shards
+    assert_eq!(
+        store.get_outgoing(100).len(),
+        0,
+        "Outgoing edges should be removed"
+    );
+    assert_eq!(
+        store.get_incoming(200).len(),
+        0,
+        "Incoming edges in other shard should also be cleaned up"
+    );
+    assert_eq!(
+        store.edge_count(),
+        0,
+        "Edge count should be 0 after cleanup"
+    );
+}
+
+#[test]
+fn test_remove_node_edges_incoming_cross_shard() {
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // source=200 → shard 8
+    // target=100 → shard 36
+    store.add_edge(GraphEdge::new(1, 200, 100, "POINTS_TO"));
+
+    // Remove edges for node 100 (target node)
+    store.remove_node_edges(100);
+
+    // Edge should be completely removed from both shards
+    assert_eq!(store.get_outgoing(200).len(), 0);
+    assert_eq!(store.get_incoming(100).len(), 0);
+    assert_eq!(store.edge_count(), 0);
+}
+
 #[test]
 fn test_edge_count_across_shards() {
     let store = ConcurrentEdgeStore::with_shards(4);

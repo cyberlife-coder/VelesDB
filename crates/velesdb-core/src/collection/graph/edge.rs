@@ -221,6 +221,28 @@ impl EdgeStore {
         }
     }
 
+    /// Removes an edge by ID, only cleaning the outgoing index.
+    ///
+    /// Used by `ConcurrentEdgeStore` for cross-shard cleanup.
+    pub fn remove_edge_outgoing_only(&mut self, edge_id: u64) {
+        if let Some(edge) = self.edges.remove(&edge_id) {
+            if let Some(ids) = self.outgoing.get_mut(&edge.source()) {
+                ids.retain(|&id| id != edge_id);
+            }
+        }
+    }
+
+    /// Removes an edge by ID, only cleaning the incoming index.
+    ///
+    /// Used by `ConcurrentEdgeStore` for cross-shard cleanup.
+    pub fn remove_edge_incoming_only(&mut self, edge_id: u64) {
+        if let Some(edge) = self.edges.remove(&edge_id) {
+            if let Some(ids) = self.incoming.get_mut(&edge.target()) {
+                ids.retain(|&id| id != edge_id);
+            }
+        }
+    }
+
     /// Removes all edges connected to a node (cascade delete).
     ///
     /// Removes both outgoing and incoming edges, cleaning up all indices.
