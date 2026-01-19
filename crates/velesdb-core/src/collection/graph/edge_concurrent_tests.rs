@@ -12,7 +12,9 @@ use std::thread;
 #[test]
 fn test_concurrent_store_add_and_get() {
     let store = ConcurrentEdgeStore::new();
-    store.add_edge(GraphEdge::new(1, 100, 200, "KNOWS"));
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
 
     let outgoing = store.get_outgoing(100);
     assert_eq!(outgoing.len(), 1);
@@ -22,8 +24,12 @@ fn test_concurrent_store_add_and_get() {
 #[test]
 fn test_concurrent_store_get_neighbors() {
     let store = ConcurrentEdgeStore::new();
-    store.add_edge(GraphEdge::new(1, 100, 200, "A"));
-    store.add_edge(GraphEdge::new(2, 100, 300, "B"));
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "B").expect("valid"))
+        .expect("add");
 
     let neighbors = store.get_neighbors(100);
     assert_eq!(neighbors.len(), 2);
@@ -34,9 +40,15 @@ fn test_concurrent_store_get_neighbors() {
 #[test]
 fn test_concurrent_store_cascade_delete() {
     let store = ConcurrentEdgeStore::new();
-    store.add_edge(GraphEdge::new(1, 100, 200, "A"));
-    store.add_edge(GraphEdge::new(2, 100, 300, "B"));
-    store.add_edge(GraphEdge::new(3, 400, 100, "C"));
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "B").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 400, 100, "C").expect("valid"))
+        .expect("add");
 
     store.remove_node_edges(100);
 
@@ -52,8 +64,12 @@ fn test_concurrent_store_cascade_delete() {
 #[test]
 fn test_traverse_bfs_single_hop() {
     let store = ConcurrentEdgeStore::new();
-    store.add_edge(GraphEdge::new(1, 1, 2, "LINK"));
-    store.add_edge(GraphEdge::new(2, 1, 3, "LINK"));
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "LINK").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 1, 3, "LINK").expect("valid"))
+        .expect("add");
 
     let reachable = store.traverse_bfs(1, 1);
     assert!(reachable.contains(&1));
@@ -65,10 +81,18 @@ fn test_traverse_bfs_single_hop() {
 fn test_traverse_bfs_multi_hop() {
     let store = ConcurrentEdgeStore::new();
     // Chain: 1 -> 2 -> 3 -> 4 -> 5
-    store.add_edge(GraphEdge::new(1, 1, 2, "NEXT"));
-    store.add_edge(GraphEdge::new(2, 2, 3, "NEXT"));
-    store.add_edge(GraphEdge::new(3, 3, 4, "NEXT"));
-    store.add_edge(GraphEdge::new(4, 4, 5, "NEXT"));
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "NEXT").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 2, 3, "NEXT").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 3, 4, "NEXT").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(4, 4, 5, "NEXT").expect("valid"))
+        .expect("add");
 
     // Depth 2: should reach 1, 2, 3
     let depth2 = store.traverse_bfs(1, 2);
@@ -86,9 +110,15 @@ fn test_traverse_bfs_multi_hop() {
 fn test_traverse_bfs_with_cycle() {
     let store = ConcurrentEdgeStore::new();
     // Cycle: 1 -> 2 -> 3 -> 1
-    store.add_edge(GraphEdge::new(1, 1, 2, "NEXT"));
-    store.add_edge(GraphEdge::new(2, 2, 3, "NEXT"));
-    store.add_edge(GraphEdge::new(3, 3, 1, "NEXT"));
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "NEXT").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 2, 3, "NEXT").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 3, 1, "NEXT").expect("valid"))
+        .expect("add");
 
     // Should not infinite loop
     let reachable = store.traverse_bfs(1, 10);
@@ -98,8 +128,12 @@ fn test_traverse_bfs_with_cycle() {
 #[test]
 fn test_traverse_bfs_disconnected() {
     let store = ConcurrentEdgeStore::new();
-    store.add_edge(GraphEdge::new(1, 1, 2, "LINK"));
-    store.add_edge(GraphEdge::new(2, 100, 200, "OTHER")); // Disconnected
+    store
+        .add_edge(GraphEdge::new(1, 1, 2, "LINK").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 200, "OTHER").expect("valid")) // Disconnected
+        .expect("add");
 
     let reachable = store.traverse_bfs(1, 10);
     assert!(reachable.contains(&1));
@@ -118,7 +152,9 @@ fn test_concurrent_reads_no_block() {
 
     // Add some edges
     for i in 0..100 {
-        store.add_edge(GraphEdge::new(i, i, i + 1, "LINK"));
+        store
+            .add_edge(GraphEdge::new(i, i, i + 1, "LINK").expect("valid"))
+            .expect("add");
     }
 
     // Spawn many readers
@@ -149,7 +185,9 @@ fn test_concurrent_write_different_shards() {
                 let id = (t * 1000 + i) as u64;
                 let source = t as u64 * 1000 + i as u64;
                 let target = source + 1;
-                store_clone.add_edge(GraphEdge::new(id, source, target, "LINK"));
+                store_clone
+                    .add_edge(GraphEdge::new(id, source, target, "LINK").expect("valid"))
+                    .expect("add");
             }
         }));
     }
@@ -170,7 +208,9 @@ fn test_concurrent_read_write_same_shard() {
 
     let writer = thread::spawn(move || {
         for i in 0..100 {
-            store_writer.add_edge(GraphEdge::new(i, 1, i + 100, "LINK"));
+            store_writer
+                .add_edge(GraphEdge::new(i, 1, i + 100, "LINK").expect("valid"))
+                .expect("add");
         }
     });
 
@@ -196,12 +236,12 @@ fn test_sharded_lock_ordering_no_deadlock() {
             for i in 0..50 {
                 let source = (t * 100 + i) as u64;
                 let target = ((t + 1) % 4 * 100 + i) as u64;
-                store_clone.add_edge(GraphEdge::new(
-                    (t * 1000 + i) as u64,
-                    source,
-                    target,
-                    "CROSS",
-                ));
+                store_clone
+                    .add_edge(
+                        GraphEdge::new((t * 1000 + i) as u64, source, target, "CROSS")
+                            .expect("valid"),
+                    )
+                    .expect("add");
             }
         }));
     }
@@ -224,7 +264,9 @@ fn test_get_incoming_cross_shard() {
     // source=100 → shard 36 (100 % 64)
     // target=200 → shard 8 (200 % 64)
     // These are in DIFFERENT shards
-    store.add_edge(GraphEdge::new(1, 100, 200, "WROTE"));
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "WROTE").expect("valid"))
+        .expect("add");
 
     // get_outgoing should work (looks in source shard)
     let outgoing = store.get_outgoing(100);
@@ -247,9 +289,15 @@ fn test_bidirectional_traversal_cross_shard() {
 
     // Create edges that definitely cross shards
     // Node IDs chosen to be in different shards
-    store.add_edge(GraphEdge::new(1, 0, 64, "A")); // shard 0 -> shard 0
-    store.add_edge(GraphEdge::new(2, 1, 65, "B")); // shard 1 -> shard 1
-    store.add_edge(GraphEdge::new(3, 2, 100, "C")); // shard 2 -> shard 36
+    store
+        .add_edge(GraphEdge::new(1, 0, 64, "A").expect("valid")) // shard 0 -> shard 0
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 1, 65, "B").expect("valid")) // shard 1 -> shard 1
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 2, 100, "C").expect("valid")) // shard 2 -> shard 36
+        .expect("add");
 
     // All incoming lookups must work
     assert_eq!(store.get_incoming(64).len(), 1);
@@ -278,7 +326,9 @@ fn test_remove_node_edges_cross_shard_cleanup() {
 
     // source=100 → shard 36 (100 % 64)
     // target=200 → shard 8 (200 % 64)
-    store.add_edge(GraphEdge::new(1, 100, 200, "WROTE"));
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "WROTE").expect("valid"))
+        .expect("add");
 
     // Verify edge exists in both directions
     assert_eq!(store.get_outgoing(100).len(), 1);
@@ -312,7 +362,9 @@ fn test_remove_node_edges_incoming_cross_shard() {
 
     // source=200 → shard 8
     // target=100 → shard 36
-    store.add_edge(GraphEdge::new(1, 200, 100, "POINTS_TO"));
+    store
+        .add_edge(GraphEdge::new(1, 200, 100, "POINTS_TO").expect("valid"))
+        .expect("add");
 
     // Remove edges for node 100 (target node)
     store.remove_node_edges(100);
@@ -328,8 +380,403 @@ fn test_edge_count_across_shards() {
     let store = ConcurrentEdgeStore::with_shards(4);
 
     for i in 0..100 {
-        store.add_edge(GraphEdge::new(i, i, i + 1, "LINK"));
+        store
+            .add_edge(GraphEdge::new(i, i, i + 1, "LINK").expect("valid"))
+            .expect("add");
     }
 
     assert_eq!(store.edge_count(), 100);
+}
+
+// =============================================================================
+// Bug fix tests: Duplicate ID handling in ConcurrentEdgeStore
+// =============================================================================
+
+#[test]
+fn test_concurrent_store_duplicate_id_rejected() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "FIRST").expect("valid"))
+        .expect("add first");
+
+    // Adding edge with same ID should fail
+    let result = store.add_edge(GraphEdge::new(1, 300, 400, "SECOND").expect("valid"));
+    assert!(result.is_err());
+
+    // Original edge should still be intact
+    assert_eq!(store.edge_count(), 1);
+    let edges = store.get_outgoing(100);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].label(), "FIRST");
+}
+
+#[test]
+fn test_concurrent_store_duplicate_id_cross_shard() {
+    // Use 64 shards to ensure edges are in different shards
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // First edge: source=100 (shard 36), target=200 (shard 8)
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "FIRST").expect("valid"))
+        .expect("add first");
+
+    // Second edge with same ID but different shards: source=1 (shard 1), target=2 (shard 2)
+    let result = store.add_edge(GraphEdge::new(1, 1, 2, "SECOND").expect("valid"));
+    assert!(
+        result.is_err(),
+        "duplicate ID should be rejected even in different shards"
+    );
+
+    // Verify original edge is intact
+    assert_eq!(store.edge_count(), 1);
+}
+
+#[test]
+fn test_remove_node_edges_allows_id_reuse() {
+    // Bug #8: After remove_node_edges, the edge IDs should be available for reuse
+    let store = ConcurrentEdgeStore::new();
+
+    // Add edge with ID 1
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "FIRST").expect("valid"))
+        .expect("add first");
+    assert_eq!(store.edge_count(), 1);
+
+    // Remove all edges for node 100
+    store.remove_node_edges(100);
+    assert_eq!(store.edge_count(), 0);
+
+    // Now we should be able to reuse ID 1
+    let result = store.add_edge(GraphEdge::new(1, 300, 400, "REUSED").expect("valid"));
+    assert!(
+        result.is_ok(),
+        "should be able to reuse ID after remove_node_edges"
+    );
+    assert_eq!(store.edge_count(), 1);
+}
+
+#[test]
+fn test_remove_edge_allows_id_reuse() {
+    // Verify remove_edge also cleans up the ID registry
+    let store = ConcurrentEdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(42, 1, 2, "TEST").expect("valid"))
+        .expect("add");
+    assert_eq!(store.edge_count(), 1);
+
+    store.remove_edge(42);
+    assert_eq!(store.edge_count(), 0);
+
+    // Should be able to reuse ID 42
+    let result = store.add_edge(GraphEdge::new(42, 3, 4, "REUSED").expect("valid"));
+    assert!(
+        result.is_ok(),
+        "should be able to reuse ID after remove_edge"
+    );
+}
+
+#[test]
+fn test_concurrent_remove_and_add_same_id() {
+    // Regression test for race condition: remove_edge must clean shards
+    // BEFORE removing from registry to prevent duplicate ID insertion
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::new());
+
+    // Add initial edge
+    store
+        .add_edge(GraphEdge::new(100, 1, 2, "INITIAL").expect("valid"))
+        .expect("add initial");
+
+    // Spawn multiple threads that try to remove and re-add the same ID
+    let mut handles = vec![];
+    for i in 0..10 {
+        let store_clone = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            // Remove and immediately try to re-add
+            store_clone.remove_edge(100);
+            // Small delay to increase chance of race
+            std::thread::yield_now();
+            let _ = store_clone.add_edge(
+                GraphEdge::new(100, (i * 10) as u64, (i * 10 + 1) as u64, "RETRY").expect("valid"),
+            );
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    // After all operations, we should have at most 1 edge with ID 100
+    // The key invariant: no duplicate IDs should exist
+    assert!(
+        store.edge_count() <= 1,
+        "should have at most 1 edge, got {}",
+        store.edge_count()
+    );
+}
+
+#[test]
+fn test_concurrent_remove_node_edges_and_add() {
+    // Regression test for race condition: remove_node_edges must clean shards
+    // BEFORE removing IDs from registry
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::new());
+
+    // Add multiple edges from node 1
+    for i in 1..=5 {
+        store
+            .add_edge(GraphEdge::new(i, 1, i + 100, "LINK").expect("valid"))
+            .expect("add");
+    }
+    assert_eq!(store.edge_count(), 5);
+
+    // Thread 1: remove all edges from node 1
+    let store1 = Arc::clone(&store);
+    let h1 = thread::spawn(move || {
+        store1.remove_node_edges(1);
+    });
+
+    // Thread 2: try to add edge with ID that might be getting removed
+    let store2 = Arc::clone(&store);
+    let h2 = thread::spawn(move || {
+        std::thread::yield_now();
+        // Try to reuse ID 3 (one of the IDs being removed)
+        let _ = store2.add_edge(GraphEdge::new(3, 50, 51, "NEW").expect("valid"));
+    });
+
+    h1.join().unwrap();
+    h2.join().unwrap();
+
+    // Key invariant: no corruption, edge_count should be consistent
+    let count = store.edge_count();
+    // After remove_node_edges(1), we should have 0 or 1 edge
+    // (1 if thread 2 managed to add after removal completed)
+    assert!(
+        count <= 1,
+        "edge count should be <= 1 after remove_node_edges, got {}",
+        count
+    );
+}
+
+#[test]
+fn test_cross_shard_add_edge_consistency() {
+    // Regression test: cross-shard add_edge should maintain consistency
+    // If we add an edge spanning shards, both indices must be populated
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // Add cross-shard edge: source=100 and target=200 should be in different shards
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "CROSS").expect("valid"))
+        .expect("add cross-shard");
+
+    // Verify outgoing index is populated
+    let outgoing = store.get_outgoing(100);
+    assert_eq!(outgoing.len(), 1, "outgoing index should have 1 edge");
+    assert_eq!(outgoing[0].id(), 1);
+
+    // Verify incoming index is populated
+    let incoming = store.get_incoming(200);
+    assert_eq!(incoming.len(), 1, "incoming index should have 1 edge");
+    assert_eq!(incoming[0].id(), 1);
+
+    // Verify both point to same edge data
+    assert_eq!(outgoing[0].source(), incoming[0].source());
+    assert_eq!(outgoing[0].target(), incoming[0].target());
+}
+
+#[test]
+fn test_get_outgoing_by_label() {
+    let store = ConcurrentEdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "LIKES").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 100, 400, "KNOWS").expect("valid"))
+        .expect("add");
+
+    let knows = store.get_outgoing_by_label(100, "KNOWS");
+    assert_eq!(knows.len(), 2);
+
+    let likes = store.get_outgoing_by_label(100, "LIKES");
+    assert_eq!(likes.len(), 1);
+    assert_eq!(likes[0].target(), 300);
+
+    let none = store.get_outgoing_by_label(100, "HATES");
+    assert!(none.is_empty());
+}
+
+#[test]
+fn test_get_incoming_by_label() {
+    let store = ConcurrentEdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 200, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 300, 500, "BLOCKS").expect("valid"))
+        .expect("add");
+
+    let follows = store.get_incoming_by_label(500, "FOLLOWS");
+    assert_eq!(follows.len(), 2);
+
+    let blocks = store.get_incoming_by_label(500, "BLOCKS");
+    assert_eq!(blocks.len(), 1);
+}
+
+#[test]
+fn test_contains_edge() {
+    let store = ConcurrentEdgeStore::new();
+
+    assert!(!store.contains_edge(1));
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "TEST").expect("valid"))
+        .expect("add");
+
+    assert!(store.contains_edge(1));
+    assert!(!store.contains_edge(2));
+
+    store.remove_edge(1);
+    assert!(!store.contains_edge(1));
+}
+
+#[test]
+fn test_get_edge() {
+    let store = ConcurrentEdgeStore::new();
+
+    assert!(store.get_edge(1).is_none());
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "TEST").expect("valid"))
+        .expect("add");
+
+    let edge = store.get_edge(1);
+    assert!(edge.is_some());
+    let edge = edge.unwrap();
+    assert_eq!(edge.id(), 1);
+    assert_eq!(edge.source(), 100);
+    assert_eq!(edge.target(), 200);
+    assert_eq!(edge.label(), "TEST");
+
+    assert!(store.get_edge(999).is_none());
+}
+
+#[test]
+fn test_self_loop_remove_node_edges() {
+    // Test that self-loops are handled correctly in remove_node_edges
+    let store = ConcurrentEdgeStore::new();
+
+    // Add a self-loop (source == target)
+    store
+        .add_edge(GraphEdge::new(1, 100, 100, "SELF").expect("valid"))
+        .expect("add self-loop");
+
+    // Add another regular edge
+    store
+        .add_edge(GraphEdge::new(2, 100, 200, "OTHER").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.edge_count(), 2);
+
+    // Remove all edges for node 100
+    store.remove_node_edges(100);
+
+    assert_eq!(store.edge_count(), 0);
+
+    // Should be able to reuse both IDs
+    assert!(store
+        .add_edge(GraphEdge::new(1, 1, 2, "REUSED").expect("valid"))
+        .is_ok());
+    assert!(store
+        .add_edge(GraphEdge::new(2, 3, 4, "REUSED").expect("valid"))
+        .is_ok());
+}
+
+/// Regression test for Devin R74-157: Race between add_edge and remove_edge
+/// Scenario: remove_edge must not free an ID while add_edge is inserting it.
+/// Fix: edge_ids lock is held throughout add_edge/remove_edge operations.
+#[test]
+fn test_add_remove_race_registry_consistency() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+
+    // Pre-populate with edge ID 1
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "INITIAL").expect("valid"))
+        .expect("initial add");
+
+    // Spawn threads that concurrently add and remove
+    let mut handles = vec![];
+
+    for i in 0..10 {
+        let store_clone = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            // Thread alternates between remove and re-add of same ID
+            store_clone.remove_edge(1);
+            // Try to re-add with same ID - should succeed if remove completed
+            let _ =
+                store_clone.add_edge(GraphEdge::new(1, 100 + i, 200 + i, "RETRY").expect("valid"));
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("thread join");
+    }
+
+    // After all operations, registry and shards must be consistent:
+    // If ID 1 exists in registry, it must exist in a shard
+    // If ID 1 doesn't exist in registry, it must not exist in any shard
+    let in_registry = store.contains_edge(1);
+    let in_shard = store.get_edge(1).is_some();
+
+    assert_eq!(
+        in_registry, in_shard,
+        "Registry and shard must be consistent: registry={}, shard={}",
+        in_registry, in_shard
+    );
+}
+
+/// Test that edge_ids lock ordering prevents deadlock between add and remove
+#[test]
+fn test_lock_ordering_no_deadlock_add_remove() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+
+    // Many threads doing concurrent add/remove operations
+    let mut handles = vec![];
+
+    for i in 0..20 {
+        let store_clone = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            let edge_id = (i % 5) as u64; // Only 5 unique IDs to force contention
+            for _ in 0..50 {
+                let _ = store_clone.add_edge(
+                    GraphEdge::new(edge_id, i as u64 * 100, i as u64 * 100 + 1, "CONTEND")
+                        .expect("valid"),
+                );
+                store_clone.remove_edge(edge_id);
+            }
+        }));
+    }
+
+    // If there's a deadlock, this will hang
+    for handle in handles {
+        handle.join().expect("thread should not deadlock");
+    }
 }
