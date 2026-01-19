@@ -185,3 +185,35 @@ fn test_parse_relationship_star_open_start() {
     let rel = result.unwrap();
     assert_eq!(rel.range, Some((1, 5)));
 }
+
+// === Bracket validation tests (Bug fix) ===
+
+#[test]
+fn test_error_missing_closing_bracket() {
+    // Missing ] should produce an error
+    let result = parse_relationship_pattern("-[r:WROTE->");
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains(']') || err.contains("closing"),
+        "Error should mention missing closing bracket"
+    );
+}
+
+#[test]
+fn test_error_missing_opening_bracket() {
+    // Missing [ should produce an error
+    let result = parse_relationship_pattern("-r:WROTE]->");
+    assert!(result.is_err());
+}
+
+// === parse_value single quote test (Bug fix) ===
+
+#[test]
+fn test_parse_node_single_quote_property() {
+    // Single quote ' as value should not panic, should error
+    let result = parse_node_pattern("(n:Person {name: '})");
+    // Should either error or handle gracefully, not panic
+    // The malformed value should cause an error
+    assert!(result.is_err());
+}

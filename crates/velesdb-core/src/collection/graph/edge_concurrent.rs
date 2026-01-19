@@ -119,10 +119,68 @@ impl ConcurrentEdgeStore {
     }
 
     /// Removes all edges connected to a node (cascade delete, thread-safe).
+    ///
+    /// Handles cross-shard cleanup: collects all edges, then removes from all
+    /// relevant shards with proper lock ordering to prevent deadlocks.
     pub fn remove_node_edges(&self, node_id: u64) {
-        let shard = &self.shards[self.shard_index(node_id)];
-        let mut guard = shard.write();
-        guard.remove_node_edges(node_id);
+        let node_shard = self.shard_index(node_id);
+
+        // Phase 1: Collect all edges connected to this node (read-only)
+        let (outgoing_edges, incoming_edges): (Vec<_>, Vec<_>) = {
+            let guard = self.shards[node_shard].read();
+            let outgoing: Vec<_> = guard
+                .get_outgoing(node_id)
+                .iter()
+                .map(|e| (e.id(), e.target()))
+                .collect();
+            let incoming: Vec<_> = guard
+                .get_incoming(node_id)
+                .iter()
+                .map(|e| (e.id(), e.source()))
+                .collect();
+            (outgoing, incoming)
+        };
+
+        // Phase 2: Collect all shards that need cleanup
+        let mut shards_to_clean: std::collections::BTreeSet<usize> =
+            std::collections::BTreeSet::new();
+        shards_to_clean.insert(node_shard);
+
+        for (_, target) in &outgoing_edges {
+            shards_to_clean.insert(self.shard_index(*target));
+        }
+        for (_, source) in &incoming_edges {
+            shards_to_clean.insert(self.shard_index(*source));
+        }
+
+        // Phase 3: Acquire locks in ascending order and perform cleanup
+        // BTreeSet iteration is already sorted ascending
+        let mut guards: Vec<_> = shards_to_clean
+            .iter()
+            .map(|&idx| (idx, self.shards[idx].write()))
+            .collect();
+
+        // Phase 4: Clean up edges in all shards
+        for (shard_idx, guard) in &mut guards {
+            if *shard_idx == node_shard {
+                // Main shard: full cleanup
+                guard.remove_node_edges(node_id);
+            } else {
+                // Other shards: clean only the cross-shard edge entries
+                for (edge_id, target) in &outgoing_edges {
+                    if self.shard_index(*target) == *shard_idx {
+                        // This edge's incoming index is in this shard
+                        guard.remove_edge_incoming_only(*edge_id);
+                    }
+                }
+                for (edge_id, source) in &incoming_edges {
+                    if self.shard_index(*source) == *shard_idx {
+                        // This edge's outgoing index is in this shard
+                        guard.remove_edge_outgoing_only(*edge_id);
+                    }
+                }
+            }
+        }
     }
 
     /// Traverses the graph using BFS from a starting node.
