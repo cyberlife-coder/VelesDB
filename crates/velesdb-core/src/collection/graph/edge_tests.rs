@@ -1,4 +1,4 @@
-//! Tests for GraphEdge and EdgeStore.
+//! Tests for `GraphEdge` and `EdgeStore`.
 //!
 //! TDD: Tests written BEFORE implementation (RED phase).
 

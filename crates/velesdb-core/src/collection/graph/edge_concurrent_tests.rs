@@ -1,4 +1,4 @@
-//! Tests for ConcurrentEdgeStore - thread-safety and performance.
+//! Tests for `ConcurrentEdgeStore` - thread-safety and performance.
 
 use super::edge::GraphEdge;
 use super::edge_concurrent::ConcurrentEdgeStore;
@@ -213,8 +213,115 @@ fn test_sharded_lock_ordering_no_deadlock() {
 }
 
 // =============================================================================
+// Cross-shard incoming edges test (Bug fix verification)
+// =============================================================================
+
+#[test]
+fn test_get_incoming_cross_shard() {
+    // Use 64 shards to ensure source and target are in different shards
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // source=100 → shard 36 (100 % 64)
+    // target=200 → shard 8 (200 % 64)
+    // These are in DIFFERENT shards
+    store.add_edge(GraphEdge::new(1, 100, 200, "WROTE"));
+
+    // get_outgoing should work (looks in source shard)
+    let outgoing = store.get_outgoing(100);
+    assert_eq!(outgoing.len(), 1, "get_outgoing should find the edge");
+    assert_eq!(outgoing[0].target(), 200);
+
+    // get_incoming MUST also work (must look in correct shard)
+    let incoming = store.get_incoming(200);
+    assert_eq!(
+        incoming.len(),
+        1,
+        "get_incoming must find cross-shard edges"
+    );
+    assert_eq!(incoming[0].source(), 100);
+}
+
+#[test]
+fn test_bidirectional_traversal_cross_shard() {
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // Create edges that definitely cross shards
+    // Node IDs chosen to be in different shards
+    store.add_edge(GraphEdge::new(1, 0, 64, "A")); // shard 0 -> shard 0
+    store.add_edge(GraphEdge::new(2, 1, 65, "B")); // shard 1 -> shard 1
+    store.add_edge(GraphEdge::new(3, 2, 100, "C")); // shard 2 -> shard 36
+
+    // All incoming lookups must work
+    assert_eq!(store.get_incoming(64).len(), 1);
+    assert_eq!(store.get_incoming(65).len(), 1);
+    assert_eq!(store.get_incoming(100).len(), 1);
+}
+
+// =============================================================================
 // Edge count
 // =============================================================================
+
+#[test]
+#[should_panic(expected = "num_shards must be at least 1")]
+fn test_with_shards_zero_panics() {
+    let _ = ConcurrentEdgeStore::with_shards(0);
+}
+
+// =============================================================================
+// Cross-shard remove_node_edges cleanup test (Bug fix verification)
+// =============================================================================
+
+#[test]
+fn test_remove_node_edges_cross_shard_cleanup() {
+    // Use 64 shards to ensure source and target are in different shards
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // source=100 → shard 36 (100 % 64)
+    // target=200 → shard 8 (200 % 64)
+    store.add_edge(GraphEdge::new(1, 100, 200, "WROTE"));
+
+    // Verify edge exists in both directions
+    assert_eq!(store.get_outgoing(100).len(), 1);
+    assert_eq!(store.get_incoming(200).len(), 1);
+    assert_eq!(store.edge_count(), 1);
+
+    // Remove edges for node 100 (source node)
+    store.remove_node_edges(100);
+
+    // Edge should be completely removed from both shards
+    assert_eq!(
+        store.get_outgoing(100).len(),
+        0,
+        "Outgoing edges should be removed"
+    );
+    assert_eq!(
+        store.get_incoming(200).len(),
+        0,
+        "Incoming edges in other shard should also be cleaned up"
+    );
+    assert_eq!(
+        store.edge_count(),
+        0,
+        "Edge count should be 0 after cleanup"
+    );
+}
+
+#[test]
+fn test_remove_node_edges_incoming_cross_shard() {
+    let store = ConcurrentEdgeStore::with_shards(64);
+
+    // source=200 → shard 8
+    // target=100 → shard 36
+    store.add_edge(GraphEdge::new(1, 200, 100, "POINTS_TO"));
+
+    // Remove edges for node 100 (target node)
+    store.remove_node_edges(100);
+
+    // Edge should be completely removed from both shards
+    assert_eq!(store.get_outgoing(200).len(), 0);
+    assert_eq!(store.get_incoming(100).len(), 0);
+    assert_eq!(store.edge_count(), 0);
+}
 
 #[test]
 fn test_edge_count_across_shards() {
