@@ -279,6 +279,17 @@ fn test_node_brace_reversed_order() {
     );
 }
 
+#[test]
+fn test_relationship_brace_reversed_order() {
+    // Relationship properties with } before { should return ParseError, not panic
+    let result = parse_relationship_pattern("-[r:KNOWS } foo {a: 1]->");
+    assert!(
+        result.is_err(),
+        "Should error on reversed braces in relationship: {:?}",
+        result
+    );
+}
+
 // === Comma inside string literal test (Bug fix) ===
 
 #[test]

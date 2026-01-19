@@ -162,6 +162,13 @@ fn parse_rel_details(input: &str, rel: &mut RelationshipPattern) -> Result<(), P
         let pe = input
             .rfind('}')
             .ok_or_else(|| ParseError::syntax(ps, input, "Expected '}'"))?;
+        if pe <= ps {
+            return Err(ParseError::syntax(
+                ps,
+                input,
+                "Mismatched braces in relationship properties",
+            ));
+        }
         (input[..ps].trim(), parse_properties(&input[ps + 1..pe])?)
     } else {
         (input, HashMap::new())
