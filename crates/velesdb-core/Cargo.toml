@@ -190,3 +190,7 @@ harness = false
 [[bench]]
 name = "edge_store_benchmark"
 harness = false
+
+[[bench]]
+name = "match_parser_benchmark"
+harness = false
