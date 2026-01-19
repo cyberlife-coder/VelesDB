@@ -60,6 +60,13 @@ pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
         let pe = inner
             .rfind('}')
             .ok_or_else(|| ParseError::syntax(ps, input, "Expected '}'"))?;
+        if pe <= ps {
+            return Err(ParseError::syntax(
+                ps,
+                input,
+                "Mismatched braces in node pattern",
+            ));
+        }
         (inner[..ps].trim(), parse_properties(&inner[ps + 1..pe])?)
     } else {
         (inner, HashMap::new())
@@ -125,6 +132,13 @@ pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, Pa
     }
 
     if has_open && has_close {
+        if ie <= is {
+            return Err(ParseError::syntax(
+                is,
+                input,
+                "Mismatched brackets in relationship pattern",
+            ));
+        }
         let inner = input[is + 1..ie].trim();
         if !inner.is_empty() {
             if let Some(sp) = inner.find('*') {
@@ -188,16 +202,35 @@ fn parse_range(input: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// Splits properties respecting string literals (commas inside quotes are preserved).
 fn parse_properties(input: &str) -> Result<HashMap<String, Value>, ParseError> {
     let mut props = HashMap::new();
-    for prop in input.split(',') {
-        if let Some(c) = prop.find(':') {
-            props.insert(
-                prop[..c].trim().to_string(),
-                parse_value(prop[c + 1..].trim())?,
-            );
+    let mut in_string = false;
+    let mut start = 0;
+
+    for (i, ch) in input.char_indices() {
+        if ch == '\'' {
+            in_string = !in_string;
+        } else if ch == ',' && !in_string {
+            let prop = input[start..i].trim();
+            if let Some(c) = prop.find(':') {
+                props.insert(
+                    prop[..c].trim().to_string(),
+                    parse_value(prop[c + 1..].trim())?,
+                );
+            }
+            start = i + 1;
         }
     }
+
+    let prop = input[start..].trim();
+    if let Some(c) = prop.find(':') {
+        props.insert(
+            prop[..c].trim().to_string(),
+            parse_value(prop[c + 1..].trim())?,
+        );
+    }
+
     Ok(props)
 }
 
@@ -374,9 +407,11 @@ fn find_keyword(input: &str, kw: &str) -> Option<usize> {
             .zip(kw_bytes.iter())
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
         {
-            // Check word boundaries
-            let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-            let after_ok = i + kw_len >= bytes.len() || !bytes[i + kw_len].is_ascii_alphanumeric();
+            // Check word boundaries (underscore is part of identifiers)
+            let before_ok =
+                i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let after_ok = i + kw_len >= bytes.len()
+                || !(bytes[i + kw_len].is_ascii_alphanumeric() || bytes[i + kw_len] == b'_');
 
             if before_ok && after_ok {
                 return Some(i);

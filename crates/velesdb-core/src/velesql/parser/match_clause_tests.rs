@@ -1,7 +1,7 @@
 //! Tests for MATCH clause parser.
 
 use super::match_clause::{parse_match_clause, parse_node_pattern, parse_relationship_pattern};
-use crate::velesql::ast::Direction;
+use crate::velesql::ast::{Direction, Value};
 
 #[test]
 fn test_parse_simple_node() {
@@ -255,6 +255,81 @@ fn test_where_diamond_not_equal_operator() {
     assert!(clause.where_clause.is_some());
 }
 
-// Note: Full Unicode support in property values requires additional parser work.
-// The current fixes address the specific bugs reported by Devin.
-// Unicode property values are a separate enhancement.
+// === Bracket/brace ordering tests (Bug fix: prevent panic on malformed input) ===
+
+#[test]
+fn test_relationship_bracket_reversed_order() {
+    // Input where ] appears before [ should return ParseError, not panic
+    let result = parse_relationship_pattern("-]foo[->");
+    assert!(
+        result.is_err(),
+        "Should error on reversed brackets: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_node_brace_reversed_order() {
+    // Input where } appears before { should return ParseError, not panic
+    let result = parse_node_pattern("(n } foo {a: 1)");
+    assert!(
+        result.is_err(),
+        "Should error on reversed braces: {:?}",
+        result
+    );
+}
+
+// === Comma inside string literal test (Bug fix) ===
+
+#[test]
+fn test_property_with_comma_in_string() {
+    // Commas inside string values should be preserved
+    let result = parse_node_pattern("(n:Person {name: 'Alice, Bob', age: 30})");
+    assert!(
+        result.is_ok(),
+        "Should parse comma inside string: {:?}",
+        result
+    );
+    let node = result.unwrap();
+    assert_eq!(node.properties.len(), 2);
+    assert_eq!(
+        node.properties.get("name"),
+        Some(&Value::String("Alice, Bob".to_string()))
+    );
+    assert_eq!(node.properties.get("age"), Some(&Value::Integer(30)));
+}
+
+// === Underscore in identifier test (Bug fix) ===
+
+#[test]
+fn test_keyword_not_matched_after_underscore() {
+    // Keywords after underscore should NOT be matched (underscore is part of identifier)
+    let result = parse_match_clause("MATCH (foo_RETURN:Label) RETURN foo_RETURN");
+    assert!(
+        result.is_ok(),
+        "Should parse identifier with keyword substring: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_keyword_not_matched_before_underscore() {
+    // Keywords before underscore should NOT be matched
+    let result = parse_match_clause("MATCH (RETURN_value:Label) RETURN RETURN_value");
+    assert!(
+        result.is_ok(),
+        "Should parse identifier starting with keyword: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_where_clause_identifier_with_underscore() {
+    // WHERE should not be matched inside where_clause identifier
+    let result = parse_match_clause("MATCH (n:Person) WHERE n.where_status = 'active' RETURN n");
+    assert!(
+        result.is_ok(),
+        "Should handle where_status identifier: {:?}",
+        result
+    );
+}
