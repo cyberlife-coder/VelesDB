@@ -31,11 +31,13 @@ mod error_tests;
 mod explain;
 #[cfg(test)]
 mod explain_tests;
+mod graph_pattern;
 mod parser;
 #[cfg(test)]
 mod parser_tests;
 
 pub use ast::*;
+pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};

@@ -11,9 +11,11 @@
 //! - Growth factor: 2x minimum with 64MB floor - fewer resize operations
 //! - Explicit `reserve_capacity()` for bulk imports
 
+use super::compaction::CompactionContext;
 use super::guard::VectorSliceGuard;
 use super::metrics::StorageMetrics;
 use super::traits::VectorStorage;
+use super::vector_bytes::{bytes_to_vector, vector_to_bytes};
 
 use memmap2::MmapMut;
 use parking_lot::RwLock;
@@ -264,96 +266,24 @@ impl MmapStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn compact(&mut self) -> io::Result<usize> {
-        let vector_size = self.dimension * std::mem::size_of::<f32>();
+        let ctx = CompactionContext {
+            path: &self.path,
+            dimension: self.dimension,
+            index: &self.index,
+            mmap: &self.mmap,
+            next_offset: &self.next_offset,
+            wal: &self.wal,
+            initial_size: Self::INITIAL_SIZE,
+        };
 
-        // 1. Get current state
-        let index = self.index.read();
-        let active_count = index.len();
+        let bytes_reclaimed = ctx.compact()?;
 
-        if active_count == 0 {
-            // Nothing to compact
-            drop(index);
-            return Ok(0);
+        // Save updated index after compaction
+        if bytes_reclaimed > 0 {
+            self.flush()?;
         }
 
-        // Calculate space used vs allocated
-        let current_offset = self.next_offset.load(Ordering::Relaxed);
-        let active_size = active_count * vector_size;
-
-        if current_offset <= active_size {
-            // No fragmentation, nothing to reclaim
-            drop(index);
-            return Ok(0);
-        }
-
-        let bytes_to_reclaim = current_offset - active_size;
-
-        // 2. Create temporary file for compacted data
-        let temp_path = self.path.join("vectors.dat.tmp");
-        let temp_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&temp_path)?;
-
-        // Size the temp file for active vectors
-        let new_size = (active_size as u64).max(Self::INITIAL_SIZE);
-        temp_file.set_len(new_size)?;
-
-        let mut temp_mmap = unsafe { MmapMut::map_mut(&temp_file)? };
-
-        // 3. Copy active vectors to new file with new offsets
-        let mmap = self.mmap.read();
-        let mut new_index: FxHashMap<u64, usize> = FxHashMap::default();
-        new_index.reserve(active_count);
-
-        let mut new_offset = 0usize;
-        for (&id, &old_offset) in index.iter() {
-            // Copy vector data
-            let src = &mmap[old_offset..old_offset + vector_size];
-            temp_mmap[new_offset..new_offset + vector_size].copy_from_slice(src);
-            new_index.insert(id, new_offset);
-            new_offset += vector_size;
-        }
-
-        drop(mmap);
-        drop(index);
-
-        // 4. Flush temp file
-        temp_mmap.flush()?;
-        drop(temp_mmap);
-        drop(temp_file);
-
-        // 5. Atomic swap: rename temp -> main
-        let data_path = self.path.join("vectors.dat");
-        std::fs::rename(&temp_path, &data_path)?;
-
-        // 6. Reopen the compacted file
-        let new_data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
-
-        let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
-
-        // 7. Update internal state
-        *self.mmap.write() = new_mmap;
-        // Note: We can't reassign self.data_file directly, so we use std::mem::replace
-        // This is a limitation - for full fix we'd need data_file behind RwLock too
-
-        *self.index.write() = new_index;
-        self.next_offset.store(new_offset, Ordering::Relaxed);
-
-        // 8. Write compaction marker to WAL
-        {
-            let mut wal = self.wal.write();
-            // Op: Compact (4) - marker only, no data
-            wal.write_all(&[4u8])?;
-            wal.flush()?;
-        }
-
-        // 9. Save updated index
-        self.flush()?;
-
-        Ok(bytes_to_reclaim)
+        Ok(bytes_reclaimed)
     }
 
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).
@@ -362,61 +292,27 @@ impl MmapStorage {
     /// A ratio > 0.3 (30% fragmentation) is a good threshold.
     #[must_use]
     pub fn fragmentation_ratio(&self) -> f64 {
-        let index = self.index.read();
-        let active_count = index.len();
-        drop(index);
+        let ctx = CompactionContext {
+            path: &self.path,
+            dimension: self.dimension,
+            index: &self.index,
+            mmap: &self.mmap,
+            next_offset: &self.next_offset,
+            wal: &self.wal,
+            initial_size: Self::INITIAL_SIZE,
+        };
 
-        if active_count == 0 {
-            return 0.0;
-        }
-
-        let vector_size = self.dimension * std::mem::size_of::<f32>();
-        let active_size = active_count * vector_size;
-        let current_offset = self.next_offset.load(Ordering::Relaxed);
-
-        if current_offset == 0 {
-            return 0.0;
-        }
-
-        #[allow(clippy::cast_precision_loss)]
-        let ratio = 1.0 - (active_size as f64 / current_offset as f64);
-        ratio.max(0.0)
+        ctx.fragmentation_ratio()
     }
 
     /// Retrieves a vector by ID without copying (zero-copy).
     ///
-    /// Returns a guard that provides direct access to the mmap'd data.
-    /// This is significantly faster than `retrieve()` for read-heavy workloads
-    /// as it eliminates heap allocation and memory copy.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The vector ID to retrieve
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(guard))` - Guard providing zero-copy access to the vector
-    /// - `Ok(None)` - Vector with this ID doesn't exist
-    /// - `Err(...)` - I/O error (e.g., corrupted data)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let guard = storage.retrieve_ref(id)?.unwrap();
-    /// let slice: &[f32] = guard.as_ref();
-    /// // Use slice directly - no allocation occurred
-    /// ```
-    ///
-    /// # Performance
-    ///
-    /// Compared to `retrieve()`:
-    /// - **No heap allocation** - data accessed directly from mmap
-    /// - **No memcpy** - pointer arithmetic only
-    /// - **Lock held** - guard must be dropped to release read lock
+    /// Returns a guard providing direct mmap access. Faster than `retrieve()`
+    /// as it eliminates heap allocation and memcpy. Guard must be dropped to release lock.
     ///
     /// # Errors
     ///
-    /// Returns an error if the stored offset is out of bounds (corrupted index).
+    /// Returns an error if the stored offset is out of bounds.
     pub fn retrieve_ref(&self, id: u64) -> io::Result<Option<VectorSliceGuard<'_>>> {
         // First check if ID exists (separate lock to minimize contention)
         let offset = {
@@ -465,9 +361,7 @@ impl VectorStorage for MmapStorage {
             ));
         }
 
-        let vector_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(vector.as_ptr().cast::<u8>(), std::mem::size_of_val(vector))
-        };
+        let vector_bytes = vector_to_bytes(vector);
 
         // 1. Write to WAL
         {
@@ -568,12 +462,7 @@ impl VectorStorage for MmapStorage {
 
             // Write all vectors contiguously
             for &(id, vector) in vectors {
-                let vector_bytes: &[u8] = unsafe {
-                    std::slice::from_raw_parts(
-                        vector.as_ptr().cast::<u8>(),
-                        std::mem::size_of_val(vector),
-                    )
-                };
+                let vector_bytes = vector_to_bytes(vector);
                 wal.write_all(&id.to_le_bytes())?;
                 #[allow(clippy::cast_possible_truncation)]
                 let len_u32 = vector_bytes.len() as u32;
@@ -589,12 +478,7 @@ impl VectorStorage for MmapStorage {
             let mut mmap = self.mmap.write();
 
             for &(id, vector) in vectors {
-                let vector_bytes: &[u8] = unsafe {
-                    std::slice::from_raw_parts(
-                        vector.as_ptr().cast::<u8>(),
-                        std::mem::size_of_val(vector),
-                    )
-                };
+                let vector_bytes = vector_to_bytes(vector);
 
                 // Get offset (existing or from new_vector_offsets)
                 // Perf: O(1) HashMap lookup instead of O(n) linear search
@@ -637,18 +521,7 @@ impl VectorStorage for MmapStorage {
         }
 
         let bytes = &mmap[offset..offset + vector_size];
-
-        // Convert bytes back to f32
-        let mut vector = vec![0.0f32; self.dimension];
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                vector.as_mut_ptr().cast::<u8>(),
-                vector_size,
-            );
-        }
-
-        Ok(Some(vector))
+        Ok(Some(bytes_to_vector(bytes, self.dimension)))
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {

@@ -11,12 +11,14 @@
 //! - [`VectorSliceGuard`]: Zero-copy vector slice guard
 //! - [`metrics`]: Storage operation metrics (P0 audit - latency monitoring)
 
+mod compaction;
 mod guard;
 mod histogram;
 mod log_payload;
 pub mod metrics;
 mod mmap;
 mod traits;
+mod vector_bytes;
 
 #[cfg(test)]
 mod histogram_tests;
