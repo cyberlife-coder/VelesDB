@@ -286,6 +286,20 @@ fn test_edge_whitespace_only_label_rejected() {
 }
 
 #[test]
+fn test_edge_label_trimmed_on_storage() {
+    // Bug: label with whitespace should be trimmed when stored
+    let edge = GraphEdge::new(1, 100, 200, "  KNOWS  ").expect("valid");
+    assert_eq!(edge.label(), "KNOWS", "label should be trimmed");
+
+    // Verify lookup works with trimmed label
+    let mut store = EdgeStore::new();
+    store.add_edge(edge).expect("add");
+
+    let found = store.get_outgoing_by_label(100, "KNOWS");
+    assert_eq!(found.len(), 1, "should find edge with trimmed label");
+}
+
+#[test]
 fn test_edge_store_duplicate_id_rejected() {
     let mut store = EdgeStore::new();
     store

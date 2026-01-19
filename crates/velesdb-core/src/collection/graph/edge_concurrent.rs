@@ -108,15 +108,31 @@ impl ConcurrentEdgeStore {
 
             // Add to source shard (outgoing index)
             // Add to target shard (incoming index)
+            // Handle errors with proper rollback
             if source_shard < target_shard {
                 // first = source, second = target
-                // Skip duplicate check in EdgeStore since we already checked globally
-                first_guard.add_edge_outgoing_only(edge.clone()).ok();
-                second_guard.add_edge_incoming_only(edge).ok();
+                if let Err(e) = first_guard.add_edge_outgoing_only(edge.clone()) {
+                    self.edge_ids.write().remove(&edge_id);
+                    return Err(e);
+                }
+                if let Err(e) = second_guard.add_edge_incoming_only(edge) {
+                    // Rollback first shard operation
+                    first_guard.remove_edge_outgoing_only(edge_id);
+                    self.edge_ids.write().remove(&edge_id);
+                    return Err(e);
+                }
             } else {
                 // first = target, second = source
-                second_guard.add_edge_outgoing_only(edge.clone()).ok();
-                first_guard.add_edge_incoming_only(edge).ok();
+                if let Err(e) = second_guard.add_edge_outgoing_only(edge.clone()) {
+                    self.edge_ids.write().remove(&edge_id);
+                    return Err(e);
+                }
+                if let Err(e) = first_guard.add_edge_incoming_only(edge) {
+                    // Rollback second shard operation
+                    second_guard.remove_edge_outgoing_only(edge_id);
+                    self.edge_ids.write().remove(&edge_id);
+                    return Err(e);
+                }
             }
         }
         Ok(())

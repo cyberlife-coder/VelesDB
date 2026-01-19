@@ -52,7 +52,7 @@ impl GraphEdge {
             id,
             source,
             target,
-            label: label.to_string(),
+            label: trimmed.to_string(),
             properties: HashMap::new(),
         })
     }
