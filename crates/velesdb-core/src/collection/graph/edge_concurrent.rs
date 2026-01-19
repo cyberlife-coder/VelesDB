@@ -33,8 +33,13 @@ impl ConcurrentEdgeStore {
     }
 
     /// Creates a new concurrent edge store with a specific number of shards.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num_shards` is 0 (would cause division-by-zero in shard_index).
     #[must_use]
     pub fn with_shards(num_shards: usize) -> Self {
+        assert!(num_shards > 0, "num_shards must be at least 1");
         let shards = (0..num_shards)
             .map(|_| RwLock::new(EdgeStore::new()))
             .collect();
@@ -49,34 +54,41 @@ impl ConcurrentEdgeStore {
 
     /// Adds an edge to the store (thread-safe).
     ///
-    /// Acquires locks in ascending shard order to prevent deadlocks.
+    /// Edges are stored in BOTH source and target shards:
+    /// - Source shard: for outgoing index lookups
+    /// - Target shard: for incoming index lookups
+    ///
+    /// When source and target are in different shards, locks are acquired
+    /// in ascending shard index order to prevent deadlocks.
     pub fn add_edge(&self, edge: GraphEdge) {
-        let source = edge.source();
-        let target = edge.target();
-        let shard_src = self.shard_index(source);
-        let shard_tgt = self.shard_index(target);
+        let source_shard = self.shard_index(edge.source());
+        let target_shard = self.shard_index(edge.target());
 
-        if shard_src == shard_tgt {
-            let mut guard = self.shards[shard_src].write();
+        if source_shard == target_shard {
+            // Same shard: single lock, EdgeStore handles both indices
+            let mut guard = self.shards[source_shard].write();
             guard.add_edge(edge);
         } else {
-            // Acquire locks in ascending order to prevent deadlock
-            let (first, second) = if shard_src < shard_tgt {
-                (shard_src, shard_tgt)
+            // Different shards: acquire locks in ascending order to prevent deadlock
+            let (first_idx, second_idx) = if source_shard < target_shard {
+                (source_shard, target_shard)
             } else {
-                (shard_tgt, shard_src)
+                (target_shard, source_shard)
             };
 
-            let mut _guard1 = self.shards[first].write();
-            let mut guard2 = self.shards[second].write();
+            let mut first_guard = self.shards[first_idx].write();
+            let mut second_guard = self.shards[second_idx].write();
 
-            // Add to the source shard (where outgoing index is maintained)
-            if first == shard_src {
-                drop(_guard1);
-                let mut src_guard = self.shards[shard_src].write();
-                src_guard.add_edge(edge);
+            // Add to source shard (outgoing index)
+            // Add to target shard (incoming index)
+            if source_shard < target_shard {
+                // first = source, second = target
+                first_guard.add_edge_outgoing_only(edge.clone());
+                second_guard.add_edge_incoming_only(edge);
             } else {
-                guard2.add_edge(edge);
+                // first = target, second = source
+                second_guard.add_edge_outgoing_only(edge.clone());
+                first_guard.add_edge_incoming_only(edge);
             }
         }
     }
@@ -107,10 +119,68 @@ impl ConcurrentEdgeStore {
     }
 
     /// Removes all edges connected to a node (cascade delete, thread-safe).
+    ///
+    /// Handles cross-shard cleanup: collects all edges, then removes from all
+    /// relevant shards with proper lock ordering to prevent deadlocks.
     pub fn remove_node_edges(&self, node_id: u64) {
-        let shard = &self.shards[self.shard_index(node_id)];
-        let mut guard = shard.write();
-        guard.remove_node_edges(node_id);
+        let node_shard = self.shard_index(node_id);
+
+        // Phase 1: Collect all edges connected to this node (read-only)
+        let (outgoing_edges, incoming_edges): (Vec<_>, Vec<_>) = {
+            let guard = self.shards[node_shard].read();
+            let outgoing: Vec<_> = guard
+                .get_outgoing(node_id)
+                .iter()
+                .map(|e| (e.id(), e.target()))
+                .collect();
+            let incoming: Vec<_> = guard
+                .get_incoming(node_id)
+                .iter()
+                .map(|e| (e.id(), e.source()))
+                .collect();
+            (outgoing, incoming)
+        };
+
+        // Phase 2: Collect all shards that need cleanup
+        let mut shards_to_clean: std::collections::BTreeSet<usize> =
+            std::collections::BTreeSet::new();
+        shards_to_clean.insert(node_shard);
+
+        for (_, target) in &outgoing_edges {
+            shards_to_clean.insert(self.shard_index(*target));
+        }
+        for (_, source) in &incoming_edges {
+            shards_to_clean.insert(self.shard_index(*source));
+        }
+
+        // Phase 3: Acquire locks in ascending order and perform cleanup
+        // BTreeSet iteration is already sorted ascending
+        let mut guards: Vec<_> = shards_to_clean
+            .iter()
+            .map(|&idx| (idx, self.shards[idx].write()))
+            .collect();
+
+        // Phase 4: Clean up edges in all shards
+        for (shard_idx, guard) in &mut guards {
+            if *shard_idx == node_shard {
+                // Main shard: full cleanup
+                guard.remove_node_edges(node_id);
+            } else {
+                // Other shards: clean only the cross-shard edge entries
+                for (edge_id, target) in &outgoing_edges {
+                    if self.shard_index(*target) == *shard_idx {
+                        // This edge's incoming index is in this shard
+                        guard.remove_edge_incoming_only(*edge_id);
+                    }
+                }
+                for (edge_id, source) in &incoming_edges {
+                    if self.shard_index(*source) == *shard_idx {
+                        // This edge's outgoing index is in this shard
+                        guard.remove_edge_outgoing_only(*edge_id);
+                    }
+                }
+            }
+        }
     }
 
     /// Traverses the graph using BFS from a starting node.
@@ -151,9 +221,14 @@ impl ConcurrentEdgeStore {
     }
 
     /// Returns the total edge count across all shards.
+    ///
+    /// Uses outgoing edge count to avoid double-counting edges that span shards.
     #[must_use]
     pub fn edge_count(&self) -> usize {
-        self.shards.iter().map(|s| s.read().edge_count()).sum()
+        self.shards
+            .iter()
+            .map(|s| s.read().outgoing_edge_count())
+            .sum()
     }
 }
 
