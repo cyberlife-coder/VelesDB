@@ -344,3 +344,43 @@ fn test_where_clause_identifier_with_underscore() {
         result
     );
 }
+
+// === Expert 5: Additional edge case tests ===
+
+#[test]
+fn test_nested_parentheses_in_pattern() {
+    // Nested patterns should be handled correctly
+    let result = parse_match_clause("MATCH (a)-[:R]->(b)-[:S]->(c) RETURN a, b, c");
+    assert!(
+        result.is_ok(),
+        "Should handle chained patterns: {:?}",
+        result
+    );
+    let clause = result.unwrap();
+    assert_eq!(clause.patterns[0].nodes.len(), 3);
+    assert_eq!(clause.patterns[0].relationships.len(), 2);
+}
+
+#[test]
+fn test_empty_relationship_brackets() {
+    // Empty brackets should be valid
+    let result = parse_relationship_pattern("-[]->");
+    assert!(result.is_ok(), "Should handle empty brackets: {:?}", result);
+}
+
+#[test]
+fn test_relationship_with_only_alias() {
+    let result = parse_relationship_pattern("-[r]->");
+    assert!(result.is_ok());
+    let rel = result.unwrap();
+    assert_eq!(rel.alias, Some("r".to_string()));
+}
+
+#[test]
+fn test_node_with_only_label_no_alias() {
+    let result = parse_node_pattern("(:Person)");
+    assert!(result.is_ok());
+    let node = result.unwrap();
+    assert!(node.alias.is_none());
+    assert_eq!(node.labels, vec!["Person".to_string()]);
+}
