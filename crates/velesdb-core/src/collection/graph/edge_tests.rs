@@ -340,3 +340,83 @@ fn test_edge_store_no_index_corruption_on_duplicate() {
     let incoming_300 = store.get_incoming(300);
     assert!(incoming_300.is_empty(), "incoming to 300 should be empty");
 }
+
+#[test]
+fn test_get_incoming_by_label() {
+    let mut store = EdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 200, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 300, 500, "BLOCKS").expect("valid"))
+        .expect("add");
+
+    let follows = store.get_incoming_by_label(500, "FOLLOWS");
+    assert_eq!(follows.len(), 2);
+
+    let blocks = store.get_incoming_by_label(500, "BLOCKS");
+    assert_eq!(blocks.len(), 1);
+
+    let none = store.get_incoming_by_label(500, "LIKES");
+    assert!(none.is_empty());
+}
+
+#[test]
+fn test_contains_edge() {
+    let mut store = EdgeStore::new();
+
+    assert!(!store.contains_edge(1));
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "TEST").expect("valid"))
+        .expect("add");
+
+    assert!(store.contains_edge(1));
+    assert!(!store.contains_edge(2));
+
+    store.remove_edge(1);
+    assert!(!store.contains_edge(1));
+}
+
+#[test]
+fn test_outgoing_edge_count() {
+    let mut store = EdgeStore::new();
+
+    assert_eq!(store.outgoing_edge_count(), 0);
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "B").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 200, 300, "C").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.outgoing_edge_count(), 3);
+    assert_eq!(store.edge_count(), 3);
+}
+
+#[test]
+fn test_property_access() {
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    let mut props = HashMap::new();
+    props.insert("weight".to_string(), json!(0.95));
+    props.insert("since".to_string(), json!("2024-01-01"));
+
+    let edge = GraphEdge::new(1, 100, 200, "KNOWS")
+        .expect("valid")
+        .with_properties(props);
+
+    assert_eq!(edge.property("weight"), Some(&json!(0.95)));
+    assert_eq!(edge.property("since"), Some(&json!("2024-01-01")));
+    assert_eq!(edge.property("missing"), None);
+    assert_eq!(edge.properties().len(), 2);
+}
