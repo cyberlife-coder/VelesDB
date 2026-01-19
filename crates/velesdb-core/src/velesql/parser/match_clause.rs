@@ -1,10 +1,11 @@
 //! MATCH clause parser for graph pattern matching.
 
-use crate::velesql::ast::{
-    CompareOp, Comparison, Condition, Direction, GraphPattern, MatchClause, NodePattern,
-    RelationshipPattern, ReturnClause, ReturnItem, Value,
-};
+use crate::velesql::ast::{CompareOp, Comparison, Condition, Value};
 use crate::velesql::error::ParseError;
+use crate::velesql::graph_pattern::{
+    Direction, GraphPattern, MatchClause, NodePattern, RelationshipPattern, ReturnClause,
+    ReturnItem,
+};
 use std::collections::HashMap;
 
 /// Parses a complete MATCH clause.

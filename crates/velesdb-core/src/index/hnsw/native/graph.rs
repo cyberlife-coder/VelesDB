@@ -4,55 +4,11 @@
 //! as described in the Malkov & Yashunin paper.
 
 use super::distance::DistanceEngine;
+use super::layer::{Layer, NodeId};
+use super::ordered_float::OrderedFloat;
 use parking_lot::RwLock;
 use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-/// Unique identifier for a node in the graph.
-pub type NodeId = usize;
-
-/// A single layer in the HNSW hierarchy.
-#[derive(Debug)]
-pub struct Layer {
-    /// Adjacency list: node_id -> list of neighbor node_ids
-    pub(super) neighbors: Vec<RwLock<Vec<NodeId>>>,
-}
-
-impl Layer {
-    /// Creates a new layer with the given capacity.
-    pub(super) fn new(capacity: usize) -> Self {
-        Self {
-            neighbors: (0..capacity).map(|_| RwLock::new(Vec::new())).collect(),
-        }
-    }
-
-    fn ensure_capacity(&mut self, node_id: NodeId) {
-        while self.neighbors.len() <= node_id {
-            self.neighbors.push(RwLock::new(Vec::new()));
-        }
-    }
-
-    fn get_neighbors(&self, node_id: NodeId) -> Vec<NodeId> {
-        if node_id < self.neighbors.len() {
-            self.neighbors[node_id].read().clone()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Sets the neighbors for a node.
-    pub(super) fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
-        if node_id < self.neighbors.len() {
-            *self.neighbors[node_id].write() = neighbors;
-        }
-    }
-
-    fn add_neighbor(&self, node_id: NodeId, neighbor: NodeId) {
-        if node_id < self.neighbors.len() {
-            self.neighbors[node_id].write().push(neighbor);
-        }
-    }
-}
 
 /// Native HNSW index implementation.
 ///
@@ -497,24 +453,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// VAMANA-style neighbor selection with alpha diversification.
     ///
-    /// Based on DiskANN/VAMANA algorithm (Subramanya et al., 2019).
-    ///
-    /// This algorithm selects neighbors that are:
-    /// 1. Close to the query point
-    /// 2. Diverse (not clustered together)
-    ///
-    /// # Alpha Parameter
-    ///
-    /// - `alpha = 1.0`: Standard HNSW heuristic (Malkov & Yashunin)
-    /// - `alpha > 1.0`: More aggressive diversification (VAMANA-style)
-    ///   - Values 1.1-1.2 improve recall on large datasets (100K+)
-    ///   - Higher alpha = more diverse but potentially more edges
-    ///
-    /// # Algorithm
-    ///
-    /// For each candidate c with distance d(q,c) to query:
-    /// - Accept c if: α × d(q,c) < d(c,s) for all selected neighbors s
-    /// - This ensures neighbors are spread out in vector space
+    /// Based on DiskANN/VAMANA algorithm. Selects diverse neighbors using:
+    /// α × d(q,c) <= d(c,s) condition. Alpha=1.0 is standard HNSW, >1.0 favors diversity.
     pub(crate) fn select_neighbors(
         &self,
         _query: &[f32], // Not used directly - distances to query are in candidates
@@ -627,25 +567,5 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // BUG-CORE-001 FIX Phase 4: Now acquire layers lock to write (no vectors lock needed)
             self.layers.read()[layer].set_neighbors(neighbor, pruned);
         }
-    }
-}
-
-/// Wrapper for f32 to implement Ord for `BinaryHeap`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct OrderedFloat(f32);
-
-impl Eq for OrderedFloat {}
-
-impl PartialOrd for OrderedFloat {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for OrderedFloat {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0
-            .partial_cmp(&other.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
