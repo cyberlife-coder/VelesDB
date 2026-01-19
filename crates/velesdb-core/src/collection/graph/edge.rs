@@ -130,10 +130,46 @@ impl EdgeStore {
         self.edges.insert(id, edge);
     }
 
+    /// Adds an edge with only the outgoing index (for cross-shard storage).
+    ///
+    /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
+    /// The edge is stored and indexed by source node only.
+    pub fn add_edge_outgoing_only(&mut self, edge: GraphEdge) {
+        let id = edge.id();
+        let source = edge.source();
+
+        // Add to outgoing index only
+        self.outgoing.entry(source).or_default().push(id);
+
+        // Store the edge
+        self.edges.insert(id, edge);
+    }
+
+    /// Adds an edge with only the incoming index (for cross-shard storage).
+    ///
+    /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
+    /// The edge is stored and indexed by target node only.
+    pub fn add_edge_incoming_only(&mut self, edge: GraphEdge) {
+        let id = edge.id();
+        let target = edge.target();
+
+        // Add to incoming index only
+        self.incoming.entry(target).or_default().push(id);
+
+        // Store the edge
+        self.edges.insert(id, edge);
+    }
+
     /// Returns the total number of edges in the store.
     #[must_use]
     pub fn edge_count(&self) -> usize {
         self.edges.len()
+    }
+
+    /// Returns the count of edges where this shard is the source (for accurate cross-shard counting).
+    #[must_use]
+    pub fn outgoing_edge_count(&self) -> usize {
+        self.outgoing.values().map(Vec::len).sum()
     }
 
     /// Gets an edge by its ID.

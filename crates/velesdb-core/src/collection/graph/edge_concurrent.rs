@@ -49,12 +49,43 @@ impl ConcurrentEdgeStore {
 
     /// Adds an edge to the store (thread-safe).
     ///
-    /// Edges are stored in the source shard only (for outgoing index).
-    /// No cross-shard locking needed since EdgeStore handles both directions internally.
+    /// Edges are stored in BOTH source and target shards:
+    /// - Source shard: for outgoing index lookups
+    /// - Target shard: for incoming index lookups
+    ///
+    /// When source and target are in different shards, locks are acquired
+    /// in ascending shard index order to prevent deadlocks.
     pub fn add_edge(&self, edge: GraphEdge) {
-        let shard_idx = self.shard_index(edge.source());
-        let mut guard = self.shards[shard_idx].write();
-        guard.add_edge(edge);
+        let source_shard = self.shard_index(edge.source());
+        let target_shard = self.shard_index(edge.target());
+
+        if source_shard == target_shard {
+            // Same shard: single lock, EdgeStore handles both indices
+            let mut guard = self.shards[source_shard].write();
+            guard.add_edge(edge);
+        } else {
+            // Different shards: acquire locks in ascending order to prevent deadlock
+            let (first_idx, second_idx) = if source_shard < target_shard {
+                (source_shard, target_shard)
+            } else {
+                (target_shard, source_shard)
+            };
+
+            let mut first_guard = self.shards[first_idx].write();
+            let mut second_guard = self.shards[second_idx].write();
+
+            // Add to source shard (outgoing index)
+            // Add to target shard (incoming index)
+            if source_shard < target_shard {
+                // first = source, second = target
+                first_guard.add_edge_outgoing_only(edge.clone());
+                second_guard.add_edge_incoming_only(edge);
+            } else {
+                // first = target, second = source
+                second_guard.add_edge_outgoing_only(edge.clone());
+                first_guard.add_edge_incoming_only(edge);
+            }
+        }
     }
 
     /// Gets all outgoing edges from a node (thread-safe).
@@ -127,9 +158,14 @@ impl ConcurrentEdgeStore {
     }
 
     /// Returns the total edge count across all shards.
+    ///
+    /// Uses outgoing edge count to avoid double-counting edges that span shards.
     #[must_use]
     pub fn edge_count(&self) -> usize {
-        self.shards.iter().map(|s| s.read().edge_count()).sum()
+        self.shards
+            .iter()
+            .map(|s| s.read().outgoing_edge_count())
+            .sum()
     }
 }
 
