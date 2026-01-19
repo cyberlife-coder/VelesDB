@@ -1,0 +1,411 @@
+//! Graph traversal algorithms for multi-hop queries.
+//!
+//! This module provides BFS-based traversal for variable-length path patterns
+//! like `(a)-[*1..3]->(b)` in MATCH clauses.
+
+#![allow(dead_code)] // WIP: Will be used by MATCH clause execution
+
+use super::EdgeStore;
+use std::collections::{HashSet, VecDeque};
+
+/// Default maximum depth for unbounded traversals.
+pub const DEFAULT_MAX_DEPTH: u32 = 3;
+
+/// Result of a graph traversal operation.
+#[derive(Debug, Clone)]
+pub struct TraversalResult {
+    /// The target node ID reached.
+    pub target_id: u64,
+    /// The path taken (list of edge IDs).
+    pub path: Vec<u64>,
+    /// Depth of the traversal (number of hops).
+    pub depth: u32,
+}
+
+impl TraversalResult {
+    /// Creates a new traversal result.
+    #[must_use]
+    pub fn new(target_id: u64, path: Vec<u64>, depth: u32) -> Self {
+        Self {
+            target_id,
+            path,
+            depth,
+        }
+    }
+}
+
+/// Configuration for graph traversal.
+#[derive(Debug, Clone)]
+pub struct TraversalConfig {
+    /// Minimum number of hops (inclusive).
+    pub min_depth: u32,
+    /// Maximum number of hops (inclusive).
+    pub max_depth: u32,
+    /// Maximum number of results to return.
+    pub limit: usize,
+    /// Filter by relationship types (empty = all types).
+    pub rel_types: Vec<String>,
+}
+
+impl Default for TraversalConfig {
+    fn default() -> Self {
+        Self {
+            min_depth: 1,
+            max_depth: DEFAULT_MAX_DEPTH,
+            limit: 100,
+            rel_types: Vec::new(),
+        }
+    }
+}
+
+impl TraversalConfig {
+    /// Creates a config for a specific range (e.g., *1..3).
+    #[must_use]
+    pub fn with_range(min: u32, max: u32) -> Self {
+        Self {
+            min_depth: min,
+            max_depth: max.min(DEFAULT_MAX_DEPTH), // Cap at default max
+            ..Self::default()
+        }
+    }
+
+    /// Sets the result limit.
+    #[must_use]
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Filters by relationship types.
+    #[must_use]
+    pub fn with_rel_types(mut self, types: Vec<String>) -> Self {
+        self.rel_types = types;
+        self
+    }
+}
+
+/// BFS state for traversal.
+#[derive(Debug)]
+struct BfsState {
+    /// Current node ID.
+    node_id: u64,
+    /// Path taken to reach this node (edge IDs).
+    path: Vec<u64>,
+    /// Current depth.
+    depth: u32,
+}
+
+/// Performs BFS traversal from a source node.
+///
+/// Finds all paths from `source_id` within the configured depth range.
+/// Uses iterative BFS with `VecDeque` for better cache locality.
+///
+/// # Arguments
+///
+/// * `edge_store` - The edge storage to traverse.
+/// * `source_id` - Starting node ID.
+/// * `config` - Traversal configuration.
+///
+/// # Returns
+///
+/// Vector of traversal results, limited by `config.limit`.
+#[must_use]
+pub fn bfs_traverse(
+    edge_store: &EdgeStore,
+    source_id: u64,
+    config: &TraversalConfig,
+) -> Vec<TraversalResult> {
+    let mut results = Vec::new();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    // Initialize with source node
+    queue.push_back(BfsState {
+        node_id: source_id,
+        path: Vec::new(),
+        depth: 0,
+    });
+
+    while let Some(state) = queue.pop_front() {
+        // Check if we've collected enough results
+        if results.len() >= config.limit {
+            break;
+        }
+
+        // Get outgoing edges from current node
+        let edges = edge_store.get_outgoing(state.node_id);
+
+        for edge in edges {
+            // Filter by relationship type if specified
+            if !config.rel_types.is_empty() && !config.rel_types.contains(&edge.label().to_string())
+            {
+                continue;
+            }
+
+            let target = edge.target();
+            let new_depth = state.depth + 1;
+
+            // Skip if exceeds max depth
+            if new_depth > config.max_depth {
+                continue;
+            }
+
+            // Build new path
+            let mut new_path = state.path.clone();
+            new_path.push(edge.id());
+
+            // Add to results if within valid depth range
+            if new_depth >= config.min_depth {
+                results.push(TraversalResult::new(target, new_path.clone(), new_depth));
+
+                if results.len() >= config.limit {
+                    break;
+                }
+            }
+
+            // Continue traversal if not at max depth and not visited
+            if new_depth < config.max_depth && !visited.contains(&target) {
+                visited.insert(target);
+                queue.push_back(BfsState {
+                    node_id: target,
+                    path: new_path,
+                    depth: new_depth,
+                });
+            }
+        }
+    }
+
+    results
+}
+
+/// Performs BFS traversal in the reverse direction (following incoming edges).
+#[must_use]
+pub fn bfs_traverse_reverse(
+    edge_store: &EdgeStore,
+    source_id: u64,
+    config: &TraversalConfig,
+) -> Vec<TraversalResult> {
+    let mut results = Vec::new();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    queue.push_back(BfsState {
+        node_id: source_id,
+        path: Vec::new(),
+        depth: 0,
+    });
+
+    while let Some(state) = queue.pop_front() {
+        if results.len() >= config.limit {
+            break;
+        }
+
+        let edges = edge_store.get_incoming(state.node_id);
+
+        for edge in edges {
+            if !config.rel_types.is_empty() {
+                let label = edge.label().to_string();
+                if !config.rel_types.contains(&label) {
+                    continue;
+                }
+            }
+
+            let source = edge.source();
+            let new_depth = state.depth + 1;
+
+            if new_depth > config.max_depth {
+                continue;
+            }
+
+            let mut new_path = state.path.clone();
+            new_path.push(edge.id());
+
+            if new_depth >= config.min_depth {
+                results.push(TraversalResult::new(source, new_path.clone(), new_depth));
+
+                if results.len() >= config.limit {
+                    break;
+                }
+            }
+
+            if new_depth < config.max_depth && !visited.contains(&source) {
+                visited.insert(source);
+                queue.push_back(BfsState {
+                    node_id: source,
+                    path: new_path,
+                    depth: new_depth,
+                });
+            }
+        }
+    }
+
+    results
+}
+
+/// Performs bidirectional BFS (follows both directions).
+#[must_use]
+pub fn bfs_traverse_both(
+    edge_store: &EdgeStore,
+    source_id: u64,
+    config: &TraversalConfig,
+) -> Vec<TraversalResult> {
+    let mut results = Vec::new();
+    let half_limit = config.limit / 2 + 1;
+
+    let config_half = TraversalConfig {
+        limit: half_limit,
+        ..config.clone()
+    };
+
+    // Forward traversal
+    let forward = bfs_traverse(edge_store, source_id, &config_half);
+    results.extend(forward);
+
+    // Reverse traversal
+    if results.len() < config.limit {
+        let reverse = bfs_traverse_reverse(edge_store, source_id, &config_half);
+        for r in reverse {
+            if results.len() >= config.limit {
+                break;
+            }
+            // Avoid duplicates
+            if !results
+                .iter()
+                .any(|existing| existing.target_id == r.target_id && existing.path == r.path)
+            {
+                results.push(r);
+            }
+        }
+    }
+
+    results.truncate(config.limit);
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collection::graph::GraphEdge;
+
+    fn create_test_edge_store() -> EdgeStore {
+        let mut store = EdgeStore::new();
+        // Create a simple graph:
+        // 1 --KNOWS--> 2 --KNOWS--> 3 --KNOWS--> 4
+        //              |
+        //              +--WROTE--> 5
+        store
+            .add_edge(GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(102, 3, 4, "KNOWS").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(103, 2, 5, "WROTE").unwrap())
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn test_bfs_single_hop() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(1, 1);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].target_id, 2);
+        assert_eq!(results[0].depth, 1);
+    }
+
+    #[test]
+    fn test_bfs_multi_hop() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(1, 3);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        // Should find: 1->2, 1->2->3, 1->2->5, 1->2->3->4
+        assert!(results.len() >= 4);
+
+        // Verify we can reach node 4 at depth 3
+        assert!(results.iter().any(|r| r.target_id == 4 && r.depth == 3));
+    }
+
+    #[test]
+    fn test_bfs_with_rel_type_filter() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(1, 3).with_rel_types(vec!["KNOWS".to_string()]);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        // Should only follow KNOWS edges: 1->2, 1->2->3, 1->2->3->4
+        // Should NOT include 1->2->5 (WROTE)
+        assert!(!results.iter().any(|r| r.target_id == 5));
+        assert!(results.iter().any(|r| r.target_id == 4));
+    }
+
+    #[test]
+    fn test_bfs_min_depth() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(2, 3);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        // Should NOT include depth 1 results
+        assert!(!results.iter().any(|r| r.depth == 1));
+        // Should include depth 2 and 3
+        assert!(results.iter().any(|r| r.depth == 2));
+        assert!(results.iter().any(|r| r.depth == 3));
+    }
+
+    #[test]
+    fn test_bfs_limit() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(1, 3).with_limit(2);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        assert!(results.len() <= 2);
+    }
+
+    #[test]
+    fn test_bfs_reverse() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(1, 2);
+
+        let results = bfs_traverse_reverse(&store, 4, &config);
+
+        // From 4, going backwards: 4<-3, 4<-3<-2
+        assert!(results.iter().any(|r| r.target_id == 3 && r.depth == 1));
+        assert!(results.iter().any(|r| r.target_id == 2 && r.depth == 2));
+    }
+
+    #[test]
+    fn test_default_max_depth() {
+        assert_eq!(DEFAULT_MAX_DEPTH, 3);
+
+        let config = TraversalConfig::default();
+        assert_eq!(config.min_depth, 1);
+        assert_eq!(config.max_depth, 3);
+    }
+
+    #[test]
+    fn test_path_tracking() {
+        let store = create_test_edge_store();
+        let config = TraversalConfig::with_range(1, 2);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        // Find the result that reached node 3 (2 hops)
+        let to_node_3 = results.iter().find(|r| r.target_id == 3 && r.depth == 2);
+        assert!(to_node_3.is_some());
+
+        let path = &to_node_3.unwrap().path;
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0], 100); // Edge 1->2
+        assert_eq!(path[1], 101); // Edge 2->3
+    }
+}
