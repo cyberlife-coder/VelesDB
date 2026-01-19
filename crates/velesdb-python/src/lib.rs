@@ -25,9 +25,11 @@
 //! ```
 
 mod collection;
+mod graph;
 mod utils;
 
 pub use collection::Collection;
+pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversal_to_dict};
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;

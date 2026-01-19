@@ -21,8 +21,8 @@ ignore = [
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property: tauri transitive" },
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive" },
-    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive, no fix available" },
-    { id = "RUSTSEC-2025-0141", reason = "bincode: hnsw_rs transitive, considered complete by maintainers" },
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive, unmaintained, no fix available" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode: hnsw_rs/velesdb-core serialization, migration planned" },
 ]
 
 [licenses]
@@ -42,7 +42,7 @@ allow = [
 ]
 # Note: Unicode-DFS-2016 removed - not used by current deps
 
-# Exception for local crates (ELv2 licensed)
+# Exception for local crates (Elastic License 2.0 - source available)
 [[licenses.clarify]]
 name = "tauri-plugin-velesdb"
 expression = "MIT"
@@ -64,6 +64,11 @@ expression = "LicenseRef-ELv2"
 license-files = []
 
 [[licenses.clarify]]
+name = "velesdb-wasm"
+expression = "LicenseRef-ELv2"
+license-files = []
+
+[[licenses.clarify]]
 name = "velesdb-migrate"
 expression = "LicenseRef-ELv2"
 license-files = []
@@ -78,10 +83,6 @@ name = "velesdb-python"
 expression = "LicenseRef-ELv2"
 license-files = []
 
-[[licenses.clarify]]
-name = "velesdb-wasm"
-expression = "LicenseRef-ELv2"
-license-files = []
 
 [bans]
 multiple-versions = "warn"
