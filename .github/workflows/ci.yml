@@ -74,7 +74,7 @@ jobs:
 
       - name: Run Clippy (strict)
         run: |
-          cargo clippy --all-targets --all-features \
+          cargo clippy --workspace --all-targets --all-features \
             --exclude velesdb-python \
             -- -D warnings -D clippy::pedantic
 
@@ -104,7 +104,7 @@ jobs:
 
       - name: Run tests
         run: |
-          cargo test --all-features --workspace \
+          cargo test --workspace --all-features \
             --exclude velesdb-python \
             -- --test-threads=1
         env:
