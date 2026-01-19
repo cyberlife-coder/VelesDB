@@ -703,3 +703,80 @@ fn test_self_loop_remove_node_edges() {
         .add_edge(GraphEdge::new(2, 3, 4, "REUSED").expect("valid"))
         .is_ok());
 }
+
+/// Regression test for Devin R74-157: Race between add_edge and remove_edge
+/// Scenario: remove_edge must not free an ID while add_edge is inserting it.
+/// Fix: edge_ids lock is held throughout add_edge/remove_edge operations.
+#[test]
+fn test_add_remove_race_registry_consistency() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+
+    // Pre-populate with edge ID 1
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "INITIAL").expect("valid"))
+        .expect("initial add");
+
+    // Spawn threads that concurrently add and remove
+    let mut handles = vec![];
+
+    for i in 0..10 {
+        let store_clone = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            // Thread alternates between remove and re-add of same ID
+            store_clone.remove_edge(1);
+            // Try to re-add with same ID - should succeed if remove completed
+            let _ =
+                store_clone.add_edge(GraphEdge::new(1, 100 + i, 200 + i, "RETRY").expect("valid"));
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("thread join");
+    }
+
+    // After all operations, registry and shards must be consistent:
+    // If ID 1 exists in registry, it must exist in a shard
+    // If ID 1 doesn't exist in registry, it must not exist in any shard
+    let in_registry = store.contains_edge(1);
+    let in_shard = store.get_edge(1).is_some();
+
+    assert_eq!(
+        in_registry, in_shard,
+        "Registry and shard must be consistent: registry={}, shard={}",
+        in_registry, in_shard
+    );
+}
+
+/// Test that edge_ids lock ordering prevents deadlock between add and remove
+#[test]
+fn test_lock_ordering_no_deadlock_add_remove() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(4));
+
+    // Many threads doing concurrent add/remove operations
+    let mut handles = vec![];
+
+    for i in 0..20 {
+        let store_clone = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            let edge_id = (i % 5) as u64; // Only 5 unique IDs to force contention
+            for _ in 0..50 {
+                let _ = store_clone.add_edge(
+                    GraphEdge::new(edge_id, i as u64 * 100, i as u64 * 100 + 1, "CONTEND")
+                        .expect("valid"),
+                );
+                store_clone.remove_edge(edge_id);
+            }
+        }));
+    }
+
+    // If there's a deadlock, this will hang
+    for handle in handles {
+        handle.join().expect("thread should not deadlock");
+    }
+}
