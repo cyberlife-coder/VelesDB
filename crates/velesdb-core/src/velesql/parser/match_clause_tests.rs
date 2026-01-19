@@ -420,3 +420,37 @@ fn test_relationship_with_properties_and_range() {
     // This tests combined range and properties parsing
     assert!(result.is_ok() || result.is_err()); // May or may not be supported
 }
+
+// === Devin Bug: Operator inside string literal (Bug fix) ===
+
+#[test]
+fn test_where_operator_inside_string_literal() {
+    // Operators inside string literals should be ignored
+    // The = operator should be found, not the > inside 'x > y'
+    let result = parse_match_clause("MATCH (n) WHERE n.status = 'x > y' RETURN n");
+    assert!(result.is_ok(), "Should parse correctly: {:?}", result);
+    let clause = result.unwrap();
+    assert!(clause.where_clause.is_some());
+}
+
+#[test]
+fn test_where_multiple_operators_in_string() {
+    // Multiple operators inside string should all be ignored
+    let result = parse_match_clause("MATCH (n) WHERE n.expr = 'a >= b && c <= d' RETURN n");
+    assert!(
+        result.is_ok(),
+        "Should handle multiple operators in string: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_where_not_equal_inside_string() {
+    // != inside string should be ignored, real != outside should be found
+    let result = parse_match_clause("MATCH (n) WHERE n.value != 'test != value' RETURN n");
+    assert!(
+        result.is_ok(),
+        "Should find != outside string: {:?}",
+        result
+    );
+}

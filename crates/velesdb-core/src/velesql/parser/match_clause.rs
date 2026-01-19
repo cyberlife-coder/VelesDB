@@ -335,19 +335,20 @@ fn find_matching_paren(input: &str, start: usize) -> Result<usize, ParseError> {
 
 fn parse_where_condition(input: &str) -> Result<Condition, ParseError> {
     // Order matters: check multi-char operators before single-char ones
-    let (col, op, vs) = if let Some(p) = input.find("!=") {
+    // Use string-literal-aware search to avoid matching operators inside quotes
+    let (col, op, vs) = if let Some(p) = find_operator(input, "!=") {
         (&input[..p], CompareOp::NotEq, input[p + 2..].trim())
-    } else if let Some(p) = input.find("<>") {
+    } else if let Some(p) = find_operator(input, "<>") {
         (&input[..p], CompareOp::NotEq, input[p + 2..].trim())
-    } else if let Some(p) = input.find(">=") {
+    } else if let Some(p) = find_operator(input, ">=") {
         (&input[..p], CompareOp::Gte, input[p + 2..].trim())
-    } else if let Some(p) = input.find("<=") {
+    } else if let Some(p) = find_operator(input, "<=") {
         (&input[..p], CompareOp::Lte, input[p + 2..].trim())
-    } else if let Some(p) = input.find('>') {
+    } else if let Some(p) = find_operator(input, ">") {
         (&input[..p], CompareOp::Gt, input[p + 1..].trim())
-    } else if let Some(p) = input.find('<') {
+    } else if let Some(p) = find_operator(input, "<") {
         (&input[..p], CompareOp::Lt, input[p + 1..].trim())
-    } else if let Some(p) = input.find('=') {
+    } else if let Some(p) = find_operator(input, "=") {
         (&input[..p], CompareOp::Eq, input[p + 1..].trim())
     } else {
         return Err(ParseError::syntax(0, input, "Invalid WHERE"));
@@ -357,6 +358,47 @@ fn parse_where_condition(input: &str) -> Result<Condition, ParseError> {
         operator: op,
         value: parse_value(vs)?,
     }))
+}
+
+/// Finds an operator in the input string, respecting string literal boundaries.
+/// Returns the byte position of the operator, or None if not found outside quotes.
+fn find_operator(input: &str, op: &str) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let op_bytes = op.as_bytes();
+    let op_len = op_bytes.len();
+
+    if op_len == 0 || bytes.len() < op_len {
+        return None;
+    }
+
+    let mut in_string = false;
+    let mut i = 0;
+
+    while i <= bytes.len() - op_len {
+        let b = bytes[i];
+
+        // Track string literal boundaries
+        if b == b'\'' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
+
+        // Skip if inside a string literal
+        if in_string {
+            i += 1;
+            continue;
+        }
+
+        // Check if operator matches at this position
+        if &bytes[i..i + op_len] == op_bytes {
+            return Some(i);
+        }
+
+        i += 1;
+    }
+
+    None
 }
 
 fn parse_return_clause(input: &str) -> ReturnClause {
