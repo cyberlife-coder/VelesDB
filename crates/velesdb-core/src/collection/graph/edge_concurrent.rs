@@ -33,8 +33,13 @@ impl ConcurrentEdgeStore {
     }
 
     /// Creates a new concurrent edge store with a specific number of shards.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num_shards` is 0 (would cause division-by-zero in shard_index).
     #[must_use]
     pub fn with_shards(num_shards: usize) -> Self {
+        assert!(num_shards > 0, "num_shards must be at least 1");
         let shards = (0..num_shards)
             .map(|_| RwLock::new(EdgeStore::new()))
             .collect();
