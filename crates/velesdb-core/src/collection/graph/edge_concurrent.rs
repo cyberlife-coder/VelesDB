@@ -74,13 +74,12 @@ impl ConcurrentEdgeStore {
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         let edge_id = edge.id();
 
-        // Check and register edge ID globally (prevents cross-shard duplicates)
-        {
-            let mut ids = self.edge_ids.write();
-            if ids.contains(&edge_id) {
-                return Err(Error::EdgeExists(edge_id));
-            }
-            ids.insert(edge_id);
+        // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
+        // condition where remove_edge could free an ID while we're still inserting.
+        // Lock ordering: edge_ids FIRST, then shards in ascending order.
+        let mut ids = self.edge_ids.write();
+        if ids.contains(&edge_id) {
+            return Err(Error::EdgeExists(edge_id));
         }
 
         let source_shard = self.shard_index(edge.source());
@@ -90,11 +89,8 @@ impl ConcurrentEdgeStore {
         if source_shard == target_shard {
             // Same shard: single lock, EdgeStore handles both indices
             let mut guard = self.shards[source_shard].write();
-            if let Err(e) = guard.add_edge(edge) {
-                // Rollback: remove from global registry on failure
-                self.edge_ids.write().remove(&edge_id);
-                return Err(e);
-            }
+            guard.add_edge(edge)?;
+            ids.insert(edge_id);
         } else {
             // Different shards: acquire locks in ascending order to prevent deadlock
             let (first_idx, second_idx) = if source_shard < target_shard {
@@ -111,29 +107,23 @@ impl ConcurrentEdgeStore {
             // Handle errors with proper rollback
             if source_shard < target_shard {
                 // first = source, second = target
-                if let Err(e) = first_guard.add_edge_outgoing_only(edge.clone()) {
-                    self.edge_ids.write().remove(&edge_id);
-                    return Err(e);
-                }
+                first_guard.add_edge_outgoing_only(edge.clone())?;
                 if let Err(e) = second_guard.add_edge_incoming_only(edge) {
                     // Rollback first shard operation
                     first_guard.remove_edge_outgoing_only(edge_id);
-                    self.edge_ids.write().remove(&edge_id);
                     return Err(e);
                 }
             } else {
                 // first = target, second = source
-                if let Err(e) = second_guard.add_edge_outgoing_only(edge.clone()) {
-                    self.edge_ids.write().remove(&edge_id);
-                    return Err(e);
-                }
+                second_guard.add_edge_outgoing_only(edge.clone())?;
                 if let Err(e) = first_guard.add_edge_incoming_only(edge) {
                     // Rollback second shard operation
                     second_guard.remove_edge_outgoing_only(edge_id);
-                    self.edge_ids.write().remove(&edge_id);
                     return Err(e);
                 }
             }
+            // Insert AFTER successful shard mutations
+            ids.insert(edge_id);
         }
         Ok(())
     }
@@ -142,18 +132,25 @@ impl ConcurrentEdgeStore {
     ///
     /// # Concurrency Safety
     ///
-    /// Shard cleanup happens BEFORE registry removal to prevent race conditions
-    /// where another thread could reinsert the same ID while shards still contain
-    /// the old edge data.
+    /// Lock ordering: edge_ids FIRST, then shards. This matches add_edge ordering
+    /// to prevent deadlocks. The edge_ids lock is held throughout to prevent
+    /// add_edge from inserting an ID we're about to remove.
     pub fn remove_edge(&self, edge_id: u64) {
-        // Remove from all shards FIRST (edge may be in multiple shards for cross-shard edges)
-        // This prevents race condition where ID is freed before data is cleaned up
+        // Acquire edge_ids lock FIRST (same ordering as add_edge)
+        let mut ids = self.edge_ids.write();
+
+        // Only proceed if the edge exists in our registry
+        if !ids.contains(&edge_id) {
+            return;
+        }
+
+        // Remove from all shards (edge may be in multiple shards for cross-shard edges)
         for shard in &self.shards {
             shard.write().remove_edge(edge_id);
         }
 
-        // Remove from global registry AFTER shards are clean
-        self.edge_ids.write().remove(&edge_id);
+        // Remove from global registry (still holding lock)
+        ids.remove(&edge_id);
     }
 
     /// Gets all outgoing edges from a node (thread-safe).
@@ -228,16 +225,16 @@ impl ConcurrentEdgeStore {
     /// Handles cross-shard cleanup: collects all edges, then removes from all
     /// relevant shards with proper lock ordering to prevent deadlocks.
     ///
-    /// # Concurrency Note
+    /// # Concurrency Safety
     ///
-    /// This operation is **NOT atomic**. Between reading the edges and acquiring
-    /// write locks, other threads may add new edges to/from this node. Those
-    /// edges will NOT be removed. For atomic cascade delete, external
-    /// synchronization is required (e.g., application-level locking).
-    ///
-    /// This is a deliberate design choice to avoid holding write locks on all
-    /// shards during the read phase, which would severely impact concurrency.
+    /// Lock ordering: edge_ids FIRST, then shards in ascending order.
+    /// This matches add_edge/remove_edge ordering to prevent deadlocks.
+    /// The edge_ids lock is held throughout to prevent add_edge from
+    /// inserting IDs we're about to remove.
     pub fn remove_node_edges(&self, node_id: u64) {
+        // CRITICAL: Acquire edge_ids lock FIRST (same ordering as add_edge/remove_edge)
+        let mut ids = self.edge_ids.write();
+
         let node_shard = self.shard_index(node_id);
 
         // Phase 1: Collect all edges connected to this node (read-only)
@@ -268,7 +265,7 @@ impl ConcurrentEdgeStore {
             shards_to_clean.insert(self.shard_index(*source));
         }
 
-        // Phase 3: Acquire locks in ascending order and perform cleanup
+        // Phase 3: Acquire shard locks in ascending order and perform cleanup
         // BTreeSet iteration is already sorted ascending
         let mut guards: Vec<_> = shards_to_clean
             .iter()
@@ -297,22 +294,17 @@ impl ConcurrentEdgeStore {
             }
         }
 
-        // Phase 5: Remove edge IDs from global registry AFTER shard cleanup
-        // This prevents race condition where another thread could reinsert
-        // the same ID while shards still contain the old edge data
+        // Phase 5: Remove edge IDs from global registry (still holding lock)
         // Note: Use a set to deduplicate IDs (self-loops appear in both lists)
-        {
-            let mut ids = self.edge_ids.write();
-            let mut removed: HashSet<u64> = HashSet::new();
-            for (edge_id, _) in &outgoing_edges {
-                if removed.insert(*edge_id) {
-                    ids.remove(edge_id);
-                }
+        let mut removed: HashSet<u64> = HashSet::new();
+        for (edge_id, _) in &outgoing_edges {
+            if removed.insert(*edge_id) {
+                ids.remove(edge_id);
             }
-            for (edge_id, _) in &incoming_edges {
-                if removed.insert(*edge_id) {
-                    ids.remove(edge_id);
-                }
+        }
+        for (edge_id, _) in &incoming_edges {
+            if removed.insert(*edge_id) {
+                ids.remove(edge_id);
             }
         }
     }
