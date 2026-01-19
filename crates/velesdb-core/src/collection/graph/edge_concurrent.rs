@@ -181,6 +181,48 @@ impl ConcurrentEdgeStore {
             .collect()
     }
 
+    /// Gets outgoing edges filtered by label (thread-safe).
+    #[must_use]
+    pub fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
+        self.get_outgoing(node_id)
+            .into_iter()
+            .filter(|e| e.label() == label)
+            .collect()
+    }
+
+    /// Gets incoming edges filtered by label (thread-safe).
+    #[must_use]
+    pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
+        self.get_incoming(node_id)
+            .into_iter()
+            .filter(|e| e.label() == label)
+            .collect()
+    }
+
+    /// Checks if an edge with the given ID exists.
+    #[must_use]
+    pub fn contains_edge(&self, edge_id: u64) -> bool {
+        self.edge_ids.read().contains(&edge_id)
+    }
+
+    /// Gets an edge by ID (searches all shards).
+    ///
+    /// Returns `None` if the edge doesn't exist.
+    #[must_use]
+    pub fn get_edge(&self, edge_id: u64) -> Option<GraphEdge> {
+        // Quick check in registry first
+        if !self.edge_ids.read().contains(&edge_id) {
+            return None;
+        }
+        // Search in shards (edge is stored in source shard)
+        for shard in &self.shards {
+            if let Some(edge) = shard.read().get_edge(edge_id) {
+                return Some(edge.clone());
+            }
+        }
+        None
+    }
+
     /// Removes all edges connected to a node (cascade delete, thread-safe).
     ///
     /// Handles cross-shard cleanup: collects all edges, then removes from all
@@ -258,13 +300,19 @@ impl ConcurrentEdgeStore {
         // Phase 5: Remove edge IDs from global registry AFTER shard cleanup
         // This prevents race condition where another thread could reinsert
         // the same ID while shards still contain the old edge data
+        // Note: Use a set to deduplicate IDs (self-loops appear in both lists)
         {
             let mut ids = self.edge_ids.write();
+            let mut removed: HashSet<u64> = HashSet::new();
             for (edge_id, _) in &outgoing_edges {
-                ids.remove(edge_id);
+                if removed.insert(*edge_id) {
+                    ids.remove(edge_id);
+                }
             }
             for (edge_id, _) in &incoming_edges {
-                ids.remove(edge_id);
+                if removed.insert(*edge_id) {
+                    ids.remove(edge_id);
+                }
             }
         }
     }

@@ -588,3 +588,118 @@ fn test_cross_shard_add_edge_consistency() {
     assert_eq!(outgoing[0].source(), incoming[0].source());
     assert_eq!(outgoing[0].target(), incoming[0].target());
 }
+
+#[test]
+fn test_get_outgoing_by_label() {
+    let store = ConcurrentEdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "LIKES").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 100, 400, "KNOWS").expect("valid"))
+        .expect("add");
+
+    let knows = store.get_outgoing_by_label(100, "KNOWS");
+    assert_eq!(knows.len(), 2);
+
+    let likes = store.get_outgoing_by_label(100, "LIKES");
+    assert_eq!(likes.len(), 1);
+    assert_eq!(likes[0].target(), 300);
+
+    let none = store.get_outgoing_by_label(100, "HATES");
+    assert!(none.is_empty());
+}
+
+#[test]
+fn test_get_incoming_by_label() {
+    let store = ConcurrentEdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 200, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 300, 500, "BLOCKS").expect("valid"))
+        .expect("add");
+
+    let follows = store.get_incoming_by_label(500, "FOLLOWS");
+    assert_eq!(follows.len(), 2);
+
+    let blocks = store.get_incoming_by_label(500, "BLOCKS");
+    assert_eq!(blocks.len(), 1);
+}
+
+#[test]
+fn test_contains_edge() {
+    let store = ConcurrentEdgeStore::new();
+
+    assert!(!store.contains_edge(1));
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "TEST").expect("valid"))
+        .expect("add");
+
+    assert!(store.contains_edge(1));
+    assert!(!store.contains_edge(2));
+
+    store.remove_edge(1);
+    assert!(!store.contains_edge(1));
+}
+
+#[test]
+fn test_get_edge() {
+    let store = ConcurrentEdgeStore::new();
+
+    assert!(store.get_edge(1).is_none());
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "TEST").expect("valid"))
+        .expect("add");
+
+    let edge = store.get_edge(1);
+    assert!(edge.is_some());
+    let edge = edge.unwrap();
+    assert_eq!(edge.id(), 1);
+    assert_eq!(edge.source(), 100);
+    assert_eq!(edge.target(), 200);
+    assert_eq!(edge.label(), "TEST");
+
+    assert!(store.get_edge(999).is_none());
+}
+
+#[test]
+fn test_self_loop_remove_node_edges() {
+    // Test that self-loops are handled correctly in remove_node_edges
+    let store = ConcurrentEdgeStore::new();
+
+    // Add a self-loop (source == target)
+    store
+        .add_edge(GraphEdge::new(1, 100, 100, "SELF").expect("valid"))
+        .expect("add self-loop");
+
+    // Add another regular edge
+    store
+        .add_edge(GraphEdge::new(2, 100, 200, "OTHER").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.edge_count(), 2);
+
+    // Remove all edges for node 100
+    store.remove_node_edges(100);
+
+    assert_eq!(store.edge_count(), 0);
+
+    // Should be able to reuse both IDs
+    assert!(store
+        .add_edge(GraphEdge::new(1, 1, 2, "REUSED").expect("valid"))
+        .is_ok());
+    assert!(store
+        .add_edge(GraphEdge::new(2, 3, 4, "REUSED").expect("valid"))
+        .is_ok());
+}
