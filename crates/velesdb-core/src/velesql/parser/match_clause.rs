@@ -156,13 +156,20 @@ fn parse_rel_types(input: &str, rel: &mut RelationshipPattern) {
     }
 }
 
+/// Parses variable-length range after `*`.
 fn parse_range(input: &str) -> Option<(u32, u32)> {
-    input.find("..").map(|d| {
-        (
+    let input = input.trim();
+    if input.is_empty() {
+        return Some((1, u32::MAX));
+    }
+    if let Some(d) = input.find("..") {
+        Some((
             input[..d].trim().parse().unwrap_or(1),
             input[d + 2..].trim().parse().unwrap_or(u32::MAX),
-        )
-    })
+        ))
+    } else {
+        input.parse::<u32>().ok().map(|n| (n, n))
+    }
 }
 
 fn parse_properties(input: &str) -> Result<HashMap<String, Value>, ParseError> {

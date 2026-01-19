@@ -147,3 +147,41 @@ fn test_error_range_invalid() {
     let result2 = parse_relationship_pattern("invalid");
     assert!(result2.is_err());
 }
+
+// === Variable-length relationship tests (Bug fix) ===
+
+#[test]
+fn test_parse_relationship_star_unbounded() {
+    // -[*]-> should parse as unbounded range (1, MAX)
+    let result = parse_relationship_pattern("-[*]->");
+    assert!(result.is_ok());
+    let rel = result.unwrap();
+    assert_eq!(rel.range, Some((1, u32::MAX)));
+}
+
+#[test]
+fn test_parse_relationship_star_exact() {
+    // -[*3]-> should parse as exact range (3, 3)
+    let result = parse_relationship_pattern("-[*3]->");
+    assert!(result.is_ok());
+    let rel = result.unwrap();
+    assert_eq!(rel.range, Some((3, 3)));
+}
+
+#[test]
+fn test_parse_relationship_star_open_end() {
+    // -[*2..]-> should parse as (2, MAX)
+    let result = parse_relationship_pattern("-[*2..]->");
+    assert!(result.is_ok());
+    let rel = result.unwrap();
+    assert_eq!(rel.range, Some((2, u32::MAX)));
+}
+
+#[test]
+fn test_parse_relationship_star_open_start() {
+    // -[*..5]-> should parse as (1, 5)
+    let result = parse_relationship_pattern("-[*..5]->");
+    assert!(result.is_ok());
+    let rel = result.unwrap();
+    assert_eq!(rel.range, Some((1, 5)));
+}

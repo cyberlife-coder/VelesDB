@@ -262,6 +262,12 @@ fn test_bidirectional_traversal_cross_shard() {
 // =============================================================================
 
 #[test]
+#[should_panic(expected = "num_shards must be at least 1")]
+fn test_with_shards_zero_panics() {
+    let _ = ConcurrentEdgeStore::with_shards(0);
+}
+
+#[test]
 fn test_edge_count_across_shards() {
     let store = ConcurrentEdgeStore::with_shards(4);
 
