@@ -24,49 +24,18 @@
 //! results = collection.search([0.1, 0.2, ...], top_k=10)
 //! ```
 
+mod utils;
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt; // For into_py_any() helper
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use velesdb_core::{
-    Database as CoreDatabase, DistanceMetric, FusionStrategy as CoreFusionStrategy, Point,
-    StorageMode,
+use utils::{
+    extract_vector, json_to_python, parse_metric, parse_storage_mode, python_to_json, to_pyobject,
 };
-
-/// Extracts a vector from a PyObject, supporting both Python lists and NumPy arrays.
-///
-/// # Arguments
-/// * `py` - Python GIL token
-/// * `obj` - The Python object (list or numpy.ndarray)
-///
-/// # Returns
-/// A Vec<f32> containing the vector data
-///
-/// # Errors
-/// Returns an error if the object is neither a list nor a numpy array
-fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
-    // Try numpy array first (most common in ML workflows)
-    if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f32>>(py) {
-        return Ok(array.as_slice()?.to_vec());
-    }
-
-    // Try numpy float64 array and convert
-    if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f64>>(py) {
-        return Ok(array.as_slice()?.iter().map(|&x| x as f32).collect());
-    }
-
-    // Fall back to Python list
-    if let Ok(list) = obj.extract::<Vec<f32>>(py) {
-        return Ok(list);
-    }
-
-    Err(PyValueError::new_err(
-        "Vector must be a Python list or numpy array of floats",
-    ))
-}
+use velesdb_core::{Database as CoreDatabase, FusionStrategy as CoreFusionStrategy, Point};
 
 /// Fusion strategy for combining results from multiple vector searches.
 ///
@@ -1212,105 +1181,6 @@ pub struct SearchResult {
     score: f32,
     #[pyo3(get)]
     payload: PyObject,
-}
-
-// Helper functions
-
-fn parse_metric(metric: &str) -> PyResult<DistanceMetric> {
-    match metric.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceMetric::Cosine),
-        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
-        "dot" | "dotproduct" | "ip" => Ok(DistanceMetric::DotProduct),
-        "hamming" => Ok(DistanceMetric::Hamming),
-        "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err(PyValueError::new_err(format!(
-            "Invalid metric '{}'. Use 'cosine', 'euclidean', 'dot', 'hamming', or 'jaccard'",
-            metric
-        ))),
-    }
-}
-
-fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
-    match mode.to_lowercase().as_str() {
-        "full" | "f32" => Ok(StorageMode::Full),
-        "sq8" | "int8" => Ok(StorageMode::SQ8),
-        "binary" | "bit" => Ok(StorageMode::Binary),
-        _ => Err(PyValueError::new_err(format!(
-            "Invalid storage_mode '{}'. Use 'full', 'sq8', or 'binary'",
-            mode
-        ))),
-    }
-}
-
-fn python_to_json(py: Python<'_>, obj: &PyObject) -> Option<serde_json::Value> {
-    if let Ok(s) = obj.extract::<String>(py) {
-        return Some(serde_json::Value::String(s));
-    }
-    if let Ok(i) = obj.extract::<i64>(py) {
-        return Some(serde_json::Value::Number(i.into()));
-    }
-    if let Ok(f) = obj.extract::<f64>(py) {
-        return serde_json::Number::from_f64(f).map(serde_json::Value::Number);
-    }
-    if let Ok(b) = obj.extract::<bool>(py) {
-        return Some(serde_json::Value::Bool(b));
-    }
-    if obj.is_none(py) {
-        return Some(serde_json::Value::Null);
-    }
-    if let Ok(list) = obj.extract::<Vec<PyObject>>(py) {
-        let arr: Vec<serde_json::Value> = list
-            .iter()
-            .filter_map(|item| python_to_json(py, item))
-            .collect();
-        return Some(serde_json::Value::Array(arr));
-    }
-    if let Ok(dict) = obj.extract::<HashMap<String, PyObject>>(py) {
-        let map: serde_json::Map<String, serde_json::Value> = dict
-            .into_iter()
-            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
-            .collect();
-        return Some(serde_json::Value::Object(map));
-    }
-    None
-}
-
-/// Helper to convert a value to PyObject using IntoPyObject trait.
-/// This replaces the deprecated `into_py` method.
-#[inline]
-fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> PyObject
-where
-    T: IntoPyObjectExt<'py>,
-{
-    value.into_py_any(py).expect("infallible conversion")
-}
-
-fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
-    match value {
-        serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(b) => to_pyobject(py, *b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                to_pyobject(py, i)
-            } else if let Some(f) = n.as_f64() {
-                to_pyobject(py, f)
-            } else {
-                py.None()
-            }
-        }
-        serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
-        serde_json::Value::Array(arr) => {
-            let list: Vec<PyObject> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            to_pyobject(py, list)
-        }
-        serde_json::Value::Object(map) => {
-            let dict: HashMap<String, PyObject> = map
-                .iter()
-                .map(|(k, v)| (k.clone(), json_to_python(py, v)))
-                .collect();
-            to_pyobject(py, dict)
-        }
-    }
 }
 
 /// VelesDB - A high-performance vector database for AI applications.
