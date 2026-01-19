@@ -1,7 +1,8 @@
 //! Tests for MATCH clause parser.
 
 use super::match_clause::{parse_match_clause, parse_node_pattern, parse_relationship_pattern};
-use crate::velesql::ast::{Direction, Value};
+use crate::velesql::ast::Value;
+use crate::velesql::graph_pattern::Direction;
 
 #[test]
 fn test_parse_simple_node() {

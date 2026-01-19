@@ -1,6 +1,7 @@
 //! Tests for `graph` module - Native HNSW graph implementation.
 
-use super::graph::{NativeHnsw, NodeId};
+use super::graph::NativeHnsw;
+use super::layer::NodeId;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::native::distance::CpuDistance;
 

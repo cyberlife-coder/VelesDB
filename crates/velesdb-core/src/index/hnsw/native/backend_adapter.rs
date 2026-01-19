@@ -8,7 +8,8 @@
 //! - Persistence (file dump/load)
 
 use super::distance::DistanceEngine;
-use super::graph::{NativeHnsw, NodeId};
+use super::graph::NativeHnsw;
+use super::layer::{Layer, NodeId};
 use crate::distance::DistanceMetric;
 use rayon::prelude::*;
 use std::fs::File;
@@ -331,7 +332,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             reader.read_exact(&mut buf8)?;
             let num_nodes = u64::from_le_bytes(buf8) as usize;
 
-            let layer = super::graph::Layer::new(num_nodes);
+            let layer = Layer::new(num_nodes);
             for node_id in 0..num_nodes {
                 reader.read_exact(&mut buf4)?;
                 let num_neighbors = u32::from_le_bytes(buf4) as usize;
