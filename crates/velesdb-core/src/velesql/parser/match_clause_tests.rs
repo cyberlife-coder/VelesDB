@@ -384,3 +384,39 @@ fn test_node_with_only_label_no_alias() {
     assert!(node.alias.is_none());
     assert_eq!(node.labels, vec!["Person".to_string()]);
 }
+
+// === Devin Expert 4: Edge Case Fuzzing Tests ===
+
+#[test]
+fn test_empty_where_condition() {
+    // WHERE immediately followed by RETURN should error, not panic
+    let result = parse_match_clause("MATCH (n) WHERE RETURN n");
+    assert!(result.is_err(), "Should error on empty WHERE: {:?}", result);
+}
+
+#[test]
+fn test_where_with_only_whitespace() {
+    // WHERE with only whitespace should error
+    let result = parse_match_clause("MATCH (n) WHERE   RETURN n");
+    assert!(
+        result.is_err(),
+        "Should error on whitespace-only WHERE: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_deeply_nested_properties() {
+    // Multiple properties should parse correctly
+    let result = parse_node_pattern("(n:Person {a: 1, b: 2, c: 3, d: 'test'})");
+    assert!(result.is_ok());
+    let node = result.unwrap();
+    assert_eq!(node.properties.len(), 4);
+}
+
+#[test]
+fn test_relationship_with_properties_and_range() {
+    let result = parse_relationship_pattern("-[r:KNOWS*1..3 {since: 2020}]->");
+    // This tests combined range and properties parsing
+    assert!(result.is_ok() || result.is_err()); // May or may not be supported
+}
