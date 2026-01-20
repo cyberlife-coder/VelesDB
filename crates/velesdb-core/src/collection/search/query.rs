@@ -192,9 +192,9 @@ impl Collection {
                 // we need to recompute scores
                 let order_vec = self.resolve_vector(&sim.vector, params)?;
 
-                // Recompute similarity scores for accurate ordering
+                // Recompute metric scores for accurate ordering
                 for result in results.iter_mut() {
-                    let score = self.compute_similarity(&result.point.vector, &order_vec);
+                    let score = self.compute_metric_score(&result.point.vector, &order_vec);
                     result.score = score;
                 }
 
@@ -279,15 +279,18 @@ impl Collection {
         }
     }
 
-    /// Compute similarity/distance between two vectors using the collection's configured metric.
+    /// Compute the metric score between two vectors using the collection's configured metric.
     ///
-    /// This method respects the collection's `DistanceMetric` configuration:
+    /// **Note:** This returns the raw metric score, not a normalized similarity.
+    /// The interpretation depends on the metric:
     /// - **Cosine**: Returns cosine similarity (higher = more similar)
     /// - **DotProduct**: Returns dot product (higher = more similar)
     /// - **Euclidean**: Returns euclidean distance (lower = more similar)
     /// - **Hamming**: Returns hamming distance (lower = more similar)
     /// - **Jaccard**: Returns jaccard similarity (higher = more similar)
-    fn compute_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    ///
+    /// Use `metric.higher_is_better()` to determine score interpretation.
+    fn compute_metric_score(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() || a.is_empty() {
             return 0.0;
         }
@@ -469,6 +472,12 @@ impl Collection {
 
         // The score from HNSW is already computed using the collection's configured metric
         // (Cosine, Euclidean, DotProduct, Hamming, or Jaccard)
+        //
+        // TODO: For distance metrics (Euclidean, Hamming), the threshold semantics may be
+        // counterintuitive. E.g., `similarity() > 0.5` with Euclidean filters for distances > 0.5,
+        // which means "less similar". Consider inverting comparisons based on metric.higher_is_better()
+        // or documenting this as "raw score" filtering rather than "similarity" filtering.
+        //
         // Filter results based on threshold and operator
         let threshold_f32 = threshold as f32;
 
