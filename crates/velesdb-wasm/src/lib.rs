@@ -727,6 +727,133 @@ impl VectorStore {
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Similarity search with threshold filtering.
+    ///
+    /// Returns vectors where similarity to query meets the threshold condition.
+    /// This is the WASM equivalent of VelesQL's `WHERE similarity(field, vector) > threshold`.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector as `Float32Array`
+    /// * `threshold` - Similarity threshold value
+    /// * `operator` - Comparison operator: ">" (gt), ">=" (gte), "<" (lt), "<=" (lte), "=" (eq)
+    /// * `k` - Maximum number of results
+    ///
+    /// # Returns
+    ///
+    /// Array of `[id, score]` tuples where score meets the threshold condition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query dimension doesn't match or operator is invalid.
+    #[wasm_bindgen]
+    pub fn similarity_search(
+        &self,
+        query: &[f32],
+        threshold: f32,
+        operator: &str,
+        k: usize,
+    ) -> Result<JsValue, JsValue> {
+        if query.len() != self.dimension {
+            return Err(JsValue::from_str(&format!(
+                "Query dimension mismatch: expected {}, got {}",
+                self.dimension,
+                query.len()
+            )));
+        }
+
+        // Parse operator
+        let op_fn: Box<dyn Fn(f32, f32) -> bool> = match operator {
+            ">" | "gt" => Box::new(|score, thresh| score > thresh),
+            ">=" | "gte" => Box::new(|score, thresh| score >= thresh),
+            "<" | "lt" => Box::new(|score, thresh| score < thresh),
+            "<=" | "lte" => Box::new(|score, thresh| score <= thresh),
+            "=" | "eq" => Box::new(|score, thresh| (score - thresh).abs() < 0.001),
+            _ => {
+                return Err(JsValue::from_str(
+                    "Invalid operator. Use: >, >=, <, <=, = (or gt, gte, lt, lte, eq)",
+                ))
+            }
+        };
+
+        // Calculate all similarities
+        let all_scores: Vec<(u64, f32)> = match self.storage_mode {
+            StorageMode::Full => self
+                .ids
+                .iter()
+                .enumerate()
+                .map(|(idx, &id)| {
+                    let start = idx * self.dimension;
+                    let v_data = &self.data[start..start + self.dimension];
+                    let score = self.metric.calculate(query, v_data);
+                    (id, score)
+                })
+                .collect(),
+            StorageMode::SQ8 => {
+                let mut dequantized = vec![0.0f32; self.dimension];
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &id)| {
+                        let start = idx * self.dimension;
+                        let min = self.sq8_mins[idx];
+                        let scale = self.sq8_scales[idx];
+                        for (i, &q) in self.data_sq8[start..start + self.dimension]
+                            .iter()
+                            .enumerate()
+                        {
+                            dequantized[i] = (f32::from(q) / scale) + min;
+                        }
+                        let score = self.metric.calculate(query, &dequantized);
+                        (id, score)
+                    })
+                    .collect()
+            }
+            StorageMode::Binary => {
+                let bytes_per_vec = self.dimension.div_ceil(8);
+                let mut binary_vec = vec![0.0f32; self.dimension];
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &id)| {
+                        let start = idx * bytes_per_vec;
+                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
+                            .iter()
+                            .enumerate()
+                        {
+                            for bit in 0..8 {
+                                let dim_idx = i * 8 + bit;
+                                if dim_idx < self.dimension {
+                                    binary_vec[dim_idx] =
+                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
+                                }
+                            }
+                        }
+                        let score = self.metric.calculate(query, &binary_vec);
+                        (id, score)
+                    })
+                    .collect()
+            }
+        };
+
+        // Filter by threshold
+        let mut results: Vec<(u64, f32)> = all_scores
+            .into_iter()
+            .filter(|(_, score)| op_fn(*score, threshold))
+            .collect();
+
+        // Sort by relevance
+        if self.metric.higher_is_better() {
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        results.truncate(k);
+
+        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Performs text search on payload fields.
     ///
     /// This is a simple substring-based search on payload text fields.

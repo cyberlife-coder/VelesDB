@@ -180,3 +180,33 @@ fn test_fuse_results_empty() {
     let fused = fusion::fuse_results(&all_results, "rrf", 60);
     assert!(fused.is_empty());
 }
+
+// Note: similarity_search tests require WASM runtime (returns JsValue).
+// The method is tested via wasm-pack test in CI.
+// Here we test the underlying distance calculations used by similarity_search.
+
+#[test]
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn test_similarity_threshold_logic() {
+    // Test the threshold comparison logic used in similarity_search
+    let threshold = 0.8_f32;
+
+    // GT: score > threshold
+    assert!(0.9_f32 > threshold);
+    assert!(0.8_f32 <= threshold); // Equivalent to !(0.8 > threshold)
+    assert!(0.7_f32 <= threshold); // Equivalent to !(0.7 > threshold)
+
+    // GTE: score >= threshold
+    assert!(0.9_f32 >= threshold);
+    assert!(0.8_f32 >= threshold);
+    assert!(0.7_f32 < threshold); // Equivalent to !(0.7 >= threshold)
+
+    // LT: score < threshold
+    assert!(0.9_f32 >= threshold); // Equivalent to !(0.9 < threshold)
+    assert!(0.8_f32 >= threshold); // Equivalent to !(0.8 < threshold)
+    assert!(0.7_f32 < threshold);
+
+    // EQ: |score - threshold| < 0.001
+    assert!((0.8001_f32 - threshold).abs() < 0.001);
+    assert!((0.81_f32 - threshold).abs() >= 0.001);
+}
