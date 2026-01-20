@@ -193,3 +193,163 @@ fn test_memory_usage() {
     let after = index.memory_usage();
     assert!(after > initial);
 }
+
+// =========================================================================
+// Maintenance hooks tests (US-002)
+// =========================================================================
+
+#[test]
+fn test_on_add_node_indexes_properties() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "email");
+    index.create_index("Person", "name");
+
+    let mut properties = std::collections::HashMap::new();
+    properties.insert("email".to_string(), json!("alice@example.com"));
+    properties.insert("name".to_string(), json!("Alice"));
+    properties.insert("age".to_string(), json!(30)); // Not indexed
+
+    index.on_add_node("Person", 1, &properties);
+
+    // Indexed properties should be found
+    let email_result = index.lookup("Person", "email", &json!("alice@example.com"));
+    assert!(email_result.is_some());
+    assert!(email_result.unwrap().contains(1));
+
+    let name_result = index.lookup("Person", "name", &json!("Alice"));
+    assert!(name_result.is_some());
+    assert!(name_result.unwrap().contains(1));
+
+    // Non-indexed property (age) should not be in index
+    assert!(!index.has_index("Person", "age"));
+}
+
+#[test]
+fn test_on_remove_node_removes_from_index() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "email");
+
+    let mut properties = std::collections::HashMap::new();
+    properties.insert("email".to_string(), json!("alice@example.com"));
+
+    // Add node
+    index.on_add_node("Person", 1, &properties);
+    assert!(index
+        .lookup("Person", "email", &json!("alice@example.com"))
+        .is_some());
+
+    // Remove node
+    index.on_remove_node("Person", 1, &properties);
+
+    // Should no longer be in index
+    let result = index.lookup("Person", "email", &json!("alice@example.com"));
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_on_update_property_updates_index() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "email");
+
+    // Add initial value
+    index.insert("Person", "email", &json!("old@example.com"), 1);
+
+    // Verify old value exists
+    assert!(index
+        .lookup("Person", "email", &json!("old@example.com"))
+        .unwrap()
+        .contains(1));
+
+    // Update property
+    index.on_update_property(
+        "Person",
+        1,
+        "email",
+        &json!("old@example.com"),
+        &json!("new@example.com"),
+    );
+
+    // Old value should be gone
+    let old_result = index.lookup("Person", "email", &json!("old@example.com"));
+    assert!(old_result.is_none());
+
+    // New value should exist
+    let new_result = index.lookup("Person", "email", &json!("new@example.com"));
+    assert!(new_result.is_some());
+    assert!(new_result.unwrap().contains(1));
+}
+
+#[test]
+fn test_on_update_non_indexed_property_noop() {
+    let mut index = PropertyIndex::new();
+    // No index created for "age"
+
+    // Should not panic or error
+    index.on_update_property("Person", 1, "age", &json!(25), &json!(30));
+
+    // No index should exist
+    assert!(!index.has_index("Person", "age"));
+}
+
+#[test]
+fn test_index_consistency_after_multiple_mutations() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Document", "category");
+
+    let mut props1 = std::collections::HashMap::new();
+    props1.insert("category".to_string(), json!("tech"));
+
+    let mut props2 = std::collections::HashMap::new();
+    props2.insert("category".to_string(), json!("tech"));
+
+    let mut props3 = std::collections::HashMap::new();
+    props3.insert("category".to_string(), json!("science"));
+
+    // Add 3 documents
+    index.on_add_node("Document", 1, &props1);
+    index.on_add_node("Document", 2, &props2);
+    index.on_add_node("Document", 3, &props3);
+
+    // Verify counts
+    assert_eq!(
+        index
+            .lookup("Document", "category", &json!("tech"))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        index
+            .lookup("Document", "category", &json!("science"))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Remove one tech document
+    index.on_remove_node("Document", 1, &props1);
+    assert_eq!(
+        index
+            .lookup("Document", "category", &json!("tech"))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Update remaining tech to science
+    index.on_update_property("Document", 2, "category", &json!("tech"), &json!("science"));
+
+    // Tech should be empty now
+    assert!(index
+        .lookup("Document", "category", &json!("tech"))
+        .is_none());
+
+    // Science should have 2
+    assert_eq!(
+        index
+            .lookup("Document", "category", &json!("science"))
+            .unwrap()
+            .len(),
+        2
+    );
+}
