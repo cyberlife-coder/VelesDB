@@ -1,4 +1,4 @@
-//! Graph bindings for VelesDB WASM.
+//! Graph bindings for `VelesDB` WASM.
 //!
 //! Provides wasm-bindgen wrappers for graph operations (nodes, edges, traversal).
 //! Enables knowledge graph construction in browser applications.
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 /// A graph node for knowledge graph construction.
+#[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphNode {
@@ -91,6 +92,7 @@ impl GraphNode {
 }
 
 /// A graph edge representing a relationship between nodes.
+#[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphEdge {
