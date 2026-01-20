@@ -51,8 +51,13 @@ fn test_ordered_float_negative() {
 fn test_ordered_float_zero() {
     let a = OrderedFloat(0.0);
     let b = OrderedFloat(-0.0);
-    // IEEE 754: 0.0 == -0.0
-    assert_eq!(a.cmp(&b), Ordering::Equal);
+    // IEEE 754 total ordering: -0.0 < +0.0 (different bit representations)
+    // This is the correct behavior for total_cmp
+    assert_eq!(a.cmp(&b), Ordering::Greater);
+    assert_eq!(b.cmp(&a), Ordering::Less);
+    // But same value zeros should be equal
+    assert_eq!(OrderedFloat(0.0).cmp(&OrderedFloat(0.0)), Ordering::Equal);
+    assert_eq!(OrderedFloat(-0.0).cmp(&OrderedFloat(-0.0)), Ordering::Equal);
 }
 
 #[test]

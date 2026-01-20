@@ -13,7 +13,7 @@ pub const DEFAULT_MAX_DEPTH: u32 = 3;
 
 /// Safety cap for maximum depth to prevent runaway traversals.
 /// Only applied when user requests unbounded traversal (*).
-/// 
+///
 /// Note: Neo4j and ArangoDB do NOT impose hard limits.
 /// 100 is chosen to cover most real-world use cases:
 /// - Social networks (6 degrees of separation)
@@ -505,7 +505,11 @@ mod tests {
         // (BFS with visited tracking prevents re-expansion)
         // Node 1 CAN appear as a result (via 3->1 edge) but only once
         for (node_id, count) in &target_counts {
-            assert_eq!(*count, 1, "Node {} appeared {} times, expected 1", node_id, count);
+            assert_eq!(
+                *count, 1,
+                "Node {} appeared {} times, expected 1",
+                node_id, count
+            );
         }
 
         // Verify we found the expected nodes: 2, 3, and 1 (via cycle)
