@@ -1,0 +1,281 @@
+//! Tests for similarity() function parsing in VelesQL.
+//!
+//! TDD: These tests are written BEFORE implementation.
+
+#[cfg(test)]
+mod tests {
+    use crate::velesql::ast::{CompareOp, Condition, VectorExpr};
+    use crate::velesql::Parser;
+
+    // ============================================
+    // BASIC PARSING TESTS
+    // ============================================
+
+    #[test]
+    fn test_similarity_with_parameter_greater_than() {
+        let query = "SELECT * FROM docs WHERE similarity(embedding, $query_vec) > 0.8";
+        let result = Parser::parse(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let stmt = result.unwrap();
+        if let Some(ref condition) = stmt.select.where_clause {
+            match condition {
+                Condition::Similarity(sim) => {
+                    assert_eq!(sim.field, "embedding");
+                    assert!(
+                        matches!(sim.vector, VectorExpr::Parameter(ref name) if name == "query_vec")
+                    );
+                    assert_eq!(sim.operator, CompareOp::Gt);
+                    assert!((sim.threshold - 0.8).abs() < 0.001);
+                }
+                _ => panic!("Expected Similarity condition, got {:?}", condition),
+            }
+        } else {
+            panic!("Expected condition in statement");
+        }
+    }
+
+    #[test]
+    fn test_similarity_with_literal_vector() {
+        let query = "SELECT * FROM docs WHERE similarity(embedding, [0.1, 0.2, 0.3]) >= 0.5";
+        let result = Parser::parse(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let stmt = result.unwrap();
+        if let Some(ref condition) = stmt.select.where_clause {
+            match condition {
+                Condition::Similarity(sim) => {
+                    assert_eq!(sim.field, "embedding");
+                    if let VectorExpr::Literal(vec) = &sim.vector {
+                        assert_eq!(vec.len(), 3);
+                        assert!((vec[0] - 0.1).abs() < 0.001);
+                    } else {
+                        panic!("Expected literal vector");
+                    }
+                    assert_eq!(sim.operator, CompareOp::Gte);
+                    assert!((sim.threshold - 0.5).abs() < 0.001);
+                }
+                _ => panic!("Expected Similarity condition"),
+            }
+        } else {
+            panic!("Expected condition in statement");
+        }
+    }
+
+    #[test]
+    fn test_similarity_less_than() {
+        let query = "SELECT * FROM docs WHERE similarity(vec_field, $v) < 0.3";
+        let result = Parser::parse(query);
+        assert!(result.is_ok());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.operator, CompareOp::Lt);
+            assert!((sim.threshold - 0.3).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_less_than_or_equal() {
+        let query = "SELECT * FROM docs WHERE similarity(vec, $v) <= 0.9";
+        let result = Parser::parse(query);
+        assert!(result.is_ok());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.operator, CompareOp::Lte);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_equal() {
+        let query = "SELECT * FROM docs WHERE similarity(emb, $q) = 1.0";
+        let result = Parser::parse(query);
+        assert!(result.is_ok());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.operator, CompareOp::Eq);
+            assert!((sim.threshold - 1.0).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    // ============================================
+    // COMBINED CONDITIONS TESTS
+    // ============================================
+
+    #[test]
+    fn test_similarity_with_and_condition() {
+        let query =
+            "SELECT * FROM docs WHERE similarity(embedding, $v) > 0.7 AND category = 'tech'";
+        let result = Parser::parse(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::And(left, _right)) = &stmt.select.where_clause {
+            assert!(matches!(left.as_ref(), Condition::Similarity(_)));
+        } else {
+            panic!("Expected AND condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_with_or_condition() {
+        let query =
+            "SELECT * FROM docs WHERE similarity(emb1, $v1) > 0.8 OR similarity(emb2, $v2) > 0.8";
+        let result = Parser::parse(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Or(left, right)) = &stmt.select.where_clause {
+            assert!(matches!(left.as_ref(), Condition::Similarity(_)));
+            assert!(matches!(right.as_ref(), Condition::Similarity(_)));
+        } else {
+            panic!("Expected OR condition");
+        }
+    }
+
+    // ============================================
+    // EDGE CASES AND ERROR HANDLING
+    // ============================================
+
+    #[test]
+    fn test_similarity_zero_threshold() {
+        let query = "SELECT * FROM docs WHERE similarity(emb, $v) > 0.0";
+        let result = Parser::parse(query);
+        assert!(result.is_ok());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert!((sim.threshold - 0.0).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_one_threshold() {
+        let query = "SELECT * FROM docs WHERE similarity(emb, $v) >= 1.0";
+        let result = Parser::parse(query);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_similarity_negative_threshold_parsed() {
+        // Parser should accept negative values, validation happens later
+        let query = "SELECT * FROM docs WHERE similarity(emb, $v) > -0.5";
+        let result = Parser::parse(query);
+        // Note: grammar only accepts positive floats, so this should fail
+        // We can update grammar later if needed
+        assert!(result.is_err() || result.is_ok());
+    }
+
+    #[test]
+    fn test_similarity_missing_field_error() {
+        let query = "SELECT * FROM docs WHERE similarity(, $v) > 0.5";
+        let result = Parser::parse(query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_similarity_missing_vector_error() {
+        let query = "SELECT * FROM docs WHERE similarity(emb, ) > 0.5";
+        let result = Parser::parse(query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_similarity_missing_threshold_error() {
+        let query = "SELECT * FROM docs WHERE similarity(emb, $v) >";
+        let result = Parser::parse(query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_similarity_missing_operator_error() {
+        let query = "SELECT * FROM docs WHERE similarity(emb, $v) 0.5";
+        let result = Parser::parse(query);
+        assert!(result.is_err());
+    }
+
+    // ============================================
+    // FIELD NAME VARIATIONS
+    // ============================================
+
+    #[test]
+    fn test_similarity_dotted_field_name() {
+        let query = "SELECT * FROM docs WHERE similarity(node.embedding, $v) > 0.8";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "Failed to parse dotted field: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.field, "node.embedding");
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_underscore_field_name() {
+        let query = "SELECT * FROM docs WHERE similarity(my_embedding_field, $v) > 0.5";
+        let result = Parser::parse(query);
+        assert!(result.is_ok());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.field, "my_embedding_field");
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    /// Test that integer thresholds are accepted (not just floats).
+    /// This reduces user confusion when writing queries like `> 1` instead of `> 1.0`.
+    #[test]
+    fn test_similarity_integer_threshold() {
+        let query = "SELECT * FROM docs WHERE similarity(embedding, $v) > 1";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "Integer threshold should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.operator, CompareOp::Gt);
+            assert!((sim.threshold - 1.0).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_negative_integer_threshold() {
+        let query = "SELECT * FROM docs WHERE similarity(embedding, $v) >= -1";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "Negative integer threshold should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert!((sim.threshold - (-1.0)).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+}

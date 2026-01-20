@@ -38,6 +38,8 @@ mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
+#[cfg(test)]
+mod similarity_tests;
 
 pub use ast::*;
 pub use graph_pattern::*;

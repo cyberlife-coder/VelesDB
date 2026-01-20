@@ -210,6 +210,8 @@ pub enum Condition {
     VectorSearch(VectorSearch),
     /// Multi-vector fused search: `vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'`
     VectorFusedSearch(VectorFusedSearch),
+    /// Similarity function: `similarity(field, $vector) > threshold`
+    Similarity(SimilarityCondition),
     /// Comparison: column op value
     Comparison(Comparison),
     /// IN operator: column IN (values)
@@ -311,6 +313,29 @@ pub enum VectorExpr {
     Literal(Vec<f32>),
     /// Parameter reference: `$param_name`
     Parameter(String),
+}
+
+/// Similarity function condition: `similarity(field, vector) op threshold`
+///
+/// Used in hybrid queries combining graph traversal with vector similarity.
+///
+/// # Example
+///
+/// ```sql
+/// MATCH (d:Document)-[:MENTIONS]->(e:Entity)
+/// WHERE similarity(d.embedding, $query_vector) > 0.8
+/// RETURN d, e
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarityCondition {
+    /// Field name containing the embedding (e.g., "embedding", "node.embedding")
+    pub field: String,
+    /// Vector to compare against (literal or parameter)
+    pub vector: VectorExpr,
+    /// Comparison operator (>, >=, <, <=, =)
+    pub operator: CompareOp,
+    /// Similarity threshold (typically 0.0 to 1.0)
+    pub threshold: f64,
 }
 
 /// Comparison condition.
