@@ -1307,12 +1307,14 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v1.1.0 ✅ (Current - January 2026)
+### v1.2.0 ✅ (Current - January 2026)
+- [x] **🧠 Knowledge Graph Storage** - GraphSchema, GraphNode, GraphEdge, BFS traversal
+- [x] **📝 VelesQL MATCH Clause** - Cypher-inspired graph queries
+- [x] **🔗 Agent Toolkit SDK** - Graph bindings for Python, WASM, Mobile
 - [x] **🚀 Native HNSW Implementation** - Zero external dependencies, pure Rust
 - [x] **⚡ Lock-Free Cache** - DashMap L1 + LRU L2 two-tier caching
 - [x] **🔎 Trigram Index** - 22-128x faster LIKE queries with Roaring Bitmaps
 - [x] **🗄️ Metadata-Only Collections** - Lightweight collections without vectors
-- [x] **🔍 LIKE/ILIKE Filters** - SQL pattern matching with wildcards
 - [x] **📦 Published to crates.io, PyPI, npm** - All SDKs available
 
 ### v1.0.0 ✅
@@ -1330,7 +1332,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 - [x] **Tauri Desktop Plugin** for AI-powered apps
 - [x] **LlamaIndex & LangChain Integrations**
 
-### v1.2.0 (Planned)
+### v1.3.0 (Planned)
 - [ ] GPU Acceleration (wgpu backend)
 - [ ] Product Quantization (PQ)
 - [ ] Sparse vector support

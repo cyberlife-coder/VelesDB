@@ -233,3 +233,21 @@ fn test_node_type_name_case_sensitive() {
     assert!(!schema.has_node_type("person"));
     assert!(!schema.has_node_type("PERSON"));
 }
+
+#[test]
+fn test_validate_edge_type_rejects_undeclared_node_types() {
+    // Bug: validate_edge_type doesn't check that from/to node types exist in schema
+    // Expected: In strict mode, edge validation should fail if endpoint node types
+    // are not declared in the schema, even if they match the edge definition.
+    let schema = GraphSchema::new()
+        // Only declare the edge type, not the node types it references
+        .with_edge_type(EdgeType::new("KNOWS", "Person", "Person"));
+
+    // This SHOULD fail because "Person" node type is not declared
+    // But currently it passes because only edge definition matching is checked
+    let result = schema.validate_edge_type("KNOWS", "Person", "Person");
+    assert!(
+        result.is_err(),
+        "Should reject edge when endpoint node types are not declared in schema"
+    );
+}
