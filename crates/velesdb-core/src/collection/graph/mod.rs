@@ -39,6 +39,7 @@ mod edge;
 mod edge_concurrent;
 mod node;
 mod property_index;
+mod range_index;
 mod schema;
 mod traversal;
 
@@ -51,11 +52,14 @@ mod node_tests;
 #[cfg(test)]
 mod property_index_tests;
 #[cfg(test)]
+mod range_index_tests;
+#[cfg(test)]
 mod schema_tests;
 
 pub use edge::{EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use node::{Element, GraphNode};
 pub use property_index::PropertyIndex;
+pub use range_index::{OrderedValue, RangeIndex};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
 pub use traversal::{TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH};

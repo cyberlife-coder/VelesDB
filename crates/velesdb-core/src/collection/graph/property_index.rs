@@ -3,6 +3,7 @@
 //! Provides O(1) lookups on (label, property_name, value) instead of O(n) scans.
 
 use roaring::RoaringBitmap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -20,7 +21,7 @@ use std::collections::HashMap;
 /// let nodes = index.lookup("Person", "email", &json!("alice@example.com"));
 /// assert!(nodes.map_or(false, |b| b.contains(1)));
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PropertyIndex {
     /// (label, property_name) -> (value_json -> node_ids)
     indexes: HashMap<(String, String), HashMap<String, RoaringBitmap>>,
@@ -192,5 +193,46 @@ impl PropertyIndex {
     /// Use this to backfill an index after creation.
     pub fn index_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
         self.on_add_node(label, node_id, properties);
+    }
+
+    // =========================================================================
+    // Persistence - serialize/deserialize index to/from bytes
+    // =========================================================================
+
+    /// Serialize the index to bytes using bincode.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::serialize(self)
+    }
+
+    /// Deserialize an index from bytes.
+    ///
+    /// # Errors
+    /// Returns an error if deserialization fails (corrupted data).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
+        bincode::deserialize(bytes)
+    }
+
+    /// Save the index to a file.
+    ///
+    /// # Errors
+    /// Returns an error if serialization or file I/O fails.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let bytes = self
+            .to_bytes()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        std::fs::write(path, bytes)
+    }
+
+    /// Load an index from a file.
+    ///
+    /// # Errors
+    /// Returns an error if file I/O or deserialization fails.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Self::from_bytes(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 }
