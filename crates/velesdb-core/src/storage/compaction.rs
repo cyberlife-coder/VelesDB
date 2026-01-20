@@ -11,6 +11,54 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Cross-platform atomic file replacement.
+///
+/// On Unix, `rename()` atomically replaces the destination.
+/// On Windows, `rename()` fails if destination exists, so we use a backup strategy.
+fn atomic_replace(src: &Path, dst: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::rename(src, dst)
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows: rename fails if dst exists
+        // Strategy: dst -> backup, src -> dst, remove backup
+        let backup = dst.with_extension("dat.bak");
+
+        // Remove stale backup if exists
+        let _ = std::fs::remove_file(&backup);
+
+        // Move existing dst to backup (if exists)
+        if dst.exists() {
+            std::fs::rename(dst, &backup)?;
+        }
+
+        // Move src to dst
+        match std::fs::rename(src, dst) {
+            Ok(()) => {
+                // Success: remove backup
+                let _ = std::fs::remove_file(&backup);
+                Ok(())
+            }
+            Err(e) => {
+                // Failed: try to restore backup
+                if backup.exists() {
+                    let _ = std::fs::rename(&backup, dst);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Fallback for other platforms
+        std::fs::rename(src, dst)
+    }
+}
+
 /// Compaction configuration and state.
 pub(super) struct CompactionContext<'a> {
     pub path: &'a Path,
@@ -101,9 +149,9 @@ impl CompactionContext<'_> {
         drop(temp_mmap);
         drop(temp_file);
 
-        // 5. Atomic swap: rename temp -> main
+        // 5. Atomic swap: rename temp -> main (cross-platform)
         let data_path = self.path.join("vectors.dat");
-        std::fs::rename(&temp_path, &data_path)?;
+        atomic_replace(&temp_path, &data_path)?;
 
         // 6. Reopen the compacted file
         let new_data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
