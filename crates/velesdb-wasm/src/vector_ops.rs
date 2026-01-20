@@ -120,6 +120,8 @@ pub fn sort_results(results: &mut [(u64, f32)], higher_is_better: bool) {
 }
 
 /// Parse comparison operator string.
+///
+/// Supports: >, >=, <, <=, =, != (and aliases gt, gte, lt, lte, eq, neq)
 #[allow(dead_code)]
 pub fn parse_operator(op: &str) -> Option<Box<dyn Fn(f32, f32) -> bool>> {
     match op {
@@ -128,6 +130,7 @@ pub fn parse_operator(op: &str) -> Option<Box<dyn Fn(f32, f32) -> bool>> {
         "<" | "lt" => Some(Box::new(|score, thresh| score < thresh)),
         "<=" | "lte" => Some(Box::new(|score, thresh| score <= thresh)),
         "=" | "eq" => Some(Box::new(|score, thresh| (score - thresh).abs() < 0.001)),
+        "!=" | "neq" => Some(Box::new(|score, thresh| (score - thresh).abs() >= 0.001)),
         _ => None,
     }
 }

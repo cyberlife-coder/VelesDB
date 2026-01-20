@@ -117,13 +117,15 @@ impl Parser {
                         _ => return Err(ParseError::syntax(0, inner.as_str(), "Invalid operator")),
                     });
                 }
-                Rule::float => {
-                    threshold = Some(
-                        inner
-                            .as_str()
-                            .parse::<f64>()
-                            .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid float"))?,
-                    );
+                Rule::numeric_threshold => {
+                    // numeric_threshold = { float | integer }
+                    let inner_value = inner
+                        .into_inner()
+                        .next()
+                        .ok_or_else(|| ParseError::syntax(0, "", "Expected numeric threshold"))?;
+                    threshold = Some(inner_value.as_str().parse::<f64>().map_err(|_| {
+                        ParseError::syntax(0, inner_value.as_str(), "Invalid threshold")
+                    })?);
                 }
                 _ => {}
             }

@@ -248,8 +248,10 @@ impl Collection {
         use crate::velesql::Condition;
 
         match condition {
-            // Remove similarity conditions - they're handled separately
-            Condition::Similarity(_) => None,
+            // Remove vector search conditions - they're handled separately by the query executor
+            Condition::Similarity(_)
+            | Condition::VectorSearch(_)
+            | Condition::VectorFusedSearch(_) => None,
             // For AND: keep both sides if they exist, or just one side
             Condition::And(left, right) => {
                 let left_filter = Self::extract_metadata_filter(left);

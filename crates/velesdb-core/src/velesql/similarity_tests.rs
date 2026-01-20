@@ -239,4 +239,43 @@ mod tests {
             panic!("Expected Similarity condition");
         }
     }
+
+    /// Test that integer thresholds are accepted (not just floats).
+    /// This reduces user confusion when writing queries like `> 1` instead of `> 1.0`.
+    #[test]
+    fn test_similarity_integer_threshold() {
+        let query = "SELECT * FROM docs WHERE similarity(embedding, $v) > 1";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "Integer threshold should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.operator, CompareOp::Gt);
+            assert!((sim.threshold - 1.0).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
+
+    #[test]
+    fn test_similarity_negative_integer_threshold() {
+        let query = "SELECT * FROM docs WHERE similarity(embedding, $v) >= -1";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "Negative integer threshold should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert!((sim.threshold - (-1.0)).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
+    }
 }

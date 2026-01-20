@@ -48,9 +48,11 @@ primary_expr = {
 
 // Similarity function: similarity(field, vector) op threshold
 // Used in hybrid graph-vector queries
+// Note: threshold accepts both float (0.8) and integer (1) for user convenience
 similarity_expr = {
-    ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" ~ compare_op ~ float
+    ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" ~ compare_op ~ numeric_threshold
 }
+numeric_threshold = { float | integer }
 similarity_field = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | ".")* }
 
 // Vector search: vector NEAR vector_value
