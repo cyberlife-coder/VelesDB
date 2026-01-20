@@ -1,5 +1,6 @@
 //! Collection lifecycle methods (create, open, flush).
 
+use crate::collection::graph::{PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -82,6 +83,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
         };
 
         collection.save_config()?;
@@ -166,6 +169,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
         };
 
         collection.save_config()?;
@@ -232,6 +237,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
         })
     }
 
