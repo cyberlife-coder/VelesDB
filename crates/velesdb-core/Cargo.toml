@@ -194,3 +194,7 @@ harness = false
 [[bench]]
 name = "match_parser_benchmark"
 harness = false
+
+[[bench]]
+name = "similarity_benchmark"
+harness = false

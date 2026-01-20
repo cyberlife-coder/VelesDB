@@ -47,6 +47,7 @@ mod graph;
 mod persistence;
 mod simd;
 mod text_search;
+mod vector_ops;
 
 pub use distance::DistanceMetric;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
@@ -503,84 +504,29 @@ impl VectorStore {
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
 
-        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = match self.storage_mode {
-            StorageMode::Full => self
-                .ids
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &id)| {
-                    let payload = self.payloads[idx].as_ref()?;
-                    if !filter::matches_filter(payload, &filter_obj) {
-                        return None;
-                    }
-                    let start = idx * self.dimension;
-                    let v_data = &self.data[start..start + self.dimension];
-                    let score = self.metric.calculate(query, v_data);
-                    Some((id, score, Some(payload)))
-                })
-                .collect(),
-            StorageMode::SQ8 => {
-                let mut dequantized = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, &id)| {
-                        let payload = self.payloads[idx].as_ref()?;
-                        if !filter::matches_filter(payload, &filter_obj) {
-                            return None;
-                        }
-                        let start = idx * self.dimension;
-                        let min = self.sq8_mins[idx];
-                        let scale = self.sq8_scales[idx];
-                        for (i, &q) in self.data_sq8[start..start + self.dimension]
-                            .iter()
-                            .enumerate()
-                        {
-                            dequantized[i] = (f32::from(q) / scale) + min;
-                        }
-                        let score = self.metric.calculate(query, &dequantized);
-                        Some((id, score, Some(payload)))
-                    })
-                    .collect()
-            }
-            StorageMode::Binary => {
-                let bytes_per_vec = self.dimension.div_ceil(8);
-                let mut binary_vec = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, &id)| {
-                        let payload = self.payloads[idx].as_ref()?;
-                        if !filter::matches_filter(payload, &filter_obj) {
-                            return None;
-                        }
-                        let start = idx * bytes_per_vec;
-                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
-                            .iter()
-                            .enumerate()
-                        {
-                            for bit in 0..8 {
-                                let dim_idx = i * 8 + bit;
-                                if dim_idx < self.dimension {
-                                    binary_vec[dim_idx] =
-                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                                }
-                            }
-                        }
-                        let score = self.metric.calculate(query, &binary_vec);
-                        Some((id, score, Some(payload)))
-                    })
-                    .collect()
-            }
-        };
+        let mut results = vector_ops::compute_filtered_scores(
+            query,
+            &self.ids,
+            &self.payloads,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            &self.metric,
+            self.storage_mode,
+            |payload| filter::matches_filter(payload, &filter_obj),
+        );
 
         // Sort by relevance
-        if self.metric.higher_is_better() {
-            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
+        results.sort_by(|a, b| {
+            if self.metric.higher_is_better() {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
         results.truncate(k);
 
         // Convert to serializable format
@@ -645,83 +591,21 @@ impl VectorStore {
             )));
         }
 
-        let mut results: Vec<(u64, f32)> = match self.storage_mode {
-            StorageMode::Full => {
-                // Full precision - direct calculation
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * self.dimension;
-                        let v_data = &self.data[start..start + self.dimension];
-                        let score = self.metric.calculate(query, v_data);
-                        (id, score)
-                    })
-                    .collect()
-            }
-            StorageMode::SQ8 => {
-                // SQ8 - dequantize on the fly
-                let mut dequantized = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * self.dimension;
-                        let min = self.sq8_mins[idx];
-                        let scale = self.sq8_scales[idx];
-
-                        // Dequantize: value = (quantized / scale) + min
-                        for (i, &q) in self.data_sq8[start..start + self.dimension]
-                            .iter()
-                            .enumerate()
-                        {
-                            dequantized[i] = (f32::from(q) / scale) + min;
-                        }
-
-                        let score = self.metric.calculate(query, &dequantized);
-                        (id, score)
-                    })
-                    .collect()
-            }
-            StorageMode::Binary => {
-                // Binary - unpack bits and compare
-                let bytes_per_vec = self.dimension.div_ceil(8);
-                let mut binary_vec = vec![0.0f32; self.dimension];
-
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * bytes_per_vec;
-
-                        // Unpack bits to f32 (0.0 or 1.0)
-                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
-                            .iter()
-                            .enumerate()
-                        {
-                            for bit in 0..8 {
-                                let dim_idx = i * 8 + bit;
-                                if dim_idx < self.dimension {
-                                    binary_vec[dim_idx] =
-                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                                }
-                            }
-                        }
-
-                        let score = self.metric.calculate(query, &binary_vec);
-                        (id, score)
-                    })
-                    .collect()
-            }
-        };
+        let mut results = vector_ops::compute_scores(
+            query,
+            &self.ids,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            &self.metric,
+            self.storage_mode,
+        );
 
         // Sort by relevance
-        if self.metric.higher_is_better() {
-            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
+        vector_ops::sort_results(&mut results, self.metric.higher_is_better());
         results.truncate(k);
 
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -776,65 +660,19 @@ impl VectorStore {
             }
         };
 
-        // Calculate all similarities
-        let all_scores: Vec<(u64, f32)> = match self.storage_mode {
-            StorageMode::Full => self
-                .ids
-                .iter()
-                .enumerate()
-                .map(|(idx, &id)| {
-                    let start = idx * self.dimension;
-                    let v_data = &self.data[start..start + self.dimension];
-                    let score = self.metric.calculate(query, v_data);
-                    (id, score)
-                })
-                .collect(),
-            StorageMode::SQ8 => {
-                let mut dequantized = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * self.dimension;
-                        let min = self.sq8_mins[idx];
-                        let scale = self.sq8_scales[idx];
-                        for (i, &q) in self.data_sq8[start..start + self.dimension]
-                            .iter()
-                            .enumerate()
-                        {
-                            dequantized[i] = (f32::from(q) / scale) + min;
-                        }
-                        let score = self.metric.calculate(query, &dequantized);
-                        (id, score)
-                    })
-                    .collect()
-            }
-            StorageMode::Binary => {
-                let bytes_per_vec = self.dimension.div_ceil(8);
-                let mut binary_vec = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * bytes_per_vec;
-                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
-                            .iter()
-                            .enumerate()
-                        {
-                            for bit in 0..8 {
-                                let dim_idx = i * 8 + bit;
-                                if dim_idx < self.dimension {
-                                    binary_vec[dim_idx] =
-                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                                }
-                            }
-                        }
-                        let score = self.metric.calculate(query, &binary_vec);
-                        (id, score)
-                    })
-                    .collect()
-            }
-        };
+        // Calculate all similarities using helper
+        let all_scores = vector_ops::compute_scores(
+            query,
+            &self.ids,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            &self.metric,
+            self.storage_mode,
+        );
 
         // Filter by threshold
         let mut results: Vec<(u64, f32)> = all_scores
@@ -843,12 +681,7 @@ impl VectorStore {
             .collect();
 
         // Sort by relevance
-        if self.metric.higher_is_better() {
-            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
+        vector_ops::sort_results(&mut results, self.metric.higher_is_better());
         results.truncate(k);
 
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
