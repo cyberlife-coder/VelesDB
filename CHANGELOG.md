@@ -56,6 +56,18 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
   - New endpoints: `POST/GET /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`
   - `similarity()` function available via `query()` method in Python and TypeScript REST
 
+- **EPIC-009: Graph Property Index**
+  - `PropertyIndex` for O(1) hash-based equality lookups
+  - `RangeIndex` for O(log n) range queries on ordered values
+  - Index management: `create_property_index`, `create_range_index`, `list_indexes`, `drop_index`
+  - Memory usage tracking per index
+
+- **EPIC-016: SDK Ecosystem Sync**
+  - Property Index propagated to velesdb-server REST API
+  - Property Index propagated to velesdb-python (PyO3 bindings)
+  - Property Index propagated to TypeScript SDK (REST backend)
+  - New endpoints: `POST/GET /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`
+
 #### Changed
 
 - **EPIC-007: Python Bindings Refactoring**
