@@ -209,3 +209,101 @@ fn test_plan_display_impl() {
     // Assert
     assert!(display.contains("Query Plan:"));
 }
+
+// =========================================================================
+// IndexLookup tests (US-003)
+// =========================================================================
+
+#[test]
+fn test_index_lookup_plan_creation() {
+    // Arrange
+    let plan = IndexLookupPlan {
+        label: "Person".to_string(),
+        property: "email".to_string(),
+        value: "alice@example.com".to_string(),
+    };
+
+    // Assert
+    assert_eq!(plan.label, "Person");
+    assert_eq!(plan.property, "email");
+    assert_eq!(plan.value, "alice@example.com");
+}
+
+#[test]
+fn test_index_lookup_node_cost() {
+    // IndexLookup should have very low cost (O(1))
+    let plan = QueryPlan {
+        root: PlanNode::IndexLookup(IndexLookupPlan {
+            label: "Person".to_string(),
+            property: "email".to_string(),
+            value: "test@test.com".to_string(),
+        }),
+        estimated_cost_ms: 0.0001,
+        index_used: Some(IndexType::Property),
+        filter_strategy: FilterStrategy::None,
+    };
+
+    // IndexLookup cost should be much lower than TableScan
+    let scan_plan = QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "Person".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+    };
+
+    assert!(plan.estimated_cost_ms < scan_plan.estimated_cost_ms);
+}
+
+#[test]
+fn test_index_lookup_render_tree() {
+    // Arrange
+    let plan = QueryPlan {
+        root: PlanNode::IndexLookup(IndexLookupPlan {
+            label: "Person".to_string(),
+            property: "email".to_string(),
+            value: "alice@example.com".to_string(),
+        }),
+        estimated_cost_ms: 0.0001,
+        index_used: Some(IndexType::Property),
+        filter_strategy: FilterStrategy::None,
+    };
+
+    // Act
+    let tree = plan.to_tree();
+
+    // Assert - EXPLAIN should show IndexLookup(Person.email)
+    assert!(tree.contains("IndexLookup(Person.email)"));
+    assert!(tree.contains("Value: alice@example.com"));
+    assert!(tree.contains("Index used: PropertyIndex"));
+}
+
+#[test]
+fn test_index_type_property() {
+    assert_eq!(IndexType::Property.as_str(), "PropertyIndex");
+}
+
+#[test]
+fn test_index_lookup_json_serialization() {
+    // Arrange
+    let plan = QueryPlan {
+        root: PlanNode::IndexLookup(IndexLookupPlan {
+            label: "Document".to_string(),
+            property: "category".to_string(),
+            value: "tech".to_string(),
+        }),
+        estimated_cost_ms: 0.0001,
+        index_used: Some(IndexType::Property),
+        filter_strategy: FilterStrategy::None,
+    };
+
+    // Act
+    let json = plan.to_json().expect("JSON serialization failed");
+
+    // Assert
+    assert!(json.contains("IndexLookup"));
+    assert!(json.contains("Document"));
+    assert!(json.contains("category"));
+    assert!(json.contains("tech"));
+}

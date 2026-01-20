@@ -43,6 +43,8 @@ pub enum PlanNode {
     Offset(OffsetPlan),
     /// Table scan (no index).
     TableScan(TableScanPlan),
+    /// Property index lookup (O(1) instead of scan).
+    IndexLookup(IndexLookupPlan),
     /// Sequential operations.
     Sequence(Vec<PlanNode>),
 }
@@ -88,6 +90,17 @@ pub struct TableScanPlan {
     pub collection: String,
 }
 
+/// Property index lookup plan (O(1) lookup).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexLookupPlan {
+    /// Label being queried.
+    pub label: String,
+    /// Property name with index.
+    pub property: String,
+    /// Value being looked up (as string representation).
+    pub value: String,
+}
+
 /// Type of index used in the query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndexType {
@@ -97,6 +110,8 @@ pub enum IndexType {
     Flat,
     /// Binary quantization index.
     BinaryQuantization,
+    /// Property index for equality lookups.
+    Property,
 }
 
 /// Strategy for applying filters.
@@ -252,6 +267,7 @@ impl QueryPlan {
             PlanNode::Filter(f) => 0.01 * (1.0 - f.selectivity),
             PlanNode::Limit(_) | PlanNode::Offset(_) => 0.001,
             PlanNode::TableScan(_) => 1.0,
+            PlanNode::IndexLookup(_) => 0.0001, // O(1) lookup is very fast
             PlanNode::Sequence(nodes) => nodes.iter().map(Self::node_cost).sum(),
         }
     }
@@ -308,6 +324,14 @@ impl QueryPlan {
             PlanNode::TableScan(ts) => {
                 let _ = writeln!(output, "{prefix}{connector}TableScan: {}", ts.collection);
             }
+            PlanNode::IndexLookup(il) => {
+                let _ = writeln!(
+                    output,
+                    "{prefix}{connector}IndexLookup({}.{})",
+                    il.label, il.property
+                );
+                let _ = writeln!(output, "{child_prefix}└─ Value: {}", il.value);
+            }
             PlanNode::Sequence(nodes) => {
                 for (i, child) in nodes.iter().enumerate() {
                     Self::render_node(child, output, prefix, i == nodes.len() - 1);
@@ -334,6 +358,7 @@ impl IndexType {
             Self::Hnsw => "HNSW",
             Self::Flat => "Flat",
             Self::BinaryQuantization => "BinaryQuantization",
+            Self::Property => "PropertyIndex",
         }
     }
 }
