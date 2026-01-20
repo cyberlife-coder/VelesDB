@@ -1,4 +1,4 @@
-//! Text search utilities for VelesDB WASM.
+//! Text search utilities for `VelesDB` WASM.
 //!
 //! Provides simple substring-based text search on JSON payloads.
 

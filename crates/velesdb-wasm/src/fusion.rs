@@ -1,4 +1,4 @@
-//! Result fusion strategies for VelesDB WASM.
+//! Result fusion strategies for `VelesDB` WASM.
 //!
 //! Provides different strategies for combining results from multiple queries:
 //! - Average: Mean score across all queries

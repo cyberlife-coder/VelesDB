@@ -1,4 +1,4 @@
-//! Tests for VelesDB WASM VectorStore.
+//! Tests for `VelesDB` WASM `VectorStore`.
 
 use super::*;
 

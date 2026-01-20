@@ -1,4 +1,4 @@
-//! Filter evaluation for VelesDB WASM.
+//! Filter evaluation for `VelesDB` WASM.
 //!
 //! Provides JSON-based metadata filtering for vector search results.
 //! Supports conditions: eq, neq, gt, gte, lt, lte, and, or, not.
