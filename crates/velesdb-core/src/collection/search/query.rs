@@ -4,6 +4,29 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
+use std::cmp::Ordering;
+
+/// Compare two JSON values for sorting.
+fn compare_json_values(a: Option<&serde_json::Value>, b: Option<&serde_json::Value>) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(va), Some(vb)) => {
+            // Compare by type priority: numbers, strings, booleans, null
+            match (va, vb) {
+                (serde_json::Value::Number(na), serde_json::Value::Number(nb)) => {
+                    let fa = na.as_f64().unwrap_or(0.0);
+                    let fb = nb.as_f64().unwrap_or(0.0);
+                    fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+                }
+                (serde_json::Value::String(sa), serde_json::Value::String(sb)) => sa.cmp(sb),
+                (serde_json::Value::Bool(ba), serde_json::Value::Bool(bb)) => ba.cmp(bb),
+                _ => Ordering::Equal,
+            }
+        }
+    }
+}
 
 impl Collection {
     /// Executes a `VelesQL` query on this collection.
@@ -120,10 +143,134 @@ impl Collection {
             }
         };
 
+        // Apply ORDER BY if present
+        if let Some(ref order_by) = stmt.order_by {
+            self.apply_order_by(&mut results, order_by, params)?;
+        }
+
         // Apply limit
         results.truncate(limit);
 
         Ok(results)
+    }
+
+    /// Apply ORDER BY clause to results.
+    fn apply_order_by(
+        &self,
+        results: &mut [SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        use crate::velesql::OrderByExpr;
+
+        if order_by.is_empty() {
+            return Ok(());
+        }
+
+        // For now, we only support single ORDER BY expression
+        // Multiple ORDER BY items would require more complex sorting
+        let first = &order_by[0];
+
+        match &first.expr {
+            OrderByExpr::Similarity(sim) => {
+                // Sort by similarity score
+                // The score is already computed during search, so we just sort
+                let descending = first.descending;
+
+                // If the similarity vector is different from the search vector,
+                // we need to recompute scores
+                let order_vec = self.resolve_vector(&sim.vector, params)?;
+
+                // Recompute similarity scores for accurate ordering
+                for result in results.iter_mut() {
+                    let score = self.compute_similarity(&result.point.vector, &order_vec);
+                    result.score = score;
+                }
+
+                if descending {
+                    results.sort_by(|a, b| {
+                        b.score
+                            .partial_cmp(&a.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                } else {
+                    results.sort_by(|a, b| {
+                        a.score
+                            .partial_cmp(&b.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+            OrderByExpr::Field(field_name) => {
+                // Sort by payload field value
+                let descending = first.descending;
+
+                results.sort_by(|a, b| {
+                    let val_a = a.point.payload.as_ref().and_then(|p| p.get(field_name));
+                    let val_b = b.point.payload.as_ref().and_then(|p| p.get(field_name));
+
+                    let cmp = compare_json_values(val_a, val_b);
+                    if descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Resolve a vector expression to actual vector values.
+    fn resolve_vector(
+        &self,
+        vector: &crate::velesql::VectorExpr,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<f32>> {
+        use crate::velesql::VectorExpr;
+
+        match vector {
+            VectorExpr::Literal(v) => Ok(v.clone()),
+            VectorExpr::Parameter(name) => {
+                let val = params
+                    .get(name)
+                    .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
+                if let serde_json::Value::Array(arr) = val {
+                    #[allow(clippy::cast_possible_truncation)]
+                    arr.iter()
+                        .map(|v| {
+                            v.as_f64().map(|f| f as f32).ok_or_else(|| {
+                                Error::Config(format!(
+                                    "Invalid vector parameter ${name}: expected numbers"
+                                ))
+                            })
+                        })
+                        .collect::<Result<Vec<f32>>>()
+                } else {
+                    Err(Error::Config(format!(
+                        "Invalid vector parameter ${name}: expected array"
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Compute cosine similarity between two vectors.
+    fn compute_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.0;
+        }
+
+        dot / (norm_a * norm_b)
     }
 
     /// Helper to extract MATCH query from any nested condition.
