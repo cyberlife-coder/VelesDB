@@ -210,6 +210,10 @@ impl Collection {
             .collect();
 
         // Ensure results are sorted by score (should already be, but defensive)
+        // TODO: For distance metrics (Euclidean, Hamming) where lower=better,
+        // this descending sort may not match user expectations. Consider using
+        // metric.higher_is_better() to determine sort direction, similar to
+        // the ORDER BY similarity() fix in query.rs:201-225.
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)

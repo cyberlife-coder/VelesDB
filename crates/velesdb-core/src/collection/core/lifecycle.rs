@@ -232,7 +232,17 @@ impl Collection {
         let property_index = {
             let index_path = path.join("property_index.bin");
             if index_path.exists() {
-                PropertyIndex::load_from_file(&index_path).unwrap_or_else(|_| PropertyIndex::new())
+                match PropertyIndex::load_from_file(&index_path) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
+                            index_path,
+                            e
+                        );
+                        PropertyIndex::new()
+                    }
+                }
             } else {
                 PropertyIndex::new()
             }
@@ -242,7 +252,17 @@ impl Collection {
         let range_index = {
             let index_path = path.join("range_index.bin");
             if index_path.exists() {
-                RangeIndex::load_from_file(&index_path).unwrap_or_else(|_| RangeIndex::new())
+                match RangeIndex::load_from_file(&index_path) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
+                            index_path,
+                            e
+                        );
+                        RangeIndex::new()
+                    }
+                }
             } else {
                 RangeIndex::new()
             }
