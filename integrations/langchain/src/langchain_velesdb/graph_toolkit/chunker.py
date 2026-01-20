@@ -121,8 +121,10 @@ class SemanticChunker:
                                     entities=chunk_entities,
                                 )
                             )
-                            current_offset += len(current_chunk) - self.chunk_overlap
-                            overlap_text = current_chunk[-self.chunk_overlap :] if self.chunk_overlap > 0 else ""
+                            # Clamp overlap to chunk length to prevent negative offsets
+                            effective_overlap = min(self.chunk_overlap, len(current_chunk))
+                            current_offset += len(current_chunk) - effective_overlap
+                            overlap_text = current_chunk[-effective_overlap:] if effective_overlap > 0 else ""
                             current_chunk = overlap_text + separator + split
                         else:
                             current_chunk = potential

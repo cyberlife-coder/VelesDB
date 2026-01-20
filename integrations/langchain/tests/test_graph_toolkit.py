@@ -164,6 +164,28 @@ class TestSemanticChunker:
         chunks = chunker.chunk(text)
         assert chunks[0].start_idx == 0
 
+    def test_chunk_overlap_exceeds_chunk_length_no_negative_indices(self):
+        """Test that large chunk_overlap doesn't produce negative start_idx.
+
+        Bug: When chunk_overlap > len(current_chunk), the offset calculation
+        (len(chunk) - overlap) became negative, causing negative start_idx.
+        Fix: Clamp effective_overlap to min(chunk_overlap, len(current_chunk)).
+        """
+        chunker = SemanticChunker(chunk_size=50, chunk_overlap=200)
+        text = "A. B. C. D. E. F. G. H. I. J. K. L. M. N. O. P. Q. R. S. T."
+        chunks = chunker.chunk(text)
+
+        for i, chunk in enumerate(chunks):
+            assert chunk.start_idx >= 0, (
+                f"Chunk {i} has negative start_idx: {chunk.start_idx}"
+            )
+            assert chunk.end_idx >= chunk.start_idx, (
+                f"Chunk {i} has end_idx < start_idx: {chunk.end_idx} < {chunk.start_idx}"
+            )
+            assert chunk.end_idx <= len(text) + 200, (
+                f"Chunk {i} has end_idx beyond text length: {chunk.end_idx}"
+            )
+
 
 class TestGraphLoader:
     """Tests for GraphLoader."""
