@@ -3,7 +3,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use clap::Parser;
@@ -16,8 +16,9 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
-    batch_search, create_collection, delete_collection, delete_point, get_collection, get_point,
-    health_check, list_collections, query, search, upsert_points, ApiDoc, AppState,
+    batch_search, create_collection, create_index, delete_collection, delete_index, delete_point,
+    get_collection, get_point, health_check, list_collections, list_indexes, query, search,
+    upsert_points, ApiDoc, AppState,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -78,6 +79,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
+        .route(
+            "/collections/{name}/indexes",
+            get(list_indexes).post(create_index),
+        )
+        .route(
+            "/collections/{name}/indexes/{label}/{property}",
+            delete(delete_index),
+        )
         .route("/query", post(query))
         .with_state(state);
 

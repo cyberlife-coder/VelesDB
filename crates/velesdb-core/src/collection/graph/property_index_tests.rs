@@ -306,6 +306,65 @@ fn test_property_index_corrupted_data() {
 }
 
 // =========================================================================
+// Collection lifecycle persistence tests (EPIC-009 US-005)
+// =========================================================================
+
+#[test]
+fn test_property_index_persists_across_collection_reopen() {
+    use crate::collection::types::Collection;
+    use crate::distance::DistanceMetric;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from(temp_dir.path());
+
+    // Create collection and add property index
+    {
+        let collection = Collection::create(path.clone(), 4, DistanceMetric::Cosine).unwrap();
+
+        // Create a property index
+        collection
+            .property_index
+            .write()
+            .create_index("Person", "email");
+        collection
+            .property_index
+            .write()
+            .insert("Person", "email", &json!("alice@example.com"), 1);
+        collection
+            .property_index
+            .write()
+            .insert("Person", "email", &json!("bob@example.com"), 2);
+
+        // Flush to persist
+        collection.flush().unwrap();
+    }
+
+    // Reopen collection and verify index is loaded
+    {
+        let collection = Collection::open(path).unwrap();
+
+        // Verify index exists and data is preserved
+        let index = collection.property_index.read();
+        assert!(
+            index.has_index("Person", "email"),
+            "Property index should be loaded from disk"
+        );
+
+        let alice_nodes = index.lookup("Person", "email", &json!("alice@example.com"));
+        assert!(
+            alice_nodes.is_some_and(|b| b.contains(1)),
+            "Alice should be in index after reopen"
+        );
+
+        let bob_nodes = index.lookup("Person", "email", &json!("bob@example.com"));
+        assert!(
+            bob_nodes.is_some_and(|b| b.contains(2)),
+            "Bob should be in index after reopen"
+        );
+    }
+}
+
+// =========================================================================
 // Maintenance hooks tests (US-002)
 // =========================================================================
 

@@ -11,6 +11,8 @@ import type {
   SearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
+  CreateIndexOptions,
+  IndexInfo,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -451,5 +453,71 @@ export class VelesDB {
    */
   get backendType(): string {
     return this.config.backend;
+  }
+
+  // ========================================================================
+  // Index Management (EPIC-009)
+  // ========================================================================
+
+  /**
+   * Create a property index for O(1) equality lookups or O(log n) range queries
+   * 
+   * @param collection - Collection name
+   * @param options - Index configuration (label, property, indexType)
+   * 
+   * @example
+   * ```typescript
+   * // Create hash index for fast email lookups
+   * await db.createIndex('users', { label: 'Person', property: 'email' });
+   * 
+   * // Create range index for timestamp queries
+   * await db.createIndex('events', { label: 'Event', property: 'timestamp', indexType: 'range' });
+   * ```
+   */
+  async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
+    this.ensureInitialized();
+    
+    if (!options.label || !options.property) {
+      throw new ValidationError('Index requires label and property');
+    }
+
+    await this.backend.createIndex(collection, options);
+  }
+
+  /**
+   * List all indexes on a collection
+   * 
+   * @param collection - Collection name
+   * @returns Array of index information
+   */
+  async listIndexes(collection: string): Promise<IndexInfo[]> {
+    this.ensureInitialized();
+    return this.backend.listIndexes(collection);
+  }
+
+  /**
+   * Check if an index exists
+   * 
+   * @param collection - Collection name
+   * @param label - Node label
+   * @param property - Property name
+   * @returns true if index exists
+   */
+  async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
+    this.ensureInitialized();
+    return this.backend.hasIndex(collection, label, property);
+  }
+
+  /**
+   * Drop an index
+   * 
+   * @param collection - Collection name
+   * @param label - Node label
+   * @param property - Property name
+   * @returns true if index was dropped, false if it didn't exist
+   */
+  async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
+    this.ensureInitialized();
+    return this.backend.dropIndex(collection, label, property);
   }
 }
