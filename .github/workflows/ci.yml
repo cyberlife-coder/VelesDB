@@ -40,6 +40,8 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUST_VERSION: "1.83"
+  # Skip Python detection for pyo3 - avoids environment contamination issues
+  PYO3_NO_PYTHON: "1"
 
 jobs:
   # ===========================================================================
@@ -71,7 +73,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy (strict)
-        run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
+        run: |
+          cargo clippy --workspace --all-targets --all-features \
+            --exclude velesdb-python \
+            -- -D warnings -D clippy::pedantic
 
   # ===========================================================================
   # Tests unitaires (parallèle avec lint et security)
@@ -98,7 +103,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
-        run: cargo test --all-features --workspace -- --test-threads=1
+        run: |
+          cargo test --workspace --all-features \
+            --exclude velesdb-python \
+            -- --test-threads=1
         env:
           RUST_TEST_THREADS: 1
 

@@ -437,3 +437,5 @@ impl From<bool> for Value {
         Self::Boolean(v)
     }
 }
+
+// Graph Pattern Matching types are in graph_pattern.rs

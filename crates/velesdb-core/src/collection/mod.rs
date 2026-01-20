@@ -11,8 +11,10 @@
 //! - BM25 index for full-text search
 //! - Hybrid search combining vector and text similarity
 //! - Metadata-only collections (no vectors) for reference tables
+//! - Graph collections for knowledge graph storage (nodes, edges, traversal)
 
 mod core;
+pub mod graph;
 mod search;
 mod types;
 
@@ -22,4 +24,8 @@ mod tests;
 #[cfg(test)]
 mod metadata_only_tests;
 
+pub use graph::{
+    ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
+    ValueType,
+};
 pub use types::{Collection, CollectionConfig, CollectionType};

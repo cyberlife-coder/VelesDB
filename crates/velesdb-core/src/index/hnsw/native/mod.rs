@@ -40,13 +40,16 @@ mod backend_adapter;
 mod distance;
 mod dual_precision;
 mod graph;
+pub(crate) mod layer;
+mod ordered_float;
 mod quantization;
 mod search;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
 pub use distance::{CpuDistance, DistanceEngine, NativeSimdDistance, SimdDistance};
 pub use dual_precision::DualPrecisionHnsw;
-pub use graph::{Layer, NativeHnsw, NodeId};
+pub use graph::NativeHnsw;
+pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
 pub use search::SearchResult;
 
@@ -56,6 +59,10 @@ mod backend_adapter_tests;
 mod dual_precision_tests;
 #[cfg(test)]
 mod graph_tests;
+#[cfg(test)]
+mod layer_tests;
+#[cfg(test)]
+mod ordered_float_tests;
 #[cfg(test)]
 mod quantization_tests;
 #[cfg(test)]

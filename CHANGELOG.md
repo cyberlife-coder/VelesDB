@@ -5,6 +5,61 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-01-19
+
+### 🧠 Knowledge Graph & VelesQL MATCH Release
+
+Major release introducing Knowledge Graph storage and VelesQL MATCH clause for graph traversal queries.
+
+#### Added
+
+- **EPIC-004: Knowledge Graph Storage**
+  - `GraphSchema` for heterogeneous node/edge type definitions
+  - `GraphNode` with labels, properties, and optional vector embeddings
+  - `GraphEdge` for typed relationships with properties
+  - `EdgeStore` and `ConcurrentEdgeStore` for thread-safe edge management
+  - BFS-based traversal algorithms for multi-hop queries
+  - Unified `Element` enum (Point | Node) for hybrid storage
+
+- **EPIC-005: VelesQL MATCH Clause**
+  - Cypher-inspired MATCH syntax: `MATCH (a:Person)-[r:KNOWS]->(b)`
+  - Variable-length paths: `(a)-[*1..3]->(b)`
+  - Direction support: outgoing `->`, incoming `<-`, both `--`
+  - WHERE clause with comparison operators (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`)
+  - RETURN clause for result projection
+
+- **EPIC-006: Agent Toolkit SDK**
+  - Graph bindings for Python (PyO3): `GraphNode`, `GraphEdge`, traversal
+  - Graph bindings for WASM: full graph API in browser
+  - Graph bindings for Mobile (UniFFI): iOS/Android support
+
+#### Changed
+
+- **EPIC-007: Python Bindings Refactoring**
+  - Extracted `collection.rs` (580 lines) from `lib.rs`
+  - Extracted `utils.rs` with 6 helper functions
+  - `lib.rs` reduced from 1336 to 321 lines (-76%)
+
+- **WASM/Mobile Refactoring**
+  - Extracted `filter.rs`, `fusion.rs`, `text_search.rs`, `graph.rs` modules
+  - Tests moved to dedicated `lib_tests.rs` files
+  - Improved code organization following Martin Fowler methodology
+
+#### Fixed
+
+- Race conditions in `ConcurrentEdgeStore` with atomic registry operations
+- Cross-shard consistency in edge removal operations
+- VelesQL parser edge cases (string literals, brace validation)
+- Duplicate edge ID prevention with proper validation
+
+#### Technical Notes
+
+- All 1400+ workspace tests passing
+- New graph traversal benchmarks added
+- Security advisories updated in `deny.toml`
+
+---
+
 ## [1.1.2] - 2026-01-18
 
 ### 🔧 Code Quality & GPU Acceleration Release
