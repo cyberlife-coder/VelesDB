@@ -27,15 +27,15 @@ FusionStrategy::Weighted { vector_weight: 0.7, graph_weight: 0.3 }
 |-----------|------|--------|-----|-------|
 | velesdb-core | Engine | ✅ DONE | #61 | Source - Parser + Executor |
 | velesdb-wasm | SDK WASM | ✅ DONE | #61 | similarity_search() method |
-| velesdb-server | API HTTP | 🔴 TODO | - | POST /query avec similarity |
+| velesdb-server | API HTTP | ✅ DONE | - | Uses core execute_query directly |
 | velesdb-python | SDK Python | ✅ DONE | - | Uses core execute_query directly |
 | velesdb-cli | CLI | ✅ DONE | - | Uses core execute_query directly |
-| sdks/typescript | SDK TypeScript | 🔴 TODO | - | HTTP client query() |
-| integrations/langchain | LangChain | 🟡 PARTIAL | - | VectorStore exists, add similarity |
+| sdks/typescript | SDK TypeScript | ✅ DONE | - | query() method exists in REST backend |
+| integrations/langchain | LangChain | ✅ DONE | - | query() method uses Python SDK |
 | integrations/llamaindex | LlamaIndex | 🔴 TODO | - | VectorStore avec similarity |
 | tauri-plugin-velesdb | Plugin Tauri | 🔴 TODO | - | Tauri commands |
 | velesdb-mobile | SDK Mobile | 🔴 TODO | - | UniFFI bindings |
-| docs/ | Documentation | 🔴 TODO | - | VelesQL similarity guide |
+| docs/ | Documentation | ✅ DONE | - | VELESQL_SPEC.md updated |
 
 ## Priorité de propagation
 
