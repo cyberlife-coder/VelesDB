@@ -170,6 +170,10 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Build wheel
+        env:
+          # Clear any cached/polluted Python paths to avoid cross-platform issues
+          PYTHONHOME: ""
+          PYTHONPATH: ""
         run: |
           pip install maturin
           cd crates/velesdb-python

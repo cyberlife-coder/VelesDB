@@ -74,6 +74,8 @@ bench_output.txt
 .venv/
 __pycache__/
 *.pyc
+*.pyd
+*.so
 
 # Node modules (TypeScript SDK)
 node_modules/
