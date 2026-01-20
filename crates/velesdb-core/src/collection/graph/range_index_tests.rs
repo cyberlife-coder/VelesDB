@@ -232,3 +232,63 @@ fn test_memory_usage() {
     let after = index.memory_usage();
     assert!(after > initial);
 }
+
+// =========================================================================
+// Persistence tests (US-005)
+// =========================================================================
+
+#[test]
+fn test_range_index_serialize_deserialize() {
+    let mut index = RangeIndex::new();
+    index.create_index("Event", "timestamp");
+    index.insert("Event", "timestamp", &json!(100), 1);
+    index.insert("Event", "timestamp", &json!(200), 2);
+    index.insert("Event", "timestamp", &json!(300), 3);
+
+    // Serialize
+    let bytes = index.to_bytes().expect("Serialization failed");
+    assert!(!bytes.is_empty());
+
+    // Deserialize
+    let loaded = RangeIndex::from_bytes(&bytes).expect("Deserialization failed");
+
+    // Verify range queries work after deserialization
+    let result = loaded.range_greater_than("Event", "timestamp", &json!(150));
+    assert_eq!(result.len(), 2);
+    assert!(result.contains(2));
+    assert!(result.contains(3));
+}
+
+#[test]
+fn test_range_index_persist_to_file() {
+    let mut index = RangeIndex::new();
+    index.create_index("Measurement", "value");
+    index.insert("Measurement", "value", &json!(1.5), 1);
+    index.insert("Measurement", "value", &json!(2.5), 2);
+    index.insert("Measurement", "value", &json!(3.5), 3);
+
+    // Save to temp file
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join("test_range_index.bin");
+
+    index.save_to_file(&file_path).expect("Save failed");
+    assert!(file_path.exists());
+
+    // Load from file
+    let loaded = RangeIndex::load_from_file(&file_path).expect("Load failed");
+
+    // Verify range query works
+    let result = loaded.range_between("Measurement", "value", &json!(2.0), &json!(3.0));
+    assert_eq!(result.len(), 1);
+    assert!(result.contains(2));
+
+    // Cleanup
+    std::fs::remove_file(&file_path).ok();
+}
+
+#[test]
+fn test_range_index_corrupted_data() {
+    let corrupted = vec![0u8, 1, 2, 3, 255, 254];
+    let result = RangeIndex::from_bytes(&corrupted);
+    assert!(result.is_err());
+}
