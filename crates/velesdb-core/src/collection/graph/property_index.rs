@@ -133,4 +133,59 @@ impl PropertyIndex {
         }
         total
     }
+
+    // =========================================================================
+    // Maintenance hooks - called automatically on graph mutations
+    // =========================================================================
+
+    /// Hook called when a node is added to the graph.
+    ///
+    /// Indexes all properties that have an active index.
+    pub fn on_add_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
+        for (prop_name, value) in properties {
+            if self.has_index(label, prop_name) {
+                self.insert(label, prop_name, value, node_id);
+            }
+        }
+    }
+
+    /// Hook called when a node is removed from the graph.
+    ///
+    /// Removes all indexed properties for this node.
+    pub fn on_remove_node(
+        &mut self,
+        label: &str,
+        node_id: u64,
+        properties: &HashMap<String, Value>,
+    ) {
+        for (prop_name, value) in properties {
+            if self.has_index(label, prop_name) {
+                self.remove(label, prop_name, value, node_id);
+            }
+        }
+    }
+
+    /// Hook called when a property is updated on a node.
+    ///
+    /// Removes old value and inserts new value if property is indexed.
+    pub fn on_update_property(
+        &mut self,
+        label: &str,
+        node_id: u64,
+        property: &str,
+        old_value: &Value,
+        new_value: &Value,
+    ) {
+        if self.has_index(label, property) {
+            self.remove(label, property, old_value, node_id);
+            self.insert(label, property, new_value, node_id);
+        }
+    }
+
+    /// Hook to index all properties of a node after creating an index.
+    ///
+    /// Use this to backfill an index after creation.
+    pub fn index_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
+        self.on_add_node(label, node_id, properties);
+    }
 }
