@@ -12,6 +12,8 @@ import type {
   SearchOptions,
   SearchResult,
   MultiQuerySearchOptions,
+  CreateIndexOptions,
+  IndexInfo,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -485,5 +487,83 @@ export class RestBackend implements IVelesDBBackend {
 
   async close(): Promise<void> {
     this._initialized = false;
+  }
+
+  // ========================================================================
+  // Index Management (EPIC-009)
+  // ========================================================================
+
+  async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/indexes`,
+      {
+        label: options.label,
+        property: options.property,
+        index_type: options.indexType ?? 'hash',
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async listIndexes(collection: string): Promise<IndexInfo[]> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ indexes: Array<{
+      label: string;
+      property: string;
+      index_type: string;
+      cardinality: number;
+      memory_bytes: number;
+    }>; total: number }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/indexes`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return (response.data?.indexes ?? []).map(idx => ({
+      label: idx.label,
+      property: idx.property,
+      indexType: idx.index_type as 'hash' | 'range',
+      cardinality: idx.cardinality,
+      memoryBytes: idx.memory_bytes,
+    }));
+  }
+
+  async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
+    const indexes = await this.listIndexes(collection);
+    return indexes.some(idx => idx.label === label && idx.property === property);
+  }
+
+  async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ dropped: boolean }>(
+      'DELETE',
+      `/collections/${encodeURIComponent(collection)}/indexes/${encodeURIComponent(label)}/${encodeURIComponent(property)}`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        return false;
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.dropped ?? false;
   }
 }

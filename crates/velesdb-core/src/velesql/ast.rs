@@ -20,12 +20,46 @@ pub struct SelectStatement {
     pub from: String,
     /// WHERE conditions (optional).
     pub where_clause: Option<Condition>,
+    /// ORDER BY clause (optional).
+    pub order_by: Option<Vec<SelectOrderBy>>,
     /// LIMIT value (optional).
     pub limit: Option<u64>,
     /// OFFSET value (optional).
     pub offset: Option<u64>,
     /// WITH clause for query-time configuration (optional).
     pub with_clause: Option<WithClause>,
+}
+
+/// ORDER BY item for sorting SELECT results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectOrderBy {
+    /// Expression to order by (field or similarity).
+    pub expr: OrderByExpr,
+    /// Sort direction (true = DESC, false = ASC).
+    pub descending: bool,
+}
+
+/// Expression types supported in ORDER BY clause.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum OrderByExpr {
+    /// Simple field reference (e.g., `created_at`).
+    Field(String),
+    /// Similarity function (e.g., `similarity(embedding, $v)`).
+    Similarity(SimilarityOrderBy),
+}
+
+/// Similarity expression for ORDER BY.
+///
+/// # Example
+/// ```sql
+/// ORDER BY similarity(embedding, $query_vec) DESC
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarityOrderBy {
+    /// Field containing the embedding vector.
+    pub field: String,
+    /// Vector to compare against.
+    pub vector: VectorExpr,
 }
 
 /// WITH clause for query-time configuration overrides.

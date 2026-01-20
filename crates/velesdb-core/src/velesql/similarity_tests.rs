@@ -278,4 +278,108 @@ mod tests {
             panic!("Expected Similarity condition");
         }
     }
+
+    // ============================================
+    // ORDER BY SIMILARITY TESTS (EPIC-008 US-008)
+    // ============================================
+
+    #[test]
+    fn test_order_by_similarity_desc() {
+        let query =
+            "SELECT * FROM docs WHERE category = 'tech' ORDER BY similarity(embedding, $v) DESC LIMIT 10";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "ORDER BY similarity DESC should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        assert!(stmt.select.order_by.is_some());
+        let order_by = stmt.select.order_by.as_ref().unwrap();
+        assert_eq!(order_by.len(), 1);
+        assert!(order_by[0].descending);
+        // Check it's a similarity expression
+        match &order_by[0].expr {
+            crate::velesql::OrderByExpr::Similarity(sim) => {
+                assert_eq!(sim.field, "embedding");
+                assert!(matches!(sim.vector, VectorExpr::Parameter(ref name) if name == "v"));
+            }
+            crate::velesql::OrderByExpr::Field(_) => panic!("Expected OrderByExpr::Similarity"),
+        }
+    }
+
+    #[test]
+    fn test_order_by_similarity_asc() {
+        let query = "SELECT * FROM docs ORDER BY similarity(embedding, $v) ASC LIMIT 5";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "ORDER BY similarity ASC should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        assert!(stmt.select.order_by.is_some());
+        let order_by = stmt.select.order_by.as_ref().unwrap();
+        assert!(!order_by[0].descending);
+    }
+
+    #[test]
+    fn test_order_by_similarity_default_desc() {
+        // Default for similarity should be DESC (highest similarity first)
+        let query = "SELECT * FROM docs ORDER BY similarity(embedding, $v) LIMIT 10";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "ORDER BY similarity without direction should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        assert!(stmt.select.order_by.is_some());
+        let order_by = stmt.select.order_by.as_ref().unwrap();
+        // Default should be DESC for similarity
+        assert!(order_by[0].descending);
+    }
+
+    #[test]
+    fn test_order_by_field() {
+        let query = "SELECT * FROM docs ORDER BY created_at DESC LIMIT 10";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "ORDER BY field should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        assert!(stmt.select.order_by.is_some());
+        let order_by = stmt.select.order_by.as_ref().unwrap();
+        match &order_by[0].expr {
+            crate::velesql::OrderByExpr::Field(name) => {
+                assert_eq!(name, "created_at");
+            }
+            crate::velesql::OrderByExpr::Similarity(_) => panic!("Expected OrderByExpr::Field"),
+        }
+    }
+
+    #[test]
+    fn test_order_by_multiple() {
+        let query =
+            "SELECT * FROM docs ORDER BY similarity(embedding, $v) DESC, created_at ASC LIMIT 10";
+        let result = Parser::parse(query);
+        assert!(
+            result.is_ok(),
+            "Multiple ORDER BY should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        assert!(stmt.select.order_by.is_some());
+        let order_by = stmt.select.order_by.as_ref().unwrap();
+        assert_eq!(order_by.len(), 2);
+        assert!(order_by[0].descending);
+        assert!(!order_by[1].descending);
+    }
 }

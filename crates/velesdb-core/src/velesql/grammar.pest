@@ -11,8 +11,15 @@ query = { SOI ~ select_stmt ~ ";"? ~ EOI }
 // SELECT statement with optional WITH clause
 select_stmt = { 
     ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
-    where_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
+    where_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
 }
+
+// ORDER BY clause
+order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
+order_by_item = { order_by_expr ~ sort_direction? }
+order_by_expr = { order_by_similarity | identifier }
+order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
+sort_direction = { ^"DESC" | ^"ASC" }
 
 // WITH clause for query-time configuration overrides
 with_clause = { ^"WITH" ~ "(" ~ with_option_list ~ ")" }

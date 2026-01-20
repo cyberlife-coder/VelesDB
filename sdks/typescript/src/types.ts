@@ -117,6 +117,37 @@ export interface SearchResult {
   vector?: number[];
 }
 
+// ============================================================================
+// Index Management Types (EPIC-009)
+// ============================================================================
+
+/** Index type for property indexes */
+export type IndexType = 'hash' | 'range';
+
+/** Index information */
+export interface IndexInfo {
+  /** Node label (e.g., "Person") */
+  label: string;
+  /** Property name (e.g., "email") */
+  property: string;
+  /** Index type: 'hash' for O(1) equality, 'range' for O(log n) range queries */
+  indexType: IndexType;
+  /** Number of unique values indexed (for hash indexes) */
+  cardinality: number;
+  /** Memory usage in bytes */
+  memoryBytes: number;
+}
+
+/** Options for creating an index */
+export interface CreateIndexOptions {
+  /** Node label to index */
+  label: string;
+  /** Property name to index */
+  property: string;
+  /** Index type: 'hash' (default) or 'range' */
+  indexType?: IndexType;
+}
+
 /** Backend interface that all backends must implement */
 export interface IVelesDBBackend {
   /** Initialize the backend */
@@ -202,6 +233,20 @@ export interface IVelesDBBackend {
   
   /** Close/cleanup the backend */
   close(): Promise<void>;
+
+  // Index Management (EPIC-009)
+  
+  /** Create a property index for O(1) equality lookups */
+  createIndex(collection: string, options: CreateIndexOptions): Promise<void>;
+  
+  /** List all indexes on a collection */
+  listIndexes(collection: string): Promise<IndexInfo[]>;
+  
+  /** Check if an index exists */
+  hasIndex(collection: string, label: string, property: string): Promise<boolean>;
+  
+  /** Drop an index */
+  dropIndex(collection: string, label: string, property: string): Promise<boolean>;
 }
 
 /** Error types */
