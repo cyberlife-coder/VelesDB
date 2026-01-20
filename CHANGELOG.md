@@ -50,6 +50,7 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
   - Property Index propagated to velesdb-python (PyO3 bindings)
   - Property Index propagated to TypeScript SDK (REST backend)
   - New endpoints: `POST/GET /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`
+  - `similarity()` function available via `query()` method in Python and TypeScript REST
 
 #### Changed
 
