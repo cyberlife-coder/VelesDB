@@ -47,24 +47,16 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
 
 #### Fixed
 
-- **Critical Bug Fixes (PR #57)**
-  - `MmapStorage`: data_file handle not updated after compaction causing data loss
-  - `MobileGraphStore`: deadlock between `add_edge` and `remove_node` (lock order inversion)
-  - `OrderedFloat`: NaN violation of Ord contract (now uses `f32::total_cmp`)
-  - Compaction `rename()` fails on Windows (cross-platform `atomic_replace`)
-  - Race condition in `update_graph_latency` (atomic EMA with CAS loop)
 - Race conditions in `ConcurrentEdgeStore` with atomic registry operations
 - Cross-shard consistency in edge removal operations
 - VelesQL parser edge cases (string literals, brace validation)
 - Duplicate edge ID prevention with proper validation
-- Clippy pedantic warnings in `velesdb-wasm` (doc_markdown, unsafe_derive_deserialize)
 
 #### Technical Notes
 
 - All 1400+ workspace tests passing
 - New graph traversal benchmarks added
 - Security advisories updated in `deny.toml`
-- CI workflow optimized: exclude `velesdb-python` with `PYO3_NO_PYTHON=1`
 
 ---
 

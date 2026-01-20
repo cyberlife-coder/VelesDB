@@ -200,10 +200,14 @@ impl QueryPlanner {
             1.0
         };
 
-        let rel_sel = if total_edges > 0 && rel_type_count > 0 {
-            rel_type_count as f64 / total_edges as f64
-        } else {
+        let rel_sel = if total_edges == 0 {
+            // No edges in graph → relationship predicate is vacuously true
             1.0
+        } else if rel_type_count == 0 {
+            // Edges exist but none match requested type → nothing matches
+            0.0
+        } else {
+            rel_type_count as f64 / total_edges as f64
         };
 
         // Combined selectivity (multiplicative for AND)
@@ -300,6 +304,24 @@ mod tests {
         assert_eq!(
             planner.choose_strategy(Some(0.40)),
             ExecutionStrategy::VectorFirst
+        );
+    }
+
+    #[test]
+    fn test_estimate_selectivity_missing_rel_type_returns_zero() {
+        // Bug: When rel_type_count=0 but total_edges>0, returns 1.0 (non-selective)
+        // Expected: Should return 0.0 because no edges match the requested type
+        let planner = QueryPlanner::new();
+
+        // 100 nodes with 10 matching label, 50 edges but 0 of requested type
+        let sel = planner.estimate_selectivity(10, 100, 0, 50);
+
+        // If no edges match the relationship type, selectivity should be 0.0
+        // (nothing will match), not 1.0 (everything matches)
+        assert!(
+            sel < 0.01,
+            "Missing relationship type should give selectivity ~0.0, got {}",
+            sel
         );
     }
 }
