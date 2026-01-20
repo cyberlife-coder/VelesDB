@@ -28,6 +28,7 @@ mod search;
 mod serialization;
 mod simd;
 mod text_search;
+mod utils;
 mod vector_ops;
 
 pub use distance::DistanceMetric;
@@ -175,13 +176,7 @@ impl VectorStore {
     /// Inserts a vector with the given ID.
     #[wasm_bindgen]
     pub fn insert(&mut self, id: u64, vector: &[f32]) -> Result<(), JsValue> {
-        if vector.len() != self.dimension {
-            return Err(JsValue::from_str(&format!(
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            )));
-        }
+        utils::validate_dimension_with_prefix(vector.len(), self.dimension, "Vector")?;
 
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
             self.remove_at_index(idx);
@@ -201,13 +196,7 @@ impl VectorStore {
         vector: &[f32],
         payload: JsValue,
     ) -> Result<(), JsValue> {
-        if vector.len() != self.dimension {
-            return Err(JsValue::from_str(&format!(
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                vector.len()
-            )));
-        }
+        utils::validate_dimension_with_prefix(vector.len(), self.dimension, "Vector")?;
 
         let parsed_payload: Option<serde_json::Value> =
             if payload.is_null() || payload.is_undefined() {
@@ -250,13 +239,7 @@ impl VectorStore {
         k: usize,
         filter: JsValue,
     ) -> Result<JsValue, JsValue> {
-        if query.len() != self.dimension {
-            return Err(JsValue::from_str(&format!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimension,
-                query.len()
-            )));
-        }
+        utils::validate_dimension_with_prefix(query.len(), self.dimension, "Query")?;
 
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
@@ -356,17 +339,9 @@ impl VectorStore {
     /// Searches for the k nearest neighbors to the query vector.
     #[wasm_bindgen]
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
-        if query.len() != self.dimension {
-            return Err(JsValue::from_str(&format!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimension,
-                query.len()
-            )));
-        }
-
-        let store_ref = self.as_store_ref();
-        let results = search::search_knn(&store_ref, query, k);
-        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        utils::validate_dimension_with_prefix(query.len(), self.dimension, "Query")?;
+        let results = search::search_knn(&self.as_store_ref(), query, k);
+        utils::results_to_jsvalue(&results)
     }
 
     /// Similarity search with threshold filtering (VelesQL equivalent).
@@ -378,23 +353,15 @@ impl VectorStore {
         operator: &str,
         k: usize,
     ) -> Result<JsValue, JsValue> {
-        if query.len() != self.dimension {
-            return Err(JsValue::from_str(&format!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dimension,
-                query.len()
-            )));
-        }
-
+        utils::validate_dimension_with_prefix(query.len(), self.dimension, "Query")?;
         let op_fn = search::parse_similarity_operator(operator).ok_or_else(|| {
             JsValue::from_str(
                 "Invalid operator. Use: >, >=, <, <=, =, != (or gt, gte, lt, lte, eq, neq)",
             )
         })?;
-
-        let store_ref = self.as_store_ref();
-        let results = search::similarity_search_impl(&store_ref, query, threshold, &*op_fn, k);
-        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        let results =
+            search::similarity_search_impl(&self.as_store_ref(), query, threshold, &*op_fn, k);
+        utils::results_to_jsvalue(&results)
     }
 
     /// Performs text search on payload fields.
@@ -407,11 +374,8 @@ impl VectorStore {
     ) -> Result<JsValue, JsValue> {
         let results =
             search::text_search_impl(&self.ids, &self.payloads, query, k, field.as_deref());
-        let output: Vec<serde_json::Value> = results
-            .into_iter()
-            .map(|(id, score, payload)| serde_json::json!({"id": id, "score": score, "payload": payload}))
-            .collect();
-        serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+        let output = utils::format_payload_results(results);
+        utils::results_to_jsvalue(&output)
     }
 
     /// Hybrid search combining vector similarity and text search.
@@ -423,28 +387,14 @@ impl VectorStore {
         k: usize,
         vector_weight: Option<f32>,
     ) -> Result<JsValue, JsValue> {
-        if query_vector.len() != self.dimension {
-            return Err(JsValue::from_str(&format!(
-                "Vector dimension mismatch: expected {}, got {}",
-                self.dimension,
-                query_vector.len()
-            )));
-        }
-
-        // SQ8/Binary fallback to simple vector search
+        utils::validate_dimension_with_prefix(query_vector.len(), self.dimension, "Vector")?;
         if self.storage_mode != StorageMode::Full {
             return self.search(query_vector, k);
         }
-
         let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
-        let store_ref = self.as_store_ref();
-        let results = search::hybrid_search_impl(&store_ref, query_vector, text_query, k, v_weight);
-
-        let output: Vec<serde_json::Value> = results
-            .into_iter()
-            .map(|(id, score, payload)| serde_json::json!({"id": id, "score": score, "payload": payload}))
-            .collect();
-        serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+        let results =
+            search::hybrid_search_impl(&self.as_store_ref(), query_vector, text_query, k, v_weight);
+        utils::results_to_jsvalue(&utils::format_payload_results(results))
     }
 
     /// Multi-query search with result fusion (average/maximum/rrf).
@@ -462,27 +412,23 @@ impl VectorStore {
                 "multi_query_search requires at least one vector",
             ));
         }
-        let expected_len = num_vectors * self.dimension;
-        if vectors.len() != expected_len {
+        let expected = num_vectors * self.dimension;
+        if vectors.len() != expected {
             return Err(JsValue::from_str(&format!(
-                "Expected {} floats ({} vectors × {} dims), got {}",
-                expected_len,
-                num_vectors,
-                self.dimension,
+                "Expected {} floats, got {}",
+                expected,
                 vectors.len()
             )));
         }
-
-        let store_ref = self.as_store_ref();
         let results = search::multi_query_search_impl(
-            &store_ref,
+            &self.as_store_ref(),
             vectors,
             num_vectors,
             k,
             strategy,
             rrf_k.unwrap_or(60),
         );
-        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        utils::results_to_jsvalue(&results)
     }
 
     /// Batch search for multiple vectors.
@@ -494,32 +440,35 @@ impl VectorStore {
         k: usize,
     ) -> Result<JsValue, JsValue> {
         if num_vectors == 0 {
-            return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
-                .map_err(|e| JsValue::from_str(&e.to_string()));
+            return utils::results_to_jsvalue::<Vec<Vec<(u64, f32)>>>(&vec![]);
         }
-        let expected_len = num_vectors * self.dimension;
-        if vectors.len() != expected_len {
+        let expected = num_vectors * self.dimension;
+        if vectors.len() != expected {
             return Err(JsValue::from_str(&format!(
                 "Expected {} floats, got {}",
-                expected_len,
+                expected,
                 vectors.len()
             )));
         }
-
-        let store_ref = self.as_store_ref();
-        let results = search::batch_search_impl(&store_ref, vectors, num_vectors, k);
-        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        utils::results_to_jsvalue(&search::batch_search_impl(
+            &self.as_store_ref(),
+            vectors,
+            num_vectors,
+            k,
+        ))
     }
 
     /// Removes a vector by ID.
     #[wasm_bindgen]
     pub fn remove(&mut self, id: u64) -> bool {
-        if let Some(idx) = self.ids.iter().position(|&x| x == id) {
-            self.remove_at_index(idx);
-            true
-        } else {
-            false
-        }
+        self.ids
+            .iter()
+            .position(|&x| x == id)
+            .map(|idx| {
+                self.remove_at_index(idx);
+                true
+            })
+            .unwrap_or(false)
     }
 
     /// Clears all vectors from the store.
@@ -538,13 +487,13 @@ impl VectorStore {
     #[wasm_bindgen]
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        let id_bytes = self.ids.len() * std::mem::size_of::<u64>();
+        let ids = self.ids.len() * 8;
         match self.storage_mode {
-            StorageMode::Full => id_bytes + self.data.len() * 4,
+            StorageMode::Full => ids + self.data.len() * 4,
             StorageMode::SQ8 => {
-                id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
+                ids + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
             }
-            StorageMode::Binary => id_bytes + self.data_binary.len(),
+            StorageMode::Binary => ids + self.data_binary.len(),
         }
     }
 
@@ -646,10 +595,8 @@ impl VectorStore {
     /// Imports a vector store from binary format.
     #[wasm_bindgen]
     pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
-        let header = serialization::parse_header(bytes).map_err(JsValue::from_str)?;
-        let (ids, data) = serialization::import_data(bytes, &header);
-        let count = header.count;
-
+        let h = serialization::parse_header(bytes).map_err(JsValue::from_str)?;
+        let (ids, data) = serialization::import_data(bytes, &h);
         Ok(Self {
             ids,
             data,
@@ -657,9 +604,9 @@ impl VectorStore {
             data_binary: Vec::new(),
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
-            payloads: vec![None; count],
-            dimension: header.dimension,
-            metric: header.metric,
+            payloads: vec![None; h.count],
+            dimension: h.dimension,
+            metric: h.metric,
             storage_mode: StorageMode::Full,
         })
     }
