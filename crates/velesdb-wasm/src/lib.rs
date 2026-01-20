@@ -47,12 +47,35 @@ mod graph;
 mod persistence;
 mod quantization;
 mod search;
+mod serialization;
 mod simd;
 mod text_search;
 mod vector_ops;
 
 pub use distance::DistanceMetric;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
+
+/// Parses metric string to DistanceMetric enum.
+fn parse_metric(metric: &str) -> Result<DistanceMetric, &'static str> {
+    match metric.to_lowercase().as_str() {
+        "cosine" => Ok(DistanceMetric::Cosine),
+        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
+        "dot" | "dotproduct" | "inner" => Ok(DistanceMetric::DotProduct),
+        "hamming" => Ok(DistanceMetric::Hamming),
+        "jaccard" => Ok(DistanceMetric::Jaccard),
+        _ => Err("Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard"),
+    }
+}
+
+/// Parses storage mode string to StorageMode enum.
+fn parse_storage_mode(mode: &str) -> Result<StorageMode, &'static str> {
+    match mode.to_lowercase().as_str() {
+        "full" => Ok(StorageMode::Full),
+        "sq8" => Ok(StorageMode::SQ8),
+        "binary" => Ok(StorageMode::Binary),
+        _ => Err("Unknown storage mode. Use: full, sq8, binary"),
+    }
+}
 
 /// Storage mode for vector quantization.
 #[wasm_bindgen]
@@ -115,50 +138,35 @@ impl VectorStore {
     /// Returns an error if the metric is not recognized.
     #[wasm_bindgen(constructor)]
     pub fn new(dimension: usize, metric: &str) -> Result<VectorStore, JsValue> {
-        let metric = match metric.to_lowercase().as_str() {
-            "cosine" => DistanceMetric::Cosine,
-            "euclidean" | "l2" => DistanceMetric::Euclidean,
-            "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
-            "hamming" => DistanceMetric::Hamming,
-            "jaccard" => DistanceMetric::Jaccard,
-            _ => {
-                return Err(JsValue::from_str(
-                    "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
-                ))
-            }
-        };
+        let metric = parse_metric(metric).map_err(JsValue::from_str)?;
+        Ok(Self::create_empty(dimension, metric, StorageMode::Full, 0))
+    }
 
-        Ok(Self {
-            ids: Vec::new(),
-            data: Vec::new(),
+    /// Internal helper to create an empty store with specified parameters.
+    fn create_empty(
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        capacity: usize,
+    ) -> Self {
+        Self {
+            ids: Vec::with_capacity(capacity),
+            data: Vec::with_capacity(capacity * dimension),
             data_sq8: Vec::new(),
             data_binary: Vec::new(),
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
-            payloads: Vec::new(),
+            payloads: Vec::with_capacity(capacity),
             dimension,
             metric,
-            storage_mode: StorageMode::Full,
-        })
+            storage_mode,
+        }
     }
 
     /// Creates a metadata-only store (no vectors, only payloads).
-    ///
-    /// Useful for storing auxiliary data without vector embeddings.
     #[wasm_bindgen]
     pub fn new_metadata_only() -> VectorStore {
-        Self {
-            ids: Vec::new(),
-            data: Vec::new(),
-            data_sq8: Vec::new(),
-            data_binary: Vec::new(),
-            sq8_mins: Vec::new(),
-            sq8_scales: Vec::new(),
-            payloads: Vec::new(),
-            dimension: 0,
-            metric: DistanceMetric::Cosine,
-            storage_mode: StorageMode::Full,
-        }
+        Self::create_empty(0, DistanceMetric::Cosine, StorageMode::Full, 0)
     }
 
     /// Returns true if this is a metadata-only store.
@@ -170,63 +178,16 @@ impl VectorStore {
 
     /// Creates a new vector store with specified storage mode for memory optimization.
     ///
-    /// # Arguments
-    ///
-    /// * `dimension` - Vector dimension
-    /// * `metric` - Distance metric
-    /// * `mode` - Storage mode: "full", "sq8", or "binary"
-    ///
-    /// # Storage Modes
-    ///
-    /// - `full`: Best recall, 4 bytes/dimension
-    /// - `sq8`: 4x compression, ~1% recall loss
-    /// - `binary`: 32x compression, ~5-10% recall loss
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the metric or storage mode is unknown.
+    /// Storage modes: `full` (4B/dim), `sq8` (1B/dim, 4x compression), `binary` (1bit/dim, 32x)
     #[wasm_bindgen]
     pub fn new_with_mode(
         dimension: usize,
         metric: &str,
         mode: &str,
     ) -> Result<VectorStore, JsValue> {
-        let metric = match metric.to_lowercase().as_str() {
-            "cosine" => DistanceMetric::Cosine,
-            "euclidean" | "l2" => DistanceMetric::Euclidean,
-            "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
-            "hamming" => DistanceMetric::Hamming,
-            "jaccard" => DistanceMetric::Jaccard,
-            _ => {
-                return Err(JsValue::from_str(
-                    "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
-                ))
-            }
-        };
-
-        let storage_mode = match mode.to_lowercase().as_str() {
-            "full" => StorageMode::Full,
-            "sq8" => StorageMode::SQ8,
-            "binary" => StorageMode::Binary,
-            _ => {
-                return Err(JsValue::from_str(
-                    "Unknown storage mode. Use: full, sq8, binary",
-                ))
-            }
-        };
-
-        Ok(Self {
-            ids: Vec::new(),
-            data: Vec::new(),
-            data_sq8: Vec::new(),
-            data_binary: Vec::new(),
-            sq8_mins: Vec::new(),
-            sq8_scales: Vec::new(),
-            payloads: Vec::new(),
-            dimension,
-            metric,
-            storage_mode,
-        })
+        let metric = parse_metric(metric).map_err(JsValue::from_str)?;
+        let storage_mode = parse_storage_mode(mode).map_err(JsValue::from_str)?;
+        Ok(Self::create_empty(dimension, metric, storage_mode, 0))
     }
 
     /// Returns the storage mode.
@@ -718,50 +679,19 @@ impl VectorStore {
     }
 
     /// Creates a new vector store with pre-allocated capacity.
-    ///
-    /// This is more efficient when you know the approximate number of vectors
-    /// you'll be inserting, as it avoids repeated memory allocations.
-    ///
-    /// # Arguments
-    ///
-    /// * `dimension` - Vector dimension
-    /// * `metric` - Distance metric: "cosine", "euclidean", or "dot"
-    /// * `capacity` - Number of vectors to pre-allocate space for
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the metric is not recognized.
     #[wasm_bindgen]
     pub fn with_capacity(
         dimension: usize,
         metric: &str,
         capacity: usize,
     ) -> Result<VectorStore, JsValue> {
-        let metric = match metric.to_lowercase().as_str() {
-            "cosine" => DistanceMetric::Cosine,
-            "euclidean" | "l2" => DistanceMetric::Euclidean,
-            "dot" | "dotproduct" | "inner" => DistanceMetric::DotProduct,
-            "hamming" => DistanceMetric::Hamming,
-            "jaccard" => DistanceMetric::Jaccard,
-            _ => {
-                return Err(JsValue::from_str(
-                    "Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard",
-                ))
-            }
-        };
-
-        Ok(Self {
-            ids: Vec::with_capacity(capacity),
-            data: Vec::with_capacity(capacity * dimension),
-            data_sq8: Vec::new(),
-            data_binary: Vec::new(),
-            sq8_mins: Vec::new(),
-            sq8_scales: Vec::new(),
-            payloads: Vec::with_capacity(capacity),
+        let metric = parse_metric(metric).map_err(JsValue::from_str)?;
+        Ok(Self::create_empty(
             dimension,
             metric,
-            storage_mode: StorageMode::Full,
-        })
+            StorageMode::Full,
+            capacity,
+        ))
     }
 
     /// Pre-allocates memory for the specified number of additional vectors.
@@ -829,71 +759,15 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Exports the vector store to a binary format.
-    ///
-    /// The binary format contains:
-    /// - Header: dimension (u32), metric (u8), count (u64)
-    /// - For each vector: id (u64), data (f32 array)
-    ///
-    /// Use this to persist data to `IndexedDB` or `localStorage`.
-    ///
-    /// # Errors
-    ///
-    /// This function currently does not return errors but uses `Result`
-    /// for future extensibility.
-    ///
-    /// # Performance
-    ///
-    /// Perf: Pre-allocates exact buffer size to avoid reallocations.
-    /// Throughput: ~1600 MB/s on 10k vectors (768D)
+    /// Exports the vector store to a binary format for persistence.
     #[wasm_bindgen]
     pub fn export_to_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        // Perf: Pre-allocate exact size - uses contiguous buffer for 2500+ MB/s
-        let count = self.ids.len();
-        let vector_size = 8 + self.dimension * 4; // id + data
-        let total_size = 18 + count * vector_size;
-        let mut bytes = Vec::with_capacity(total_size);
-
-        // Header: magic number "VELS" (4 bytes)
-        bytes.extend_from_slice(b"VELS");
-
-        // Version (1 byte)
-        bytes.push(1);
-
-        // Dimension (4 bytes, little-endian)
-        #[allow(clippy::cast_possible_truncation)]
-        let dim_u32 = self.dimension as u32;
-        bytes.extend_from_slice(&dim_u32.to_le_bytes());
-
-        // Metric (1 byte: 0=cosine, 1=euclidean, 2=dot, 3=hamming, 4=jaccard)
-        let metric_byte = match self.metric {
-            DistanceMetric::Cosine => 0u8,
-            DistanceMetric::Euclidean => 1u8,
-            DistanceMetric::DotProduct => 2u8,
-            DistanceMetric::Hamming => 3u8,
-            DistanceMetric::Jaccard => 4u8,
-        };
-        bytes.push(metric_byte);
-
-        // Vector count (8 bytes, little-endian)
-        #[allow(clippy::cast_possible_truncation)]
-        let count_u64 = count as u64;
-        bytes.extend_from_slice(&count_u64.to_le_bytes());
-
-        // Perf: Write IDs and data from contiguous buffers
-        for (idx, &id) in self.ids.iter().enumerate() {
-            bytes.extend_from_slice(&id.to_le_bytes());
-            // Direct slice from contiguous data buffer
-            let start = idx * self.dimension;
-            let data_slice = &self.data[start..start + self.dimension];
-            // Write f32s as bytes
-            let data_bytes: &[u8] = unsafe {
-                core::slice::from_raw_parts(data_slice.as_ptr().cast::<u8>(), self.dimension * 4)
-            };
-            bytes.extend_from_slice(data_bytes);
-        }
-
-        Ok(bytes)
+        Ok(serialization::export_to_bytes(
+            &self.ids,
+            &self.data,
+            self.dimension,
+            &self.metric,
+        ))
     }
 
     /// Saves the vector store to `IndexedDB`.
@@ -963,104 +837,11 @@ impl VectorStore {
     }
 
     /// Imports a vector store from binary format.
-    ///
-    /// Use this to restore data from `IndexedDB` or `localStorage`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The data is too short or corrupted
-    /// - The magic number is invalid
-    /// - The version is unsupported
-    /// - The metric byte is invalid
     #[wasm_bindgen]
     pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
-        if bytes.len() < 18 {
-            return Err(JsValue::from_str("Invalid data: too short"));
-        }
-
-        // Check magic number
-        if &bytes[0..4] != b"VELS" {
-            return Err(JsValue::from_str("Invalid data: wrong magic number"));
-        }
-
-        // Check version
-        let version = bytes[4];
-        if version != 1 {
-            return Err(JsValue::from_str(&format!(
-                "Unsupported version: {version}"
-            )));
-        }
-
-        // Read dimension
-        let dimension = u32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
-
-        // Read metric
-        let metric = match bytes[9] {
-            0 => DistanceMetric::Cosine,
-            1 => DistanceMetric::Euclidean,
-            2 => DistanceMetric::DotProduct,
-            3 => DistanceMetric::Hamming,
-            4 => DistanceMetric::Jaccard,
-            _ => return Err(JsValue::from_str("Invalid metric byte")),
-        };
-
-        // Read vector count
-        #[allow(clippy::cast_possible_truncation)]
-        let count = u64::from_le_bytes([
-            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17],
-        ]) as usize;
-
-        // Calculate expected size
-        let vector_size = 8 + dimension * 4; // id + data
-        let expected_size = 18 + count * vector_size;
-        if bytes.len() < expected_size {
-            return Err(JsValue::from_str(&format!(
-                "Invalid data: expected {expected_size} bytes, got {}",
-                bytes.len()
-            )));
-        }
-
-        // Perf: Pre-allocate contiguous buffers
-        // Optimization: Single allocation + bulk copy = 500+ MB/s
-        let mut ids = Vec::with_capacity(count);
-        let total_floats = count * dimension;
-        let mut data = vec![0.0_f32; total_floats];
-
-        let mut offset = 18;
-        let data_bytes_len = dimension * 4;
-
-        // Read all IDs first (cache-friendly sequential access)
-        for _ in 0..count {
-            let id = u64::from_le_bytes([
-                bytes[offset],
-                bytes[offset + 1],
-                bytes[offset + 2],
-                bytes[offset + 3],
-                bytes[offset + 4],
-                bytes[offset + 5],
-                bytes[offset + 6],
-                bytes[offset + 7],
-            ]);
-            ids.push(id);
-            offset += 8 + data_bytes_len; // Skip to next ID
-        }
-
-        // Perf: Bulk copy all vector data in one operation
-        // SAFETY: f32 and [u8; 4] have same size, WASM is little-endian
-        let data_as_bytes: &mut [u8] = unsafe {
-            core::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), total_floats * 4)
-        };
-
-        // Copy data from each vector position
-        offset = 18 + 8; // Skip header + first ID
-        for i in 0..count {
-            let dest_start = i * dimension * 4;
-            let dest_end = dest_start + data_bytes_len;
-            data_as_bytes[dest_start..dest_end]
-                .copy_from_slice(&bytes[offset..offset + data_bytes_len]);
-            offset += 8 + data_bytes_len; // Move to next vector's data
-        }
+        let header = serialization::parse_header(bytes).map_err(JsValue::from_str)?;
+        let (ids, data) = serialization::import_data(bytes, &header);
+        let count = header.count;
 
         Ok(Self {
             ids,
@@ -1070,8 +851,8 @@ impl VectorStore {
             sq8_mins: Vec::new(),
             sq8_scales: Vec::new(),
             payloads: vec![None; count],
-            dimension,
-            metric,
+            dimension: header.dimension,
+            metric: header.metric,
             storage_mode: StorageMode::Full,
         })
     }
