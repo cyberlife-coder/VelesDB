@@ -185,8 +185,8 @@ impl Collection {
         match &first.expr {
             OrderByExpr::Similarity(sim) => {
                 // Sort by similarity score
-                // The score is already computed during search, so we just sort
-                let descending = first.descending;
+                // User expectation: DESC = most similar first, ASC = least similar first
+                let user_wants_most_similar_first = first.descending;
 
                 // If the similarity vector is different from the search vector,
                 // we need to recompute scores
@@ -198,7 +198,19 @@ impl Collection {
                     result.score = score;
                 }
 
-                if descending {
+                // Adjust sort order based on metric semantics:
+                // - Similarity metrics (Cosine, DotProduct, Jaccard): higher = more similar
+                // - Distance metrics (Euclidean, Hamming): lower = more similar
+                let metric = self.config.read().metric;
+                let sort_descending = if metric.higher_is_better() {
+                    // Higher score = more similar, so DESC for most similar
+                    user_wants_most_similar_first
+                } else {
+                    // Lower score = more similar, so ASC for most similar
+                    !user_wants_most_similar_first
+                };
+
+                if sort_descending {
                     results.sort_by(|a, b| {
                         b.score
                             .partial_cmp(&a.score)
@@ -455,7 +467,8 @@ impl Collection {
     ) -> Vec<SearchResult> {
         use crate::velesql::CompareOp;
 
-        // The score from HNSW is already cosine similarity (for cosine metric)
+        // The score from HNSW is already computed using the collection's configured metric
+        // (Cosine, Euclidean, DotProduct, Hamming, or Jaccard)
         // Filter results based on threshold and operator
         let threshold_f32 = threshold as f32;
 

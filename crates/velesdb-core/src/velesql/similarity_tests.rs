@@ -386,6 +386,8 @@ mod tests {
     /// BUG-001: compute_similarity must respect collection's configured metric
     /// This test verifies that ORDER BY similarity() uses the collection's metric
     /// instead of always using cosine similarity.
+    ///
+    /// Semantics: DESC = most similar first, ASC = least similar first
     #[test]
     fn test_order_by_similarity_respects_collection_metric() {
         use crate::distance::DistanceMetric;
@@ -394,7 +396,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = std::path::PathBuf::from(temp_dir.path());
 
-        // Create collection with EUCLIDEAN metric (lower = better)
+        // Create collection with EUCLIDEAN metric (lower distance = more similar)
         let collection = Collection::create(path, 3, DistanceMetric::Euclidean).unwrap();
 
         // Insert test vectors
@@ -420,13 +422,10 @@ mod tests {
             .unwrap();
 
         // Query vector: [1, 0, 0]
-        // Euclidean distances:
-        // - v1 [1,0,0] -> 0.0 (closest)
-        // - v3 [0.5,0.5,0] -> sqrt(0.5) ≈ 0.707
-        // - v2 [0,1,0] -> sqrt(2) ≈ 1.414 (farthest)
+        // Euclidean distances: v1=0.0 (closest), v3≈0.707, v2≈1.414 (farthest)
         //
-        // For Euclidean (lower = better), ORDER BY similarity ASC should give: v1, v3, v2
-        // But if we wrongly use cosine, order would be different!
+        // ASC = least similar first → v2 (farthest), v3, v1 (closest)
+        // This verifies the metric is correctly used (Euclidean, not hardcoded cosine)
 
         let query = "SELECT * FROM test ORDER BY similarity(vector, $v) ASC LIMIT 3";
         let parsed = crate::velesql::Parser::parse(query).unwrap();
@@ -435,11 +434,71 @@ mod tests {
 
         let results = collection.execute_query(&parsed, &params).unwrap();
 
-        // With Euclidean metric and ASC order, v1 should be first (distance 0)
+        // ASC = least similar first, so v2 should be first (distance ~1.414)
+        assert_eq!(results.len(), 3);
+        assert_eq!(
+            results[0].point.id, 2,
+            "Euclidean ASC should return v2 first (least similar, distance ~1.414)"
+        );
+        assert_eq!(
+            results[2].point.id, 1,
+            "Euclidean ASC should return v1 last (most similar, distance 0)"
+        );
+    }
+
+    /// Test ORDER BY similarity DESC with Euclidean metric.
+    /// DESC should always mean "most similar first" regardless of metric type.
+    #[test]
+    fn test_order_by_similarity_desc_euclidean_metric() {
+        use crate::distance::DistanceMetric;
+        use crate::Collection;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = std::path::PathBuf::from(temp_dir.path());
+
+        // Create collection with EUCLIDEAN metric (lower = more similar)
+        let collection = Collection::create(path, 3, DistanceMetric::Euclidean).unwrap();
+
+        // Insert test vectors
+        collection
+            .upsert(vec![
+                crate::point::Point {
+                    id: 1,
+                    vector: vec![1.0, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"name": "v1"})),
+                },
+                crate::point::Point {
+                    id: 2,
+                    vector: vec![0.0, 1.0, 0.0],
+                    payload: Some(serde_json::json!({"name": "v2"})),
+                },
+                crate::point::Point {
+                    id: 3,
+                    vector: vec![0.5, 0.5, 0.0],
+                    payload: Some(serde_json::json!({"name": "v3"})),
+                },
+            ])
+            .unwrap();
+
+        // Query vector: [1, 0, 0]
+        // Euclidean distances: v1=0.0, v3≈0.707, v2≈1.414
+        // DESC should return: v1 (most similar), v3, v2 (least similar)
+        let query = "SELECT * FROM test ORDER BY similarity(vector, $v) DESC LIMIT 3";
+        let parsed = crate::velesql::Parser::parse(query).unwrap();
+        let mut params = std::collections::HashMap::new();
+        params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0]));
+
+        let results = collection.execute_query(&parsed, &params).unwrap();
+
+        // DESC = most similar first, so v1 should be first (distance 0)
         assert_eq!(results.len(), 3);
         assert_eq!(
             results[0].point.id, 1,
-            "BUG-001: Euclidean ASC should return v1 first (distance 0)"
+            "Euclidean DESC should return v1 first (most similar, distance 0)"
+        );
+        assert_eq!(
+            results[2].point.id, 2,
+            "Euclidean DESC should return v2 last (least similar, distance ~1.414)"
         );
     }
 }
