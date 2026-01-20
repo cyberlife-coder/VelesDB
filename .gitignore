@@ -82,3 +82,9 @@ node_modules/
 
 # Build artifacts from sub-crates
 **/target/
+
+# Internal docs
+docs/MESSAGING_GUIDE.md
+docs/SECURITY_AUDIT*.md
+docs/TECHNICAL_AUDIT*.md
+.epics/ROADMAP-2026-STRATEGY.md

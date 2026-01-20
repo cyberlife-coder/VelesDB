@@ -5,8 +5,8 @@
 <h1 align="center">🐺 VelesDB</h1>
 
 <h3 align="center">
-  🚀 <strong>The Real-Time Memory for AI Agents</strong> 🚀<br/>
-  <em>Microsecond Vector Search • Local Context • Zero Latency</em>
+  🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
+  <em>Vector + Graph Fusion • 57µs Search • Single Binary • Privacy-First</em>
 </h3>
 
 
@@ -34,22 +34,28 @@
 
 ---
 
-## 🚀 The Agentic Memory Engine
+## 🧠 The Local Knowledge Engine for AI Agents
 
 ### 🎯 The Problem We Solve
 
-> **"My RAG agent takes 200ms per context retrieval. Users notice the lag."**
+> **"My RAG agent needs both semantic search AND knowledge relationships. Existing tools force me to choose or glue multiple systems together."**
 
-Traditional vector databases add **50-100ms of latency** per query. For an AI agent that retrieves context 10+ times per conversation, that's **1+ second of delay** before the first token.
+**Three pain points** developers face building AI agents:
+
+1. **Latency kills UX** — Cloud vector DBs add 50-100ms per query. 10 retrievals = 1+ second delay.
+2. **Vectors alone aren't enough** — Semantic similarity misses relationships ("Who authored this document?").
+3. **Privacy & deployment friction** — Cloud dependencies, API keys, complex clusters.
 
 ### 💡 The VelesDB Solution
 
-**VelesDB delivers sub-millisecond retrieval** by running embedded in your application — no network round-trips, no cluster overhead.
+**VelesDB is the only embedded database that natively fuses vector search with knowledge graphs** in a single 15MB binary:
 
-| Metric | VelesDB | Cloud Vector DBs |
+| What You Get | VelesDB | Others |
 | :--- | :--- | :--- |
 | **Search Latency (p50)** | **57µs** | 50-100ms |
-| **Time to First Token** | **< 1ms** | 50-100ms+ |
+| **Vector + Graph in ONE query** | ✅ `MATCH ... WHERE similarity() > 0.8` | ❌ Separate systems |
+| **Zero Cloud Dependencies** | ✅ Single binary, works offline | ❌ API keys, clusters |
+| **Runs Everywhere** | ✅ Server, Browser, Mobile, Desktop | ❌ Server-only |
 
 ### 🏢 Coming From Another Vector DB?
 
@@ -62,11 +68,20 @@ Traditional vector databases add **50-100ms of latency** per query. For an AI ag
 | **ChromaDB** | Production-grade Rust vs Python prototype |
 
 ```sql
--- Migrate in minutes. Same SQL patterns you know.
+-- Vector search + metadata filtering
 SELECT * FROM documents 
-WHERE vector NEAR $query 
-  AND category = 'tech' 
-LIMIT 10
+WHERE vector NEAR $query AND category = 'tech' 
+LIMIT 10;
+
+-- 🆕 Knowledge Graph traversal (v1.2.0)
+MATCH (d:Document)-[:MENTIONS]->(e:Entity)
+WHERE d.category = 'research'
+RETURN e.name, COUNT(*) as mentions;
+
+-- 🔮 Coming: Vector + Graph Fusion (v1.3.0)
+MATCH (d:Document)-[:AUTHORED_BY]->(p:Person)
+WHERE similarity(d.embedding, $question) > 0.8
+RETURN p.name, p.email;
 ```
 
 ---
@@ -76,20 +91,20 @@ LIMIT 10
 <table align="center">
 <tr>
 <td align="center" width="25%">
-<h3>🏎️ 57µs Search</h3>
-<p>Native HNSW + AVX-512 SIMD.<br/><strong>700x faster than pgvector</strong></p>
+<h3>🧠 Vector + Graph</h3>
+<p>Unified semantic search AND knowledge relationships.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>📝 SQL You Know</h3>
-<p>VelesQL: no JSON DSL.<br/><strong>Migrate in minutes.</strong></p>
+<h3>🏀️ 57µs Search</h3>
+<p>Native HNSW + AVX-512 SIMD.<br/><strong>1000x faster than cloud.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📦 15MB Binary</h3>
-<p>Zero dependencies.<br/><strong>Works offline.</strong></p>
+<p>Zero dependencies.<br/><strong>Works offline, air-gapped.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>🌍 Run Anywhere</h3>
-<p>Server, Browser, Mobile.<br/><strong>Same codebase.</strong></p>
+<p>Server, Browser, Mobile, Desktop.<br/><strong>Same Rust codebase.</strong></p>
 </td>
 </tr>
 </table>
@@ -112,19 +127,20 @@ LIMIT 10
 
 ### 🏆 VelesDB vs The Competition
 
-| Metric | 🐺 **VelesDB** | Qdrant | Milvus | Pinecone | pgvector |
-|--------|---------------|--------|--------|----------|----------|
-| **Architecture** | **Single Binary** | Container | Cluster | SaaS | Postgres Ext |
-| **Search Latency** | **57µs (10K)** | ~30ms | ~20ms | ~50ms | ~50ms |
-| **Setup Time** | **< 1 min** | 5-10 min | 30+ min | 5 min | 15+ min |
-| **Binary Size** | **15 MB** | 100+ MB | GBs | N/A | Extension |
-| **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
+| Capability | 🐺 **VelesDB** | Neo4j | Qdrant | Milvus | Pinecone |
+|--------|---------------|-------|--------|--------|----------|
+| **Native Vector + Graph** | ✅ **Unified** | ❌ Vector plugin | ❌ No graph | ❌ No graph | ❌ No graph |
+| **Architecture** | **15MB Binary** | JVM Container | Container | Cluster | SaaS only |
+| **Search Latency** | **57µs** | ~10ms | ~30ms | ~20ms | ~50ms |
+| **VelesQL (SQL-like)** | ✅ | ❌ Cypher only | ❌ JSON DSL | ❌ SDK | ❌ SDK |
 | **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Mobile (iOS/Android)** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **GPU Acceleration** | ✅ (wgpu v1.1.2) | ❌ | ✅ | N/A | ❌ |
-| **Recall@10** | **96-100%*** | ~99% | ~99% | ~99% | 100% |
+| **Mobile Native** | ✅ iOS/Android | ❌ | ❌ | ❌ | ❌ |
+| **Offline/Air-Gapped** | ✅ | ❌ | 🟡 | ❌ | ❌ |
+| **Privacy (Zero Cloud)** | ✅ | 🟡 | 🟡 | ❌ | ❌ |
 
-> *92%+ Fast mode • 99%+ Balanced mode • 100% with Perfect mode
+> **The key insight**: VelesDB is the ONLY solution combining **vector semantic search** + **knowledge graph traversal** in a single embedded binary. No glue code, no multiple systems.
+
+> *Recall: 92%+ Fast mode • 99%+ Balanced mode • 100% with Perfect mode
 
 ### 📊 Benchmark: VelesDB Local Performance
 

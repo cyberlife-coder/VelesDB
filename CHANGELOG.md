@@ -33,6 +33,12 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
   - Graph bindings for WASM: full graph API in browser
   - Graph bindings for Mobile (UniFFI): iOS/Android support
 
+- **EPIC-008: Vector-Graph Fusion Query** (in progress)
+  - `similarity()` function in VelesQL: `WHERE similarity(field, $vector) > 0.8`
+  - Support for comparison operators: `>`, `>=`, `<`, `<=`, `=`
+  - Literal vectors and parameter resolution
+  - Threshold-based filtering on search results
+
 #### Changed
 
 - **EPIC-007: Python Bindings Refactoring**

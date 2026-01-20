@@ -9,6 +9,8 @@
 
 mod batch;
 mod query;
+#[cfg(test)]
+mod similarity_exec_tests;
 mod text;
 mod vector;
 
