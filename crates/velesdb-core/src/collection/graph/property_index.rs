@@ -44,8 +44,9 @@ impl PropertyIndex {
     /// Check if an index exists for this (label, property) pair.
     #[must_use]
     pub fn has_index(&self, label: &str, property: &str) -> bool {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.contains_key(&key)
+        self.indexes
+            .keys()
+            .any(|(l, p)| l == label && p == property)
     }
 
     /// Insert a node into the index.
@@ -89,11 +90,13 @@ impl PropertyIndex {
     /// Returns `Some(&RoaringBitmap)` with matching node IDs (empty if no matches).
     #[must_use]
     pub fn lookup(&self, label: &str, property: &str, value: &Value) -> Option<&RoaringBitmap> {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.get(&key).and_then(|value_map| {
-            let value_key = value.to_string();
-            value_map.get(&value_key)
-        })
+        self.indexes
+            .iter()
+            .find(|((l, p), _)| l == label && p == property)
+            .and_then(|(_, value_map)| {
+                let value_key = value.to_string();
+                value_map.get(&value_key)
+            })
     }
 
     /// Get all indexed (label, property) pairs.
@@ -105,8 +108,10 @@ impl PropertyIndex {
     /// Get the number of unique values for a (label, property) pair.
     #[must_use]
     pub fn cardinality(&self, label: &str, property: &str) -> Option<usize> {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.get(&key).map(std::collections::HashMap::len)
+        self.indexes
+            .iter()
+            .find(|((l, p), _)| l == label && p == property)
+            .map(|(_, value_map)| value_map.len())
     }
 
     /// Drop an index for a (label, property) pair.

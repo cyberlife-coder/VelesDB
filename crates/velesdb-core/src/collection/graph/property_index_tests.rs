@@ -195,6 +195,50 @@ fn test_memory_usage() {
 }
 
 // =========================================================================
+// Edge cases tests (Expert review)
+// =========================================================================
+
+#[test]
+fn test_null_value_in_index() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "nickname");
+
+    // Null values should be indexable
+    index.insert("Person", "nickname", &json!(null), 1);
+    index.insert("Person", "nickname", &json!(null), 2);
+
+    let result = index.lookup("Person", "nickname", &json!(null));
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().len(), 2);
+}
+
+#[test]
+fn test_empty_string_value() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "middle_name");
+
+    index.insert("Person", "middle_name", &json!(""), 1);
+
+    let result = index.lookup("Person", "middle_name", &json!(""));
+    assert!(result.is_some());
+    assert!(result.unwrap().contains(1));
+}
+
+#[test]
+fn test_clear_removes_all_indexes() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "email");
+    index.create_index("Company", "domain");
+    index.insert("Person", "email", &json!("test@test.com"), 1);
+
+    index.clear();
+
+    assert!(!index.has_index("Person", "email"));
+    assert!(!index.has_index("Company", "domain"));
+    assert!(index.indexed_properties().is_empty());
+}
+
+// =========================================================================
 // Maintenance hooks tests (US-002)
 // =========================================================================
 
