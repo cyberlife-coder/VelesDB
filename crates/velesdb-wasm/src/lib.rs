@@ -45,6 +45,8 @@ mod filter;
 mod fusion;
 mod graph;
 mod persistence;
+mod quantization;
+mod search;
 mod simd;
 mod text_search;
 mod vector_ops;
@@ -261,11 +263,6 @@ impl VectorStore {
 
     /// Inserts a vector with the given ID.
     ///
-    /// # Arguments
-    ///
-    /// * `id` - Unique identifier for the vector
-    /// * `vector` - `Float32Array` of the vector data
-    ///
     /// # Errors
     ///
     /// Returns an error if vector dimension doesn't match store dimension.
@@ -279,64 +276,17 @@ impl VectorStore {
             )));
         }
 
-        // Remove existing vector with same ID if present
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
             self.remove_at_index(idx);
         }
 
-        // Append based on storage mode
         self.ids.push(id);
         self.payloads.push(None);
-        match self.storage_mode {
-            StorageMode::Full => {
-                self.data.extend_from_slice(vector);
-            }
-            StorageMode::SQ8 => {
-                // SQ8: Quantize to u8 with per-vector min/scale
-                let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                    (min.min(v), max.max(v))
-                });
-                let scale = if (max - min).abs() < 1e-10 {
-                    1.0
-                } else {
-                    255.0 / (max - min)
-                };
-
-                self.sq8_mins.push(min);
-                self.sq8_scales.push(scale);
-
-                for &v in vector {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
-                    self.data_sq8.push(quantized);
-                }
-            }
-            StorageMode::Binary => {
-                // Binary: Pack 8 bits per byte (1 bit per dimension)
-                let bytes_needed = self.dimension.div_ceil(8);
-                for byte_idx in 0..bytes_needed {
-                    let mut byte = 0u8;
-                    for bit in 0..8 {
-                        let dim_idx = byte_idx * 8 + bit;
-                        if dim_idx < self.dimension && vector[dim_idx] > 0.0 {
-                            byte |= 1 << bit;
-                        }
-                    }
-                    self.data_binary.push(byte);
-                }
-            }
-        }
-
+        self.append_vector_data(vector);
         Ok(())
     }
 
     /// Inserts a vector with the given ID and optional JSON payload.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Unique identifier for the vector
-    /// * `vector` - `Float32Array` of the vector data
-    /// * `payload` - Optional JSON payload (metadata)
     ///
     /// # Errors
     ///
@@ -356,7 +306,6 @@ impl VectorStore {
             )));
         }
 
-        // Parse payload from JsValue
         let parsed_payload: Option<serde_json::Value> =
             if payload.is_null() || payload.is_undefined() {
                 None
@@ -367,60 +316,17 @@ impl VectorStore {
                 )
             };
 
-        // Remove existing vector with same ID if present
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
             self.remove_at_index(idx);
         }
 
-        // Append based on storage mode
         self.ids.push(id);
         self.payloads.push(parsed_payload);
-        match self.storage_mode {
-            StorageMode::Full => {
-                self.data.extend_from_slice(vector);
-            }
-            StorageMode::SQ8 => {
-                let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                    (min.min(v), max.max(v))
-                });
-                let scale = if (max - min).abs() < 1e-10 {
-                    1.0
-                } else {
-                    255.0 / (max - min)
-                };
-
-                self.sq8_mins.push(min);
-                self.sq8_scales.push(scale);
-
-                for &v in vector {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
-                    self.data_sq8.push(quantized);
-                }
-            }
-            StorageMode::Binary => {
-                let bytes_needed = self.dimension.div_ceil(8);
-                for byte_idx in 0..bytes_needed {
-                    let mut byte = 0u8;
-                    for bit in 0..8 {
-                        let dim_idx = byte_idx * 8 + bit;
-                        if dim_idx < self.dimension && vector[dim_idx] > 0.0 {
-                            byte |= 1 << bit;
-                        }
-                    }
-                    self.data_binary.push(byte);
-                }
-            }
-        }
-
+        self.append_vector_data(vector);
         Ok(())
     }
 
     /// Gets a vector by ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The vector ID to retrieve
     ///
     /// # Returns
     ///
@@ -432,45 +338,8 @@ impl VectorStore {
             None => return Ok(JsValue::NULL),
         };
 
-        let vector: Vec<f32> = match self.storage_mode {
-            StorageMode::Full => {
-                let start = idx * self.dimension;
-                self.data[start..start + self.dimension].to_vec()
-            }
-            StorageMode::SQ8 => {
-                let start = idx * self.dimension;
-                let min = self.sq8_mins[idx];
-                let scale = self.sq8_scales[idx];
-                self.data_sq8[start..start + self.dimension]
-                    .iter()
-                    .map(|&q| (f32::from(q) / scale) + min)
-                    .collect()
-            }
-            StorageMode::Binary => {
-                let bytes_per_vec = self.dimension.div_ceil(8);
-                let start = idx * bytes_per_vec;
-                let mut vec = vec![0.0f32; self.dimension];
-                for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
-                    .iter()
-                    .enumerate()
-                {
-                    for bit in 0..8 {
-                        let dim_idx = i * 8 + bit;
-                        if dim_idx < self.dimension {
-                            vec[dim_idx] = if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                        }
-                    }
-                }
-                vec
-            }
-        };
-
-        let result = serde_json::json!({
-            "id": id,
-            "vector": vector,
-            "payload": self.payloads[idx]
-        });
-
+        let vector = self.get_vector_at_index(idx);
+        let result = serde_json::json!({"id": id, "vector": vector, "payload": self.payloads[idx]});
         serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -480,11 +349,7 @@ impl VectorStore {
     ///
     /// * `query` - Query vector
     /// * `k` - Number of results
-    /// * `filter` - JSON filter object (e.g., `{"condition": {"type": "eq", "field": "category", "value": "tech"}}`)
-    ///
-    /// # Returns
-    ///
-    /// Array of `[id, score, payload]` tuples sorted by relevance.
+    /// * `filter` - JSON filter object
     #[wasm_bindgen]
     pub fn search_with_filter(
         &self,
@@ -500,47 +365,16 @@ impl VectorStore {
             )));
         }
 
-        // Parse filter - expecting a Filter structure from velesdb-core
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
 
-        let mut results = vector_ops::compute_filtered_scores(
-            query,
-            &self.ids,
-            &self.payloads,
-            &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
-            self.dimension,
-            &self.metric,
-            self.storage_mode,
-            |payload| filter::matches_filter(payload, &filter_obj),
-        );
+        let store_ref = self.as_store_ref();
+        let results = search::search_with_filter_impl(&store_ref, query, k, &filter_obj);
 
-        // Sort by relevance
-        results.sort_by(|a, b| {
-            if self.metric.higher_is_better() {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            }
-        });
-        results.truncate(k);
-
-        // Convert to serializable format
         let output: Vec<serde_json::Value> = results
             .into_iter()
-            .map(|(id, score, payload)| {
-                serde_json::json!({
-                    "id": id,
-                    "score": score,
-                    "payload": payload
-                })
-            })
+            .map(|(id, score, payload)| serde_json::json!({"id": id, "score": score, "payload": payload}))
             .collect();
-
         serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -563,6 +397,65 @@ impl VectorStore {
                 let bytes_per_vec = self.dimension.div_ceil(8);
                 let start = idx * bytes_per_vec;
                 self.data_binary.drain(start..start + bytes_per_vec);
+            }
+        }
+    }
+
+    /// Creates a reference to store data for search operations.
+    fn as_store_ref(&self) -> search::StoreRef<'_> {
+        search::StoreRef {
+            ids: &self.ids,
+            data: &self.data,
+            data_sq8: &self.data_sq8,
+            data_binary: &self.data_binary,
+            sq8_mins: &self.sq8_mins,
+            sq8_scales: &self.sq8_scales,
+            payloads: &self.payloads,
+            dimension: self.dimension,
+            metric: &self.metric,
+            storage_mode: self.storage_mode,
+        }
+    }
+
+    /// Appends vector data to the appropriate storage buffer based on storage mode.
+    fn append_vector_data(&mut self, vector: &[f32]) {
+        match self.storage_mode {
+            StorageMode::Full => self.data.extend_from_slice(vector),
+            StorageMode::SQ8 => {
+                let (quantized, min, scale) = quantization::quantize_sq8(vector);
+                self.sq8_mins.push(min);
+                self.sq8_scales.push(scale);
+                self.data_sq8.extend(quantized);
+            }
+            StorageMode::Binary => {
+                let packed = quantization::pack_binary(vector, self.dimension);
+                self.data_binary.extend(packed);
+            }
+        }
+    }
+
+    /// Gets vector data at the given index, dequantizing if necessary.
+    fn get_vector_at_index(&self, idx: usize) -> Vec<f32> {
+        match self.storage_mode {
+            StorageMode::Full => {
+                let start = idx * self.dimension;
+                self.data[start..start + self.dimension].to_vec()
+            }
+            StorageMode::SQ8 => {
+                let start = idx * self.dimension;
+                quantization::dequantize_sq8(
+                    &self.data_sq8[start..start + self.dimension],
+                    self.sq8_mins[idx],
+                    self.sq8_scales[idx],
+                )
+            }
+            StorageMode::Binary => {
+                let bytes_per_vec = self.dimension.div_ceil(8);
+                let start = idx * bytes_per_vec;
+                quantization::unpack_binary(
+                    &self.data_binary[start..start + bytes_per_vec],
+                    self.dimension,
+                )
             }
         }
     }
@@ -591,23 +484,8 @@ impl VectorStore {
             )));
         }
 
-        let mut results = vector_ops::compute_scores(
-            query,
-            &self.ids,
-            &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
-            self.dimension,
-            &self.metric,
-            self.storage_mode,
-        );
-
-        // Sort by relevance
-        vector_ops::sort_results(&mut results, self.metric.higher_is_better());
-        results.truncate(k);
-
+        let store_ref = self.as_store_ref();
+        let results = search::search_knn(&store_ref, query, k);
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -646,52 +524,18 @@ impl VectorStore {
             )));
         }
 
-        // Parse operator
-        let op_fn: Box<dyn Fn(f32, f32) -> bool> = match operator {
-            ">" | "gt" => Box::new(|score, thresh| score > thresh),
-            ">=" | "gte" => Box::new(|score, thresh| score >= thresh),
-            "<" | "lt" => Box::new(|score, thresh| score < thresh),
-            "<=" | "lte" => Box::new(|score, thresh| score <= thresh),
-            "=" | "eq" => Box::new(|score, thresh| (score - thresh).abs() < 0.001),
-            "!=" | "neq" => Box::new(|score, thresh| (score - thresh).abs() >= 0.001),
-            _ => {
-                return Err(JsValue::from_str(
-                    "Invalid operator. Use: >, >=, <, <=, =, != (or gt, gte, lt, lte, eq, neq)",
-                ))
-            }
-        };
+        let op_fn = search::parse_similarity_operator(operator).ok_or_else(|| {
+            JsValue::from_str(
+                "Invalid operator. Use: >, >=, <, <=, =, != (or gt, gte, lt, lte, eq, neq)",
+            )
+        })?;
 
-        // Calculate all similarities using helper
-        let all_scores = vector_ops::compute_scores(
-            query,
-            &self.ids,
-            &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
-            self.dimension,
-            &self.metric,
-            self.storage_mode,
-        );
-
-        // Filter by threshold
-        let mut results: Vec<(u64, f32)> = all_scores
-            .into_iter()
-            .filter(|(_, score)| op_fn(*score, threshold))
-            .collect();
-
-        // Sort by relevance
-        vector_ops::sort_results(&mut results, self.metric.higher_is_better());
-        results.truncate(k);
-
+        let store_ref = self.as_store_ref();
+        let results = search::similarity_search_impl(&store_ref, query, threshold, &*op_fn, k);
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Performs text search on payload fields.
-    ///
-    /// This is a simple substring-based search on payload text fields.
-    /// For full BM25 text search, use the REST API backend.
     ///
     /// # Arguments
     ///
@@ -709,43 +553,16 @@ impl VectorStore {
         k: usize,
         field: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        let query_lower = query.to_lowercase();
-
-        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = self
-            .ids
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &id)| {
-                let payload = self.payloads[idx].as_ref()?;
-                let matches =
-                    text_search::payload_contains_text(payload, &query_lower, field.as_deref());
-                if matches {
-                    Some((id, 1.0, Some(payload)))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        results.truncate(k);
-
+        let results =
+            search::text_search_impl(&self.ids, &self.payloads, query, k, field.as_deref());
         let output: Vec<serde_json::Value> = results
             .into_iter()
-            .map(|(id, score, payload)| {
-                serde_json::json!({
-                    "id": id,
-                    "score": score,
-                    "payload": payload
-                })
-            })
+            .map(|(id, score, payload)| serde_json::json!({"id": id, "score": score, "payload": payload}))
             .collect();
-
         serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Performs hybrid search combining vector similarity and text search.
-    ///
-    /// Uses a simple weighted fusion of vector search and text search results.
     ///
     /// # Arguments
     ///
@@ -753,10 +570,6 @@ impl VectorStore {
     /// * `text_query` - Text query for payload search
     /// * `k` - Number of results to return
     /// * `vector_weight` - Weight for vector results (0.0-1.0, default 0.5)
-    ///
-    /// # Returns
-    ///
-    /// Array of fused results with id, score, and payload.
     #[wasm_bindgen]
     pub fn hybrid_search(
         &self,
@@ -773,70 +586,23 @@ impl VectorStore {
             )));
         }
 
+        // SQ8/Binary fallback to simple vector search
+        if self.storage_mode != StorageMode::Full {
+            return self.search(query_vector, k);
+        }
+
         let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
-        let t_weight = 1.0 - v_weight;
-        let text_query_lower = text_query.to_lowercase();
-
-        // Perform vector search and text matching in one pass
-        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = match self.storage_mode {
-            StorageMode::Full => {
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, &id)| {
-                        let start = idx * self.dimension;
-                        let v_data = &self.data[start..start + self.dimension];
-                        let vector_score = self.metric.calculate(query_vector, v_data);
-
-                        let payload = self.payloads[idx].as_ref();
-                        let text_score = if let Some(p) = payload {
-                            if text_search::search_all_fields(p, &text_query_lower) {
-                                1.0
-                            } else {
-                                0.0
-                            }
-                        } else {
-                            0.0
-                        };
-
-                        // Combine scores
-                        let combined_score = v_weight * vector_score + t_weight * text_score;
-                        if combined_score > 0.0 {
-                            Some((id, combined_score, payload))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
-            _ => {
-                // Simplified for SQ8/Binary - just vector search
-                return self.search(query_vector, k);
-            }
-        };
-
-        // Sort by combined score
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(k);
+        let store_ref = self.as_store_ref();
+        let results = search::hybrid_search_impl(&store_ref, query_vector, text_query, k, v_weight);
 
         let output: Vec<serde_json::Value> = results
             .into_iter()
-            .map(|(id, score, payload)| {
-                serde_json::json!({
-                    "id": id,
-                    "score": score,
-                    "payload": payload
-                })
-            })
+            .map(|(id, score, payload)| serde_json::json!({"id": id, "score": score, "payload": payload}))
             .collect();
-
         serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Performs multi-query search with result fusion.
-    ///
-    /// Executes searches for multiple query vectors and fuses results
-    /// using the specified strategy.
     ///
     /// # Arguments
     ///
@@ -844,11 +610,7 @@ impl VectorStore {
     /// * `num_vectors` - Number of vectors in the array
     /// * `k` - Number of results to return
     /// * `strategy` - Fusion strategy: "average", "maximum", "rrf"
-    /// * `rrf_k` - RRF k parameter (only used when strategy = "rrf", default 60)
-    ///
-    /// # Returns
-    ///
-    /// Array of fused results with id and score.
+    /// * `rrf_k` - RRF k parameter (default 60)
     #[wasm_bindgen]
     pub fn multi_query_search(
         &mut self,
@@ -863,7 +625,6 @@ impl VectorStore {
                 "multi_query_search requires at least one vector",
             ));
         }
-
         let expected_len = num_vectors * self.dimension;
         if vectors.len() != expected_len {
             return Err(JsValue::from_str(&format!(
@@ -875,66 +636,25 @@ impl VectorStore {
             )));
         }
 
-        // Execute search for each vector
-        let overfetch_k = k * 3; // Overfetch for better fusion
-        let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
-
-        for i in 0..num_vectors {
-            let start = i * self.dimension;
-            let query = &vectors[start..start + self.dimension];
-
-            let results: Vec<(u64, f32)> = match self.storage_mode {
-                StorageMode::Full => {
-                    let mut r: Vec<(u64, f32)> = self
-                        .ids
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, &id)| {
-                            let v_start = idx * self.dimension;
-                            let v_data = &self.data[v_start..v_start + self.dimension];
-                            let score = self.metric.calculate(query, v_data);
-                            (id, score)
-                        })
-                        .collect();
-
-                    if self.metric.higher_is_better() {
-                        r.sort_by(|a, b| {
-                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                    } else {
-                        r.sort_by(|a, b| {
-                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                    }
-                    r.truncate(overfetch_k);
-                    r
-                }
-                _ => Vec::new(), // Simplified for other modes
-            };
-
-            all_results.push(results);
-        }
-
-        // Fuse results based on strategy
-        let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
-
-        // Take top k
-        let top_k: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
-
-        serde_wasm_bindgen::to_value(&top_k).map_err(|e| JsValue::from_str(&e.to_string()))
+        let store_ref = self.as_store_ref();
+        let results = search::multi_query_search_impl(
+            &store_ref,
+            vectors,
+            num_vectors,
+            k,
+            strategy,
+            rrf_k.unwrap_or(60),
+        );
+        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    /// Batch search for multiple vectors in parallel.
+    /// Batch search for multiple vectors.
     ///
     /// # Arguments
     ///
     /// * `vectors` - Flat array of query vectors (concatenated)
     /// * `num_vectors` - Number of vectors
     /// * `k` - Results per query
-    ///
-    /// # Returns
-    ///
-    /// Array of arrays of (id, score) tuples.
     #[wasm_bindgen]
     pub fn batch_search(
         &self,
@@ -946,7 +666,6 @@ impl VectorStore {
             return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         }
-
         let expected_len = num_vectors * self.dimension;
         if vectors.len() != expected_len {
             return Err(JsValue::from_str(&format!(
@@ -956,44 +675,9 @@ impl VectorStore {
             )));
         }
 
-        let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
-
-        for i in 0..num_vectors {
-            let start = i * self.dimension;
-            let query = &vectors[start..start + self.dimension];
-
-            let results: Vec<(u64, f32)> = match self.storage_mode {
-                StorageMode::Full => {
-                    let mut r: Vec<(u64, f32)> = self
-                        .ids
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, &id)| {
-                            let v_start = idx * self.dimension;
-                            let v_data = &self.data[v_start..v_start + self.dimension];
-                            (id, self.metric.calculate(query, v_data))
-                        })
-                        .collect();
-
-                    if self.metric.higher_is_better() {
-                        r.sort_by(|a, b| {
-                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                    } else {
-                        r.sort_by(|a, b| {
-                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                    }
-                    r.truncate(k);
-                    r
-                }
-                _ => Vec::new(),
-            };
-
-            all_results.push(results);
-        }
-
-        serde_wasm_bindgen::to_value(&all_results).map_err(|e| JsValue::from_str(&e.to_string()))
+        let store_ref = self.as_store_ref();
+        let results = search::batch_search_impl(&store_ref, vectors, num_vectors, k);
+        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Removes a vector by ID.
