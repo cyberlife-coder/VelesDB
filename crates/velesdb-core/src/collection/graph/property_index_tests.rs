@@ -239,6 +239,73 @@ fn test_clear_removes_all_indexes() {
 }
 
 // =========================================================================
+// Persistence tests (US-005)
+// =========================================================================
+
+#[test]
+fn test_property_index_serialize_deserialize() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Person", "email");
+    index.create_index("Person", "age");
+    index.insert("Person", "email", &json!("alice@example.com"), 1);
+    index.insert("Person", "email", &json!("bob@example.com"), 2);
+    index.insert("Person", "age", &json!(30), 1);
+
+    // Serialize
+    let bytes = index.to_bytes().expect("Serialization failed");
+    assert!(!bytes.is_empty());
+
+    // Deserialize
+    let loaded = PropertyIndex::from_bytes(&bytes).expect("Deserialization failed");
+
+    // Verify data integrity
+    assert!(loaded.has_index("Person", "email"));
+    assert!(loaded.has_index("Person", "age"));
+
+    let result = loaded.lookup("Person", "email", &json!("alice@example.com"));
+    assert!(result.is_some());
+    assert!(result.unwrap().contains(1));
+
+    let result2 = loaded.lookup("Person", "age", &json!(30));
+    assert!(result2.is_some());
+    assert!(result2.unwrap().contains(1));
+}
+
+#[test]
+fn test_property_index_persist_to_file() {
+    let mut index = PropertyIndex::new();
+    index.create_index("Document", "category");
+    index.insert("Document", "category", &json!("tech"), 1);
+    index.insert("Document", "category", &json!("tech"), 2);
+    index.insert("Document", "category", &json!("science"), 3);
+
+    // Save to temp file
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join("test_property_index.bin");
+
+    index.save_to_file(&file_path).expect("Save failed");
+    assert!(file_path.exists());
+
+    // Load from file
+    let loaded = PropertyIndex::load_from_file(&file_path).expect("Load failed");
+
+    // Verify
+    let tech_nodes = loaded.lookup("Document", "category", &json!("tech"));
+    assert!(tech_nodes.is_some());
+    assert_eq!(tech_nodes.unwrap().len(), 2);
+
+    // Cleanup
+    std::fs::remove_file(&file_path).ok();
+}
+
+#[test]
+fn test_property_index_corrupted_data() {
+    let corrupted = vec![0u8, 1, 2, 3, 255, 254];
+    let result = PropertyIndex::from_bytes(&corrupted);
+    assert!(result.is_err());
+}
+
+// =========================================================================
 // Maintenance hooks tests (US-002)
 // =========================================================================
 
