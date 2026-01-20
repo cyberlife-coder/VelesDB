@@ -28,8 +28,10 @@ pub struct QueryStats {
     avg_vector_latency_us: AtomicU64,
     /// Average graph traversal latency in microseconds.
     avg_graph_latency_us: AtomicU64,
-    /// Number of queries executed (for averaging).
-    query_count: AtomicU64,
+    /// Number of vector queries executed (for averaging).
+    vector_query_count: AtomicU64,
+    /// Number of graph queries executed (for averaging).
+    graph_query_count: AtomicU64,
 }
 
 impl QueryStats {
@@ -55,7 +57,7 @@ impl QueryStats {
 
     /// Updates average vector search latency.
     pub fn update_vector_latency(&self, latency_us: u64) {
-        let count = self.query_count.fetch_add(1, Ordering::Relaxed) + 1;
+        let count = self.vector_query_count.fetch_add(1, Ordering::Relaxed) + 1;
         let old_avg = self.avg_vector_latency_us.load(Ordering::Relaxed);
         let new_avg = if count == 1 {
             latency_us
@@ -67,11 +69,43 @@ impl QueryStats {
     }
 
     /// Updates average graph traversal latency.
+    ///
+    /// Uses a dedicated graph_query_count to ensure accurate averaging
+    /// independent of vector query count.
     pub fn update_graph_latency(&self, latency_us: u64) {
+        let count = self.graph_query_count.fetch_add(1, Ordering::Relaxed) + 1;
         let old_avg = self.avg_graph_latency_us.load(Ordering::Relaxed);
-        let count = self.query_count.load(Ordering::Relaxed).max(1);
-        let new_avg = (old_avg * (count - 1) + latency_us) / count;
+        let new_avg = if count == 1 {
+            latency_us
+        } else {
+            // Running average
+            (old_avg * (count - 1) + latency_us) / count
+        };
         self.avg_graph_latency_us.store(new_avg, Ordering::Relaxed);
+    }
+
+    /// Gets the average vector latency in microseconds.
+    #[must_use]
+    pub fn avg_vector_latency_us(&self) -> u64 {
+        self.avg_vector_latency_us.load(Ordering::Relaxed)
+    }
+
+    /// Gets the average graph latency in microseconds.
+    #[must_use]
+    pub fn avg_graph_latency_us(&self) -> u64 {
+        self.avg_graph_latency_us.load(Ordering::Relaxed)
+    }
+
+    /// Gets the total number of vector queries.
+    #[must_use]
+    pub fn vector_query_count(&self) -> u64 {
+        self.vector_query_count.load(Ordering::Relaxed)
+    }
+
+    /// Gets the total number of graph queries.
+    #[must_use]
+    pub fn graph_query_count(&self) -> u64 {
+        self.graph_query_count.load(Ordering::Relaxed)
     }
 }
 
@@ -211,6 +245,27 @@ mod tests {
         stats.update_vector_latency(100);
         stats.update_vector_latency(200);
         // Average should be ~150
+        assert_eq!(stats.avg_vector_latency_us(), 150);
+        assert_eq!(stats.vector_query_count(), 2);
+    }
+
+    #[test]
+    fn test_graph_latency_independent_count() {
+        let stats = QueryStats::new();
+
+        // Update vector latency multiple times
+        stats.update_vector_latency(100);
+        stats.update_vector_latency(200);
+        stats.update_vector_latency(300);
+
+        // Graph latency should use its own counter, not vector_query_count
+        stats.update_graph_latency(50);
+        stats.update_graph_latency(150);
+
+        // Graph average should be 100 (50+150)/2, not affected by vector count
+        assert_eq!(stats.avg_graph_latency_us(), 100);
+        assert_eq!(stats.graph_query_count(), 2);
+        assert_eq!(stats.vector_query_count(), 3);
     }
 
     #[test]

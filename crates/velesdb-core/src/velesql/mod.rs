@@ -37,6 +37,7 @@ mod graph_pattern_tests;
 mod parser;
 #[cfg(test)]
 mod parser_tests;
+mod planner;
 
 pub use ast::*;
 pub use graph_pattern::*;
@@ -49,3 +50,4 @@ pub use explain::{
 };
 pub use parser::match_clause;
 pub use parser::Parser;
+pub use planner::{ExecutionStrategy, QueryPlanner, QueryStats};

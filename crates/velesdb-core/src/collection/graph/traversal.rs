@@ -11,6 +11,10 @@ use std::collections::{HashSet, VecDeque};
 /// Default maximum depth for unbounded traversals.
 pub const DEFAULT_MAX_DEPTH: u32 = 3;
 
+/// Safety cap for maximum depth to prevent runaway traversals.
+/// Only applied when user requests unbounded traversal (*).
+pub const SAFETY_MAX_DEPTH: u32 = 10;
+
 /// Result of a graph traversal operation.
 #[derive(Debug, Clone)]
 pub struct TraversalResult {
@@ -60,11 +64,26 @@ impl Default for TraversalConfig {
 
 impl TraversalConfig {
     /// Creates a config for a specific range (e.g., *1..3).
+    ///
+    /// Respects the caller's max_depth without artificial capping.
+    /// For unbounded traversals, use `with_unbounded_range()` instead.
     #[must_use]
     pub fn with_range(min: u32, max: u32) -> Self {
         Self {
             min_depth: min,
-            max_depth: max.min(DEFAULT_MAX_DEPTH), // Cap at default max
+            max_depth: max,
+            ..Self::default()
+        }
+    }
+
+    /// Creates a config for unbounded traversal (e.g., *1..).
+    ///
+    /// Applies SAFETY_MAX_DEPTH cap to prevent runaway traversals.
+    #[must_use]
+    pub fn with_unbounded_range(min: u32) -> Self {
+        Self {
+            min_depth: min,
+            max_depth: SAFETY_MAX_DEPTH,
             ..Self::default()
         }
     }
@@ -80,6 +99,13 @@ impl TraversalConfig {
     #[must_use]
     pub fn with_rel_types(mut self, types: Vec<String>) -> Self {
         self.rel_types = types;
+        self
+    }
+
+    /// Sets a custom max depth (for advanced use cases).
+    #[must_use]
+    pub fn with_max_depth(mut self, max_depth: u32) -> Self {
+        self.max_depth = max_depth;
         self
     }
 }
@@ -118,6 +144,10 @@ pub fn bfs_traverse(
     let mut results = Vec::new();
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
+
+    // CRITICAL FIX: Mark source node as visited before traversal
+    // to prevent cycles back to source causing duplicate work
+    visited.insert(source_id);
 
     // Initialize with source node
     queue.push_back(BfsState {
@@ -188,6 +218,9 @@ pub fn bfs_traverse_reverse(
     let mut results = Vec::new();
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
+
+    // CRITICAL FIX: Mark source node as visited before traversal
+    visited.insert(source_id);
 
     queue.push_back(BfsState {
         node_id: source_id,
@@ -308,6 +341,24 @@ mod tests {
         store
     }
 
+    fn create_cyclic_edge_store() -> EdgeStore {
+        let mut store = EdgeStore::new();
+        // Create a cyclic graph:
+        // 1 --KNOWS--> 2 --KNOWS--> 3
+        // ^                         |
+        // +-------KNOWS-------------+
+        store
+            .add_edge(GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(102, 3, 1, "KNOWS").unwrap())
+            .unwrap(); // Cycle back to 1
+        store
+    }
+
     #[test]
     fn test_bfs_single_hop() {
         let store = create_test_edge_store();
@@ -407,5 +458,57 @@ mod tests {
         assert_eq!(path.len(), 2);
         assert_eq!(path[0], 100); // Edge 1->2
         assert_eq!(path[1], 101); // Edge 2->3
+    }
+
+    #[test]
+    fn test_with_range_respects_max_depth() {
+        // FIX: with_range should NOT cap max_depth artificially
+        let config = TraversalConfig::with_range(1, 5);
+        assert_eq!(config.max_depth, 5);
+
+        let config = TraversalConfig::with_range(1, 10);
+        assert_eq!(config.max_depth, 10);
+    }
+
+    #[test]
+    fn test_unbounded_range_applies_safety_cap() {
+        let config = TraversalConfig::with_unbounded_range(1);
+        assert_eq!(config.max_depth, SAFETY_MAX_DEPTH);
+    }
+
+    #[test]
+    fn test_bfs_cyclic_graph_no_infinite_loop() {
+        let store = create_cyclic_edge_store();
+        let config = TraversalConfig::with_range(1, 5).with_limit(100);
+
+        let results = bfs_traverse(&store, 1, &config);
+
+        // Results should be finite (not infinite loop)
+        assert!(results.len() < 100);
+
+        // Count how many times each target appears
+        let mut target_counts = std::collections::HashMap::new();
+        for r in &results {
+            *target_counts.entry(r.target_id).or_insert(0) += 1;
+        }
+
+        // Each node should appear at most once in results
+        // (BFS with visited tracking prevents re-expansion)
+        // Node 1 CAN appear as a result (via 3->1 edge) but only once
+        for (node_id, count) in &target_counts {
+            assert_eq!(*count, 1, "Node {} appeared {} times, expected 1", node_id, count);
+        }
+
+        // Verify we found the expected nodes: 2, 3, and 1 (via cycle)
+        assert!(results.iter().any(|r| r.target_id == 2 && r.depth == 1));
+        assert!(results.iter().any(|r| r.target_id == 3 && r.depth == 2));
+        // Node 1 is reachable via 1->2->3->1 at depth 3
+        assert!(results.iter().any(|r| r.target_id == 1 && r.depth == 3));
+    }
+
+    #[test]
+    fn test_with_max_depth_custom() {
+        let config = TraversalConfig::default().with_max_depth(7);
+        assert_eq!(config.max_depth, 7);
     }
 }
