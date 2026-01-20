@@ -228,6 +228,26 @@ impl Collection {
             }
         }
 
+        // Load PropertyIndex if it exists (EPIC-009 US-005)
+        let property_index = {
+            let index_path = path.join("property_index.bin");
+            if index_path.exists() {
+                PropertyIndex::load_from_file(&index_path).unwrap_or_else(|_| PropertyIndex::new())
+            } else {
+                PropertyIndex::new()
+            }
+        };
+
+        // Load RangeIndex if it exists (EPIC-009 US-005)
+        let range_index = {
+            let index_path = path.join("range_index.bin");
+            if index_path.exists() {
+                RangeIndex::load_from_file(&index_path).unwrap_or_else(|_| RangeIndex::new())
+            } else {
+                RangeIndex::new()
+            }
+        };
+
         Ok(Self {
             path,
             config: Arc::new(RwLock::new(config)),
@@ -237,8 +257,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
-            range_index: Arc::new(RwLock::new(RangeIndex::new())),
+            property_index: Arc::new(RwLock::new(property_index)),
+            range_index: Arc::new(RwLock::new(range_index)),
         })
     }
 
@@ -258,6 +278,21 @@ impl Collection {
         self.vector_storage.write().flush().map_err(Error::Io)?;
         self.payload_storage.write().flush().map_err(Error::Io)?;
         self.index.save(&self.path).map_err(Error::Io)?;
+
+        // Save PropertyIndex (EPIC-009 US-005)
+        let property_index_path = self.path.join("property_index.bin");
+        self.property_index
+            .read()
+            .save_to_file(&property_index_path)
+            .map_err(Error::Io)?;
+
+        // Save RangeIndex (EPIC-009 US-005)
+        let range_index_path = self.path.join("range_index.bin");
+        self.range_index
+            .read()
+            .save_to_file(&range_index_path)
+            .map_err(Error::Io)?;
+
         Ok(())
     }
 
