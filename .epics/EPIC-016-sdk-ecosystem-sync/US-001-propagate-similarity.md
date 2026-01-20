@@ -82,9 +82,9 @@ Par SDK:
 | Python (PyO3) | ✅ | 🟡 | 🔴 |
 | WASM | ✅ | ✅ | 🔴 |
 | Mobile (UniFFI) | 🔴 | 🔴 | 🔴 |
-| TypeScript | 🔴 | 🔴 | 🔴 |
+| TypeScript | ✅ | 🔴 | 🔴 |
 | Tauri Plugin | 🔴 | 🔴 | 🔴 |
-| LangChain | 🔴 | 🔴 | 🔴 |
+| LangChain | ✅ | 🔴 | 🔴 |
 | LlamaIndex | 🔴 | 🔴 | 🔴 |
 | CLI | ✅ | 🔴 | 🔴 |
 
