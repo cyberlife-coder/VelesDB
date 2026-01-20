@@ -1,4 +1,15 @@
 //! VelesQL query execution for Collection.
+//!
+//! # Future Enhancement: HybridExecutionPlan Integration
+//!
+//! The `HybridExecutionPlan` and `choose_hybrid_strategy()` in `planner.rs`
+//! are ready for integration to optimize query execution based on:
+//! - Query pattern (ORDER BY similarity, filters, etc.)
+//! - Runtime statistics (latency, selectivity)
+//! - Over-fetch factor for filtered queries
+//!
+//! TODO: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
+//! to leverage cost-based optimization for complex queries.
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -174,20 +185,32 @@ impl Collection {
         match &first.expr {
             OrderByExpr::Similarity(sim) => {
                 // Sort by similarity score
-                // The score is already computed during search, so we just sort
-                let descending = first.descending;
+                // User expectation: DESC = most similar first, ASC = least similar first
+                let user_wants_most_similar_first = first.descending;
 
                 // If the similarity vector is different from the search vector,
                 // we need to recompute scores
                 let order_vec = self.resolve_vector(&sim.vector, params)?;
 
-                // Recompute similarity scores for accurate ordering
+                // Recompute metric scores for accurate ordering
                 for result in results.iter_mut() {
-                    let score = self.compute_similarity(&result.point.vector, &order_vec);
+                    let score = self.compute_metric_score(&result.point.vector, &order_vec);
                     result.score = score;
                 }
 
-                if descending {
+                // Adjust sort order based on metric semantics:
+                // - Similarity metrics (Cosine, DotProduct, Jaccard): higher = more similar
+                // - Distance metrics (Euclidean, Hamming): lower = more similar
+                let metric = self.config.read().metric;
+                let sort_descending = if metric.higher_is_better() {
+                    // Higher score = more similar, so DESC for most similar
+                    user_wants_most_similar_first
+                } else {
+                    // Lower score = more similar, so ASC for most similar
+                    !user_wants_most_similar_first
+                };
+
+                if sort_descending {
                     results.sort_by(|a, b| {
                         b.score
                             .partial_cmp(&a.score)
@@ -256,21 +279,25 @@ impl Collection {
         }
     }
 
-    /// Compute cosine similarity between two vectors.
-    fn compute_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    /// Compute the metric score between two vectors using the collection's configured metric.
+    ///
+    /// **Note:** This returns the raw metric score, not a normalized similarity.
+    /// The interpretation depends on the metric:
+    /// - **Cosine**: Returns cosine similarity (higher = more similar)
+    /// - **DotProduct**: Returns dot product (higher = more similar)
+    /// - **Euclidean**: Returns euclidean distance (lower = more similar)
+    /// - **Hamming**: Returns hamming distance (lower = more similar)
+    /// - **Jaccard**: Returns jaccard similarity (higher = more similar)
+    ///
+    /// Use `metric.higher_is_better()` to determine score interpretation.
+    fn compute_metric_score(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() || a.is_empty() {
             return 0.0;
         }
 
-        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm_a == 0.0 || norm_b == 0.0 {
-            return 0.0;
-        }
-
-        dot / (norm_a * norm_b)
+        // Use the collection's configured metric for consistent behavior
+        let metric = self.config.read().metric;
+        metric.calculate(a, b)
     }
 
     /// Helper to extract MATCH query from any nested condition.
@@ -443,7 +470,14 @@ impl Collection {
     ) -> Vec<SearchResult> {
         use crate::velesql::CompareOp;
 
-        // The score from HNSW is already cosine similarity (for cosine metric)
+        // The score from HNSW is already computed using the collection's configured metric
+        // (Cosine, Euclidean, DotProduct, Hamming, or Jaccard)
+        //
+        // TODO: For distance metrics (Euclidean, Hamming), the threshold semantics may be
+        // counterintuitive. E.g., `similarity() > 0.5` with Euclidean filters for distances > 0.5,
+        // which means "less similar". Consider inverting comparisons based on metric.higher_is_better()
+        // or documenting this as "raw score" filtering rather than "similarity" filtering.
+        //
         // Filter results based on threshold and operator
         let threshold_f32 = threshold as f32;
 
