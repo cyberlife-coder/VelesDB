@@ -55,33 +55,49 @@ impl QueryStats {
         self.graph_selectivity.load(Ordering::Relaxed) as f64 / 1_000_000.0
     }
 
-    /// Updates average vector search latency.
+    /// Updates average vector search latency using exponential moving average.
+    ///
+    /// Uses EMA with α=0.1 for thread-safe updates without race conditions.
+    /// EMA formula: new_avg = α * latency + (1-α) * old_avg
+    /// This avoids the race condition in running average calculations.
     pub fn update_vector_latency(&self, latency_us: u64) {
-        let count = self.vector_query_count.fetch_add(1, Ordering::Relaxed) + 1;
-        let old_avg = self.avg_vector_latency_us.load(Ordering::Relaxed);
-        let new_avg = if count == 1 {
-            latency_us
-        } else {
-            // Running average
-            (old_avg * (count - 1) + latency_us) / count
-        };
-        self.avg_vector_latency_us.store(new_avg, Ordering::Relaxed);
+        self.vector_query_count.fetch_add(1, Ordering::Relaxed);
+        Self::atomic_ema_update(&self.avg_vector_latency_us, latency_us);
     }
 
-    /// Updates average graph traversal latency.
+    /// Updates average graph traversal latency using exponential moving average.
     ///
-    /// Uses a dedicated graph_query_count to ensure accurate averaging
-    /// independent of vector query count.
+    /// Uses EMA with α=0.1 for thread-safe updates without race conditions.
+    /// This ensures accurate statistics for query planning decisions.
     pub fn update_graph_latency(&self, latency_us: u64) {
-        let count = self.graph_query_count.fetch_add(1, Ordering::Relaxed) + 1;
-        let old_avg = self.avg_graph_latency_us.load(Ordering::Relaxed);
-        let new_avg = if count == 1 {
-            latency_us
-        } else {
-            // Running average
-            (old_avg * (count - 1) + latency_us) / count
-        };
-        self.avg_graph_latency_us.store(new_avg, Ordering::Relaxed);
+        self.graph_query_count.fetch_add(1, Ordering::Relaxed);
+        Self::atomic_ema_update(&self.avg_graph_latency_us, latency_us);
+    }
+
+    /// Atomically updates an EMA using compare-and-swap loop.
+    ///
+    /// α = 0.1 (10% weight to new value, 90% to historical average)
+    /// This provides smooth averaging while being fully thread-safe.
+    fn atomic_ema_update(avg: &AtomicU64, new_value: u64) {
+        loop {
+            let old_avg = avg.load(Ordering::Relaxed);
+            let new_avg = if old_avg == 0 {
+                // First value: use it directly
+                new_value
+            } else {
+                // EMA: new_avg = 0.1 * new_value + 0.9 * old_avg
+                // Using integer math: (new_value + 9 * old_avg) / 10
+                (new_value + 9 * old_avg) / 10
+            };
+            // CAS loop ensures atomic read-modify-write
+            if avg
+                .compare_exchange_weak(old_avg, new_avg, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+            // Retry on contention
+        }
     }
 
     /// Gets the average vector latency in microseconds.
@@ -244,8 +260,8 @@ mod tests {
 
         stats.update_vector_latency(100);
         stats.update_vector_latency(200);
-        // Average should be ~150
-        assert_eq!(stats.avg_vector_latency_us(), 150);
+        // EMA with α=0.1: first=100, then (200 + 9*100)/10 = 110
+        assert_eq!(stats.avg_vector_latency_us(), 110);
         assert_eq!(stats.vector_query_count(), 2);
     }
 
@@ -262,8 +278,9 @@ mod tests {
         stats.update_graph_latency(50);
         stats.update_graph_latency(150);
 
-        // Graph average should be 100 (50+150)/2, not affected by vector count
-        assert_eq!(stats.avg_graph_latency_us(), 100);
+        // EMA with α=0.1: first=50, then (150 + 9*50)/10 = 60
+        // Graph stats are independent from vector stats
+        assert_eq!(stats.avg_graph_latency_us(), 60);
         assert_eq!(stats.graph_query_count(), 2);
         assert_eq!(stats.vector_query_count(), 3);
     }
