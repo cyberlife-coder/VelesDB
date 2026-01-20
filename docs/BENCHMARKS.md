@@ -1,10 +1,10 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: January 11, 2026 (v1.1.0)*
+*Last updated: January 20, 2026 (v1.2.0)*
 
 ---
 
-## 🚀 v1.1.0 Headline
+## 🚀 v1.2.0 Headline
 
 | Metric | Baseline | VelesDB | Winner |
 |--------|----------|---------|--------|

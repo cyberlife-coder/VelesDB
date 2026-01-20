@@ -121,7 +121,7 @@ LIMIT 10
 | **Query Language** | **SQL (VelesQL)** | JSON DSL | SDK | SDK | SQL |
 | **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Mobile (iOS/Android)** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **GPU Acceleration** | ✅ (wgpu v1.1.2) | ❌ | ✅ | N/A | ❌ |
+| **GPU Acceleration** | ✅ (wgpu v1.2.0) | ❌ | ✅ | N/A | ❌ |
 | **Recall@10** | **96-100%*** | ~99% | ~99% | ~99% | 100% |
 
 > *92%+ Fast mode • 99%+ Balanced mode • 100% with Perfect mode
@@ -155,7 +155,7 @@ LIMIT 10
 | Component | Version |
 |-----------|---------|
 | **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v1.1.2 |
+| **VelesDB** | v1.2.0 |
 | **SIMD** | AVX-512 enabled |
 | **Criterion** | 0.5.1 |
 
@@ -207,9 +207,9 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 
 > 📖 [Full architecture guide](docs/reference/NATIVE_HNSW.md)
 
-### Recall by Mode (Native Rust, Criterion benchmarks — v1.1.0)
+### Recall by Mode (Native Rust, Criterion benchmarks — v1.2.0)
 
-| Config | Mode | ef_search | Recall@10 | Latency P50 | v1.1.0 Gain |
+| Config | Mode | ef_search | Recall@10 | Latency P50 | v1.2.0 Gain |
 |--------|------|-----------|-----------|-------------|-------------|
 | **10K/128D** | Fast | 64 | **92.2%** | **36µs** | 🆕 |
 | **10K/128D** | Balanced | 128 | **98.8%** | **57µs** | 🚀 **-80%** |
@@ -218,7 +218,7 @@ VelesDB now uses a **custom Native HNSW implementation** with zero external depe
 
 > *Latency P50 = median search time per query. Native Rust (no HTTP overhead).*
 > 
-> **v1.1.0 EPIC-CORE-003**: LRU Cache, Trigram Index, Lock-free structures → **72-92% faster** across all modes.
+> **v1.2.0**: Knowledge Graph, VelesQL MATCH, LRU Cache, Trigram Index → **72-92% faster** across all modes.
 
 > 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
 
@@ -253,7 +253,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 
 | Guide | Description |
 |-------|-------------|
-| **[Usage Examples v1.1.0](docs/USAGE_EXAMPLES_V1.1.0.md)** | Complete code examples for all features in every language |
+| **[Usage Examples](docs/USAGE_EXAMPLES_V1.1.0.md)** | Complete code examples for all features in every language |
 | **[CHANGELOG](CHANGELOG.md)** | Version history and breaking changes |
 | **[Benchmarks](docs/BENCHMARKS.md)** | Performance measurements and methodology |
 | **[Native HNSW](docs/reference/NATIVE_HNSW.md)** | Architecture deep-dive |
@@ -271,7 +271,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 - 🔍 **LIKE/ILIKE Filters** — SQL pattern matching with wildcards ⭐ NEW
 - 🔎 **Trigram Index** — 22-128x faster LIKE queries with Roaring Bitmaps ⭐ NEW
 - ⚡ **Lock-Free Cache** — DashMap L1 + LRU L2 two-tier caching ⭐ NEW
-- 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (v1.1.2)
+- 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (v1.2.0)
 - 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
 - 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale
 - 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
@@ -362,7 +362,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-1.1.0-amd64.deb
+sudo dpkg -i velesdb-1.2.0-amd64.deb
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -458,7 +458,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.1.0"}
+# {"status":"healthy","version":"1.2.0"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -1161,7 +1161,7 @@ velesdb-cli info ./data
 
 **REPL Session:**
 ```
-VelesQL REPL v1.1.0
+VelesQL REPL v1.2.0
 Type 'help' for commands, 'quit' to exit.
 
 velesql> SELECT * FROM documents WHERE category = 'tech' LIMIT 5;
@@ -1307,7 +1307,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 ## 📊 Roadmap
 
-### v1.1.0 ✅ (Current - January 2026)
+### v1.2.0 ✅ (Current - January 2026)
 - [x] **🚀 Native HNSW Implementation** - Zero external dependencies, pure Rust
 - [x] **⚡ Lock-Free Cache** - DashMap L1 + LRU L2 two-tier caching
 - [x] **🔎 Trigram Index** - 22-128x faster LIKE queries with Roaring Bitmaps
