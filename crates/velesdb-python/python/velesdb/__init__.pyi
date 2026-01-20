@@ -284,6 +284,70 @@ class Collection:
     def flush(self) -> None:
         """Flush pending changes to disk."""
         ...
+    
+    # Index Management (EPIC-009)
+    
+    def create_property_index(self, label: str, property: str) -> None:
+        """Create a property index for O(1) equality lookups on graph nodes.
+        
+        Args:
+            label: Node label to index (e.g., "Person")
+            property: Property name to index (e.g., "email")
+        """
+        ...
+    
+    def create_range_index(self, label: str, property: str) -> None:
+        """Create a range index for O(log n) range queries on graph nodes.
+        
+        Args:
+            label: Node label to index (e.g., "Event")
+            property: Property name to index (e.g., "timestamp")
+        """
+        ...
+    
+    def has_property_index(self, label: str, property: str) -> bool:
+        """Check if a property index exists.
+        
+        Args:
+            label: Node label
+            property: Property name
+        
+        Returns:
+            True if a property index exists for this label/property
+        """
+        ...
+    
+    def has_range_index(self, label: str, property: str) -> bool:
+        """Check if a range index exists.
+        
+        Args:
+            label: Node label
+            property: Property name
+        
+        Returns:
+            True if a range index exists for this label/property
+        """
+        ...
+    
+    def list_indexes(self) -> List[Dict[str, Any]]:
+        """List all indexes on this collection.
+        
+        Returns:
+            List of dicts with keys: label, property, index_type, cardinality, memory_bytes
+        """
+        ...
+    
+    def drop_index(self, label: str, property: str) -> bool:
+        """Drop an index (either property or range).
+        
+        Args:
+            label: Node label
+            property: Property name
+        
+        Returns:
+            True if an index was dropped, False if no index existed
+        """
+        ...
 
 
 class Database:
