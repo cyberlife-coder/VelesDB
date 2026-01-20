@@ -33,17 +33,21 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
   - Graph bindings for WASM: full graph API in browser
   - Graph bindings for Mobile (UniFFI): iOS/Android support
 
-- **EPIC-008: Vector-Graph Fusion Query** (in progress)
+- **EPIC-008: Vector-Graph Fusion Query** ✅
   - `similarity()` function in VelesQL: `WHERE similarity(field, $vector) > 0.8`
   - Support for comparison operators: `>`, `>=`, `<`, `<=`, `=`
   - Literal vectors and parameter resolution
   - Threshold-based filtering on search results
+  - `ORDER BY similarity(field, $v) [ASC|DESC]` for sorted results
+  - Hybrid Query Planner with cost-based optimization
+  - Over-fetch factor calculation for filtered ORDER BY queries
 
-- **EPIC-009: Graph Property Index**
+- **EPIC-009: Graph Property Index** ✅
   - `PropertyIndex` for O(1) hash-based equality lookups
   - `RangeIndex` for O(log n) range queries on ordered values
   - Index management: `create_property_index`, `create_range_index`, `list_indexes`, `drop_index`
   - Memory usage tracking per index
+  - Automatic index persistence across Collection lifecycle (save/load)
 
 - **EPIC-016: SDK Ecosystem Sync**
   - Property Index propagated to velesdb-server REST API
