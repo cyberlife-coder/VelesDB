@@ -22,7 +22,8 @@
 //! ```
 
 use super::distance::DistanceEngine;
-use super::graph::{NativeHnsw, NodeId};
+use super::graph::NativeHnsw;
+use super::layer::NodeId;
 use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
 use std::sync::Arc;
 

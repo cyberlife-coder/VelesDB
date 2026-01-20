@@ -88,6 +88,30 @@ pub enum Error {
     /// Vector required for vector collection (VELES-016).
     #[error("[VELES-016] Vector required for collection '{0}' (not metadata-only)")]
     VectorRequired(String),
+
+    /// Schema validation error (VELES-017).
+    #[error("[VELES-017] Schema validation error: {0}")]
+    SchemaValidation(String),
+
+    /// Graph operation not supported (VELES-018).
+    #[error("[VELES-018] Graph operation not supported: {0}")]
+    GraphNotSupported(String),
+
+    /// Edge already exists (VELES-019).
+    #[error("[VELES-019] Edge with ID '{0}' already exists")]
+    EdgeExists(u64),
+
+    /// Edge not found (VELES-020).
+    #[error("[VELES-020] Edge with ID '{0}' not found")]
+    EdgeNotFound(u64),
+
+    /// Invalid edge label (VELES-021).
+    #[error("[VELES-021] Invalid edge label: {0}")]
+    InvalidEdgeLabel(String),
+
+    /// Node not found (VELES-022).
+    #[error("[VELES-022] Node with ID '{0}' not found")]
+    NodeNotFound(u64),
 }
 
 impl Error {
@@ -111,6 +135,12 @@ impl Error {
             Self::VectorNotAllowed(_) => "VELES-014",
             Self::SearchNotSupported(_) => "VELES-015",
             Self::VectorRequired(_) => "VELES-016",
+            Self::SchemaValidation(_) => "VELES-017",
+            Self::GraphNotSupported(_) => "VELES-018",
+            Self::EdgeExists(_) => "VELES-019",
+            Self::EdgeNotFound(_) => "VELES-020",
+            Self::InvalidEdgeLabel(_) => "VELES-021",
+            Self::NodeNotFound(_) => "VELES-022",
         }
     }
 

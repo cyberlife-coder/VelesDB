@@ -41,10 +41,15 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod distance;
+mod filter;
+mod fusion;
+mod graph;
 mod persistence;
 mod simd;
+mod text_search;
 
 pub use distance::DistanceMetric;
+pub use graph::{GraphEdge, GraphNode, GraphStore};
 
 /// Storage mode for vector quantization.
 #[wasm_bindgen]
@@ -505,7 +510,7 @@ impl VectorStore {
                 .enumerate()
                 .filter_map(|(idx, &id)| {
                     let payload = self.payloads[idx].as_ref()?;
-                    if !self.matches_filter(payload, &filter_obj) {
+                    if !filter::matches_filter(payload, &filter_obj) {
                         return None;
                     }
                     let start = idx * self.dimension;
@@ -521,7 +526,7 @@ impl VectorStore {
                     .enumerate()
                     .filter_map(|(idx, &id)| {
                         let payload = self.payloads[idx].as_ref()?;
-                        if !self.matches_filter(payload, &filter_obj) {
+                        if !filter::matches_filter(payload, &filter_obj) {
                             return None;
                         }
                         let start = idx * self.dimension;
@@ -546,7 +551,7 @@ impl VectorStore {
                     .enumerate()
                     .filter_map(|(idx, &id)| {
                         let payload = self.payloads[idx].as_ref()?;
-                        if !self.matches_filter(payload, &filter_obj) {
+                        if !filter::matches_filter(payload, &filter_obj) {
                             return None;
                         }
                         let start = idx * bytes_per_vec;
@@ -591,145 +596,6 @@ impl VectorStore {
             .collect();
 
         serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
-    }
-
-    /// Simple filter matching (supports basic eq, neq, gt, lt conditions).
-    fn matches_filter(&self, payload: &serde_json::Value, filter: &serde_json::Value) -> bool {
-        // Extract condition from filter
-        let condition = match filter.get("condition") {
-            Some(c) => c,
-            None => return true, // No condition = match all
-        };
-
-        self.evaluate_condition(payload, condition)
-    }
-
-    /// Evaluates a single condition against a payload.
-    fn evaluate_condition(
-        &self,
-        payload: &serde_json::Value,
-        condition: &serde_json::Value,
-    ) -> bool {
-        let cond_type = condition.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-        match cond_type {
-            "eq" => {
-                let field = condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("");
-                let value = condition.get("value");
-                let payload_value = self.get_nested_field(payload, field);
-                match (payload_value, value) {
-                    (Some(pv), Some(v)) => pv == v,
-                    _ => false,
-                }
-            }
-            "neq" => {
-                let field = condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("");
-                let value = condition.get("value");
-                let payload_value = self.get_nested_field(payload, field);
-                match (payload_value, value) {
-                    (Some(pv), Some(v)) => pv != v,
-                    (None, _) => true,
-                    _ => false,
-                }
-            }
-            "gt" => {
-                let field = condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("");
-                let value = condition.get("value").and_then(|v| v.as_f64());
-                let payload_value = self
-                    .get_nested_field(payload, field)
-                    .and_then(|v| v.as_f64());
-                match (payload_value, value) {
-                    (Some(pv), Some(v)) => pv > v,
-                    _ => false,
-                }
-            }
-            "gte" => {
-                let field = condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("");
-                let value = condition.get("value").and_then(|v| v.as_f64());
-                let payload_value = self
-                    .get_nested_field(payload, field)
-                    .and_then(|v| v.as_f64());
-                match (payload_value, value) {
-                    (Some(pv), Some(v)) => pv >= v,
-                    _ => false,
-                }
-            }
-            "lt" => {
-                let field = condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("");
-                let value = condition.get("value").and_then(|v| v.as_f64());
-                let payload_value = self
-                    .get_nested_field(payload, field)
-                    .and_then(|v| v.as_f64());
-                match (payload_value, value) {
-                    (Some(pv), Some(v)) => pv < v,
-                    _ => false,
-                }
-            }
-            "lte" => {
-                let field = condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("");
-                let value = condition.get("value").and_then(|v| v.as_f64());
-                let payload_value = self
-                    .get_nested_field(payload, field)
-                    .and_then(|v| v.as_f64());
-                match (payload_value, value) {
-                    (Some(pv), Some(v)) => pv <= v,
-                    _ => false,
-                }
-            }
-            "and" => {
-                let conditions = condition.get("conditions").and_then(|c| c.as_array());
-                match conditions {
-                    Some(conds) => conds.iter().all(|c| self.evaluate_condition(payload, c)),
-                    None => true,
-                }
-            }
-            "or" => {
-                let conditions = condition.get("conditions").and_then(|c| c.as_array());
-                match conditions {
-                    Some(conds) => conds.iter().any(|c| self.evaluate_condition(payload, c)),
-                    None => true,
-                }
-            }
-            "not" => {
-                let inner = condition.get("condition");
-                match inner {
-                    Some(c) => !self.evaluate_condition(payload, c),
-                    None => true,
-                }
-            }
-            _ => true, // Unknown condition type = match all
-        }
-    }
-
-    /// Gets a nested field from a JSON payload using dot notation.
-    fn get_nested_field<'a>(
-        &self,
-        payload: &'a serde_json::Value,
-        field: &str,
-    ) -> Option<&'a serde_json::Value> {
-        let mut current = payload;
-        for part in field.split('.') {
-            current = current.get(part)?;
-        }
-        Some(current)
     }
 
     /// Removes vector at the given index (internal helper).
@@ -890,7 +756,8 @@ impl VectorStore {
             .enumerate()
             .filter_map(|(idx, &id)| {
                 let payload = self.payloads[idx].as_ref()?;
-                let matches = Self::payload_contains_text(payload, &query_lower, field.as_deref());
+                let matches =
+                    text_search::payload_contains_text(payload, &query_lower, field.as_deref());
                 if matches {
                     Some((id, 1.0, Some(payload)))
                 } else {
@@ -962,7 +829,7 @@ impl VectorStore {
 
                         let payload = self.payloads[idx].as_ref();
                         let text_score = if let Some(p) = payload {
-                            if Self::search_all_fields(p, &text_query_lower) {
+                            if text_search::search_all_fields(p, &text_query_lower) {
                                 1.0
                             } else {
                                 0.0
@@ -1088,68 +955,12 @@ impl VectorStore {
         }
 
         // Fuse results based on strategy
-        let fused = self.fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
+        let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
 
         // Take top k
         let top_k: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
         serde_wasm_bindgen::to_value(&top_k).map_err(|e| JsValue::from_str(&e.to_string()))
-    }
-
-    /// Fuses results from multiple queries using the specified strategy.
-    fn fuse_results(
-        &self,
-        all_results: &[Vec<(u64, f32)>],
-        strategy: &str,
-        rrf_k: u32,
-    ) -> Vec<(u64, f32)> {
-        use std::collections::HashMap;
-
-        let mut scores: HashMap<u64, Vec<f32>> = HashMap::new();
-        let mut ranks: HashMap<u64, Vec<usize>> = HashMap::new();
-
-        for (query_idx, results) in all_results.iter().enumerate() {
-            for (rank, (id, score)) in results.iter().enumerate() {
-                scores.entry(*id).or_default().push(*score);
-                ranks
-                    .entry(*id)
-                    .or_insert_with(|| vec![usize::MAX; all_results.len()])[query_idx] = rank;
-            }
-        }
-
-        let mut fused: Vec<(u64, f32)> = match strategy.to_lowercase().as_str() {
-            "average" | "avg" => scores
-                .iter()
-                .map(|(id, s)| {
-                    let avg = s.iter().sum::<f32>() / s.len() as f32;
-                    (*id, avg)
-                })
-                .collect(),
-            "maximum" | "max" => scores
-                .iter()
-                .map(|(id, s)| {
-                    let max = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                    (*id, max)
-                })
-                .collect(),
-            _ => {
-                // Reciprocal Rank Fusion
-                ranks
-                    .iter()
-                    .map(|(id, r)| {
-                        let rrf_score: f32 = r
-                            .iter()
-                            .filter(|&&rank| rank != usize::MAX)
-                            .map(|&rank| 1.0 / (rrf_k as f32 + rank as f32 + 1.0))
-                            .sum();
-                        (*id, rrf_score)
-                    })
-                    .collect()
-            }
-        };
-
-        fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        fused
     }
 
     /// Batch search for multiple vectors in parallel.
@@ -1222,47 +1033,6 @@ impl VectorStore {
         }
 
         serde_wasm_bindgen::to_value(&all_results).map_err(|e| JsValue::from_str(&e.to_string()))
-    }
-
-    /// Checks if payload contains text in specified field or any string field.
-    fn payload_contains_text(
-        payload: &serde_json::Value,
-        query: &str,
-        field: Option<&str>,
-    ) -> bool {
-        if let Some(field_name) = field {
-            // Search specific field
-            if let Some(value) = payload.get(field_name) {
-                return Self::value_contains_text(value, query);
-            }
-            false
-        } else {
-            // Search all fields
-            Self::search_all_fields(payload, query)
-        }
-    }
-
-    /// Recursively searches all string fields in a JSON value.
-    fn search_all_fields(value: &serde_json::Value, query: &str) -> bool {
-        match value {
-            serde_json::Value::String(s) => s.to_lowercase().contains(query),
-            serde_json::Value::Object(obj) => {
-                obj.values().any(|v| Self::search_all_fields(v, query))
-            }
-            serde_json::Value::Array(arr) => arr.iter().any(|v| Self::search_all_fields(v, query)),
-            _ => false,
-        }
-    }
-
-    /// Checks if a value contains the query text.
-    fn value_contains_text(value: &serde_json::Value, query: &str) -> bool {
-        match value {
-            serde_json::Value::String(s) => s.to_lowercase().contains(query),
-            serde_json::Value::Array(arr) => {
-                arr.iter().any(|v| Self::value_contains_text(v, query))
-            }
-            _ => false,
-        }
     }
 
     /// Removes a vector by ID.
@@ -1682,189 +1452,5 @@ macro_rules! console_log {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_storage_mode_full() {
-        let store = VectorStore::new(4, "cosine").unwrap();
-        assert_eq!(store.storage_mode(), "full");
-        assert_eq!(store.len(), 0);
-    }
-
-    #[test]
-    fn test_storage_mode_sq8() {
-        let store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
-        assert_eq!(store.storage_mode(), "sq8");
-    }
-
-    #[test]
-    fn test_storage_mode_binary() {
-        let store = VectorStore::new_with_mode(4, "cosine", "binary").unwrap();
-        assert_eq!(store.storage_mode(), "binary");
-    }
-
-    #[test]
-    fn test_sq8_insert_and_memory() {
-        let mut store = VectorStore::new_with_mode(768, "cosine", "sq8").unwrap();
-        #[allow(clippy::cast_precision_loss)]
-        let vector: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001).collect();
-
-        store.insert(1, &vector).unwrap();
-
-        assert_eq!(store.len(), 1);
-        // SQ8: 768 bytes (u8) + 8 bytes (min+scale) + 8 bytes (id) = 784 bytes
-        // Full would be: 768 * 4 + 8 = 3080 bytes
-        let mem = store.memory_usage();
-        assert!(mem < 1000, "SQ8 should use less than 1KB, got {mem}");
-    }
-
-    #[test]
-    fn test_binary_insert_and_memory() {
-        let mut store = VectorStore::new_with_mode(768, "cosine", "binary").unwrap();
-        let vector: Vec<f32> = (0..768)
-            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
-            .collect();
-
-        store.insert(1, &vector).unwrap();
-
-        assert_eq!(store.len(), 1);
-        // Binary: 768/8 = 96 bytes + 8 bytes (id) = 104 bytes
-        // Full would be: 768 * 4 + 8 = 3080 bytes (~30x more)
-        let mem = store.memory_usage();
-        assert!(
-            mem < 150,
-            "Binary should use less than 150 bytes, got {mem}"
-        );
-    }
-
-    #[test]
-    fn test_sq8_quantization_roundtrip() {
-        let mut store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
-
-        // Insert vectors - verify quantization works
-        store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
-        store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();
-        store.insert(3, &[0.5, 0.5, 0.0, 0.0]).unwrap();
-
-        assert_eq!(store.len(), 3);
-        // Verify SQ8 data was stored
-        assert_eq!(store.data_sq8.len(), 12); // 3 vectors * 4 dims
-        assert_eq!(store.sq8_mins.len(), 3);
-        assert_eq!(store.sq8_scales.len(), 3);
-    }
-
-    #[test]
-    fn test_binary_packing() {
-        let mut store = VectorStore::new_with_mode(8, "hamming", "binary").unwrap();
-
-        // Insert binary vectors
-        store
-            .insert(1, &[1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-            .unwrap();
-
-        assert_eq!(store.len(), 1);
-        // 8 dims = 1 byte
-        assert_eq!(store.data_binary.len(), 1);
-        // First two bits set: 0b00000011 = 3
-        assert_eq!(store.data_binary[0], 3);
-    }
-
-    #[test]
-    fn test_binary_packing_large() {
-        let mut store = VectorStore::new_with_mode(16, "hamming", "binary").unwrap();
-
-        // All ones in first byte, all zeros in second
-        let mut vec = vec![0.0f32; 16];
-        for item in vec.iter_mut().take(8) {
-            *item = 1.0;
-        }
-        store.insert(1, &vec).unwrap();
-
-        assert_eq!(store.data_binary.len(), 2);
-        assert_eq!(store.data_binary[0], 0xFF); // All 8 bits set
-        assert_eq!(store.data_binary[1], 0x00); // No bits set
-    }
-
-    #[test]
-    fn test_remove_sq8() {
-        let mut store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
-        store.insert(1, &[1.0, 2.0, 3.0, 4.0]).unwrap();
-        store.insert(2, &[5.0, 6.0, 7.0, 8.0]).unwrap();
-
-        assert_eq!(store.len(), 2);
-        assert!(store.remove(1));
-        assert_eq!(store.len(), 1);
-        assert!(!store.remove(1)); // Already removed
-    }
-
-    #[test]
-    fn test_clear_all_modes() {
-        for mode in ["full", "sq8", "binary"] {
-            let mut store = VectorStore::new_with_mode(4, "cosine", mode).unwrap();
-            store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
-            store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();
-
-            assert_eq!(store.len(), 2);
-            store.clear();
-            assert_eq!(store.len(), 0);
-            assert_eq!(store.memory_usage(), 0);
-        }
-    }
-
-    // =========================================================================
-    // Fusion Logic Tests (pure Rust, no JsValue)
-    // =========================================================================
-
-    #[test]
-    fn test_fuse_results_rrf() {
-        let store = VectorStore::new(4, "cosine").unwrap();
-        let results1 = vec![(1, 0.9), (2, 0.8), (3, 0.7)];
-        let results2 = vec![(2, 0.95), (1, 0.85), (4, 0.6)];
-        let all_results = vec![results1, results2];
-
-        let fused = store.fuse_results(&all_results, "rrf", 60);
-        assert!(!fused.is_empty());
-        // ID 2 appears in rank 0 and rank 1, should have high RRF score
-        // ID 1 appears in rank 0 and rank 1, should also be high
-    }
-
-    #[test]
-    fn test_fuse_results_average() {
-        let store = VectorStore::new(4, "cosine").unwrap();
-        let results1 = vec![(1, 0.9), (2, 0.8)];
-        let results2 = vec![(1, 0.7), (2, 0.6)];
-        let all_results = vec![results1, results2];
-
-        let fused = store.fuse_results(&all_results, "average", 60);
-        assert_eq!(fused.len(), 2);
-        // ID 1: (0.9 + 0.7) / 2 = 0.8
-        // ID 2: (0.8 + 0.6) / 2 = 0.7
-        let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
-        assert!((id1_score.unwrap() - 0.8).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_fuse_results_maximum() {
-        let store = VectorStore::new(4, "cosine").unwrap();
-        let results1 = vec![(1, 0.9), (2, 0.5)];
-        let results2 = vec![(1, 0.7), (2, 0.8)];
-        let all_results = vec![results1, results2];
-
-        let fused = store.fuse_results(&all_results, "maximum", 60);
-        // ID 1: max(0.9, 0.7) = 0.9
-        // ID 2: max(0.5, 0.8) = 0.8
-        let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
-        let id2_score = fused.iter().find(|(id, _)| *id == 2).map(|(_, s)| *s);
-        assert!((id1_score.unwrap() - 0.9).abs() < 0.01);
-        assert!((id2_score.unwrap() - 0.8).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_fuse_results_empty() {
-        let store = VectorStore::new(4, "cosine").unwrap();
-        let all_results: Vec<Vec<(u64, f32)>> = vec![];
-        let fused = store.fuse_results(&all_results, "rrf", 60);
-        assert!(fused.is_empty());
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

@@ -4,6 +4,11 @@ mod conditions;
 mod select;
 mod values;
 
+#[allow(dead_code)]
+pub mod match_clause;
+#[cfg(test)]
+mod match_clause_tests;
+
 use pest::Parser as PestParser;
 use pest_derive::Parser;
 
