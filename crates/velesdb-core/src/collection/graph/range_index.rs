@@ -3,13 +3,14 @@
 //! Provides O(log n) range queries (>, <, >=, <=, BETWEEN) instead of O(n) scans.
 
 use roaring::RoaringBitmap;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
 
 /// Wrapper for comparable numeric values in BTreeMap.
 ///
 /// JSON values are converted to this for ordered comparison.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderedValue {
     /// Null value (sorts first)
     Null,
@@ -22,7 +23,7 @@ pub enum OrderedValue {
 }
 
 /// Wrapper for f64 that implements Ord (NaN sorts last).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct OrderedFloat(pub f64);
 
 impl PartialOrd for OrderedFloat {
@@ -106,7 +107,7 @@ impl OrderedValue {
 /// // Range query: timestamp > 1704067200
 /// let nodes = index.range_greater_than("Event", "timestamp", &json!(1704067200));
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RangeIndex {
     /// (label, property_name) -> (ordered_value -> node_ids)
     indexes: HashMap<(String, String), BTreeMap<OrderedValue, RoaringBitmap>>,
@@ -326,5 +327,46 @@ impl RangeIndex {
     #[must_use]
     pub fn indexed_properties(&self) -> Vec<(String, String)> {
         self.indexes.keys().cloned().collect()
+    }
+
+    // =========================================================================
+    // Persistence - serialize/deserialize index to/from bytes
+    // =========================================================================
+
+    /// Serialize the index to bytes using bincode.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::serialize(self)
+    }
+
+    /// Deserialize an index from bytes.
+    ///
+    /// # Errors
+    /// Returns an error if deserialization fails (corrupted data).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
+        bincode::deserialize(bytes)
+    }
+
+    /// Save the index to a file.
+    ///
+    /// # Errors
+    /// Returns an error if serialization or file I/O fails.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let bytes = self
+            .to_bytes()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        std::fs::write(path, bytes)
+    }
+
+    /// Load an index from a file.
+    ///
+    /// # Errors
+    /// Returns an error if file I/O or deserialization fails.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Self::from_bytes(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 }
