@@ -13,29 +13,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::manual_let_else)]
 
-//! `VelesDB` WASM - Vector search in the browser
-//!
-//! This crate provides WebAssembly bindings for `VelesDB`'s core vector operations.
-//! It enables browser-based vector search without any server dependency.
-//!
-//! # Features
-//!
-//! - **In-memory vector store**: Fast vector storage and retrieval
-//! - **SIMD-optimized**: Uses WASM SIMD128 for distance calculations
-//! - **Multiple metrics**: Cosine, Euclidean, Dot Product
-//! - **Half-precision**: f16/bf16 support for 50% memory reduction
-//!
-//! # Usage (JavaScript)
-//!
-//! ```javascript
-//! import init, { VectorStore } from 'velesdb-wasm';
-//!
-//! await init();
-//!
-//! const store = new VectorStore(768, "cosine");
-//! store.insert(1, new Float32Array([0.1, 0.2, ...]));
-//! const results = store.search(new Float32Array([0.1, ...]), 10);
-//! ```
+//! VelesDB WASM - Browser-based vector search with SIMD optimization.
 
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -90,34 +68,15 @@ pub enum StorageMode {
     Binary,
 }
 
-/// A vector store for in-memory vector search.
-///
-/// # Performance
-///
-/// Uses contiguous memory layout for optimal cache locality and fast
-/// serialization. Vector data is stored in a single buffer rather than
-/// individual Vec allocations.
-///
-/// # Storage Modes
-///
-/// - `Full`: f32 precision, best recall
-/// - `SQ8`: 4x memory reduction, ~1% recall loss
-/// - `Binary`: 32x memory reduction, ~5-10% recall loss
+/// In-memory vector store with contiguous layout for optimal performance.
 #[wasm_bindgen]
 pub struct VectorStore {
-    /// Vector IDs in insertion order
     ids: Vec<u64>,
-    /// Contiguous buffer for Full mode (f32)
     data: Vec<f32>,
-    /// Contiguous buffer for SQ8 mode (u8)
     data_sq8: Vec<u8>,
-    /// Contiguous buffer for Binary mode (packed bits)
     data_binary: Vec<u8>,
-    /// Min values for SQ8 dequantization (per vector)
     sq8_mins: Vec<f32>,
-    /// Scale values for SQ8 dequantization (per vector)
     sq8_scales: Vec<f32>,
-    /// Payloads (JSON metadata) for each vector
     payloads: Vec<Option<serde_json::Value>>,
     dimension: usize,
     metric: DistanceMetric,
@@ -126,16 +85,7 @@ pub struct VectorStore {
 
 #[wasm_bindgen]
 impl VectorStore {
-    /// Creates a new vector store with the specified dimension and distance metric.
-    ///
-    /// # Arguments
-    ///
-    /// * `dimension` - Vector dimension (e.g., 768 for BERT, 1536 for GPT)
-    /// * `metric` - Distance metric: "cosine", "euclidean", or "dot"
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the metric is not recognized.
+    /// Creates a new vector store with specified dimension and metric.
     #[wasm_bindgen(constructor)]
     pub fn new(dimension: usize, metric: &str) -> Result<VectorStore, JsValue> {
         let metric = parse_metric(metric).map_err(JsValue::from_str)?;
