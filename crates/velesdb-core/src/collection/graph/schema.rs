@@ -243,18 +243,31 @@ impl GraphSchema {
 
         match edge_def {
             Some(def) => {
-                // Validate source node type
+                // Validate source node type matches edge definition
                 if def.from_type != from_type {
                     return Err(Error::SchemaValidation(format!(
                         "Edge '{}' expects source type '{}', got '{}'",
                         edge_type, def.from_type, from_type
                     )));
                 }
-                // Validate target node type
+                // Validate target node type matches edge definition
                 if def.to_type != to_type {
                     return Err(Error::SchemaValidation(format!(
                         "Edge '{}' expects target type '{}', got '{}'",
                         edge_type, def.to_type, to_type
+                    )));
+                }
+                // Validate that endpoint node types are declared in schema
+                if !self.has_node_type(from_type) {
+                    return Err(Error::SchemaValidation(format!(
+                        "Edge '{}' references undeclared source node type '{}'",
+                        edge_type, from_type
+                    )));
+                }
+                if !self.has_node_type(to_type) {
+                    return Err(Error::SchemaValidation(format!(
+                        "Edge '{}' references undeclared target node type '{}'",
+                        edge_type, to_type
                     )));
                 }
                 Ok(())
