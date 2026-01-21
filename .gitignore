@@ -83,8 +83,13 @@ node_modules/
 # Build artifacts from sub-crates
 **/target/
 
-# Internal docs
+# Internal docs (confidential/strategy - DO NOT COMMIT)
 docs/MESSAGING_GUIDE.md
 docs/SECURITY_AUDIT*.md
 docs/TECHNICAL_AUDIT*.md
-.epics/ROADMAP-2026-STRATEGY.md
+**/ROADMAP-*-STRATEGY.md
+**/AUDIT-*.md
+**/BACKLOG_*.md
+**/GAP_ANALYSIS*.md
+**/*CONFIDENTIAL*.md
+**/*INTERNAL*.md
