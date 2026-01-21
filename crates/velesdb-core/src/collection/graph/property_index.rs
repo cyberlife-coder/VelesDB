@@ -53,14 +53,23 @@ impl PropertyIndex {
     /// Insert a node into the index.
     ///
     /// Returns `true` if the index exists and the node was added.
+    ///
+    /// # Note
+    ///
+    /// Uses RoaringBitmap internally which only supports u32 IDs.
+    /// Node IDs > 4 billion will be truncated. This is acceptable for most
+    /// use cases but should be documented as a limitation.
     pub fn insert(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
+        // RoaringBitmap limitation: only supports u32
+        // For node_id > u32::MAX, this will wrap. Document as known limitation.
+        #[allow(clippy::cast_possible_truncation)]
         let key = (label.to_string(), property.to_string());
         if let Some(value_map) = self.indexes.get_mut(&key) {
             let value_key = value.to_string();
             value_map
                 .entry(value_key)
                 .or_default()
-                .insert(node_id as u32);
+                .insert(node_id as u32); // See function doc: RoaringBitmap u32 limitation
             true
         } else {
             false
@@ -70,12 +79,17 @@ impl PropertyIndex {
     /// Remove a node from the index.
     ///
     /// Returns `true` if the node was removed.
+    ///
+    /// # Note
+    ///
+    /// See `insert` for RoaringBitmap u32 limitation.
     pub fn remove(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
+        #[allow(clippy::cast_possible_truncation)]
         let key = (label.to_string(), property.to_string());
         if let Some(value_map) = self.indexes.get_mut(&key) {
             let value_key = value.to_string();
             if let Some(bitmap) = value_map.get_mut(&value_key) {
-                let removed = bitmap.remove(node_id as u32);
+                let removed = bitmap.remove(node_id as u32); // RoaringBitmap u32 limitation
                 if bitmap.is_empty() {
                     value_map.remove(&value_key);
                 }

@@ -5,6 +5,63 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🚀 EPIC-019: Scalability 10M+ Edges
+
+Performance optimizations for graph operations at 10M+ scale.
+
+#### Added
+
+- **Adaptive Sharding** (`ConcurrentEdgeStore`)
+  - `with_estimated_edges()` constructor for optimal shard count based on graph size
+  - Integer-based log2 calculation (avoids floating-point imprecision)
+  - Scales from 1 shard (small graphs) to 512 shards (10M+ edges)
+
+- **Label Indexing** (O(k) lookup)
+  - `by_label` index: get all edges with a specific label
+  - `outgoing_by_label` index: get outgoing edges by (node, label)
+  - `get_edges_by_label()` API for cross-shard label queries
+
+- **String Interning** (`LabelTable`)
+  - Deduplicated label storage with `LabelId` (u32)
+  - ~60% memory reduction for repeated labels
+  - Thread-safe with `RwLock`
+
+- **Streaming BFS Iterator** (`BfsIterator`)
+  - Memory-bounded graph traversal with configurable limits
+  - `StreamingConfig`: max_depth, max_visited, relationship_types filter
+  - Implements `Iterator<Item = TraversalResult>` for lazy evaluation
+
+- **Performance Metrics** (`GraphMetrics`)
+  - `LatencyHistogram` with 10 buckets for percentile tracking
+  - Atomic counters for node/edge operations
+  - `observe()` method with overflow protection
+
+#### Changed
+
+- **HashMap Pre-allocation** (`EdgeStore::with_capacity`)
+  - Pre-sized HashMaps based on expected edges/nodes
+  - Saturating arithmetic to prevent overflow
+
+- **Optimized Edge Removal** (`ConcurrentEdgeStore::remove_edge`)
+  - `edge_ids` changed from `HashSet` to `HashMap<edge_id, source_id>`
+  - 2-shard lookup instead of 256-shard iteration
+  - Specialized `remove_edge_incoming_only` for cross-shard cleanup
+
+- **Refactored Traversal Module**
+  - Extracted `streaming.rs` from `traversal.rs` (Martin Fowler method)
+  - `BfsIterator` buffers all edges from a node before yielding
+
+#### Fixed
+
+- `BfsIterator::next()` skipping edges when node has multiple outgoing edges
+- `LabelTable::intern()` truncation for labels > 1000 chars (bounds check)
+- `Duration::as_nanos()` truncation for durations > 584 years (cap at u64::MAX)
+- `EdgeStore::with_capacity` overflow for extreme inputs (saturating_mul)
+
+---
+
 ## [1.2.0] - 2026-01-20
 
 ### 🧠 Knowledge Graph & VelesQL MATCH Release
