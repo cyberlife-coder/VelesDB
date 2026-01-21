@@ -103,6 +103,9 @@ pub struct BfsIterator<'a> {
     config: StreamingConfig,
     yielded: usize,
     visited_overflow: bool,
+    /// Buffer for pending results from current node being processed.
+    /// This ensures all edges from a node are yielded before moving to next node.
+    pending_results: VecDeque<TraversalResult>,
 }
 
 impl<'a> BfsIterator<'a> {
@@ -126,6 +129,7 @@ impl<'a> BfsIterator<'a> {
             config,
             yielded: 0,
             visited_overflow: false,
+            pending_results: VecDeque::new(),
         }
     }
 
@@ -162,10 +166,18 @@ impl Iterator for BfsIterator<'_> {
             }
         }
 
+        // First, yield any pending results from previous node processing
+        if let Some(result) = self.pending_results.pop_front() {
+            self.yielded += 1;
+            return Some(result);
+        }
+
+        // Process nodes from queue until we have results to yield
         while let Some(state) = self.queue.pop_front() {
             // Get outgoing edges
             let edges = self.edge_store.get_outgoing(state.node_id);
 
+            // Process ALL edges from this node, collecting results
             for edge in edges {
                 // Filter by relationship type
                 if !self.config.rel_types.is_empty()
@@ -214,9 +226,15 @@ impl Iterator for BfsIterator<'_> {
                     });
                 }
 
-                // Yield result
+                // Buffer the result (don't return immediately - process all edges first)
+                self.pending_results
+                    .push_back(TraversalResult::new(target, new_path, new_depth));
+            }
+
+            // After processing all edges from this node, yield first pending result if any
+            if let Some(result) = self.pending_results.pop_front() {
                 self.yielded += 1;
-                return Some(TraversalResult::new(target, new_path, new_depth));
+                return Some(result);
             }
         }
 
@@ -289,6 +307,39 @@ mod tests {
         assert!(results.iter().any(|r| r.target_id == 2 && r.depth == 1));
         assert!(results.iter().any(|r| r.target_id == 3 && r.depth == 2));
         assert!(results.iter().any(|r| r.target_id == 4 && r.depth == 3));
+        // REGRESSION: node 5 must be reachable via 2->5 (WROTE edge)
+        // This was previously skipped when iterator returned after first edge
+        assert!(
+            results.iter().any(|r| r.target_id == 5 && r.depth == 2),
+            "Node 5 should be reachable at depth 2 via edge 2->5. Found nodes: {:?}",
+            results
+                .iter()
+                .map(|r| (r.target_id, r.depth))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Regression test: ensures all edges from a node with multiple outgoing edges are processed.
+    /// Bug: BfsIterator was returning immediately after first valid edge, skipping remaining edges.
+    #[test]
+    fn test_bfs_iterator_multiple_outgoing_edges() {
+        let store = create_test_edge_store();
+        // Graph: 1 --KNOWS--> 2 --KNOWS--> 3 --KNOWS--> 4
+        //                     |
+        //                     +--WROTE--> 5
+        let config = StreamingConfig::default().with_max_depth(3);
+
+        let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+        // Node 2 has two outgoing edges: 2->3 (KNOWS) and 2->5 (WROTE)
+        // Both targets must be reached
+        let targets: Vec<u64> = results.iter().map(|r| r.target_id).collect();
+
+        assert!(targets.contains(&3), "Node 3 should be reachable via 2->3");
+        assert!(targets.contains(&5), "Node 5 should be reachable via 2->5");
+
+        // Verify we get exactly 4 results: 2, 3, 5, 4
+        assert_eq!(results.len(), 4, "Should have 4 results: nodes 2, 3, 5, 4");
     }
 
     #[test]
