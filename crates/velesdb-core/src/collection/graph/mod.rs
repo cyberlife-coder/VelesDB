@@ -38,6 +38,7 @@
 mod edge;
 mod edge_concurrent;
 mod label_table;
+mod metrics;
 mod node;
 mod property_index;
 mod range_index;
@@ -60,6 +61,7 @@ mod schema_tests;
 pub use edge::{EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_table::{LabelId, LabelTable};
+pub use metrics::{GraphMetrics, LatencyHistogram};
 pub use node::{Element, GraphNode};
 pub use property_index::PropertyIndex;
 pub use range_index::{OrderedValue, RangeIndex};
