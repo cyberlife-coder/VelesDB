@@ -35,12 +35,29 @@ impl LatencyHistogram {
     }
 
     /// Records a duration observation.
+    ///
+    /// # Note
+    ///
+    /// For extremely large durations (> 584 years), nanoseconds are capped at u64::MAX
+    /// to prevent truncation. This is acceptable since such durations indicate a bug.
     pub fn observe(&self, duration: Duration) {
-        let ns = duration.as_nanos() as u64;
+        // Cap at u64::MAX for durations > 584 years (u128 -> u64 truncation protection)
+        let ns_u128 = duration.as_nanos();
+        let ns = if ns_u128 > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            ns_u128 as u64
+        };
         self.sum_ns.fetch_add(ns, Ordering::Relaxed);
         self.count.fetch_add(1, Ordering::Relaxed);
 
-        let ms = duration.as_millis() as u64;
+        // Same protection for milliseconds (though less likely to overflow)
+        let ms_u128 = duration.as_millis();
+        let ms = if ms_u128 > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            ms_u128 as u64
+        };
         let bucket_idx = BUCKET_BOUNDS_MS
             .iter()
             .position(|&bound| ms < bound)

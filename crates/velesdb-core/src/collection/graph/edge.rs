@@ -150,13 +150,17 @@ impl EdgeStore {
     #[must_use]
     pub fn with_capacity(expected_edges: usize, expected_nodes: usize) -> Self {
         // Estimate ~10 unique labels typical for knowledge graphs
-        let expected_labels = 10;
+        let expected_labels = 10usize;
+        // Use saturating_mul to prevent overflow for extreme inputs
+        let outgoing_by_label_cap = expected_nodes
+            .saturating_mul(expected_labels)
+            .saturating_div(10);
         Self {
             edges: HashMap::with_capacity(expected_edges),
             outgoing: HashMap::with_capacity(expected_nodes),
             incoming: HashMap::with_capacity(expected_nodes),
             by_label: HashMap::with_capacity(expected_labels),
-            outgoing_by_label: HashMap::with_capacity(expected_nodes * expected_labels / 10),
+            outgoing_by_label: HashMap::with_capacity(outgoing_by_label_cap),
         }
     }
 
