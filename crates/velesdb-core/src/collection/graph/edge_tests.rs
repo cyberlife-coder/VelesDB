@@ -462,3 +462,140 @@ fn test_edgestore_default_constructor_still_works() {
     assert_eq!(store.edge_count(), 1);
     assert_eq!(store.get_outgoing(100).len(), 1);
 }
+
+// =============================================================================
+// EPIC-019 US-003: Index label → edge_ids pour Requêtes Rapides
+// =============================================================================
+
+/// AC-1: Adding edge updates the label index
+#[test]
+fn test_add_edge_updates_label_index() {
+    let mut store = EdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 200, 300, "KNOWS").expect("valid"))
+        .expect("add");
+
+    // get_edges_by_label should return all edges with that label
+    let knows_edges = store.get_edges_by_label("KNOWS");
+    assert_eq!(knows_edges.len(), 2);
+
+    let follows_edges = store.get_edges_by_label("FOLLOWS");
+    assert_eq!(follows_edges.len(), 1);
+    assert_eq!(follows_edges[0].id(), 2);
+}
+
+/// AC-2: Removing edge updates the label index
+#[test]
+fn test_remove_edge_updates_label_index() {
+    let mut store = EdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "KNOWS").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.get_edges_by_label("KNOWS").len(), 2);
+
+    store.remove_edge(1);
+
+    let knows_edges = store.get_edges_by_label("KNOWS");
+    assert_eq!(knows_edges.len(), 1);
+    assert_eq!(knows_edges[0].id(), 2);
+}
+
+/// AC-3: get_edges_by_label returns correct edges
+#[test]
+fn test_get_edges_by_label_returns_correct_edges() {
+    let mut store = EdgeStore::new();
+
+    for i in 0..100 {
+        let label = if i % 3 == 0 {
+            "A"
+        } else if i % 3 == 1 {
+            "B"
+        } else {
+            "C"
+        };
+        store
+            .add_edge(GraphEdge::new(i, i, i + 1000, label).expect("valid"))
+            .expect("add");
+    }
+
+    let a_edges = store.get_edges_by_label("A");
+    let b_edges = store.get_edges_by_label("B");
+    let c_edges = store.get_edges_by_label("C");
+
+    assert_eq!(a_edges.len(), 34); // 0, 3, 6, ..., 99 = 34 values
+    assert_eq!(b_edges.len(), 33);
+    assert_eq!(c_edges.len(), 33);
+
+    // Verify all A edges have label "A"
+    assert!(a_edges.iter().all(|e| e.label() == "A"));
+}
+
+/// AC-4: get_outgoing_by_label uses composite index - O(k) not O(degree)
+#[test]
+fn test_get_outgoing_by_label_uses_index() {
+    let mut store = EdgeStore::new();
+
+    // Create node 1 with high degree (1000 edges) but only 10 with label "TARGET"
+    for i in 0..1000 {
+        let label = if i < 10 { "TARGET" } else { "OTHER" };
+        store
+            .add_edge(GraphEdge::new(i, 1, i + 1000, label).expect("valid"))
+            .expect("add");
+    }
+
+    // get_outgoing_by_label should return exactly 10 edges
+    let target_edges = store.get_outgoing_by_label(1, "TARGET");
+    assert_eq!(target_edges.len(), 10);
+    assert!(target_edges.iter().all(|e| e.label() == "TARGET"));
+    assert!(target_edges.iter().all(|e| e.source() == 1));
+}
+
+/// AC-5: Empty label query returns empty vec
+#[test]
+fn test_get_edges_by_label_nonexistent_returns_empty() {
+    let mut store = EdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    let edges = store.get_edges_by_label("NONEXISTENT");
+    assert!(edges.is_empty());
+}
+
+/// AC-6: remove_node_edges cleans up label indices
+#[test]
+fn test_remove_node_edges_cleans_label_index() {
+    let mut store = EdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(3, 400, 100, "KNOWS").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.get_edges_by_label("KNOWS").len(), 2);
+    assert_eq!(store.get_edges_by_label("FOLLOWS").len(), 1);
+
+    store.remove_node_edges(100);
+
+    // All edges connected to node 100 should be removed from label index
+    assert!(store.get_edges_by_label("KNOWS").is_empty());
+    assert!(store.get_edges_by_label("FOLLOWS").is_empty());
+}
