@@ -94,8 +94,13 @@ impl ConcurrentEdgeStore {
             1
         } else {
             let target_shards = estimated_edges / MIN_EDGES_PER_SHARD;
-            // Round to power of 2 for better hash distribution
-            let power_of_2 = (target_shards as f64).log2().ceil() as u32;
+            // Use integer math for log2 ceiling: avoid floating-point imprecision
+            // Formula: ceil(log2(n)) = bits - leading_zeros(n-1) for n > 1
+            let power_of_2 = if target_shards <= 1 {
+                0
+            } else {
+                usize::BITS - (target_shards - 1).leading_zeros()
+            };
             (1usize << power_of_2).clamp(1, MAX_SHARDS)
         };
         Self::with_shards(optimal_shards)
@@ -216,8 +221,11 @@ impl ConcurrentEdgeStore {
 
         // Remove from only the relevant shards (2 max instead of 256)
         if source_shard_idx == target_shard_idx {
+            // Same shard: full removal from single shard
             self.shards[source_shard_idx].write().remove_edge(edge_id);
         } else {
+            // Cross-shard: use specialized methods for efficiency
+            // Source shard has outgoing + label indices, target shard has incoming only
             // Acquire locks in ascending order to prevent deadlock
             let (first_idx, second_idx) = if source_shard_idx < target_shard_idx {
                 (source_shard_idx, target_shard_idx)
@@ -226,8 +234,15 @@ impl ConcurrentEdgeStore {
             };
             let mut first = self.shards[first_idx].write();
             let mut second = self.shards[second_idx].write();
-            first.remove_edge(edge_id);
-            second.remove_edge(edge_id);
+
+            // Use specialized removal: source gets full removal, target gets incoming-only
+            if source_shard_idx < target_shard_idx {
+                first.remove_edge(edge_id); // Source: full cleanup
+                second.remove_edge_incoming_only(edge_id); // Target: incoming index only
+            } else {
+                first.remove_edge_incoming_only(edge_id); // Target: incoming index only
+                second.remove_edge(edge_id); // Source: full cleanup
+            }
         }
 
         // Remove from global registry
