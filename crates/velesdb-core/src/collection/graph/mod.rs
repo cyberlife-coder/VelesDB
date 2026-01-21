@@ -64,4 +64,6 @@ pub use node::{Element, GraphNode};
 pub use property_index::PropertyIndex;
 pub use range_index::{OrderedValue, RangeIndex};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
-pub use traversal::{TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH};
+pub use traversal::{
+    bfs_stream, BfsIterator, StreamingConfig, TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH,
+};
