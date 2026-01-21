@@ -9,7 +9,10 @@ use parking_lot::RwLock;
 use std::collections::{HashSet, VecDeque};
 
 /// Default number of shards for concurrent edge store.
-const DEFAULT_NUM_SHARDS: usize = 64;
+/// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
+/// With 256 shards and 10M edges, each shard contains ~39K edges (vs ~156K with 64 shards),
+/// reducing lock contention in multi-threaded scenarios.
+const DEFAULT_NUM_SHARDS: usize = 256;
 
 /// A thread-safe edge store using sharded locking.
 ///
