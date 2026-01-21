@@ -183,11 +183,15 @@ impl Iterator for BfsIterator<'_> {
                 }
 
                 // Check visited (with overflow handling)
+                // When visited_overflow is true, cycle detection is disabled but traversal
+                // is still bounded by max_depth, preventing infinite loops in cyclic graphs.
                 if !self.visited_overflow && self.visited.contains(&target) {
                     continue;
                 }
 
                 // Track visited if not overflowed
+                // Note: When overflow occurs, we trade cycle detection for memory efficiency.
+                // The max_depth limit ensures termination even without visited tracking.
                 if !self.visited_overflow {
                     if self.visited.len() >= self.config.max_visited_size {
                         self.visited_overflow = true;

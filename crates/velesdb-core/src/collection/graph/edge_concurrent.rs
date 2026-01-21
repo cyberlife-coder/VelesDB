@@ -182,11 +182,20 @@ impl ConcurrentEdgeStore {
     }
 
     /// Gets outgoing edges filtered by label (thread-safe).
+    ///
+    /// # Performance Note
+    ///
+    /// This method delegates to the underlying `EdgeStore::get_outgoing_by_label`
+    /// which uses the composite index `(source_id, label) -> edge_ids` for O(1) lookup
+    /// when available (EPIC-019 US-003). Falls back to filtering if index not populated.
     #[must_use]
     pub fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
-        self.get_outgoing(node_id)
+        let shard_idx = self.shard_index(node_id);
+        let shard = self.shards[shard_idx].read();
+        shard
+            .get_outgoing_by_label(node_id, label)
             .into_iter()
-            .filter(|e| e.label() == label)
+            .cloned()
             .collect()
     }
 

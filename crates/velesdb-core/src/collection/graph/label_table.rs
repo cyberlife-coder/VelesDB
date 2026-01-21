@@ -86,11 +86,22 @@ impl LabelTable {
     /// # Returns
     ///
     /// The `LabelId` for this string (existing or newly created)
+    /// # Panics
+    ///
+    /// Panics if the number of interned strings exceeds `u32::MAX` (4 billion labels).
+    /// This is extremely unlikely in practice.
     pub fn intern(&mut self, s: &str) -> LabelId {
         if let Some(&id) = self.ids.get(s) {
             return id;
         }
-        let id = LabelId(self.strings.len() as u32);
+        let len = self.strings.len();
+        assert!(
+            len < u32::MAX as usize,
+            "LabelTable overflow: cannot intern more than {} labels",
+            u32::MAX
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let id = LabelId(len as u32);
         self.strings.push(s.to_string());
         self.ids.insert(s.to_string(), id);
         id

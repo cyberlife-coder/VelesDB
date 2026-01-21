@@ -157,9 +157,23 @@ impl GraphMetrics {
     }
 
     /// Records a node deletion.
+    ///
+    /// Uses saturating subtraction to prevent underflow if called
+    /// more times than `record_node_insert`.
     pub fn record_node_delete(&self) {
         self.node_deletes_total.fetch_add(1, Ordering::Relaxed);
-        self.nodes_total.fetch_sub(1, Ordering::Relaxed);
+        // Saturating sub: load, compute, compare-exchange loop
+        loop {
+            let current = self.nodes_total.load(Ordering::Relaxed);
+            let new_val = current.saturating_sub(1);
+            if self
+                .nodes_total
+                .compare_exchange_weak(current, new_val, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+        }
     }
 
     /// Returns total node count.
@@ -186,9 +200,22 @@ impl GraphMetrics {
     }
 
     /// Records an edge deletion with latency.
+    ///
+    /// Uses saturating subtraction to prevent underflow.
     pub fn record_edge_delete(&self, latency: Duration) {
         self.edge_deletes_total.fetch_add(1, Ordering::Relaxed);
-        self.edges_total.fetch_sub(1, Ordering::Relaxed);
+        // Saturating sub to prevent underflow
+        loop {
+            let current = self.edges_total.load(Ordering::Relaxed);
+            let new_val = current.saturating_sub(1);
+            if self
+                .edges_total
+                .compare_exchange_weak(current, new_val, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+        }
         self.edge_delete_latency.observe(latency);
     }
 
