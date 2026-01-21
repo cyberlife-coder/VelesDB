@@ -43,6 +43,7 @@ mod node;
 mod property_index;
 mod range_index;
 mod schema;
+mod streaming;
 mod traversal;
 
 #[cfg(test)]
@@ -66,6 +67,5 @@ pub use node::{Element, GraphNode};
 pub use property_index::PropertyIndex;
 pub use range_index::{OrderedValue, RangeIndex};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
-pub use traversal::{
-    bfs_stream, BfsIterator, StreamingConfig, TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH,
-};
+pub use streaming::{bfs_stream, BfsIterator, StreamingConfig};
+pub use traversal::{TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH};
