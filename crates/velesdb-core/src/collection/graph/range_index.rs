@@ -137,6 +137,12 @@ impl RangeIndex {
     /// Insert a node into the range index.
     ///
     /// Returns `true` if the index exists and the value is comparable.
+    ///
+    /// # Note
+    ///
+    /// Uses RoaringBitmap internally which only supports u32 IDs.
+    /// Node IDs > 4 billion will be truncated.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn insert(
         &mut self,
         label: &str,
@@ -147,7 +153,7 @@ impl RangeIndex {
         let key = (label.to_string(), property.to_string());
         if let Some(btree) = self.indexes.get_mut(&key) {
             if let Some(ordered) = OrderedValue::from_json(value) {
-                btree.entry(ordered).or_default().insert(node_id as u32);
+                btree.entry(ordered).or_default().insert(node_id as u32); // RoaringBitmap u32
                 return true;
             }
         }
@@ -155,6 +161,11 @@ impl RangeIndex {
     }
 
     /// Remove a node from the range index.
+    ///
+    /// # Note
+    ///
+    /// See `insert` for RoaringBitmap u32 limitation.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn remove(
         &mut self,
         label: &str,
@@ -166,7 +177,7 @@ impl RangeIndex {
         if let Some(btree) = self.indexes.get_mut(&key) {
             if let Some(ordered) = OrderedValue::from_json(value) {
                 if let Some(bitmap) = btree.get_mut(&ordered) {
-                    let removed = bitmap.remove(node_id as u32);
+                    let removed = bitmap.remove(node_id as u32); // RoaringBitmap u32
                     if bitmap.is_empty() {
                         btree.remove(&ordered);
                     }
