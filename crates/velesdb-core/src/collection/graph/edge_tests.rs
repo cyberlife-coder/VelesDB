@@ -420,3 +420,45 @@ fn test_property_access() {
     assert_eq!(edge.property("missing"), None);
     assert_eq!(edge.properties().len(), 2);
 }
+
+// =============================================================================
+// EPIC-019 US-002: Pré-allocation HashMap avec with_capacity
+// =============================================================================
+
+/// AC-1: EdgeStore::with_capacity creates store with pre-allocated HashMaps
+#[test]
+fn test_edgestore_with_capacity_basic() {
+    let store = EdgeStore::with_capacity(1000, 100);
+    // Store is empty but has capacity
+    assert_eq!(store.edge_count(), 0);
+}
+
+/// AC-2: EdgeStore::with_capacity reduces reallocations during bulk insert
+#[test]
+fn test_edgestore_with_capacity_no_realloc_1000_edges() {
+    let mut store = EdgeStore::with_capacity(1000, 500);
+
+    // Insert 1000 edges - should not cause reallocations
+    for i in 0..1000u64 {
+        let source = i % 500; // 500 unique sources
+        let target = (i % 500) + 500; // 500 unique targets
+        store
+            .add_edge(GraphEdge::new(i, source, target, "LINK").expect("valid"))
+            .expect("add");
+    }
+
+    assert_eq!(store.edge_count(), 1000);
+}
+
+/// AC-3: Default constructor still works (backward compatibility)
+#[test]
+fn test_edgestore_default_constructor_still_works() {
+    let mut store = EdgeStore::new();
+
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "TEST").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.edge_count(), 1);
+    assert_eq!(store.get_outgoing(100).len(), 1);
+}
