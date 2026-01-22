@@ -1,20 +1,17 @@
 //! Prometheus metrics handler for VelesDB REST API.
 //!
 //! Provides a `/metrics` endpoint for Prometheus scraping.
-//! [EPIC-016/US-034]
+//! Requires the `prometheus` feature flag to be enabled.
+//! [EPIC-016/US-034, US-035]
 //!
 //! Metrics exposed:
-//! - `velesdb_collections_total`: Total number of collections
-//! - `velesdb_graph_edge_count`: Total edges per collection graph
 //! - `velesdb_info`: Server version info
+//! - `velesdb_up`: Server availability gauge
 
-#![allow(dead_code)] // Handlers will be used when integrated into router
+#![allow(dead_code)] // Functions exposed via feature flag, used when prometheus feature enabled
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse};
+use axum::{http::StatusCode, response::IntoResponse};
 use std::fmt::Write;
-
-use super::graph::GraphService;
-
 /// Prometheus text format metrics response.
 ///
 /// Returns metrics in Prometheus exposition format.
@@ -27,7 +24,7 @@ use super::graph::GraphService;
     ),
     tag = "metrics"
 )]
-pub async fn prometheus_metrics(State(graph_service): State<GraphService>) -> impl IntoResponse {
+pub async fn prometheus_metrics() -> impl IntoResponse {
     let mut output = String::new();
 
     // Write header comments
@@ -49,30 +46,6 @@ pub async fn prometheus_metrics(State(graph_service): State<GraphService>) -> im
     writeln!(output, "# HELP velesdb_up VelesDB server is up and running").unwrap();
     writeln!(output, "# TYPE velesdb_up gauge").unwrap();
     writeln!(output, "velesdb_up 1").unwrap();
-    writeln!(output).unwrap();
-
-    // Graph edge counts from GraphService (per collection)
-    writeln!(
-        output,
-        "# HELP velesdb_graph_edge_count Number of edges per collection graph"
-    )
-    .unwrap();
-    writeln!(output, "# TYPE velesdb_graph_edge_count gauge").unwrap();
-
-    // Note: GraphService stores track edge counts per collection
-    // This is populated as collections are used with graph operations
-    let stores = graph_service.list_stores();
-    for (name, store) in stores {
-        if let Ok(guard) = store.read() {
-            writeln!(
-                output,
-                "velesdb_graph_edge_count{{collection=\"{}\"}} {}",
-                name,
-                guard.edge_count()
-            )
-            .unwrap();
-        }
-    }
 
     (
         StatusCode::OK,

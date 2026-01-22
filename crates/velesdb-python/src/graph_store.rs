@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::graph::{dict_to_edge, edge_to_dict};
-use velesdb_core::collection::graph::{EdgeStore, GraphEdge};
+use velesdb_core::collection::graph::EdgeStore;
 
 /// Configuration for streaming BFS traversal.
 ///
