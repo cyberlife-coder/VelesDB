@@ -230,23 +230,25 @@ impl GraphStore {
         let iterator = bfs_stream(&store, start_node, core_config);
 
         // Collect results, converting from core TraversalResult to Python TraversalResult
+        // FLAG-2 FIX: Handle empty path correctly instead of using unwrap_or(0)
+        // which could collide with a real edge_id=0
         let results: Vec<TraversalResult> = iterator
             .take(config.max_visited)
-            .map(|r| {
-                // Get edge info from the path
-                let edge_id = r.path.last().copied().unwrap_or(0);
+            .filter_map(|r| {
+                // Get edge info from the path - skip results with empty path
+                let edge_id = r.path.last().copied()?;
                 let edge = store.get_edge(edge_id);
                 let (source, label) = edge
                     .map(|e| (e.source(), e.label().to_string()))
                     .unwrap_or((start_node, String::new()));
 
-                TraversalResult {
+                Some(TraversalResult {
                     depth: r.depth as usize,
                     source,
                     target: r.target_id,
                     label,
                     edge_id,
-                }
+                })
             })
             .collect();
 
