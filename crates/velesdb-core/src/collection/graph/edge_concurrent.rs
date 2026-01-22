@@ -49,6 +49,10 @@ pub struct ConcurrentEdgeStore {
     num_shards: usize,
     /// Global registry of edge IDs with source node for optimized removal.
     /// Maps edge_id -> source_node_id for O(1) shard lookup during removal.
+    ///
+    /// **FLAG-5: Changed from HashSet to HashMap intentionally.**
+    /// This trades ~8 bytes extra memory per edge for O(1) removal lookup
+    /// instead of O(shards) iteration. Worth it for graphs with frequent deletions.
     edge_ids: RwLock<std::collections::HashMap<u64, u64>>,
 }
 
@@ -88,6 +92,10 @@ impl ConcurrentEdgeStore {
     ///
     /// This avoids memory overhead of 256 shards for small graphs while
     /// maintaining good concurrency for large graphs.
+    ///
+    /// **FLAG-6: Uses integer bit manipulation for ceiling log2.**
+    /// Formula: `ceil(log2(n)) = bits - leading_zeros(n-1)` for n > 1.
+    /// This avoids floating-point imprecision from `(n as f64).log2().ceil()`.
     #[must_use]
     pub fn with_estimated_edges(estimated_edges: usize) -> Self {
         let optimal_shards = if estimated_edges < MIN_EDGES_PER_SHARD {

@@ -9,11 +9,13 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::graph::{dict_to_edge, edge_to_dict};
 use velesdb_core::collection::graph::EdgeStore;
+// FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
+use velesdb_core::collection::graph::{bfs_stream, StreamingConfig as CoreStreamingConfig};
 
 /// Configuration for streaming BFS traversal.
 ///
@@ -212,56 +214,41 @@ impl GraphStore {
             .read()
             .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
 
-        let mut results = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
-        let mut queue: VecDeque<(u64, usize)> = VecDeque::new();
+        // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
+        // Convert Python config to core config
+        let rel_types: Vec<String> = config.relationship_types.unwrap_or_default();
 
-        visited.insert(start_node);
-        queue.push_back((start_node, 0));
+        #[allow(clippy::cast_possible_truncation)]
+        let core_config = CoreStreamingConfig {
+            max_depth: config.max_depth as u32,
+            max_visited_size: config.max_visited,
+            rel_types,
+            limit: Some(config.max_visited),
+        };
 
-        let label_filter: Option<HashSet<&str>> = config
-            .relationship_types
-            .as_ref()
-            .map(|types| types.iter().map(String::as_str).collect());
+        // Use core's bfs_stream iterator
+        let iterator = bfs_stream(&store, start_node, core_config);
 
-        while let Some((current_node, depth)) = queue.pop_front() {
-            if depth >= config.max_depth {
-                continue;
-            }
+        // Collect results, converting from core TraversalResult to Python TraversalResult
+        let results: Vec<TraversalResult> = iterator
+            .take(config.max_visited)
+            .map(|r| {
+                // Get edge info from the path
+                let edge_id = r.path.last().copied().unwrap_or(0);
+                let edge = store.get_edge(edge_id);
+                let (source, label) = edge
+                    .map(|e| (e.source(), e.label().to_string()))
+                    .unwrap_or((start_node, String::new()));
 
-            let outgoing = store.get_outgoing(current_node);
-
-            for edge in outgoing {
-                // Apply label filter if specified
-                if let Some(ref filter) = label_filter {
-                    if !filter.contains(edge.label()) {
-                        continue;
-                    }
+                TraversalResult {
+                    depth: r.depth as usize,
+                    source,
+                    target: r.target_id,
+                    label,
+                    edge_id,
                 }
-
-                let target = edge.target();
-
-                // Add traversal result
-                results.push(TraversalResult {
-                    depth: depth + 1,
-                    source: current_node,
-                    target,
-                    label: edge.label().to_string(),
-                    edge_id: edge.id(),
-                });
-
-                // Check memory bound
-                if results.len() >= config.max_visited {
-                    return Ok(results);
-                }
-
-                // Queue unvisited nodes
-                if !visited.contains(&target) {
-                    visited.insert(target);
-                    queue.push_back((target, depth + 1));
-                }
-            }
-        }
+            })
+            .collect();
 
         Ok(results)
     }

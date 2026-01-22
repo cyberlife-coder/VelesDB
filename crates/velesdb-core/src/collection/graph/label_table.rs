@@ -90,6 +90,10 @@ impl LabelTable {
     ///
     /// Panics if the number of interned strings exceeds `u32::MAX` (4 billion labels).
     /// This is extremely unlikely in practice.
+    ///
+    /// **FLAG-8: This panics instead of returning Result for ergonomic reasons.**
+    /// In production, 4 billion unique labels is unrealistic. If this becomes a concern,
+    /// consider implementing label eviction or sharding across multiple tables.
     pub fn intern(&mut self, s: &str) -> LabelId {
         if let Some(&id) = self.ids.get(s) {
             return id;
