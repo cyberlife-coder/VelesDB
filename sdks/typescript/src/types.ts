@@ -118,6 +118,52 @@ export interface SearchResult {
 }
 
 // ============================================================================
+// Knowledge Graph Types (EPIC-016 US-041)
+// ============================================================================
+
+/** Graph edge representing a relationship between nodes */
+export interface GraphEdge {
+  /** Unique edge ID */
+  id: number;
+  /** Source node ID */
+  source: number;
+  /** Target node ID */
+  target: number;
+  /** Edge label (relationship type, e.g., "KNOWS", "FOLLOWS") */
+  label: string;
+  /** Edge properties */
+  properties?: Record<string, unknown>;
+}
+
+/** Request to add an edge to the graph */
+export interface AddEdgeRequest {
+  /** Unique edge ID */
+  id: number;
+  /** Source node ID */
+  source: number;
+  /** Target node ID */
+  target: number;
+  /** Edge label (relationship type) */
+  label: string;
+  /** Edge properties (optional) */
+  properties?: Record<string, unknown>;
+}
+
+/** Response containing edges */
+export interface EdgesResponse {
+  /** List of edges */
+  edges: GraphEdge[];
+  /** Total count of edges returned */
+  count: number;
+}
+
+/** Options for querying edges */
+export interface GetEdgesOptions {
+  /** Filter by edge label */
+  label?: string;
+}
+
+// ============================================================================
 // Index Management Types (EPIC-009)
 // ============================================================================
 
@@ -247,6 +293,14 @@ export interface IVelesDBBackend {
   
   /** Drop an index */
   dropIndex(collection: string, label: string, property: string): Promise<boolean>;
+
+  // Knowledge Graph (EPIC-016 US-041)
+  
+  /** Add an edge to the collection's knowledge graph */
+  addEdge(collection: string, edge: AddEdgeRequest): Promise<void>;
+  
+  /** Get edges from the collection's knowledge graph */
+  getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]>;
 }
 
 /** Error types */

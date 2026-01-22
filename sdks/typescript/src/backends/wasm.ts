@@ -14,6 +14,9 @@ import type {
   MultiQuerySearchOptions,
   CreateIndexOptions,
   IndexInfo,
+  AddEdgeRequest,
+  GetEdgesOptions,
+  GraphEdge,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -447,5 +450,26 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     // Return false - nothing to drop since no indexes exist in WASM backend
     return false;
+  }
+
+  // ========================================================================
+  // Knowledge Graph (EPIC-016 US-041) - Stubs for WASM backend
+  // Note: Graph operations require server-side EdgeStore
+  // ========================================================================
+
+  async addEdge(_collection: string, _edge: AddEdgeRequest): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Knowledge Graph operations are not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async getEdges(_collection: string, _options?: GetEdgesOptions): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Knowledge Graph operations are not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
   }
 }

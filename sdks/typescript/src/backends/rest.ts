@@ -14,6 +14,9 @@ import type {
   MultiQuerySearchOptions,
   CreateIndexOptions,
   IndexInfo,
+  AddEdgeRequest,
+  GetEdgesOptions,
+  GraphEdge,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -603,5 +606,52 @@ export class RestBackend implements IVelesDBBackend {
     // BUG-2 FIX: Success without error = index was dropped
     // API may return 200/204 without body, so default to true on success
     return response.data?.dropped ?? true;
+  }
+
+  // ========================================================================
+  // Knowledge Graph (EPIC-016 US-041)
+  // ========================================================================
+
+  async addEdge(collection: string, edge: AddEdgeRequest): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/graph/edges`,
+      {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        properties: edge.properties ?? {},
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+
+    const queryParams = options?.label ? `?label=${encodeURIComponent(options.label)}` : '';
+
+    const response = await this.request<{ edges: GraphEdge[]; count: number }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/graph/edges${queryParams}`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.edges ?? [];
   }
 }

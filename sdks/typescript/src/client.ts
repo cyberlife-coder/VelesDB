@@ -13,6 +13,9 @@ import type {
   MultiQuerySearchOptions,
   CreateIndexOptions,
   IndexInfo,
+  AddEdgeRequest,
+  GetEdgesOptions,
+  GraphEdge,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -519,5 +522,58 @@ export class VelesDB {
   async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
     this.ensureInitialized();
     return this.backend.dropIndex(collection, label, property);
+  }
+
+  // ========================================================================
+  // Knowledge Graph (EPIC-016 US-041)
+  // ========================================================================
+
+  /**
+   * Add an edge to the collection's knowledge graph
+   * 
+   * @param collection - Collection name
+   * @param edge - Edge to add (id, source, target, label, properties)
+   * 
+   * @example
+   * ```typescript
+   * await db.addEdge('social', {
+   *   id: 1,
+   *   source: 100,
+   *   target: 200,
+   *   label: 'FOLLOWS',
+   *   properties: { since: '2024-01-01' }
+   * });
+   * ```
+   */
+  async addEdge(collection: string, edge: AddEdgeRequest): Promise<void> {
+    this.ensureInitialized();
+    
+    if (!edge.label || typeof edge.label !== 'string') {
+      throw new ValidationError('Edge label is required and must be a string');
+    }
+    
+    if (typeof edge.source !== 'number' || typeof edge.target !== 'number') {
+      throw new ValidationError('Edge source and target must be numbers');
+    }
+
+    await this.backend.addEdge(collection, edge);
+  }
+
+  /**
+   * Get edges from the collection's knowledge graph
+   * 
+   * @param collection - Collection name
+   * @param options - Query options (filter by label)
+   * @returns Array of edges
+   * 
+   * @example
+   * ```typescript
+   * // Get all edges with label "FOLLOWS"
+   * const edges = await db.getEdges('social', { label: 'FOLLOWS' });
+   * ```
+   */
+  async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+    return this.backend.getEdges(collection, options);
   }
 }

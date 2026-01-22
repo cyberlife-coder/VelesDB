@@ -146,6 +146,46 @@ describe('WasmBackend', () => {
     });
   });
 
+  describe('multiQuerySearch', () => {
+    beforeEach(async () => {
+      await backend.init();
+      await backend.createCollection('vectors', { dimension: 4, metric: 'cosine' });
+    });
+
+    it('should throw NOT_SUPPORTED error', async () => {
+      await expect(backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]]))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should include helpful error message', async () => {
+      await expect(backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]]))
+        .rejects.toThrow('Multi-query fusion is not supported in WASM backend');
+    });
+  });
+
+  describe('Knowledge Graph (EPIC-016 US-041)', () => {
+    beforeEach(async () => {
+      await backend.init();
+      await backend.createCollection('social', { dimension: 4, metric: 'cosine' });
+    });
+
+    it('should throw NOT_SUPPORTED error for addEdge', async () => {
+      const edge = { id: 1, source: 100, target: 200, label: 'FOLLOWS' };
+      await expect(backend.addEdge('social', edge))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should throw NOT_SUPPORTED error for getEdges', async () => {
+      await expect(backend.getEdges('social'))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should include helpful error message for graph operations', async () => {
+      await expect(backend.getEdges('social'))
+        .rejects.toThrow('Knowledge Graph operations are not supported in WASM backend');
+    });
+  });
+
   describe('error handling', () => {
     it('should throw when not initialized', async () => {
       await expect(backend.createCollection('test', { dimension: 128 }))
