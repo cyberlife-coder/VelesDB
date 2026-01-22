@@ -17,6 +17,9 @@ use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use std::cmp::Ordering;
 
+/// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
+const MAX_LIMIT: usize = 100_000;
+
 /// Compare two JSON values for sorting.
 fn compare_json_values(a: Option<&serde_json::Value>, b: Option<&serde_json::Value>) -> Ordering {
     match (a, b) {
@@ -59,7 +62,10 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
-        let limit = usize::try_from(stmt.limit.unwrap_or(10)).unwrap_or(usize::MAX);
+        // Cap limit to prevent overflow in over-fetch calculations
+        let limit = usize::try_from(stmt.limit.unwrap_or(10))
+            .unwrap_or(MAX_LIMIT)
+            .min(MAX_LIMIT);
 
         // 1. Extract vector search (NEAR) or similarity() if present
         let mut vector_search = None;
@@ -85,11 +91,14 @@ impl Collection {
             // Also apply any additional metadata filters from the WHERE clause
             (None, Some((field, vec, op, threshold)), filter_cond) => {
                 // Get more candidates for filtering (both similarity and metadata)
-                let candidates = self.search(vec, limit * 4)?;
+                // Use saturating_mul to prevent overflow on large limits
+                let candidates_k = limit.saturating_mul(4);
+                let candidates = self.search(vec, candidates_k)?;
 
                 // First filter by similarity threshold
+                let filter_k = limit.saturating_mul(2);
                 let similarity_filtered =
-                    self.filter_by_similarity(candidates, field, vec, *op, *threshold, limit * 2);
+                    self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
 
                 // Then apply any additional metadata filters (e.g., AND category = 'tech')
                 if let Some(cond) = filter_cond {
