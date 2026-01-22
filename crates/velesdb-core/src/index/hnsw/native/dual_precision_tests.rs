@@ -184,3 +184,67 @@ fn test_insert_after_quantizer_training() {
 
     assert!(!results.is_empty());
 }
+
+// =========================================================================
+// TDD Tests: Quantized reranking optimization (US-003)
+// =========================================================================
+
+#[test]
+fn test_quantized_reranking_uses_asymmetric_distance() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 64, 16, 100, 500);
+
+    // Insert 200 vectors
+    for i in 0..200 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i * 64 + j) as f32 * 0.01).sin())
+            .collect();
+        hnsw.insert(v);
+    }
+
+    // Force train quantizer
+    hnsw.force_train_quantizer();
+    assert!(hnsw.is_quantizer_trained());
+
+    // Search should use quantized reranking
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.01).sin()).collect();
+    let results = hnsw.search(&query, 10, 50);
+
+    assert!(!results.is_empty());
+    // Results should be properly sorted by exact distance
+    for i in 1..results.len() {
+        assert!(
+            results[i].1 >= results[i - 1].1,
+            "Results must be sorted by exact distance after reranking"
+        );
+    }
+}
+
+#[test]
+fn test_quantized_reranking_maintains_recall() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000);
+
+    // Insert 500 vectors
+    let vectors: Vec<Vec<f32>> = (0..500)
+        .map(|i| {
+            (0..128)
+                .map(|j| ((i * 128 + j) as f32 * 0.001).cos())
+                .collect()
+        })
+        .collect();
+
+    for v in &vectors {
+        hnsw.insert(v.clone());
+    }
+
+    hnsw.force_train_quantizer();
+
+    // Search with known query (should find exact match at index 0)
+    let query = vectors[0].clone();
+    let results = hnsw.search(&query, 10, 100);
+
+    // Node 0 should be in top results (recall check)
+    let found_exact = results.iter().any(|(id, _)| *id == 0);
+    assert!(found_exact, "Quantized reranking should maintain high recall");
+}
