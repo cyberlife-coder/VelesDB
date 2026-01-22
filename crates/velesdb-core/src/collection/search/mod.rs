@@ -8,6 +8,8 @@
 //! - VelesQL query execution
 
 mod batch;
+#[cfg(test)]
+mod distance_semantics_tests;
 mod query;
 #[cfg(test)]
 mod similarity_exec_tests;
