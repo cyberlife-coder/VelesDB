@@ -20,22 +20,48 @@ use std::cmp::Ordering;
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 const MAX_LIMIT: usize = 100_000;
 
-/// Compare two JSON values for sorting.
+/// Compare two JSON values for sorting with total ordering.
+///
+/// Ordering priority (ascending): Null < Bool < Number < String < Array < Object
+/// This ensures deterministic sorting even with mixed types.
 fn compare_json_values(a: Option<&serde_json::Value>, b: Option<&serde_json::Value>) -> Ordering {
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
         (Some(_), None) => Ordering::Greater,
         (Some(va), Some(vb)) => {
-            // Compare by type priority: numbers, strings, booleans, null
+            // BUG FIX: Define total ordering for mixed JSON types
+            // Type priority: Null(0) < Bool(1) < Number(2) < String(3) < Array(4) < Object(5)
+            let type_rank = |v: &serde_json::Value| -> u8 {
+                match v {
+                    serde_json::Value::Null => 0,
+                    serde_json::Value::Bool(_) => 1,
+                    serde_json::Value::Number(_) => 2,
+                    serde_json::Value::String(_) => 3,
+                    serde_json::Value::Array(_) => 4,
+                    serde_json::Value::Object(_) => 5,
+                }
+            };
+
+            let rank_a = type_rank(va);
+            let rank_b = type_rank(vb);
+
+            // First compare by type rank
+            if rank_a != rank_b {
+                return rank_a.cmp(&rank_b);
+            }
+
+            // Same type: compare values
             match (va, vb) {
                 (serde_json::Value::Number(na), serde_json::Value::Number(nb)) => {
                     let fa = na.as_f64().unwrap_or(0.0);
                     let fb = nb.as_f64().unwrap_or(0.0);
-                    fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+                    fa.total_cmp(&fb) // Use total_cmp for NaN safety
                 }
                 (serde_json::Value::String(sa), serde_json::Value::String(sb)) => sa.cmp(sb),
                 (serde_json::Value::Bool(ba), serde_json::Value::Bool(bb)) => ba.cmp(bb),
+                // Null vs Null, Array vs Array, Object vs Object: treat as equal
+                // (comparing array/object contents would be complex and rarely needed)
                 _ => Ordering::Equal,
             }
         }
@@ -433,7 +459,13 @@ impl Collection {
                 }
                 self.extract_similarity_condition(right, params)
             }
-            Condition::Group(inner) => self.extract_similarity_condition(inner, params),
+            // BUG FIX: Handle Condition::Not - similarity inside NOT should be extracted
+            // Note: NOT similarity() semantically means "exclude similar items" which
+            // cannot be efficiently executed with current architecture. We extract it
+            // so validation can detect and reject this unsupported pattern.
+            Condition::Group(inner) | Condition::Not(inner) => {
+                self.extract_similarity_condition(inner, params)
+            }
             _ => Ok(None),
         }
     }
