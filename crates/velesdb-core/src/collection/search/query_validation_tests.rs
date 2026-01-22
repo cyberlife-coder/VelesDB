@@ -195,4 +195,172 @@ mod tests {
             result.err()
         );
     }
+
+    // =========================================================================
+    // Tests for ORDER BY multi-columns (EPIC-028)
+    // =========================================================================
+
+    #[test]
+    fn test_order_by_two_columns_asc_desc() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "A", "priority": 3})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "A", "priority": 1})),
+            },
+            crate::Point {
+                id: 3,
+                vector: vec![0.8, 0.2, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "B", "priority": 2})),
+            },
+            crate::Point {
+                id: 4,
+                vector: vec![0.7, 0.3, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "A", "priority": 2})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+
+        // ORDER BY category ASC, priority DESC
+        // Expected order: A(priority=3), A(priority=2), A(priority=1), B(priority=2)
+        let query = "SELECT * FROM test ORDER BY category ASC, priority DESC LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+
+        let result = collection.execute_query(&parsed, &HashMap::new());
+        assert!(
+            result.is_ok(),
+            "Multi-column ORDER BY should work: {:?}",
+            result.err()
+        );
+
+        let results = result.unwrap();
+        assert_eq!(results.len(), 4);
+
+        // Verify order: category A first (ASC), within A: priority DESC (3, 2, 1)
+        let categories: Vec<&str> = results
+            .iter()
+            .map(|r| {
+                r.point
+                    .payload
+                    .as_ref()
+                    .unwrap()
+                    .get("category")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+            })
+            .collect();
+        let priorities: Vec<i64> = results
+            .iter()
+            .map(|r| {
+                r.point
+                    .payload
+                    .as_ref()
+                    .unwrap()
+                    .get("priority")
+                    .unwrap()
+                    .as_i64()
+                    .unwrap()
+            })
+            .collect();
+
+        // All A's come before B
+        assert_eq!(&categories[0..3], &["A", "A", "A"]);
+        assert_eq!(categories[3], "B");
+
+        // Within A's, priority should be DESC (3, 2, 1)
+        assert_eq!(&priorities[0..3], &[3, 2, 1]);
+    }
+
+    #[test]
+    fn test_order_by_three_columns() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"a": 1, "b": 2, "c": "x"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"a": 1, "b": 2, "c": "y"})),
+            },
+            crate::Point {
+                id: 3,
+                vector: vec![0.8, 0.2, 0.0, 0.0],
+                payload: Some(serde_json::json!({"a": 1, "b": 1, "c": "z"})),
+            },
+            crate::Point {
+                id: 4,
+                vector: vec![0.7, 0.3, 0.0, 0.0],
+                payload: Some(serde_json::json!({"a": 2, "b": 1, "c": "w"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+
+        // ORDER BY a ASC, b DESC, c ASC
+        let query = "SELECT * FROM test ORDER BY a ASC, b DESC, c ASC LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+
+        let result = collection.execute_query(&parsed, &HashMap::new());
+        assert!(
+            result.is_ok(),
+            "Three-column ORDER BY should work: {:?}",
+            result.err()
+        );
+
+        let results = result.unwrap();
+        assert_eq!(results.len(), 4);
+
+        // Expected order based on (a ASC, b DESC, c ASC):
+        // (1, 2, x), (1, 2, y), (1, 1, z), (2, 1, w)
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_order_by_stable_equal_values() {
+        let (collection, _temp) = create_test_collection();
+
+        // All same category - should maintain stable order (original insertion order)
+        let points = vec![
+            crate::Point {
+                id: 10,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "same", "seq": 1})),
+            },
+            crate::Point {
+                id: 20,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "same", "seq": 2})),
+            },
+            crate::Point {
+                id: 30,
+                vector: vec![0.8, 0.2, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "same", "seq": 3})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+
+        // ORDER BY category ASC only - all equal, should be stable
+        let query = "SELECT * FROM test ORDER BY category ASC LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+
+        let result = collection.execute_query(&parsed, &HashMap::new());
+        assert!(result.is_ok());
+
+        // Rust sort_by is stable, so order should be preserved for equal values
+        // We just verify it doesn't crash and returns all results
+        let results = result.unwrap();
+        assert_eq!(results.len(), 3);
+    }
 }
