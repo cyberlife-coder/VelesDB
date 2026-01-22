@@ -334,11 +334,83 @@ fn hamming_popcnt(a: &[f32], b: &[f32]) -> u32 {
     crate::simd_explicit::hamming_distance_simd(a, b) as u32
 }
 
+/// AVX-512 VPOPCNTDQ implementation for Hamming distance.
+///
+/// Uses AVX-512 VPOPCNTDQ instruction when available for ~2x speedup
+/// over regular POPCNT on large vectors.
+///
+/// # Safety
+///
+/// This function uses runtime CPU feature detection via `is_x86_feature_detected!`.
+/// Falls back to regular POPCNT if VPOPCNTDQ is not available.
 #[cfg(target_arch = "x86_64")]
 fn hamming_avx512_popcnt(a: &[f32], b: &[f32]) -> u32 {
-    // For now, delegate to regular popcnt
-    // TODO: Implement true AVX-512 VPOPCNTDQ when available
-    hamming_popcnt(a, b)
+    // Runtime detection of AVX-512 VPOPCNTDQ
+    // This instruction is available on Ice Lake+ and Zen 4+ CPUs
+    #[cfg(target_feature = "avx512vpopcntdq")]
+    {
+        // SAFETY: Feature is compile-time enabled
+        unsafe { hamming_avx512_vpopcntdq_impl(a, b) }
+    }
+
+    #[cfg(not(target_feature = "avx512vpopcntdq"))]
+    {
+        // Runtime detection fallback
+        if is_x86_feature_detected!("avx512vpopcntdq") && is_x86_feature_detected!("avx512f") {
+            // SAFETY: Runtime check passed
+            unsafe { hamming_avx512_vpopcntdq_impl(a, b) }
+        } else {
+            // Fallback to regular POPCNT
+            hamming_popcnt(a, b)
+        }
+    }
+}
+
+/// AVX-512 VPOPCNTDQ inner implementation.
+///
+/// # Safety
+///
+/// Caller must ensure AVX-512F and AVX-512VPOPCNTDQ are available.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512vpopcntdq")]
+unsafe fn hamming_avx512_vpopcntdq_impl(a: &[f32], b: &[f32]) -> u32 {
+    use std::arch::x86_64::*;
+
+    debug_assert_eq!(a.len(), b.len());
+    let len = a.len();
+
+    // Reinterpret f32 slices as u32 for bit operations
+    let a_bits = std::slice::from_raw_parts(a.as_ptr() as *const u32, len);
+    let b_bits = std::slice::from_raw_parts(b.as_ptr() as *const u32, len);
+
+    let mut total: u64 = 0;
+    let chunks = len / 16; // Process 16 u32 (512 bits) at a time
+
+    for i in 0..chunks {
+        let base = i * 16;
+
+        // Load 512 bits (16 x u32) from each vector
+        let va = _mm512_loadu_si512(a_bits.as_ptr().add(base) as *const __m512i);
+        let vb = _mm512_loadu_si512(b_bits.as_ptr().add(base) as *const __m512i);
+
+        // XOR to get differing bits
+        let xor_result = _mm512_xor_si512(va, vb);
+
+        // VPOPCNTDQ: count set bits in each 64-bit element (8 elements)
+        let popcnt = _mm512_popcnt_epi64(xor_result);
+
+        // Horizontal sum of 8 x u64 popcount values
+        total += _mm512_reduce_add_epi64(popcnt) as u64;
+    }
+
+    // Handle remainder with scalar POPCNT
+    let remainder_start = chunks * 16;
+    for i in remainder_start..len {
+        let xor = a_bits[i] ^ b_bits[i];
+        total += xor.count_ones() as u64;
+    }
+
+    total as u32
 }
 
 // =============================================================================
