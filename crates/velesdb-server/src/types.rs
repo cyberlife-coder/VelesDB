@@ -124,6 +124,7 @@ fn default_top_k() -> usize {
 }
 
 /// Convert mode string to ef_search value.
+#[must_use]
 pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
     match mode.to_lowercase().as_str() {
         "fast" => Some(64),
