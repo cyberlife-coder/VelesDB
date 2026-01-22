@@ -12,6 +12,8 @@ mod batch;
 mod distance_semantics_tests;
 mod query;
 #[cfg(test)]
+mod query_validation_tests;
+#[cfg(test)]
 mod similarity_exec_tests;
 mod text;
 mod vector;
