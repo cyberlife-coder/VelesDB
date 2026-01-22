@@ -35,6 +35,11 @@ impl GraphService {
     }
 
     /// Gets or creates an edge store for a collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned (indicates a prior panic while holding the lock).
+    #[must_use]
     pub fn get_or_create_store(&self, collection_name: &str) -> Arc<RwLock<EdgeStore>> {
         let mut stores = self.stores.write().expect("lock poisoned");
         stores
@@ -44,6 +49,10 @@ impl GraphService {
     }
 
     /// Adds an edge to a collection's graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lock is poisoned or if adding the edge fails.
     pub fn add_edge(&self, collection_name: &str, edge: GraphEdge) -> Result<(), String> {
         let store = self.get_or_create_store(collection_name);
         let mut guard = store.write().map_err(|e| format!("Lock error: {e}"))?;
@@ -51,6 +60,11 @@ impl GraphService {
     }
 
     /// Gets edges by label from a collection's graph.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned.
+    #[must_use]
     pub fn get_edges_by_label(&self, collection_name: &str, label: &str) -> Vec<GraphEdge> {
         let store = self.get_or_create_store(collection_name);
         let guard = store.read().expect("lock poisoned");
@@ -62,6 +76,11 @@ impl GraphService {
     }
 
     /// Lists all stores (for metrics).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned.
+    #[must_use]
     pub fn list_stores(&self) -> Vec<(String, Arc<std::sync::RwLock<EdgeStore>>)> {
         let stores = self.stores.read().expect("lock poisoned");
         stores.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
@@ -119,6 +138,10 @@ pub struct AddEdgeRequest {
 /// Get edges from a collection's graph, optionally filtered by label.
 ///
 /// Returns all edges or edges matching the specified label.
+///
+/// # Errors
+///
+/// Returns an error tuple with status code and error response if the operation fails.
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/edges",
@@ -160,6 +183,12 @@ pub async fn get_edges(
 }
 
 /// Add an edge to a collection's graph.
+///
+/// # Errors
+///
+/// Returns an error tuple with status code and error response if:
+/// - The request properties are invalid
+/// - The edge creation fails
 #[utoipa::path(
     post,
     path = "/collections/{name}/graph/edges",
