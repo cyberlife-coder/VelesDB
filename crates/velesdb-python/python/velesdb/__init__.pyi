@@ -443,3 +443,157 @@ class Database:
     def flush(self) -> None:
         """Flush all pending changes to disk."""
         ...
+
+
+# =============================================================================
+# Graph Classes (EPIC-016/US-030, US-032)
+# =============================================================================
+
+class StreamingConfig:
+    """Configuration for streaming BFS traversal.
+    
+    Args:
+        max_depth: Maximum traversal depth (default: 3)
+        max_visited: Maximum nodes to visit for memory bound (default: 10000)
+        relationship_types: Optional filter by relationship types
+    
+    Example:
+        >>> config = StreamingConfig(max_depth=3, max_visited=10000)
+        >>> config.relationship_types = ["KNOWS", "FOLLOWS"]
+    """
+    
+    max_depth: int
+    max_visited: int
+    relationship_types: Optional[List[str]]
+    
+    def __init__(
+        self,
+        max_depth: int = 3,
+        max_visited: int = 10000,
+        relationship_types: Optional[List[str]] = None,
+    ) -> None: ...
+
+
+class TraversalResult:
+    """Result of a BFS traversal step.
+    
+    Attributes:
+        depth: Current depth in the traversal
+        source: Source node ID
+        target: Target node ID
+        label: Edge label
+        edge_id: Edge ID
+    """
+    
+    depth: int
+    source: int
+    target: int
+    label: str
+    edge_id: int
+
+
+class GraphStore:
+    """In-memory graph store for knowledge graph operations.
+    
+    Example:
+        >>> store = GraphStore()
+        >>> store.add_edge({"id": 1, "source": 100, "target": 200, "label": "KNOWS"})
+        >>> edges = store.get_edges_by_label("KNOWS")
+        >>> for result in store.traverse_bfs_streaming(100, StreamingConfig()):
+        ...     print(f"Depth {result.depth}: {result.source} -> {result.target}")
+    """
+    
+    def __init__(self) -> None:
+        """Creates a new empty graph store."""
+        ...
+    
+    def add_edge(self, edge: Dict[str, Any]) -> None:
+        """Adds an edge to the graph.
+        
+        Args:
+            edge: Dict with keys: id (int), source (int), target (int), 
+                  label (str), properties (dict, optional)
+        """
+        ...
+    
+    def get_edges_by_label(self, label: str) -> List[Dict[str, Any]]:
+        """Gets all edges with the specified label.
+        
+        Args:
+            label: The relationship type to filter by (e.g., "KNOWS", "FOLLOWS")
+        
+        Returns:
+            List of edge dicts with keys: id, source, target, label, properties
+        
+        Note:
+            Uses internal label index for O(1) lookup per label.
+        """
+        ...
+    
+    def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]:
+        """Gets outgoing edges from a node.
+        
+        Args:
+            node_id: The source node ID
+        
+        Returns:
+            List of edge dicts
+        """
+        ...
+    
+    def get_incoming(self, node_id: int) -> List[Dict[str, Any]]:
+        """Gets incoming edges to a node.
+        
+        Args:
+            node_id: The target node ID
+        
+        Returns:
+            List of edge dicts
+        """
+        ...
+    
+    def get_outgoing_by_label(self, node_id: int, label: str) -> List[Dict[str, Any]]:
+        """Gets outgoing edges from a node filtered by label.
+        
+        Args:
+            node_id: The source node ID
+            label: The relationship type to filter by
+        
+        Returns:
+            List of edge dicts matching the label
+        """
+        ...
+    
+    def traverse_bfs_streaming(
+        self, start_node: int, config: StreamingConfig
+    ) -> List[TraversalResult]:
+        """Performs streaming BFS traversal from a start node.
+        
+        Args:
+            start_node: The node ID to start traversal from
+            config: StreamingConfig with max_depth, max_visited, relationship_types
+        
+        Returns:
+            List of TraversalResult objects
+        
+        Note:
+            Results are bounded by config.max_visited to prevent memory exhaustion.
+        
+        Example:
+            >>> config = StreamingConfig(max_depth=2, max_visited=100)
+            >>> for result in store.traverse_bfs_streaming(100, config):
+            ...     print(f"{result.source} -> {result.target}")
+        """
+        ...
+    
+    def remove_edge(self, edge_id: int) -> None:
+        """Removes an edge by ID.
+        
+        Args:
+            edge_id: The edge ID to remove
+        """
+        ...
+    
+    def edge_count(self) -> int:
+        """Returns the number of edges in the store."""
+        ...
