@@ -78,6 +78,41 @@ export class RestBackend implements IVelesDBBackend {
     }
   }
 
+  private mapStatusToErrorCode(status: number): string {
+    switch (status) {
+      case 400:
+        return 'BAD_REQUEST';
+      case 401:
+        return 'UNAUTHORIZED';
+      case 403:
+        return 'FORBIDDEN';
+      case 404:
+        return 'NOT_FOUND';
+      case 409:
+        return 'CONFLICT';
+      case 429:
+        return 'RATE_LIMITED';
+      case 500:
+        return 'INTERNAL_ERROR';
+      case 503:
+        return 'SERVICE_UNAVAILABLE';
+      default:
+        return 'UNKNOWN_ERROR';
+    }
+  }
+
+  private extractErrorPayload(data: unknown): { code?: string; message?: string } {
+    if (!data || typeof data !== 'object') {
+      return {};
+    }
+
+    const payload = data as Record<string, unknown>;
+    const code = typeof payload.code === 'string' ? payload.code : undefined;
+    const messageField = payload.message ?? payload.error;
+    const message = typeof messageField === 'string' ? messageField : undefined;
+    return { code, message };
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -105,13 +140,14 @@ export class RestBackend implements IVelesDBBackend {
 
       clearTimeout(timeoutId);
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
+        const errorPayload = this.extractErrorPayload(data);
         return {
           error: {
-            code: data.code ?? 'UNKNOWN_ERROR',
-            message: data.message ?? `HTTP ${response.status}`,
+            code: errorPayload.code ?? this.mapStatusToErrorCode(response.status),
+            message: errorPayload.message ?? `HTTP ${response.status}`,
           },
         };
       }
