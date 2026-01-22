@@ -235,7 +235,12 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
         return CommandResult::Continue;
     }
     let name = parts[1];
-    let page: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // BUG FIX: Ensure page >= 1 to prevent arithmetic underflow on (page - 1)
+    let page: usize = parts
+        .get(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
     let page_size = 10;
 
     match db.get_collection(name) {

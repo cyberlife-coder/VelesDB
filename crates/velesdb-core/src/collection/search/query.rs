@@ -485,7 +485,10 @@ impl Collection {
             Condition::And(left, right) | Condition::Or(left, right) => {
                 Self::count_similarity_conditions(left) + Self::count_similarity_conditions(right)
             }
-            Condition::Group(inner) => Self::count_similarity_conditions(inner),
+            // BUG FIX: Handle Condition::Not to find similarity inside NOT clauses
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::count_similarity_conditions(inner)
+            }
             _ => 0,
         }
     }
@@ -515,7 +518,10 @@ impl Collection {
                 Self::has_similarity_in_problematic_or(left)
                     || Self::has_similarity_in_problematic_or(right)
             }
-            Condition::Group(inner) => Self::has_similarity_in_problematic_or(inner),
+            // BUG FIX: Handle Condition::Not to check nested ORs inside NOT clauses
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::has_similarity_in_problematic_or(inner)
+            }
             _ => false,
         }
     }
@@ -532,7 +538,10 @@ impl Collection {
                 Self::has_non_similarity_conditions(left)
                     || Self::has_non_similarity_conditions(right)
             }
-            Condition::Group(inner) => Self::has_non_similarity_conditions(inner),
+            // BUG FIX: Handle Condition::Not - NOT wraps another condition
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::has_non_similarity_conditions(inner)
+            }
             // All other conditions (Compare, In, Between, Match, etc.) are non-similarity
             _ => true,
         }
