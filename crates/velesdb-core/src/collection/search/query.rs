@@ -555,6 +555,12 @@ impl Collection {
 
     /// Check if similarity() appears under a NOT condition.
     /// This pattern is not supported because negating similarity cannot be efficiently executed.
+    ///
+    /// # Note
+    ///
+    /// This function is prepared for when VelesQL parser supports `NOT condition` syntax.
+    /// Currently, the parser only supports `IS NOT NULL` and `!=` operators.
+    /// When parser is extended (see EPIC-005), this validation will activate.
     fn has_similarity_under_not(condition: &crate::velesql::Condition) -> bool {
         use crate::velesql::Condition;
 
