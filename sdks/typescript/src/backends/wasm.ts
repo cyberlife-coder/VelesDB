@@ -421,24 +421,31 @@ export class WasmBackend implements IVelesDBBackend {
 
   async createIndex(_collection: string, _options: CreateIndexOptions): Promise<void> {
     this.ensureInitialized();
-    // WASM backend doesn't support indexes yet
-    // This is a no-op stub for API compatibility
-    console.warn('WasmBackend: createIndex is not yet supported');
+    // FIX: Throw error instead of silent warning for fail-fast behavior
+    // This prevents confusion when switching between REST and WASM backends
+    throw new Error(
+      'WasmBackend: createIndex is not yet supported. ' +
+      'Index operations require the REST backend with velesdb-server.'
+    );
   }
 
   async listIndexes(_collection: string): Promise<IndexInfo[]> {
     this.ensureInitialized();
-    // Return empty list - no index support in WASM backend yet
+    // Return empty list - WASM backend has no indexes
+    // This is acceptable since an empty list is semantically correct (no indexes exist)
     return [];
   }
 
   async hasIndex(_collection: string, _label: string, _property: string): Promise<boolean> {
     this.ensureInitialized();
+    // Return false - WASM backend has no indexes
+    // This is semantically correct (no index exists)
     return false;
   }
 
   async dropIndex(_collection: string, _label: string, _property: string): Promise<boolean> {
     this.ensureInitialized();
+    // Return false - nothing to drop since no indexes exist in WASM backend
     return false;
   }
 }

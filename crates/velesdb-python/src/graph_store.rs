@@ -194,10 +194,13 @@ impl GraphStore {
     ///     config: StreamingConfig with max_depth, max_visited, relationship_types
     ///
     /// Returns:
-    ///     List of TraversalResult objects (use as iterator for memory efficiency)
+    ///     List of TraversalResult objects representing edge traversals.
     ///
     /// Note:
-    ///     Results are bounded by config.max_visited to prevent memory exhaustion.
+    ///     - The start node itself is NOT included in results (it has no incoming edge).
+    ///     - Results represent edges traversed, not nodes visited.
+    ///     - Results are bounded by config.max_visited to prevent memory exhaustion.
+    ///     - To get the start node, query it separately before traversal.
     ///
     /// Example:
     ///     >>> config = StreamingConfig(max_depth=2, max_visited=100)

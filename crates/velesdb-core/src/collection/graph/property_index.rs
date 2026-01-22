@@ -62,7 +62,15 @@ impl PropertyIndex {
         // BUG FIX: Reject node_id > u32::MAX instead of silently truncating
         // This prevents data corruption from ID collisions
         let Some(safe_id) = u32::try_from(node_id).ok() else {
-            return false; // Node ID exceeds RoaringBitmap u32 limit
+            tracing::warn!(
+                node_id = node_id,
+                label = label,
+                property = property,
+                "PropertyIndex: node_id exceeds u32::MAX ({}), cannot index. \
+                 RoaringBitmap only supports u32 IDs.",
+                u32::MAX
+            );
+            return false;
         };
 
         let key = (label.to_string(), property.to_string());

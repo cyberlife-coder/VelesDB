@@ -18,7 +18,7 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
     delete_point, get_collection, get_edges, get_point, health_check, list_collections,
-    list_indexes, query, search, upsert_points, ApiDoc, AppState, GraphService,
+    list_indexes, multi_query_search, query, search, upsert_points, ApiDoc, AppState, GraphService,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -90,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
+        .route("/collections/{name}/search/multi", post(multi_query_search))
         .route(
             "/collections/{name}/indexes",
             get(list_indexes).post(create_index),

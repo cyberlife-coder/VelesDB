@@ -34,8 +34,10 @@ else
     echo -e "${GREEN}✅ Formatting OK${NC}"
 
     # 2. Run clippy
+    # Note: -W pedantic (warning) instead of -D (deny) to not block commits on style opinions
+    # -D warnings still catches correctness issues
     echo -e "\n${YELLOW}📎 Running clippy...${NC}"
-    if ! cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic; then
+    if ! cargo clippy --all-targets --all-features -- -D warnings -W clippy::pedantic; then
         echo -e "${RED}❌ Clippy found issues. Fix them before committing.${NC}"
         exit 1
     fi
