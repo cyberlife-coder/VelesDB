@@ -1,7 +1,7 @@
-//! Benchmark for similarity() function and fusion strategies (EPIC-008).
+//! Benchmark for `similarity()` function and fusion strategies (EPIC-008).
 //!
 //! Measures:
-//! - VelesQL parser performance for similarity() queries
+//! - `VelesQL` parser performance for `similarity()` queries
 //! - Fusion strategy computation (RRF, Weighted, Average, Maximum)
 //! - End-to-end similarity filtering
 
@@ -73,8 +73,10 @@ fn bench_parse_similarity_complex(c: &mut Criterion) {
 fn generate_fusion_data(size: usize) -> Vec<Vec<(u64, f32)>> {
     let mut rng_seed = 42u64;
     let next_rand = |seed: &mut u64| -> f32 {
-        *seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        ((*seed >> 16) & 0x7fff) as f32 / 32768.0
+        *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        #[allow(clippy::cast_precision_loss)]
+        let score = ((*seed >> 16) & 0x7fff) as f32 / 32768.0;
+        score
     };
 
     (0..3)
