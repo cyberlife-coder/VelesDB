@@ -350,6 +350,44 @@ Execute multiple searches in a single request.
 }
 ```
 
+### POST /collections/:name/search/multi
+
+Execute multiple vector queries and merge results using Reciprocal Rank Fusion (RRF).
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| queries | array | Yes | Array of query vectors |
+| top_k | integer | No | Results per query (default: 10) |
+
+**Example:**
+```json
+{
+  "queries": [
+    [0.1, 0.2, 0.3, ...],
+    [0.4, 0.5, 0.6, ...]
+  ],
+  "top_k": 10
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": 1, "score": 0.0312, "payload": {...}},
+    {"id": 2, "score": 0.0298, "payload": {...}}
+  ],
+  "timing_ms": 3.45
+}
+```
+
+**Use Cases:**
+- Multi-modal search (text + image embeddings)
+- Query expansion with multiple query variants
+- Ensemble retrieval with different embedding models
+
 ---
 
 ## VelesQL Query
