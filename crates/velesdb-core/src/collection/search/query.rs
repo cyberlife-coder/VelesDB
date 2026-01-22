@@ -239,16 +239,14 @@ impl Collection {
 
     /// Apply ORDER BY clause to results.
     ///
-    /// # Limitations
+    /// Supports multiple ORDER BY columns with stable sorting.
+    /// Each column is compared in order; ties are broken by subsequent columns.
     ///
-    /// **FLAG-4: Currently only the FIRST ORDER BY expression is executed.**
-    /// Multiple ORDER BY columns are parsed but subsequent ones are ignored.
-    /// This is a known limitation that will be addressed in a future version.
+    /// # Examples
     ///
-    /// Example of affected query:
     /// ```sql
-    /// SELECT * FROM collection ORDER BY similarity() DESC, created_at ASC
-    /// -- Only similarity() DESC is applied; created_at is ignored
+    /// SELECT * FROM collection ORDER BY category ASC, priority DESC
+    /// SELECT * FROM collection ORDER BY similarity() DESC, timestamp ASC
     /// ```
     fn apply_order_by(
         &self,
@@ -257,72 +255,98 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<()> {
         use crate::velesql::OrderByExpr;
+        use std::cmp::Ordering;
 
         if order_by.is_empty() {
             return Ok(());
         }
 
-        // For now, we only support single ORDER BY expression
-        // Multiple ORDER BY items would require more complex sorting
-        let first = &order_by[0];
-
-        match &first.expr {
-            OrderByExpr::Similarity(sim) => {
-                // Sort by similarity score
-                // User expectation: DESC = most similar first, ASC = least similar first
-                let user_wants_most_similar_first = first.descending;
-
-                // If the similarity vector is different from the search vector,
-                // we need to recompute scores
+        // Pre-compute similarity scores if any ORDER BY uses similarity()
+        // This avoids recomputing during the sort comparison
+        let mut similarity_scores: Option<Vec<f32>> = None;
+        for ob in order_by {
+            if let OrderByExpr::Similarity(sim) = &ob.expr {
                 let order_vec = self.resolve_vector(&sim.vector, params)?;
+                let scores: Vec<f32> = results
+                    .iter()
+                    .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
+                    .collect();
+                similarity_scores = Some(scores);
+                break; // Only need to compute once
+            }
+        }
 
-                // Recompute metric scores for accurate ordering
-                for result in results.iter_mut() {
-                    let score = self.compute_metric_score(&result.point.vector, &order_vec);
-                    result.score = score;
-                }
+        // Get metric for similarity comparison direction
+        let metric = self.config.read().metric;
+        let higher_is_better = metric.higher_is_better();
 
-                // Adjust sort order based on metric semantics:
-                // - Similarity metrics (Cosine, DotProduct, Jaccard): higher = more similar
-                // - Distance metrics (Euclidean, Hamming): lower = more similar
-                let metric = self.config.read().metric;
-                let sort_descending = if metric.higher_is_better() {
-                    // Higher score = more similar, so DESC for most similar
-                    user_wants_most_similar_first
-                } else {
-                    // Lower score = more similar, so ASC for most similar
-                    !user_wants_most_similar_first
+        // Create index-based sorting to maintain score association
+        let mut indices: Vec<usize> = (0..results.len()).collect();
+
+        indices.sort_by(|&i, &j| {
+            // Compare by each ORDER BY column in sequence
+            for ob in order_by {
+                let cmp = match &ob.expr {
+                    OrderByExpr::Similarity(_) => {
+                        // Use pre-computed similarity scores
+                        if let Some(ref scores) = similarity_scores {
+                            let score_i = scores[i];
+                            let score_j = scores[j];
+                            score_i.total_cmp(&score_j)
+                        } else {
+                            Ordering::Equal
+                        }
+                    }
+                    OrderByExpr::Field(field_name) => {
+                        let val_i = results[i]
+                            .point
+                            .payload
+                            .as_ref()
+                            .and_then(|p| p.get(field_name));
+                        let val_j = results[j]
+                            .point
+                            .payload
+                            .as_ref()
+                            .and_then(|p| p.get(field_name));
+                        compare_json_values(val_i, val_j)
+                    }
                 };
 
-                if sort_descending {
-                    results.sort_by(|a, b| {
-                        b.score
-                            .partial_cmp(&a.score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                } else {
-                    results.sort_by(|a, b| {
-                        a.score
-                            .partial_cmp(&b.score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-            }
-            OrderByExpr::Field(field_name) => {
-                // Sort by payload field value
-                let descending = first.descending;
-
-                results.sort_by(|a, b| {
-                    let val_a = a.point.payload.as_ref().and_then(|p| p.get(field_name));
-                    let val_b = b.point.payload.as_ref().and_then(|p| p.get(field_name));
-
-                    let cmp = compare_json_values(val_a, val_b);
-                    if descending {
+                // Apply direction (ASC/DESC)
+                let directed_cmp = if ob.descending {
+                    // For similarity with distance metrics, invert the comparison
+                    if matches!(&ob.expr, OrderByExpr::Similarity(_)) && !higher_is_better {
+                        cmp // Distance: lower is better, DESC means keep natural order
+                    } else {
                         cmp.reverse()
+                    }
+                } else {
+                    // ASC
+                    if matches!(&ob.expr, OrderByExpr::Similarity(_)) && !higher_is_better {
+                        cmp.reverse() // Distance: lower is better, ASC means reverse
                     } else {
                         cmp
                     }
-                });
+                };
+
+                // If not equal, return this comparison
+                if directed_cmp != Ordering::Equal {
+                    return directed_cmp;
+                }
+                // Otherwise, continue to next ORDER BY column
+            }
+            Ordering::Equal
+        });
+
+        // Reorder results based on sorted indices
+        let sorted_results: Vec<SearchResult> =
+            indices.iter().map(|&i| results[i].clone()).collect();
+        results.clone_from_slice(&sorted_results);
+
+        // Update scores if similarity was used
+        if let Some(scores) = similarity_scores {
+            for (i, result) in results.iter_mut().enumerate() {
+                result.score = scores[indices[i]];
             }
         }
 
