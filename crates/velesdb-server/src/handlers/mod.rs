@@ -26,7 +26,7 @@ pub use health::health_check;
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{delete_point, get_point, upsert_points};
 pub use query::query;
-pub use search::{batch_search, hybrid_search, search, text_search};
+pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
 
 // Graph handlers (EPIC-016) - will be used when routes are added
 #[allow(unused_imports)]
