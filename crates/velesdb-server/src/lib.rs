@@ -35,6 +35,13 @@ pub use handlers::{
     search, text_search, upsert_points,
 };
 
+// FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031)
+pub use handlers::graph::{add_edge, get_edges, GraphService};
+
+// FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
+#[cfg(feature = "prometheus")]
+pub use handlers::metrics::{health_metrics, prometheus_metrics};
+
 // ============================================================================
 // OpenAPI Documentation
 // ============================================================================

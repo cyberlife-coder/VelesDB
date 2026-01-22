@@ -175,6 +175,18 @@ impl Collection {
     }
 
     /// Apply ORDER BY clause to results.
+    ///
+    /// # Limitations
+    ///
+    /// **FLAG-4: Currently only the FIRST ORDER BY expression is executed.**
+    /// Multiple ORDER BY columns are parsed but subsequent ones are ignored.
+    /// This is a known limitation that will be addressed in a future version.
+    ///
+    /// Example of affected query:
+    /// ```sql
+    /// SELECT * FROM collection ORDER BY similarity() DESC, created_at ASC
+    /// -- Only similarity() DESC is applied; created_at is ignored
+    /// ```
     fn apply_order_by(
         &self,
         results: &mut [SearchResult],
@@ -410,7 +422,9 @@ impl Collection {
                 };
                 Ok(Some((sim.field.clone(), vec, sim.operator, sim.threshold)))
             }
-            Condition::And(left, right) => {
+            // Both AND and OR: recursively search for similarity conditions
+            // BUG-3 FIX: Extract similarity() from both AND and OR conditions
+            Condition::And(left, right) | Condition::Or(left, right) => {
                 if let Some(s) = self.extract_similarity_condition(left, params)? {
                     return Ok(Some(s));
                 }
@@ -447,6 +461,10 @@ impl Collection {
                 }
             }
             // For OR: both sides must exist
+            // FLAG-13: This is intentionally asymmetric with AND.
+            // AND can work with partial conditions (e.g., similarity() AND metadata)
+            // but OR semantically requires both sides to be evaluable.
+            // Without both sides, we cannot properly evaluate the OR condition.
             Condition::Or(left, right) => {
                 let left_filter = Self::extract_metadata_filter(left);
                 let right_filter = Self::extract_metadata_filter(right);

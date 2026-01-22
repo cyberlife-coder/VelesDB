@@ -595,11 +595,13 @@ export class RestBackend implements IVelesDBBackend {
 
     if (response.error) {
       if (response.error.code === 'NOT_FOUND') {
-        return false;
+        return false;  // Index didn't exist
       }
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    return response.data?.dropped ?? false;
+    // BUG-2 FIX: Success without error = index was dropped
+    // API may return 200/204 without body, so default to true on success
+    return response.data?.dropped ?? true;
   }
 }

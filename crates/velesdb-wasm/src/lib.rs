@@ -646,14 +646,26 @@ impl VectorStore {
             )));
         }
 
-        // Parse operator
-        let op_fn: Box<dyn Fn(f32, f32) -> bool> = match operator {
-            ">" | "gt" => Box::new(|score, thresh| score > thresh),
-            ">=" | "gte" => Box::new(|score, thresh| score >= thresh),
-            "<" | "lt" => Box::new(|score, thresh| score < thresh),
-            "<=" | "lte" => Box::new(|score, thresh| score <= thresh),
-            "=" | "eq" => Box::new(|score, thresh| (score - thresh).abs() < 0.001),
-            "!=" | "neq" => Box::new(|score, thresh| (score - thresh).abs() >= 0.001),
+        // Parse operator - METRIC-AWARE comparison
+        // For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
+        // For distance metrics (Euclidean, Hamming): lower score = more similar
+        // When user says "similarity() > 0.8", they mean "more similar than 0.8 threshold"
+        // For distance metrics, this inverts to "distance < 0.8"
+        let higher_is_better = self.metric.higher_is_better();
+        let op_fn: Box<dyn Fn(f32, f32) -> bool> = match (operator, higher_is_better) {
+            // Similarity metrics: normal comparison
+            (">" | "gt", true) => Box::new(|score, thresh| score > thresh),
+            (">=" | "gte", true) => Box::new(|score, thresh| score >= thresh),
+            ("<" | "lt", true) => Box::new(|score, thresh| score < thresh),
+            ("<=" | "lte", true) => Box::new(|score, thresh| score <= thresh),
+            // Distance metrics: inverted comparison (lower = more similar)
+            (">" | "gt", false) => Box::new(|score, thresh| score < thresh),
+            (">=" | "gte", false) => Box::new(|score, thresh| score <= thresh),
+            ("<" | "lt", false) => Box::new(|score, thresh| score > thresh),
+            ("<=" | "lte", false) => Box::new(|score, thresh| score >= thresh),
+            // Equality operators: same for both metric types
+            ("=" | "eq", _) => Box::new(|score, thresh| (score - thresh).abs() < 0.001),
+            ("!=" | "neq", _) => Box::new(|score, thresh| (score - thresh).abs() >= 0.001),
             _ => {
                 return Err(JsValue::from_str(
                     "Invalid operator. Use: >, >=, <, <=, =, != (or gt, gte, lt, lte, eq, neq)",

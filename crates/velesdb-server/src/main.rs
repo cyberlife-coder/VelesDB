@@ -16,9 +16,9 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
-    batch_search, create_collection, create_index, delete_collection, delete_index, delete_point,
-    get_collection, get_point, health_check, list_collections, list_indexes, query, search,
-    upsert_points, ApiDoc, AppState,
+    add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
+    delete_point, get_collection, get_edges, get_point, health_check, list_collections,
+    list_indexes, query, search, upsert_points, ApiDoc, AppState, GraphService,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -59,7 +59,18 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::open(&args.data_dir)?;
     let state = Arc::new(AppState { db });
 
-    // Build API router with state
+    // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
+    let graph_service = GraphService::new();
+
+    // Graph routes with GraphService state (separate router)
+    let graph_router = Router::new()
+        .route(
+            "/collections/{name}/graph/edges",
+            get(get_edges).post(add_edge),
+        )
+        .with_state(graph_service);
+
+    // Build API router with AppState
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route(
@@ -88,7 +99,16 @@ async fn main() -> anyhow::Result<()> {
             delete(delete_index),
         )
         .route("/query", post(query))
-        .with_state(state);
+        .with_state(state)
+        // FLAG-2 FIX: Merge graph router with its own state
+        .merge(graph_router);
+
+    // FLAG-3 FIX: Add metrics endpoint conditionally (EPIC-016/US-034,035)
+    #[cfg(feature = "prometheus")]
+    let api_router = {
+        use velesdb_server::prometheus_metrics;
+        api_router.route("/metrics", get(prometheus_metrics))
+    };
 
     // Swagger UI (stateless router)
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
