@@ -106,6 +106,16 @@ impl Collection {
             vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
             similarity_condition = self.extract_similarity_condition(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);
+
+            // BUG FIX: Reject queries that combine NEAR and similarity()
+            // These have ambiguous semantics - which vector predicate takes precedence?
+            if vector_search.is_some() && similarity_condition.is_some() {
+                return Err(Error::Config(
+                    "Cannot combine vector NEAR and similarity() in the same query. \
+                    Use either NEAR for vector search or similarity() for threshold filtering, not both."
+                        .to_string(),
+                ));
+            }
         }
 
         // 2. Resolve WITH clause options
@@ -505,7 +515,36 @@ impl Collection {
             ));
         }
 
+        // BUG FIX: NOT similarity() is not supported
+        // Semantically this would mean "exclude similar items" which cannot be
+        // efficiently executed with ANN indexes (would require full scan + exclusion)
+        if similarity_count >= 1 && Self::has_similarity_under_not(condition) {
+            return Err(Error::Config(
+                "NOT similarity() is not supported. Negating similarity conditions \
+                cannot be efficiently executed. Consider using a threshold filter instead."
+                    .to_string(),
+            ));
+        }
+
         Ok(())
+    }
+
+    /// Check if similarity() appears under a NOT condition.
+    /// This pattern is not supported because negating similarity cannot be efficiently executed.
+    fn has_similarity_under_not(condition: &crate::velesql::Condition) -> bool {
+        use crate::velesql::Condition;
+
+        match condition {
+            Condition::Not(inner) => {
+                // If there's any similarity inside NOT, it's unsupported
+                Self::count_similarity_conditions(inner) > 0
+            }
+            Condition::And(left, right) | Condition::Or(left, right) => {
+                Self::has_similarity_under_not(left) || Self::has_similarity_under_not(right)
+            }
+            Condition::Group(inner) => Self::has_similarity_under_not(inner),
+            _ => false,
+        }
     }
 
     /// Count the number of similarity() conditions in a condition tree.
@@ -620,6 +659,12 @@ impl Collection {
             // Unwrap groups
             Condition::Group(inner) => {
                 Self::extract_metadata_filter(inner).map(|c| Condition::Group(Box::new(c)))
+            }
+            // Handle NOT: preserve NOT wrapper if inner condition exists
+            // Note: NOT similarity() is rejected earlier in validation, so we only
+            // need to handle NOT with metadata conditions here
+            Condition::Not(inner) => {
+                Self::extract_metadata_filter(inner).map(|c| Condition::Not(Box::new(c)))
             }
             // Keep all other conditions (comparisons, IN, BETWEEN, etc.)
             other => Some(other.clone()),
