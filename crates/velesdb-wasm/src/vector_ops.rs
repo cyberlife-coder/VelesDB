@@ -1,7 +1,7 @@
-//! Internal vector operations for VectorStore.
+//! Internal vector operations for `VectorStore`.
 //!
 //! This module contains extracted scoring and search logic to reduce lib.rs size.
-//! These are internal helpers, not exposed via wasm_bindgen.
+//! These are internal helpers, not exposed via `wasm_bindgen`.
 
 use crate::distance::DistanceMetric;
 use crate::StorageMode;
@@ -19,7 +19,7 @@ pub fn compute_scores(
     sq8_mins: &[f32],
     sq8_scales: &[f32],
     dimension: usize,
-    metric: &DistanceMetric,
+    metric: DistanceMetric,
     storage_mode: StorageMode,
 ) -> Vec<(u64, f32)> {
     match storage_mode {
@@ -37,7 +37,7 @@ fn compute_scores_full(
     ids: &[u64],
     data: &[f32],
     dimension: usize,
-    metric: &DistanceMetric,
+    metric: DistanceMetric,
 ) -> Vec<(u64, f32)> {
     ids.iter()
         .enumerate()
@@ -58,7 +58,7 @@ fn compute_scores_sq8(
     sq8_mins: &[f32],
     sq8_scales: &[f32],
     dimension: usize,
-    metric: &DistanceMetric,
+    metric: DistanceMetric,
 ) -> Vec<(u64, f32)> {
     let mut dequantized = vec![0.0f32; dimension];
 
@@ -85,7 +85,7 @@ fn compute_scores_binary(
     ids: &[u64],
     data_binary: &[u8],
     dimension: usize,
-    metric: &DistanceMetric,
+    metric: DistanceMetric,
 ) -> Vec<(u64, f32)> {
     let bytes_per_vec = dimension.div_ceil(8);
     let mut binary_vec = vec![0.0f32; dimension];
@@ -147,7 +147,7 @@ pub fn compute_filtered_scores<'a, F>(
     sq8_mins: &[f32],
     sq8_scales: &[f32],
     dimension: usize,
-    metric: &DistanceMetric,
+    metric: DistanceMetric,
     storage_mode: StorageMode,
     predicate: F,
 ) -> Vec<(u64, f32, Option<&'a serde_json::Value>)>
@@ -228,7 +228,7 @@ mod tests {
         let data = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
         let metric = DistanceMetric::Cosine;
 
-        let scores = compute_scores_full(&query, &ids, &data, 4, &metric);
+        let scores = compute_scores_full(&query, &ids, &data, 4, metric);
 
         assert_eq!(scores.len(), 2);
         assert_eq!(scores[0].0, 1);

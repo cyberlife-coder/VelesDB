@@ -514,7 +514,7 @@ impl VectorStore {
             &self.sq8_mins,
             &self.sq8_scales,
             self.dimension,
-            &self.metric,
+            self.metric,
             self.storage_mode,
             |payload| filter::matches_filter(payload, &filter_obj),
         );
@@ -600,7 +600,7 @@ impl VectorStore {
             &self.sq8_mins,
             &self.sq8_scales,
             self.dimension,
-            &self.metric,
+            self.metric,
             self.storage_mode,
         );
 
@@ -614,7 +614,7 @@ impl VectorStore {
     /// Similarity search with threshold filtering.
     ///
     /// Returns vectors where similarity to query meets the threshold condition.
-    /// This is the WASM equivalent of VelesQL's `WHERE similarity(field, vector) > threshold`.
+    /// This is the WASM equivalent of `VelesQL`'s `WHERE similarity(field, vector) > threshold`.
     ///
     /// # Arguments
     ///
@@ -671,7 +671,7 @@ impl VectorStore {
             &self.sq8_mins,
             &self.sq8_scales,
             self.dimension,
-            &self.metric,
+            self.metric,
             self.storage_mode,
         );
 
