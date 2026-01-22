@@ -36,16 +36,21 @@ impl GraphService {
 
     /// Gets or creates an edge store for a collection.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the internal lock is poisoned (indicates a prior panic while holding the lock).
-    #[must_use]
-    pub fn get_or_create_store(&self, collection_name: &str) -> Arc<RwLock<EdgeStore>> {
-        let mut stores = self.stores.write().expect("lock poisoned");
-        stores
+    /// Returns an error if the internal lock is poisoned.
+    pub fn get_or_create_store(
+        &self,
+        collection_name: &str,
+    ) -> Result<Arc<RwLock<EdgeStore>>, String> {
+        let mut stores = self
+            .stores
+            .write()
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        Ok(stores
             .entry(collection_name.to_string())
             .or_insert_with(|| Arc::new(RwLock::new(EdgeStore::new())))
-            .clone()
+            .clone())
     }
 
     /// Adds an edge to a collection's graph.
@@ -54,36 +59,42 @@ impl GraphService {
     ///
     /// Returns an error if the lock is poisoned or if adding the edge fails.
     pub fn add_edge(&self, collection_name: &str, edge: GraphEdge) -> Result<(), String> {
-        let store = self.get_or_create_store(collection_name);
+        let store = self.get_or_create_store(collection_name)?;
         let mut guard = store.write().map_err(|e| format!("Lock error: {e}"))?;
         guard.add_edge(edge).map_err(|e| e.to_string())
     }
 
     /// Gets edges by label from a collection's graph.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the internal lock is poisoned.
-    #[must_use]
-    pub fn get_edges_by_label(&self, collection_name: &str, label: &str) -> Vec<GraphEdge> {
-        let store = self.get_or_create_store(collection_name);
-        let guard = store.read().expect("lock poisoned");
-        guard
+    /// Returns an error if the internal lock is poisoned.
+    pub fn get_edges_by_label(
+        &self,
+        collection_name: &str,
+        label: &str,
+    ) -> Result<Vec<GraphEdge>, String> {
+        let store = self.get_or_create_store(collection_name)?;
+        let guard = store.read().map_err(|e| format!("Lock poisoned: {e}"))?;
+        Ok(guard
             .get_edges_by_label(label)
             .into_iter()
             .cloned()
-            .collect()
+            .collect())
     }
 
     /// Lists all stores (for metrics).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the internal lock is poisoned.
-    #[must_use]
-    pub fn list_stores(&self) -> Vec<(String, Arc<std::sync::RwLock<EdgeStore>>)> {
-        let stores = self.stores.read().expect("lock poisoned");
-        stores.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    /// Returns an error if the internal lock is poisoned.
+    #[allow(clippy::type_complexity)]
+    pub fn list_stores(&self) -> Result<Vec<(String, Arc<std::sync::RwLock<EdgeStore>>)>, String> {
+        let stores = self
+            .stores
+            .read()
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
+        Ok(stores.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 }
 
@@ -164,6 +175,14 @@ pub async fn get_edges(
     let edges: Vec<EdgeResponse> = if let Some(label) = params.label {
         graph_service
             .get_edges_by_label(&name, &label)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to get edges: {e}"),
+                    }),
+                )
+            })?
             .into_iter()
             .map(|e| EdgeResponse {
                 id: e.id(),
@@ -258,7 +277,9 @@ mod tests {
             .add_edge("test_collection", edge)
             .expect("should add");
 
-        let edges = service.get_edges_by_label("test_collection", "KNOWS");
+        let edges = service
+            .get_edges_by_label("test_collection", "KNOWS")
+            .expect("should get edges");
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].label(), "KNOWS");
     }
