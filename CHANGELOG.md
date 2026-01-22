@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔧 Devin Cognition Flags Review (2026-01-22)
+
+Quality and consistency fixes based on expert code review.
+
+#### Fixed
+
+- **PropertyIndex observability**: Added `tracing::warn` when node_id > u32::MAX (silent failure → observable)
+- **Null payload handling**: Unified behavior in `search_with_filter` with `execute_query` (consistency)
+- **WasmBackend stubs**: `createIndex` now throws explicit error instead of silent warning (fail-fast)
+- **multi_query_search route**: Exposed previously dead handler at `/collections/{name}/search/multi`
+
+#### Changed
+
+- **Clippy pre-commit**: Changed `-D clippy::pedantic` to `-W` (warning, not error) for better DX
+
+#### Documentation
+
+- **Python BFS docstring**: Clarified that start node is NOT included in traversal results (edge semantics)
+- Added `DEVIN_FLAGS_REVIEW_2026-01-22.md` and `EXPERT_CONFRONTATION_2026-01-22.md`
+
+---
+
 ### 🚀 EPIC-019: Scalability 10M+ Edges
 
 Performance optimizations for graph operations at 10M+ scale.
