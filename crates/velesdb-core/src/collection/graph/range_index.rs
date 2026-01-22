@@ -137,12 +137,7 @@ impl RangeIndex {
     /// Insert a node into the range index.
     ///
     /// Returns `true` if the index exists and the value is comparable.
-    ///
-    /// # Note
-    ///
-    /// Uses RoaringBitmap internally which only supports u32 IDs.
-    /// Node IDs > 4 billion will be truncated.
-    #[allow(clippy::cast_possible_truncation)]
+    /// Returns `false` if node_id > u32::MAX to prevent data corruption.
     pub fn insert(
         &mut self,
         label: &str,
@@ -150,10 +145,15 @@ impl RangeIndex {
         value: &serde_json::Value,
         node_id: u64,
     ) -> bool {
+        // BUG FIX: Reject node_id > u32::MAX instead of silently truncating
+        let Some(safe_id) = u32::try_from(node_id).ok() else {
+            return false;
+        };
+
         let key = (label.to_string(), property.to_string());
         if let Some(btree) = self.indexes.get_mut(&key) {
             if let Some(ordered) = OrderedValue::from_json(value) {
-                btree.entry(ordered).or_default().insert(node_id as u32); // RoaringBitmap u32
+                btree.entry(ordered).or_default().insert(safe_id);
                 return true;
             }
         }
@@ -162,10 +162,7 @@ impl RangeIndex {
 
     /// Remove a node from the range index.
     ///
-    /// # Note
-    ///
-    /// See `insert` for RoaringBitmap u32 limitation.
-    #[allow(clippy::cast_possible_truncation)]
+    /// Returns `false` if node_id > u32::MAX (cannot exist in index).
     pub fn remove(
         &mut self,
         label: &str,
@@ -173,11 +170,16 @@ impl RangeIndex {
         value: &serde_json::Value,
         node_id: u64,
     ) -> bool {
+        // BUG FIX: node_id > u32::MAX cannot exist in index
+        let Some(safe_id) = u32::try_from(node_id).ok() else {
+            return false;
+        };
+
         let key = (label.to_string(), property.to_string());
         if let Some(btree) = self.indexes.get_mut(&key) {
             if let Some(ordered) = OrderedValue::from_json(value) {
                 if let Some(bitmap) = btree.get_mut(&ordered) {
-                    let removed = bitmap.remove(node_id as u32); // RoaringBitmap u32
+                    let removed = bitmap.remove(safe_id);
                     if bitmap.is_empty() {
                         btree.remove(&ordered);
                     }

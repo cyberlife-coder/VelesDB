@@ -57,19 +57,18 @@ impl PropertyIndex {
     /// # Note
     ///
     /// Uses RoaringBitmap internally which only supports u32 IDs.
-    /// Node IDs > 4 billion will be truncated. This is acceptable for most
-    /// use cases but should be documented as a limitation.
+    /// Returns `false` if node_id > u32::MAX to prevent data corruption.
     pub fn insert(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
-        // RoaringBitmap limitation: only supports u32
-        // For node_id > u32::MAX, this will wrap. Document as known limitation.
-        #[allow(clippy::cast_possible_truncation)]
+        // BUG FIX: Reject node_id > u32::MAX instead of silently truncating
+        // This prevents data corruption from ID collisions
+        let Some(safe_id) = u32::try_from(node_id).ok() else {
+            return false; // Node ID exceeds RoaringBitmap u32 limit
+        };
+
         let key = (label.to_string(), property.to_string());
         if let Some(value_map) = self.indexes.get_mut(&key) {
             let value_key = value.to_string();
-            value_map
-                .entry(value_key)
-                .or_default()
-                .insert(node_id as u32); // See function doc: RoaringBitmap u32 limitation
+            value_map.entry(value_key).or_default().insert(safe_id);
             true
         } else {
             false
@@ -79,17 +78,18 @@ impl PropertyIndex {
     /// Remove a node from the index.
     ///
     /// Returns `true` if the node was removed.
-    ///
-    /// # Note
-    ///
-    /// See `insert` for RoaringBitmap u32 limitation.
+    /// Returns `false` if node_id > u32::MAX (cannot exist in index).
     pub fn remove(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
-        #[allow(clippy::cast_possible_truncation)]
+        // BUG FIX: node_id > u32::MAX cannot exist in index, return false
+        let Some(safe_id) = u32::try_from(node_id).ok() else {
+            return false;
+        };
+
         let key = (label.to_string(), property.to_string());
         if let Some(value_map) = self.indexes.get_mut(&key) {
             let value_key = value.to_string();
             if let Some(bitmap) = value_map.get_mut(&value_key) {
-                let removed = bitmap.remove(node_id as u32); // RoaringBitmap u32 limitation
+                let removed = bitmap.remove(safe_id);
                 if bitmap.is_empty() {
                     value_map.remove(&value_key);
                 }
