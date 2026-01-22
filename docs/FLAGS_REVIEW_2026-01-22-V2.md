@@ -7,10 +7,11 @@
 
 | Category | Count | Status |
 |----------|-------|--------|
-| **Critical Bugs** | 2 | ✅ Fixed |
-| **Design Decisions** | 25 | ✅ Documented |
-| **Known Limitations** | 8 | ✅ Documented |
-| **SDK Flags (out of scope)** | 5 | ⏸️ Separate tracking |
+| **Critical Bugs** | 1 | ✅ Fixed (BUG-3) |
+| **Already Fixed** | 12 | ✅ Verified in code |
+| **Design Decisions** | 20 | ✅ Documented |
+| **Known Limitations** | 5 | ✅ Documented |
+| **SDK Flags** | 2 | ⏸️ Separate tracking |
 | **Total Flags** | 40 | ✅ All categorized |
 
 ---
@@ -23,12 +24,11 @@
 - **Fix**: HashMap to store scores per ORDER BY column index
 - **Status**: ✅ Fixed
 
-### BUG-5: Unstable sort breaks multi-column ORDER BY
+### BUG-5: Unstable sort (FALSE POSITIVE)
 - **File**: `ordering.rs:110`
-- **Issue**: `sort_by` is unstable, breaks documented stable behavior
-- **Fix**: Keep `sort_by` (stable in Rust since 1.0) but document behavior
-- **Note**: Actually `sort_by` IS stable in Rust. The flag is incorrect.
-- **Status**: ✅ Verified OK
+- **Flag claimed**: `sort_by` is unstable
+- **Reality**: Rust's `slice::sort_by` IS stable (preserves order of equal elements)
+- **Status**: ✅ Flag incorrect - no fix needed
 
 ---
 
@@ -146,18 +146,33 @@
 
 ---
 
+## Already Fixed in Code (Verified)
+
+| Flag | File | Fix |
+|------|------|-----|
+| FLAG-2 Python BFS | graph_store.rs:233-253 | filter_map instead of unwrap_or(0) |
+| GraphService expect() | graph.rs:46-49 | Uses map_err, not expect |
+| PropertyIndex u32 | property_index.rs:62-66 | try_from with graceful reject |
+| Lifecycle degradation | lifecycle.rs:235-244 | tracing::warn + empty index |
+| Duration overflow | metrics.rs:61-62 | .min(u128::from(u64::MAX)) |
+| BfsIterator buffer | streaming.rs:106-108 | pending_results buffer |
+| Metric-aware sort | vector.rs:212-230 | Uses metric.sort_results() |
+| GPU serial tests | gpu_backend_tests.rs | #[serial(gpu)] added |
+| REPL underflow | repl_commands.rs:238-243 | saturating_sub for page |
+| JSON total ordering | ordering.rs:26-59 | total_cmp for NaN safety |
+| OR validation | validation.rs:39-46 | Clear error for unsupported |
+| NOT similarity | validation.rs:48-57 | Validated and rejected |
+
+---
+
 ## SDK Flags (Separate Tracking)
 
 ### TypeScript SDK
-1. `rest.ts:81-115` - HTTP error mapping
-2. `rest.ts:104-150` - Error payload extraction
-3. `rest.ts:591-605` - dropIndex defaults to true
+1. `rest.ts:81-115` - HTTP error mapping - verify API contract
+2. `rest.ts:591-605` - dropIndex defaults - confirm with API spec
 
-### Python SDK
-1. `graph_store.rs:234-253` - BFS streaming filters
-
-### WASM SDK
-1. `wasm.ts:416-444` - Index stubs
+### WASM SDK  
+1. `wasm.ts:416-444` - Index stubs - tracked in EPIC-016
 
 ---
 
