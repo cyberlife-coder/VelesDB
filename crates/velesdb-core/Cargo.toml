@@ -202,3 +202,7 @@ harness = false
 [[bench]]
 name = "property_index_benchmark"
 harness = false
+
+[[bench]]
+name = "orderby_similarity_benchmark"
+harness = false
