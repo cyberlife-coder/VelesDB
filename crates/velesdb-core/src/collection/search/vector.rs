@@ -209,15 +209,25 @@ impl Collection {
             .take(k)
             .collect();
 
-        // Ensure results are sorted by score (should already be, but defensive)
-        // TODO: For distance metrics (Euclidean, Hamming) where lower=better,
-        // this descending sort may not match user expectations. Consider using
-        // metric.higher_is_better() to determine sort direction, similar to
-        // the ORDER BY similarity() fix in query.rs:201-225.
+        // Sort results by similarity (most similar first)
+        // For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar → DESC
+        // For distance metrics (Euclidean, Hamming): lower score = more similar → ASC
+        let config = self.config.read();
+        let higher_is_better = config.metric.higher_is_better();
+        drop(config);
+
         results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            if higher_is_better {
+                // Similarity: descending (highest first)
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                // Distance: ascending (lowest first)
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
         });
 
         Ok(results)

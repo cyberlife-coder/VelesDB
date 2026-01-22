@@ -458,6 +458,13 @@ impl Collection {
     /// Filter search results by similarity threshold.
     ///
     /// For similarity() function queries, we need to check if results meet the threshold.
+    ///
+    /// **Metric-aware semantics:**
+    /// - For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
+    ///   - `similarity() > 0.8` keeps results with score > 0.8
+    /// - For distance metrics (Euclidean, Hamming): lower score = more similar
+    ///   - `similarity() > 0.8` is interpreted as "more similar than threshold"
+    ///   - which means distance < 0.8 (comparison inverted)
     #[allow(clippy::too_many_arguments)]
     fn filter_by_similarity(
         &self,
@@ -470,28 +477,38 @@ impl Collection {
     ) -> Vec<SearchResult> {
         use crate::velesql::CompareOp;
 
-        // The score from HNSW is already computed using the collection's configured metric
-        // (Cosine, Euclidean, DotProduct, Hamming, or Jaccard)
-        //
-        // TODO: For distance metrics (Euclidean, Hamming), the threshold semantics may be
-        // counterintuitive. E.g., `similarity() > 0.5` with Euclidean filters for distances > 0.5,
-        // which means "less similar". Consider inverting comparisons based on metric.higher_is_better()
-        // or documenting this as "raw score" filtering rather than "similarity" filtering.
-        //
-        // Filter results based on threshold and operator
+        let config = self.config.read();
+        let higher_is_better = config.metric.higher_is_better();
+        drop(config);
+
         let threshold_f32 = threshold as f32;
 
         candidates
             .into_iter()
             .filter(|r| {
                 let score = r.score;
-                match op {
-                    CompareOp::Gt => score > threshold_f32,
-                    CompareOp::Gte => score >= threshold_f32,
-                    CompareOp::Lt => score < threshold_f32,
-                    CompareOp::Lte => score <= threshold_f32,
-                    CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
-                    CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
+                // For distance metrics, invert comparisons so "similarity > X" means "distance < X"
+                if higher_is_better {
+                    // Similarity metrics: direct comparison
+                    match op {
+                        CompareOp::Gt => score > threshold_f32,
+                        CompareOp::Gte => score >= threshold_f32,
+                        CompareOp::Lt => score < threshold_f32,
+                        CompareOp::Lte => score <= threshold_f32,
+                        CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
+                        CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
+                    }
+                } else {
+                    // Distance metrics: inverted comparison
+                    // "similarity > X" means "more similar than X" = "distance < X"
+                    match op {
+                        CompareOp::Gt => score < threshold_f32,   // more similar = lower distance
+                        CompareOp::Gte => score <= threshold_f32,
+                        CompareOp::Lt => score > threshold_f32,   // less similar = higher distance
+                        CompareOp::Lte => score >= threshold_f32,
+                        CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
+                        CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
+                    }
                 }
             })
             .take(limit)
