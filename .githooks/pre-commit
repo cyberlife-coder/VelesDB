@@ -35,7 +35,7 @@ else
 
     # 2. Run clippy
     echo -e "\n${YELLOW}📎 Running clippy...${NC}"
-    if ! cargo clippy --all-targets --all-features -- -D warnings; then
+    if ! cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic; then
         echo -e "${RED}❌ Clippy found issues. Fix them before committing.${NC}"
         exit 1
     fi
