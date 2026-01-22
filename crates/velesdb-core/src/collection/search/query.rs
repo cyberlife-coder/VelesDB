@@ -82,6 +82,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed (e.g., missing parameters).
+    #[allow(clippy::too_many_lines)] // Complex dispatch logic - refactoring planned
     pub fn execute_query(
         &self,
         query: &crate::velesql::Query,
@@ -107,15 +108,8 @@ impl Collection {
             similarity_condition = self.extract_similarity_condition(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);
 
-            // BUG FIX: Reject queries that combine NEAR and similarity()
-            // These have ambiguous semantics - which vector predicate takes precedence?
-            if vector_search.is_some() && similarity_condition.is_some() {
-                return Err(Error::Config(
-                    "Cannot combine vector NEAR and similarity() in the same query. \
-                    Use either NEAR for vector search or similarity() for threshold filtering, not both."
-                        .to_string(),
-                ));
-            }
+            // NEAR + similarity() is supported: NEAR finds candidates, similarity() filters by threshold
+            // This is a common pattern in RAG/agentic memory: find top-k AND filter by confidence
         }
 
         // 2. Resolve WITH clause options
@@ -158,7 +152,37 @@ impl Collection {
                     similarity_filtered
                 }
             }
-            (Some(vector), _, Some(ref cond)) => {
+            // NEAR + similarity() + optional metadata: find candidates, then filter by threshold
+            // Pattern: "Find top-k neighbors AND keep only those with similarity > threshold"
+            (Some(vector), Some((field, sim_vec, op, threshold)), filter_cond) => {
+                // 1. NEAR finds candidates (overfetch for filtering headroom)
+                let candidates_k = limit.saturating_mul(4);
+                let candidates = self.search(vector, candidates_k)?;
+
+                // 2. Apply similarity threshold filter
+                let filter_k = limit.saturating_mul(2);
+                let similarity_filtered = self
+                    .filter_by_similarity(candidates, field, sim_vec, *op, *threshold, filter_k);
+
+                // 3. Apply additional metadata filters if present
+                if let Some(cond) = filter_cond {
+                    let metadata_filter = Self::extract_metadata_filter(cond);
+                    if let Some(filter_cond) = metadata_filter {
+                        let filter =
+                            crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                        similarity_filtered
+                            .into_iter()
+                            .filter(|r| r.point.payload.as_ref().is_some_and(|p| filter.matches(p)))
+                            .take(limit)
+                            .collect()
+                    } else {
+                        similarity_filtered
+                    }
+                } else {
+                    similarity_filtered
+                }
+            }
+            (Some(vector), None, Some(ref cond)) => {
                 // Check if condition contains MATCH for hybrid search
                 if let Some(text_query) = Self::extract_match_query(cond) {
                     // Hybrid search: NEAR + MATCH
