@@ -86,10 +86,24 @@ impl Collection {
         let mut results = match (&vector_search, &similarity_condition, &filter_condition) {
             // similarity() function - use vector to search, then filter by threshold
             // Also apply any additional metadata filters from the WHERE clause
+            //
+            // BUG-1/3 NOTE: This uses ANN (top-K) search, not exhaustive search.
+            // Points outside the top-K window may match the threshold but won't be returned.
+            // For exact threshold semantics, use a larger LIMIT or consider full scan.
+            // We use a 10x over-fetch factor to reduce false negatives.
             (None, Some((field, vec, op, threshold)), filter_cond) => {
-                // Get more candidates for filtering (both similarity and metadata)
-                // Use saturating_mul to prevent overflow on large limits
-                let candidates_k = limit.saturating_mul(4);
+                // BUG-5 FIX: Validate field name - currently only "vector" is supported
+                if field != "vector" {
+                    return Err(crate::error::Error::Config(format!(
+                        "similarity() field '{}' not found. Only 'vector' field is supported. \
+                        Multi-vector support is planned for a future release.",
+                        field
+                    )));
+                }
+
+                // BUG-1/3 FIX: Increase over-fetch factor from 4x to 10x to reduce false negatives
+                // This is a trade-off between performance and accuracy for threshold queries
+                let candidates_k = limit.saturating_mul(10).min(MAX_LIMIT);
                 let candidates = self.search(vec, candidates_k)?;
 
                 // First filter by similarity threshold
@@ -104,9 +118,13 @@ impl Collection {
                     if let Some(filter_cond) = metadata_filter {
                         let filter =
                             crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                        // BUG-4 FIX: Don't drop points with null payload - check if filter matches null
                         similarity_filtered
                             .into_iter()
-                            .filter(|r| r.point.payload.as_ref().is_some_and(|p| filter.matches(p)))
+                            .filter(|r| match r.point.payload.as_ref() {
+                                Some(p) => filter.matches(p),
+                                None => filter.matches(&serde_json::Value::Null),
+                            })
                             .take(limit)
                             .collect()
                     } else {
@@ -119,8 +137,18 @@ impl Collection {
             // NEAR + similarity() + optional metadata: find candidates, then filter by threshold
             // Pattern: "Find top-k neighbors AND keep only those with similarity > threshold"
             (Some(vector), Some((field, sim_vec, op, threshold)), filter_cond) => {
+                // BUG-5 FIX: Validate field name - currently only "vector" is supported
+                if field != "vector" {
+                    return Err(crate::error::Error::Config(format!(
+                        "similarity() field '{}' not found. Only 'vector' field is supported. \
+                        Multi-vector support is planned for a future release.",
+                        field
+                    )));
+                }
+
                 // 1. NEAR finds candidates (overfetch for filtering headroom)
-                let candidates_k = limit.saturating_mul(4);
+                // BUG-1/3 FIX: Increase over-fetch factor to 10x for better threshold accuracy
+                let candidates_k = limit.saturating_mul(10).min(MAX_LIMIT);
                 let candidates = self.search(vector, candidates_k)?;
 
                 // 2. Apply similarity threshold filter
@@ -134,9 +162,13 @@ impl Collection {
                     if let Some(filter_cond) = metadata_filter {
                         let filter =
                             crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                        // BUG-4 FIX: Don't drop points with null payload - check if filter matches null
                         similarity_filtered
                             .into_iter()
-                            .filter(|r| r.point.payload.as_ref().is_some_and(|p| filter.matches(p)))
+                            .filter(|r| match r.point.payload.as_ref() {
+                                Some(p) => filter.matches(p),
+                                None => filter.matches(&serde_json::Value::Null),
+                            })
                             .take(limit)
                             .collect()
                     } else {
@@ -205,6 +237,9 @@ impl Collection {
     ///
     /// For similarity() function queries, we need to check if results meet the threshold.
     ///
+    /// **BUG-2 FIX:** Recomputes similarity using `query_vec`, not the cached NEAR scores.
+    /// This is critical when NEAR and similarity() use different vectors.
+    ///
     /// **Metric-aware semantics:**
     /// - For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
     ///   - `similarity() > 0.8` keeps results with score > 0.8
@@ -216,7 +251,7 @@ impl Collection {
         &self,
         candidates: Vec<SearchResult>,
         _field: &str,
-        _query_vec: &[f32],
+        query_vec: &[f32],
         op: crate::velesql::CompareOp,
         threshold: f64,
         limit: usize,
@@ -231,10 +266,13 @@ impl Collection {
 
         candidates
             .into_iter()
-            .filter(|r| {
-                let score = r.score;
+            .filter_map(|mut r| {
+                // BUG-2 FIX: Recompute similarity using the similarity() vector, not NEAR scores
+                // This ensures correct filtering when NEAR and similarity() use different vectors
+                let score = self.compute_metric_score(&r.point.vector, query_vec);
+
                 // For distance metrics, invert comparisons so "similarity > X" means "distance < X"
-                if higher_is_better {
+                let passes = if higher_is_better {
                     // Similarity metrics: direct comparison
                     match op {
                         CompareOp::Gt => score > threshold_f32,
@@ -255,6 +293,14 @@ impl Collection {
                         CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
                         CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
                     }
+                };
+
+                if passes {
+                    // Update score to reflect the similarity() vector score
+                    r.score = score;
+                    Some(r)
+                } else {
+                    None
                 }
             })
             .take(limit)
