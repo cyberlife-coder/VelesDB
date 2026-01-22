@@ -6,7 +6,19 @@ from velesdb.velesdb import (
     Collection,
     SearchResult,
     FusionStrategy,
+    GraphStore,
+    StreamingConfig,
+    TraversalResult,
     __version__,
 )
 
-__all__ = ["Database", "Collection", "SearchResult", "FusionStrategy", "__version__"]
+__all__ = [
+    "Database",
+    "Collection",
+    "SearchResult",
+    "FusionStrategy",
+    "GraphStore",
+    "StreamingConfig",
+    "TraversalResult",
+    "__version__",
+]

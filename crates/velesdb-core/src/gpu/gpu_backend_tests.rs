@@ -1,14 +1,20 @@
 //! Tests for `gpu_backend` module
+//!
+//! GPU tests must run serially to avoid deadlocks on shared GPU resources.
+//! Each test creates a new wgpu instance which can conflict with parallel execution.
 
 use super::gpu_backend::*;
+use serial_test::serial;
 
 #[test]
+#[serial(gpu)]
 fn test_gpu_available_check() {
     // Should not panic
     let _ = GpuAccelerator::is_available();
 }
 
 #[test]
+#[serial(gpu)]
 fn test_gpu_accelerator_creation() {
     // May return None if no GPU available (CI environment)
     let gpu = GpuAccelerator::new();
@@ -20,6 +26,7 @@ fn test_gpu_accelerator_creation() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_cosine_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
         let results = gpu.batch_cosine_similarity(&[], &[1.0, 0.0, 0.0], 3);
@@ -28,6 +35,7 @@ fn test_batch_cosine_empty_input() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_cosine_identical_vectors() {
     if let Some(gpu) = GpuAccelerator::new() {
         // Query and vector are identical -> similarity should be 1.0
@@ -46,6 +54,7 @@ fn test_batch_cosine_identical_vectors() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_cosine_orthogonal_vectors() {
     if let Some(gpu) = GpuAccelerator::new() {
         let query = vec![1.0, 0.0, 0.0];
@@ -59,6 +68,7 @@ fn test_batch_cosine_orthogonal_vectors() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_cosine_multiple_vectors() {
     if let Some(gpu) = GpuAccelerator::new() {
         let query = vec![1.0, 0.0, 0.0];
@@ -83,6 +93,7 @@ fn test_batch_cosine_multiple_vectors() {
 // =========================================================================
 
 #[test]
+#[serial(gpu)]
 fn test_batch_euclidean_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
         let results = gpu.batch_euclidean_distance(&[], &[1.0, 0.0, 0.0], 3);
@@ -91,6 +102,7 @@ fn test_batch_euclidean_empty_input() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_euclidean_identical_vectors() {
     if let Some(gpu) = GpuAccelerator::new() {
         let query = vec![1.0, 2.0, 3.0];
@@ -104,6 +116,7 @@ fn test_batch_euclidean_identical_vectors() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_euclidean_known_distance() {
     if let Some(gpu) = GpuAccelerator::new() {
         let query = vec![0.0, 0.0, 0.0];
@@ -125,6 +138,7 @@ fn test_batch_euclidean_known_distance() {
 // =========================================================================
 
 #[test]
+#[serial(gpu)]
 fn test_batch_dot_product_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
         let results = gpu.batch_dot_product(&[], &[1.0, 0.0, 0.0], 3);
@@ -133,6 +147,7 @@ fn test_batch_dot_product_empty_input() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_dot_product_orthogonal() {
     if let Some(gpu) = GpuAccelerator::new() {
         let query = vec![1.0, 0.0, 0.0];
@@ -146,6 +161,7 @@ fn test_batch_dot_product_orthogonal() {
 }
 
 #[test]
+#[serial(gpu)]
 fn test_batch_dot_product_parallel() {
     if let Some(gpu) = GpuAccelerator::new() {
         let query = vec![2.0, 3.0, 4.0];

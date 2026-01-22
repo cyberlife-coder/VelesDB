@@ -38,6 +38,8 @@ mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
+#[cfg(test)]
+mod similarity_tests;
 
 pub use ast::*;
 pub use graph_pattern::*;
@@ -45,8 +47,8 @@ pub use graph_pattern::*;
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
 pub use explain::{
-    FilterPlan, FilterStrategy, IndexType, LimitPlan, OffsetPlan, PlanNode, QueryPlan,
-    TableScanPlan, VectorSearchPlan,
+    FilterPlan, FilterStrategy, IndexLookupPlan, IndexType, LimitPlan, OffsetPlan, PlanNode,
+    QueryPlan, TableScanPlan, VectorSearchPlan,
 };
 pub use parser::match_clause;
 pub use parser::Parser;

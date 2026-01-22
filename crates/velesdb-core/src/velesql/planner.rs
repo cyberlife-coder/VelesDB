@@ -213,6 +213,122 @@ impl QueryPlanner {
         // Combined selectivity (multiplicative for AND)
         label_sel * rel_sel
     }
+
+    /// Choose optimal strategy for hybrid queries with ORDER BY similarity().
+    ///
+    /// When ORDER BY similarity() is present, we optimize for:
+    /// 1. Always execute vector search first (it naturally orders by similarity)
+    /// 2. Apply filters as post-processing to preserve ordering
+    /// 3. Use early termination when LIMIT is specified
+    ///
+    /// # Arguments
+    /// * `has_order_by_similarity` - True if ORDER BY similarity() is in query
+    /// * `has_filter` - True if WHERE clause with non-vector conditions
+    /// * `limit` - Optional LIMIT value for early termination optimization
+    /// * `estimated_selectivity` - Optional estimated filter selectivity
+    #[must_use]
+    pub fn choose_hybrid_strategy(
+        &self,
+        has_order_by_similarity: bool,
+        has_filter: bool,
+        limit: Option<u64>,
+        estimated_selectivity: Option<f64>,
+    ) -> HybridExecutionPlan {
+        if has_order_by_similarity {
+            // ORDER BY similarity() always benefits from VectorFirst
+            // because HNSW naturally returns results in similarity order
+            let over_fetch_factor = if has_filter {
+                // Over-fetch based on selectivity to ensure LIMIT results after filtering
+                let sel = estimated_selectivity.unwrap_or(0.5);
+                if sel > 0.0 {
+                    (1.0 / sel).clamp(2.0, 10.0)
+                } else {
+                    10.0
+                }
+            } else {
+                1.0
+            };
+
+            HybridExecutionPlan {
+                strategy: ExecutionStrategy::VectorFirst,
+                over_fetch_factor,
+                use_early_termination: limit.is_some(),
+                recompute_scores: false,
+            }
+        } else if has_filter {
+            // No ORDER BY similarity - use standard planning
+            let selectivity =
+                estimated_selectivity.unwrap_or_else(|| self.stats.graph_selectivity());
+            let strategy = self.choose_strategy(Some(selectivity));
+
+            HybridExecutionPlan {
+                strategy,
+                over_fetch_factor: if matches!(strategy, ExecutionStrategy::VectorFirst) {
+                    2.0
+                } else {
+                    1.0
+                },
+                use_early_termination: limit.is_some(),
+                recompute_scores: true,
+            }
+        } else {
+            // No filter, no ORDER BY - simple vector search
+            HybridExecutionPlan {
+                strategy: ExecutionStrategy::VectorFirst,
+                over_fetch_factor: 1.0,
+                use_early_termination: true,
+                recompute_scores: false,
+            }
+        }
+    }
+
+    /// Estimate cost in microseconds for a given execution plan.
+    ///
+    /// Uses runtime statistics to estimate total query cost.
+    #[must_use]
+    pub fn estimate_cost(&self, plan: &HybridExecutionPlan, candidate_count: u64) -> u64 {
+        let vector_cost = self.stats.avg_vector_latency_us();
+        let graph_cost = self.stats.avg_graph_latency_us();
+
+        match plan.strategy {
+            ExecutionStrategy::VectorFirst => {
+                // Vector search + optional filter pass
+                vector_cost + candidate_count // 1µs per filter check
+            }
+            ExecutionStrategy::GraphFirst => {
+                // Graph traversal + vector search on candidates
+                graph_cost + (candidate_count * vector_cost / 1000).max(1)
+            }
+            ExecutionStrategy::Parallel => {
+                // Max of both (parallel execution)
+                vector_cost.max(graph_cost) + 10 // 10µs merge overhead
+            }
+        }
+    }
+}
+
+/// Execution plan for hybrid queries (US-009).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HybridExecutionPlan {
+    /// Primary execution strategy.
+    pub strategy: ExecutionStrategy,
+    /// Factor to multiply LIMIT for over-fetching when filtering.
+    pub over_fetch_factor: f64,
+    /// Whether to use early termination optimization.
+    pub use_early_termination: bool,
+    /// Whether scores need to be recomputed after filtering.
+    pub recompute_scores: bool,
+}
+
+impl Default for HybridExecutionPlan {
+    fn default() -> Self {
+        Self {
+            strategy: ExecutionStrategy::VectorFirst,
+            over_fetch_factor: 1.0,
+            use_early_termination: true,
+            recompute_scores: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -323,5 +439,80 @@ mod tests {
             "Missing relationship type should give selectivity ~0.0, got {}",
             sel
         );
+    }
+
+    // =========================================================================
+    // Hybrid Query Planner Tests (US-009)
+    // =========================================================================
+
+    #[test]
+    fn test_hybrid_strategy_order_by_similarity_uses_vector_first() {
+        let planner = QueryPlanner::new();
+
+        // ORDER BY similarity() should always use VectorFirst
+        let plan = planner.choose_hybrid_strategy(true, false, Some(10), None);
+
+        assert_eq!(plan.strategy, ExecutionStrategy::VectorFirst);
+        assert!(!plan.recompute_scores); // Scores are already in order
+    }
+
+    #[test]
+    fn test_hybrid_strategy_order_by_similarity_with_filter_over_fetches() {
+        let planner = QueryPlanner::new();
+
+        // ORDER BY similarity() with filter needs over-fetching
+        let plan = planner.choose_hybrid_strategy(true, true, Some(10), Some(0.5));
+
+        assert_eq!(plan.strategy, ExecutionStrategy::VectorFirst);
+        assert!(plan.over_fetch_factor >= 2.0); // Should over-fetch for filtering
+    }
+
+    #[test]
+    fn test_hybrid_strategy_low_selectivity_over_fetches_more() {
+        let planner = QueryPlanner::new();
+
+        // Low selectivity (10%) needs more over-fetching
+        let plan = planner.choose_hybrid_strategy(true, true, Some(10), Some(0.1));
+
+        // 1.0 / 0.1 = 10.0 (capped at 10)
+        assert!((plan.over_fetch_factor - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hybrid_strategy_no_order_by_uses_standard_planning() {
+        let planner = QueryPlanner::new();
+
+        // Without ORDER BY similarity, use standard selectivity-based planning
+        let plan = planner.choose_hybrid_strategy(false, true, Some(10), Some(0.005));
+
+        // Low selectivity should use GraphFirst
+        assert_eq!(plan.strategy, ExecutionStrategy::GraphFirst);
+        assert!(plan.recompute_scores); // Scores need recomputing
+    }
+
+    #[test]
+    fn test_hybrid_plan_default() {
+        let plan = HybridExecutionPlan::default();
+
+        assert_eq!(plan.strategy, ExecutionStrategy::VectorFirst);
+        assert!((plan.over_fetch_factor - 1.0).abs() < 0.01);
+        assert!(plan.use_early_termination);
+        assert!(!plan.recompute_scores);
+    }
+
+    #[test]
+    fn test_estimate_cost_vector_first() {
+        let planner = QueryPlanner::new();
+        planner.stats().update_vector_latency(100);
+
+        let plan = HybridExecutionPlan {
+            strategy: ExecutionStrategy::VectorFirst,
+            over_fetch_factor: 1.0,
+            use_early_termination: true,
+            recompute_scores: false,
+        };
+
+        let cost = planner.estimate_cost(&plan, 100);
+        assert!(cost > 0);
     }
 }

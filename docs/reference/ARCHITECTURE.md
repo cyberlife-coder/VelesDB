@@ -128,7 +128,50 @@ This document describes the internal architecture of VelesDB.
 - RoaringBitmap for set operations
 - 122x faster than JSON filtering
 
-### 4. Index Layer
+### 4. Knowledge Graph Layer (EPIC-019)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      KNOWLEDGE GRAPH ENGINE                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────┐ │
+│  │   GraphSchema    │  │    GraphNode     │  │      GraphEdge         │ │
+│  │  (labels, types) │  │ (id, properties) │  │ (src, tgt, label, props)│ │
+│  └────────┬─────────┘  └────────┬─────────┘  └───────────┬────────────┘ │
+│           │                     │                        │              │
+│           ▼                     ▼                        ▼              │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    ConcurrentEdgeStore                           │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │   │
+│  │  │  256 Shards │  │  edge_ids   │  │    Label Indices        │  │   │
+│  │  │ (RwLock<    │  │  HashMap    │  │  by_label, outgoing_    │  │   │
+│  │  │  EdgeStore>)│  │ (edge→src)  │  │  by_label               │  │   │
+│  │  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │   │
+│  │         │                │                     │                 │   │
+│  │         ▼                ▼                     ▼                 │   │
+│  │  ┌──────────────────────────────────────────────────────────┐   │   │
+│  │  │  Optimized Operations:                                    │   │   │
+│  │  │  • add_edge: O(1) with cross-shard dual-insert           │   │   │
+│  │  │  • remove_edge: O(1) 2-shard lookup (not 256)            │   │   │
+│  │  │  • get_edges_by_label: O(k) via label index              │   │   │
+│  │  └──────────────────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────┐ │
+│  │   LabelTable     │  │   BfsIterator    │  │    GraphMetrics        │ │
+│  │ String interning │  │ Streaming BFS    │  │  LatencyHistogram      │ │
+│  │  LabelId (u32)   │  │ memory-bounded   │  │  node/edge counters    │ │
+│  └──────────────────┘  └──────────────────┘  └────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Scalability (10M+ edges)**:
+- Adaptive sharding: 1-512 shards based on graph size
+- 2-shard removal: O(1) instead of O(256) lock acquisitions
+- Label indices: O(k) edge lookup by relationship type
+- String interning: ~60% memory reduction for labels
+
+### 5. Index Layer
 
 #### HNSW Index
 ```

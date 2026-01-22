@@ -12,6 +12,8 @@ import type {
   SearchOptions,
   SearchResult,
   MultiQuerySearchOptions,
+  CreateIndexOptions,
+  IndexInfo,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -410,5 +412,40 @@ export class WasmBackend implements IVelesDBBackend {
       hash = hash & hash; // Convert to 32bit integer
     }
     return Math.abs(hash);
+  }
+
+  // ========================================================================
+  // Index Management (EPIC-009) - Stubs for WASM backend
+  // Note: Full implementation requires velesdb-wasm support
+  // ========================================================================
+
+  async createIndex(_collection: string, _options: CreateIndexOptions): Promise<void> {
+    this.ensureInitialized();
+    // FIX: Throw error instead of silent warning for fail-fast behavior
+    // This prevents confusion when switching between REST and WASM backends
+    throw new Error(
+      'WasmBackend: createIndex is not yet supported. ' +
+      'Index operations require the REST backend with velesdb-server.'
+    );
+  }
+
+  async listIndexes(_collection: string): Promise<IndexInfo[]> {
+    this.ensureInitialized();
+    // Return empty list - WASM backend has no indexes
+    // This is acceptable since an empty list is semantically correct (no indexes exist)
+    return [];
+  }
+
+  async hasIndex(_collection: string, _label: string, _property: string): Promise<boolean> {
+    this.ensureInitialized();
+    // Return false - WASM backend has no indexes
+    // This is semantically correct (no index exists)
+    return false;
+  }
+
+  async dropIndex(_collection: string, _label: string, _property: string): Promise<boolean> {
+    this.ensureInitialized();
+    // Return false - nothing to drop since no indexes exist in WASM backend
+    return false;
   }
 }
