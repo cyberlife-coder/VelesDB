@@ -234,6 +234,42 @@ class VelesDBVectorStore(VectorStore):
 
         return documents
 
+    def similarity_search_with_relevance_scores(
+        self,
+        query: str,
+        k: int = 4,
+        score_threshold: Optional[float] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Search for documents with relevance scores and optional threshold.
+
+        This method enables similarity()-like filtering from VelesDB Core.
+
+        Args:
+            query: Query string to search for.
+            k: Number of results to return. Defaults to 4.
+            score_threshold: Minimum similarity score (0.0-1.0 for cosine).
+                Only return documents with score >= threshold.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of (Document, score) tuples above threshold.
+
+        Example:
+            >>> # Get only highly relevant documents (>0.8 similarity)
+            >>> results = vectorstore.similarity_search_with_relevance_scores(
+            ...     "machine learning",
+            ...     k=10,
+            ...     score_threshold=0.8
+            ... )
+        """
+        results = self.similarity_search_with_score(query, k=k, **kwargs)
+
+        if score_threshold is not None:
+            results = [(doc, score) for doc, score in results if score >= score_threshold]
+
+        return results
+
     def similarity_search_with_filter(
         self,
         query: str,

@@ -88,6 +88,14 @@ license-files = []
 multiple-versions = "warn"
 wildcards = "allow"
 
+# Skip duplicate warnings for transitive dependencies we can't control
+skip = [
+    # base64 0.21.x used by ron/swift-rs/tauri, 0.22.x by hyper-util/plist/reqwest
+    { crate = "base64@0.21.7", reason = "tauri transitive (ron, swift-rs)" },
+    # bitflags 1.x used by tauri GTK/webkit deps, 2.x by modern deps
+    { crate = "bitflags@1.3.2", reason = "tauri transitive (javascriptcore-rs, png)" },
+]
+
 [sources]
 unknown-registry = "warn"
 unknown-git = "warn"

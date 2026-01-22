@@ -12,6 +12,7 @@ Example:
 """
 
 from llamaindex_velesdb.vectorstore import VelesDBVectorStore
+from llamaindex_velesdb.graph_loader import GraphLoader
 
-__all__ = ["VelesDBVectorStore"]
+__all__ = ["VelesDBVectorStore", "GraphLoader"]
 __version__ = "0.8.10"

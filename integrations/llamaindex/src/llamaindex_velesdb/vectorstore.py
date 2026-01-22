@@ -253,6 +253,51 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             ids=ids,
         )
 
+    def query_with_score_threshold(
+        self,
+        query: VectorStoreQuery,
+        score_threshold: float = 0.0,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Query with similarity score threshold filtering.
+
+        This method enables similarity()-like filtering from VelesDB Core.
+        Only returns results with score >= threshold.
+
+        Args:
+            query: Vector store query with embedding and parameters.
+            score_threshold: Minimum similarity score (0.0-1.0 for cosine).
+                Only return nodes with score >= threshold.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Query result with nodes above threshold.
+
+        Example:
+            >>> # Get only highly relevant results (>0.8 similarity)
+            >>> query = VectorStoreQuery(
+            ...     query_embedding=embedding,
+            ...     similarity_top_k=20
+            ... )
+            >>> result = vector_store.query_with_score_threshold(
+            ...     query, score_threshold=0.8
+            ... )
+        """
+        result = self.query(query, **kwargs)
+
+        if score_threshold > 0.0 and result.similarities:
+            filtered_indices = [
+                i for i, score in enumerate(result.similarities)
+                if score >= score_threshold
+            ]
+            return VectorStoreQueryResult(
+                nodes=[result.nodes[i] for i in filtered_indices] if result.nodes else [],
+                similarities=[result.similarities[i] for i in filtered_indices],
+                ids=[result.ids[i] for i in filtered_indices] if result.ids else [],
+            )
+
+        return result
+
     def hybrid_query(
         self,
         query_str: str,
