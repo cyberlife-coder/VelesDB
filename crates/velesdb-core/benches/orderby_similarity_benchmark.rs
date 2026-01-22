@@ -1,4 +1,4 @@
-//! Benchmark for ORDER BY similarity() performance (EPIC-008/US-010).
+//! Benchmark for ORDER BY `similarity()` performance (EPIC-008/US-010).
 //!
 //! Validates AC-3: < 200µs for sorting by similarity score.
 
@@ -67,7 +67,7 @@ fn bench_parse_orderby_multiple(c: &mut Criterion) {
 fn bench_sort_by_similarity_score(c: &mut Criterion) {
     let mut group = c.benchmark_group("orderby_sort");
 
-    for size in [100usize, 500, 1000, 5000].iter() {
+    for size in &[100usize, 500, 1000, 5000] {
         // Generate mock search results with scores
         let results: Vec<(u64, f32)> = (0..*size).map(|i| (i as u64, rand_score(i))).collect();
 
@@ -98,8 +98,10 @@ fn bench_sort_by_similarity_score(c: &mut Criterion) {
 fn rand_score(seed: usize) -> f32 {
     let seed = seed as u64;
     // Simple LCG for deterministic "random" scores
-    let x = seed.wrapping_mul(1103515245).wrapping_add(12345);
-    (x % 1000) as f32 / 1000.0
+    let x = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+    #[allow(clippy::cast_precision_loss)]
+    let score = (x % 1000) as f32 / 1000.0;
+    score
 }
 
 criterion_group!(
