@@ -47,6 +47,7 @@ fn test_query_serialization() {
             columns: SelectColumns::All,
             from: "documents".to_string(),
             where_clause: None,
+            order_by: None,
             limit: Some(10),
             offset: None,
             with_clause: None,

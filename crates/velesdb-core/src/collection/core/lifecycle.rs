@@ -1,5 +1,6 @@
 //! Collection lifecycle methods (create, open, flush).
 
+use crate::collection::graph::{PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -82,6 +83,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
         };
 
         collection.save_config()?;
@@ -166,6 +169,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
         };
 
         collection.save_config()?;
@@ -223,6 +228,46 @@ impl Collection {
             }
         }
 
+        // Load PropertyIndex if it exists (EPIC-009 US-005)
+        let property_index = {
+            let index_path = path.join("property_index.bin");
+            if index_path.exists() {
+                match PropertyIndex::load_from_file(&index_path) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
+                            index_path,
+                            e
+                        );
+                        PropertyIndex::new()
+                    }
+                }
+            } else {
+                PropertyIndex::new()
+            }
+        };
+
+        // Load RangeIndex if it exists (EPIC-009 US-005)
+        let range_index = {
+            let index_path = path.join("range_index.bin");
+            if index_path.exists() {
+                match RangeIndex::load_from_file(&index_path) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
+                            index_path,
+                            e
+                        );
+                        RangeIndex::new()
+                    }
+                }
+            } else {
+                RangeIndex::new()
+            }
+        };
+
         Ok(Self {
             path,
             config: Arc::new(RwLock::new(config)),
@@ -232,6 +277,8 @@ impl Collection {
             text_index,
             sq8_cache: Arc::new(RwLock::new(HashMap::new())),
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_index: Arc::new(RwLock::new(property_index)),
+            range_index: Arc::new(RwLock::new(range_index)),
         })
     }
 
@@ -251,6 +298,21 @@ impl Collection {
         self.vector_storage.write().flush().map_err(Error::Io)?;
         self.payload_storage.write().flush().map_err(Error::Io)?;
         self.index.save(&self.path).map_err(Error::Io)?;
+
+        // Save PropertyIndex (EPIC-009 US-005)
+        let property_index_path = self.path.join("property_index.bin");
+        self.property_index
+            .read()
+            .save_to_file(&property_index_path)
+            .map_err(Error::Io)?;
+
+        // Save RangeIndex (EPIC-009 US-005)
+        let range_index_path = self.path.join("range_index.bin");
+        self.range_index
+            .read()
+            .save_to_file(&range_index_path)
+            .map_err(Error::Io)?;
+
         Ok(())
     }
 

@@ -2,6 +2,11 @@
 //!
 //! This module provides BFS-based traversal for variable-length path patterns
 //! like `(a)-[*1..3]->(b)` in MATCH clauses.
+//!
+//! # Streaming Mode (EPIC-019 US-005)
+//!
+//! For large graphs, the module provides streaming iterators that yield results
+//! lazily without loading all visited nodes into memory at once.
 
 #![allow(dead_code)] // WIP: Will be used by MATCH clause execution
 
@@ -119,13 +124,13 @@ impl TraversalConfig {
 
 /// BFS state for traversal.
 #[derive(Debug)]
-struct BfsState {
+pub(super) struct BfsState {
     /// Current node ID.
-    node_id: u64,
+    pub(super) node_id: u64,
     /// Path taken to reach this node (edge IDs).
-    path: Vec<u64>,
+    pub(super) path: Vec<u64>,
     /// Current depth.
-    depth: u32,
+    pub(super) depth: u32,
 }
 
 /// Performs BFS traversal from a source node.

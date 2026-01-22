@@ -37,8 +37,13 @@
 
 mod edge;
 mod edge_concurrent;
+mod label_table;
+mod metrics;
 mod node;
+mod property_index;
+mod range_index;
 mod schema;
+mod streaming;
 mod traversal;
 
 #[cfg(test)]
@@ -48,10 +53,19 @@ mod edge_tests;
 #[cfg(test)]
 mod node_tests;
 #[cfg(test)]
+mod property_index_tests;
+#[cfg(test)]
+mod range_index_tests;
+#[cfg(test)]
 mod schema_tests;
 
 pub use edge::{EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
+pub use label_table::{LabelId, LabelTable};
+pub use metrics::{GraphMetrics, LatencyHistogram};
 pub use node::{Element, GraphNode};
+pub use property_index::PropertyIndex;
+pub use range_index::{OrderedValue, RangeIndex};
 pub use schema::{EdgeType, GraphSchema, NodeType, ValueType};
+pub use streaming::{bfs_stream, BfsIterator, StreamingConfig};
 pub use traversal::{TraversalConfig, TraversalResult, DEFAULT_MAX_DEPTH};

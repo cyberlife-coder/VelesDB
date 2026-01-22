@@ -105,6 +105,11 @@ impl GraphEdge {
 ///
 /// Provides O(1) access to edges by ID and O(degree) access to
 /// outgoing/incoming edges for any node.
+///
+/// # Index Structure (EPIC-019 US-003)
+///
+/// - `by_label`: Secondary index for O(k) label-based queries
+/// - `outgoing_by_label`: Composite index (source, label) for O(k) filtered traversal
 #[derive(Debug, Default)]
 pub struct EdgeStore {
     /// All edges indexed by ID
@@ -113,6 +118,10 @@ pub struct EdgeStore {
     outgoing: HashMap<u64, Vec<u64>>,
     /// Incoming edges: target_id -> Vec<edge_id>
     incoming: HashMap<u64, Vec<u64>>,
+    /// Secondary index: label -> Vec<edge_id> for fast label queries
+    by_label: HashMap<String, Vec<u64>>,
+    /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
+    outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
 }
 
 impl EdgeStore {
@@ -122,9 +131,43 @@ impl EdgeStore {
         Self::default()
     }
 
+    /// Creates an edge store with pre-allocated capacity for better performance.
+    ///
+    /// Pre-allocating reduces memory reallocation overhead when inserting many edges.
+    /// With 10M edges, this can reduce peak memory usage by ~2x and improve insert throughput.
+    ///
+    /// # Arguments
+    ///
+    /// * `expected_edges` - Expected number of edges to store
+    /// * `expected_nodes` - Expected number of unique nodes (sources + targets)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // For a graph with ~1M edges and ~100K nodes
+    /// let store = EdgeStore::with_capacity(1_000_000, 100_000);
+    /// ```
+    #[must_use]
+    pub fn with_capacity(expected_edges: usize, expected_nodes: usize) -> Self {
+        // Estimate ~10 unique labels typical for knowledge graphs
+        let expected_labels = 10usize;
+        // Use saturating_mul to prevent overflow for extreme inputs
+        let outgoing_by_label_cap = expected_nodes
+            .saturating_mul(expected_labels)
+            .saturating_div(10);
+        Self {
+            edges: HashMap::with_capacity(expected_edges),
+            outgoing: HashMap::with_capacity(expected_nodes),
+            incoming: HashMap::with_capacity(expected_nodes),
+            by_label: HashMap::with_capacity(expected_labels),
+            outgoing_by_label: HashMap::with_capacity(outgoing_by_label_cap),
+        }
+    }
+
     /// Adds an edge to the store.
     ///
     /// Creates bidirectional index entries for efficient traversal.
+    /// Also maintains label-based secondary indices (EPIC-019 US-003).
     ///
     /// # Errors
     ///
@@ -133,6 +176,7 @@ impl EdgeStore {
         let id = edge.id();
         let source = edge.source();
         let target = edge.target();
+        let label = edge.label().to_string();
 
         // Check for duplicate ID
         if self.edges.contains_key(&id) {
@@ -144,6 +188,15 @@ impl EdgeStore {
 
         // Add to incoming index
         self.incoming.entry(target).or_default().push(id);
+
+        // Add to label index (US-003)
+        self.by_label.entry(label.clone()).or_default().push(id);
+
+        // Add to composite (source, label) index (US-003)
+        self.outgoing_by_label
+            .entry((source, label))
+            .or_default()
+            .push(id);
 
         // Store the edge
         self.edges.insert(id, edge);
@@ -161,6 +214,7 @@ impl EdgeStore {
     pub fn add_edge_outgoing_only(&mut self, edge: GraphEdge) -> Result<()> {
         let id = edge.id();
         let source = edge.source();
+        let label = edge.label().to_string();
 
         // Check for duplicate ID
         if self.edges.contains_key(&id) {
@@ -169,6 +223,15 @@ impl EdgeStore {
 
         // Add to outgoing index only
         self.outgoing.entry(source).or_default().push(id);
+
+        // Add to label index (US-003)
+        self.by_label.entry(label.clone()).or_default().push(id);
+
+        // Add to composite (source, label) index (US-003)
+        self.outgoing_by_label
+            .entry((source, label))
+            .or_default()
+            .push(id);
 
         // Store the edge
         self.edges.insert(id, edge);
@@ -179,6 +242,7 @@ impl EdgeStore {
     ///
     /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
     /// The edge is stored and indexed by target node only.
+    /// Note: Label indices are maintained by the source shard in ConcurrentEdgeStore.
     ///
     /// # Errors
     ///
@@ -195,6 +259,7 @@ impl EdgeStore {
         // Add to incoming index only
         self.incoming.entry(target).or_default().push(id);
 
+        // Note: by_label and outgoing_by_label are maintained by source shard
         // Store the edge
         self.edges.insert(id, edge);
         Ok(())
@@ -236,13 +301,27 @@ impl EdgeStore {
             .unwrap_or_default()
     }
 
-    /// Gets outgoing edges filtered by label.
+    /// Gets outgoing edges filtered by label using composite index - O(k) where k = result count.
+    ///
+    /// Uses the `outgoing_by_label` composite index for fast lookup instead of
+    /// iterating through all outgoing edges (EPIC-019 US-003).
     #[must_use]
     pub fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
-        self.get_outgoing(node_id)
-            .into_iter()
-            .filter(|e| e.label() == label)
-            .collect()
+        self.outgoing_by_label
+            .get(&(node_id, label.to_string()))
+            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Gets all edges with a specific label - O(k) where k = result count.
+    ///
+    /// Uses the `by_label` secondary index for fast lookup (EPIC-019 US-003).
+    #[must_use]
+    pub fn get_edges_by_label(&self, label: &str) -> Vec<&GraphEdge> {
+        self.by_label
+            .get(label)
+            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
+            .unwrap_or_default()
     }
 
     /// Gets incoming edges filtered by label.
@@ -262,15 +341,26 @@ impl EdgeStore {
 
     /// Removes an edge by ID.
     ///
-    /// Cleans up both outgoing and incoming indices.
+    /// Cleans up all indices: outgoing, incoming, by_label, and outgoing_by_label.
     pub fn remove_edge(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
+            let source = edge.source();
+            let label = edge.label().to_string();
+
             // Remove from outgoing index
-            if let Some(ids) = self.outgoing.get_mut(&edge.source()) {
+            if let Some(ids) = self.outgoing.get_mut(&source) {
                 ids.retain(|&id| id != edge_id);
             }
             // Remove from incoming index
             if let Some(ids) = self.incoming.get_mut(&edge.target()) {
+                ids.retain(|&id| id != edge_id);
+            }
+            // Remove from label index (US-003)
+            if let Some(ids) = self.by_label.get_mut(&label) {
+                ids.retain(|&id| id != edge_id);
+            }
+            // Remove from composite index (US-003)
+            if let Some(ids) = self.outgoing_by_label.get_mut(&(source, label)) {
                 ids.retain(|&id| id != edge_id);
             }
         }
@@ -279,9 +369,20 @@ impl EdgeStore {
     /// Removes an edge by ID, only cleaning the outgoing index.
     ///
     /// Used by `ConcurrentEdgeStore` for cross-shard cleanup.
+    /// Also cleans up label indices since they are maintained by source shard.
     pub fn remove_edge_outgoing_only(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
-            if let Some(ids) = self.outgoing.get_mut(&edge.source()) {
+            let source = edge.source();
+            let label = edge.label().to_string();
+
+            if let Some(ids) = self.outgoing.get_mut(&source) {
+                ids.retain(|&id| id != edge_id);
+            }
+            // Clean label indices (US-003)
+            if let Some(ids) = self.by_label.get_mut(&label) {
+                ids.retain(|&id| id != edge_id);
+            }
+            if let Some(ids) = self.outgoing_by_label.get_mut(&(source, label)) {
                 ids.retain(|&id| id != edge_id);
             }
         }
@@ -300,7 +401,8 @@ impl EdgeStore {
 
     /// Removes all edges connected to a node (cascade delete).
     ///
-    /// Removes both outgoing and incoming edges, cleaning up all indices.
+    /// Removes both outgoing and incoming edges, cleaning up all indices
+    /// including label indices (EPIC-019 US-003).
     pub fn remove_node_edges(&mut self, node_id: u64) {
         // Collect edge IDs to remove (outgoing)
         let outgoing_ids: Vec<u64> = self.outgoing.remove(&node_id).unwrap_or_default();
@@ -308,19 +410,40 @@ impl EdgeStore {
         // Collect edge IDs to remove (incoming)
         let incoming_ids: Vec<u64> = self.incoming.remove(&node_id).unwrap_or_default();
 
-        // Remove outgoing edges and clean incoming indices
+        // Remove outgoing edges and clean all indices
         for edge_id in outgoing_ids {
             if let Some(edge) = self.edges.remove(&edge_id) {
+                let label = edge.label().to_string();
+                // Clean incoming index
                 if let Some(ids) = self.incoming.get_mut(&edge.target()) {
+                    ids.retain(|&id| id != edge_id);
+                }
+                // Clean label index (US-003)
+                if let Some(ids) = self.by_label.get_mut(&label) {
+                    ids.retain(|&id| id != edge_id);
+                }
+                // Clean composite index (US-003)
+                if let Some(ids) = self.outgoing_by_label.get_mut(&(node_id, label)) {
                     ids.retain(|&id| id != edge_id);
                 }
             }
         }
 
-        // Remove incoming edges and clean outgoing indices
+        // Remove incoming edges and clean all indices
         for edge_id in incoming_ids {
             if let Some(edge) = self.edges.remove(&edge_id) {
-                if let Some(ids) = self.outgoing.get_mut(&edge.source()) {
+                let source = edge.source();
+                let label = edge.label().to_string();
+                // Clean outgoing index
+                if let Some(ids) = self.outgoing.get_mut(&source) {
+                    ids.retain(|&id| id != edge_id);
+                }
+                // Clean label index (US-003)
+                if let Some(ids) = self.by_label.get_mut(&label) {
+                    ids.retain(|&id| id != edge_id);
+                }
+                // Clean composite index (US-003)
+                if let Some(ids) = self.outgoing_by_label.get_mut(&(source, label)) {
                     ids.retain(|&id| id != edge_id);
                 }
             }

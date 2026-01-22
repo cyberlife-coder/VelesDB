@@ -186,15 +186,20 @@ impl Collection {
         let payload_storage = self.payload_storage.read();
 
         // Map index results to SearchResult with full point data, applying filter
+        // FIX: Consistent null payload handling - match null if no payload (same as execute_query)
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
 
-                // Apply filter - if no payload, filter fails
-                let payload_ref = payload.as_ref()?;
-                if !filter.matches(payload_ref) {
+                // Apply filter - check if filter matches payload or null
+                // This matches the behavior in execute_query for consistency
+                let matches = match payload.as_ref() {
+                    Some(p) => filter.matches(p),
+                    None => filter.matches(&serde_json::Value::Null),
+                };
+                if !matches {
                     return None;
                 }
 
@@ -209,11 +214,25 @@ impl Collection {
             .take(k)
             .collect();
 
-        // Ensure results are sorted by score (should already be, but defensive)
+        // Sort results by similarity (most similar first)
+        // For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar → DESC
+        // For distance metrics (Euclidean, Hamming): lower score = more similar → ASC
+        let config = self.config.read();
+        let higher_is_better = config.metric.higher_is_better();
+        drop(config);
+
         results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            if higher_is_better {
+                // Similarity: descending (highest first)
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                // Distance: ascending (lowest first)
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
         });
 
         Ok(results)

@@ -20,12 +20,46 @@ pub struct SelectStatement {
     pub from: String,
     /// WHERE conditions (optional).
     pub where_clause: Option<Condition>,
+    /// ORDER BY clause (optional).
+    pub order_by: Option<Vec<SelectOrderBy>>,
     /// LIMIT value (optional).
     pub limit: Option<u64>,
     /// OFFSET value (optional).
     pub offset: Option<u64>,
     /// WITH clause for query-time configuration (optional).
     pub with_clause: Option<WithClause>,
+}
+
+/// ORDER BY item for sorting SELECT results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectOrderBy {
+    /// Expression to order by (field or similarity).
+    pub expr: OrderByExpr,
+    /// Sort direction (true = DESC, false = ASC).
+    pub descending: bool,
+}
+
+/// Expression types supported in ORDER BY clause.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum OrderByExpr {
+    /// Simple field reference (e.g., `created_at`).
+    Field(String),
+    /// Similarity function (e.g., `similarity(embedding, $v)`).
+    Similarity(SimilarityOrderBy),
+}
+
+/// Similarity expression for ORDER BY.
+///
+/// # Example
+/// ```sql
+/// ORDER BY similarity(embedding, $query_vec) DESC
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarityOrderBy {
+    /// Field containing the embedding vector.
+    pub field: String,
+    /// Vector to compare against.
+    pub vector: VectorExpr,
 }
 
 /// WITH clause for query-time configuration overrides.
@@ -210,6 +244,8 @@ pub enum Condition {
     VectorSearch(VectorSearch),
     /// Multi-vector fused search: `vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'`
     VectorFusedSearch(VectorFusedSearch),
+    /// Similarity function: `similarity(field, $vector) > threshold`
+    Similarity(SimilarityCondition),
     /// Comparison: column op value
     Comparison(Comparison),
     /// IN operator: column IN (values)
@@ -311,6 +347,29 @@ pub enum VectorExpr {
     Literal(Vec<f32>),
     /// Parameter reference: `$param_name`
     Parameter(String),
+}
+
+/// Similarity function condition: `similarity(field, vector) op threshold`
+///
+/// Used in hybrid queries combining graph traversal with vector similarity.
+///
+/// # Example
+///
+/// ```sql
+/// MATCH (d:Document)-[:MENTIONS]->(e:Entity)
+/// WHERE similarity(d.embedding, $query_vector) > 0.8
+/// RETURN d, e
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarityCondition {
+    /// Field name containing the embedding (e.g., "embedding", "node.embedding")
+    pub field: String,
+    /// Vector to compare against (literal or parameter)
+    pub vector: VectorExpr,
+    /// Comparison operator (>, >=, <, <=, =)
+    pub operator: CompareOp,
+    /// Similarity threshold (typically 0.0 to 1.0)
+    pub threshold: f64,
 }
 
 /// Comparison condition.

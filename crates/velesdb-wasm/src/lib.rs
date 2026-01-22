@@ -47,6 +47,7 @@ mod graph;
 mod persistence;
 mod simd;
 mod text_search;
+mod vector_ops;
 
 pub use distance::DistanceMetric;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
@@ -503,84 +504,29 @@ impl VectorStore {
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
 
-        let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = match self.storage_mode {
-            StorageMode::Full => self
-                .ids
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &id)| {
-                    let payload = self.payloads[idx].as_ref()?;
-                    if !filter::matches_filter(payload, &filter_obj) {
-                        return None;
-                    }
-                    let start = idx * self.dimension;
-                    let v_data = &self.data[start..start + self.dimension];
-                    let score = self.metric.calculate(query, v_data);
-                    Some((id, score, Some(payload)))
-                })
-                .collect(),
-            StorageMode::SQ8 => {
-                let mut dequantized = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, &id)| {
-                        let payload = self.payloads[idx].as_ref()?;
-                        if !filter::matches_filter(payload, &filter_obj) {
-                            return None;
-                        }
-                        let start = idx * self.dimension;
-                        let min = self.sq8_mins[idx];
-                        let scale = self.sq8_scales[idx];
-                        for (i, &q) in self.data_sq8[start..start + self.dimension]
-                            .iter()
-                            .enumerate()
-                        {
-                            dequantized[i] = (f32::from(q) / scale) + min;
-                        }
-                        let score = self.metric.calculate(query, &dequantized);
-                        Some((id, score, Some(payload)))
-                    })
-                    .collect()
-            }
-            StorageMode::Binary => {
-                let bytes_per_vec = self.dimension.div_ceil(8);
-                let mut binary_vec = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, &id)| {
-                        let payload = self.payloads[idx].as_ref()?;
-                        if !filter::matches_filter(payload, &filter_obj) {
-                            return None;
-                        }
-                        let start = idx * bytes_per_vec;
-                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
-                            .iter()
-                            .enumerate()
-                        {
-                            for bit in 0..8 {
-                                let dim_idx = i * 8 + bit;
-                                if dim_idx < self.dimension {
-                                    binary_vec[dim_idx] =
-                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                                }
-                            }
-                        }
-                        let score = self.metric.calculate(query, &binary_vec);
-                        Some((id, score, Some(payload)))
-                    })
-                    .collect()
-            }
-        };
+        let mut results = vector_ops::compute_filtered_scores(
+            query,
+            &self.ids,
+            &self.payloads,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            self.metric,
+            self.storage_mode,
+            |payload| filter::matches_filter(payload, &filter_obj),
+        );
 
         // Sort by relevance
-        if self.metric.higher_is_better() {
-            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
+        results.sort_by(|a, b| {
+            if self.metric.higher_is_better() {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
         results.truncate(k);
 
         // Convert to serializable format
@@ -645,83 +591,110 @@ impl VectorStore {
             )));
         }
 
-        let mut results: Vec<(u64, f32)> = match self.storage_mode {
-            StorageMode::Full => {
-                // Full precision - direct calculation
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * self.dimension;
-                        let v_data = &self.data[start..start + self.dimension];
-                        let score = self.metric.calculate(query, v_data);
-                        (id, score)
-                    })
-                    .collect()
-            }
-            StorageMode::SQ8 => {
-                // SQ8 - dequantize on the fly
-                let mut dequantized = vec![0.0f32; self.dimension];
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * self.dimension;
-                        let min = self.sq8_mins[idx];
-                        let scale = self.sq8_scales[idx];
+        let mut results = vector_ops::compute_scores(
+            query,
+            &self.ids,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            self.metric,
+            self.storage_mode,
+        );
 
-                        // Dequantize: value = (quantized / scale) + min
-                        for (i, &q) in self.data_sq8[start..start + self.dimension]
-                            .iter()
-                            .enumerate()
-                        {
-                            dequantized[i] = (f32::from(q) / scale) + min;
-                        }
+        // Sort by relevance
+        vector_ops::sort_results(&mut results, self.metric.higher_is_better());
+        results.truncate(k);
 
-                        let score = self.metric.calculate(query, &dequantized);
-                        (id, score)
-                    })
-                    .collect()
-            }
-            StorageMode::Binary => {
-                // Binary - unpack bits and compare
-                let bytes_per_vec = self.dimension.div_ceil(8);
-                let mut binary_vec = vec![0.0f32; self.dimension];
+        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 
-                self.ids
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &id)| {
-                        let start = idx * bytes_per_vec;
+    /// Similarity search with threshold filtering.
+    ///
+    /// Returns vectors where similarity to query meets the threshold condition.
+    /// This is the WASM equivalent of `VelesQL`'s `WHERE similarity(field, vector) > threshold`.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query vector as `Float32Array`
+    /// * `threshold` - Similarity threshold value
+    /// * `operator` - Comparison operator: ">" (gt), ">=" (gte), "<" (lt), "<=" (lte), "=" (eq), "!=" (neq)
+    /// * `k` - Maximum number of results
+    ///
+    /// # Returns
+    ///
+    /// Array of `[id, score]` tuples where score meets the threshold condition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query dimension doesn't match or operator is invalid.
+    #[wasm_bindgen]
+    pub fn similarity_search(
+        &self,
+        query: &[f32],
+        threshold: f32,
+        operator: &str,
+        k: usize,
+    ) -> Result<JsValue, JsValue> {
+        if query.len() != self.dimension {
+            return Err(JsValue::from_str(&format!(
+                "Query dimension mismatch: expected {}, got {}",
+                self.dimension,
+                query.len()
+            )));
+        }
 
-                        // Unpack bits to f32 (0.0 or 1.0)
-                        for (i, &byte) in self.data_binary[start..start + bytes_per_vec]
-                            .iter()
-                            .enumerate()
-                        {
-                            for bit in 0..8 {
-                                let dim_idx = i * 8 + bit;
-                                if dim_idx < self.dimension {
-                                    binary_vec[dim_idx] =
-                                        if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                                }
-                            }
-                        }
-
-                        let score = self.metric.calculate(query, &binary_vec);
-                        (id, score)
-                    })
-                    .collect()
+        // Parse operator - METRIC-AWARE comparison
+        // For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
+        // For distance metrics (Euclidean, Hamming): lower score = more similar
+        // When user says "similarity() > 0.8", they mean "more similar than 0.8 threshold"
+        // For distance metrics, this inverts to "distance < 0.8"
+        let higher_is_better = self.metric.higher_is_better();
+        let op_fn: Box<dyn Fn(f32, f32) -> bool> = match (operator, higher_is_better) {
+            // Similarity metrics: normal comparison
+            (">" | "gt", true) => Box::new(|score, thresh| score > thresh),
+            (">=" | "gte", true) => Box::new(|score, thresh| score >= thresh),
+            ("<" | "lt", true) => Box::new(|score, thresh| score < thresh),
+            ("<=" | "lte", true) => Box::new(|score, thresh| score <= thresh),
+            // Distance metrics: inverted comparison (lower = more similar)
+            (">" | "gt", false) => Box::new(|score, thresh| score < thresh),
+            (">=" | "gte", false) => Box::new(|score, thresh| score <= thresh),
+            ("<" | "lt", false) => Box::new(|score, thresh| score > thresh),
+            ("<=" | "lte", false) => Box::new(|score, thresh| score >= thresh),
+            // Equality operators: same for both metric types
+            ("=" | "eq", _) => Box::new(|score, thresh| (score - thresh).abs() < 0.001),
+            ("!=" | "neq", _) => Box::new(|score, thresh| (score - thresh).abs() >= 0.001),
+            _ => {
+                return Err(JsValue::from_str(
+                    "Invalid operator. Use: >, >=, <, <=, =, != (or gt, gte, lt, lte, eq, neq)",
+                ))
             }
         };
 
-        // Sort by relevance
-        if self.metric.higher_is_better() {
-            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        } else {
-            results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
+        // Calculate all similarities using helper
+        let all_scores = vector_ops::compute_scores(
+            query,
+            &self.ids,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            self.metric,
+            self.storage_mode,
+        );
 
+        // Filter by threshold
+        let mut results: Vec<(u64, f32)> = all_scores
+            .into_iter()
+            .filter(|(_, score)| op_fn(*score, threshold))
+            .collect();
+
+        // Sort by relevance
+        vector_ops::sort_results(&mut results, self.metric.higher_is_better());
         results.truncate(k);
 
         serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))

@@ -1,0 +1,7 @@
+langchain-core>=0.1.0
+velesdb>=0.8.0
+
+[dev]
+pytest>=7.0
+pytest-asyncio>=0.21
+langchain>=0.1.0
