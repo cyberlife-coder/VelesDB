@@ -85,18 +85,18 @@ impl Collection {
             return Ok(());
         }
 
-        // Pre-compute similarity scores if any ORDER BY uses similarity()
-        // This avoids recomputing during the sort comparison
-        let mut similarity_scores: Option<Vec<f32>> = None;
-        for ob in order_by {
+        // BUG-3 FIX: Pre-compute similarity scores for ALL ORDER BY similarity() columns
+        // Each similarity() can use a different vector, so we need separate score vectors
+        let mut similarity_scores_map: std::collections::HashMap<usize, Vec<f32>> =
+            std::collections::HashMap::new();
+        for (idx, ob) in order_by.iter().enumerate() {
             if let OrderByExpr::Similarity(sim) = &ob.expr {
                 let order_vec = self.resolve_vector(&sim.vector, params)?;
                 let scores: Vec<f32> = results
                     .iter()
                     .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
                     .collect();
-                similarity_scores = Some(scores);
-                break; // Only need to compute once
+                similarity_scores_map.insert(idx, scores);
             }
         }
 
@@ -107,13 +107,15 @@ impl Collection {
         // Create index-based sorting to maintain score association
         let mut indices: Vec<usize> = (0..results.len()).collect();
 
+        // BUG-5 FIX: Use stable sort to preserve relative order of equal elements
+        // This ensures documented stable multi-column sorting behavior
         indices.sort_by(|&i, &j| {
             // Compare by each ORDER BY column in sequence
-            for ob in order_by {
+            for (idx, ob) in order_by.iter().enumerate() {
                 let cmp = match &ob.expr {
                     OrderByExpr::Similarity(_) => {
-                        // Use pre-computed similarity scores
-                        if let Some(ref scores) = similarity_scores {
+                        // BUG-3 FIX: Use scores for THIS specific similarity() column
+                        if let Some(scores) = similarity_scores_map.get(&idx) {
                             let score_i = scores[i];
                             let score_j = scores[j];
                             score_i.total_cmp(&score_j)
@@ -167,8 +169,8 @@ impl Collection {
             indices.iter().map(|&i| results[i].clone()).collect();
         results.clone_from_slice(&sorted_results);
 
-        // Update scores if similarity was used
-        if let Some(scores) = similarity_scores {
+        // Update scores if similarity was used (use first similarity column's scores)
+        if let Some(scores) = similarity_scores_map.get(&0) {
             for (i, result) in results.iter_mut().enumerate() {
                 result.score = scores[indices[i]];
             }
