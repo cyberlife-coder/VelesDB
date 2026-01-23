@@ -18,6 +18,9 @@ pub struct SelectStatement {
     pub columns: SelectColumns,
     /// Collection name (FROM clause).
     pub from: String,
+    /// JOIN clauses for cross-store queries (EPIC-031 US-004).
+    #[serde(default)]
+    pub joins: Vec<JoinClause>,
     /// WHERE conditions (optional).
     pub where_clause: Option<Condition>,
     /// ORDER BY clause (optional).
@@ -28,6 +31,44 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// WITH clause for query-time configuration (optional).
     pub with_clause: Option<WithClause>,
+}
+
+/// JOIN clause for cross-store queries (EPIC-031 US-004).
+///
+/// Allows joining graph traversal results with ColumnStore data.
+///
+/// # Example
+/// ```sql
+/// MATCH (p:Product)
+/// JOIN prices AS pr ON pr.product_id = p.id
+/// WHERE pr.available = true
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JoinClause {
+    /// Table/store name to join.
+    pub table: String,
+    /// Optional alias for the joined table.
+    pub alias: Option<String>,
+    /// Join condition (ON clause).
+    pub condition: JoinCondition,
+}
+
+/// Join condition specifying how to link tables.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JoinCondition {
+    /// Left side of the join (table.column).
+    pub left: ColumnRef,
+    /// Right side of the join (match_var.property).
+    pub right: ColumnRef,
+}
+
+/// Column reference with optional table/alias prefix.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnRef {
+    /// Optional table or alias prefix.
+    pub table: Option<String>,
+    /// Column or property name.
+    pub column: String,
 }
 
 /// ORDER BY item for sorting SELECT results.

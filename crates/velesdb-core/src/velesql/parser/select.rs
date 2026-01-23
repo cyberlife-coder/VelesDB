@@ -2,7 +2,8 @@
 
 use super::Rule;
 use crate::velesql::ast::{
-    Column, OrderByExpr, Query, SelectColumns, SelectOrderBy, SelectStatement, SimilarityOrderBy,
+    Column, ColumnRef, JoinClause, JoinCondition, OrderByExpr, Query, SelectColumns, SelectOrderBy,
+    SelectStatement, SimilarityOrderBy,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -25,6 +26,7 @@ impl Parser {
     ) -> Result<SelectStatement, ParseError> {
         let mut columns = SelectColumns::All;
         let mut from = String::new();
+        let mut joins = Vec::new();
         let mut where_clause = None;
         let mut order_by = None;
         let mut limit = None;
@@ -38,6 +40,9 @@ impl Parser {
                 }
                 Rule::identifier => {
                     from = inner_pair.as_str().to_string();
+                }
+                Rule::join_clause => {
+                    joins.push(Self::parse_join_clause(inner_pair)?);
                 }
                 Rule::where_clause => {
                     where_clause = Some(Self::parse_where_clause(inner_pair)?);
@@ -61,6 +66,7 @@ impl Parser {
         Ok(SelectStatement {
             columns,
             from,
+            joins,
             where_clause,
             order_by,
             limit,
@@ -201,5 +207,91 @@ impl Parser {
     pub(crate) fn parse_column_name(pair: &pest::iterators::Pair<Rule>) -> String {
         // column_name is atomic (@), so we get the full string directly
         pair.as_str().to_string()
+    }
+
+    /// Parse JOIN clause (EPIC-031 US-004).
+    pub(crate) fn parse_join_clause(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<JoinClause, ParseError> {
+        let mut table = String::new();
+        let mut alias = None;
+        let mut condition = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    table = inner_pair.as_str().to_string();
+                }
+                Rule::alias_clause => {
+                    // alias_clause contains AS identifier
+                    for alias_inner in inner_pair.into_inner() {
+                        if alias_inner.as_rule() == Rule::identifier {
+                            alias = Some(alias_inner.as_str().to_string());
+                        }
+                    }
+                }
+                Rule::join_condition => {
+                    condition = Some(Self::parse_join_condition(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let condition = condition
+            .ok_or_else(|| ParseError::syntax(0, "", "JOIN clause missing ON condition"))?;
+
+        Ok(JoinClause {
+            table,
+            alias,
+            condition,
+        })
+    }
+
+    /// Parse JOIN condition (table.column = var.property).
+    pub(crate) fn parse_join_condition(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<JoinCondition, ParseError> {
+        let mut refs: Vec<ColumnRef> = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::column_ref {
+                refs.push(Self::parse_column_ref(&inner_pair)?);
+            }
+        }
+
+        if refs.len() != 2 {
+            return Err(ParseError::syntax(
+                0,
+                "",
+                "JOIN condition requires exactly two column references",
+            ));
+        }
+
+        let right = refs.pop().unwrap();
+        let left = refs.pop().unwrap();
+
+        Ok(JoinCondition { left, right })
+    }
+
+    /// Parse column reference (table.column).
+    pub(crate) fn parse_column_ref(
+        pair: &pest::iterators::Pair<Rule>,
+    ) -> Result<ColumnRef, ParseError> {
+        // column_ref is atomic (@), format: "table.column"
+        let s = pair.as_str();
+        let parts: Vec<&str> = s.split('.').collect();
+
+        if parts.len() != 2 {
+            return Err(ParseError::syntax(
+                0,
+                s,
+                "Column reference must be in format 'table.column'",
+            ));
+        }
+
+        Ok(ColumnRef {
+            table: Some(parts[0].to_string()),
+            column: parts[1].to_string(),
+        })
     }
 }

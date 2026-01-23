@@ -322,3 +322,61 @@ fn test_parse_with_clause_float_value() {
     let value = with.get("threshold").expect("Expected threshold option");
     assert_eq!(value.as_float(), Some(0.95));
 }
+
+// ========== JOIN clause tests (EPIC-031 US-004) ==========
+
+#[test]
+fn test_parse_simple_join() {
+    let query =
+        Parser::parse("SELECT * FROM products JOIN prices ON prices.product_id = products.id")
+            .unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    let join = &query.select.joins[0];
+    assert_eq!(join.table, "prices");
+    assert!(join.alias.is_none());
+    assert_eq!(join.condition.left.table, Some("prices".to_string()));
+    assert_eq!(join.condition.left.column, "product_id");
+    assert_eq!(join.condition.right.table, Some("products".to_string()));
+    assert_eq!(join.condition.right.column, "id");
+}
+
+#[test]
+fn test_parse_join_with_alias() {
+    let query =
+        Parser::parse("SELECT * FROM products JOIN prices AS pr ON pr.product_id = products.id")
+            .unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    let join = &query.select.joins[0];
+    assert_eq!(join.table, "prices");
+    assert_eq!(join.alias, Some("pr".to_string()));
+    assert_eq!(join.condition.left.table, Some("pr".to_string()));
+    assert_eq!(join.condition.left.column, "product_id");
+}
+
+#[test]
+fn test_parse_multiple_joins() {
+    let query = Parser::parse(
+        "SELECT * FROM trips JOIN prices ON prices.trip_id = trips.id JOIN availability ON availability.trip_id = trips.id",
+    )
+    .unwrap();
+    assert_eq!(query.select.joins.len(), 2);
+    assert_eq!(query.select.joins[0].table, "prices");
+    assert_eq!(query.select.joins[1].table, "availability");
+}
+
+#[test]
+fn test_parse_join_with_where() {
+    // Note: WHERE currently only supports simple identifiers, not table.column
+    let query = Parser::parse(
+        "SELECT * FROM products JOIN prices ON prices.product_id = products.id WHERE value > 100",
+    )
+    .unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    assert!(query.select.where_clause.is_some());
+}
+
+#[test]
+fn test_parse_no_join() {
+    let query = Parser::parse("SELECT * FROM products WHERE id = 1").unwrap();
+    assert!(query.select.joins.is_empty());
+}

@@ -12,6 +12,7 @@ fn test_plan_from_simple_select() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "documents".to_string(),
+        joins: vec![],
         where_clause: None,
         order_by: None,
         limit: Some(10),
@@ -34,6 +35,7 @@ fn test_plan_from_vector_search() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "embeddings".to_string(),
+        joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("query".to_string()),
         })),
@@ -57,6 +59,7 @@ fn test_plan_with_filter() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "docs".to_string(),
+        joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
                 vector: VectorExpr::Parameter("v".to_string()),
@@ -87,6 +90,7 @@ fn test_plan_to_tree_format() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "documents".to_string(),
+        joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("q".to_string()),
         })),
@@ -113,6 +117,7 @@ fn test_plan_to_json() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "test".to_string(),
+        joins: vec![],
         where_clause: None,
         order_by: None,
         limit: Some(5),
@@ -135,6 +140,7 @@ fn test_plan_with_offset() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "items".to_string(),
+        joins: vec![],
         where_clause: None,
         order_by: None,
         limit: Some(10),
@@ -157,6 +163,7 @@ fn test_filter_strategy_post_filter_default() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "docs".to_string(),
+        joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
                 vector: VectorExpr::Parameter("v".to_string()),
@@ -203,6 +210,7 @@ fn test_plan_display_impl() {
     let stmt = SelectStatement {
         columns: SelectColumns::All,
         from: "test".to_string(),
+        joins: vec![],
         where_clause: None,
         order_by: None,
         limit: Some(5),
