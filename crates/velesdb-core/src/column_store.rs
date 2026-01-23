@@ -361,12 +361,20 @@ impl ColumnStore {
         // Check for duplicate (but allow reuse of deleted slot)
         if let Some(&existing_idx) = self.primary_index.get(&pk_value) {
             if self.deleted_rows.contains(&existing_idx) {
+                // Validate types BEFORE undeletion for atomicity
+                for (col_name, value) in values {
+                    if let Some(col) = self.columns.get(*col_name) {
+                        if !matches!(value, ColumnValue::Null) {
+                            Self::validate_type_match(col, value)?;
+                        }
+                    }
+                }
                 // Reuse deleted slot - undelete and update values
                 self.deleted_rows.remove(&existing_idx);
-                // Update the row values at the existing index
+                // Update the row values at the existing index - errors propagated
                 for (col_name, value) in values {
                     if let Some(col) = self.columns.get_mut(*col_name) {
-                        let _ = Self::set_column_value(col, existing_idx, value.clone());
+                        Self::set_column_value(col, existing_idx, value.clone())?;
                     }
                 }
                 return Ok(existing_idx);
@@ -879,9 +887,19 @@ impl ColumnStore {
         if let Some(&row_idx) = self.primary_index.get(&pk_value) {
             // Check if row is deleted
             if self.deleted_rows.contains(&row_idx) {
-                // Re-insert the row (undelete + update)
+                // Validate types BEFORE undeletion for atomicity
+                for (col_name, value) in values {
+                    if *col_name != pk_col.as_str() {
+                        if let Some(col) = self.columns.get(*col_name) {
+                            if !matches!(value, ColumnValue::Null) {
+                                Self::validate_type_match(col, value)?;
+                            }
+                        }
+                    }
+                }
+                // Re-insert the row (undelete + update) - validation passed
                 self.deleted_rows.remove(&row_idx);
-                // Update all provided columns - propagate errors
+                // Update all provided columns - errors propagated
                 for (col_name, value) in values {
                     if *col_name != pk_col.as_str() {
                         if let Some(col) = self.columns.get_mut(*col_name) {
@@ -892,7 +910,17 @@ impl ColumnStore {
                 return Ok(UpsertResult::Inserted);
             }
 
-            // Update existing row - propagate errors
+            // Validate types BEFORE applying updates for atomicity
+            for (col_name, value) in values {
+                if *col_name != pk_col.as_str() {
+                    if let Some(col) = self.columns.get(*col_name) {
+                        if !matches!(value, ColumnValue::Null) {
+                            Self::validate_type_match(col, value)?;
+                        }
+                    }
+                }
+            }
+            // Update existing row - validation passed, errors propagated
             for (col_name, value) in values {
                 if *col_name != pk_col.as_str() {
                     if let Some(col) = self.columns.get_mut(*col_name) {

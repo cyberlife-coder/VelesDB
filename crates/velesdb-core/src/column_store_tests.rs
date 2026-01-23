@@ -1539,4 +1539,70 @@ mod tests {
             result
         );
     }
+
+    /// Regression test: insert_row reusing deleted slot must be atomic
+    /// PR Review Bug: insert_row silently ignored errors and left row in inconsistent state
+    #[test]
+    fn test_insert_row_reuse_slot_atomic_on_type_mismatch() {
+        // Arrange: Create store and insert then delete a row
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
+            .unwrap();
+        store.delete_by_pk(1);
+
+        // Act: Try to reuse deleted slot with wrong type
+        let result = store.insert_row(&[
+            ("id", ColumnValue::Int(1)),
+            ("val", ColumnValue::Float(99.9)), // Wrong type!
+        ]);
+
+        // Assert: Should fail with TypeMismatch, row should remain deleted
+        assert!(
+            matches!(result, Err(ColumnStoreError::TypeMismatch { .. })),
+            "insert_row should return TypeMismatch error"
+        );
+        // Row should still be deleted (atomicity - no partial state change)
+        assert!(
+            store.get_row_idx_by_pk(1).is_none(),
+            "Row should remain deleted after failed insert"
+        );
+    }
+
+    /// Regression test: upsert re-inserting deleted row must be atomic
+    /// PR Review Bug: upsert undeleted row before validating, leaving inconsistent state
+    #[test]
+    fn test_upsert_reinsert_deleted_row_atomic() {
+        // Arrange: Create store and insert then delete a row
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
+            .unwrap();
+        store.delete_by_pk(1);
+
+        // Act: Try to upsert deleted row with wrong type
+        let result = store.upsert(&[
+            ("id", ColumnValue::Int(1)),
+            ("val", ColumnValue::Float(99.9)), // Wrong type!
+        ]);
+
+        // Assert: Should fail with TypeMismatch, row should remain deleted
+        assert!(
+            matches!(result, Err(ColumnStoreError::TypeMismatch { .. })),
+            "upsert should return TypeMismatch error"
+        );
+        // Row should still be deleted (atomicity - undeletion should not occur)
+        assert!(
+            store.get_row_idx_by_pk(1).is_none(),
+            "Row should remain deleted after failed upsert"
+        );
+    }
 }
