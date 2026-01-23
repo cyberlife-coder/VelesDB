@@ -297,7 +297,7 @@ class VelesDBVectorStore(VectorStore):
 
         # Search with filter if provided
         if filter:
-            results = collection.search(query_embedding, top_k=k, filter=filter)
+            results = collection.search_with_filter(query_embedding, top_k=k, filter=filter)
         else:
             results = collection.search(query_embedding, top_k=k)
 
@@ -637,7 +637,14 @@ class VelesDBVectorStore(VectorStore):
         if not ids or self._collection is None:
             return []
 
-        int_ids = [hash(id_str) & 0x7FFFFFFFFFFFFFFF for id_str in ids]
+        def to_int_id(id_str: str) -> int:
+            """Convert string ID to int ID, handling both numeric and hashed IDs."""
+            try:
+                return int(id_str)
+            except ValueError:
+                return hash(id_str) & 0x7FFFFFFFFFFFFFFF
+
+        int_ids = [to_int_id(id_str) for id_str in ids]
         points = self._collection.get(int_ids)
 
         documents: List[Document] = []
