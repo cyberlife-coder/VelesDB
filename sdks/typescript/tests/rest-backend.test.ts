@@ -255,8 +255,8 @@ describe('RestBackend', () => {
           body: JSON.stringify({
             vectors: vectors,
             top_k: 10,
-            fusion: 'rrf',
-            fusion_params: { k: 60 },
+            strategy: 'rrf',
+            rrf_k: 60,
             filter: undefined,
           }),
         })
@@ -303,7 +303,7 @@ describe('RestBackend', () => {
       expect(mockFetch).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          body: expect.stringContaining('"fusion":"rrf"'),
+          body: expect.stringContaining('"strategy":"rrf"'),
         })
       );
     });
