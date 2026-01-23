@@ -198,6 +198,8 @@ pub struct ColumnStore {
     primary_key_column: Option<String>,
     /// Primary key index: pk_value → row_idx (O(1) lookup)
     primary_index: HashMap<i64, usize>,
+    /// Reverse index: row_idx → pk_value (O(1) reverse lookup for expire_rows)
+    row_idx_to_pk: HashMap<usize, i64>,
     /// Deleted row indices (tombstones)
     deleted_rows: rustc_hash::FxHashSet<usize>,
     /// Row expiry timestamps: row_idx → expiry_timestamp (US-004 TTL)
@@ -376,8 +378,9 @@ impl ColumnStore {
         let row_idx = self.row_count;
         self.push_row(values);
 
-        // Update the primary index
+        // Update the primary index and reverse index
         self.primary_index.insert(pk_value, row_idx);
+        self.row_idx_to_pk.insert(row_idx, pk_value);
 
         Ok(row_idx)
     }
@@ -787,8 +790,8 @@ impl ColumnStore {
 
         // Remove expired rows (tombstone deletion - keep pk in index for potential reuse)
         for row_idx in expired_rows {
-            // Find the PK for this row
-            if let Some((&pk, _)) = self.primary_index.iter().find(|(_, &idx)| idx == row_idx) {
+            // O(1) reverse lookup via row_idx_to_pk
+            if let Some(&pk) = self.row_idx_to_pk.get(&row_idx) {
                 // Don't remove from primary_index - allows slot reuse on upsert
                 self.deleted_rows.insert(row_idx);
                 self.row_expiry.remove(&row_idx);

@@ -1342,4 +1342,42 @@ mod tests {
             "Updating primary key column should be rejected to prevent index corruption"
         );
     }
+
+    /// Regression test: expire_rows uses O(1) reverse index lookup
+    /// Previously used O(n) iter().find() which was inefficient for large datasets
+    #[test]
+    fn test_expire_rows_uses_reverse_index() {
+        // Arrange: Create store with multiple rows and TTL
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        // Insert multiple rows with immediate expiry (TTL = 0)
+        for i in 1..=100 {
+            store
+                .insert_row(&[
+                    ("id", ColumnValue::Int(i)),
+                    ("val", ColumnValue::Int(i * 10)),
+                ])
+                .unwrap();
+            store.set_ttl(i, 0).unwrap(); // Immediate expiry
+        }
+
+        // Act: Expire all rows - should use O(1) lookup per row via row_idx_to_pk
+        let result = store.expire_rows();
+
+        // Assert: All 100 rows should be expired
+        assert_eq!(result.expired_count, 100);
+        assert_eq!(result.pks.len(), 100);
+
+        // Verify rows are marked as deleted
+        for i in 1..=100 {
+            assert!(
+                store.get_row_idx_by_pk(i).is_none(),
+                "Row {} should be deleted after expiry",
+                i
+            );
+        }
+    }
 }
