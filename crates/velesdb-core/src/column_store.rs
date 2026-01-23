@@ -494,6 +494,15 @@ impl ColumnStore {
 
         // Validate all columns exist AND types match before modifying (atomicity)
         for (col_name, value) in updates {
+            // Reject updates to primary key column (would corrupt index)
+            if self
+                .primary_key_column
+                .as_ref()
+                .is_some_and(|pk_col| pk_col == *col_name)
+            {
+                return Err(ColumnStoreError::PrimaryKeyUpdate);
+            }
+
             let col = self
                 .columns
                 .get(*col_name)
@@ -1135,7 +1144,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(value) {
+                if *v == Some(value) && !self.deleted_rows.contains(&idx) {
                     Some(idx as u32)
                 } else {
                     None
@@ -1159,7 +1168,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(string_id) {
+                if *v == Some(string_id) && !self.deleted_rows.contains(&idx) {
                     Some(idx as u32)
                 } else {
                     None
@@ -1179,7 +1188,9 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val > low && *val < high => Some(idx as u32),
+                Some(val) if *val > low && *val < high && !self.deleted_rows.contains(&idx) => {
+                    Some(idx as u32)
+                }
                 _ => None,
             })
             .collect()

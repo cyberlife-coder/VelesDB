@@ -1415,4 +1415,100 @@ mod tests {
         assert!(store.get_row_idx_by_pk(1).is_some());
         assert!(store.get_row_idx_by_pk(999).is_none());
     }
+
+    /// Regression test: update_multi_by_pk must reject updates to PK column
+    /// PR Review Bug: update_multi_by_pk allowed PK updates, corrupting the index
+    #[test]
+    fn test_update_multi_by_pk_rejects_pk_column_update() {
+        // Arrange: Create store with primary key
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
+            .unwrap();
+
+        // Act: Try to update the primary key column via update_multi_by_pk
+        let result = store.update_multi_by_pk(1, &[("id", ColumnValue::Int(999))]);
+
+        // Assert: Should fail - updating PK would corrupt the index
+        assert!(
+            matches!(result, Err(ColumnStoreError::PrimaryKeyUpdate)),
+            "Should return PrimaryKeyUpdate error for PK column update"
+        );
+
+        // Verify original row is unchanged
+        assert!(store.get_row_idx_by_pk(1).is_some());
+        assert!(store.get_row_idx_by_pk(999).is_none());
+    }
+
+    /// Regression test: bitmap filters must exclude deleted rows
+    /// PR Review Bug: bitmap filters returned deleted row indices
+    #[test]
+    fn test_bitmap_filters_exclude_deleted_rows() {
+        // Arrange: Create store with primary key and data
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("id", ColumnType::Int),
+                ("val", ColumnType::Int),
+                ("name", ColumnType::String),
+            ],
+            "id",
+        );
+
+        // Intern strings first
+        let alice_id = store.string_table_mut().intern("alice");
+        let bob_id = store.string_table_mut().intern("bob");
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("val", ColumnValue::Int(100)),
+                ("name", ColumnValue::String(alice_id)),
+            ])
+            .unwrap();
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(2)),
+                ("val", ColumnValue::Int(100)),
+                ("name", ColumnValue::String(bob_id)),
+            ])
+            .unwrap();
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(3)),
+                ("val", ColumnValue::Int(200)),
+                ("name", ColumnValue::String(alice_id)),
+            ])
+            .unwrap();
+
+        // Delete row with pk=2 (index 1)
+        assert!(store.delete_by_pk(2), "Delete should succeed");
+
+        // Act: Use bitmap filters
+        let int_bitmap = store.filter_eq_int_bitmap("val", 100);
+        let string_bitmap = store.filter_eq_string_bitmap("name", "alice");
+        let range_bitmap = store.filter_range_int_bitmap("val", 50, 250);
+
+        // Assert: Deleted row (index 1) should not be in any bitmap
+        assert!(
+            !int_bitmap.contains(1),
+            "Bitmap should not contain deleted row index"
+        );
+        assert!(
+            !string_bitmap.contains(1),
+            "Bitmap should not contain deleted row index"
+        );
+        assert!(
+            !range_bitmap.contains(1),
+            "Bitmap should not contain deleted row index"
+        );
+
+        // Non-deleted rows should still be present where they match
+        assert!(int_bitmap.contains(0), "Row 0 matches val=100");
+        assert!(string_bitmap.contains(0), "Row 0 matches name=alice");
+        assert!(string_bitmap.contains(2), "Row 2 matches name=alice");
+    }
 }
