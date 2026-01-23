@@ -163,6 +163,60 @@ export interface GetEdgesOptions {
   label?: string;
 }
 
+/** Request for graph traversal (EPIC-016 US-050) */
+export interface TraverseRequest {
+  /** Source node ID to start traversal from */
+  source: number;
+  /** Traversal strategy: 'bfs' or 'dfs' */
+  strategy?: 'bfs' | 'dfs';
+  /** Maximum traversal depth */
+  maxDepth?: number;
+  /** Maximum number of results to return */
+  limit?: number;
+  /** Optional cursor for pagination */
+  cursor?: string;
+  /** Filter by relationship types (empty = all types) */
+  relTypes?: string[];
+}
+
+/** A single traversal result item */
+export interface TraversalResultItem {
+  /** Target node ID reached */
+  targetId: number;
+  /** Depth of traversal (number of hops from source) */
+  depth: number;
+  /** Path taken (list of edge IDs) */
+  path: number[];
+}
+
+/** Statistics from traversal operation */
+export interface TraversalStats {
+  /** Number of nodes visited */
+  visited: number;
+  /** Maximum depth reached */
+  depthReached: number;
+}
+
+/** Response from graph traversal */
+export interface TraverseResponse {
+  /** List of traversal results */
+  results: TraversalResultItem[];
+  /** Cursor for next page (if applicable) */
+  nextCursor?: string;
+  /** Whether more results are available */
+  hasMore: boolean;
+  /** Traversal statistics */
+  stats: TraversalStats;
+}
+
+/** Response for node degree query */
+export interface DegreeResponse {
+  /** Number of incoming edges */
+  inDegree: number;
+  /** Number of outgoing edges */
+  outDegree: number;
+}
+
 // ============================================================================
 // Index Management Types (EPIC-009)
 // ============================================================================
@@ -294,13 +348,19 @@ export interface IVelesDBBackend {
   /** Drop an index */
   dropIndex(collection: string, label: string, property: string): Promise<boolean>;
 
-  // Knowledge Graph (EPIC-016 US-041)
+  // Knowledge Graph (EPIC-016 US-041, US-050)
   
   /** Add an edge to the collection's knowledge graph */
   addEdge(collection: string, edge: AddEdgeRequest): Promise<void>;
   
   /** Get edges from the collection's knowledge graph */
   getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]>;
+
+  /** Traverse the graph using BFS or DFS from a source node */
+  traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse>;
+
+  /** Get the in-degree and out-degree of a node */
+  getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
 }
 
 /** Error types */
