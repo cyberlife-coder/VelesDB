@@ -12,9 +12,9 @@ pub use crate::types::{
 };
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
-    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, MultiQuerySearchRequest,
-    PointOutput, QueryRequest, SearchRequest, SearchResponse, SearchResult, TextSearchRequest,
-    UpsertMetadataRequest, UpsertRequest,
+    DeletePointsRequest, GetPointsRequest, HybridResult, HybridSearchRequest,
+    MultiQuerySearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest,
+    SearchResponse, SearchResult, TextSearchRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -427,13 +427,13 @@ pub async fn hybrid_search<R: Runtime>(
     })
 }
 
-/// Executes a `VelesQL` query.
+/// Executes a `VelesQL` multi-model query (EPIC-031 US-012).
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: QueryRequest,
-) -> std::result::Result<SearchResponse, CommandError> {
+) -> std::result::Result<QueryResponse, CommandError> {
     let start = std::time::Instant::now();
 
     // Parse the VelesQL query
@@ -453,18 +453,22 @@ pub async fn query<R: Runtime>(
                 .execute_query(&parsed, &request.params)
                 .map_err(|e| Error::InvalidConfig(format!("Query execution error: {e}")))?;
 
+            // Return multi-model HybridResult format
             Ok(search_results
                 .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
+                .map(|r| HybridResult {
+                    node_id: r.point.id,
+                    vector_score: Some(r.score),
+                    graph_score: None,
+                    fused_score: r.score,
+                    bindings: r.point.payload.clone(),
+                    column_data: None,
                 })
                 .collect::<Vec<_>>())
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
+    Ok(QueryResponse {
         results,
         timing_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
