@@ -168,12 +168,14 @@ mod tests {
 
     #[test]
     fn test_similarity_negative_threshold_parsed() {
-        // Parser should accept negative values, validation happens later
+        // Grammar supports negative floats via: float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+        // Parser should accept negative thresholds; semantic validation (if needed) happens later
         let query = "SELECT * FROM docs WHERE similarity(emb, $v) > -0.5";
         let result = Parser::parse(query);
-        // Note: grammar only accepts positive floats, so this should fail
-        // We can update grammar later if needed
-        assert!(result.is_err() || result.is_ok());
+        assert!(
+            result.is_ok(),
+            "Parser should accept negative threshold values"
+        );
     }
 
     #[test]
