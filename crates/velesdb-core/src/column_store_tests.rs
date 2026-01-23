@@ -1238,4 +1238,108 @@ mod tests {
             "successful + failed should equal total updates"
         );
     }
+
+    /// Bug: Filter functions return deleted rows (tombstoned rows should be excluded)
+    #[test]
+    fn test_filter_excludes_deleted_rows() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("category", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("category", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(2)),
+                ("category", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(3)),
+                ("category", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Delete row 2
+        assert!(store.delete_by_pk(2));
+
+        // Act: Filter should NOT return deleted row
+        let matches = store.filter_eq_int("category", 100);
+
+        // Assert: Only rows 0 and 2 (id=1 and id=3), NOT row 1 (id=2, deleted)
+        assert_eq!(
+            matches.len(),
+            2,
+            "Deleted row should be excluded from filter results"
+        );
+        assert!(
+            !matches.contains(&1),
+            "Deleted row index 1 should not be in results"
+        );
+    }
+
+    /// Bug: insert_row rejects previously-deleted PKs instead of reusing slot
+    #[test]
+    fn test_insert_row_allows_previously_deleted_pk() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("value", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("value", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Delete the row
+        assert!(store.delete_by_pk(1));
+
+        // Act: Insert with same PK should succeed (reuse the deleted slot)
+        let result = store.insert_row(&[
+            ("id", ColumnValue::Int(1)),
+            ("value", ColumnValue::Int(200)),
+        ]);
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "Insert should succeed for previously-deleted PK"
+        );
+    }
+
+    /// Bug: update_by_pk allows corrupting primary key index by updating PK column
+    #[test]
+    fn test_update_by_pk_rejects_pk_column_update() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("value", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("value", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act: Try to update the primary key column itself
+        let result = store.update_by_pk(1, "id", ColumnValue::Int(999));
+
+        // Assert: Should fail - updating PK would corrupt the index
+        assert!(
+            result.is_err(),
+            "Updating primary key column should be rejected to prevent index corruption"
+        );
+    }
 }

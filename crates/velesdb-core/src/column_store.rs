@@ -54,6 +54,9 @@ pub enum ColumnStoreError {
     /// Index out of bounds.
     #[error("Index out of bounds: {0}")]
     IndexOutOfBounds(usize),
+    /// Attempted to update primary key column.
+    #[error("Cannot update primary key column - would corrupt index")]
+    PrimaryKeyUpdate,
 }
 
 /// Interned string ID for fast equality comparisons.
@@ -353,8 +356,19 @@ impl ColumnStore {
             })
             .ok_or(ColumnStoreError::MissingPrimaryKey)?;
 
-        // Check for duplicate
-        if self.primary_index.contains_key(&pk_value) {
+        // Check for duplicate (but allow reuse of deleted slot)
+        if let Some(&existing_idx) = self.primary_index.get(&pk_value) {
+            if self.deleted_rows.contains(&existing_idx) {
+                // Reuse deleted slot - undelete and update values
+                self.deleted_rows.remove(&existing_idx);
+                // Update the row values at the existing index
+                for (col_name, value) in values {
+                    if let Some(col) = self.columns.get_mut(*col_name) {
+                        let _ = Self::set_column_value(col, existing_idx, value.clone());
+                    }
+                }
+                return Ok(existing_idx);
+            }
             return Err(ColumnStoreError::DuplicateKey(pk_value));
         }
 
@@ -408,12 +422,22 @@ impl ColumnStore {
     /// Returns `ColumnStoreError::RowNotFound` if no row exists with the given pk.
     /// Returns `ColumnStoreError::ColumnNotFound` if the column doesn't exist.
     /// Returns `ColumnStoreError::TypeMismatch` if the value type doesn't match the column type.
+    /// Returns `ColumnStoreError::PrimaryKeyUpdate` if trying to update the primary key column.
     pub fn update_by_pk(
         &mut self,
         pk: i64,
         column: &str,
         value: ColumnValue,
     ) -> Result<(), ColumnStoreError> {
+        // Reject updates to primary key column (would corrupt index)
+        if self
+            .primary_key_column
+            .as_ref()
+            .is_some_and(|pk_col| pk_col == column)
+        {
+            return Err(ColumnStoreError::PrimaryKeyUpdate);
+        }
+
         // Find the row index
         let row_idx = *self
             .primary_index
@@ -903,7 +927,7 @@ impl ColumnStore {
 
     /// Filters rows by equality on an integer column.
     ///
-    /// Returns a vector of row indices that match.
+    /// Returns a vector of row indices that match. Excludes deleted rows.
     #[must_use]
     pub fn filter_eq_int(&self, column: &str, value: i64) -> Vec<usize> {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
@@ -912,13 +936,19 @@ impl ColumnStore {
 
         col.iter()
             .enumerate()
-            .filter_map(|(idx, v)| if *v == Some(value) { Some(idx) } else { None })
+            .filter_map(|(idx, v)| {
+                if *v == Some(value) && !self.deleted_rows.contains(&idx) {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
     /// Filters rows by equality on a string column.
     ///
-    /// Returns a vector of row indices that match.
+    /// Returns a vector of row indices that match. Excludes deleted rows.
     #[must_use]
     pub fn filter_eq_string(&self, column: &str, value: &str) -> Vec<usize> {
         let Some(TypedColumn::String(col)) = self.columns.get(column) else {
@@ -932,7 +962,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(string_id) {
+                if *v == Some(string_id) && !self.deleted_rows.contains(&idx) {
                     Some(idx)
                 } else {
                     None
@@ -943,7 +973,7 @@ impl ColumnStore {
 
     /// Filters rows by range on an integer column (value > threshold).
     ///
-    /// Returns a vector of row indices that match.
+    /// Returns a vector of row indices that match. Excludes deleted rows.
     #[must_use]
     pub fn filter_gt_int(&self, column: &str, threshold: i64) -> Vec<usize> {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
@@ -953,13 +983,15 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val > threshold => Some(idx),
+                Some(val) if *val > threshold && !self.deleted_rows.contains(&idx) => Some(idx),
                 _ => None,
             })
             .collect()
     }
 
     /// Filters rows by range on an integer column (value < threshold).
+    ///
+    /// Excludes deleted rows.
     #[must_use]
     pub fn filter_lt_int(&self, column: &str, threshold: i64) -> Vec<usize> {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
@@ -969,13 +1001,15 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val < threshold => Some(idx),
+                Some(val) if *val < threshold && !self.deleted_rows.contains(&idx) => Some(idx),
                 _ => None,
             })
             .collect()
     }
 
     /// Filters rows by range on an integer column (low < value < high).
+    ///
+    /// Excludes deleted rows.
     #[must_use]
     pub fn filter_range_int(&self, column: &str, low: i64, high: i64) -> Vec<usize> {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
@@ -985,7 +1019,9 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val > low && *val < high => Some(idx),
+                Some(val) if *val > low && *val < high && !self.deleted_rows.contains(&idx) => {
+                    Some(idx)
+                }
                 _ => None,
             })
             .collect()
@@ -993,7 +1029,7 @@ impl ColumnStore {
 
     /// Filters rows by IN clause on a string column.
     ///
-    /// Returns a vector of row indices that match any of the values.
+    /// Returns a vector of row indices that match any of the values. Excludes deleted rows.
     #[must_use]
     pub fn filter_in_string(&self, column: &str, values: &[&str]) -> Vec<usize> {
         let Some(TypedColumn::String(col)) = self.columns.get(column) else {
@@ -1017,7 +1053,9 @@ impl ColumnStore {
             col.iter()
                 .enumerate()
                 .filter_map(|(idx, v)| match v {
-                    Some(id) if id_set.contains(id) => Some(idx),
+                    Some(id) if id_set.contains(id) && !self.deleted_rows.contains(&idx) => {
+                        Some(idx)
+                    }
                     _ => None,
                 })
                 .collect()
@@ -1025,7 +1063,7 @@ impl ColumnStore {
             col.iter()
                 .enumerate()
                 .filter_map(|(idx, v)| match v {
-                    Some(id) if ids.contains(id) => Some(idx),
+                    Some(id) if ids.contains(id) && !self.deleted_rows.contains(&idx) => Some(idx),
                     _ => None,
                 })
                 .collect()
@@ -1034,17 +1072,20 @@ impl ColumnStore {
 
     /// Counts rows matching equality on an integer column.
     ///
-    /// More efficient than `filter_eq_int().len()` as it doesn't allocate.
+    /// More efficient than `filter_eq_int().len()` as it doesn't allocate. Excludes deleted rows.
     #[must_use]
     pub fn count_eq_int(&self, column: &str, value: i64) -> usize {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
             return 0;
         };
 
-        col.iter().filter(|v| **v == Some(value)).count()
+        col.iter()
+            .enumerate()
+            .filter(|(idx, v)| **v == Some(value) && !self.deleted_rows.contains(idx))
+            .count()
     }
 
-    /// Counts rows matching equality on a string column.
+    /// Counts rows matching equality on a string column. Excludes deleted rows.
     #[must_use]
     pub fn count_eq_string(&self, column: &str, value: &str) -> usize {
         let Some(TypedColumn::String(col)) = self.columns.get(column) else {
@@ -1055,7 +1096,10 @@ impl ColumnStore {
             return 0;
         };
 
-        col.iter().filter(|v| **v == Some(string_id)).count()
+        col.iter()
+            .enumerate()
+            .filter(|(idx, v)| **v == Some(string_id) && !self.deleted_rows.contains(idx))
+            .count()
     }
 
     // =========================================================================
