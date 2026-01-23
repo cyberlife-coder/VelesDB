@@ -6,6 +6,7 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any, Iterable, List, Optional, Tuple, Type
 
@@ -14,6 +15,16 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 
 import velesdb
+
+
+def _stable_hash_id(value: str) -> int:
+    """Generate a stable numeric ID from a string using SHA256.
+    
+    Python's hash() is non-deterministic across processes, so we use
+    SHA256 for consistent IDs across runs.
+    """
+    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
+    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 class VelesDBVectorStore(VectorStore):
@@ -155,7 +166,7 @@ class VelesDBVectorStore(VectorStore):
             if ids and i < len(ids):
                 doc_id = ids[i]
                 # Convert string ID to int for VelesDB
-                int_id = hash(doc_id) & 0x7FFFFFFFFFFFFFFF
+                int_id = _stable_hash_id(doc_id)
             else:
                 int_id = self._generate_id()
                 doc_id = str(int_id)
@@ -424,7 +435,7 @@ class VelesDBVectorStore(VectorStore):
             return True
 
         # Convert string IDs to int
-        int_ids = [hash(id_str) & 0x7FFFFFFFFFFFFFFF for id_str in ids]
+        int_ids = [_stable_hash_id(id_str) for id_str in ids]
         self._collection.delete(int_ids)
         return True
 
@@ -602,7 +613,7 @@ class VelesDBVectorStore(VectorStore):
         for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
             if ids and i < len(ids):
                 doc_id = ids[i]
-                int_id = hash(doc_id) & 0x7FFFFFFFFFFFFFFF
+                int_id = _stable_hash_id(doc_id)
             else:
                 int_id = self._generate_id()
                 doc_id = str(int_id)
@@ -642,7 +653,7 @@ class VelesDBVectorStore(VectorStore):
             try:
                 return int(id_str)
             except ValueError:
-                return hash(id_str) & 0x7FFFFFFFFFFFFFFF
+                return _stable_hash_id(id_str)
 
         int_ids = [to_int_id(id_str) for id_str in ids]
         points = self._collection.get(int_ids)

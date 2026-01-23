@@ -6,6 +6,7 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, List, Optional
 
 from llama_index.core.schema import BaseNode, TextNode
@@ -17,6 +18,16 @@ from llama_index.core.vector_stores.types import (
 from pydantic import ConfigDict
 
 import velesdb
+
+
+def _stable_hash_id(value: str) -> int:
+    """Generate a stable numeric ID from a string using SHA256.
+    
+    Python's hash() is non-deterministic across processes, so we use
+    SHA256 for consistent IDs across runs.
+    """
+    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
+    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 class VelesDBVectorStore(BasePydanticVectorStore):
@@ -171,7 +182,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                         payload[key] = value
 
             # Convert node_id to int for VelesDB
-            int_id = hash(node_id) & 0x7FFFFFFFFFFFFFFF
+            int_id = _stable_hash_id(node_id)
 
             points.append({
                 "id": int_id,
@@ -194,7 +205,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         if self._collection is None:
             return
 
-        int_id = hash(ref_doc_id) & 0x7FFFFFFFFFFFFFFF
+        int_id = _stable_hash_id(ref_doc_id)
         self._collection.delete([int_id])
 
     def query(
@@ -468,7 +479,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             if hasattr(node, "metadata") and node.metadata:
                 payload.update({k: v for k, v in node.metadata.items() 
                                if isinstance(v, (str, int, float, bool))})
-            points.append({"id": hash(nid) & 0x7FFFFFFFFFFFFFFF, "vector": emb, "payload": payload})
+            points.append({"id": _stable_hash_id(nid), "vector": emb, "payload": payload})
         if points:
             collection.upsert_bulk(points)
         return result_ids
@@ -477,7 +488,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         """Retrieve nodes by their IDs."""
         if not node_ids or self._collection is None:
             return []
-        int_ids = [hash(nid) & 0x7FFFFFFFFFFFFFFF for nid in node_ids]
+        int_ids = [_stable_hash_id(nid) for nid in node_ids]
         points = self._collection.get(int_ids)
         result = []
         for pt in points:
