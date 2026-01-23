@@ -42,10 +42,10 @@
 | **get_edges_by_label** | ✅ | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **get_nodes_by_label** | ✅ | ➖ | ➖ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **BFS Traversal** | ✅ | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
-| **DFS Traversal** | ✅ | ➖ | ➖ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
+| **DFS Traversal** | ✅ | ➖ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **Streaming BFS** | ✅ | ➖ | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ |
-| **has_node/has_edge** | ✅ | ➖ | ➖ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
-| **in_degree/out_degree** | ✅ | ➖ | ➖ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
+| **has_node/has_edge** | ✅ | ➖ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
+| **in_degree/out_degree** | ✅ | ➖ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 
 ---
 
@@ -95,9 +95,9 @@
 |-----------|--------|-------|
 | **velesdb-core** | 100% | Source of truth |
 | **velesdb-server** | 98% | DFS/degree manquants (low priority) |
-| **velesdb-python** | 95% | DFS/degree/has_node manquants |
+| **velesdb-python** | 100% | ✅ Tous gaps corrigés (2026-01-23) |
 | **velesdb-wasm** | 100% | ✅ Tous gaps corrigés (2026-01-23) |
-| **velesdb-mobile** | 95% | Streaming BFS manquant |
+| **velesdb-mobile** | 100% | ✅ Tous gaps corrigés (2026-01-23) |
 | **sdks/typescript** | 90% | Graph API non exposée (REST only) |
 | **velesdb-cli** | 85% | Graph commands non implémentées |
 | **langchain** | 90% | VectorStore OK, Graph non applicable |
@@ -105,14 +105,15 @@
 
 ### Gaps Prioritaires
 
-1. **Python SDK** - Ajouter `dfs_traverse`, `has_node`, `has_edge`, `degree`
-2. **Mobile SDK** - Ajouter `streaming_bfs` 
-3. **Server** - Exposer graph utilities (DFS, degree) via REST
+1. ~~**Python SDK** - Ajouter `dfs_traverse`, `has_edge`, `degree`~~ ✅ DONE
+2. ~~**Mobile SDK** - Ajouter DFS, degree, has_node/edge~~ ✅ DONE
+3. **Server** - Exposer graph utilities (DFS, degree) via REST (low priority)
 
 ### Historique Sync
 
 | Date | Action | Components |
 |------|--------|------------|
+| 2026-01-23 | Python/Mobile gaps corrigés | velesdb-python, velesdb-mobile |
 | 2026-01-23 | WASM gaps corrigés | velesdb-wasm (9 méthodes ajoutées) |
 | 2026-01-22 | 51 Devin flags traités | All crates |
 | 2026-01-20 | EPIC-016 SDK Sync | Python, Mobile, TS, LangChain, LlamaIndex |
