@@ -387,11 +387,16 @@ impl ColumnStore {
     /// Deletes a row by primary key value.
     ///
     /// This uses tombstone deletion - the row data remains but is marked as deleted.
+    /// The pk remains in primary_index to allow slot reuse on upsert.
     /// Returns `true` if the row was found and deleted, `false` if not found.
     pub fn delete_by_pk(&mut self, pk: i64) -> bool {
-        let Some(row_idx) = self.primary_index.remove(&pk) else {
+        let Some(&row_idx) = self.primary_index.get(&pk) else {
             return false;
         };
+        // Already deleted?
+        if self.deleted_rows.contains(&row_idx) {
+            return false;
+        }
         self.deleted_rows.insert(row_idx);
         true
     }
@@ -460,24 +465,51 @@ impl ColumnStore {
             return Err(ColumnStoreError::RowNotFound(pk));
         }
 
-        // Validate all columns exist before modifying
-        for (col_name, _) in updates {
-            if !self.columns.contains_key(*col_name) {
-                return Err(ColumnStoreError::ColumnNotFound((*col_name).to_string()));
+        // Validate all columns exist AND types match before modifying (atomicity)
+        for (col_name, value) in updates {
+            let col = self
+                .columns
+                .get(*col_name)
+                .ok_or_else(|| ColumnStoreError::ColumnNotFound((*col_name).to_string()))?;
+
+            // Validate type compatibility (null is always allowed)
+            if !matches!(value, ColumnValue::Null) {
+                Self::validate_type_match(col, value)?;
             }
         }
 
-        // Apply all updates
-        // Note: unwrap is safe here because we validated all columns exist above
+        // Apply all updates (safe - validation passed)
         for (col_name, value) in updates {
             let col = self
                 .columns
                 .get_mut(*col_name)
                 .expect("column existence validated above");
+            // Type validation already done, this cannot fail for type mismatch
             Self::set_column_value(col, row_idx, value.clone())?;
         }
 
         Ok(())
+    }
+
+    /// Validates that a value's type matches the column type without modifying.
+    fn validate_type_match(col: &TypedColumn, value: &ColumnValue) -> Result<(), ColumnStoreError> {
+        let type_matches = matches!(
+            (col, value),
+            (TypedColumn::Int(_), ColumnValue::Int(_))
+                | (TypedColumn::Float(_), ColumnValue::Float(_))
+                | (TypedColumn::String(_), ColumnValue::String(_))
+                | (TypedColumn::Bool(_), ColumnValue::Bool(_))
+                | (_, ColumnValue::Null)
+        );
+
+        if type_matches {
+            Ok(())
+        } else {
+            Err(ColumnStoreError::TypeMismatch {
+                expected: Self::column_type_name(col).clone(),
+                actual: Self::value_type_name(value).clone(),
+            })
+        }
     }
 
     /// Sets a value in a typed column with type checking.
@@ -704,11 +736,11 @@ impl ColumnStore {
             .map(|(&row_idx, _)| row_idx)
             .collect();
 
-        // Remove expired rows
+        // Remove expired rows (tombstone deletion - keep pk in index for potential reuse)
         for row_idx in expired_rows {
             // Find the PK for this row
             if let Some((&pk, _)) = self.primary_index.iter().find(|(_, &idx)| idx == row_idx) {
-                self.primary_index.remove(&pk);
+                // Don't remove from primary_index - allows slot reuse on upsert
                 self.deleted_rows.insert(row_idx);
                 self.row_expiry.remove(&row_idx);
                 result.pks.push(pk);

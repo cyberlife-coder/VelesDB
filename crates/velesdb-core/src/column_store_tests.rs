@@ -1096,4 +1096,95 @@ mod tests {
         let price_matches = store.filter_eq_int("price", 200);
         assert_eq!(price_matches, vec![0]);
     }
+
+    // =========================================================================
+    // Regression Tests for Bugfixes
+    // =========================================================================
+
+    /// Bug: Upsert cannot reuse deleted row slots because delete_by_pk removes
+    /// pk from primary_index, making the deleted row check unreachable.
+    #[test]
+    fn test_upsert_reuses_deleted_row_slot() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("value", ColumnType::Int)],
+            "id",
+        );
+
+        // Insert a row
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("value", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+        let original_row_count = store.row_count();
+
+        // Delete the row
+        assert!(store.delete_by_pk(1));
+
+        // Act: Upsert the same pk - should reuse the deleted slot
+        let result = store.upsert(&[
+            ("id", ColumnValue::Int(1)),
+            ("value", ColumnValue::Int(200)),
+        ]);
+
+        // Assert
+        assert!(result.is_ok());
+        // Row count should NOT increase - the deleted slot should be reused
+        assert_eq!(
+            store.row_count(),
+            original_row_count,
+            "Upsert should reuse deleted row slot, not allocate new row"
+        );
+        // The row should be accessible
+        assert!(store.get_row_idx_by_pk(1).is_some());
+        // The value should be updated
+        let matches = store.filter_eq_int("value", 200);
+        assert!(!matches.is_empty(), "Updated value should be findable");
+    }
+
+    /// Bug: update_multi_by_pk is not atomic - if type mismatch occurs mid-update,
+    /// earlier updates are already applied, violating atomicity.
+    #[test]
+    fn test_update_multi_atomic_on_type_mismatch() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("id", ColumnType::Int),
+                ("col_a", ColumnType::Int),
+                ("col_b", ColumnType::String), // Different type!
+            ],
+            "id",
+        );
+
+        let str_id = store.string_table_mut().intern("original");
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("col_a", ColumnValue::Int(100)),
+                ("col_b", ColumnValue::String(str_id)),
+            ])
+            .unwrap();
+
+        // Act: Try to update both columns, but col_b will fail (Int into String column)
+        let result = store.update_multi_by_pk(
+            1,
+            &[
+                ("col_a", ColumnValue::Int(200)), // This should NOT be applied
+                ("col_b", ColumnValue::Int(999)), // This will fail - type mismatch
+            ],
+        );
+
+        // Assert
+        assert!(result.is_err(), "Should fail due to type mismatch");
+
+        // CRITICAL: col_a should NOT have been modified (atomicity)
+        let col_a_matches = store.filter_eq_int("col_a", 100);
+        assert_eq!(
+            col_a_matches,
+            vec![0],
+            "col_a should remain unchanged when update fails - atomicity violated!"
+        );
+    }
 }
