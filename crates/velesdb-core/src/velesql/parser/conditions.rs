@@ -3,7 +3,8 @@
 use super::Rule;
 use crate::velesql::ast::{
     BetweenCondition, CompareOp, Comparison, Condition, FusionConfig, InCondition, IsNullCondition,
-    LikeCondition, MatchCondition, VectorExpr, VectorFusedSearch, VectorSearch,
+    LikeCondition, MatchCondition, SimilarityCondition, VectorExpr, VectorFusedSearch,
+    VectorSearch,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -71,6 +72,7 @@ impl Parser {
                 let cond = Self::parse_or_expr(inner)?;
                 Ok(Condition::Group(Box::new(cond)))
             }
+            Rule::similarity_expr => Self::parse_similarity_expr(inner),
             Rule::vector_fused_search => Self::parse_vector_fused_search(inner),
             Rule::vector_search => Self::parse_vector_search(inner),
             Rule::match_expr => Self::parse_match_expr(inner),
@@ -85,6 +87,63 @@ impl Parser {
                 "Unknown condition type",
             )),
         }
+    }
+
+    /// Parses a similarity expression: `similarity(field, vector) op threshold`
+    pub(crate) fn parse_similarity_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut field = None;
+        let mut vector = None;
+        let mut operator = None;
+        let mut threshold = None;
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::similarity_field => {
+                    field = Some(inner.as_str().to_string());
+                }
+                Rule::vector_value => {
+                    vector = Some(Self::parse_vector_value(inner)?);
+                }
+                Rule::compare_op => {
+                    operator = Some(match inner.as_str() {
+                        "=" => CompareOp::Eq,
+                        "!=" | "<>" => CompareOp::NotEq,
+                        ">" => CompareOp::Gt,
+                        ">=" => CompareOp::Gte,
+                        "<" => CompareOp::Lt,
+                        "<=" => CompareOp::Lte,
+                        _ => return Err(ParseError::syntax(0, inner.as_str(), "Invalid operator")),
+                    });
+                }
+                Rule::numeric_threshold => {
+                    // numeric_threshold = { float | integer }
+                    let inner_value = inner
+                        .into_inner()
+                        .next()
+                        .ok_or_else(|| ParseError::syntax(0, "", "Expected numeric threshold"))?;
+                    threshold = Some(inner_value.as_str().parse::<f64>().map_err(|_| {
+                        ParseError::syntax(0, inner_value.as_str(), "Invalid threshold")
+                    })?);
+                }
+                _ => {}
+            }
+        }
+
+        let field = field.ok_or_else(|| ParseError::syntax(0, "", "Expected field name"))?;
+        let vector =
+            vector.ok_or_else(|| ParseError::syntax(0, "", "Expected vector expression"))?;
+        let operator = operator.ok_or_else(|| ParseError::syntax(0, "", "Expected operator"))?;
+        let threshold =
+            threshold.ok_or_else(|| ParseError::syntax(0, "", "Expected threshold value"))?;
+
+        Ok(Condition::Similarity(SimilarityCondition {
+            field,
+            vector,
+            operator,
+            threshold,
+        }))
     }
 
     pub(crate) fn parse_vector_search(

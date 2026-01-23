@@ -3,7 +3,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use clap::Parser;
@@ -16,8 +16,10 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
-    batch_search, create_collection, delete_collection, delete_point, get_collection, get_point,
-    health_check, list_collections, query, search, upsert_points, ApiDoc, AppState,
+    add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
+    delete_point, get_collection, get_edges, get_node_degree, get_point, health_check,
+    list_collections, list_indexes, multi_query_search, query, search, traverse_graph,
+    upsert_points, ApiDoc, AppState, GraphService,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -58,7 +60,31 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::open(&args.data_dir)?;
     let state = Arc::new(AppState { db });
 
-    // Build API router with state
+    // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
+    // WARNING: GraphService is in-memory only and NOT persisted to disk.
+    // Graph data will be lost on server restart. This is a preview feature.
+    // Full persistence will be implemented in EPIC-004.
+    let graph_service = GraphService::new();
+    tracing::warn!(
+        "GraphService initialized (PREVIEW): Graph data is in-memory only and will NOT persist across restarts. \
+         Use the Python/Rust SDK for persistent graph storage."
+    );
+
+    // Graph routes with GraphService state (separate router)
+    // EPIC-016/US-050: Added traverse and degree endpoints
+    let graph_router = Router::new()
+        .route(
+            "/collections/{name}/graph/edges",
+            get(get_edges).post(add_edge),
+        )
+        .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/degree",
+            get(get_node_degree),
+        )
+        .with_state(graph_service);
+
+    // Build API router with AppState
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route(
@@ -78,8 +104,26 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
+        .route("/collections/{name}/search/multi", post(multi_query_search))
+        .route(
+            "/collections/{name}/indexes",
+            get(list_indexes).post(create_index),
+        )
+        .route(
+            "/collections/{name}/indexes/{label}/{property}",
+            delete(delete_index),
+        )
         .route("/query", post(query))
-        .with_state(state);
+        .with_state(state)
+        // FLAG-2 FIX: Merge graph router with its own state
+        .merge(graph_router);
+
+    // FLAG-3 FIX: Add metrics endpoint conditionally (EPIC-016/US-034,035)
+    #[cfg(feature = "prometheus")]
+    let api_router = {
+        use velesdb_server::prometheus_metrics;
+        api_router.route("/metrics", get(prometheus_metrics))
+    };
 
     // Swagger UI (stateless router)
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());

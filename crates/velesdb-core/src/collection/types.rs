@@ -1,6 +1,6 @@
 //! Collection types and configuration.
 
-use crate::collection::graph::GraphSchema;
+use crate::collection::graph::{GraphSchema, PropertyIndex, RangeIndex};
 use crate::distance::DistanceMetric;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
@@ -153,6 +153,12 @@ pub struct Collection {
 
     /// Binary quantized vectors cache (for Binary storage mode).
     pub(super) binary_cache: Arc<RwLock<HashMap<u64, BinaryQuantizedVector>>>,
+
+    /// Property index for O(1) equality lookups on graph nodes (EPIC-009).
+    pub(super) property_index: Arc<RwLock<PropertyIndex>>,
+
+    /// Range index for O(log n) range queries on graph nodes (EPIC-009).
+    pub(super) range_index: Arc<RwLock<RangeIndex>>,
 }
 
 impl Collection {

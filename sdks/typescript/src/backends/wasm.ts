@@ -12,6 +12,14 @@ import type {
   SearchOptions,
   SearchResult,
   MultiQuerySearchOptions,
+  CreateIndexOptions,
+  IndexInfo,
+  AddEdgeRequest,
+  GetEdgesOptions,
+  GraphEdge,
+  TraverseRequest,
+  TraverseResponse,
+  DegreeResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -410,5 +418,77 @@ export class WasmBackend implements IVelesDBBackend {
       hash = hash & hash; // Convert to 32bit integer
     }
     return Math.abs(hash);
+  }
+
+  // ========================================================================
+  // Index Management (EPIC-009) - Stubs for WASM backend
+  // Note: Full implementation requires velesdb-wasm support
+  // ========================================================================
+
+  async createIndex(_collection: string, _options: CreateIndexOptions): Promise<void> {
+    this.ensureInitialized();
+    // FIX: Throw error instead of silent warning for fail-fast behavior
+    // This prevents confusion when switching between REST and WASM backends
+    throw new Error(
+      'WasmBackend: createIndex is not yet supported. ' +
+      'Index operations require the REST backend with velesdb-server.'
+    );
+  }
+
+  async listIndexes(_collection: string): Promise<IndexInfo[]> {
+    this.ensureInitialized();
+    // Return empty list - WASM backend has no indexes
+    // This is acceptable since an empty list is semantically correct (no indexes exist)
+    return [];
+  }
+
+  async hasIndex(_collection: string, _label: string, _property: string): Promise<boolean> {
+    this.ensureInitialized();
+    // Return false - WASM backend has no indexes
+    // This is semantically correct (no index exists)
+    return false;
+  }
+
+  async dropIndex(_collection: string, _label: string, _property: string): Promise<boolean> {
+    this.ensureInitialized();
+    // Return false - nothing to drop since no indexes exist in WASM backend
+    return false;
+  }
+
+  // ========================================================================
+  // Knowledge Graph (EPIC-016 US-041) - Stubs for WASM backend
+  // Note: Graph operations require server-side EdgeStore
+  // ========================================================================
+
+  async addEdge(_collection: string, _edge: AddEdgeRequest): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Knowledge Graph operations are not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async getEdges(_collection: string, _options?: GetEdgesOptions): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Knowledge Graph operations are not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async traverseGraph(_collection: string, _request: TraverseRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Graph traversal is not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async getNodeDegree(_collection: string, _nodeId: number): Promise<DegreeResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Graph degree query is not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
   }
 }

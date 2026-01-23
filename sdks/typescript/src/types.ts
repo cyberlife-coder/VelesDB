@@ -117,6 +117,137 @@ export interface SearchResult {
   vector?: number[];
 }
 
+// ============================================================================
+// Knowledge Graph Types (EPIC-016 US-041)
+// ============================================================================
+
+/** Graph edge representing a relationship between nodes */
+export interface GraphEdge {
+  /** Unique edge ID */
+  id: number;
+  /** Source node ID */
+  source: number;
+  /** Target node ID */
+  target: number;
+  /** Edge label (relationship type, e.g., "KNOWS", "FOLLOWS") */
+  label: string;
+  /** Edge properties */
+  properties?: Record<string, unknown>;
+}
+
+/** Request to add an edge to the graph */
+export interface AddEdgeRequest {
+  /** Unique edge ID */
+  id: number;
+  /** Source node ID */
+  source: number;
+  /** Target node ID */
+  target: number;
+  /** Edge label (relationship type) */
+  label: string;
+  /** Edge properties (optional) */
+  properties?: Record<string, unknown>;
+}
+
+/** Response containing edges */
+export interface EdgesResponse {
+  /** List of edges */
+  edges: GraphEdge[];
+  /** Total count of edges returned */
+  count: number;
+}
+
+/** Options for querying edges */
+export interface GetEdgesOptions {
+  /** Filter by edge label */
+  label?: string;
+}
+
+/** Request for graph traversal (EPIC-016 US-050) */
+export interface TraverseRequest {
+  /** Source node ID to start traversal from */
+  source: number;
+  /** Traversal strategy: 'bfs' or 'dfs' */
+  strategy?: 'bfs' | 'dfs';
+  /** Maximum traversal depth */
+  maxDepth?: number;
+  /** Maximum number of results to return */
+  limit?: number;
+  /** Optional cursor for pagination */
+  cursor?: string;
+  /** Filter by relationship types (empty = all types) */
+  relTypes?: string[];
+}
+
+/** A single traversal result item */
+export interface TraversalResultItem {
+  /** Target node ID reached */
+  targetId: number;
+  /** Depth of traversal (number of hops from source) */
+  depth: number;
+  /** Path taken (list of edge IDs) */
+  path: number[];
+}
+
+/** Statistics from traversal operation */
+export interface TraversalStats {
+  /** Number of nodes visited */
+  visited: number;
+  /** Maximum depth reached */
+  depthReached: number;
+}
+
+/** Response from graph traversal */
+export interface TraverseResponse {
+  /** List of traversal results */
+  results: TraversalResultItem[];
+  /** Cursor for next page (if applicable) */
+  nextCursor?: string;
+  /** Whether more results are available */
+  hasMore: boolean;
+  /** Traversal statistics */
+  stats: TraversalStats;
+}
+
+/** Response for node degree query */
+export interface DegreeResponse {
+  /** Number of incoming edges */
+  inDegree: number;
+  /** Number of outgoing edges */
+  outDegree: number;
+}
+
+// ============================================================================
+// Index Management Types (EPIC-009)
+// ============================================================================
+
+/** Index type for property indexes */
+export type IndexType = 'hash' | 'range';
+
+/** Index information */
+export interface IndexInfo {
+  /** Node label (e.g., "Person") */
+  label: string;
+  /** Property name (e.g., "email") */
+  property: string;
+  /** Index type: 'hash' for O(1) equality, 'range' for O(log n) range queries */
+  indexType: IndexType;
+  /** Number of unique values indexed (for hash indexes) */
+  cardinality: number;
+  /** Memory usage in bytes */
+  memoryBytes: number;
+}
+
+/** Options for creating an index */
+export interface CreateIndexOptions {
+  /** Node label to index */
+  label: string;
+  /** Property name to index */
+  property: string;
+  /** Index type: 'hash' (default) or 'range' */
+  indexType?: IndexType;
+}
+
 /** Backend interface that all backends must implement */
 export interface IVelesDBBackend {
   /** Initialize the backend */
@@ -202,6 +333,34 @@ export interface IVelesDBBackend {
   
   /** Close/cleanup the backend */
   close(): Promise<void>;
+
+  // Index Management (EPIC-009)
+  
+  /** Create a property index for O(1) equality lookups */
+  createIndex(collection: string, options: CreateIndexOptions): Promise<void>;
+  
+  /** List all indexes on a collection */
+  listIndexes(collection: string): Promise<IndexInfo[]>;
+  
+  /** Check if an index exists */
+  hasIndex(collection: string, label: string, property: string): Promise<boolean>;
+  
+  /** Drop an index */
+  dropIndex(collection: string, label: string, property: string): Promise<boolean>;
+
+  // Knowledge Graph (EPIC-016 US-041, US-050)
+  
+  /** Add an edge to the collection's knowledge graph */
+  addEdge(collection: string, edge: AddEdgeRequest): Promise<void>;
+  
+  /** Get edges from the collection's knowledge graph */
+  getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]>;
+
+  /** Traverse the graph using BFS or DFS from a source node */
+  traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse>;
+
+  /** Get the in-degree and out-degree of a node */
+  getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
 }
 
 /** Error types */

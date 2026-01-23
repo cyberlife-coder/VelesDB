@@ -393,6 +393,135 @@ impl GraphStore {
         self.outgoing.clear();
         self.incoming.clear();
     }
+
+    /// Performs DFS traversal from a source node.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_id` - Starting node ID
+    /// * `max_depth` - Maximum traversal depth
+    /// * `limit` - Maximum number of results
+    ///
+    /// # Returns
+    ///
+    /// Array of reachable node IDs with their depths (depth-first order).
+    #[wasm_bindgen]
+    pub fn dfs_traverse(
+        &self,
+        source_id: u64,
+        max_depth: usize,
+        limit: usize,
+    ) -> Result<JsValue, JsValue> {
+        use std::collections::HashSet;
+
+        let mut results: Vec<(u64, usize)> = Vec::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+
+        // Recursive DFS helper using stack to avoid recursion limits
+        let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
+
+        while let Some((node_id, depth)) = stack.pop() {
+            if results.len() >= limit {
+                break;
+            }
+
+            if visited.contains(&node_id) {
+                continue;
+            }
+            visited.insert(node_id);
+
+            if depth > 0 {
+                results.push((node_id, depth));
+            }
+
+            if depth < max_depth {
+                // Push neighbors in reverse order for correct DFS traversal
+                let neighbors: Vec<_> = self
+                    .get_outgoing(node_id)
+                    .into_iter()
+                    .filter(|e| !visited.contains(&e.target))
+                    .collect();
+
+                for edge in neighbors.into_iter().rev() {
+                    stack.push((edge.target, depth + 1));
+                }
+            }
+        }
+
+        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Gets all nodes with a specific label.
+    ///
+    /// # Arguments
+    ///
+    /// * `label` - The label to filter by
+    ///
+    /// # Returns
+    ///
+    /// Array of nodes matching the label.
+    #[wasm_bindgen]
+    pub fn get_nodes_by_label(&self, label: &str) -> Vec<GraphNode> {
+        self.nodes
+            .values()
+            .filter(|n| n.label == label)
+            .cloned()
+            .collect()
+    }
+
+    /// Gets all edges with a specific label.
+    ///
+    /// # Arguments
+    ///
+    /// * `label` - The relationship type to filter by
+    ///
+    /// # Returns
+    ///
+    /// Array of edges matching the label.
+    #[wasm_bindgen]
+    pub fn get_edges_by_label(&self, label: &str) -> Vec<GraphEdge> {
+        self.edges
+            .values()
+            .filter(|e| e.label == label)
+            .cloned()
+            .collect()
+    }
+
+    /// Gets all node IDs in the graph.
+    #[wasm_bindgen]
+    pub fn get_all_node_ids(&self) -> Vec<u64> {
+        self.nodes.keys().copied().collect()
+    }
+
+    /// Gets all edge IDs in the graph.
+    #[wasm_bindgen]
+    pub fn get_all_edge_ids(&self) -> Vec<u64> {
+        self.edges.keys().copied().collect()
+    }
+
+    /// Checks if a node exists.
+    #[wasm_bindgen]
+    pub fn has_node(&self, id: u64) -> bool {
+        self.nodes.contains_key(&id)
+    }
+
+    /// Checks if an edge exists.
+    #[wasm_bindgen]
+    pub fn has_edge(&self, id: u64) -> bool {
+        self.edges.contains_key(&id)
+    }
+
+    /// Gets the degree (number of outgoing edges) of a node.
+    #[wasm_bindgen]
+    pub fn out_degree(&self, node_id: u64) -> usize {
+        self.outgoing.get(&node_id).map_or(0, Vec::len)
+    }
+
+    /// Gets the in-degree (number of incoming edges) of a node.
+    #[wasm_bindgen]
+    pub fn in_degree(&self, node_id: u64) -> usize {
+        self.incoming.get(&node_id).map_or(0, Vec::len)
+    }
 }
 
 impl Default for GraphStore {
@@ -635,5 +764,96 @@ mod tests {
 
         assert_eq!(store.node_count(), 0);
         assert_eq!(store.edge_count(), 0);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_dfs_traverse() {
+        let mut store = GraphStore::new();
+        store.add_node(GraphNode::new(1, "A"));
+        store.add_node(GraphNode::new(2, "B"));
+        store.add_node(GraphNode::new(3, "C"));
+        store.add_node(GraphNode::new(4, "D"));
+        store
+            .add_edge(GraphEdge::new(100, 1, 2, "NEXT").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(101, 2, 3, "NEXT").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(102, 1, 4, "NEXT").unwrap())
+            .unwrap();
+
+        let result = store.dfs_traverse(1, 3, 10);
+        assert!(result.is_ok());
+    }
+
+    #[wasm_bindgen_test]
+    fn test_get_nodes_by_label() {
+        let mut store = GraphStore::new();
+        store.add_node(GraphNode::new(1, "Person"));
+        store.add_node(GraphNode::new(2, "Person"));
+        store.add_node(GraphNode::new(3, "Document"));
+
+        let persons = store.get_nodes_by_label("Person");
+        assert_eq!(persons.len(), 2);
+
+        let docs = store.get_nodes_by_label("Document");
+        assert_eq!(docs.len(), 1);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_get_edges_by_label() {
+        let mut store = GraphStore::new();
+        store.add_node(GraphNode::new(1, "Person"));
+        store.add_node(GraphNode::new(2, "Person"));
+        store.add_node(GraphNode::new(3, "Person"));
+        store
+            .add_edge(GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(101, 2, 3, "WORKS_WITH").unwrap())
+            .unwrap();
+
+        let knows = store.get_edges_by_label("KNOWS");
+        assert_eq!(knows.len(), 1);
+
+        let works = store.get_edges_by_label("WORKS_WITH");
+        assert_eq!(works.len(), 1);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_has_node_and_edge() {
+        let mut store = GraphStore::new();
+        store.add_node(GraphNode::new(1, "Person"));
+        store
+            .add_edge(GraphEdge::new(100, 1, 1, "SELF").unwrap())
+            .unwrap();
+
+        assert!(store.has_node(1));
+        assert!(!store.has_node(999));
+        assert!(store.has_edge(100));
+        assert!(!store.has_edge(999));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_degree() {
+        let mut store = GraphStore::new();
+        store.add_node(GraphNode::new(1, "A"));
+        store.add_node(GraphNode::new(2, "B"));
+        store.add_node(GraphNode::new(3, "C"));
+        store
+            .add_edge(GraphEdge::new(100, 1, 2, "E").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(101, 1, 3, "E").unwrap())
+            .unwrap();
+        store
+            .add_edge(GraphEdge::new(102, 2, 1, "E").unwrap())
+            .unwrap();
+
+        assert_eq!(store.out_degree(1), 2);
+        assert_eq!(store.in_degree(1), 1);
+        assert_eq!(store.out_degree(2), 1);
+        assert_eq!(store.in_degree(2), 1);
     }
 }

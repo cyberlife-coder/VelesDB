@@ -63,7 +63,9 @@ use tauri::{
 
 pub mod commands;
 pub mod error;
+pub mod helpers;
 pub mod state;
+pub mod types;
 
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;

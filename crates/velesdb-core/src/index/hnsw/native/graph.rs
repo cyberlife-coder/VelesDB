@@ -447,7 +447,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // Convert to sorted vec
         let mut result_vec: Vec<(NodeId, f32)> =
             results.into_iter().map(|(d, n)| (n, d.0)).collect();
-        result_vec.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        result_vec.sort_by(|a, b| a.1.total_cmp(&b.1));
         result_vec
     }
 
@@ -557,7 +557,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 .map(|(n, n_vec)| (*n, self.distance.distance(&neighbor_vec, n_vec)))
                 .collect();
 
-            with_dist.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            with_dist.sort_by(|a, b| a.1.total_cmp(&b.1));
             let pruned: Vec<NodeId> = with_dist
                 .into_iter()
                 .take(max_conn)
