@@ -60,7 +60,14 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState { db });
 
     // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
+    // WARNING: GraphService is in-memory only and NOT persisted to disk.
+    // Graph data will be lost on server restart. This is a preview feature.
+    // Full persistence will be implemented in EPIC-004.
     let graph_service = GraphService::new();
+    tracing::warn!(
+        "GraphService initialized (PREVIEW): Graph data is in-memory only and will NOT persist across restarts. \
+         Use the Python/Rust SDK for persistent graph storage."
+    );
 
     // Graph routes with GraphService state (separate router)
     let graph_router = Router::new()

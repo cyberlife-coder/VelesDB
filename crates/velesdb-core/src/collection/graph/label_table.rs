@@ -4,6 +4,18 @@
 //! With 10M edges having only ~20 distinct labels, this can save ~200MB of memory.
 
 use std::collections::HashMap;
+use thiserror::Error;
+
+/// Error type for LabelTable operations.
+#[derive(Debug, Error)]
+pub enum LabelTableError {
+    /// The label table has reached its maximum capacity.
+    #[error("LabelTable overflow: cannot intern more than {max_labels} labels")]
+    Overflow {
+        /// Maximum number of labels supported.
+        max_labels: u32,
+    },
+}
 
 /// ID for an interned label string.
 ///
@@ -85,30 +97,27 @@ impl LabelTable {
     ///
     /// # Returns
     ///
-    /// The `LabelId` for this string (existing or newly created)
-    /// # Panics
+    /// The `LabelId` for this string (existing or newly created), or an error
+    /// if the table has reached capacity (4 billion labels).
     ///
-    /// Panics if the number of interned strings exceeds `u32::MAX` (4 billion labels).
-    /// This is extremely unlikely in practice.
+    /// # Errors
     ///
-    /// **FLAG-8: This panics instead of returning Result for ergonomic reasons.**
-    /// In production, 4 billion unique labels is unrealistic. If this becomes a concern,
-    /// consider implementing label eviction or sharding across multiple tables.
-    pub fn intern(&mut self, s: &str) -> LabelId {
+    /// Returns an error if the number of interned strings would exceed `u32::MAX`.
+    pub fn intern(&mut self, s: &str) -> Result<LabelId, LabelTableError> {
         if let Some(&id) = self.ids.get(s) {
-            return id;
+            return Ok(id);
         }
         let len = self.strings.len();
-        assert!(
-            len < u32::MAX as usize,
-            "LabelTable overflow: cannot intern more than {} labels",
-            u32::MAX
-        );
+        if len >= u32::MAX as usize {
+            return Err(LabelTableError::Overflow {
+                max_labels: u32::MAX,
+            });
+        }
         #[allow(clippy::cast_possible_truncation)]
         let id = LabelId(len as u32);
         self.strings.push(s.to_string());
         self.ids.insert(s.to_string(), id);
-        id
+        Ok(id)
     }
 
     /// Resolves a LabelId back to its original string.
@@ -168,9 +177,9 @@ mod tests {
     fn test_label_table_intern_returns_same_id() {
         let mut table = LabelTable::new();
 
-        let id1 = table.intern("Person");
-        let id2 = table.intern("Person");
-        let id3 = table.intern("Company");
+        let id1 = table.intern("Person").unwrap();
+        let id2 = table.intern("Person").unwrap();
+        let id3 = table.intern("Company").unwrap();
 
         assert_eq!(id1, id2, "Same label should return same ID");
         assert_ne!(id1, id3, "Different labels should return different IDs");
@@ -180,7 +189,7 @@ mod tests {
     fn test_label_table_resolve_returns_original() {
         let mut table = LabelTable::new();
 
-        let id = table.intern("Person");
+        let id = table.intern("Person").unwrap();
         assert_eq!(table.resolve(id), Some("Person"));
 
         let invalid_id = LabelId::from_u32(999);
@@ -194,9 +203,9 @@ mod tests {
         assert!(table.is_empty());
         assert_eq!(table.len(), 0);
 
-        table.intern("A");
-        table.intern("B");
-        table.intern("A"); // Duplicate
+        table.intern("A").unwrap();
+        table.intern("B").unwrap();
+        table.intern("A").unwrap(); // Duplicate
 
         assert!(!table.is_empty());
         assert_eq!(table.len(), 2);
@@ -208,7 +217,7 @@ mod tests {
 
         assert_eq!(table.get_id("Person"), None);
 
-        let id = table.intern("Person");
+        let id = table.intern("Person").unwrap();
         assert_eq!(table.get_id("Person"), Some(id));
         assert_eq!(table.get_id("Company"), None);
     }
@@ -217,9 +226,9 @@ mod tests {
     fn test_label_table_iter() {
         let mut table = LabelTable::new();
 
-        table.intern("A");
-        table.intern("B");
-        table.intern("C");
+        table.intern("A").unwrap();
+        table.intern("B").unwrap();
+        table.intern("C").unwrap();
 
         let labels: Vec<_> = table.iter().collect();
         assert_eq!(labels.len(), 3);
@@ -245,7 +254,7 @@ mod tests {
         let mut table = LabelTable::new();
 
         assert!(!table.contains("Person"));
-        table.intern("Person");
+        table.intern("Person").unwrap();
         assert!(table.contains("Person"));
         assert!(!table.contains("Company"));
     }
@@ -257,7 +266,7 @@ mod tests {
         // Intern 1000 unique labels
         for i in 0..1000 {
             let label = format!("Label{}", i);
-            let id = table.intern(&label);
+            let id = table.intern(&label).unwrap();
             assert_eq!(id.as_u32(), i as u32);
         }
 

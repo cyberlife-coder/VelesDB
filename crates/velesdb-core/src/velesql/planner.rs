@@ -2,6 +2,13 @@
 //!
 //! This module provides intelligent query planning for hybrid graph-vector queries,
 //! choosing the optimal execution strategy based on estimated selectivity.
+//!
+//! # TODO: Cost-Based Optimization (v2.0)
+//!
+//! The current planner uses heuristic-based strategy selection. Future improvements:
+//! - Collect runtime statistics for actual selectivity estimation
+//! - Implement cost model based on index cardinality
+//! - Add adaptive query execution with plan switching
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

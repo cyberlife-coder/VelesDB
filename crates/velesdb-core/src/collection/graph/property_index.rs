@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Current schema version for PropertyIndex serialization.
+/// Increment this when making breaking changes to the index format.
+pub const PROPERTY_INDEX_VERSION: u32 = 1;
+
 /// Index for fast property-based node lookups.
 ///
 /// Maps (label, property_name) -> (value -> node_ids) for O(1) lookups.
@@ -23,8 +27,15 @@ use std::collections::HashMap;
 /// ```
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PropertyIndex {
+    /// Schema version for forward compatibility.
+    #[serde(default = "default_version")]
+    version: u32,
     /// (label, property_name) -> (value_json -> node_ids)
     indexes: HashMap<(String, String), HashMap<String, RoaringBitmap>>,
+}
+
+fn default_version() -> u32 {
+    PROPERTY_INDEX_VERSION
 }
 
 impl PropertyIndex {

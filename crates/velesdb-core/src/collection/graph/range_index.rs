@@ -92,6 +92,10 @@ impl OrderedValue {
     }
 }
 
+/// Current schema version for RangeIndex serialization.
+/// Increment this when making breaking changes to the index format.
+pub const RANGE_INDEX_VERSION: u32 = 1;
+
 /// Range index for ordered property lookups.
 ///
 /// Uses BTreeMap for O(log n) range queries on numeric/string properties.
@@ -109,8 +113,15 @@ impl OrderedValue {
 /// ```
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RangeIndex {
+    /// Schema version for forward compatibility.
+    #[serde(default = "default_range_version")]
+    version: u32,
     /// (label, property_name) -> (ordered_value -> node_ids)
     indexes: HashMap<(String, String), BTreeMap<OrderedValue, RoaringBitmap>>,
+}
+
+fn default_range_version() -> u32 {
+    RANGE_INDEX_VERSION
 }
 
 impl RangeIndex {
