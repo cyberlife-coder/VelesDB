@@ -325,6 +325,76 @@ impl GraphStore {
             .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
         Ok(store.get_incoming(node_id).len())
     }
+
+    /// Performs DFS traversal from a source node.
+    ///
+    /// Args:
+    ///     source_id: Starting node ID
+    ///     config: StreamingConfig with max_depth, max_visited, relationship_types
+    ///
+    /// Returns:
+    ///     List of TraversalResult objects for each edge visited.
+    ///
+    /// Example:
+    ///     >>> results = store.traverse_dfs(100, StreamingConfig(max_depth=3))
+    ///     >>> for r in results:
+    ///     ...     print(f"Depth {r.depth}: {r.source} -> {r.target}")
+    #[pyo3(signature = (source_id, config))]
+    fn traverse_dfs(
+        &self,
+        source_id: u64,
+        config: &StreamingConfig,
+    ) -> PyResult<Vec<TraversalResult>> {
+        use std::collections::HashSet;
+
+        let store = self
+            .inner
+            .read()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+
+        let mut results = Vec::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+        let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
+
+        while let Some((node_id, depth)) = stack.pop() {
+            if visited.len() >= config.max_visited {
+                break;
+            }
+
+            if visited.contains(&node_id) {
+                continue;
+            }
+            visited.insert(node_id);
+
+            if depth < config.max_depth {
+                let edges = store.get_outgoing(node_id);
+                let filtered: Vec<_> = edges
+                    .into_iter()
+                    .filter(|e| {
+                        if let Some(ref types) = config.relationship_types {
+                            types.contains(&e.label().to_string())
+                        } else {
+                            true
+                        }
+                    })
+                    .filter(|e| !visited.contains(&e.target()))
+                    .collect();
+
+                for edge in filtered.into_iter().rev() {
+                    results.push(TraversalResult {
+                        depth: depth + 1,
+                        source: edge.source(),
+                        target: edge.target(),
+                        label: edge.label().to_string(),
+                        edge_id: edge.id(),
+                    });
+                    stack.push((edge.target(), depth + 1));
+                }
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
