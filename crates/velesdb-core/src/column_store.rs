@@ -1092,6 +1092,38 @@ impl ColumnStore {
         self.columns.get(name)
     }
 
+    /// Returns an iterator over column names.
+    pub fn column_names(&self) -> impl Iterator<Item = &str> {
+        self.columns.keys().map(String::as_str)
+    }
+
+    /// Gets a value from a column at a specific row index as JSON.
+    ///
+    /// Returns `None` if the column doesn't exist, the row is deleted, or the value is NULL.
+    /// String values are resolved from the string table.
+    #[must_use]
+    pub fn get_value_as_json(&self, column: &str, row_idx: usize) -> Option<serde_json::Value> {
+        if self.deleted_rows.contains(&row_idx) {
+            return None;
+        }
+
+        let col = self.columns.get(column)?;
+        match col {
+            TypedColumn::Int(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            TypedColumn::Float(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            TypedColumn::String(v) => v.get(row_idx).and_then(|opt| {
+                opt.and_then(|id| self.string_table.get(id).map(|s| serde_json::json!(s)))
+            }),
+            TypedColumn::Bool(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+        }
+    }
+
     /// Filters rows by equality on an integer column.
     ///
     /// Returns a vector of row indices that match. Excludes deleted rows.
