@@ -14,6 +14,7 @@ from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
+from pydantic import ConfigDict
 
 import velesdb
 
@@ -60,8 +61,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
     _collection: Optional[velesdb.Collection] = None
     _dimension: Optional[int] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(
         self,
