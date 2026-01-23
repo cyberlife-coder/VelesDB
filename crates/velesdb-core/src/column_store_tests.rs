@@ -726,4 +726,374 @@ mod tests {
             _ => panic!("Expected ColumnNotFound error"),
         }
     }
+
+    // =========================================================================
+    // TDD Tests for EPIC-020 US-003: Batch Updates
+    // =========================================================================
+
+    #[test]
+    fn test_batch_update_multiple_rows() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        for i in 1..=100 {
+            store
+                .insert_row(&[
+                    ("price_id", ColumnValue::Int(i)),
+                    ("price", ColumnValue::Int(100)),
+                ])
+                .unwrap();
+        }
+
+        // Act - batch update 50 rows
+        let updates: Vec<BatchUpdate> = (1..=50)
+            .map(|i| BatchUpdate {
+                pk: i,
+                column: "price".to_string(),
+                value: ColumnValue::Int(200),
+            })
+            .collect();
+
+        let result = store.batch_update(&updates);
+
+        // Assert
+        assert_eq!(result.successful, 50);
+        assert!(result.failed.is_empty());
+    }
+
+    #[test]
+    fn test_batch_update_partial_failure() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(1)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(2)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act - batch with one nonexistent pk
+        let updates = vec![
+            BatchUpdate {
+                pk: 1,
+                column: "price".to_string(),
+                value: ColumnValue::Int(200),
+            },
+            BatchUpdate {
+                pk: 2,
+                column: "price".to_string(),
+                value: ColumnValue::Int(200),
+            },
+            BatchUpdate {
+                pk: 999, // doesn't exist
+                column: "price".to_string(),
+                value: ColumnValue::Int(200),
+            },
+        ];
+
+        let result = store.batch_update(&updates);
+
+        // Assert
+        assert_eq!(result.successful, 2);
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].0, 999);
+    }
+
+    #[test]
+    fn test_batch_update_mixed_columns() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("price_id", ColumnType::Int),
+                ("price", ColumnType::Int),
+                ("quantity", ColumnType::Int),
+            ],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(1)),
+                ("price", ColumnValue::Int(100)),
+                ("quantity", ColumnValue::Int(10)),
+            ])
+            .unwrap();
+
+        // Act - update different columns
+        let updates = vec![
+            BatchUpdate {
+                pk: 1,
+                column: "price".to_string(),
+                value: ColumnValue::Int(200),
+            },
+            BatchUpdate {
+                pk: 1,
+                column: "quantity".to_string(),
+                value: ColumnValue::Int(20),
+            },
+        ];
+
+        let result = store.batch_update(&updates);
+
+        // Assert
+        assert_eq!(result.successful, 2);
+        let price_matches = store.filter_eq_int("price", 200);
+        let quantity_matches = store.filter_eq_int("quantity", 20);
+        assert_eq!(price_matches, vec![0]);
+        assert_eq!(quantity_matches, vec![0]);
+    }
+
+    #[test]
+    fn test_batch_update_empty_batch() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        // Act
+        let result = store.batch_update(&[]);
+
+        // Assert
+        assert_eq!(result.successful, 0);
+        assert!(result.failed.is_empty());
+    }
+
+    // =========================================================================
+    // TDD Tests for EPIC-020 US-004: TTL Expiration
+    // =========================================================================
+
+    #[test]
+    fn test_set_ttl_on_row() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act
+        let result = store.set_ttl(123, 3600);
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_set_ttl_nonexistent_row() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        // Act
+        let result = store.set_ttl(999, 3600);
+
+        // Assert
+        assert!(result.is_err());
+        match result {
+            Err(ColumnStoreError::RowNotFound(pk)) => assert_eq!(pk, 999),
+            _ => panic!("Expected RowNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_expire_rows_removes_expired() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Set TTL to 0 (immediately expired)
+        store.set_ttl(123, 0).unwrap();
+
+        // Act
+        let result = store.expire_rows();
+
+        // Assert
+        assert_eq!(result.expired_count, 1);
+        assert_eq!(result.pks, vec![123]);
+        assert!(store.get_row_idx_by_pk(123).is_none());
+    }
+
+    #[test]
+    fn test_expire_rows_keeps_valid() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Set TTL to 1 hour (not expired)
+        store.set_ttl(123, 3600).unwrap();
+
+        // Act
+        let result = store.expire_rows();
+
+        // Assert
+        assert_eq!(result.expired_count, 0);
+        assert!(store.get_row_idx_by_pk(123).is_some());
+    }
+
+    // =========================================================================
+    // TDD Tests for EPIC-020 US-005: Upsert
+    // =========================================================================
+
+    #[test]
+    fn test_upsert_inserts_new_row() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        // Act
+        let result = store.upsert(&[
+            ("price_id", ColumnValue::Int(123)),
+            ("price", ColumnValue::Int(100)),
+        ]);
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), UpsertResult::Inserted);
+        assert_eq!(store.row_count(), 1);
+    }
+
+    #[test]
+    fn test_upsert_updates_existing_row() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act
+        let result = store.upsert(&[
+            ("price_id", ColumnValue::Int(123)),
+            ("price", ColumnValue::Int(200)),
+        ]);
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), UpsertResult::Updated);
+        assert_eq!(store.row_count(), 1);
+        let matches = store.filter_eq_int("price", 200);
+        assert_eq!(matches, vec![0]);
+    }
+
+    #[test]
+    fn test_batch_upsert_mixed() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(1)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act - upsert: pk=1 exists, pk=2 and pk=3 are new
+        let rows = vec![
+            vec![
+                ("price_id", ColumnValue::Int(1)),
+                ("price", ColumnValue::Int(200)),
+            ],
+            vec![
+                ("price_id", ColumnValue::Int(2)),
+                ("price", ColumnValue::Int(300)),
+            ],
+            vec![
+                ("price_id", ColumnValue::Int(3)),
+                ("price", ColumnValue::Int(400)),
+            ],
+        ];
+
+        let result = store.batch_upsert(&rows);
+
+        // Assert
+        assert_eq!(result.updated, 1);
+        assert_eq!(result.inserted, 2);
+        assert!(result.failed.is_empty());
+        assert_eq!(store.row_count(), 3);
+    }
+
+    #[test]
+    fn test_upsert_partial_columns() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("price_id", ColumnType::Int),
+                ("price", ColumnType::Int),
+                ("available", ColumnType::Bool),
+            ],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+                ("available", ColumnValue::Bool(true)),
+            ])
+            .unwrap();
+
+        // Act - upsert only updates price, not available
+        let result = store.upsert(&[
+            ("price_id", ColumnValue::Int(123)),
+            ("price", ColumnValue::Int(200)),
+        ]);
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), UpsertResult::Updated);
+        // Price should be updated
+        let price_matches = store.filter_eq_int("price", 200);
+        assert_eq!(price_matches, vec![0]);
+    }
 }

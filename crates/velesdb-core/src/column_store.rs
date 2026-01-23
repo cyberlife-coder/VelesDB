@@ -197,6 +197,8 @@ pub struct ColumnStore {
     primary_index: HashMap<i64, usize>,
     /// Deleted row indices (tombstones)
     deleted_rows: rustc_hash::FxHashSet<usize>,
+    /// Row expiry timestamps: row_idx → expiry_timestamp (US-004 TTL)
+    row_expiry: HashMap<usize, u64>,
 }
 
 impl ColumnStore {
@@ -573,6 +575,269 @@ impl ColumnStore {
         }
     }
 
+    // =========================================================================
+    // US-003: Batch Updates
+    // =========================================================================
+
+    /// Performs batch updates with optimized cache locality.
+    ///
+    /// Updates are grouped by column for better cache performance.
+    /// Partial failures are allowed - successful updates are not rolled back.
+    ///
+    /// # Arguments
+    ///
+    /// * `updates` - List of batch update operations
+    ///
+    /// # Returns
+    ///
+    /// `BatchUpdateResult` containing counts of successful and failed updates.
+    pub fn batch_update(&mut self, updates: &[BatchUpdate]) -> BatchUpdateResult {
+        let mut result = BatchUpdateResult::default();
+
+        // Group updates by column for better cache locality
+        let mut by_column: HashMap<&str, Vec<(usize, ColumnValue)>> = HashMap::new();
+
+        for update in updates {
+            // Check if row is deleted
+            if let Some(&row_idx) = self.primary_index.get(&update.pk) {
+                if self.deleted_rows.contains(&row_idx) {
+                    result
+                        .failed
+                        .push((update.pk, ColumnStoreError::RowNotFound(update.pk)));
+                    continue;
+                }
+                by_column
+                    .entry(update.column.as_str())
+                    .or_default()
+                    .push((row_idx, update.value.clone()));
+            } else {
+                result
+                    .failed
+                    .push((update.pk, ColumnStoreError::RowNotFound(update.pk)));
+            }
+        }
+
+        // Apply updates grouped by column
+        for (col_name, col_updates) in by_column {
+            if let Some(col) = self.columns.get_mut(col_name) {
+                for (row_idx, value) in col_updates {
+                    if Self::set_column_value(col, row_idx, value).is_ok() {
+                        result.successful += 1;
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Batch update with same value for multiple primary keys.
+    ///
+    /// Useful for bulk operations like setting `available=false` for sold out items.
+    pub fn batch_update_same_value(
+        &mut self,
+        pks: &[i64],
+        column: &str,
+        value: &ColumnValue,
+    ) -> BatchUpdateResult {
+        let updates: Vec<BatchUpdate> = pks
+            .iter()
+            .map(|&pk| BatchUpdate {
+                pk,
+                column: column.to_string(),
+                value: value.clone(),
+            })
+            .collect();
+        self.batch_update(&updates)
+    }
+
+    // =========================================================================
+    // US-004: TTL Expiration
+    // =========================================================================
+
+    /// Sets a TTL (Time To Live) on a row.
+    ///
+    /// The row will be marked for expiration after the specified duration.
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Primary key of the row
+    /// * `ttl_seconds` - Time to live in seconds from now
+    ///
+    /// # Errors
+    ///
+    /// Returns `ColumnStoreError::RowNotFound` if the row doesn't exist.
+    pub fn set_ttl(&mut self, pk: i64, ttl_seconds: u64) -> Result<(), ColumnStoreError> {
+        let row_idx = *self
+            .primary_index
+            .get(&pk)
+            .ok_or(ColumnStoreError::RowNotFound(pk))?;
+
+        if self.deleted_rows.contains(&row_idx) {
+            return Err(ColumnStoreError::RowNotFound(pk));
+        }
+
+        let expiry_ts = Self::now_timestamp() + ttl_seconds;
+
+        // Store expiry in a special internal tracking (using deleted_rows for simplicity)
+        // In a real implementation, we'd have a separate BTreeMap<u64, Vec<usize>>
+        // For now, we'll store the expiry timestamp in an internal map
+        self.row_expiry.insert(row_idx, expiry_ts);
+
+        Ok(())
+    }
+
+    /// Expires all rows that have passed their TTL.
+    ///
+    /// # Returns
+    ///
+    /// `ExpireResult` containing the count and PKs of expired rows.
+    pub fn expire_rows(&mut self) -> ExpireResult {
+        let now = Self::now_timestamp();
+        let mut result = ExpireResult::default();
+
+        // Find expired rows
+        let expired_rows: Vec<usize> = self
+            .row_expiry
+            .iter()
+            .filter(|(_, &expiry)| expiry <= now)
+            .map(|(&row_idx, _)| row_idx)
+            .collect();
+
+        // Remove expired rows
+        for row_idx in expired_rows {
+            // Find the PK for this row
+            if let Some((&pk, _)) = self.primary_index.iter().find(|(_, &idx)| idx == row_idx) {
+                self.primary_index.remove(&pk);
+                self.deleted_rows.insert(row_idx);
+                self.row_expiry.remove(&row_idx);
+                result.pks.push(pk);
+                result.expired_count += 1;
+            }
+        }
+
+        result
+    }
+
+    /// Returns the current timestamp in seconds since UNIX epoch.
+    fn now_timestamp() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    // =========================================================================
+    // US-005: Upsert
+    // =========================================================================
+
+    /// Upsert: inserts a new row or updates an existing one.
+    ///
+    /// This is more efficient than checking existence then insert/update,
+    /// as it only performs one lookup.
+    ///
+    /// # Arguments
+    ///
+    /// * `values` - Column values for the row (must include primary key)
+    ///
+    /// # Returns
+    ///
+    /// `UpsertResult::Inserted` if a new row was created,
+    /// `UpsertResult::Updated` if an existing row was modified.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ColumnStoreError::MissingPrimaryKey` if no primary key is configured
+    /// or the primary key value is missing from values.
+    pub fn upsert(
+        &mut self,
+        values: &[(&str, ColumnValue)],
+    ) -> Result<UpsertResult, ColumnStoreError> {
+        let Some(ref pk_col) = self.primary_key_column else {
+            return Err(ColumnStoreError::MissingPrimaryKey);
+        };
+
+        // Find the primary key value
+        let pk_value = values
+            .iter()
+            .find(|(name, _)| *name == pk_col.as_str())
+            .and_then(|(_, value)| {
+                if let ColumnValue::Int(v) = value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
+            .ok_or(ColumnStoreError::MissingPrimaryKey)?;
+
+        // Check if row exists
+        if let Some(&row_idx) = self.primary_index.get(&pk_value) {
+            // Check if row is deleted
+            if self.deleted_rows.contains(&row_idx) {
+                // Re-insert the row (undelete + update)
+                self.deleted_rows.remove(&row_idx);
+                // Update all provided columns
+                for (col_name, value) in values {
+                    if *col_name != pk_col.as_str() {
+                        if let Some(col) = self.columns.get_mut(*col_name) {
+                            let _ = Self::set_column_value(col, row_idx, value.clone());
+                        }
+                    }
+                }
+                return Ok(UpsertResult::Inserted);
+            }
+
+            // Update existing row
+            for (col_name, value) in values {
+                if *col_name != pk_col.as_str() {
+                    if let Some(col) = self.columns.get_mut(*col_name) {
+                        let _ = Self::set_column_value(col, row_idx, value.clone());
+                    }
+                }
+            }
+            Ok(UpsertResult::Updated)
+        } else {
+            // Insert new row
+            self.insert_row(values)?;
+            Ok(UpsertResult::Inserted)
+        }
+    }
+
+    /// Batch upsert: inserts or updates multiple rows.
+    ///
+    /// More efficient than individual upserts for bulk operations.
+    pub fn batch_upsert(&mut self, rows: &[Vec<(&str, ColumnValue)>]) -> BatchUpsertResult {
+        let mut result = BatchUpsertResult::default();
+
+        for row in rows {
+            match self.upsert(row) {
+                Ok(UpsertResult::Inserted) => result.inserted += 1,
+                Ok(UpsertResult::Updated) => result.updated += 1,
+                Err(e) => {
+                    // Try to get the PK for error reporting
+                    let pk = row
+                        .iter()
+                        .find(|(name, _)| {
+                            self.primary_key_column
+                                .as_ref()
+                                .is_some_and(|pk| pk.as_str() == *name)
+                        })
+                        .and_then(|(_, v)| {
+                            if let ColumnValue::Int(pk) = v {
+                                Some(*pk)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    result.failed.push((pk, e));
+                }
+            }
+        }
+
+        result
+    }
+
     /// Gets a column by name.
     #[must_use]
     pub fn get_column(&self, name: &str) -> Option<&TypedColumn> {
@@ -847,4 +1112,65 @@ pub enum ColumnValue {
     Bool(bool),
     /// Null value
     Null,
+}
+
+// =========================================================================
+// US-003: Batch Updates
+// =========================================================================
+
+/// A single update operation for batch processing.
+#[derive(Debug, Clone)]
+pub struct BatchUpdate {
+    /// Primary key of the row to update.
+    pub pk: i64,
+    /// Column name to update.
+    pub column: String,
+    /// New value for the column.
+    pub value: ColumnValue,
+}
+
+/// Result of a batch update operation.
+#[derive(Debug, Default)]
+pub struct BatchUpdateResult {
+    /// Number of successful updates.
+    pub successful: usize,
+    /// List of failed updates with their errors.
+    pub failed: Vec<(i64, ColumnStoreError)>,
+}
+
+// =========================================================================
+// US-004: TTL Expiration
+// =========================================================================
+
+/// Result of an expire operation.
+#[derive(Debug, Default)]
+pub struct ExpireResult {
+    /// Number of expired rows.
+    pub expired_count: usize,
+    /// Primary keys of expired rows.
+    pub pks: Vec<i64>,
+}
+
+// =========================================================================
+// US-005: Upsert
+// =========================================================================
+
+/// Result of a single upsert operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpsertResult {
+    /// A new row was inserted.
+    Inserted,
+    /// An existing row was updated.
+    Updated,
+}
+
+/// Result of a batch upsert operation.
+#[derive(Debug, Default)]
+pub struct BatchUpsertResult {
+    /// Number of inserted rows.
+    pub inserted: usize,
+    /// Number of updated rows.
+    pub updated: usize,
+    /// List of failed operations with their errors.
+    pub failed: Vec<(i64, ColumnStoreError)>,
 }
