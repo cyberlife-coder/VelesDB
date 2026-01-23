@@ -1732,4 +1732,28 @@ mod tests {
         );
         assert_eq!(store.deleted_row_count(), 1);
     }
+
+    /// Regression test: upsert returns ColumnNotFound for non-existent columns
+    /// (consistency with update_by_pk behavior)
+    #[test]
+    fn test_upsert_rejects_nonexistent_column() {
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        // Try to upsert with a non-existent column
+        let result = store.upsert(&[
+            ("id", ColumnValue::Int(1)),
+            ("val", ColumnValue::Int(100)),
+            ("nonexistent", ColumnValue::Int(999)),
+        ]);
+
+        // Should fail with ColumnNotFound (not silently ignore)
+        assert!(
+            matches!(result, Err(ColumnStoreError::ColumnNotFound(ref col)) if col == "nonexistent"),
+            "upsert should return ColumnNotFound for non-existent column, got: {:?}",
+            result
+        );
+    }
 }

@@ -951,6 +951,13 @@ impl ColumnStore {
             })
             .ok_or(ColumnStoreError::MissingPrimaryKey)?;
 
+        // Validate all columns exist BEFORE any mutations (consistency with update_by_pk)
+        for (col_name, _) in values {
+            if *col_name != pk_col.as_str() && !self.columns.contains_key(*col_name) {
+                return Err(ColumnStoreError::ColumnNotFound((*col_name).to_string()));
+            }
+        }
+
         // Check if row exists
         if let Some(&row_idx) = self.primary_index.get(&pk_value) {
             // Check if row is deleted
