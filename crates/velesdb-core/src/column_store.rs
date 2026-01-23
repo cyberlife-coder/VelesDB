@@ -409,10 +409,20 @@ impl ColumnStore {
                 }
                 // Reuse deleted slot - undelete and update values
                 self.deleted_rows.remove(&existing_idx);
-                // Update the row values at the existing index - errors propagated
-                for (col_name, value) in values {
-                    if let Some(col) = self.columns.get_mut(*col_name) {
-                        Self::set_column_value(col, existing_idx, value.clone())?;
+                // Clear any stale TTL from the deleted row
+                self.row_expiry.remove(&existing_idx);
+                // Build map of provided values for O(1) lookup
+                let value_map: std::collections::HashMap<&str, &ColumnValue> =
+                    values.iter().map(|(k, v)| (*k, v)).collect();
+                // Clear ALL columns first (set unprovided to null, provided to value)
+                let col_names: Vec<String> = self.columns.keys().cloned().collect();
+                for col_name in col_names {
+                    if let Some(col) = self.columns.get_mut(&col_name) {
+                        if let Some(value) = value_map.get(col_name.as_str()) {
+                            Self::set_column_value(col, existing_idx, (*value).clone())?;
+                        } else {
+                            Self::set_column_value(col, existing_idx, ColumnValue::Null)?;
+                        }
                     }
                 }
                 return Ok(existing_idx);
@@ -949,11 +959,21 @@ impl ColumnStore {
                 }
                 // Re-insert the row (undelete + update) - validation passed
                 self.deleted_rows.remove(&row_idx);
-                // Update all provided columns - errors propagated
-                for (col_name, value) in values {
-                    if *col_name != pk_col.as_str() {
-                        if let Some(col) = self.columns.get_mut(*col_name) {
-                            Self::set_column_value(col, row_idx, value.clone())?;
+                // Clear any stale TTL from the deleted row
+                self.row_expiry.remove(&row_idx);
+                // Build map of provided values for O(1) lookup
+                let value_map: std::collections::HashMap<&str, &ColumnValue> =
+                    values.iter().map(|(k, v)| (*k, v)).collect();
+                // Clear ALL columns (set unprovided to null, provided to value)
+                let col_names: Vec<String> = self.columns.keys().cloned().collect();
+                for col_name in col_names {
+                    if col_name != *pk_col {
+                        if let Some(col) = self.columns.get_mut(&col_name) {
+                            if let Some(value) = value_map.get(col_name.as_str()) {
+                                Self::set_column_value(col, row_idx, (*value).clone())?;
+                            } else {
+                                Self::set_column_value(col, row_idx, ColumnValue::Null)?;
+                            }
                         }
                     }
                 }

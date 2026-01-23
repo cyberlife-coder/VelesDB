@@ -1622,6 +1622,82 @@ mod tests {
         let _ = ColumnStore::with_primary_key(&[("id", ColumnType::String)], "id");
     }
 
+    /// Regression test: Stale data is cleared when reusing deleted slot
+    #[test]
+    fn test_stale_data_cleared_on_slot_reuse() {
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("id", ColumnType::Int),
+                ("col_a", ColumnType::Int),
+                ("col_b", ColumnType::Int),
+            ],
+            "id",
+        );
+
+        // Insert row with all columns
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("col_a", ColumnValue::Int(100)),
+                ("col_b", ColumnValue::Int(200)),
+            ])
+            .unwrap();
+
+        // Delete the row
+        store.delete_by_pk(1);
+
+        // Re-insert with only some columns (col_b not provided)
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("col_a", ColumnValue::Int(999)),
+            ])
+            .unwrap();
+
+        // col_b should be null, NOT the stale value 200
+        // Verify by checking that the old value 200 is NOT found
+        let stale_matches = store.filter_eq_int("col_b", 200);
+        assert!(
+            stale_matches.is_empty(),
+            "Stale value 200 should NOT be found after slot reuse"
+        );
+        // And col_a should have the new value
+        let new_matches = store.filter_eq_int("col_a", 999);
+        assert_eq!(new_matches, vec![0], "New value should be found");
+    }
+
+    /// Regression test: TTL is cleared when reusing deleted slot
+    #[test]
+    fn test_ttl_cleared_on_slot_reuse() {
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        // Insert and set TTL
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
+            .unwrap();
+        store.set_ttl(1, 0).unwrap(); // Immediate expiry
+
+        // Delete the row
+        store.delete_by_pk(1);
+
+        // Re-insert via insert_row (slot reuse)
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(200))])
+            .unwrap();
+
+        // Expire rows - should NOT expire the newly inserted row
+        store.expire_rows();
+
+        // Row should still exist (TTL was cleared on reuse)
+        assert!(
+            store.get_row_idx_by_pk(1).is_some(),
+            "Row should not be expired - TTL should have been cleared on slot reuse"
+        );
+    }
+
     /// Test: active_row_count excludes deleted rows
     #[test]
     fn test_active_row_count_excludes_deleted() {
