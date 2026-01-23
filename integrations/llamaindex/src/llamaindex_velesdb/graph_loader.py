@@ -186,7 +186,8 @@ class GraphLoader:
         nodes_added = 0
 
         for node in nodes:
-            node_id = hash(node.node_id) & 0x7FFFFFFFFFFFFFFF
+            # Use deterministic SHA256-based ID (not Python hash() which is randomized)
+            node_id = _generate_id(node.node_id, node_label)
 
             metadata = {
                 "node_id": node.node_id,

@@ -19,6 +19,7 @@ Example:
 
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
+import hashlib
 import requests
 
 try:
@@ -285,11 +286,14 @@ class GraphQARetriever(GraphRetriever):
         return docs
     
     def _deduplicate(self, docs: List[Document]) -> List[Document]:
-        """Remove duplicate documents based on content hash."""
+        """Remove duplicate documents based on stable content hash."""
         seen = set()
         unique = []
         for doc in docs:
-            content_hash = hash(doc.page_content[:200])
+            # Use SHA256 for deterministic, collision-resistant hashing
+            content_hash = hashlib.sha256(
+                doc.page_content[:200].encode("utf-8")
+            ).hexdigest()
             if content_hash not in seen:
                 seen.add(content_hash)
                 unique.append(doc)
