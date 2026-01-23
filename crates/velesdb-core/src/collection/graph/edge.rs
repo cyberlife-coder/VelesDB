@@ -3,6 +3,12 @@
 //! This module provides:
 //! - `GraphEdge`: A typed relationship between nodes with properties
 //! - `EdgeStore`: Bidirectional index for efficient edge traversal
+//!
+//! # Edge Removal Semantics
+//!
+//! During edge removal, the internal indexes may be temporarily inconsistent
+//! while the operation is in progress. The final state is always consistent.
+//! For concurrent access, use `ConcurrentEdgeStore` instead.
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};

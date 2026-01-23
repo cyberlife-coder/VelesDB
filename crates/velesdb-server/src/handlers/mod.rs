@@ -28,9 +28,12 @@ pub use points::{delete_point, get_point, upsert_points};
 pub use query::query;
 pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
 
-// Graph handlers (EPIC-016) - will be used when routes are added
+// Graph handlers (EPIC-016) - exported via lib.rs
 #[allow(unused_imports)]
-pub use graph::{add_edge, get_edges, GraphService};
+pub use graph::{
+    add_edge, get_edges, get_node_degree, traverse_graph, DegreeResponse, GraphService,
+    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+};
 
 // Metrics handlers - conditional on prometheus feature
 #[cfg(feature = "prometheus")]

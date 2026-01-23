@@ -15,28 +15,31 @@ fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
 }
 
 /// Benchmark HNSW index insertion performance (sequential).
+///
+/// Note: Only 1000 vectors for sequential - 10000 takes ~14min and parallel mode
+/// is the realistic use-case for larger datasets.
 fn bench_hnsw_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_insert");
 
-    for &count in &[1000_u64, 10_000_u64] {
-        let dim = 768;
-        group.throughput(Throughput::Elements(count));
+    // Only 1000 for sequential (10000 is too slow ~850s, use parallel instead)
+    let count = 1000_u64;
+    let dim = 768;
+    group.throughput(Throughput::Elements(count));
 
-        group.bench_with_input(
-            BenchmarkId::new("sequential", format!("{count}x{dim}d")),
-            &count,
-            |b, &count| {
-                b.iter(|| {
-                    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
-                    for i in 0..count {
-                        let vector = generate_vector(dim, i);
-                        index.insert(i, &vector);
-                    }
-                    black_box(index.len())
-                });
-            },
-        );
-    }
+    group.bench_with_input(
+        BenchmarkId::new("sequential", format!("{count}x{dim}d")),
+        &count,
+        |b, &count| {
+            b.iter(|| {
+                let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                for i in 0..count {
+                    let vector = generate_vector(dim, i);
+                    index.insert(i, &vector);
+                }
+                black_box(index.len())
+            });
+        },
+    );
 
     group.finish();
 }

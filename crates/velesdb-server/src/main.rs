@@ -17,8 +17,9 @@ use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
-    delete_point, get_collection, get_edges, get_point, health_check, list_collections,
-    list_indexes, multi_query_search, query, search, upsert_points, ApiDoc, AppState, GraphService,
+    delete_point, get_collection, get_edges, get_node_degree, get_point, health_check,
+    list_collections, list_indexes, multi_query_search, query, search, traverse_graph,
+    upsert_points, ApiDoc, AppState, GraphService,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -60,13 +61,26 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState { db });
 
     // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
+    // WARNING: GraphService is in-memory only and NOT persisted to disk.
+    // Graph data will be lost on server restart. This is a preview feature.
+    // Full persistence will be implemented in EPIC-004.
     let graph_service = GraphService::new();
+    tracing::warn!(
+        "GraphService initialized (PREVIEW): Graph data is in-memory only and will NOT persist across restarts. \
+         Use the Python/Rust SDK for persistent graph storage."
+    );
 
     // Graph routes with GraphService state (separate router)
+    // EPIC-016/US-050: Added traverse and degree endpoints
     let graph_router = Router::new()
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
+        )
+        .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/degree",
+            get(get_node_degree),
         )
         .with_state(graph_service);
 

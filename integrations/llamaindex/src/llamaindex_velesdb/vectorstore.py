@@ -6,6 +6,7 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, List, Optional
 
 from llama_index.core.schema import BaseNode, TextNode
@@ -14,8 +15,19 @@ from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
+from pydantic import ConfigDict
 
 import velesdb
+
+
+def _stable_hash_id(value: str) -> int:
+    """Generate a stable numeric ID from a string using SHA256.
+    
+    Python's hash() is non-deterministic across processes, so we use
+    SHA256 for consistent IDs across runs.
+    """
+    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
+    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 class VelesDBVectorStore(BasePydanticVectorStore):
@@ -60,8 +72,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
     _collection: Optional[velesdb.Collection] = None
     _dimension: Optional[int] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(
         self,
@@ -171,7 +182,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                         payload[key] = value
 
             # Convert node_id to int for VelesDB
-            int_id = hash(node_id) & 0x7FFFFFFFFFFFFFFF
+            int_id = _stable_hash_id(node_id)
 
             points.append({
                 "id": int_id,
@@ -194,7 +205,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         if self._collection is None:
             return
 
-        int_id = hash(ref_doc_id) & 0x7FFFFFFFFFFFFFFF
+        int_id = _stable_hash_id(ref_doc_id)
         self._collection.delete([int_id])
 
     def query(
@@ -252,6 +263,51 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             similarities=similarities,
             ids=ids,
         )
+
+    def query_with_score_threshold(
+        self,
+        query: VectorStoreQuery,
+        score_threshold: float = 0.0,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Query with similarity score threshold filtering.
+
+        This method enables similarity()-like filtering from VelesDB Core.
+        Only returns results with score >= threshold.
+
+        Args:
+            query: Vector store query with embedding and parameters.
+            score_threshold: Minimum similarity score (0.0-1.0 for cosine).
+                Only return nodes with score >= threshold.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Query result with nodes above threshold.
+
+        Example:
+            >>> # Get only highly relevant results (>0.8 similarity)
+            >>> query = VectorStoreQuery(
+            ...     query_embedding=embedding,
+            ...     similarity_top_k=20
+            ... )
+            >>> result = vector_store.query_with_score_threshold(
+            ...     query, score_threshold=0.8
+            ... )
+        """
+        result = self.query(query, **kwargs)
+
+        if score_threshold > 0.0 and result.similarities:
+            filtered_indices = [
+                i for i, score in enumerate(result.similarities)
+                if score >= score_threshold
+            ]
+            return VectorStoreQueryResult(
+                nodes=[result.nodes[i] for i in filtered_indices] if result.nodes else [],
+                similarities=[result.similarities[i] for i in filtered_indices],
+                ids=[result.ids[i] for i in filtered_indices] if result.ids else [],
+            )
+
+        return result
 
     def hybrid_query(
         self,
@@ -423,7 +479,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             if hasattr(node, "metadata") and node.metadata:
                 payload.update({k: v for k, v in node.metadata.items() 
                                if isinstance(v, (str, int, float, bool))})
-            points.append({"id": hash(nid) & 0x7FFFFFFFFFFFFFFF, "vector": emb, "payload": payload})
+            points.append({"id": _stable_hash_id(nid), "vector": emb, "payload": payload})
         if points:
             collection.upsert_bulk(points)
         return result_ids
@@ -432,7 +488,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         """Retrieve nodes by their IDs."""
         if not node_ids or self._collection is None:
             return []
-        int_ids = [hash(nid) & 0x7FFFFFFFFFFFFFFF for nid in node_ids]
+        int_ids = [_stable_hash_id(nid) for nid in node_ids]
         points = self._collection.get(int_ids)
         result = []
         for pt in points:

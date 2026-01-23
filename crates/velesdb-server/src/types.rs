@@ -226,6 +226,18 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_rrf_k")]
     #[schema(example = 60)]
     pub rrf_k: u32,
+    /// Weighted fusion: weight for average score component (default 0.5).
+    #[serde(default = "default_avg_weight")]
+    #[schema(example = 0.5)]
+    pub avg_weight: f32,
+    /// Weighted fusion: weight for max score component (default 0.3).
+    #[serde(default = "default_max_weight")]
+    #[schema(example = 0.3)]
+    pub max_weight: f32,
+    /// Weighted fusion: weight for hit count component (default 0.2).
+    #[serde(default = "default_hit_weight")]
+    #[schema(example = 0.2)]
+    pub hit_weight: f32,
     /// Optional metadata filter to apply to results.
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
@@ -237,6 +249,18 @@ fn default_fusion_strategy() -> String {
 
 fn default_rrf_k() -> u32 {
     60
+}
+
+fn default_avg_weight() -> f32 {
+    0.5
+}
+
+fn default_max_weight() -> f32 {
+    0.3
+}
+
+fn default_hit_weight() -> f32 {
+    0.2
 }
 
 // ============================================================================

@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.3.0] - 2026-01-23
+
+### 🌐 EPIC-016: Graph Parity Ecosystem
+
+Full ecosystem parity for graph features across all VelesDB components.
+
+#### Added
+
+- **Server REST API** (`velesdb-server`)
+  - `POST /collections/{name}/graph/traverse` - BFS/DFS traversal with filtering
+  - `GET /collections/{name}/graph/nodes/{node_id}/degree` - Node in/out degree
+  - `POST /collections/{name}/graph/edges` - Add edge to graph
+  - `GET /collections/{name}/graph/edges?label=X` - Query edges by label
+  - OpenAPI documentation for all graph endpoints
+
+- **TypeScript SDK** (`sdks/typescript`)
+  - `traverseGraph()` method for BFS/DFS traversal
+  - `getNodeDegree()` method for node degree queries
+  - Full type definitions for graph operations
+
+- **CLI** (`velesdb-cli`)
+  - `velesdb graph traverse` - Graph traversal command
+  - `velesdb graph degree` - Node degree query
+  - `velesdb graph add-edge` - Add edge command
+  - Instructions for REST API usage (server required)
+
+- **LangChain Integration** (`integrations/langchain`)
+  - `GraphRetriever` - Seed + expand pattern for RAG
+  - `GraphQARetriever` - QA-optimized graph retrieval
+  - Low latency mode with `low_latency=True`
+  - Configurable timeout with `timeout_ms` and `fallback_on_timeout`
+
+- **LlamaIndex Integration** (`integrations/llamaindex`)
+  - `GraphRetriever` - Custom retriever with graph expansion
+  - `GraphQARetriever` - QA-optimized retriever
+  - Same latency options as LangChain
+
+#### Changed
+
+- **Performance**: BFS/DFS `rel_types` filtering optimized from O(k) to O(1) using HashSet
+
+#### Refactored
+
+- **Server graph.rs** (716L → 4 modules < 250L each)
+  - `graph/types.rs` - Request/Response types
+  - `graph/service.rs` - GraphService + BFS/DFS logic
+  - `graph/handlers.rs` - HTTP handlers
+  - `graph/mod.rs` - Re-exports and tests
+
+- **CLI main.rs** (908L → 656L)
+  - Extracted `graph.rs` module with GraphAction enum and handler
+
+---
+
 ### 🔧 Devin Cognition Flags Review (2026-01-22)
 
 Quality and consistency fixes based on expert code review.

@@ -208,9 +208,9 @@ pub async fn multi_query_search(
         "maximum" | "max" => FusionStrategy::Maximum,
         "rrf" => FusionStrategy::RRF { k: req.rrf_k },
         "weighted" => FusionStrategy::Weighted {
-            avg_weight: 0.5,
-            max_weight: 0.3,
-            hit_weight: 0.2,
+            avg_weight: req.avg_weight,
+            max_weight: req.max_weight,
+            hit_weight: req.hit_weight,
         },
         _ => {
             return (
