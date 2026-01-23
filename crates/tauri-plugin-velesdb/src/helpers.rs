@@ -60,6 +60,47 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> String {
     .to_string()
 }
 
+/// Parses fusion strategy from string and optional params.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn parse_fusion_strategy(
+    fusion: &str,
+    params: Option<&serde_json::Value>,
+) -> velesdb_core::fusion::FusionStrategy {
+    use velesdb_core::fusion::FusionStrategy;
+    match fusion.to_lowercase().as_str() {
+        "rrf" => {
+            let k = params
+                .and_then(|p| p.get("k"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(60) as u32;
+            FusionStrategy::RRF { k }
+        }
+        "average" => FusionStrategy::Average,
+        "maximum" => FusionStrategy::Maximum,
+        "weighted" => {
+            let avg_weight = params
+                .and_then(|p| p.get("avgWeight").or_else(|| p.get("avg_weight")))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.6) as f32;
+            let max_weight = params
+                .and_then(|p| p.get("maxWeight").or_else(|| p.get("max_weight")))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.3) as f32;
+            let hit_weight = params
+                .and_then(|p| p.get("hitWeight").or_else(|| p.get("hit_weight")))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.1) as f32;
+            FusionStrategy::Weighted {
+                avg_weight,
+                max_weight,
+                hit_weight,
+            }
+        }
+        _ => FusionStrategy::RRF { k: 60 },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
