@@ -21,6 +21,7 @@ Example:
 """
 
 from langchain_velesdb.vectorstore import VelesDBVectorStore
+from langchain_velesdb.graph_retriever import GraphRetriever, GraphQARetriever
 
-__all__ = ["VelesDBVectorStore"]
+__all__ = ["VelesDBVectorStore", "GraphRetriever", "GraphQARetriever"]
 __version__ = "0.8.10"

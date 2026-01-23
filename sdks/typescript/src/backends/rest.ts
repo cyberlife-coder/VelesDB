@@ -17,6 +17,9 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  TraverseRequest,
+  TraverseResponse,
+  DegreeResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -653,5 +656,74 @@ export class RestBackend implements IVelesDBBackend {
     }
 
     return response.data?.edges ?? [];
+  }
+
+  // ========================================================================
+  // Graph Traversal (EPIC-016 US-050)
+  // ========================================================================
+
+  async traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<{
+      results: Array<{ target_id: number; depth: number; path: number[] }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      stats: { visited: number; depth_reached: number };
+    }>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/graph/traverse`,
+      {
+        source: request.source,
+        strategy: request.strategy ?? 'bfs',
+        max_depth: request.maxDepth ?? 3,
+        limit: request.limit ?? 100,
+        cursor: request.cursor,
+        rel_types: request.relTypes ?? [],
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data!;
+    return {
+      results: data.results.map(r => ({
+        targetId: r.target_id,
+        depth: r.depth,
+        path: r.path,
+      })),
+      nextCursor: data.next_cursor ?? undefined,
+      hasMore: data.has_more,
+      stats: {
+        visited: data.stats.visited,
+        depthReached: data.stats.depth_reached,
+      },
+    };
+  }
+
+  async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ in_degree: number; out_degree: number }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/graph/nodes/${nodeId}/degree`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return {
+      inDegree: response.data?.in_degree ?? 0,
+      outDegree: response.data?.out_degree ?? 0,
+    };
   }
 }
