@@ -474,8 +474,8 @@ export class RestBackend implements IVelesDBBackend {
       {
         vectors: formattedVectors,
         top_k: options?.k ?? 10,
-        fusion: options?.fusion ?? 'rrf',
-        fusion_params: options?.fusionParams ?? { k: 60 },
+        strategy: options?.fusion ?? 'rrf',
+        rrf_k: options?.fusionParams?.k ?? 60,
         filter: options?.filter,
       }
     );

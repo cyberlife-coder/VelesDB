@@ -146,9 +146,9 @@ pub struct AddEdgeRequest {
     pub properties: serde_json::Value,
 }
 
-/// Get edges from a collection's graph, optionally filtered by label.
+/// Get edges from a collection's graph filtered by label.
 ///
-/// Returns all edges or edges matching the specified label.
+/// Returns edges matching the specified label. The `label` query parameter is required.
 ///
 /// # Errors
 ///
@@ -162,6 +162,7 @@ pub struct AddEdgeRequest {
     ),
     responses(
         (status = 200, description = "Edges retrieved successfully", body = EdgesResponse),
+        (status = 400, description = "Missing required 'label' query parameter", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
@@ -172,30 +173,34 @@ pub async fn get_edges(
     Query(params): Query<EdgeQueryParams>,
     State(graph_service): State<GraphService>,
 ) -> Result<Json<EdgesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let edges: Vec<EdgeResponse> = if let Some(label) = params.label {
-        graph_service
-            .get_edges_by_label(&name, &label)
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to get edges: {e}"),
-                    }),
-                )
-            })?
-            .into_iter()
-            .map(|e| EdgeResponse {
-                id: e.id(),
-                source: e.source(),
-                target: e.target(),
-                label: e.label().to_string(),
-                properties: serde_json::to_value(e.properties()).unwrap_or_default(),
-            })
-            .collect()
-    } else {
-        // Return empty for now - full edge listing requires pagination
-        Vec::new()
-    };
+    let label = params.label.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Query parameter 'label' is required. Listing all edges requires pagination (not yet implemented).".to_string(),
+            }),
+        )
+    })?;
+
+    let edges: Vec<EdgeResponse> = graph_service
+        .get_edges_by_label(&name, &label)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get edges: {e}"),
+                }),
+            )
+        })?
+        .into_iter()
+        .map(|e| EdgeResponse {
+            id: e.id(),
+            source: e.source(),
+            target: e.target(),
+            label: e.label().to_string(),
+            properties: serde_json::to_value(e.properties()).unwrap_or_default(),
+        })
+        .collect();
 
     let count = edges.len();
     Ok(Json(EdgesResponse { edges, count }))
