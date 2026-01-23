@@ -189,9 +189,10 @@ class GraphLoader:
             # Use deterministic SHA256-based ID (not Python hash() which is randomized)
             node_id = _generate_id(node.node_id, node_label)
 
+            content = node.get_content() if hasattr(node, "get_content") else None
             metadata = {
                 "node_id": node.node_id,
-                "text_preview": node.get_content()[:200] if hasattr(node, "get_content") else "",
+                "text_preview": content[:200] if content else "",
             }
 
             if hasattr(node, "metadata") and node.metadata:
