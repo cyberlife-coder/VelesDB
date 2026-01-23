@@ -16,6 +16,9 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  TraverseRequest,
+  TraverseResponse,
+  DegreeResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -575,5 +578,69 @@ export class VelesDB {
   async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
     this.ensureInitialized();
     return this.backend.getEdges(collection, options);
+  }
+
+  // ========================================================================
+  // Graph Traversal (EPIC-016 US-050)
+  // ========================================================================
+
+  /**
+   * Traverse the graph using BFS or DFS from a source node
+   * 
+   * @param collection - Collection name
+   * @param request - Traversal request options
+   * @returns Traversal response with results and stats
+   * 
+   * @example
+   * ```typescript
+   * // BFS traversal from node 100
+   * const result = await db.traverseGraph('social', {
+   *   source: 100,
+   *   strategy: 'bfs',
+   *   maxDepth: 3,
+   *   limit: 100,
+   *   relTypes: ['FOLLOWS', 'KNOWS']
+   * });
+   * 
+   * for (const node of result.results) {
+   *   console.log(`Reached node ${node.targetId} at depth ${node.depth}`);
+   * }
+   * ```
+   */
+  async traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+    
+    if (typeof request.source !== 'number') {
+      throw new ValidationError('Source node ID must be a number');
+    }
+
+    if (request.strategy && !['bfs', 'dfs'].includes(request.strategy)) {
+      throw new ValidationError("Strategy must be 'bfs' or 'dfs'");
+    }
+
+    return this.backend.traverseGraph(collection, request);
+  }
+
+  /**
+   * Get the in-degree and out-degree of a node
+   * 
+   * @param collection - Collection name
+   * @param nodeId - Node ID
+   * @returns Degree response with inDegree and outDegree
+   * 
+   * @example
+   * ```typescript
+   * const degree = await db.getNodeDegree('social', 100);
+   * console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
+   * ```
+   */
+  async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
+    this.ensureInitialized();
+    
+    if (typeof nodeId !== 'number') {
+      throw new ValidationError('Node ID must be a number');
+    }
+
+    return this.backend.getNodeDegree(collection, nodeId);
   }
 }

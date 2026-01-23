@@ -35,8 +35,11 @@ pub use handlers::{
     multi_query_search, query, search, text_search, upsert_points,
 };
 
-// FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031)
-pub use handlers::graph::{add_edge, get_edges, GraphService};
+// FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
+pub use handlers::graph::{
+    add_edge, get_edges, get_node_degree, traverse_graph, DegreeResponse, GraphService,
+    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+};
 
 // FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
 #[cfg(feature = "prometheus")]
