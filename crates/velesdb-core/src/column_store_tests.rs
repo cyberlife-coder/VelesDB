@@ -1380,4 +1380,39 @@ mod tests {
             );
         }
     }
+
+    /// Regression test: batch_update must reject updates to PK column
+    /// PR Review Bug: batch_update allowed PK updates, corrupting the index
+    #[test]
+    fn test_batch_update_rejects_pk_column_update() {
+        // Arrange: Create store with primary key
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
+            .unwrap();
+
+        // Act: Try to update the primary key column via batch_update
+        let updates = vec![BatchUpdate {
+            pk: 1,
+            column: "id".to_string(),
+            value: ColumnValue::Int(999),
+        }];
+        let result = store.batch_update(&updates);
+
+        // Assert: Should fail - updating PK would corrupt the index
+        assert_eq!(result.successful, 0);
+        assert_eq!(result.failed.len(), 1);
+        assert!(
+            matches!(result.failed[0].1, ColumnStoreError::PrimaryKeyUpdate),
+            "Should return PrimaryKeyUpdate error for PK column update"
+        );
+
+        // Verify original row is unchanged
+        assert!(store.get_row_idx_by_pk(1).is_some());
+        assert!(store.get_row_idx_by_pk(999).is_none());
+    }
 }

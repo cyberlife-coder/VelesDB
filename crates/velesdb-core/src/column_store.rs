@@ -657,6 +657,18 @@ impl ColumnStore {
         let mut by_column: HashMap<&str, Vec<(usize, ColumnValue)>> = HashMap::new();
 
         for update in updates {
+            // Reject updates to primary key column (would corrupt index)
+            if self
+                .primary_key_column
+                .as_ref()
+                .is_some_and(|pk_col| pk_col == &update.column)
+            {
+                result
+                    .failed
+                    .push((update.pk, ColumnStoreError::PrimaryKeyUpdate));
+                continue;
+            }
+
             // Check if row is deleted
             if let Some(&row_idx) = self.primary_index.get(&update.pk) {
                 if self.deleted_rows.contains(&row_idx) {
