@@ -45,6 +45,7 @@ mod filter;
 mod fusion;
 mod graph;
 mod persistence;
+mod serialization;
 mod simd;
 mod text_search;
 mod vector_ops;
@@ -1176,52 +1177,7 @@ impl VectorStore {
     /// Throughput: ~1600 MB/s on 10k vectors (768D)
     #[wasm_bindgen]
     pub fn export_to_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        // Perf: Pre-allocate exact size - uses contiguous buffer for 2500+ MB/s
-        let count = self.ids.len();
-        let vector_size = 8 + self.dimension * 4; // id + data
-        let total_size = 18 + count * vector_size;
-        let mut bytes = Vec::with_capacity(total_size);
-
-        // Header: magic number "VELS" (4 bytes)
-        bytes.extend_from_slice(b"VELS");
-
-        // Version (1 byte)
-        bytes.push(1);
-
-        // Dimension (4 bytes, little-endian)
-        #[allow(clippy::cast_possible_truncation)]
-        let dim_u32 = self.dimension as u32;
-        bytes.extend_from_slice(&dim_u32.to_le_bytes());
-
-        // Metric (1 byte: 0=cosine, 1=euclidean, 2=dot, 3=hamming, 4=jaccard)
-        let metric_byte = match self.metric {
-            DistanceMetric::Cosine => 0u8,
-            DistanceMetric::Euclidean => 1u8,
-            DistanceMetric::DotProduct => 2u8,
-            DistanceMetric::Hamming => 3u8,
-            DistanceMetric::Jaccard => 4u8,
-        };
-        bytes.push(metric_byte);
-
-        // Vector count (8 bytes, little-endian)
-        #[allow(clippy::cast_possible_truncation)]
-        let count_u64 = count as u64;
-        bytes.extend_from_slice(&count_u64.to_le_bytes());
-
-        // Perf: Write IDs and data from contiguous buffers
-        for (idx, &id) in self.ids.iter().enumerate() {
-            bytes.extend_from_slice(&id.to_le_bytes());
-            // Direct slice from contiguous data buffer
-            let start = idx * self.dimension;
-            let data_slice = &self.data[start..start + self.dimension];
-            // Write f32s as bytes
-            let data_bytes: &[u8] = unsafe {
-                core::slice::from_raw_parts(data_slice.as_ptr().cast::<u8>(), self.dimension * 4)
-            };
-            bytes.extend_from_slice(data_bytes);
-        }
-
-        Ok(bytes)
+        Ok(serialization::export_to_bytes(self))
     }
 
     /// Saves the vector store to `IndexedDB`.
@@ -1303,105 +1259,7 @@ impl VectorStore {
     /// - The metric byte is invalid
     #[wasm_bindgen]
     pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
-        if bytes.len() < 18 {
-            return Err(JsValue::from_str("Invalid data: too short"));
-        }
-
-        // Check magic number
-        if &bytes[0..4] != b"VELS" {
-            return Err(JsValue::from_str("Invalid data: wrong magic number"));
-        }
-
-        // Check version
-        let version = bytes[4];
-        if version != 1 {
-            return Err(JsValue::from_str(&format!(
-                "Unsupported version: {version}"
-            )));
-        }
-
-        // Read dimension
-        let dimension = u32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
-
-        // Read metric
-        let metric = match bytes[9] {
-            0 => DistanceMetric::Cosine,
-            1 => DistanceMetric::Euclidean,
-            2 => DistanceMetric::DotProduct,
-            3 => DistanceMetric::Hamming,
-            4 => DistanceMetric::Jaccard,
-            _ => return Err(JsValue::from_str("Invalid metric byte")),
-        };
-
-        // Read vector count
-        #[allow(clippy::cast_possible_truncation)]
-        let count = u64::from_le_bytes([
-            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17],
-        ]) as usize;
-
-        // Calculate expected size
-        let vector_size = 8 + dimension * 4; // id + data
-        let expected_size = 18 + count * vector_size;
-        if bytes.len() < expected_size {
-            return Err(JsValue::from_str(&format!(
-                "Invalid data: expected {expected_size} bytes, got {}",
-                bytes.len()
-            )));
-        }
-
-        // Perf: Pre-allocate contiguous buffers
-        // Optimization: Single allocation + bulk copy = 500+ MB/s
-        let mut ids = Vec::with_capacity(count);
-        let total_floats = count * dimension;
-        let mut data = vec![0.0_f32; total_floats];
-
-        let mut offset = 18;
-        let data_bytes_len = dimension * 4;
-
-        // Read all IDs first (cache-friendly sequential access)
-        for _ in 0..count {
-            let id = u64::from_le_bytes([
-                bytes[offset],
-                bytes[offset + 1],
-                bytes[offset + 2],
-                bytes[offset + 3],
-                bytes[offset + 4],
-                bytes[offset + 5],
-                bytes[offset + 6],
-                bytes[offset + 7],
-            ]);
-            ids.push(id);
-            offset += 8 + data_bytes_len; // Skip to next ID
-        }
-
-        // Perf: Bulk copy all vector data in one operation
-        // SAFETY: f32 and [u8; 4] have same size, WASM is little-endian
-        let data_as_bytes: &mut [u8] = unsafe {
-            core::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), total_floats * 4)
-        };
-
-        // Copy data from each vector position
-        offset = 18 + 8; // Skip header + first ID
-        for i in 0..count {
-            let dest_start = i * dimension * 4;
-            let dest_end = dest_start + data_bytes_len;
-            data_as_bytes[dest_start..dest_end]
-                .copy_from_slice(&bytes[offset..offset + data_bytes_len]);
-            offset += 8 + data_bytes_len; // Move to next vector's data
-        }
-
-        Ok(Self {
-            ids,
-            data,
-            data_sq8: Vec::new(),
-            data_binary: Vec::new(),
-            sq8_mins: Vec::new(),
-            sq8_scales: Vec::new(),
-            payloads: vec![None; count],
-            dimension,
-            metric,
-            storage_mode: StorageMode::Full,
-        })
+        serialization::import_from_bytes(bytes)
     }
 }
 

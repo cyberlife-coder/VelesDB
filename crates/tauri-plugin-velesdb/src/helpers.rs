@@ -69,9 +69,15 @@ mod tests {
     #[test]
     fn test_parse_metric_valid() {
         assert!(matches!(parse_metric("cosine"), Ok(DistanceMetric::Cosine)));
-        assert!(matches!(parse_metric("EUCLIDEAN"), Ok(DistanceMetric::Euclidean)));
+        assert!(matches!(
+            parse_metric("EUCLIDEAN"),
+            Ok(DistanceMetric::Euclidean)
+        ));
         assert!(matches!(parse_metric("l2"), Ok(DistanceMetric::Euclidean)));
-        assert!(matches!(parse_metric("dot"), Ok(DistanceMetric::DotProduct)));
+        assert!(matches!(
+            parse_metric("dot"),
+            Ok(DistanceMetric::DotProduct)
+        ));
     }
 
     #[test]
@@ -83,7 +89,10 @@ mod tests {
     fn test_parse_storage_mode_valid() {
         assert!(matches!(parse_storage_mode("full"), Ok(StorageMode::Full)));
         assert!(matches!(parse_storage_mode("sq8"), Ok(StorageMode::SQ8)));
-        assert!(matches!(parse_storage_mode("binary"), Ok(StorageMode::Binary)));
+        assert!(matches!(
+            parse_storage_mode("binary"),
+            Ok(StorageMode::Binary)
+        ));
     }
 
     #[test]
