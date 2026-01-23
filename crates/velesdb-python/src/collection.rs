@@ -8,7 +8,11 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
+use crate::collection_helpers::{
+    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, point_to_dict,
+    search_result_to_dict, search_results_to_dicts, search_results_to_multimodel_dicts,
+};
+use crate::utils::{extract_vector, python_to_json, to_pyobject};
 use crate::FusionStrategy;
 use velesdb_core::{FusionStrategy as CoreFusionStrategy, Point};
 
@@ -214,24 +218,7 @@ impl Collection {
                 .search(&query_vector, top_k)
                 .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {}", e)))?;
 
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut result = HashMap::new();
-                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("score".to_string(), to_pyobject(py, r.score));
-
-                    let payload_py = match &r.point.payload {
-                        Some(p) => json_to_python(py, p),
-                        None => py.None(),
-                    };
-                    result.insert("payload".to_string(), payload_py);
-
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(search_results_to_dicts(py, results))
         })
     }
 
@@ -240,26 +227,10 @@ impl Collection {
     fn get(&self, ids: Vec<u64>) -> PyResult<Vec<Option<HashMap<String, PyObject>>>> {
         Python::with_gil(|py| {
             let points = self.inner.get(&ids);
-
-            let py_points: Vec<Option<HashMap<String, PyObject>>> = points
+            let py_points = points
                 .into_iter()
-                .map(|opt_point| {
-                    opt_point.map(|p| {
-                        let mut result = HashMap::new();
-                        result.insert("id".to_string(), to_pyobject(py, p.id));
-                        result.insert("vector".to_string(), to_pyobject(py, p.vector.clone()));
-
-                        let payload_py = match &p.payload {
-                            Some(payload) => json_to_python(py, payload),
-                            None => py.None(),
-                        };
-                        result.insert("payload".to_string(), payload_py);
-
-                        result
-                    })
-                })
+                .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)))
                 .collect();
-
             Ok(py_points)
         })
     }
@@ -293,43 +264,13 @@ impl Collection {
         filter: Option<PyObject>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let filter_obj = match filter {
-                Some(f) => {
-                    let json_str = py
-                        .import("json")?
-                        .call_method1("dumps", (f,))?
-                        .extract::<String>()?;
-                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
-                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
-                    Some(filter)
-                }
-                None => None,
-            };
-
+            let filter_obj = parse_optional_filter(py, filter)?;
             let results = if let Some(f) = filter_obj {
                 self.inner.text_search_with_filter(query, top_k, &f)
             } else {
                 self.inner.text_search(query, top_k)
             };
-
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut result = HashMap::new();
-                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("score".to_string(), to_pyobject(py, r.score));
-
-                    let payload_py = match &r.point.payload {
-                        Some(p) => json_to_python(py, p),
-                        None => py.None(),
-                    };
-                    result.insert("payload".to_string(), payload_py);
-
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(search_results_to_dicts(py, results))
         })
     }
 
@@ -345,20 +286,7 @@ impl Collection {
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
-
-            let filter_obj = match filter {
-                Some(f) => {
-                    let json_str = py
-                        .import("json")?
-                        .call_method1("dumps", (f,))?
-                        .extract::<String>()?;
-                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
-                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
-                    Some(filter)
-                }
-                None => None,
-            };
-
+            let filter_obj = parse_optional_filter(py, filter)?;
             let results = if let Some(f) = filter_obj {
                 self.inner.hybrid_search_with_filter(
                     &query_vector,
@@ -372,25 +300,7 @@ impl Collection {
                     .hybrid_search(&query_vector, query, top_k, Some(vector_weight))
             }
             .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))?;
-
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut result = HashMap::new();
-                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("score".to_string(), to_pyobject(py, r.score));
-
-                    let payload_py = match &r.point.payload {
-                        Some(p) => json_to_python(py, p),
-                        None => py.None(),
-                    };
-                    result.insert("payload".to_string(), payload_py);
-
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(search_results_to_dicts(py, results))
         })
     }
 
@@ -404,70 +314,43 @@ impl Collection {
             let mut queries = Vec::with_capacity(searches.len());
             let mut filters = Vec::with_capacity(searches.len());
             let mut top_ks = Vec::with_capacity(searches.len());
-
             for search_dict in searches {
                 let vector_obj = search_dict
                     .get("vector")
                     .ok_or_else(|| PyValueError::new_err("Search missing 'vector' field"))?;
-                let vector = extract_vector(py, vector_obj)?;
-                queries.push(vector);
-
-                let top_k: usize = search_dict
-                    .get("top_k")
-                    .or_else(|| search_dict.get("topK"))
-                    .map(|v| v.extract(py))
-                    .transpose()?
-                    .unwrap_or(10);
-                top_ks.push(top_k);
-
-                let filter_obj = match search_dict.get("filter") {
-                    Some(f) => {
-                        let json_str = py
-                            .import("json")?
-                            .call_method1("dumps", (f,))?
-                            .extract::<String>()?;
-                        let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
-                            .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
-                        Some(filter)
-                    }
-                    None => None,
-                };
-                filters.push(filter_obj);
+                queries.push(extract_vector(py, vector_obj)?);
+                top_ks.push(
+                    search_dict
+                        .get("top_k")
+                        .or_else(|| search_dict.get("topK"))
+                        .map(|v| v.extract(py))
+                        .transpose()?
+                        .unwrap_or(10),
+                );
+                filters.push(
+                    search_dict
+                        .get("filter")
+                        .map(|f| parse_filter(py, f))
+                        .transpose()?,
+                );
             }
-
             let max_top_k = top_ks.iter().max().copied().unwrap_or(10);
             let query_refs: Vec<&[f32]> = queries.iter().map(|v| v.as_slice()).collect();
-
             let batch_results = self
                 .inner
                 .search_batch_with_filters(&query_refs, max_top_k, &filters)
                 .map_err(|e| PyRuntimeError::new_err(format!("Batch search failed: {e}")))?;
-
-            let py_batch_results: Vec<Vec<HashMap<String, PyObject>>> = batch_results
+            Ok(batch_results
                 .into_iter()
                 .zip(top_ks)
                 .map(|(results, k)| {
                     results
                         .into_iter()
                         .take(k)
-                        .map(|r| {
-                            let mut result = HashMap::new();
-                            result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                            result.insert("score".to_string(), to_pyobject(py, r.score));
-
-                            let payload_py = match &r.point.payload {
-                                Some(p) => json_to_python(py, p),
-                                None => py.None(),
-                            };
-                            result.insert("payload".to_string(), payload_py);
-
-                            result
-                        })
+                        .map(|r| search_result_to_dict(py, &r))
                         .collect()
                 })
-                .collect();
-
-            Ok(py_batch_results)
+                .collect())
         })
     }
 
@@ -481,47 +364,17 @@ impl Collection {
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
             let query_vector = extract_vector(py, &vector)?;
-
-            let filter_obj = match filter {
-                Some(f) => {
-                    let json_str = py
-                        .import("json")?
-                        .call_method1("dumps", (f,))?
-                        .extract::<String>()?;
-                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
-                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
-                    filter
-                }
-                None => {
-                    return Err(PyValueError::new_err(
-                        "Filter is required for search_with_filter",
-                    ));
-                }
-            };
-
+            let filter_obj = filter
+                .map(|f| parse_filter(py, &f))
+                .transpose()?
+                .ok_or_else(|| {
+                    PyValueError::new_err("Filter is required for search_with_filter")
+                })?;
             let results = self
                 .inner
                 .search_with_filter(&query_vector, top_k, &filter_obj)
                 .map_err(|e| PyRuntimeError::new_err(format!("Search with filter failed: {e}")))?;
-
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut result = HashMap::new();
-                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("score".to_string(), to_pyobject(py, r.score));
-
-                    let payload_py = match &r.point.payload {
-                        Some(p) => json_to_python(py, p),
-                        None => py.None(),
-                    };
-                    result.insert("payload".to_string(), payload_py);
-
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(search_results_to_dicts(py, results))
         })
     }
 
@@ -566,37 +419,7 @@ impl Collection {
                 .execute_query(&parsed, &rust_params)
                 .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {e}")))?;
 
-            // Return multi-model result format (EPIC-031)
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut result = HashMap::new();
-                    // Multi-model fields
-                    result.insert("node_id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("vector_score".to_string(), to_pyobject(py, r.score));
-                    result.insert("graph_score".to_string(), py.None());
-                    result.insert("fused_score".to_string(), to_pyobject(py, r.score));
-                    // Payload as bindings
-                    let payload_py = match &r.point.payload {
-                        Some(p) => json_to_python(py, p),
-                        None => py.None(),
-                    };
-                    result.insert("bindings".to_string(), payload_py);
-                    result.insert("column_data".to_string(), py.None());
-                    // Legacy fields for compatibility
-                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("score".to_string(), to_pyobject(py, r.score));
-                    result.insert("payload".to_string(), {
-                        match &r.point.payload {
-                            Some(p) => json_to_python(py, p),
-                            None => py.None(),
-                        }
-                    });
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(search_results_to_multimodel_dicts(py, results))
         })
     }
 
@@ -610,53 +433,20 @@ impl Collection {
         filter: Option<PyObject>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let mut query_vectors: Vec<Vec<f32>> = Vec::with_capacity(vectors.len());
-            for v in &vectors {
-                query_vectors.push(extract_vector(py, v)?);
-            }
-
+            let query_vectors: Vec<Vec<f32>> = vectors
+                .iter()
+                .map(|v| extract_vector(py, v))
+                .collect::<PyResult<_>>()?;
             let fusion_strategy = fusion
                 .map(|f| f.inner())
                 .unwrap_or(CoreFusionStrategy::RRF { k: 60 });
-
-            let filter_obj = match filter {
-                Some(f) => {
-                    let json_str = py
-                        .import("json")?
-                        .call_method1("dumps", (f,))?
-                        .extract::<String>()?;
-                    let filter: velesdb_core::Filter = serde_json::from_str(&json_str)
-                        .map_err(|e| PyValueError::new_err(format!("Invalid filter: {e}")))?;
-                    Some(filter)
-                }
-                None => None,
-            };
-
+            let filter_obj = parse_optional_filter(py, filter)?;
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-
             let results = self
                 .inner
                 .multi_query_search(&query_refs, top_k, fusion_strategy, filter_obj.as_ref())
                 .map_err(|e| PyRuntimeError::new_err(format!("Multi-query search failed: {e}")))?;
-
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|r| {
-                    let mut result = HashMap::new();
-                    result.insert("id".to_string(), to_pyobject(py, r.point.id));
-                    result.insert("score".to_string(), to_pyobject(py, r.score));
-
-                    let payload_py = match &r.point.payload {
-                        Some(p) => json_to_python(py, p),
-                        None => py.None(),
-                    };
-                    result.insert("payload".to_string(), payload_py);
-
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(search_results_to_dicts(py, results))
         })
     }
 
@@ -669,35 +459,21 @@ impl Collection {
         fusion: Option<FusionStrategy>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let mut query_vectors: Vec<Vec<f32>> = Vec::with_capacity(vectors.len());
-            for v in &vectors {
-                query_vectors.push(extract_vector(py, v)?);
-            }
-
+            let query_vectors: Vec<Vec<f32>> = vectors
+                .iter()
+                .map(|v| extract_vector(py, v))
+                .collect::<PyResult<_>>()?;
             let fusion_strategy = fusion
                 .map(|f| f.inner())
                 .unwrap_or(CoreFusionStrategy::RRF { k: 60 });
-
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-
             let results = self
                 .inner
                 .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Multi-query search IDs failed: {e}"))
                 })?;
-
-            let py_results: Vec<HashMap<String, PyObject>> = results
-                .into_iter()
-                .map(|(id, score)| {
-                    let mut result = HashMap::new();
-                    result.insert("id".to_string(), to_pyobject(py, id));
-                    result.insert("score".to_string(), to_pyobject(py, score));
-                    result
-                })
-                .collect();
-
-            Ok(py_results)
+            Ok(id_score_pairs_to_dicts(py, results))
         })
     }
 
@@ -705,14 +481,7 @@ impl Collection {
     // Index Management (EPIC-009 propagation)
     // ========================================================================
 
-    /// Create a property index for O(1) equality lookups on graph nodes.
-    ///
-    /// Args:
-    ///     label: Node label to index (e.g., "Person")
-    ///     property: Property name to index (e.g., "email")
-    ///
-    /// Example:
-    ///     >>> collection.create_property_index("Person", "email")
+    /// Create a property index for O(1) equality lookups.
     #[pyo3(signature = (label, property))]
     fn create_property_index(&self, label: &str, property: &str) -> PyResult<()> {
         self.inner
@@ -720,14 +489,7 @@ impl Collection {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create property index: {e}")))
     }
 
-    /// Create a range index for O(log n) range queries on graph nodes.
-    ///
-    /// Args:
-    ///     label: Node label to index (e.g., "Event")
-    ///     property: Property name to index (e.g., "timestamp")
-    ///
-    /// Example:
-    ///     >>> collection.create_range_index("Event", "timestamp")
+    /// Create a range index for O(log n) range queries.
     #[pyo3(signature = (label, property))]
     fn create_range_index(&self, label: &str, property: &str) -> PyResult<()> {
         self.inner
@@ -736,26 +498,12 @@ impl Collection {
     }
 
     /// Check if a property index exists.
-    ///
-    /// Args:
-    ///     label: Node label
-    ///     property: Property name
-    ///
-    /// Returns:
-    ///     True if a property index exists for this label/property combination
     #[pyo3(signature = (label, property))]
     fn has_property_index(&self, label: &str, property: &str) -> bool {
         self.inner.has_property_index(label, property)
     }
 
     /// Check if a range index exists.
-    ///
-    /// Args:
-    ///     label: Node label
-    ///     property: Property name
-    ///
-    /// Returns:
-    ///     True if a range index exists for this label/property combination
     #[pyo3(signature = (label, property))]
     fn has_range_index(&self, label: &str, property: &str) -> bool {
         self.inner.has_range_index(label, property)

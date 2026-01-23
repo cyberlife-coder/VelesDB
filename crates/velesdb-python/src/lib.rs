@@ -25,6 +25,7 @@
 //! ```
 
 mod collection;
+mod collection_helpers;
 mod graph;
 mod graph_store;
 mod utils;
