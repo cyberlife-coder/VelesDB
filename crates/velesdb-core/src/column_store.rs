@@ -37,6 +37,23 @@ pub enum ColumnStoreError {
     /// Primary key column not found in schema.
     #[error("Primary key column '{0}' not found in schema")]
     PrimaryKeyColumnNotFound(String),
+    /// Row not found for given primary key.
+    #[error("Row not found for primary key: {0}")]
+    RowNotFound(i64),
+    /// Column not found in schema.
+    #[error("Column not found: {0}")]
+    ColumnNotFound(String),
+    /// Type mismatch when updating a column.
+    #[error("Type mismatch: expected {expected}, got {actual}")]
+    TypeMismatch {
+        /// Expected column type.
+        expected: String,
+        /// Actual value type provided.
+        actual: String,
+    },
+    /// Index out of bounds.
+    #[error("Index out of bounds: {0}")]
+    IndexOutOfBounds(usize),
 }
 
 /// Interned string ID for fast equality comparisons.
@@ -375,6 +392,185 @@ impl ColumnStore {
         };
         self.deleted_rows.insert(row_idx);
         true
+    }
+
+    /// Updates a single column value for a row identified by primary key - O(1).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ColumnStoreError::RowNotFound` if no row exists with the given pk.
+    /// Returns `ColumnStoreError::ColumnNotFound` if the column doesn't exist.
+    /// Returns `ColumnStoreError::TypeMismatch` if the value type doesn't match the column type.
+    pub fn update_by_pk(
+        &mut self,
+        pk: i64,
+        column: &str,
+        value: ColumnValue,
+    ) -> Result<(), ColumnStoreError> {
+        // Find the row index
+        let row_idx = *self
+            .primary_index
+            .get(&pk)
+            .ok_or(ColumnStoreError::RowNotFound(pk))?;
+
+        // Check if row is deleted
+        if self.deleted_rows.contains(&row_idx) {
+            return Err(ColumnStoreError::RowNotFound(pk));
+        }
+
+        // Get the column
+        let col = self
+            .columns
+            .get_mut(column)
+            .ok_or_else(|| ColumnStoreError::ColumnNotFound(column.to_string()))?;
+
+        // Update the value with type checking
+        Self::set_column_value(col, row_idx, value)
+    }
+
+    /// Updates multiple columns atomically for a row identified by primary key.
+    ///
+    /// All columns are validated before any update is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ColumnStoreError::RowNotFound` if no row exists with the given pk.
+    /// Returns `ColumnStoreError::ColumnNotFound` if any column doesn't exist.
+    /// Returns `ColumnStoreError::TypeMismatch` if any value type doesn't match its column type.
+    ///
+    /// # Panics
+    ///
+    /// This function will not panic under normal operation. The internal expect
+    /// is guarded by prior validation that all columns exist.
+    pub fn update_multi_by_pk(
+        &mut self,
+        pk: i64,
+        updates: &[(&str, ColumnValue)],
+    ) -> Result<(), ColumnStoreError> {
+        // Find the row index
+        let row_idx = *self
+            .primary_index
+            .get(&pk)
+            .ok_or(ColumnStoreError::RowNotFound(pk))?;
+
+        // Check if row is deleted
+        if self.deleted_rows.contains(&row_idx) {
+            return Err(ColumnStoreError::RowNotFound(pk));
+        }
+
+        // Validate all columns exist before modifying
+        for (col_name, _) in updates {
+            if !self.columns.contains_key(*col_name) {
+                return Err(ColumnStoreError::ColumnNotFound((*col_name).to_string()));
+            }
+        }
+
+        // Apply all updates
+        // Note: unwrap is safe here because we validated all columns exist above
+        for (col_name, value) in updates {
+            let col = self
+                .columns
+                .get_mut(*col_name)
+                .expect("column existence validated above");
+            Self::set_column_value(col, row_idx, value.clone())?;
+        }
+
+        Ok(())
+    }
+
+    /// Sets a value in a typed column with type checking.
+    fn set_column_value(
+        col: &mut TypedColumn,
+        row_idx: usize,
+        value: ColumnValue,
+    ) -> Result<(), ColumnStoreError> {
+        // Handle null case first (allowed for any type)
+        if matches!(value, ColumnValue::Null) {
+            match col {
+                TypedColumn::Int(vec) => {
+                    if row_idx >= vec.len() {
+                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                    }
+                    vec[row_idx] = None;
+                }
+                TypedColumn::Float(vec) => {
+                    if row_idx >= vec.len() {
+                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                    }
+                    vec[row_idx] = None;
+                }
+                TypedColumn::String(vec) => {
+                    if row_idx >= vec.len() {
+                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                    }
+                    vec[row_idx] = None;
+                }
+                TypedColumn::Bool(vec) => {
+                    if row_idx >= vec.len() {
+                        return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                    }
+                    vec[row_idx] = None;
+                }
+            }
+            return Ok(());
+        }
+
+        // Handle typed values
+        match (col, value) {
+            (TypedColumn::Int(vec), ColumnValue::Int(v)) => {
+                if row_idx >= vec.len() {
+                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                }
+                vec[row_idx] = Some(v);
+                Ok(())
+            }
+            (TypedColumn::Float(vec), ColumnValue::Float(v)) => {
+                if row_idx >= vec.len() {
+                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                }
+                vec[row_idx] = Some(v);
+                Ok(())
+            }
+            (TypedColumn::String(vec), ColumnValue::String(v)) => {
+                if row_idx >= vec.len() {
+                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                }
+                vec[row_idx] = Some(v);
+                Ok(())
+            }
+            (TypedColumn::Bool(vec), ColumnValue::Bool(v)) => {
+                if row_idx >= vec.len() {
+                    return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
+                }
+                vec[row_idx] = Some(v);
+                Ok(())
+            }
+            (col, value) => Err(ColumnStoreError::TypeMismatch {
+                expected: Self::column_type_name(col),
+                actual: Self::value_type_name(&value),
+            }),
+        }
+    }
+
+    /// Returns the type name of a column.
+    fn column_type_name(col: &TypedColumn) -> String {
+        match col {
+            TypedColumn::Int(_) => "Int".to_string(),
+            TypedColumn::Float(_) => "Float".to_string(),
+            TypedColumn::String(_) => "String".to_string(),
+            TypedColumn::Bool(_) => "Bool".to_string(),
+        }
+    }
+
+    /// Returns the type name of a value.
+    fn value_type_name(value: &ColumnValue) -> String {
+        match value {
+            ColumnValue::Int(_) => "Int".to_string(),
+            ColumnValue::Float(_) => "Float".to_string(),
+            ColumnValue::String(_) => "String".to_string(),
+            ColumnValue::Bool(_) => "Bool".to_string(),
+            ColumnValue::Null => "Null".to_string(),
+        }
     }
 
     /// Gets a column by name.

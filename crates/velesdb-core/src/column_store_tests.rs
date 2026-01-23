@@ -583,4 +583,147 @@ mod tests {
         assert!(store.get_row_idx_by_pk(100).is_none());
         assert!(store.get_row_idx_by_pk(200).is_some());
     }
+
+    // =========================================================================
+    // TDD Tests for EPIC-020 US-002: Update In-Place
+    // =========================================================================
+
+    #[test]
+    fn test_update_single_column() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("price_id", ColumnType::Int),
+                ("price", ColumnType::Int),
+                ("name", ColumnType::String),
+            ],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act
+        let result = store.update_by_pk(123, "price", ColumnValue::Int(150));
+
+        // Assert
+        assert!(result.is_ok());
+        // Verify the value was updated by checking via filter
+        let matches = store.filter_eq_int("price", 150);
+        assert_eq!(matches, vec![0]);
+    }
+
+    #[test]
+    fn test_update_multi_columns() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("price_id", ColumnType::Int),
+                ("price", ColumnType::Int),
+                ("available", ColumnType::Bool),
+            ],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+                ("available", ColumnValue::Bool(false)),
+            ])
+            .unwrap();
+
+        // Act
+        let result = store.update_multi_by_pk(
+            123,
+            &[
+                ("price", ColumnValue::Int(150)),
+                ("available", ColumnValue::Bool(true)),
+            ],
+        );
+
+        // Assert
+        assert!(result.is_ok());
+        let price_matches = store.filter_eq_int("price", 150);
+        assert_eq!(price_matches, vec![0]);
+    }
+
+    #[test]
+    fn test_update_nonexistent_row_returns_error() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        // Act - Try to update a row that doesn't exist
+        let result = store.update_by_pk(999, "price", ColumnValue::Int(150));
+
+        // Assert
+        assert!(result.is_err());
+        match result {
+            Err(ColumnStoreError::RowNotFound(pk)) => assert_eq!(pk, 999),
+            _ => panic!("Expected RowNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_update_preserves_other_columns() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("price_id", ColumnType::Int),
+                ("price", ColumnType::Int),
+                ("quantity", ColumnType::Int),
+            ],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+                ("quantity", ColumnValue::Int(50)),
+            ])
+            .unwrap();
+
+        // Act - Update only price
+        store
+            .update_by_pk(123, "price", ColumnValue::Int(150))
+            .unwrap();
+
+        // Assert - quantity should still be 50
+        let quantity_matches = store.filter_eq_int("quantity", 50);
+        assert_eq!(quantity_matches, vec![0]);
+    }
+
+    #[test]
+    fn test_update_nonexistent_column_returns_error() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
+            "price_id",
+        );
+
+        store
+            .insert_row(&[
+                ("price_id", ColumnValue::Int(123)),
+                ("price", ColumnValue::Int(100)),
+            ])
+            .unwrap();
+
+        // Act - Try to update a column that doesn't exist
+        let result = store.update_by_pk(123, "nonexistent", ColumnValue::Int(150));
+
+        // Assert
+        assert!(result.is_err());
+        match result {
+            Err(ColumnStoreError::ColumnNotFound(col)) => assert_eq!(col, "nonexistent"),
+            _ => panic!("Expected ColumnNotFound error"),
+        }
+    }
 }
