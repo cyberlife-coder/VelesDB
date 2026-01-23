@@ -12,6 +12,14 @@ import type {
   SearchOptions,
   SearchResult,
   MultiQuerySearchOptions,
+  CreateIndexOptions,
+  IndexInfo,
+  AddEdgeRequest,
+  GetEdgesOptions,
+  GraphEdge,
+  TraverseRequest,
+  TraverseResponse,
+  DegreeResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -76,6 +84,41 @@ export class RestBackend implements IVelesDBBackend {
     }
   }
 
+  private mapStatusToErrorCode(status: number): string {
+    switch (status) {
+      case 400:
+        return 'BAD_REQUEST';
+      case 401:
+        return 'UNAUTHORIZED';
+      case 403:
+        return 'FORBIDDEN';
+      case 404:
+        return 'NOT_FOUND';
+      case 409:
+        return 'CONFLICT';
+      case 429:
+        return 'RATE_LIMITED';
+      case 500:
+        return 'INTERNAL_ERROR';
+      case 503:
+        return 'SERVICE_UNAVAILABLE';
+      default:
+        return 'UNKNOWN_ERROR';
+    }
+  }
+
+  private extractErrorPayload(data: unknown): { code?: string; message?: string } {
+    if (!data || typeof data !== 'object') {
+      return {};
+    }
+
+    const payload = data as Record<string, unknown>;
+    const code = typeof payload.code === 'string' ? payload.code : undefined;
+    const messageField = payload.message ?? payload.error;
+    const message = typeof messageField === 'string' ? messageField : undefined;
+    return { code, message };
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -103,13 +146,14 @@ export class RestBackend implements IVelesDBBackend {
 
       clearTimeout(timeoutId);
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
+        const errorPayload = this.extractErrorPayload(data);
         return {
           error: {
-            code: data.code ?? 'UNKNOWN_ERROR',
-            message: data.message ?? `HTTP ${response.status}`,
+            code: errorPayload.code ?? this.mapStatusToErrorCode(response.status),
+            message: errorPayload.message ?? `HTTP ${response.status}`,
           },
         };
       }
@@ -433,8 +477,8 @@ export class RestBackend implements IVelesDBBackend {
       {
         vectors: formattedVectors,
         top_k: options?.k ?? 10,
-        fusion: options?.fusion ?? 'rrf',
-        fusion_params: options?.fusionParams ?? { k: 60 },
+        strategy: options?.fusion ?? 'rrf',
+        rrf_k: options?.fusionParams?.k ?? 60,
         filter: options?.filter,
       }
     );
@@ -485,5 +529,201 @@ export class RestBackend implements IVelesDBBackend {
 
   async close(): Promise<void> {
     this._initialized = false;
+  }
+
+  // ========================================================================
+  // Index Management (EPIC-009)
+  // ========================================================================
+
+  async createIndex(collection: string, options: CreateIndexOptions): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/indexes`,
+      {
+        label: options.label,
+        property: options.property,
+        index_type: options.indexType ?? 'hash',
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async listIndexes(collection: string): Promise<IndexInfo[]> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ indexes: Array<{
+      label: string;
+      property: string;
+      index_type: string;
+      cardinality: number;
+      memory_bytes: number;
+    }>; total: number }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/indexes`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return (response.data?.indexes ?? []).map(idx => ({
+      label: idx.label,
+      property: idx.property,
+      indexType: idx.index_type as 'hash' | 'range',
+      cardinality: idx.cardinality,
+      memoryBytes: idx.memory_bytes,
+    }));
+  }
+
+  async hasIndex(collection: string, label: string, property: string): Promise<boolean> {
+    const indexes = await this.listIndexes(collection);
+    return indexes.some(idx => idx.label === label && idx.property === property);
+  }
+
+  async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ dropped: boolean }>(
+      'DELETE',
+      `/collections/${encodeURIComponent(collection)}/indexes/${encodeURIComponent(label)}/${encodeURIComponent(property)}`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        return false;  // Index didn't exist
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    // BUG-2 FIX: Success without error = index was dropped
+    // API may return 200/204 without body, so default to true on success
+    return response.data?.dropped ?? true;
+  }
+
+  // ========================================================================
+  // Knowledge Graph (EPIC-016 US-041)
+  // ========================================================================
+
+  async addEdge(collection: string, edge: AddEdgeRequest): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/graph/edges`,
+      {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        properties: edge.properties ?? {},
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
+    this.ensureInitialized();
+
+    const queryParams = options?.label ? `?label=${encodeURIComponent(options.label)}` : '';
+
+    const response = await this.request<{ edges: GraphEdge[]; count: number }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/graph/edges${queryParams}`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.edges ?? [];
+  }
+
+  // ========================================================================
+  // Graph Traversal (EPIC-016 US-050)
+  // ========================================================================
+
+  async traverseGraph(collection: string, request: TraverseRequest): Promise<TraverseResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<{
+      results: Array<{ target_id: number; depth: number; path: number[] }>;
+      next_cursor: string | null;
+      has_more: boolean;
+      stats: { visited: number; depth_reached: number };
+    }>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/graph/traverse`,
+      {
+        source: request.source,
+        strategy: request.strategy ?? 'bfs',
+        max_depth: request.maxDepth ?? 3,
+        limit: request.limit ?? 100,
+        cursor: request.cursor,
+        rel_types: request.relTypes ?? [],
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data!;
+    return {
+      results: data.results.map(r => ({
+        targetId: r.target_id,
+        depth: r.depth,
+        path: r.path,
+      })),
+      nextCursor: data.next_cursor ?? undefined,
+      hasMore: data.has_more,
+      stats: {
+        visited: data.stats.visited,
+        depthReached: data.stats.depth_reached,
+      },
+    };
+  }
+
+  async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<{ in_degree: number; out_degree: number }>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/graph/nodes/${nodeId}/degree`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return {
+      inDegree: response.data?.in_degree ?? 0,
+      outDegree: response.data?.out_degree ?? 0,
+    };
   }
 }

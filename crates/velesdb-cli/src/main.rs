@@ -10,6 +10,7 @@
 //!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 //!   `velesdb import ./data.jsonl --collection docs`
 
+mod graph;
 mod import;
 mod license;
 mod repl;
@@ -245,6 +246,12 @@ enum Commands {
         /// Output format (table, json)
         #[arg(short, long, default_value = "table")]
         format: String,
+    },
+
+    /// Graph operations (EPIC-016 US-050)
+    Graph {
+        #[command(subcommand)]
+        action: graph::GraphAction,
     },
 }
 
@@ -729,6 +736,9 @@ fn main() -> anyhow::Result<()> {
             } else {
                 println!("{} Point with ID {} not found", "❌".red(), id);
             }
+        }
+        Commands::Graph { action } => {
+            graph::handle(action);
         }
     }
 

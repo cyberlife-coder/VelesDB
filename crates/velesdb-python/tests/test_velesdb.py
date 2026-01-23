@@ -969,5 +969,84 @@ class TestMultiQuerySearch:
             assert "payload" not in r or r.get("payload") is None
 
 
+class TestVelesQLSimilarity:
+    """Tests for VelesQL similarity() function (EPIC-008)."""
+
+    def test_similarity_query_basic(self, temp_db_path):
+        """Test basic similarity() query in VelesQL."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("similarity_test", dimension=4, metric="cosine")
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"title": "Doc A"}},
+            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"title": "Doc B"}},
+            {"id": 3, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"title": "Doc C"}},
+        ])
+
+        # Query with similarity threshold > 0.8
+        results = collection.query(
+            "SELECT * FROM similarity_test WHERE similarity(vector, $v) > 0.8",
+            params={"v": [1.0, 0.0, 0.0, 0.0]}
+        )
+
+        # Should return docs with similarity > 0.8 to [1,0,0,0]
+        assert len(results) >= 1
+        ids = [r["id"] for r in results]
+        assert 1 in ids  # Exact match
+        assert 2 in ids  # 0.9 similarity
+
+    def test_similarity_query_with_threshold(self, temp_db_path):
+        """Test similarity() with different thresholds."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("sim_threshold", dimension=4, metric="cosine")
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.7, 0.7, 0.0, 0.0]},  # ~0.7 similarity
+            {"id": 3, "vector": [0.0, 1.0, 0.0, 0.0]},  # 0 similarity
+        ])
+
+        # High threshold - only exact matches
+        results_high = collection.query(
+            "SELECT * FROM sim_threshold WHERE similarity(vector, $v) > 0.95",
+            params={"v": [1.0, 0.0, 0.0, 0.0]}
+        )
+
+        # Low threshold - more matches
+        results_low = collection.query(
+            "SELECT * FROM sim_threshold WHERE similarity(vector, $v) > 0.5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]}
+        )
+
+        assert len(results_high) <= len(results_low)
+
+    def test_similarity_query_operators(self, temp_db_path):
+        """Test similarity() with different comparison operators."""
+        db = velesdb.Database(temp_db_path)
+        collection = db.create_collection("sim_ops", dimension=4, metric="cosine")
+
+        collection.upsert([
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": 2, "vector": [0.5, 0.5, 0.5, 0.5]},
+        ])
+
+        query_vec = [1.0, 0.0, 0.0, 0.0]
+
+        # Test >= operator
+        results_gte = collection.query(
+            "SELECT * FROM sim_ops WHERE similarity(vector, $v) >= 0.5",
+            params={"v": query_vec}
+        )
+        assert len(results_gte) >= 1
+
+        # Test < operator (low similarity)
+        results_lt = collection.query(
+            "SELECT * FROM sim_ops WHERE similarity(vector, $v) < 0.3",
+            params={"v": query_vec}
+        )
+        # Results should have low similarity
+        assert isinstance(results_lt, list)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

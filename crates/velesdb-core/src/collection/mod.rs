@@ -24,8 +24,9 @@ mod tests;
 #[cfg(test)]
 mod metadata_only_tests;
 
+pub use core::IndexInfo;
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
-    ValueType,
+    PropertyIndex, RangeIndex, ValueType,
 };
 pub use types::{Collection, CollectionConfig, CollectionType};

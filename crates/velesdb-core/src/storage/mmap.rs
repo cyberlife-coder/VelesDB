@@ -23,9 +23,10 @@ use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::error;
 
 /// Memory-mapped file storage for vectors.
 ///
@@ -50,6 +51,8 @@ pub struct MmapStorage {
     next_offset: AtomicUsize,
     /// P0 Audit: Metrics for monitoring `ensure_capacity` latency
     metrics: Arc<StorageMetrics>,
+    /// Epoch counter incremented every time the mmap is remapped.
+    remap_epoch: AtomicU64,
 }
 
 impl MmapStorage {
@@ -93,6 +96,9 @@ impl MmapStorage {
             data_file.set_len(Self::INITIAL_SIZE)?;
         }
 
+        // SAFETY: data_file is a valid, open file with set_len() called to ensure
+        // the mapping range is fully allocated. MmapMut requires the file to be
+        // readable and writable, which is guaranteed by OpenOptions above.
         let mmap = unsafe { MmapMut::map_mut(&data_file)? };
 
         // 2. Open/Create WAL
@@ -132,6 +138,7 @@ impl MmapStorage {
             mmap: RwLock::new(mmap),
             next_offset: AtomicUsize::new(next_offset),
             metrics: Arc::new(StorageMetrics::new()),
+            remap_epoch: AtomicU64::new(0),
         })
     }
 
@@ -176,8 +183,12 @@ impl MmapStorage {
             // Resize file
             self.data_file.set_len(new_len)?;
 
-            // Remap
+            // SAFETY: data_file has been resized with set_len(new_len) above,
+            // ensuring the new mapping range is fully allocated. The old mmap
+            // is dropped when we assign the new one.
             *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
+            // Increment epoch so existing VectorSliceGuards become invalid
+            self.remap_epoch.fetch_add(1, Ordering::Release);
 
             did_resize = true;
             bytes_resized = new_len.saturating_sub(current_len);
@@ -347,10 +358,13 @@ impl MmapStorage {
         #[allow(clippy::cast_ptr_alignment)]
         let ptr = unsafe { mmap.as_ptr().add(offset).cast::<f32>() };
 
+        let epoch_at_creation = self.remap_epoch.load(Ordering::Acquire);
         Ok(Some(VectorSliceGuard {
             _guard: mmap,
             ptr,
             len: self.dimension,
+            epoch_ptr: &self.remap_epoch,
+            epoch_at_creation,
         }))
     }
 }
@@ -571,5 +585,29 @@ impl VectorStorage for MmapStorage {
 
     fn ids(&self) -> Vec<u64> {
         self.index.read().keys().copied().collect()
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Drop implementation – guarantees durability on graceful shutdown
+// -----------------------------------------------------------------------------
+impl Drop for MmapStorage {
+    fn drop(&mut self) {
+        // 1. Flush WAL first (durability of operation log)
+        if let Some(mut wal) = self.wal.try_write() {
+            if let Err(e) = wal.flush() {
+                error!(?e, "Failed to flush WAL in MmapStorage::drop");
+            }
+            if let Err(e) = wal.get_ref().sync_all() {
+                error!(?e, "Failed to fsync WAL in MmapStorage::drop");
+            }
+        }
+
+        // 2. Flush mmap to persist vector bytes
+        if let Some(mmap) = self.mmap.try_write() {
+            if let Err(e) = mmap.flush() {
+                error!(?e, "Failed to flush mmap in MmapStorage::drop");
+            }
+        }
     }
 }

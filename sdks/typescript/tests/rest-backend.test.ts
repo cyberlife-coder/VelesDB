@@ -227,6 +227,143 @@ describe('RestBackend', () => {
     });
   });
 
+  describe('multiQuerySearch', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should send POST to /search/multi with correct body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [{ id: '1', score: 0.95 }] }),
+      });
+
+      const vectors = [[0.1, 0.2], [0.3, 0.4]];
+      const options = { k: 10, fusion: 'rrf' as const, fusionParams: { k: 60 } };
+      
+      await backend.multiQuerySearch('test', vectors, options);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/test/search/multi',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            vectors: vectors,
+            top_k: 10,
+            strategy: 'rrf',
+            rrf_k: 60,
+            filter: undefined,
+          }),
+        })
+      );
+    });
+
+    it('should return fused search results', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ 
+          results: [
+            { id: '1', score: 0.95 },
+            { id: '2', score: 0.85 }
+          ] 
+        }),
+      });
+
+      const results = await backend.multiQuerySearch('test', [[0.1, 0.2]], { k: 5 });
+      
+      expect(results.length).toBe(2);
+      expect(results[0].id).toBe('1');
+      expect(results[0].score).toBe(0.95);
+    });
+
+    it('should handle collection not found', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Collection not found' }),
+      });
+
+      await expect(backend.multiQuerySearch('nonexistent', [[0.1, 0.2]]))
+        .rejects.toThrow(NotFoundError);
+    });
+
+    it('should use default fusion strategy when not specified', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.multiQuerySearch('test', [[0.1, 0.2]]);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"strategy":"rrf"'),
+        })
+      );
+    });
+  });
+
+  describe('Knowledge Graph (EPIC-016 US-041)', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should send POST to /graph/edges for addEdge', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      const edge = { id: 1, source: 100, target: 200, label: 'FOLLOWS' };
+      await backend.addEdge('social', edge);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/social/graph/edges',
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+
+    it('should send GET to /graph/edges for getEdges', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ edges: [], count: 0 }),
+      });
+
+      await backend.getEdges('social');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/social/graph/edges',
+        expect.objectContaining({ method: 'GET' })
+      );
+    });
+
+    it('should filter by label in query params', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ edges: [{ id: 1, source: 100, target: 200, label: 'FOLLOWS' }], count: 1 }),
+      });
+
+      const edges = await backend.getEdges('social', { label: 'FOLLOWS' });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/social/graph/edges?label=FOLLOWS',
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(edges.length).toBe(1);
+    });
+  });
+
   describe('error handling', () => {
     beforeEach(async () => {
       mockFetch.mockResolvedValueOnce({

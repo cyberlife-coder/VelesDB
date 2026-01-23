@@ -128,6 +128,71 @@ WHERE vector NEAR $v AND category = 'tech' AND price > 50
 LIMIT 10
 ```
 
+### Similarity Function (v1.3+)
+
+The `similarity()` function enables **threshold-based vector filtering** - filter results by similarity score rather than just finding nearest neighbors.
+
+#### Syntax
+
+```sql
+similarity(field, vector_expr) <operator> threshold
+```
+
+#### Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `field` | The vector field name (e.g., `vector`, `embedding`) |
+| `vector_expr` | A parameter (`$v`) or literal vector (`[0.1, 0.2, ...]`) |
+| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=` |
+| `threshold` | Similarity score (0.0 to 1.0 for cosine/dot) |
+
+#### Examples
+
+```sql
+-- Find documents with similarity > 0.8
+SELECT * FROM docs WHERE similarity(vector, $query) > 0.8
+
+-- High precision filtering (>= 0.9)
+SELECT * FROM docs WHERE similarity(embedding, $v) >= 0.9 LIMIT 10
+
+-- Exclude very similar documents (deduplication)
+SELECT * FROM docs WHERE similarity(vector, $ref) < 0.95
+
+-- Combined with metadata filters
+SELECT * FROM docs 
+WHERE similarity(vector, $q) > 0.7 
+  AND category = 'technology'
+  AND published = true
+LIMIT 20
+```
+
+#### Use Cases
+
+| Use Case | Query Pattern |
+|----------|---------------|
+| **Semantic Search** | `similarity(v, $q) > 0.75` |
+| **Deduplication** | `similarity(v, $ref) < 0.9` |
+| **Quality Filter** | `similarity(v, $ideal) >= 0.85` |
+| **RAG Retrieval** | `similarity(embedding, $query) > 0.7 AND source = 'docs'` |
+
+#### Difference: NEAR vs similarity()
+
+| Feature | `NEAR` | `similarity()` |
+|---------|--------|----------------|
+| Purpose | Find K nearest neighbors | Filter by score threshold |
+| Returns | Top-K results | All matching results |
+| Control | `LIMIT N` | Threshold value |
+| Best for | "Find similar" | "Filter by quality" |
+
+```sql
+-- NEAR: "Give me 10 most similar docs"
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+
+-- similarity(): "Give me docs with similarity > 0.8"
+SELECT * FROM docs WHERE similarity(vector, $v) > 0.8
+```
+
 ## LIMIT and OFFSET
 
 ```sql
@@ -227,7 +292,7 @@ The following keywords are reserved and cannot be used as identifiers without es
 ```
 SELECT, FROM, WHERE, AND, OR, NOT, IN, BETWEEN, LIKE, MATCH,
 IS, NULL, TRUE, FALSE, LIMIT, OFFSET, WITH, NEAR, ASC, DESC,
-ORDER, BY, AS
+ORDER, BY, AS, SIMILARITY
 ```
 
 ## Grammar (EBNF)
@@ -244,10 +309,11 @@ column      = identifier ("." identifier)* ;
 where_clause  = "WHERE" or_expr ;
 or_expr       = and_expr ("OR" and_expr)* ;
 and_expr      = condition ("AND" condition)* ;
-condition     = comparison | vector_search | in_cond | between_cond 
-              | like_cond | is_null_cond | "(" or_expr ")" ;
+condition     = comparison | vector_search | similarity_cond | in_cond 
+              | between_cond | like_cond | is_null_cond | "(" or_expr ")" ;
 
-vector_search = "vector" "NEAR" vector_expr ;
+vector_search   = "vector" "NEAR" vector_expr ;
+similarity_cond = "similarity" "(" identifier "," vector_expr ")" compare_op number ;
 vector_expr   = "$" identifier | "[" number ("," number)* "]" ;
 
 comparison    = identifier compare_op value ;

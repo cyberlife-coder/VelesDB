@@ -334,10 +334,17 @@ fn hamming_popcnt(a: &[f32], b: &[f32]) -> u32 {
     crate::simd_explicit::hamming_distance_simd(a, b) as u32
 }
 
+/// AVX-512 VPOPCNTDQ placeholder for Hamming distance.
+///
+/// Note: Full AVX-512 VPOPCNTDQ implementation requires Rust 1.89+.
+/// Currently delegates to optimized POPCNT implementation.
+///
+/// Future: When MSRV is updated, this will use AVX-512 VPOPCNTDQ
+/// for ~2x speedup on Ice Lake+ and Zen 4+ CPUs.
 #[cfg(target_arch = "x86_64")]
 fn hamming_avx512_popcnt(a: &[f32], b: &[f32]) -> u32 {
-    // For now, delegate to regular popcnt
-    // TODO: Implement true AVX-512 VPOPCNTDQ when available
+    // Delegate to optimized POPCNT implementation
+    // AVX-512 VPOPCNTDQ requires Rust 1.89+ (MSRV is 1.83)
     hamming_popcnt(a, b)
 }
 

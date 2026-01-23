@@ -5,6 +5,141 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+---
+
+## [1.3.0] - 2026-01-23
+
+### 🌐 EPIC-016: Graph Parity Ecosystem
+
+Full ecosystem parity for graph features across all VelesDB components.
+
+#### Added
+
+- **Server REST API** (`velesdb-server`)
+  - `POST /collections/{name}/graph/traverse` - BFS/DFS traversal with filtering
+  - `GET /collections/{name}/graph/nodes/{node_id}/degree` - Node in/out degree
+  - `POST /collections/{name}/graph/edges` - Add edge to graph
+  - `GET /collections/{name}/graph/edges?label=X` - Query edges by label
+  - OpenAPI documentation for all graph endpoints
+
+- **TypeScript SDK** (`sdks/typescript`)
+  - `traverseGraph()` method for BFS/DFS traversal
+  - `getNodeDegree()` method for node degree queries
+  - Full type definitions for graph operations
+
+- **CLI** (`velesdb-cli`)
+  - `velesdb graph traverse` - Graph traversal command
+  - `velesdb graph degree` - Node degree query
+  - `velesdb graph add-edge` - Add edge command
+  - Instructions for REST API usage (server required)
+
+- **LangChain Integration** (`integrations/langchain`)
+  - `GraphRetriever` - Seed + expand pattern for RAG
+  - `GraphQARetriever` - QA-optimized graph retrieval
+  - Low latency mode with `low_latency=True`
+  - Configurable timeout with `timeout_ms` and `fallback_on_timeout`
+
+- **LlamaIndex Integration** (`integrations/llamaindex`)
+  - `GraphRetriever` - Custom retriever with graph expansion
+  - `GraphQARetriever` - QA-optimized retriever
+  - Same latency options as LangChain
+
+#### Changed
+
+- **Performance**: BFS/DFS `rel_types` filtering optimized from O(k) to O(1) using HashSet
+
+#### Refactored
+
+- **Server graph.rs** (716L → 4 modules < 250L each)
+  - `graph/types.rs` - Request/Response types
+  - `graph/service.rs` - GraphService + BFS/DFS logic
+  - `graph/handlers.rs` - HTTP handlers
+  - `graph/mod.rs` - Re-exports and tests
+
+- **CLI main.rs** (908L → 656L)
+  - Extracted `graph.rs` module with GraphAction enum and handler
+
+---
+
+### 🔧 Devin Cognition Flags Review (2026-01-22)
+
+Quality and consistency fixes based on expert code review.
+
+#### Fixed
+
+- **PropertyIndex observability**: Added `tracing::warn` when node_id > u32::MAX (silent failure → observable)
+- **Null payload handling**: Unified behavior in `search_with_filter` with `execute_query` (consistency)
+- **WasmBackend stubs**: `createIndex` now throws explicit error instead of silent warning (fail-fast)
+- **multi_query_search route**: Exposed previously dead handler at `/collections/{name}/search/multi`
+
+#### Changed
+
+- **Clippy pre-commit**: Changed `-D clippy::pedantic` to `-W` (warning, not error) for better DX
+
+#### Documentation
+
+- **Python BFS docstring**: Clarified that start node is NOT included in traversal results (edge semantics)
+- Added `DEVIN_FLAGS_REVIEW_2026-01-22.md` and `EXPERT_CONFRONTATION_2026-01-22.md`
+
+---
+
+### 🚀 EPIC-019: Scalability 10M+ Edges
+
+Performance optimizations for graph operations at 10M+ scale.
+
+#### Added
+
+- **Adaptive Sharding** (`ConcurrentEdgeStore`)
+  - `with_estimated_edges()` constructor for optimal shard count based on graph size
+  - Integer-based log2 calculation (avoids floating-point imprecision)
+  - Scales from 1 shard (small graphs) to 512 shards (10M+ edges)
+
+- **Label Indexing** (O(k) lookup)
+  - `by_label` index: get all edges with a specific label
+  - `outgoing_by_label` index: get outgoing edges by (node, label)
+  - `get_edges_by_label()` API for cross-shard label queries
+
+- **String Interning** (`LabelTable`)
+  - Deduplicated label storage with `LabelId` (u32)
+  - ~60% memory reduction for repeated labels
+  - Thread-safe with `RwLock`
+
+- **Streaming BFS Iterator** (`BfsIterator`)
+  - Memory-bounded graph traversal with configurable limits
+  - `StreamingConfig`: max_depth, max_visited, relationship_types filter
+  - Implements `Iterator<Item = TraversalResult>` for lazy evaluation
+
+- **Performance Metrics** (`GraphMetrics`)
+  - `LatencyHistogram` with 10 buckets for percentile tracking
+  - Atomic counters for node/edge operations
+  - `observe()` method with overflow protection
+
+#### Changed
+
+- **HashMap Pre-allocation** (`EdgeStore::with_capacity`)
+  - Pre-sized HashMaps based on expected edges/nodes
+  - Saturating arithmetic to prevent overflow
+
+- **Optimized Edge Removal** (`ConcurrentEdgeStore::remove_edge`)
+  - `edge_ids` changed from `HashSet` to `HashMap<edge_id, source_id>`
+  - 2-shard lookup instead of 256-shard iteration
+  - Specialized `remove_edge_incoming_only` for cross-shard cleanup
+
+- **Refactored Traversal Module**
+  - Extracted `streaming.rs` from `traversal.rs` (Martin Fowler method)
+  - `BfsIterator` buffers all edges from a node before yielding
+
+#### Fixed
+
+- `BfsIterator::next()` skipping edges when node has multiple outgoing edges
+- `LabelTable::intern()` truncation for labels > 1000 chars (bounds check)
+- `Duration::as_nanos()` truncation for durations > 584 years (cap at u64::MAX)
+- `EdgeStore::with_capacity` overflow for extreme inputs (saturating_mul)
+
+---
+
 ## [1.2.0] - 2026-01-20
 
 ### 🧠 Knowledge Graph & VelesQL MATCH Release
@@ -33,6 +168,29 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
   - Graph bindings for WASM: full graph API in browser
   - Graph bindings for Mobile (UniFFI): iOS/Android support
 
+- **EPIC-008: Vector-Graph Fusion Query** ✅
+  - `similarity()` function in VelesQL: `WHERE similarity(field, $vector) > 0.8`
+  - Support for comparison operators: `>`, `>=`, `<`, `<=`, `=`
+  - Literal vectors and parameter resolution
+  - Threshold-based filtering on search results
+  - `ORDER BY similarity(field, $v) [ASC|DESC]` for sorted results
+  - Hybrid Query Planner with cost-based optimization
+  - Over-fetch factor calculation for filtered ORDER BY queries
+
+- **EPIC-009: Graph Property Index** ✅
+  - `PropertyIndex` for O(1) hash-based equality lookups
+  - `RangeIndex` for O(log n) range queries on ordered values
+  - Index management: `create_property_index`, `create_range_index`, `list_indexes`, `drop_index`
+  - Memory usage tracking per index
+  - Automatic index persistence across Collection lifecycle (save/load)
+
+- **EPIC-016: SDK Ecosystem Sync**
+  - Property Index propagated to velesdb-server REST API
+  - Property Index propagated to velesdb-python (PyO3 bindings)
+  - Property Index propagated to TypeScript SDK (REST backend)
+  - New endpoints: `POST/GET /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`
+  - `similarity()` function available via `query()` method in Python and TypeScript REST
+
 #### Changed
 
 - **EPIC-007: Python Bindings Refactoring**
@@ -43,6 +201,12 @@ Major release introducing Knowledge Graph storage and VelesQL MATCH clause for g
 - **WASM/Mobile Refactoring**
   - Extracted `filter.rs`, `fusion.rs`, `text_search.rs`, `graph.rs` modules
   - Tests moved to dedicated `lib_tests.rs` files
+
+- **Server Refactoring**
+  - `lib.rs` modularized: 1682 → 289 lines (-83%)
+  - New `types.rs` module (297 lines) for request/response types
+  - New `handlers/` directory with 6 domain modules:
+    - `health.rs`, `collections.rs`, `points.rs`, `search.rs`, `query.rs`, `indexes.rs`
   - Improved code organization following Martin Fowler methodology
 
 #### Fixed

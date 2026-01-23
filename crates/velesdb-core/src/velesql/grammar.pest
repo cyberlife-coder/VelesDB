@@ -11,8 +11,15 @@ query = { SOI ~ select_stmt ~ ";"? ~ EOI }
 // SELECT statement with optional WITH clause
 select_stmt = { 
     ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
-    where_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
+    where_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
 }
+
+// ORDER BY clause
+order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
+order_by_item = { order_by_expr ~ sort_direction? }
+order_by_expr = { order_by_similarity | identifier }
+order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
+sort_direction = { ^"DESC" | ^"ASC" }
 
 // WITH clause for query-time configuration overrides
 with_clause = { ^"WITH" ~ "(" ~ with_option_list ~ ")" }
@@ -35,6 +42,7 @@ and_expr = { primary_expr ~ (^"AND" ~ primary_expr)* }
 
 primary_expr = {
     "(" ~ or_expr ~ ")" |
+    similarity_expr |
     vector_fused_search |
     vector_search |
     match_expr |
@@ -44,6 +52,15 @@ primary_expr = {
     is_null_expr |
     compare_expr
 }
+
+// Similarity function: similarity(field, vector) op threshold
+// Used in hybrid graph-vector queries
+// Note: threshold accepts both float (0.8) and integer (1) for user convenience
+similarity_expr = {
+    ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" ~ compare_op ~ numeric_threshold
+}
+numeric_threshold = { float | integer }
+similarity_field = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | ".")* }
 
 // Vector search: vector NEAR vector_value
 // Note: Distance metric is defined at collection creation, not per-query
