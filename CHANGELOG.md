@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 🌐 EPIC-016: Graph Parity Ecosystem (2026-01-23)
+---
+
+## [1.3.0] - 2026-01-23
+
+### 🌐 EPIC-016: Graph Parity Ecosystem
 
 Full ecosystem parity for graph features across all VelesDB components.
 
