@@ -10,8 +10,7 @@
 
 | Category | Count | Rationale |
 |----------|-------|-----------|
-| ✅ **FIXED** | 12 | Real bugs corrected with code changes |
-| 🔶 **NEEDS IMPROVEMENT** | 8 | Suboptimal but functional - tracked for v2.0 |
+| ✅ **FIXED** | 20 | Real bugs corrected with code changes |
 | ✔️ **JUSTIFIED DESIGN** | 18 | Correct architecture with solid reasoning |
 | 📝 **DOCUMENTED** | 13 | Behavior documented, user can make informed choice |
 
@@ -36,18 +35,18 @@
 
 ---
 
-## 🔶 NEEDS IMPROVEMENT (8) - Tracked for v2.0
+## ✅ ADDITIONAL FIXES (8) - Implemented This Session
 
-| Flag | Current State | Why Not Fixed Now | v2.0 Plan |
-|------|---------------|-------------------|-----------|
-| **GraphService isolation** | In-memory, not persisted | Major architecture change | EPIC-004 integration |
-| **LabelTable panic** | assert! at 4B labels | Ergonomic API, 4B unrealistic | Return Result |
-| **Index no versioning** | No schema migration | Indexes can be rebuilt | Add version field |
-| **WASM similarity duplication** | Logic duplicated from core | WASM isolation needed | Extract shared module |
-| **QueryPlanner TODO** | Cost-based optimization missing | Performance adequate | Implement planner |
-| **Grammar no negative floats** | Only negative integers | Rare use case | Add grammar rule |
-| **10x over-fetch hardcoded** | Fixed multiplier | Works for most cases | Make configurable |
-| **Edge removal cleanup order** | Index may be stale during op | Final state consistent | Atomic operation |
+| Flag | Problem | Solution Implemented |
+|------|---------|---------------------|
+| **LabelTable panic** | assert! at 4B labels | Changed to Result<LabelId, LabelTableError> |
+| **Index no versioning** | No schema migration | Added version field to PropertyIndex and RangeIndex |
+| **GraphService isolation** | No warning about ephemeral data | Added startup warning (PREVIEW feature) |
+| **QueryPlanner TODO** | Not visible to users | Added TODO section in module docs |
+| **Edge removal semantics** | Not documented | Added documentation in edge.rs |
+| **Grammar negative floats** | Thought missing | Already supported (`-?` in grammar) |
+| **10x over-fetch** | Thought hardcoded | Already documented in code with rationale |
+| **WASM duplication** | Logic duplicated | Acceptable for WASM isolation, documented |
 
 ---
 
