@@ -318,11 +318,15 @@ impl ColumnStore {
     /// Missing fields will be set to null.
     /// Type mismatches are silently converted to null for flexibility.
     ///
-    /// # Note
+    /// # Warning
+    ///
+    /// This is an **unchecked** API for performance-critical bulk loading.
+    /// In debug builds, type mismatches will trigger a panic via `debug_assert!`.
+    /// In release builds, mismatches are silently converted to null.
     ///
     /// For validated insertion, use [`insert_row()`](Self::insert_row) which
     /// validates types before insertion and returns errors on mismatch.
-    pub fn push_row(&mut self, values: &[(&str, ColumnValue)]) {
+    pub fn push_row_unchecked(&mut self, values: &[(&str, ColumnValue)]) {
         // Build a map of provided values
         let value_map: FxHashMap<&str, &ColumnValue> =
             values.iter().map(|(k, v)| (*k, v)).collect();
@@ -333,6 +337,10 @@ impl ColumnStore {
                 match value {
                     ColumnValue::Null => column.push_null(),
                     ColumnValue::Int(v) => {
+                        debug_assert!(
+                            matches!(column, TypedColumn::Int(_)),
+                            "push_row_unchecked: type mismatch for column '{name}', expected Int"
+                        );
                         if let TypedColumn::Int(col) = column {
                             col.push(Some(*v));
                         } else {
@@ -340,6 +348,10 @@ impl ColumnStore {
                         }
                     }
                     ColumnValue::Float(v) => {
+                        debug_assert!(
+                            matches!(column, TypedColumn::Float(_)),
+                            "push_row_unchecked: type mismatch for column '{name}', expected Float"
+                        );
                         if let TypedColumn::Float(col) = column {
                             col.push(Some(*v));
                         } else {
@@ -347,6 +359,10 @@ impl ColumnStore {
                         }
                     }
                     ColumnValue::String(id) => {
+                        debug_assert!(
+                            matches!(column, TypedColumn::String(_)),
+                            "push_row_unchecked: type mismatch for column '{name}', expected String"
+                        );
                         if let TypedColumn::String(col) = column {
                             col.push(Some(*id));
                         } else {
@@ -354,6 +370,10 @@ impl ColumnStore {
                         }
                     }
                     ColumnValue::Bool(v) => {
+                        debug_assert!(
+                            matches!(column, TypedColumn::Bool(_)),
+                            "push_row_unchecked: type mismatch for column '{name}', expected Bool"
+                        );
                         if let TypedColumn::Bool(col) = column {
                             col.push(Some(*v));
                         } else {
@@ -367,6 +387,16 @@ impl ColumnStore {
         }
 
         self.row_count += 1;
+    }
+
+    /// Convenience alias for [`push_row_unchecked()`](Self::push_row_unchecked).
+    ///
+    /// # Deprecated
+    ///
+    /// Use `push_row_unchecked()` for clarity about the lack of validation.
+    #[inline]
+    pub fn push_row(&mut self, values: &[(&str, ColumnValue)]) {
+        self.push_row_unchecked(values);
     }
 
     /// Inserts a row with primary key validation and index update.
