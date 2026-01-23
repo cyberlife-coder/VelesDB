@@ -292,6 +292,98 @@ impl MobileGraphStore {
         incoming.clear();
         nodes.clear();
     }
+
+    /// Performs DFS traversal from a source node.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_id` - Starting node ID
+    /// * `max_depth` - Maximum traversal depth
+    /// * `limit` - Maximum number of results
+    pub fn dfs_traverse(&self, source_id: u64, max_depth: u32, limit: u32) -> Vec<TraversalResult> {
+        use std::collections::HashSet;
+
+        let mut results: Vec<TraversalResult> = Vec::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+        let mut stack: Vec<(u64, u32)> = vec![(source_id, 0)];
+
+        while let Some((node_id, depth)) = stack.pop() {
+            if results.len() >= limit as usize {
+                break;
+            }
+
+            if visited.contains(&node_id) {
+                continue;
+            }
+            visited.insert(node_id);
+
+            if depth > 0 {
+                results.push(TraversalResult { node_id, depth });
+            }
+
+            if depth < max_depth {
+                let neighbors: Vec<_> = self
+                    .get_outgoing(node_id)
+                    .into_iter()
+                    .filter(|e| !visited.contains(&e.target))
+                    .collect();
+
+                for edge in neighbors.into_iter().rev() {
+                    stack.push((edge.target, depth + 1));
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Checks if a node exists.
+    pub fn has_node(&self, id: u64) -> bool {
+        let nodes = self.nodes.read().unwrap();
+        nodes.contains_key(&id)
+    }
+
+    /// Checks if an edge exists.
+    pub fn has_edge(&self, id: u64) -> bool {
+        let edges = self.edges.read().unwrap();
+        edges.contains_key(&id)
+    }
+
+    /// Gets the out-degree (number of outgoing edges) of a node.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn out_degree(&self, node_id: u64) -> u32 {
+        let outgoing = self.outgoing.read().unwrap();
+        // Safe: graph degree unlikely to exceed u32::MAX (4 billion edges from one node)
+        outgoing.get(&node_id).map_or(0, |v| v.len() as u32)
+    }
+
+    /// Gets the in-degree (number of incoming edges) of a node.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn in_degree(&self, node_id: u64) -> u32 {
+        let incoming = self.incoming.read().unwrap();
+        // Safe: graph degree unlikely to exceed u32::MAX (4 billion edges to one node)
+        incoming.get(&node_id).map_or(0, |v| v.len() as u32)
+    }
+
+    /// Gets all nodes with a specific label.
+    pub fn get_nodes_by_label(&self, label: String) -> Vec<MobileGraphNode> {
+        let nodes = self.nodes.read().unwrap();
+        nodes
+            .values()
+            .filter(|n| n.label == label)
+            .cloned()
+            .collect()
+    }
+
+    /// Gets all edges with a specific label.
+    pub fn get_edges_by_label(&self, label: String) -> Vec<MobileGraphEdge> {
+        let edges = self.edges.read().unwrap();
+        edges
+            .values()
+            .filter(|e| e.label == label)
+            .cloned()
+            .collect()
+    }
 }
 
 impl Default for MobileGraphStore {

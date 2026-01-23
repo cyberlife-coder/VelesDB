@@ -277,6 +277,54 @@ impl GraphStore {
             .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
         Ok(store.edge_count())
     }
+
+    /// Checks if an edge exists.
+    ///
+    /// Args:
+    ///     edge_id: The edge ID to check
+    ///
+    /// Returns:
+    ///     True if the edge exists, False otherwise.
+    #[pyo3(signature = (edge_id))]
+    fn has_edge(&self, edge_id: u64) -> PyResult<bool> {
+        let store = self
+            .inner
+            .read()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        Ok(store.get_edge(edge_id).is_some())
+    }
+
+    /// Gets the out-degree (number of outgoing edges) of a node.
+    ///
+    /// Args:
+    ///     node_id: The node ID
+    ///
+    /// Returns:
+    ///     Number of outgoing edges from this node.
+    #[pyo3(signature = (node_id))]
+    fn out_degree(&self, node_id: u64) -> PyResult<usize> {
+        let store = self
+            .inner
+            .read()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        Ok(store.get_outgoing(node_id).len())
+    }
+
+    /// Gets the in-degree (number of incoming edges) of a node.
+    ///
+    /// Args:
+    ///     node_id: The node ID
+    ///
+    /// Returns:
+    ///     Number of incoming edges to this node.
+    #[pyo3(signature = (node_id))]
+    fn in_degree(&self, node_id: u64) -> PyResult<usize> {
+        let store = self
+            .inner
+            .read()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {e}")))?;
+        Ok(store.get_incoming(node_id).len())
+    }
 }
 
 #[cfg(test)]
