@@ -199,6 +199,9 @@ fn get_condition_source(
 /// Classifies a column reference to determine its data source.
 ///
 /// Supports both simple column names and qualified names (table.column).
+/// - Qualified names with known table → ColumnStore or Graph
+/// - Qualified names with unknown table → Unknown (for post-join filtering)
+/// - Unqualified names → Graph (collection columns)
 fn classify_column(
     column: &str,
     graph_vars: &HashSet<String>,
@@ -212,10 +215,11 @@ fn classify_column(
         if graph_vars.contains(table) {
             return Source::Graph;
         }
+        // Unknown table prefix - cannot determine source
+        return Source::Unknown;
     }
 
-    // Simple column name: check if it matches any known source
-    // Default to graph for unqualified names (collection columns)
+    // Simple column name: default to graph for unqualified names (collection columns)
     Source::Graph
 }
 
@@ -398,5 +402,34 @@ mod tests {
 
         assert_eq!(analysis.column_store_filters.len(), 1); // prices.b
         assert_eq!(analysis.graph_filters.len(), 2); // t.a, t.c
+    }
+
+    #[test]
+    fn test_unknown_table_prefix_goes_to_post_join() {
+        let graph_vars = make_graph_vars();
+        let join_tables = make_join_tables();
+
+        // unknown_table.column should go to post_join_filters (not graph!)
+        // This is a regression test for PR #86 review bug
+        let condition = make_comparison("unknown_table.column", 1);
+        let analysis = analyze_for_pushdown(&condition, &graph_vars, &join_tables);
+
+        assert!(!analysis.has_pushdown());
+        assert!(analysis.column_store_filters.is_empty());
+        assert!(analysis.graph_filters.is_empty());
+        assert_eq!(analysis.post_join_filters.len(), 1);
+    }
+
+    #[test]
+    fn test_misspelled_table_goes_to_post_join() {
+        let graph_vars = make_graph_vars();
+        let join_tables = make_join_tables();
+
+        // typo: "price" instead of "prices" should be caught
+        let condition = make_comparison("price.value", 100);
+        let analysis = analyze_for_pushdown(&condition, &graph_vars, &join_tables);
+
+        assert!(!analysis.has_pushdown());
+        assert_eq!(analysis.post_join_filters.len(), 1);
     }
 }
