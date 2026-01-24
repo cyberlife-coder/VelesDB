@@ -4,7 +4,6 @@
 
 <h1 align="center">
   <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="VelesDB" width="32" height="32" style="vertical-align: middle;"/>
-  VelesDB
 </h1>
 
 <h3 align="center">

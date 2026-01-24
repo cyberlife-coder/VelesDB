@@ -13,6 +13,7 @@
 //! - Metadata-only collections (no vectors) for reference tables
 //! - Graph collections for knowledge graph storage (nodes, edges, traversal)
 
+pub mod auto_reindex;
 mod core;
 pub mod graph;
 mod search;
