@@ -19,6 +19,7 @@
 mod extraction;
 pub mod join;
 mod ordering;
+pub mod pushdown;
 mod validation;
 
 // Re-export for potential external use

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔍 EPIC-031: Multi-model Query Engine
+
+#### Added
+
+- **VelesQL Parser** (US-004)
+  - JOIN clause parsing: `JOIN table ON condition`
+  - `JoinClause`, `JoinCondition`, `ColumnRef` AST structures
+  - Support for table aliases
+
+- **JOIN Executor** (US-005)
+  - `execute_join()` - Merge search results with ColumnStore data
+  - Adaptive batch sizing (single/<1K/<5K based on key count)
+  - `JoinedResult` struct for combined graph + column data
+
+- **Filter Pushdown** (US-006)
+  - `analyze_for_pushdown()` - Classify WHERE conditions by data source
+  - ColumnStore filters pushed before JOIN
+  - Graph filters remain pre-traversal
+  - Expected 80%+ reduction in JOIN data volume
+
 ---
 
 ## [1.3.0] - 2026-01-23
