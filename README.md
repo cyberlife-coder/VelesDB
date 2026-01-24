@@ -360,6 +360,110 @@ curl -X POST http://localhost:8080/query \
 
 ---
 
+## 🧪 Real-World VelesQL Scenarios
+
+### Scenario 1: Medical Research Assistant
+**Goal:** Find recent oncology studies with specific gene mentions, ordered by relevance
+
+```sql
+SELECT study_id, title, publication_date 
+FROM medical_studies 
+WHERE 
+  vector NEAR $cancer_research_embedding 
+  AND content LIKE '%BRCA1%' 
+  AND publication_date > '2025-01-01'
+ORDER BY similarity() DESC 
+LIMIT 5
+```
+
+**Parameters:**
+- `$cancer_research_embedding`: [0.23, 0.87, -0.12, ...] (embedding for "advanced cancer immunotherapy")
+
+**Expected Output:**
+```json
+{
+  "results": [
+    {
+      "study_id": "onco-2025-042", 
+      "title": "BRCA1 Mutations in Immunotherapy Response",
+      "publication_date": "2025-03-15",
+      "score": 0.92
+    },
+    {
+      "study_id": "onco-2025-017",
+      "title": "Gene Editing Approaches for Metastatic Cancer",
+      "publication_date": "2025-02-28",
+      "score": 0.87
+    }
+  ]
+}
+```
+
+---
+
+### Scenario 2: E-commerce Recommendation Engine
+**Goal:** Recommend products similar to a user's purchase history, within their price range
+
+```sql
+SELECT product_id, name, price 
+FROM products 
+WHERE 
+  vector NEAR $user_preferences 
+  AND price BETWEEN 20.00 AND 100.00 
+  AND category = 'electronics'
+ORDER BY similarity() DESC, price ASC 
+LIMIT 8
+```
+
+**Parameters:**
+- `$user_preferences`: [0.78, -0.23, 0.45, ...] (embedding based on user's purchase history)
+
+**Expected Output:**
+```json
+{
+  "results": [
+    {
+      "product_id": "prod-67890",
+      "name": "Wireless Noise-Cancelling Headphones",
+      "price": 89.99,
+      "score": 0.95
+    },
+    {
+      "product_id": "prod-54321",
+      "name": "Bluetooth Portable Speaker",
+      "price": 59.99,
+      "score": 0.91
+    }
+  ]
+}
+```
+
+---
+
+### Scenario 3: Cybersecurity Threat Detection
+**Goal:** Find similar malware patterns observed in the last 7 days
+
+```sql
+SELECT malware_hash, threat_level, first_seen 
+FROM threat_intel 
+WHERE 
+  vector NEAR $current_threat_embedding 
+  AND first_seen > NOW() - INTERVAL '7 days'
+  AND threat_level > 0.8
+ORDER BY similarity() DESC, first_seen DESC
+LIMIT 10
+```
+
+**Parameters:**
+- `$current_threat_embedding`: [0.12, -0.87, 0.34, ...] (embedding of current malware signature)
+
+**Troubleshooting Tip:** If no results appear, verify:
+1. Threat intelligence feed is updating daily
+2. Vector dimensions match collection configuration
+3. Timestamp format matches ISO 8601 (YYYY-MM-DD HH:MM:SS)
+
+---
+
 ## ⚡ Performance
 
 
@@ -531,3 +635,124 @@ AND part.material = 'titanium'
 - **50% fewer defective shipments**
 - **Offline factory floor operation**
 - **Unified defect database**
+
+```
+
+```
+
+### ☕ Buy Me A Coffee
+
+If you find this project useful, you can support its development by buying me a coffee!
+
+<a href="https://buymeacoffee.com/wiscale" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px; width: 217px;" >
+</a>
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how to get started:
+
+### Development Setup
+
+```bash
+# Clone the repo
+git clone https://github.com/cyberlife-coder/VelesDB.git
+cd VelesDB
+
+# Run tests
+cargo test --all-features
+
+# Run with checks (before committing)
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+### Project Structure
+
+```
+VelesDB/
+├── crates/
+│   ├── velesdb-core/     # Core engine library
+│   │   ├── src/
+│   │   │   ├── collection/   # Collection management
+│   │   │   ├── index/        # HNSW index
+│   │   │   ├── storage/      # Persistence layer
+│   │   │   ├── velesql/      # Query language parser
+│   │   │   └── simd/         # SIMD optimizations
+│   │   └── tests/
+│   ├── velesdb-server/   # REST API server
+│   ├── velesdb-mobile/   # iOS/Android bindings (UniFFI)
+│   ├── velesdb-wasm/     # WebAssembly module
+│   └── velesdb-python/   # Python bindings (PyO3)
+├── benches/              # Benchmarks
+└── docs/                 # Documentation
+```
+
+### Good First Issues
+
+Looking for a place to start? Check out issues labeled [`good first issue`](https://github.com/cyberlife-coder/VelesDB/labels/good%20first%20issue).
+
+---
+
+## 📊 Roadmap
+
+### v1.2.0 ✅ (Current - January 2026)
+- [x] **🧠 Knowledge Graph Storage** - GraphSchema, GraphNode, GraphEdge, BFS traversal
+- [x] **📝 VelesQL MATCH Clause** - Cypher-inspired graph queries
+- [x] **🔗 Agent Toolkit SDK** - Graph bindings for Python, WASM, Mobile
+- [x] **🚀 Native HNSW Implementation** - Zero external dependencies, pure Rust
+- [x] **⚡ Lock-Free Cache** - DashMap L1 + LRU L2 two-tier caching
+- [x] **🔎 Trigram Index** - 22-128x faster LIKE queries with Roaring Bitmaps
+- [x] **🗄️ Metadata-Only Collections** - Lightweight collections without vectors
+- [x] **📦 Published to crates.io, PyPI, npm** - All SDKs available
+
+### v1.3.0 (Planned)
+- [ ] GPU Acceleration (wgpu backend)
+- [ ] Product Quantization (PQ)
+- [ ] Sparse vector support
+- [ ] Distributed mode (Premium)
+
+---
+
+## 📜 License
+
+VelesDB is licensed under the [Elastic License 2.0 (ELv2)](LICENSE).
+
+ELv2 is a source-available license that allows free use, modification, and distribution, with restrictions only on providing the software as a managed service.
+
+---
+
+## 🏷️ Show Your Support
+
+Using VelesDB? Add the badge to your project!
+
+[![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square)](https://velesdb.com)
+
+```markdown
+[![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square)](https://velesdb.com)
+```
+
+👉 [More badge options](docs/BADGE.md)
+
+---
+
+<p align="center">
+  <strong>Built with ❤️ and 🦀 Rust</strong>
+</p>
+
+<p align="center">
+  <strong>Original Author:</strong> <a href="https://github.com/cyberlife-coder">Julien Lange</a> — <a href="https://wiscale.io"><strong>WiScale</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/cyberlife-coder/VelesDB">⭐ GitHub</a> •
+  <a href="https://deepwiki.com/cyberlife-coder/VelesDB/">📖 Documentation</a> •
+  <a href="https://github.com/cyberlife-coder/VelesDB/issues">🐛 Issues</a> •
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases">📦 Releases</a>
+</p>
+
+<p align="center">
+  <sub>Don't forget to ⭐ star the repo if you find VelesDB useful!</sub>
+</p>
