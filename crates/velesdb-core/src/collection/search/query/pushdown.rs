@@ -179,7 +179,9 @@ fn get_condition_source(
             classify_column(&m.column, graph_vars, join_tables)
         }
 
-        // Vector conditions are graph-based (applied to collection/graph)
+        // Design: Vector conditions are classified as Graph because VelesDB stores
+        // embeddings in the collection/graph layer. If future versions support vector
+        // columns in ColumnStore, this classification will need to be extended.
         Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) | Condition::Similarity(_) => {
             Source::Graph
         }
@@ -219,7 +221,10 @@ fn classify_column(
         return Source::Unknown;
     }
 
-    // Simple column name: default to graph for unqualified names (collection columns)
+    // Design: Unqualified column names default to Graph (collection layer).
+    // This follows SQL convention where unqualified names in JOIN queries refer
+    // to the "main" table (here: the MATCH clause graph pattern).
+    // Users must qualify ColumnStore columns explicitly: prices.amount, not just amount.
     Source::Graph
 }
 

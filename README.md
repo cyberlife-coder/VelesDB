@@ -9,180 +9,39 @@
   <em>Vector + Graph Fusion • 57µs Search • Single Binary • Privacy-First</em>
 </h3>
 
-
-<p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/actions"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&style=flat-square" alt="Build Status"></a>
-  <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-ELv2-blue?style=flat-square" alt="License"></a>
-  <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="GitHub Stars"></a>
-  <a href="https://deepwiki.com/cyberlife-coder/VelesDB"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/🏎️_SIMD-66ns-blue?style=for-the-badge" alt="SIMD Distance"/>
-  <img src="https://img.shields.io/badge/📦_Binary-15MB-orange?style=for-the-badge" alt="Binary Size"/>
-  <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall 100%"/>
-</p>
-
-<p align="center">
-  <a href="#-quick-start">🚀 Quick Start</a> •
-  <a href="#-full-ecosystem">🌍 Ecosystem</a> •
-  <a href="#-performance">⚡ Performance</a> •
-  <a href="#-velesql-query-language">📝 VelesQL</a> •
-  <a href="https://deepwiki.com/cyberlife-coder/VelesDB/">📖 Docs</a> •
-  <a href="#-contributing">🤝 Contributing</a>
-</p>
-
 ---
 
-## 🧠 The Local Knowledge Engine for AI Agents
+## 🌍 Full Ecosystem / Écosystème Complet
 
-### 🎯 The Problem We Solve
+VelesDB is designed to run **where your agents live** — from cloud servers to mobile devices to browsers.
 
-> **"My RAG agent needs both semantic search AND knowledge relationships. Existing tools force me to choose or glue multiple systems together."**
-
-**Three pain points** developers face building AI agents:
-
-1. **Latency kills UX** — Cloud vector DBs add 50-100ms per query. 10 retrievals = 1+ second delay.
-2. **Vectors alone aren't enough** — Semantic similarity misses relationships ("Who authored this document?").
-3. **Privacy & deployment friction** — Cloud dependencies, API keys, complex clusters.
-
-### 💡 The VelesDB Solution
-
-**VelesDB is the only embedded database that natively fuses vector search with knowledge graphs** in a single 15MB binary:
-
-| What You Get | VelesDB | Others |
-| :--- | :--- | :--- |
-| **Search Latency (p50)** | **57µs** | 50-100ms |
-| **Vector + Graph in ONE query** | ✅ `MATCH ... WHERE similarity() > 0.8` | ❌ Separate systems |
-| **Zero Cloud Dependencies** | ✅ Single binary, works offline | ❌ API keys, clusters |
-| **Runs Everywhere** | ✅ Server, Browser, Mobile, Desktop | ❌ Server-only |
-
-### 🏢 Coming From Another Vector DB?
-
-| If you use... | VelesDB difference |
-| :--- | :--- |
-| **Pinecone** | No API keys, no cloud costs, 100x faster locally |
-| **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile |
-| **Milvus** | Zero config vs complex cluster setup |
-| **pgvector** | Purpose-built for vectors, 700x faster search |
-| **ChromaDB** | Production-grade Rust vs Python prototype |
-
-```sql
--- Vector search + metadata filtering
-SELECT * FROM documents 
-WHERE vector NEAR $query AND category = 'tech' 
-LIMIT 10;
-
--- 🆕 Knowledge Graph traversal (v1.2.0)
-MATCH (d:Document)-[:MENTIONS]->(e:Entity)
-WHERE d.category = 'research'
-RETURN e.name, COUNT(*) as mentions;
-
--- 🔮 Coming: Vector + Graph Fusion (v1.3.0)
-MATCH (d:Document)-[:AUTHORED_BY]->(p:Person)
-WHERE similarity(d.embedding, $question) > 0.8
-RETURN p.name, p.email;
-```
-
----
-
-<h2 align="center">⚡ Why Developers Choose VelesDB</h2>
-
-<table align="center">
-<tr>
-<td align="center" width="25%">
-<h3>🧠 Vector + Graph</h3>
-<p>Unified semantic search AND knowledge relationships.<br/><strong>No glue code needed.</strong></p>
-</td>
-<td align="center" width="25%">
-<h3>🏀️ 57µs Search</h3>
-<p>Native HNSW + AVX-512 SIMD.<br/><strong>1000x faster than cloud.</strong></p>
-</td>
-<td align="center" width="25%">
-<h3>📦 15MB Binary</h3>
-<p>Zero dependencies.<br/><strong>Works offline, air-gapped.</strong></p>
-</td>
-<td align="center" width="25%">
-<h3>🌍 Run Anywhere</h3>
-<p>Server, Browser, Mobile, Desktop.<br/><strong>Same Rust codebase.</strong></p>
-</td>
-</tr>
-</table>
+| Domain      | Component                          | Description                              | Install                     |
+|-------------|------------------------------------|------------------------------------------|----------------------------|
+| **🦀 Core** | [velesdb-core](crates/velesdb-core) | Core engine (HNSW, SIMD, VelesQL)        | `cargo add velesdb-core`   |
+| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (11 endpoints, OpenAPI)         | `cargo install velesdb-server` |
+| **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
+| **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
+| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb`   |
+| **🌍 WASM** | [velesdb-wasm](crates/velesdb-wasm) | Browser-side vector search               | `npm i @wiscale/velesdb-wasm` |
+| **📱 Mobile** | [velesdb-mobile](crates/velesdb-mobile) | iOS (Swift) & Android (Kotlin)           | [Build instructions](#-mobile-build) |
+| **🖥️ Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) | Tauri v2 AI-powered apps               | `cargo add tauri-plugin-velesdb` |
+| **🦜 LangChain** | [langchain-velesdb](integrations/langchain) | Official VectorStore                   | `pip install langchain-velesdb` |
+| **🦙 LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) | Document indexing                     | `pip install llama-index-vector-stores-velesdb` |
+| **🔄 Migration** | [velesdb-migrate](crates/velesdb-migrate) | From Qdrant, Pinecone, Supabase        | `cargo install velesdb-migrate` |
 
 ---
 
 ## 🎯 Use Cases
 
-| Use Case | VelesDB Feature |
-| :--- | :--- |
-| **RAG Pipelines** | Sub-ms retrieval |
-| **AI Agents** | Embedded memory, local context |
-| **Desktop Apps (Tauri/Electron)** | Single binary, no server needed |
-| **Mobile AI (iOS/Android)** | Native SDKs with 32x memory compression |
-| **Browser-side Search** | WASM module, zero backend |
-| **Edge/IoT Devices** | 15MB footprint, ARM NEON optimized |
-| **On-Prem / Air-Gapped** | No cloud dependency, full data sovereignty |
-
----
-
-<a name="-full-ecosystem"></a>
-## 🌍 Full Ecosystem / Écosystème Complet
-
-VelesDB is designed to run **where your agents live** — from cloud servers to mobile devices to browsers.
-
-| Domain | Component | Description | Install |
-| :--- | :--- | :--- | :--- |
-| **🦀 Core** | **[velesdb-core](crates/velesdb-core)** | Core engine (HNSW, SIMD, VelesQL) | `cargo add velesdb-core` |
-| **🌐 Server** | **[velesdb-server](crates/velesdb-server)** | REST API (11 endpoints, OpenAPI) | `cargo install velesdb-server` |
-| **💻 CLI** | **[velesdb-cli](crates/velesdb-cli)** | Interactive REPL for VelesQL | `cargo install velesdb-cli` |
-| **🐍 Python** | **[velesdb-python](crates/velesdb-python)** | PyO3 bindings + NumPy | `pip install velesdb` |
-| **📜 TypeScript** | **[typescript-sdk](sdks/typescript)** | Node.js & Browser SDK | `npm i @wiscale/velesdb` |
-| **🌍 WASM** | **[velesdb-wasm](crates/velesdb-wasm)** | Browser-side vector search | `npm i @wiscale/velesdb-wasm` |
-| **📱 Mobile** | **[velesdb-mobile](crates/velesdb-mobile)** | iOS (Swift) & Android (Kotlin) | [Build instructions](#-mobile-build) |
-| **🖥️ Desktop** | **[tauri-plugin](crates/tauri-plugin-velesdb)** | Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
-| **🦜 LangChain** | **[langchain-velesdb](integrations/langchain)** | Official VectorStore | `pip install langchain-velesdb` |
-| **🦙 LlamaIndex** | **[llamaindex-velesdb](integrations/llamaindex)** | Document indexing | `pip install llama-index-vector-stores-velesdb` |
-| **🔄 Migration** | **[velesdb-migrate](crates/velesdb-migrate)** | From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
-
----
-
-> 💡 **Why "Veles"?** Named after the Slavic god of wisdom and keeper of memories — embodying what a vector database does: storing and retrieving the essence of knowledge.
-
----
-
-## 📚 Documentation
-
-| Guide | Description |
-|-------|-------------|
-| **[Usage Examples v1.1.0](docs/USAGE_EXAMPLES_V1.1.0.md)** | Complete code examples for all features in every language |
-| **[CHANGELOG](CHANGELOG.md)** | Version history and breaking changes |
-| **[Benchmarks](docs/BENCHMARKS.md)** | Performance measurements and methodology |
-| **[Native HNSW](docs/reference/NATIVE_HNSW.md)** | Architecture deep-dive |
-| **[VelesQL Reference](docs/reference/VELESQL.md)** | Query language specification |
-
----
-
-## ✨ Features
-
-- 🚀 **Built in Rust** — Memory-safe, fast, and reliable
-- ⚡ **SIMD-optimized Search** — AVX-512/AVX2/NEON accelerated similarity
-- 🎯 **≥95% Recall Guaranteed** — Adaptive HNSW params up to 1M vectors
-- 🔀 **Multi-Query Fusion** — Native MQG with RRF/Weighted strategies
-- 🗄️ **Metadata-Only Collections** — Lightweight collections without vectors ⭐ NEW
-- 🔍 **LIKE/ILIKE Filters** — SQL pattern matching with wildcards ⭐ NEW
-- 🔎 **Trigram Index** — 22-128x faster LIKE queries with Roaring Bitmaps ⭐ NEW
-- ⚡ **Lock-Free Cache** — DashMap L1 + LRU L2 two-tier caching ⭐ NEW
-- 🎮 **GPU Acceleration** — Optional wgpu backend for batch operations (v1.1.2)
-- 🎯 **5 Distance Metrics** — Cosine, Euclidean, Dot Product, **Hamming**, **Jaccard**
-- 🗂️ **ColumnStore Filtering** — 122x faster than JSON filtering at scale
-- 🧠 **SQ8 Quantization** — 4x memory reduction with >95% recall accuracy
-- 🔍 **Metadata Filtering** — Filter results by payload (eq, gt, lt, in, contains...)
-- 📝 **BM25 Full-Text Search** — Hybrid search combining vectors + text relevance
-- 💾 **Persistent Storage** — HNSW index with WAL for durability
-- 🔌 **Simple REST API** — Easy integration with any language
-- 📦 **Single Binary** — No dependencies, easy deployment
-- 🐳 **Docker Ready** — Run anywhere in seconds
-- 🔐 **On-Prem Ready** — Air-gapped, data sovereign, GDPR/HIPAA compliant
+| Use Case                      | VelesDB Feature                     |
+|-------------------------------|-------------------------------------|
+| **RAG Pipelines**             | Sub-ms retrieval                    |
+| **AI Agents**                 | Embedded memory, local context      |
+| **Desktop Apps (Tauri/Electron)** | Single binary, no server needed     |
+| **Mobile AI (iOS/Android)**   | Native SDKs with 32x memory compression |
+| **Browser-side Search**       | WASM module, zero backend           |
+| **Edge/IoT Devices**          | 15MB footprint, ARM NEON optimized  |
+| **On-Prem / Air-Gapped**      | No cloud dependency, full data sovereignty |
 
 ---
 
@@ -318,10 +177,10 @@ cargo ndk -t arm64-v8a -t armeabi-v7a build --release -p velesdb-mobile
 # 1. Create a collection
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
-  -d '{"name": "documents", "dimension": 4, "metric": "cosine"}'
+  -d '{"name": "my_vectors", "dimension": 4, "metric": "cosine"}'
 
 # 2. Insert vectors with metadata
-curl -X POST http://localhost:8080/collections/documents/points \
+curl -X POST http://localhost:8080/collections/my_vectors/points \
   -H "Content-Type: application/json" \
   -d '{
     "points": [
@@ -332,7 +191,7 @@ curl -X POST http://localhost:8080/collections/documents/points \
   }'
 
 # 3. Search for similar vectors
-curl -X POST http://localhost:8080/collections/documents/search \
+curl -X POST http://localhost:8080/collections/my_vectors/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.9, 0.1, 0.0, 0.0], "top_k": 2}'
 
@@ -340,7 +199,7 @@ curl -X POST http://localhost:8080/collections/documents/search \
 curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "SELECT * FROM documents WHERE vector NEAR $v AND category = '\''tech'\'' LIMIT 5",
+    "query": "SELECT * FROM my_vectors WHERE vector NEAR $v AND category = '\''tech'\'' LIMIT 5",
     "params": {"v": [0.9, 0.1, 0.0, 0.0]}
   }'
 ```
@@ -1058,177 +917,6 @@ Comprehensive documentation is available on **DeepWiki**:
   </a>
 </p>
 
-### 📢 Share VelesDB
-
-Help us grow by sharing VelesDB with your network!
-
-<p align="center">
-  <a href="https://twitter.com/intent/tweet?text=🚀%20Check%20out%20VelesDB%20-%20The%20fastest%20vector%20database%20for%20AI%20apps!%20Built%20in%20Rust%20with%20microsecond%20latency.&url=https://github.com/cyberlife-coder/VelesDB&hashtags=VectorDatabase,AI,Rust,OpenSource">
-    <img src="https://img.shields.io/badge/Share_on-Twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" alt="Share on Twitter"/>
-  </a>
-  <a href="https://www.linkedin.com/sharing/share-offsite/?url=https://github.com/cyberlife-coder/VelesDB">
-    <img src="https://img.shields.io/badge/Share_on-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="Share on LinkedIn"/>
-  </a>
-  <a href="https://www.reddit.com/submit?url=https://github.com/cyberlife-coder/VelesDB&title=VelesDB%20-%20The%20fastest%20vector%20database%20for%20AI%20applications">
-    <img src="https://img.shields.io/badge/Share_on-Reddit-FF4500?style=for-the-badge&logo=reddit&logoColor=white" alt="Share on Reddit"/>
-  </a>
-  <a href="https://news.ycombinator.com/submitlink?u=https://github.com/cyberlife-coder/VelesDB&t=VelesDB%20-%20Vector%20Search%20in%20Microseconds">
-    <img src="https://img.shields.io/badge/Share_on-Hacker_News-F0652F?style=for-the-badge&logo=ycombinator&logoColor=white" alt="Share on Hacker News"/>
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB/fork">
-    <img src="https://img.shields.io/badge/🍴_Fork_this_repo-181717?style=for-the-badge&logo=github" alt="Fork on GitHub"/>
-  </a>
-</p>
-
-[![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
-
-<p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB">⭐ Star on GitHub</a> — It helps us grow and motivates development!
-</p>
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Here's how to get started:
-
-### Development Setup
-
-```bash
-# Clone the repo
-git clone https://github.com/cyberlife-coder/VelesDB.git
-cd VelesDB
-
-# Run tests
-cargo test --all-features
-
-# Run with checks (before committing)
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-### Project Structure
-
-```
-VelesDB/
-├── crates/
-│   ├── velesdb-core/     # Core engine library
-│   │   ├── src/
-│   │   │   ├── collection/   # Collection management
-│   │   │   ├── index/        # HNSW index
-│   │   │   ├── storage/      # Persistence layer
-│   │   │   ├── velesql/      # Query language parser
-│   │   │   └── simd/         # SIMD optimizations
-│   │   └── tests/
-│   ├── velesdb-server/   # REST API server
-│   ├── velesdb-mobile/   # iOS/Android bindings (UniFFI)
-│   ├── velesdb-wasm/     # WebAssembly module
-│   └── velesdb-python/   # Python bindings (PyO3)
-├── benches/              # Benchmarks
-└── docs/                 # Documentation
-```
-
-### Good First Issues
-
-Looking for a place to start? Check out issues labeled [`good first issue`](https://github.com/cyberlife-coder/VelesDB/labels/good%20first%20issue).
-
----
-
-## 📊 Roadmap
-
-### v1.2.0 ✅ (Current - January 2026)
-- [x] **🧠 Knowledge Graph Storage** - GraphSchema, GraphNode, GraphEdge, BFS traversal
-- [x] **📝 VelesQL MATCH Clause** - Cypher-inspired graph queries
-- [x] **🔗 Agent Toolkit SDK** - Graph bindings for Python, WASM, Mobile
-- [x] **🚀 Native HNSW Implementation** - Zero external dependencies, pure Rust
-- [x] **⚡ Lock-Free Cache** - DashMap L1 + LRU L2 two-tier caching
-- [x] **🔎 Trigram Index** - 22-128x faster LIKE queries with Roaring Bitmaps
-- [x] **🗄️ Metadata-Only Collections** - Lightweight collections without vectors
-- [x] **📦 Published to crates.io, PyPI, npm** - All SDKs available
-
-### v1.0.0 ✅
-- [x] Production-ready stability
-- [x] Native HNSW with AVX-512/AVX2/NEON SIMD
-- [x] VelesQL SQL-like query language
-- [x] REST API (11 endpoints) with OpenAPI/Swagger
-- [x] Python, TypeScript, WASM, Mobile SDKs
-
-### v0.7.x - v0.8.x
-- [x] **📱 Mobile SDK** - Native iOS (Swift) and Android (Kotlin) via UniFFI
-- [x] **StorageMode IoT** - Full, SQ8 (4x), Binary (32x) compression
-- [x] **⚡ SIMD 32-wide Unrolling** - 12-17% latency reduction
-- [x] **BM25 Full-Text Search** with hybrid search
-- [x] **Tauri Desktop Plugin** for AI-powered apps
-- [x] **LlamaIndex & LangChain Integrations**
-
-### v1.3.0 (Planned)
-- [ ] GPU Acceleration (wgpu backend)
-- [ ] Product Quantization (PQ)
-- [ ] Sparse vector support
-- [ ] Distributed mode (Premium)
-
----
-
-## 💎 VelesDB Premium
-
-Need enterprise features? **VelesDB Premium** extends Core with:
-
-| Feature | Description |
-|---------|-------------|
-| **Encryption at Rest** | AES-256-GCM for data security |
-| **Snapshots** | Atomic backup/restore |
-| **RBAC / Multi-tenancy** | Role-based access control |
-| **Distributed Mode** | Horizontal scaling |
-| **Priority Support** | SLA-backed support |
-
-👉 COMING SOON
-
----
-
-## 📜 License
-
-VelesDB is licensed under the [Elastic License 2.0 (ELv2)](LICENSE).
-
-ELv2 is a source-available license that allows free use, modification, and distribution, with restrictions only on providing the software as a managed service.
-
----
-
-## 🏷️ Show Your Support
-
-Using VelesDB? Add the badge to your project!
-
-[![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square)](https://velesdb.com)
-
-```markdown
-[![Powered by VelesDB](https://img.shields.io/badge/Powered_by-VelesDB-blue?style=flat-square)](https://velesdb.com)
-```
-
-👉 [More badge options](docs/BADGE.md)
-
----
-
-<p align="center">
-  <strong>Built with ❤️ and 🦀 Rust</strong>
-</p>
-
-<p align="center">
-  <strong>Original Author:</strong> <a href="https://github.com/cyberlife-coder">Julien Lange</a> — <a href="https://wiscale.io"><strong>WiScale</strong></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/cyberlife-coder/VelesDB">⭐ GitHub</a> •
-  <a href="https://deepwiki.com/cyberlife-coder/VelesDB/">📖 Documentation</a> •
-  <a href="https://github.com/cyberlife-coder/VelesDB/issues">🐛 Issues</a> •
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases">📦 Releases</a>
-</p>
-
-<p align="center">
-  <sub>Don't forget to ⭐ star the repo if you find VelesDB useful!</sub>
-</p>
-
 ### ☕ Buy Me A Coffee
 
 If you find this project useful, you can support its development by buying me a coffee!
@@ -1236,3 +924,5 @@ If you find this project useful, you can support its development by buying me a 
 <a href="https://buymeacoffee.com/wiscale" target="_blank">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px; width: 217px;" >
 </a>
+
+```
