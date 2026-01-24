@@ -224,11 +224,15 @@ fn classify_column(
 }
 
 /// Combines two sources into a single classification.
+///
+/// Unknown is treated conservatively - combining with Unknown yields Unknown
+/// to ensure conditions with unresolved references go to post_join_filters.
 fn combine_sources(a: Source, b: Source) -> Source {
     match (a, b) {
         (Source::ColumnStore, Source::ColumnStore) => Source::ColumnStore,
         (Source::Graph, Source::Graph) => Source::Graph,
-        (Source::Unknown, other) | (other, Source::Unknown) => other,
+        // Unknown must propagate conservatively - don't inherit other source
+        (Source::Unknown, _) | (_, Source::Unknown) => Source::Unknown,
         _ => Source::Mixed,
     }
 }
@@ -430,6 +434,42 @@ mod tests {
         let analysis = analyze_for_pushdown(&condition, &graph_vars, &join_tables);
 
         assert!(!analysis.has_pushdown());
+        assert_eq!(analysis.post_join_filters.len(), 1);
+    }
+
+    #[test]
+    fn test_unknown_combined_with_known_stays_post_join() {
+        let graph_vars = make_graph_vars();
+        let join_tables = make_join_tables();
+
+        // Regression test: AND(unknown_table.x, prices.y) should NOT go to column_store
+        // because unknown_table is not resolvable - must stay in post_join
+        let unknown_filter = make_comparison("unknown_table.x", 1);
+        let known_filter = make_comparison("prices.y", 2);
+        let condition = Condition::And(Box::new(unknown_filter), Box::new(known_filter));
+
+        let analysis = analyze_for_pushdown(&condition, &graph_vars, &join_tables);
+
+        // The known filter can be pushed, but the unknown one must go to post_join
+        assert_eq!(analysis.column_store_filters.len(), 1); // prices.y
+        assert_eq!(analysis.post_join_filters.len(), 1); // unknown_table.x
+    }
+
+    #[test]
+    fn test_or_with_unknown_goes_to_post_join() {
+        let graph_vars = make_graph_vars();
+        let join_tables = make_join_tables();
+
+        // OR(unknown_table.x, prices.y) cannot be split and must stay in post_join
+        let unknown_filter = make_comparison("unknown_table.x", 1);
+        let known_filter = make_comparison("prices.y", 2);
+        let condition = Condition::Or(Box::new(unknown_filter), Box::new(known_filter));
+
+        let analysis = analyze_for_pushdown(&condition, &graph_vars, &join_tables);
+
+        // OR with unknown source must go to post_join (cannot be split)
+        assert!(!analysis.has_pushdown());
+        assert!(analysis.column_store_filters.is_empty());
         assert_eq!(analysis.post_join_filters.len(), 1);
     }
 }
