@@ -427,7 +427,14 @@ pub async fn hybrid_search<R: Runtime>(
     })
 }
 
-/// Executes a `VelesQL` multi-model query (EPIC-031 US-012).
+/// Executes a `VelesQL` query (EPIC-031 US-012).
+///
+/// Supports SELECT-style `VelesQL` queries with vector similarity search.
+/// Returns results in `HybridResult` format for forward compatibility.
+///
+/// Note: Currently supports SELECT syntax only. MATCH/graph traversal
+/// syntax is planned for a future release (see EPIC-010). For SELECT
+/// queries, `graph_score` and `column_data` will be None.
 #[command]
 pub async fn query<R: Runtime>(
     _app: AppHandle<R>,

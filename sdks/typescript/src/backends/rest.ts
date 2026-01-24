@@ -484,11 +484,13 @@ export class RestBackend implements IVelesDBBackend {
   ): Promise<QueryResponse> {
     this.ensureInitialized();
 
-    // Note: options (timeout_ms, stream) are client-side hints, not sent to server
+    // Note: Server uses POST /query (not /collections/{name}/query)
+    // The collection name is extracted from the VelesQL query string (FROM clause)
+    // The `collection` param here is kept for API compatibility but not used in URL
     // Server QueryRequest only accepts { query, params }
     const response = await this.request<QueryResponse>(
       'POST',
-      `/collections/${encodeURIComponent(collection)}/query`,
+      '/query',
       {
         query: queryString,
         params: params ?? {},
@@ -502,25 +504,29 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    // Map snake_case API response to camelCase TypeScript types
-    // Server returns: { results, timing_ms, rows_returned }
+    // Map server response to SDK QueryResponse
+    // Server returns: { results: [{id, score, payload}], timing_ms, rows_returned }
+    // SDK expects: { results: [{nodeId, vectorScore, ...}], stats: {...} }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawData = response.data as any;
     return {
       results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
-        // Use BigInt for u64 IDs to prevent precision loss above 2^53-1
-        nodeId: this.parseNodeId(r.node_id ?? r.nodeId),
-        vectorScore: (r.vector_score ?? r.vectorScore) as number | null,
+        // Server returns `id` (u64), map to nodeId with precision handling
+        nodeId: this.parseNodeId(r.id ?? r.node_id ?? r.nodeId),
+        // Server returns `score`, map to vectorScore (primary score for SELECT queries)
+        vectorScore: (r.score ?? r.vector_score ?? r.vectorScore) as number | null,
+        // graph_score not returned by SELECT queries, only by future MATCH queries
         graphScore: (r.graph_score ?? r.graphScore) as number | null,
-        fusedScore: (r.fused_score ?? r.fusedScore) as number,
-        bindings: (r.bindings as Record<string, unknown>) ?? {},
+        // Use score as fusedScore for compatibility
+        fusedScore: (r.score ?? r.fused_score ?? r.fusedScore ?? 0) as number,
+        // payload maps to bindings for compatibility
+        bindings: (r.payload ?? r.bindings) as Record<string, unknown> ?? {},
         columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
       })),
       stats: {
-        // Map server response fields (timing_ms, rows_returned) to SDK stats
-        executionTimeMs: rawData?.timing_ms ?? rawData?.stats?.execution_time_ms ?? 0,
-        strategy: rawData?.stats?.strategy ?? 'query',
-        scannedNodes: rawData?.rows_returned ?? rawData?.stats?.scanned_nodes ?? 0,
+        executionTimeMs: rawData?.timing_ms ?? 0,
+        strategy: 'select',
+        scannedNodes: rawData?.rows_returned ?? 0,
       },
     };
   }

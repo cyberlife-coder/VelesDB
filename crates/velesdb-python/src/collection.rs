@@ -378,12 +378,15 @@ impl Collection {
         })
     }
 
-    /// Execute a VelesQL multi-model query (EPIC-031 US-008).
+    /// Execute a VelesQL query (EPIC-031 US-008).
     ///
-    /// Supports hybrid vector + graph queries with VelesQL syntax.
+    /// Executes SELECT-style VelesQL queries with vector similarity search.
+    ///
+    /// Note: Currently supports SELECT syntax only. MATCH/graph traversal
+    /// syntax is planned for a future release (see EPIC-010).
     ///
     /// Args:
-    ///     query_str: VelesQL query string
+    ///     query_str: VelesQL SELECT query string
     ///     params: Query parameters (vectors as lists/numpy arrays, scalars)
     ///
     /// Returns:
