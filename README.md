@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/velesdb-icon.png" alt="VelesDB Logo" width="200"/>
+  <img src="velesdb_icon_pack/favicon/android-chrome-512x512.png" alt="VelesDB Logo" width="200"/>
 </p>
 
 <h1 align="center">🐺 VelesDB</h1>
