@@ -191,12 +191,12 @@ impl ColumnStore {
     ///
     /// Uses `RoaringBitmap` for memory-efficient storage of matching indices.
     /// Useful for combining multiple filters with AND/OR operations.
+    ///
     /// # Note
     ///
-    /// Row indices are cast to u32 for RoaringBitmap. This limits stores to ~4B rows.
-    /// Indices >= u32::MAX will be silently skipped.
+    /// Row indices are safely converted to u32 for RoaringBitmap. This limits
+    /// stores to ~4B rows. Indices >= u32::MAX are safely skipped (not truncated).
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn filter_eq_int_bitmap(&self, column: &str, value: i64) -> RoaringBitmap {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
             return RoaringBitmap::new();
@@ -206,7 +206,7 @@ impl ColumnStore {
             .enumerate()
             .filter_map(|(idx, v)| {
                 if *v == Some(value) && !self.deleted_rows.contains(&idx) {
-                    Some(idx as u32)
+                    u32::try_from(idx).ok()
                 } else {
                     None
                 }
@@ -215,8 +215,9 @@ impl ColumnStore {
     }
 
     /// Filters rows by equality on a string column, returning a bitmap.
+    ///
+    /// Indices >= u32::MAX are safely skipped.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn filter_eq_string_bitmap(&self, column: &str, value: &str) -> RoaringBitmap {
         let Some(TypedColumn::String(col)) = self.columns.get(column) else {
             return RoaringBitmap::new();
@@ -230,7 +231,7 @@ impl ColumnStore {
             .enumerate()
             .filter_map(|(idx, v)| {
                 if *v == Some(string_id) && !self.deleted_rows.contains(&idx) {
-                    Some(idx as u32)
+                    u32::try_from(idx).ok()
                 } else {
                     None
                 }
@@ -239,8 +240,9 @@ impl ColumnStore {
     }
 
     /// Filters rows by range on an integer column, returning a bitmap.
+    ///
+    /// Indices >= u32::MAX are safely skipped.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn filter_range_int_bitmap(&self, column: &str, low: i64, high: i64) -> RoaringBitmap {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
             return RoaringBitmap::new();
@@ -250,7 +252,7 @@ impl ColumnStore {
             .enumerate()
             .filter_map(|(idx, v)| match v {
                 Some(val) if *val > low && *val < high && !self.deleted_rows.contains(&idx) => {
-                    Some(idx as u32)
+                    u32::try_from(idx).ok()
                 }
                 _ => None,
             })
