@@ -90,8 +90,55 @@ impl<'a> SemanticMemory<'a> {
     }
 
     /// Returns the name of the underlying collection.
+    #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name
+    }
+
+    /// Stores a knowledge fact with its embedding vector.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for this fact
+    /// * `content` - Text content of the knowledge
+    /// * `embedding` - Vector representation of the content
+    ///
+    /// # Note
+    ///
+    /// Full implementation in US-002.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn store(
+        &self,
+        _id: u64,
+        _content: &str,
+        _embedding: &[f32],
+    ) -> Result<(), AgentMemoryError> {
+        // TODO(US-002): Implement semantic memory storage
+        Ok(())
+    }
+
+    /// Queries semantic memory by similarity search.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_embedding` - Vector to search for
+    /// * `k` - Number of results to return
+    ///
+    /// # Returns
+    ///
+    /// Vector of (id, score, content) tuples.
+    ///
+    /// # Note
+    ///
+    /// Full implementation in US-002.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn query(
+        &self,
+        _query_embedding: &[f32],
+        _k: usize,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        // TODO(US-002): Implement semantic memory query
+        Ok(Vec::new())
     }
 }
 
@@ -114,8 +161,57 @@ impl<'a> EpisodicMemory<'a> {
     }
 
     /// Returns the name of the underlying collection.
+    #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name
+    }
+
+    /// Records an event in episodic memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_id` - Unique identifier for this event
+    /// * `description` - Text description of the event
+    /// * `timestamp` - Unix timestamp of the event
+    /// * `embedding` - Optional vector representation
+    ///
+    /// # Note
+    ///
+    /// Full implementation in US-003.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn record(
+        &self,
+        _event_id: u64,
+        _description: &str,
+        _timestamp: i64,
+        _embedding: Option<&[f32]>,
+    ) -> Result<(), AgentMemoryError> {
+        // TODO(US-003): Implement episodic memory storage
+        Ok(())
+    }
+
+    /// Retrieves recent events from episodic memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Maximum number of events to return
+    /// * `since_timestamp` - Optional filter for events after this time
+    ///
+    /// # Returns
+    ///
+    /// Vector of (event_id, description, timestamp) tuples.
+    ///
+    /// # Note
+    ///
+    /// Full implementation in US-003.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn recent(
+        &self,
+        _limit: usize,
+        _since_timestamp: Option<i64>,
+    ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
+        // TODO(US-003): Implement episodic memory retrieval
+        Ok(Vec::new())
     }
 }
 
@@ -138,7 +234,58 @@ impl<'a> ProceduralMemory<'a> {
     }
 
     /// Returns the name of the underlying collection.
+    #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name
+    }
+
+    /// Learns a new procedure/pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `procedure_id` - Unique identifier for this procedure
+    /// * `name` - Human-readable name
+    /// * `steps` - Sequence of action steps
+    /// * `embedding` - Optional vector representation
+    ///
+    /// # Note
+    ///
+    /// Full implementation in US-004.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn learn(
+        &self,
+        _procedure_id: u64,
+        _name: &str,
+        _steps: &[String],
+        _embedding: Option<&[f32]>,
+    ) -> Result<(), AgentMemoryError> {
+        // TODO(US-004): Implement procedural memory storage
+        Ok(())
+    }
+
+    /// Retrieves a procedure by similarity or name.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_embedding` - Optional vector to search for similar procedures
+    /// * `name_filter` - Optional name prefix filter
+    /// * `k` - Maximum number of results
+    ///
+    /// # Returns
+    ///
+    /// Vector of (procedure_id, name, steps) tuples.
+    ///
+    /// # Note
+    ///
+    /// Full implementation in US-004.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn recall(
+        &self,
+        _query_embedding: Option<&[f32]>,
+        _name_filter: Option<&str>,
+        _k: usize,
+    ) -> Result<Vec<(u64, String, Vec<String>)>, AgentMemoryError> {
+        // TODO(US-004): Implement procedural memory retrieval
+        Ok(Vec::new())
     }
 }
