@@ -125,121 +125,6 @@ RETURN p.name, p.email;
 
 ---
 
-### 🏆 VelesDB vs The Competition
-
-| Capability | 🐺 **VelesDB** | Neo4j | Qdrant | Milvus | Pinecone |
-|--------|---------------|-------|--------|--------|----------|
-| **Native Vector + Graph** | ✅ **Unified** | ❌ Vector plugin | ❌ No graph | ❌ No graph | ❌ No graph |
-| **Architecture** | **15MB Binary** | JVM Container | Container | Cluster | SaaS only |
-| **Search Latency** | **57µs** | ~10ms | ~30ms | ~20ms | ~50ms |
-| **VelesQL (SQL-like)** | ✅ | ❌ Cypher only | ❌ JSON DSL | ❌ SDK | ❌ SDK |
-| **WASM/Browser** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Mobile Native** | ✅ iOS/Android | ❌ | ❌ | ❌ | ❌ |
-| **Offline/Air-Gapped** | ✅ | ❌ | 🟡 | ❌ | ❌ |
-| **Privacy (Zero Cloud)** | ✅ | 🟡 | 🟡 | ❌ | ❌ |
-
-> **The key insight**: VelesDB is the ONLY solution combining **vector semantic search** + **knowledge graph traversal** in a single embedded binary. No glue code, no multiple systems.
-
-> *Recall: 92%+ Fast mode • 99%+ Balanced mode • 100% with Perfect mode
-
-### 📊 Benchmark: VelesDB Local Performance
-
-**10,000 vectors, 768D, Local Windows (Criterion)** — [Full details](docs/BENCHMARKS.md)
-
-| Operation | VelesDB (Core) | Details |
-|-----------|----------------|---------|
-| **SIMD Dot Product** | **66ns** | AVX-512/AVX2 native intrinsics (1536d) |
-| **HNSW Search** | **57µs** | p50 latency (10K, Cosine) |
-| **BM25 Text Search** | **33µs** | Adaptive PostingList |
-| **Hybrid Search** | **~60µs** | Vector + BM25 fusion |
-| **VelesQL Parse** | **554ns** | Zero-allocation |
-
-### 📈 Recall vs Latency Curves
-
-<details>
-<summary><b>🔬 Benchmark Configuration (January 9, 2026)</b></summary>
-
-**Hardware:**
-| Component | Specification |
-|-----------|---------------|
-| **CPU** | Intel Core i9-14900KF (24 cores, 32 threads) |
-| **RAM** | 64 GB DDR5-5600 |
-| **Storage** | NVMe SSD (Samsung 990 Pro) |
-| **OS** | Windows 11 Professional 24H2 |
-
-**Software:**
-| Component | Version |
-|-----------|---------|
-| **Rust** | 1.92.0 (stable) |
-| **VelesDB** | v1.1.2 |
-| **SIMD** | AVX-512 enabled |
-| **Criterion** | 0.5.1 |
-
-**Test Conditions:**
-- **No network**: All benchmarks run locally, no HTTP/REST overhead
-- **No Docker**: Native binary execution, no container overhead
-- **Warm cache**: 3 warmup iterations before measurement
-- **Single process**: No concurrent load during benchmarks
-- **Release build**: `cargo bench --release`
-
-**What is measured:**
-- **SIMD Distance**: `cargo bench --bench simd_benchmark` — raw vector operations
-- **HNSW Search**: `cargo bench --bench recall_benchmark` — 100 queries on 10K vectors
-- **BM25 Search**: `cargo bench --bench bm25_benchmark` — text search on 1K documents
-
-</details>
-
-#### Recall vs Latency (10K vectors / 128D)
-
-<p align="center">
-  <img src="docs/benchmarks/recall_latency_10k_128d.png" alt="Recall vs Latency 10K/128D" width="700"/>
-</p>
-
-| Mode | ef_search | Recall@10 | Latency P50 | Status |
-|------|-----------|-----------|-------------|--------|
-| Fast | 64 | 92.2% | 56µs | ✅ |
-| **Balanced** | 128 | **98.8%** | 85µs | ✅ Production |
-| Accurate | 256 | 100.0% | 112µs | ✅ |
-| **Perfect** | 2048 | **100.0%** | 163µs | ✅ Guaranteed |
-
-#### ef_search Scaling Behavior
-
-<p align="center">
-  <img src="docs/benchmarks/ef_scaling_10k_128d.png" alt="ef_search Scaling" width="700"/>
-</p>
-
-> 32x ef_search increase (64→2048) = ~3x latency increase.
-
-#### 🆕 Native HNSW Implementation (v1.0+)
-
-VelesDB now uses a **custom Native HNSW implementation** with zero external dependencies:
-
-| Feature | Details |
-|---------|---------|
-| **SIMD Distance** | AVX-512/AVX2/NEON native intrinsics |
-| **Adaptive PostingList** | FxHashSet → RoaringBitmap auto-promotion |
-| **Prefetch Hints** | Software cache prefetching for large vectors |
-| **Parallel Insert** | Lock-free sharded vector storage |
-
-> 📖 [Full architecture guide](docs/reference/NATIVE_HNSW.md)
-
-### Recall by Mode (Native Rust, Criterion benchmarks — v1.1.0)
-
-| Config | Mode | ef_search | Recall@10 | Latency P50 | v1.1.0 Gain |
-|--------|------|-----------|-----------|-------------|-------------|
-| **10K/128D** | Fast | 64 | **92.2%** | **36µs** | 🆕 |
-| **10K/128D** | Balanced | 128 | **98.8%** | **57µs** | 🚀 **-80%** |
-| **10K/128D** | Accurate | 256 | **100%** | **130µs** | 🚀 **-72%** |
-| **10K/128D** | Perfect | 2048 | **100%** | **200µs** | 🚀 **-92%** |
-
-> *Latency P50 = median search time per query. Native Rust (no HTTP overhead).*
-> 
-> **v1.1.0 EPIC-CORE-003**: LRU Cache, Trigram Index, Lock-free structures → **72-92% faster** across all modes.
-
-> 📊 **Run your own:** `cd benchmarks && docker-compose up -d && python benchmark_docker.py`
-
----
-
 <a name="-full-ecosystem"></a>
 ## 🌍 Full Ecosystem / Écosystème Complet
 
@@ -298,75 +183,6 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 - 📦 **Single Binary** — No dependencies, easy deployment
 - 🐳 **Docker Ready** — Run anywhere in seconds
 - 🔐 **On-Prem Ready** — Air-gapped, data sovereign, GDPR/HIPAA compliant
-
----
-
-## 🔐 On-Premises & Edge Deployment
-
-VelesDB supports **on-prem and edge deployments** with full data control:
-
-| Advantage | VelesDB | Cloud Vector DBs |
-|-----------|---------|------------------|
-| **Data Sovereignty** | ✅ 100% local | ❌ Data in cloud |
-| **Air-Gapped** | ✅ Single binary, no internet | ❌ Requires connectivity |
-| **Latency** | ✅ 57µs embedded | ❌ 50-100ms network |
-| **GDPR/HIPAA** | ✅ Full control | ⚠️ Shared responsibility |
-| **Audit Trail** | ✅ Local logs | ⚠️ Provider-dependent |
-
-**Applicable sectors:**
-- 🏥 Healthcare (HIPAA) — Patient embeddings on-site
-- 🏦 Finance (PCI-DSS) — Transaction vectors local
-- 🏭 Manufacturing — Air-gapped environments
-- 🤖 Robotics — Low-latency requirements
-- 📱 Edge/IoT — Single binary deployment
-
-```bash
-# Deploy on-prem in seconds
-./velesdb-server --data-dir /secure/vectors --bind 127.0.0.1:8080
-```
-
-### 📐 Distance Metrics
-
-VelesDB supports **5 distance metrics** for different use cases:
-
-| Metric | Best For | Use Case |
-|--------|----------|----------|
-| **Cosine** | Text embeddings | Semantic search, RAG pipelines |
-| **Euclidean** | Spatial data | Geolocation, image features |
-| **Dot Product** | MIPS | Recommendation systems |
-| **Hamming** | Binary vectors | Image hashing, fingerprints, duplicate detection |
-| **Jaccard** | Sets/Tags | Recommendations, document similarity |
-
-#### 🔥 Binary Embeddings with Hamming
-
-For **ultra-fast similarity search** on binary data:
-
-```bash
-# Create collection with Hamming metric
-curl -X POST http://localhost:8080/collections \
-  -d '{"name": "fingerprints", "dimension": 64, "metric": "hamming"}'
-
-# Insert binary vectors (values > 0.5 = 1, else = 0)
-curl -X POST http://localhost:8080/collections/fingerprints/points \
-  -d '{"points": [{"id": 1, "vector": [1, 0, 1, 0, ...]}]}'
-```
-
-**Hamming** compares 64 bits in a single CPU operation (XOR + popcount).
-
-#### 🏷️ Set Similarity with Jaccard
-
-For **recommendation systems** based on shared attributes:
-
-```bash
-# Create collection with Jaccard metric  
-curl -X POST http://localhost:8080/collections \
-  -d '{"name": "user_tags", "dimension": 100, "metric": "jaccard"}'
-
-# Insert user preferences as binary vectors
-# [1,1,0,0,...] = user likes categories 0,1 but not 2,3
-```
-
-**Jaccard** measures overlap between sets. Used for collaborative filtering ("users who liked X also liked Y").
 
 ---
 
@@ -1412,3 +1228,11 @@ Using VelesDB? Add the badge to your project!
 <p align="center">
   <sub>Don't forget to ⭐ star the repo if you find VelesDB useful!</sub>
 </p>
+
+### ☕ Buy Me A Coffee
+
+If you find this project useful, you can support its development by buying me a coffee!
+
+<a href="https://buymeacoffee.com/wiscale" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px; width: 217px;" >
+</a>
