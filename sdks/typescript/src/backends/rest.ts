@@ -121,6 +121,42 @@ export class RestBackend implements IVelesDBBackend {
     return { code, message };
   }
 
+  /**
+   * Parse node ID safely to handle u64 values above Number.MAX_SAFE_INTEGER.
+   * Returns bigint for large values, number for safe values.
+   */
+  private parseNodeId(value: unknown): bigint | number {
+    if (value === null || value === undefined) {
+      return 0;
+    }
+    
+    // If already a bigint, return as-is
+    if (typeof value === 'bigint') {
+      return value;
+    }
+    
+    // If string (JSON may serialize large numbers as strings), parse as BigInt
+    if (typeof value === 'string') {
+      const num = Number(value);
+      if (num > Number.MAX_SAFE_INTEGER) {
+        return BigInt(value);
+      }
+      return num;
+    }
+    
+    // If number, check if precision is at risk
+    if (typeof value === 'number') {
+      if (value > Number.MAX_SAFE_INTEGER) {
+        // Precision already lost, but return as-is (best effort)
+        // Note: This case indicates the API should return strings for large IDs
+        return value;
+      }
+      return value;
+    }
+    
+    return 0;
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -448,16 +484,14 @@ export class RestBackend implements IVelesDBBackend {
   ): Promise<QueryResponse> {
     this.ensureInitialized();
 
+    // Note: options (timeout_ms, stream) are client-side hints, not sent to server
+    // Server QueryRequest only accepts { query, params }
     const response = await this.request<QueryResponse>(
       'POST',
       `/collections/${encodeURIComponent(collection)}/query`,
       {
         query: queryString,
         params: params ?? {},
-        options: {
-          timeout_ms: options?.timeoutMs ?? 30000,
-          stream: options?.stream ?? false,
-        },
       }
     );
 
@@ -469,11 +503,13 @@ export class RestBackend implements IVelesDBBackend {
     }
 
     // Map snake_case API response to camelCase TypeScript types
+    // Server returns: { results, timing_ms, rows_returned }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawData = response.data as any;
     return {
       results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
-        nodeId: (r.node_id ?? r.nodeId) as number,
+        // Use BigInt for u64 IDs to prevent precision loss above 2^53-1
+        nodeId: this.parseNodeId(r.node_id ?? r.nodeId),
         vectorScore: (r.vector_score ?? r.vectorScore) as number | null,
         graphScore: (r.graph_score ?? r.graphScore) as number | null,
         fusedScore: (r.fused_score ?? r.fusedScore) as number,
@@ -481,9 +517,10 @@ export class RestBackend implements IVelesDBBackend {
         columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
       })),
       stats: {
-        executionTimeMs: rawData?.stats?.execution_time_ms ?? rawData?.stats?.executionTimeMs ?? 0,
-        strategy: rawData?.stats?.strategy ?? 'unknown',
-        scannedNodes: rawData?.stats?.scanned_nodes ?? rawData?.stats?.scannedNodes ?? 0,
+        // Map server response fields (timing_ms, rows_returned) to SDK stats
+        executionTimeMs: rawData?.timing_ms ?? rawData?.stats?.execution_time_ms ?? 0,
+        strategy: rawData?.stats?.strategy ?? 'query',
+        scannedNodes: rawData?.rows_returned ?? rawData?.stats?.scanned_nodes ?? 0,
       },
     };
   }

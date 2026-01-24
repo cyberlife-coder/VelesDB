@@ -1756,4 +1756,38 @@ mod tests {
             result
         );
     }
+
+    /// Regression test: delete_by_pk must clear row_expiry to prevent false-positive expirations
+    /// PR #91 Review Bug: deleted rows were still reported by expire_rows()
+    #[test]
+    fn test_delete_by_pk_clears_row_expiry() {
+        // Arrange: Create store with TTL row
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        store
+            .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
+            .unwrap();
+
+        // Set TTL with immediate expiry
+        store.set_ttl(1, 0).unwrap();
+
+        // Act: Delete the row BEFORE calling expire_rows
+        assert!(store.delete_by_pk(1), "delete_by_pk should succeed");
+
+        // Act: Now call expire_rows - should NOT report the deleted row
+        let result = store.expire_rows();
+
+        // Assert: No rows should be reported as expired (it was already deleted)
+        assert_eq!(
+            result.expired_count, 0,
+            "expire_rows should not report manually deleted rows"
+        );
+        assert!(
+            result.pks.is_empty(),
+            "expire_rows should return empty pks for manually deleted rows"
+        );
+    }
 }

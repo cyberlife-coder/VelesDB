@@ -267,6 +267,8 @@ impl ColumnStore {
     }
 
     /// Deletes a row by primary key value.
+    ///
+    /// Also clears any TTL metadata to prevent false-positive expirations.
     pub fn delete_by_pk(&mut self, pk: i64) -> bool {
         let Some(&row_idx) = self.primary_index.get(&pk) else {
             return false;
@@ -275,6 +277,7 @@ impl ColumnStore {
             return false;
         }
         self.deleted_rows.insert(row_idx);
+        self.row_expiry.remove(&row_idx);
         true
     }
 
