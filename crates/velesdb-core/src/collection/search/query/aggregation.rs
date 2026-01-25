@@ -83,8 +83,9 @@ impl PartialEq for GroupKey {
 
 impl Eq for GroupKey {}
 
-/// Maximum number of groups allowed (memory protection).
-const MAX_GROUPS: usize = 10000;
+/// Default maximum number of groups allowed (memory protection).
+/// Can be overridden via WITH(max_groups=N) or WITH(group_limit=N).
+const DEFAULT_MAX_GROUPS: usize = 10000;
 
 /// Threshold for switching to parallel aggregation.
 /// Below this, sequential is faster due to overhead.
@@ -351,6 +352,9 @@ impl Collection {
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
 
+        // EPIC-040 US-004: Extract max_groups from WITH clause if present
+        let max_groups = Self::extract_max_groups_limit(stmt.with_clause.as_ref());
+
         // Build filter from WHERE clause if present
         let filter = stmt
             .where_clause
@@ -395,10 +399,10 @@ impl Collection {
             // Extract group key from payload (optimized: no JSON serialization)
             let group_key = Self::extract_group_key_fast(payload.as_ref(), group_by_columns);
 
-            // Check group limit
-            if !groups.contains_key(&group_key) && groups.len() >= MAX_GROUPS {
+            // Check group limit (configurable via WITH clause)
+            if !groups.contains_key(&group_key) && groups.len() >= max_groups {
                 return Err(crate::error::Error::Config(format!(
-                    "Too many groups (limit: {MAX_GROUPS})"
+                    "Too many groups (limit: {max_groups})"
                 )));
             }
 
@@ -602,5 +606,27 @@ impl Collection {
             CompareOp::Lt => agg < thresh,
             CompareOp::Lte => agg <= thresh,
         }
+    }
+
+    /// Extract max_groups limit from WITH clause (EPIC-040 US-004).
+    /// Supports both `max_groups` and `group_limit` option names.
+    /// Returns DEFAULT_MAX_GROUPS if not specified.
+    fn extract_max_groups_limit(with_clause: Option<&crate::velesql::WithClause>) -> usize {
+        let Some(with) = with_clause else {
+            return DEFAULT_MAX_GROUPS;
+        };
+
+        for opt in &with.options {
+            if opt.key == "max_groups" || opt.key == "group_limit" {
+                // Try to parse value as integer
+                if let crate::velesql::WithValue::Integer(n) = &opt.value {
+                    // Ensure positive and reasonable limit
+                    let limit = (*n).max(1) as usize;
+                    return limit.min(1_000_000); // Hard cap at 1M groups
+                }
+            }
+        }
+
+        DEFAULT_MAX_GROUPS
     }
 }
