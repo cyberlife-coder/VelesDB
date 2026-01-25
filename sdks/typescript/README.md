@@ -283,6 +283,85 @@ const result = await db.traverseGraph('social', {
 const degree = await db.getNodeDegree('social', 100);
 ```
 
+## VelesQL v2.0 Queries (v1.4.0+)
+
+Execute advanced SQL-like queries with aggregation, joins, and set operations.
+
+### Aggregation with GROUP BY / HAVING
+
+```typescript
+// Group by with aggregates
+const result = await db.query('products', `
+  SELECT category, COUNT(*), AVG(price) 
+  FROM products 
+  GROUP BY category 
+  HAVING COUNT(*) > 5 AND AVG(price) > 50
+`);
+
+// Access results
+for (const row of result.results) {
+  console.log(row.payload.category, row.payload.count);
+}
+```
+
+### ORDER BY with similarity()
+
+```typescript
+// Order by semantic similarity
+const result = await db.query('docs', `
+  SELECT * FROM docs 
+  ORDER BY similarity(vector, $v) DESC 
+  LIMIT 10
+`, { v: queryVector });
+```
+
+### JOIN across collections
+
+```typescript
+// Cross-collection join
+const result = await db.query('orders', `
+  SELECT * FROM orders 
+  JOIN customers AS c ON orders.customer_id = c.id 
+  WHERE status = $status
+`, { status: 'active' });
+```
+
+### Set Operations (UNION / INTERSECT / EXCEPT)
+
+```typescript
+// Combine query results
+const result = await db.query('users', `
+  SELECT * FROM active_users 
+  UNION 
+  SELECT * FROM archived_users
+`);
+
+// Find common elements
+const result = await db.query('users', `
+  SELECT id FROM premium_users 
+  INTERSECT 
+  SELECT id FROM active_users
+`);
+```
+
+### Hybrid Search with USING FUSION
+
+```typescript
+// RRF fusion (default)
+const result = await db.query('docs', `
+  SELECT * FROM docs 
+  USING FUSION(strategy = 'rrf', k = 60) 
+  LIMIT 20
+`);
+
+// Weighted fusion
+const result = await db.query('docs', `
+  SELECT * FROM docs 
+  USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3) 
+  LIMIT 20
+`);
+```
+
 ## VelesQL Query Builder (v1.2.0+)
 
 Build type-safe VelesQL queries with the fluent builder API.
