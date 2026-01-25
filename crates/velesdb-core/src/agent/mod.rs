@@ -27,4 +27,7 @@ mod memory;
 #[cfg(test)]
 mod memory_tests;
 
-pub use memory::{AgentMemory, AgentMemoryError};
+pub use memory::{
+    AgentMemory, AgentMemoryError, EpisodicMemory, ProceduralMemory, ProcedureMatch,
+    SemanticMemory, DEFAULT_DIMENSION,
+};
