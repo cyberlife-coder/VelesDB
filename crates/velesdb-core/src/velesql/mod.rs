@@ -53,6 +53,8 @@ mod parser_tests;
 mod planner;
 
 #[cfg(test)]
+mod fusion_clause_tests;
+#[cfg(test)]
 mod similarity_tests;
 
 pub use aggregator::{AggregateResult, Aggregator};

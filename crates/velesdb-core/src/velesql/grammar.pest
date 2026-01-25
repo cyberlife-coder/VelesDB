@@ -8,11 +8,18 @@ COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 // Main entry point
 query = { SOI ~ select_stmt ~ ";"? ~ EOI }
 
-// SELECT statement with optional JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH clauses
+// SELECT statement with optional JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
 select_stmt = { 
     ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
-    join_clause* ~ where_clause? ~ group_by_clause? ~ having_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
+    join_clause* ~ where_clause? ~ group_by_clause? ~ having_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause? ~ using_fusion_clause?
 }
+
+// USING FUSION clause for hybrid search (EPIC-040 US-005)
+using_fusion_clause = { ^"USING" ~ ^"FUSION" ~ fusion_options? }
+fusion_options = { "(" ~ fusion_option_list ~ ")" }
+fusion_option_list = { fusion_option ~ ("," ~ fusion_option)* }
+fusion_option = { identifier ~ "=" ~ fusion_value }
+fusion_value = { string | float | integer }
 
 // GROUP BY clause (EPIC-017 US-003)
 group_by_clause = { ^"GROUP" ~ ^"BY" ~ group_by_list }

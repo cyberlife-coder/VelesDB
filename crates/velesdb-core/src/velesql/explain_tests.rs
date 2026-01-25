@@ -20,6 +20,7 @@ fn test_plan_from_simple_select() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -47,6 +48,7 @@ fn test_plan_from_vector_search() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -80,6 +82,7 @@ fn test_plan_with_filter() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -106,6 +109,7 @@ fn test_plan_to_tree_format() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -133,6 +137,7 @@ fn test_plan_to_json() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -158,6 +163,7 @@ fn test_plan_with_offset() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -192,6 +198,7 @@ fn test_filter_strategy_post_filter_default() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
@@ -232,6 +239,7 @@ fn test_plan_display_impl() {
         with_clause: None,
         group_by: None,
         having: None,
+        fusion_clause: None,
     };
 
     // Act
