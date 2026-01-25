@@ -364,42 +364,87 @@ impl Parser {
         pair.as_str().to_string()
     }
 
-    /// Parse JOIN clause (EPIC-031 US-004).
+    /// Parse JOIN clause (EPIC-031 US-004, extended EPIC-040 US-003).
     pub(crate) fn parse_join_clause(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<JoinClause, ParseError> {
+        let mut join_type = crate::velesql::JoinType::Inner; // Default
         let mut table = String::new();
         let mut alias = None;
         let mut condition = None;
+        let mut using_columns = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
+                Rule::join_type => {
+                    join_type = Self::parse_join_type(inner_pair.as_str());
+                }
                 Rule::identifier => {
                     table = inner_pair.as_str().to_string();
                 }
                 Rule::alias_clause => {
-                    // alias_clause contains AS identifier
                     for alias_inner in inner_pair.into_inner() {
                         if alias_inner.as_rule() == Rule::identifier {
                             alias = Some(alias_inner.as_str().to_string());
                         }
                     }
                 }
-                Rule::join_condition => {
-                    condition = Some(Self::parse_join_condition(inner_pair)?);
+                Rule::join_spec => {
+                    for spec_inner in inner_pair.into_inner() {
+                        match spec_inner.as_rule() {
+                            Rule::on_clause => {
+                                for on_inner in spec_inner.into_inner() {
+                                    if on_inner.as_rule() == Rule::join_condition {
+                                        condition = Some(Self::parse_join_condition(on_inner)?);
+                                    }
+                                }
+                            }
+                            Rule::using_clause => {
+                                let cols: Vec<String> = spec_inner
+                                    .into_inner()
+                                    .filter(|p| p.as_rule() == Rule::identifier)
+                                    .map(|p| p.as_str().to_string())
+                                    .collect();
+                                using_columns = Some(cols);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 _ => {}
             }
         }
 
-        let condition = condition
-            .ok_or_else(|| ParseError::syntax(0, "", "JOIN clause missing ON condition"))?;
+        // Either condition or using_columns must be present
+        if condition.is_none() && using_columns.is_none() {
+            return Err(ParseError::syntax(
+                0,
+                "",
+                "JOIN clause requires ON or USING",
+            ));
+        }
 
         Ok(JoinClause {
+            join_type,
             table,
             alias,
             condition,
+            using_columns,
         })
+    }
+
+    /// Parse JOIN type (LEFT, RIGHT, FULL, INNER).
+    fn parse_join_type(text: &str) -> crate::velesql::JoinType {
+        let text = text.to_uppercase();
+        if text.starts_with("LEFT") {
+            crate::velesql::JoinType::Left
+        } else if text.starts_with("RIGHT") {
+            crate::velesql::JoinType::Right
+        } else if text.starts_with("FULL") {
+            crate::velesql::JoinType::Full
+        } else {
+            crate::velesql::JoinType::Inner
+        }
     }
 
     /// Parse JOIN condition (table.column = var.property).

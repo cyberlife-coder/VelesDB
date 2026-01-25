@@ -46,6 +46,8 @@ mod groupby_tests;
 #[cfg(test)]
 mod having_tests;
 #[cfg(test)]
+mod join_extended_tests;
+#[cfg(test)]
 mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;

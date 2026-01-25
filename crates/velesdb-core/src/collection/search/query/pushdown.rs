@@ -374,9 +374,10 @@ mod tests {
     #[test]
     fn test_extract_join_tables() {
         let joins = vec![JoinClause {
+            join_type: crate::velesql::JoinType::Inner,
             table: "prices".to_string(),
             alias: Some("pr".to_string()),
-            condition: JoinCondition {
+            condition: Some(JoinCondition {
                 left: ColumnRef {
                     table: Some("prices".to_string()),
                     column: "trip_id".to_string(),
@@ -385,7 +386,8 @@ mod tests {
                     table: Some("t".to_string()),
                     column: "id".to_string(),
                 },
-            },
+            }),
+            using_columns: None,
         }];
 
         let tables = extract_join_tables(&joins);

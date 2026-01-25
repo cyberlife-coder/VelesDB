@@ -51,12 +51,30 @@ pub struct SelectStatement {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JoinClause {
+    /// Type of join (INNER, LEFT, RIGHT, FULL).
+    pub join_type: JoinType,
     /// Table/store name to join.
     pub table: String,
     /// Optional alias for the joined table.
     pub alias: Option<String>,
-    /// Join condition (ON clause).
-    pub condition: JoinCondition,
+    /// Join condition (ON clause) - None if USING is used.
+    pub condition: Option<JoinCondition>,
+    /// USING clause columns - alternative to ON condition.
+    pub using_columns: Option<Vec<String>>,
+}
+
+/// Type of SQL JOIN operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum JoinType {
+    /// INNER JOIN - only matching rows from both tables.
+    #[default]
+    Inner,
+    /// LEFT JOIN - all rows from left table, matching from right.
+    Left,
+    /// RIGHT JOIN - all rows from right table, matching from left.
+    Right,
+    /// FULL JOIN - all rows from both tables.
+    Full,
 }
 
 /// Join condition specifying how to link tables.
