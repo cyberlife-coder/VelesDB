@@ -61,6 +61,8 @@ mod aggregation_params_tests;
 #[cfg(test)]
 mod fusion_clause_tests;
 #[cfg(test)]
+mod pr_review_bugfix_tests;
+#[cfg(test)]
 mod set_operations_tests;
 #[cfg(test)]
 mod similarity_tests;

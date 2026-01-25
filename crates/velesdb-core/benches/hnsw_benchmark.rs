@@ -4,7 +4,10 @@
 
 #![allow(clippy::cast_precision_loss)]
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{
+    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+};
+use std::time::Duration;
 use velesdb_core::{Collection, DistanceMetric, HnswIndex, Point, VectorIndex};
 
 /// Generates a random-ish vector for benchmarking.
@@ -260,6 +263,10 @@ fn bench_distance_metrics(c: &mut Criterion) {
 fn bench_recall_validation(c: &mut Criterion) {
     let mut group = c.benchmark_group("recall_validation");
     group.sample_size(10); // Fewer samples since we're measuring recall, not time
+                           // Use flat sampling for slow high-dimension benchmarks to avoid warnings
+    group.sampling_mode(SamplingMode::Flat);
+    // Increase measurement time for high dimensions (1536D, 3072D take longer)
+    group.measurement_time(Duration::from_secs(15));
 
     for &dim in &[128_usize, 384, 768, 1536, 3072] {
         let n_vectors = 5000_u64;

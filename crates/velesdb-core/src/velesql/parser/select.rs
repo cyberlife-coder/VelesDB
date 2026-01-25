@@ -355,6 +355,17 @@ impl Parser {
             agg_type.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate type"))?;
         let arg = arg.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate argument"))?;
 
+        // BUG-10 FIX: Only COUNT(*) is valid - SUM/AVG/MIN/MAX require a column name
+        if matches!(arg, AggregateArg::Wildcard) && !matches!(agg_type, AggregateType::Count) {
+            return Err(ParseError::syntax(
+                0,
+                format!("{agg_type:?}(*)"),
+                format!(
+                    "{agg_type:?}(*) is invalid - only COUNT(*) accepts *. Use {agg_type:?}(column_name) instead"
+                ),
+            ));
+        }
+
         Ok((agg_type, arg))
     }
 
@@ -579,8 +590,8 @@ impl Parser {
                         Rule::having_term => {
                             conditions.push(Self::parse_having_term(term_pair)?);
                         }
-                        _ => {
-                            // Check for AND/OR keywords
+                        Rule::having_logical_op => {
+                            // BUG-6 FIX: Now properly capture AND/OR from named rule
                             let text = term_pair.as_str().to_uppercase();
                             if text == "AND" {
                                 operators.push(crate::velesql::LogicalOp::And);
@@ -588,6 +599,7 @@ impl Parser {
                                 operators.push(crate::velesql::LogicalOp::Or);
                             }
                         }
+                        _ => {}
                     }
                 }
             }
