@@ -502,7 +502,91 @@ impl Collection {
             results.push(serde_json::Value::Object(row));
         }
 
+        // BUG-3 FIX: Apply ORDER BY to grouped aggregation results
+        if let Some(ref order_by) = stmt.order_by {
+            Self::sort_aggregation_results(&mut results, order_by);
+        }
+
         Ok(serde_json::Value::Array(results))
+    }
+
+    /// BUG-3 FIX: Sort aggregation results by ORDER BY clause.
+    fn sort_aggregation_results(
+        results: &mut [serde_json::Value],
+        order_by: &[crate::velesql::SelectOrderBy],
+    ) {
+        use crate::velesql::OrderByExpr;
+
+        results.sort_by(|a, b| {
+            for ob in order_by {
+                let ordering = match &ob.expr {
+                    OrderByExpr::Field(field) => {
+                        let val_a = a.get(field);
+                        let val_b = b.get(field);
+                        Self::compare_json_values(val_a, val_b)
+                    }
+                    OrderByExpr::Aggregate(agg) => {
+                        // Get the key name for this aggregate
+                        let key = if let Some(ref alias) = agg.alias {
+                            alias.clone()
+                        } else {
+                            match &agg.argument {
+                                crate::velesql::AggregateArg::Wildcard => "count".to_string(),
+                                crate::velesql::AggregateArg::Column(col) => {
+                                    let prefix = match agg.function_type {
+                                        crate::velesql::AggregateType::Count => "count",
+                                        crate::velesql::AggregateType::Sum => "sum",
+                                        crate::velesql::AggregateType::Avg => "avg",
+                                        crate::velesql::AggregateType::Min => "min",
+                                        crate::velesql::AggregateType::Max => "max",
+                                    };
+                                    format!("{prefix}_{col}")
+                                }
+                            }
+                        };
+                        let val_a = a.get(&key);
+                        let val_b = b.get(&key);
+                        Self::compare_json_values(val_a, val_b)
+                    }
+                    OrderByExpr::Similarity(_) => std::cmp::Ordering::Equal, // Not applicable for aggregations
+                };
+
+                let ordering = if ob.descending {
+                    ordering.reverse()
+                } else {
+                    ordering
+                };
+
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+    }
+
+    /// Compare two JSON values for sorting.
+    fn compare_json_values(
+        a: Option<&serde_json::Value>,
+        b: Option<&serde_json::Value>,
+    ) -> std::cmp::Ordering {
+        match (a, b) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(va), Some(vb)) => {
+                // Numeric comparison
+                if let (Some(na), Some(nb)) = (va.as_f64(), vb.as_f64()) {
+                    return na.total_cmp(&nb);
+                }
+                // String comparison
+                if let (Some(sa), Some(sb)) = (va.as_str(), vb.as_str()) {
+                    return sa.cmp(sb);
+                }
+                // Fallback: compare as strings
+                va.to_string().cmp(&vb.to_string())
+            }
+        }
     }
 
     /// Extract group key from payload with pre-computed hash (optimized).

@@ -4,13 +4,16 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 
 use crate::types::{
-    ErrorResponse, QueryErrorDetail, QueryErrorResponse, QueryRequest, QueryResponse,
-    SearchResultResponse,
+    AggregationResponse, ErrorResponse, QueryErrorDetail, QueryErrorResponse, QueryRequest,
+    QueryResponse, SearchResultResponse,
 };
 use crate::AppState;
-use velesdb_core::velesql;
+use velesdb_core::velesql::{self, SelectColumns};
 
 /// Execute a VelesQL query.
+///
+/// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
+/// and routes them to execute_aggregate for proper handling.
 #[utoipa::path(
     post,
     path = "/query",
@@ -62,6 +65,33 @@ pub async fn query(
         }
     };
 
+    // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
+    let is_aggregation = matches!(
+        &select.columns,
+        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
+    ) || select.group_by.is_some();
+
+    if is_aggregation {
+        // Route to aggregation execution
+        let result = match collection.execute_aggregate(&parsed, &req.params) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+        };
+
+        let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+        return Json(AggregationResponse { result, timing_ms }).into_response();
+    }
+
+    // Standard query execution
     let results = match collection.execute_query(&parsed, &req.params) {
         Ok(r) => r,
         Err(e) => {
