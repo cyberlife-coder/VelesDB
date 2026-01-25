@@ -19,6 +19,11 @@
 //! println!("{}", plan.to_tree());
 //! ```
 
+#[cfg(test)]
+mod aggregation_executor_tests;
+#[cfg(test)]
+mod aggregation_tests;
+mod aggregator;
 mod ast;
 #[cfg(test)]
 mod ast_tests;
@@ -41,6 +46,7 @@ mod planner;
 #[cfg(test)]
 mod similarity_tests;
 
+pub use aggregator::{AggregateResult, Aggregator};
 pub use ast::*;
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
