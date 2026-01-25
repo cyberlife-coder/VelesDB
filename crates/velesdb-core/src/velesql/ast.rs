@@ -93,6 +93,8 @@ pub enum OrderByExpr {
     Field(String),
     /// Similarity function (e.g., `similarity(embedding, $v)`).
     Similarity(SimilarityOrderBy),
+    /// Aggregate function (e.g., `COUNT(*)`, `SUM(price)`).
+    Aggregate(AggregateFunction),
 }
 
 /// Similarity expression for ORDER BY.
