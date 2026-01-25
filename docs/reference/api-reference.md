@@ -438,6 +438,176 @@ Execute a VelesQL query.
 | Full-text | `field MATCH 'query'` | `content MATCH 'rust'` |
 | Limit | `LIMIT n` | `LIMIT 10` |
 
+### VelesQL v2.0 Features
+
+| Feature | Syntax | Example |
+|---------|--------|---------|
+| GROUP BY | `GROUP BY col1, col2` | `GROUP BY category` |
+| HAVING | `HAVING agg > val` | `HAVING COUNT(*) > 5` |
+| HAVING AND/OR | `HAVING a AND b` | `HAVING COUNT(*) > 5 AND AVG(price) > 50` |
+| Aggregates | `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` | `SELECT COUNT(*), AVG(price)` |
+| ORDER BY multi | `ORDER BY col1, col2` | `ORDER BY category, price DESC` |
+| ORDER BY similarity | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(vector, $query) DESC` |
+| JOIN | `JOIN table ON condition` | `JOIN prices ON prices.id = p.id` |
+| LEFT/RIGHT/FULL JOIN | `LEFT JOIN table ON ...` | `LEFT JOIN customers ON ...` |
+| JOIN USING | `JOIN table USING (col)` | `JOIN customers USING (customer_id)` |
+| UNION | `query1 UNION query2` | `SELECT * FROM a UNION SELECT * FROM b` |
+| INTERSECT | `query1 INTERSECT query2` | Set intersection |
+| EXCEPT | `query1 EXCEPT query2` | Set difference |
+| USING FUSION | `USING FUSION(strategy)` | `USING FUSION(strategy='rrf', k=60)` |
+| WITH options | `WITH (max_groups=N)` | `WITH (max_groups=100)` |
+
+**VelesQL v2.0 Examples:**
+
+```sql
+-- Analytics with aggregation
+SELECT category, COUNT(*), AVG(price) 
+FROM products 
+GROUP BY category 
+HAVING COUNT(*) > 5 AND AVG(price) > 50
+
+-- Multi-column ORDER BY with similarity
+SELECT * FROM docs 
+WHERE vector NEAR $query 
+ORDER BY similarity(vector, $query) DESC, created_at DESC 
+LIMIT 20
+
+-- Cross-store JOIN
+SELECT p.name, pr.amount 
+FROM products AS p 
+JOIN prices AS pr ON pr.product_id = p.id 
+WHERE pr.amount < 100
+
+-- Hybrid search with fusion
+SELECT * FROM docs 
+USING FUSION(strategy='rrf', k=60) 
+LIMIT 20
+
+-- Set operations
+SELECT * FROM active_users 
+UNION 
+SELECT * FROM archived_users
+```
+
+---
+
+## EXPLAIN (Query Plan)
+
+### POST /query with EXPLAIN
+
+Analyze query execution plan without running the query.
+
+**Request Body:**
+```json
+{
+  "query": "EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": {"v": [0.1, 0.2, 0.3]}
+}
+```
+
+**Response:**
+```json
+{
+  "plan": {
+    "type": "VectorSearch",
+    "collection": "docs",
+    "metric": "cosine",
+    "limit": 10,
+    "estimated_cost": 0.05,
+    "children": []
+  },
+  "timing_ms": 0.12
+}
+```
+
+**Plan Node Types:**
+- `TableScan` - Full collection scan
+- `VectorSearch` - HNSW approximate nearest neighbor
+- `IndexLookup` - Property index lookup
+- `Filter` - Post-search filtering
+- `Limit` - Result limiting
+- `Offset` - Result offsetting
+
+---
+
+## Graph API
+
+### POST /collections/:name/graph/nodes
+
+Add nodes to the knowledge graph.
+
+**Request Body:**
+```json
+{
+  "nodes": [
+    {"id": "doc1", "label": "Document", "properties": {"title": "AI Guide"}}
+  ]
+}
+```
+
+### POST /collections/:name/graph/edges
+
+Add edges between nodes.
+
+**Request Body:**
+```json
+{
+  "edges": [
+    {"source": "doc1", "target": "author1", "label": "AUTHORED_BY", "properties": {}}
+  ]
+}
+```
+
+### POST /collections/:name/graph/traverse
+
+Traverse the graph using BFS or DFS.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| start_node | string | Yes | Starting node ID |
+| direction | string | No | `outgoing`, `incoming`, or `both` (default) |
+| max_depth | integer | No | Maximum traversal depth (default: 3) |
+| edge_filter | string | No | Filter edges by label |
+
+**Example:**
+```json
+{
+  "start_node": "doc1",
+  "direction": "outgoing",
+  "max_depth": 2,
+  "edge_filter": "AUTHORED_BY"
+}
+```
+
+**Response:**
+```json
+{
+  "nodes": [
+    {"id": "doc1", "label": "Document", "depth": 0},
+    {"id": "author1", "label": "Person", "depth": 1}
+  ],
+  "edges": [
+    {"source": "doc1", "target": "author1", "label": "AUTHORED_BY"}
+  ]
+}
+```
+
+### GET /collections/:name/graph/nodes/:id/degree
+
+Get node degree (in/out edge counts).
+
+**Response:**
+```json
+{
+  "node_id": "doc1",
+  "in_degree": 5,
+  "out_degree": 3,
+  "total_degree": 8
+}
+```
+
 ---
 
 ## Python API
