@@ -480,7 +480,7 @@ export class RestBackend implements IVelesDBBackend {
     collection: string,
     queryString: string,
     params?: Record<string, unknown>,
-    options?: QueryOptions
+    _options?: QueryOptions
   ): Promise<QueryResponse> {
     this.ensureInitialized();
 
