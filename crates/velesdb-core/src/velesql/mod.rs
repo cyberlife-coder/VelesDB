@@ -57,6 +57,8 @@ mod parser_tests;
 mod planner;
 
 #[cfg(test)]
+mod aggregation_params_tests;
+#[cfg(test)]
 mod fusion_clause_tests;
 #[cfg(test)]
 mod set_operations_tests;
