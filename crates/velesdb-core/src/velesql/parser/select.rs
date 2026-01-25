@@ -267,8 +267,9 @@ impl Parser {
             ));
         }
 
-        let right = refs.pop().unwrap();
-        let left = refs.pop().unwrap();
+        // SAFETY: refs.len() == 2 is validated above, pop() cannot fail
+        let right = refs.pop().expect("right ref validated by len check");
+        let left = refs.pop().expect("left ref validated by len check");
 
         Ok(JoinCondition { left, right })
     }
