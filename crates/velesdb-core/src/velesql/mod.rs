@@ -45,6 +45,8 @@ mod graph_pattern_tests;
 mod groupby_tests;
 #[cfg(test)]
 mod having_tests;
+#[cfg(test)]
+mod parallel_aggregation_tests;
 mod parser;
 #[cfg(test)]
 mod parser_tests;

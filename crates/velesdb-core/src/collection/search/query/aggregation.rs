@@ -3,6 +3,7 @@
 //! Implements streaming aggregation with O(1) memory complexity.
 //! Supports GROUP BY for grouped aggregations (US-003).
 //! Supports HAVING for filtering groups (US-006).
+//! Supports parallel aggregation with rayon (EPIC-018 US-001).
 
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -11,10 +12,18 @@ use crate::velesql::{
     AggregateArg, AggregateFunction, AggregateResult, AggregateType, Aggregator, CompareOp,
     HavingClause, Query, SelectColumns, Value,
 };
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// Maximum number of groups allowed (memory protection).
 const MAX_GROUPS: usize = 10000;
+
+/// Threshold for switching to parallel aggregation.
+/// Below this, sequential is faster due to overhead.
+const PARALLEL_THRESHOLD: usize = 10_000;
+
+/// Chunk size for parallel processing.
+const CHUNK_SIZE: usize = 1000;
 
 impl Collection {
     /// Execute an aggregation query and return results as JSON.
@@ -84,42 +93,94 @@ impl Collection {
             .iter()
             .any(|agg| matches!(agg.argument, AggregateArg::Wildcard));
 
-        // Stream through all points
+        // Collect all IDs for parallel processing decision
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
-        let ids = vector_storage.ids();
+        let ids: Vec<u64> = vector_storage.ids();
+        let total_count = ids.len();
 
-        for id in ids {
-            let payload = payload_storage.retrieve(id).ok().flatten();
+        // Use parallel aggregation for large datasets
+        let agg_result = if total_count >= PARALLEL_THRESHOLD {
+            // PARALLEL: Split into chunks, aggregate each, merge results
+            let columns_vec: Vec<String> = columns_to_aggregate
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
 
-            // Apply filter if present
-            if let Some(ref f) = filter {
-                let matches = match payload {
-                    Some(ref p) => f.matches(p),
-                    None => f.matches(&serde_json::Value::Null),
-                };
-                if !matches {
-                    continue;
+            let partial_aggregators: Vec<Aggregator> = ids
+                .par_chunks(CHUNK_SIZE)
+                .map(|chunk| {
+                    let mut chunk_agg = Aggregator::new();
+                    for &id in chunk {
+                        let payload = payload_storage.retrieve(id).ok().flatten();
+
+                        // Apply filter if present
+                        if let Some(ref f) = filter {
+                            let matches = match payload {
+                                Some(ref p) => f.matches(p),
+                                None => f.matches(&serde_json::Value::Null),
+                            };
+                            if !matches {
+                                continue;
+                            }
+                        }
+
+                        // Process COUNT(*)
+                        if has_count_star {
+                            chunk_agg.process_count();
+                        }
+
+                        // Process column aggregations
+                        if let Some(ref p) = payload {
+                            for col in &columns_vec {
+                                if let Some(value) = Self::get_nested_value(p, col) {
+                                    chunk_agg.process_value(col, value);
+                                }
+                            }
+                        }
+                    }
+                    chunk_agg
+                })
+                .collect();
+
+            // Merge all partial results
+            let mut final_agg = Aggregator::new();
+            for partial in partial_aggregators {
+                final_agg.merge(partial);
+            }
+            final_agg.finalize()
+        } else {
+            // SEQUENTIAL: Original single-pass for small datasets
+            for id in ids {
+                let payload = payload_storage.retrieve(id).ok().flatten();
+
+                // Apply filter if present
+                if let Some(ref f) = filter {
+                    let matches = match payload {
+                        Some(ref p) => f.matches(p),
+                        None => f.matches(&serde_json::Value::Null),
+                    };
+                    if !matches {
+                        continue;
+                    }
                 }
-            }
 
-            // Process COUNT(*)
-            if has_count_star {
-                aggregator.process_count();
-            }
+                // Process COUNT(*)
+                if has_count_star {
+                    aggregator.process_count();
+                }
 
-            // Process column aggregations
-            if let Some(ref p) = payload {
-                for col in &columns_to_aggregate {
-                    if let Some(value) = Self::get_nested_value(p, col) {
-                        aggregator.process_value(col, value);
+                // Process column aggregations
+                if let Some(ref p) = payload {
+                    for col in &columns_to_aggregate {
+                        if let Some(value) = Self::get_nested_value(p, col) {
+                            aggregator.process_value(col, value);
+                        }
                     }
                 }
             }
-        }
-
-        // Finalize and build result
-        let agg_result = aggregator.finalize();
+            aggregator.finalize()
+        };
         let mut result = serde_json::Map::new();
 
         // Build result based on requested aggregations

@@ -116,6 +116,41 @@ impl Aggregator {
         }
     }
 
+    /// Merge another aggregator into this one (for parallel aggregation).
+    ///
+    /// Combines counts, sums, mins, maxs from the other aggregator.
+    /// Used in map-reduce pattern for parallel processing.
+    pub fn merge(&mut self, other: Self) {
+        // Merge COUNT(*)
+        self.count += other.count;
+
+        // Merge sums
+        for (col, sum) in other.sums {
+            *self.sums.entry(col).or_insert(0.0) += sum;
+        }
+
+        // Merge counts (for AVG calculation)
+        for (col, count) in other.counts {
+            *self.counts.entry(col).or_insert(0) += count;
+        }
+
+        // Merge mins (take minimum of both)
+        for (col, min) in other.mins {
+            let current = self.mins.entry(col).or_insert(min);
+            if min < *current {
+                *current = min;
+            }
+        }
+
+        // Merge maxs (take maximum of both)
+        for (col, max) in other.maxs {
+            let current = self.maxs.entry(col).or_insert(max);
+            if max > *current {
+                *current = max;
+            }
+        }
+    }
+
     /// Finalize aggregation and return results.
     #[must_use]
     pub fn finalize(self) -> AggregateResult {
