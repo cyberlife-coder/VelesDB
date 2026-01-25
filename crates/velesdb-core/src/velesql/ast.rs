@@ -595,11 +595,24 @@ pub struct GroupByClause {
     pub columns: Vec<String>,
 }
 
+/// Logical operator for combining HAVING conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogicalOp {
+    /// Logical AND - all conditions must be true.
+    And,
+    /// Logical OR - at least one condition must be true.
+    Or,
+}
+
 /// HAVING clause for filtering aggregation groups.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct HavingClause {
     /// Conditions to filter groups (aggregate comparisons).
     pub conditions: Vec<HavingCondition>,
+    /// Logical operators between conditions (len = conditions.len() - 1).
+    /// Empty means all AND (backward compatible).
+    #[serde(default)]
+    pub operators: Vec<LogicalOp>,
 }
 
 /// A single HAVING condition.

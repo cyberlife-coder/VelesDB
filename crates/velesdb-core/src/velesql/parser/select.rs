@@ -468,18 +468,33 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<HavingClause, ParseError> {
         let mut conditions = Vec::new();
+        let mut operators = Vec::new();
 
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::having_condition {
                 for term_pair in inner_pair.into_inner() {
-                    if term_pair.as_rule() == Rule::having_term {
-                        conditions.push(Self::parse_having_term(term_pair)?);
+                    match term_pair.as_rule() {
+                        Rule::having_term => {
+                            conditions.push(Self::parse_having_term(term_pair)?);
+                        }
+                        _ => {
+                            // Check for AND/OR keywords
+                            let text = term_pair.as_str().to_uppercase();
+                            if text == "AND" {
+                                operators.push(crate::velesql::LogicalOp::And);
+                            } else if text == "OR" {
+                                operators.push(crate::velesql::LogicalOp::Or);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        Ok(HavingClause { conditions })
+        Ok(HavingClause {
+            conditions,
+            operators,
+        })
     }
 
     /// Parse a single HAVING term (aggregate op value).

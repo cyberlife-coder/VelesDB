@@ -131,12 +131,52 @@ fn bench_aggregation_groupby(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark batch vs sequential processing directly on Aggregator
+fn bench_batch_vs_sequential(c: &mut Criterion) {
+    use velesdb_core::velesql::Aggregator;
+
+    let mut group = c.benchmark_group("batch_vs_sequential");
+    group.sample_size(20);
+
+    for size in [10_000, 50_000, 100_000, 500_000] {
+        // Pre-generate values
+        let values: Vec<f64> = (0..size).map(|i| f64::from(i) * 0.01 + 1.0).collect();
+        let json_values: Vec<serde_json::Value> = values.iter().map(|v| json!(v)).collect();
+
+        // Benchmark sequential (value by value)
+        group.bench_with_input(BenchmarkId::new("sequential", size), &size, |b, _| {
+            b.iter(|| {
+                let mut agg = Aggregator::new();
+                for v in &json_values {
+                    agg.process_value("price", v);
+                }
+                black_box(agg.finalize())
+            });
+        });
+
+        // Benchmark batch processing
+        group.bench_with_input(BenchmarkId::new("batch", size), &size, |b, _| {
+            b.iter(|| {
+                let mut agg = Aggregator::new();
+                // Process in batches of 1024
+                for chunk in values.chunks(1024) {
+                    agg.process_batch("price", chunk);
+                }
+                black_box(agg.finalize())
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_aggregation_count_star,
     bench_aggregation_sum_avg,
     bench_aggregation_min_max,
-    bench_aggregation_groupby
+    bench_aggregation_groupby,
+    bench_batch_vs_sequential
 );
 
 criterion_main!(benches);

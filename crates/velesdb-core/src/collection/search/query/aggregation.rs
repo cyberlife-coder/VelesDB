@@ -517,12 +517,40 @@ impl Collection {
     }
 
     /// Evaluate HAVING clause against aggregation result.
+    /// Supports both AND and OR logical operators between conditions.
     fn evaluate_having(having: &HavingClause, agg_result: &AggregateResult) -> bool {
-        // All conditions must match (AND semantics)
-        having.conditions.iter().all(|cond| {
+        if having.conditions.is_empty() {
+            return true;
+        }
+
+        // Evaluate first condition
+        let mut result = {
+            let cond = &having.conditions[0];
             let agg_value = Self::get_aggregate_value(&cond.aggregate, agg_result);
             Self::compare_values(agg_value, cond.operator, &cond.value)
-        })
+        };
+
+        // Apply remaining conditions with their operators
+        for (i, cond) in having.conditions.iter().enumerate().skip(1) {
+            let cond_result = {
+                let agg_value = Self::get_aggregate_value(&cond.aggregate, agg_result);
+                Self::compare_values(agg_value, cond.operator, &cond.value)
+            };
+
+            // Get operator (default to AND if not specified - backward compatible)
+            let op = having
+                .operators
+                .get(i - 1)
+                .copied()
+                .unwrap_or(crate::velesql::LogicalOp::And);
+
+            match op {
+                crate::velesql::LogicalOp::And => result = result && cond_result,
+                crate::velesql::LogicalOp::Or => result = result || cond_result,
+            }
+        }
+
+        result
     }
 
     /// Get aggregate value from result based on function type.
