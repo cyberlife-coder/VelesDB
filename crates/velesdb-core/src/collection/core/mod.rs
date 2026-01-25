@@ -7,6 +7,8 @@
 
 mod crud;
 mod index_management;
+#[cfg(test)]
+mod index_management_tests;
 mod lifecycle;
 
 pub use index_management::IndexInfo;

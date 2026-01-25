@@ -32,7 +32,9 @@ group_by_list = { identifier ~ ("," ~ identifier)* }
 // HAVING clause for filtering groups (EPIC-017 US-006)
 // Supports both AND and OR logical operators
 having_clause = { ^"HAVING" ~ having_condition }
-having_condition = { having_term ~ ((^"AND" | ^"OR") ~ having_term)* }
+having_condition = { having_term ~ (having_logical_op ~ having_term)* }
+// BUG-6 FIX: Named rule so pest emits tokens for AND/OR operators
+having_logical_op = { ^"AND" | ^"OR" }
 having_term = { aggregate_function ~ compare_op ~ value }
 
 // JOIN clause for cross-store queries (EPIC-031 US-004, extended EPIC-040 US-003)
