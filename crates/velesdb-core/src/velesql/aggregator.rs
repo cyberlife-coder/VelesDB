@@ -11,6 +11,8 @@ use std::collections::HashMap;
 pub struct AggregateResult {
     /// COUNT(*) result.
     pub count: u64,
+    /// COUNT(column) results by column name (non-null value counts).
+    pub counts: HashMap<String, u64>,
     /// SUM results by column name.
     pub sums: HashMap<String, f64>,
     /// AVG results by column name (computed from sum/count).
@@ -131,6 +133,7 @@ impl Aggregator {
 
         AggregateResult {
             count: self.count,
+            counts: self.counts,
             sums: self.sums,
             avgs,
             mins: self.mins,
