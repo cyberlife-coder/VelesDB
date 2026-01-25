@@ -57,6 +57,24 @@ mod vector_ops;
 pub use distance::DistanceMetric;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
 
+/// Query result for multi-model queries (EPIC-031 US-009).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResult {
+    /// Node/point ID
+    pub node_id: u64,
+    /// Vector similarity score (if applicable)
+    pub vector_score: Option<f32>,
+    /// Graph relevance score (if applicable)
+    pub graph_score: Option<f32>,
+    /// Combined fused score
+    pub fused_score: f32,
+    /// Variable bindings/payload
+    pub bindings: serde_json::Value,
+    /// Column data from JOIN (if applicable)
+    pub column_data: Option<serde_json::Value>,
+}
+
 /// Storage mode for vector quantization.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -324,6 +342,69 @@ impl VectorStore {
             k,
             vector_weight,
         )
+    }
+
+    /// VelesQL-style query returning multi-model results (EPIC-031 US-009).
+    ///
+    /// Returns results in `HybridResult` format with `node_id`, `vector_score`,
+    /// `graph_score`, `fused_score`, `bindings`, and `column_data`.
+    ///
+    /// # Arguments
+    /// * `query_vector` - Query vector for similarity search
+    /// * `k` - Number of results to return
+    ///
+    /// # Returns
+    /// Array of `{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}`
+    #[wasm_bindgen]
+    pub fn query(&self, query_vector: &[f32], k: usize) -> Result<JsValue, JsValue> {
+        store_search::validate_dimension(query_vector.len(), self.dimension)?;
+
+        // Use compute_scores to get (id, score) pairs
+        let mut scores = vector_ops::compute_scores(
+            query_vector,
+            &self.ids,
+            &self.data,
+            &self.data_sq8,
+            &self.data_binary,
+            &self.sq8_mins,
+            &self.sq8_scales,
+            self.dimension,
+            self.metric,
+            self.storage_mode,
+        );
+
+        // Sort by score
+        vector_ops::sort_results(&mut scores, self.metric.higher_is_better());
+        scores.truncate(k);
+
+        // Build id->index map for payload lookup
+        let id_to_idx: std::collections::HashMap<u64, usize> = self
+            .ids
+            .iter()
+            .enumerate()
+            .map(|(idx, &id)| (id, idx))
+            .collect();
+
+        // Convert to HybridResult format
+        let hybrid_results: Vec<QueryResult> = scores
+            .into_iter()
+            .map(|(id, score)| {
+                let payload = id_to_idx
+                    .get(&id)
+                    .and_then(|&idx| self.payloads.get(idx).cloned().flatten());
+                QueryResult {
+                    node_id: id,
+                    vector_score: Some(score),
+                    graph_score: None,
+                    fused_score: score,
+                    bindings: payload.unwrap_or(serde_json::Value::Null),
+                    column_data: None,
+                }
+            })
+            .collect();
+
+        serde_wasm_bindgen::to_value(&hybrid_results)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
     /// Multi-query search with fusion. Strategies: average, maximum, rrf.

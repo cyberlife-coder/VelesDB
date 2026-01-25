@@ -16,14 +16,41 @@ from langchain_core.vectorstores import VectorStore
 
 import velesdb
 
+from langchain_velesdb.security import (
+    validate_path,
+    validate_dimension,
+    validate_k,
+    validate_text,
+    validate_query,
+    validate_metric,
+    validate_storage_mode,
+    validate_batch_size,
+    validate_collection_name,
+    validate_weight,
+    MAX_TEXT_LENGTH,
+    MAX_BATCH_SIZE,
+    SecurityError,
+)
+
 
 def _stable_hash_id(value: str) -> int:
     """Generate a stable numeric ID from a string using SHA256.
     
     Python's hash() is non-deterministic across processes, so we use
     SHA256 for consistent IDs across runs.
+    
+    Uses 63 bits (fits in i64/u64) from SHA256. For datasets >1M documents,
+    collision probability increases but remains acceptable (<0.01%).
+    For mission-critical deduplication, use explicit UUIDs.
+    
+    Args:
+        value: String to hash.
+        
+    Returns:
+        Positive 63-bit integer ID compatible with VelesDB Core.
     """
     hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
+    # Use 8 bytes (64 bits) and mask sign bit for positive i64
     return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
@@ -77,12 +104,17 @@ class VelesDBVectorStore(VectorStore):
                 - "sq8": 8-bit scalar quantization (4x memory reduction)
                 - "binary": 1-bit binary quantization (32x memory reduction)
             **kwargs: Additional arguments passed to the database.
+            
+        Raises:
+            SecurityError: If any parameter fails validation.
         """
+        # Validate all inputs
+        self._path = validate_path(path)
+        self._collection_name = validate_collection_name(collection_name)
+        self._metric = validate_metric(metric)
+        self._storage_mode = validate_storage_mode(storage_mode)
+        
         self._embedding = embedding
-        self._path = path
-        self._collection_name = collection_name
-        self._metric = metric
-        self._storage_mode = storage_mode
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
         self._next_id = 1
@@ -150,6 +182,13 @@ class VelesDBVectorStore(VectorStore):
         if not texts_list:
             return []
 
+        # Security: Validate batch size
+        validate_batch_size(len(texts_list))
+        
+        # Security: Validate text lengths
+        for text in texts_list:
+            validate_text(text)
+
         # Generate embeddings
         embeddings = self._embedding.embed_documents(texts_list)
         dimension = len(embeddings[0])
@@ -204,7 +243,14 @@ class VelesDBVectorStore(VectorStore):
 
         Returns:
             List of Documents most similar to the query.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
+        # Security: Validate inputs
+        validate_text(query)
+        validate_k(k)
+        
         results = self.similarity_search_with_score(query, k=k, **kwargs)
         return [doc for doc, _ in results]
 
@@ -238,8 +284,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Tuple[Document, float]] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
 
@@ -316,8 +363,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Document] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
         return documents
@@ -343,7 +391,15 @@ class VelesDBVectorStore(VectorStore):
 
         Returns:
             List of (Document, score) tuples.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
+        # Security: Validate inputs
+        validate_text(query)
+        validate_k(k)
+        validate_weight(vector_weight, "vector_weight")
+        
         # Generate query embedding
         query_embedding = self._embedding.embed_query(query)
         dimension = len(query_embedding)
@@ -372,8 +428,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Tuple[Document, float]] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
 
@@ -396,7 +453,14 @@ class VelesDBVectorStore(VectorStore):
 
         Returns:
             List of (Document, score) tuples.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
+        # Security: Validate inputs
+        validate_text(query)
+        validate_k(k)
+        
         # Get collection (use a dummy dimension since text search doesn't need it)
         if self._collection is None:
             raise ValueError("Collection not initialized. Add documents first.")
@@ -411,8 +475,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Tuple[Document, float]] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
 
@@ -534,8 +599,9 @@ class VelesDBVectorStore(VectorStore):
             documents: List[Document] = []
             for result in results:
                 payload = result.get("payload", {})
-                text = payload.pop("text", "")
-                doc = Document(page_content=text, metadata=payload)
+                text = payload.get("text", "")
+                metadata = {k: v for k, v in payload.items() if k != "text"}
+                doc = Document(page_content=text, metadata=metadata)
                 documents.append(doc)
             all_documents.append(documents)
 
@@ -570,8 +636,9 @@ class VelesDBVectorStore(VectorStore):
             documents: List[Tuple[Document, float]] = []
             for result in results:
                 payload = result.get("payload", {})
-                text = payload.pop("text", "")
-                doc = Document(page_content=text, metadata=payload)
+                text = payload.get("text", "")
+                metadata = {k: v for k, v in payload.items() if k != "text"}
+                doc = Document(page_content=text, metadata=metadata)
                 score = result.get("score", 0.0)
                 documents.append((doc, score))
             all_documents.append(documents)
@@ -662,8 +729,9 @@ class VelesDBVectorStore(VectorStore):
         for point in points:
             if point is not None:
                 payload = point.get("payload", {})
-                text = payload.pop("text", "")
-                doc = Document(page_content=text, metadata=payload)
+                text = payload.get("text", "")
+                metadata = {k: v for k, v in payload.items() if k != "text"}
+                doc = Document(page_content=text, metadata=metadata)
                 documents.append(doc)
 
         return documents
@@ -738,7 +806,13 @@ class VelesDBVectorStore(VectorStore):
 
         Returns:
             List of Documents matching the query.
+            
+        Raises:
+            SecurityError: If query fails validation.
         """
+        # Security: Validate VelesQL query
+        validate_query(query_str)
+        
         if self._collection is None:
             raise ValueError("Collection not initialized. Add documents first.")
 
@@ -747,8 +821,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Document] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
         return documents
@@ -791,9 +866,18 @@ class VelesDBVectorStore(VectorStore):
             ...     fusion="weighted",
             ...     fusion_params={"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
             ... )
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
         if not queries:
             return []
+        
+        # Security: Validate inputs
+        validate_k(k)
+        validate_batch_size(len(queries))
+        for q in queries:
+            validate_text(q)
 
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         dimension = len(query_embeddings[0])
@@ -811,8 +895,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Document] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
         return documents
@@ -858,8 +943,9 @@ class VelesDBVectorStore(VectorStore):
         documents: List[Tuple[Document, float]] = []
         for result in results:
             payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            doc = Document(page_content=text, metadata=payload)
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
 

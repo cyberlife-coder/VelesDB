@@ -262,12 +262,110 @@ fn test_parse_missing_from() {
 }
 
 // ========== Case insensitivity tests ==========
+// VelesQL follows standard SQL conventions: keywords are case-insensitive
 
 #[test]
-fn test_parse_case_insensitive() {
+fn test_parse_case_insensitive_lowercase() {
     let query = Parser::parse("select * from documents where vector near $v limit 10").unwrap();
     assert_eq!(query.select.from, "documents");
     assert_eq!(query.select.limit, Some(10));
+}
+
+#[test]
+fn test_parse_case_insensitive_uppercase() {
+    let query = Parser::parse("SELECT * FROM DOCUMENTS WHERE VECTOR NEAR $V LIMIT 10").unwrap();
+    assert_eq!(query.select.from, "DOCUMENTS");
+    assert_eq!(query.select.limit, Some(10));
+}
+
+#[test]
+fn test_parse_case_insensitive_mixed() {
+    let query = Parser::parse("Select * From documents Where Vector Near $v Limit 10").unwrap();
+    assert_eq!(query.select.from, "documents");
+    assert_eq!(query.select.limit, Some(10));
+}
+
+#[test]
+fn test_parse_case_insensitive_order_by() {
+    let query = Parser::parse("select * from docs order by name desc").unwrap();
+    assert!(query.select.order_by.is_some());
+    assert!(query.select.order_by.unwrap()[0].descending);
+}
+
+#[test]
+fn test_parse_case_insensitive_where_clauses() {
+    // AND, OR, BETWEEN, IN, LIKE, IS NULL
+    let q1 = Parser::parse("select * from t where a = 1 and b = 2").unwrap();
+    assert!(q1.select.where_clause.is_some());
+
+    let q2 = Parser::parse("select * from t where a = 1 or b = 2").unwrap();
+    assert!(q2.select.where_clause.is_some());
+
+    let q3 = Parser::parse("select * from t where x between 1 and 10").unwrap();
+    assert!(q3.select.where_clause.is_some());
+
+    let q4 = Parser::parse("select * from t where id in (1, 2, 3)").unwrap();
+    assert!(q4.select.where_clause.is_some());
+
+    let q5 = Parser::parse("select * from t where name like '%test%'").unwrap();
+    assert!(q5.select.where_clause.is_some());
+
+    let q6 = Parser::parse("select * from t where val is null").unwrap();
+    assert!(q6.select.where_clause.is_some());
+
+    let q7 = Parser::parse("select * from t where val is not null").unwrap();
+    assert!(q7.select.where_clause.is_some());
+}
+
+#[test]
+fn test_parse_case_insensitive_join() {
+    let query = Parser::parse("select * from a join b on b.id = a.b_id").unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    assert_eq!(query.select.joins[0].table, "b");
+}
+
+#[test]
+fn test_parse_case_insensitive_join_with_alias() {
+    let query =
+        Parser::parse("select * from products join prices as p on p.product_id = products.id")
+            .unwrap();
+    assert_eq!(query.select.joins[0].alias, Some("p".to_string()));
+}
+
+#[test]
+fn test_parse_case_insensitive_with_clause() {
+    let query = Parser::parse("select * from docs limit 10 with (mode = 'fast')").unwrap();
+    assert!(query.select.with_clause.is_some());
+}
+
+#[test]
+fn test_parse_case_insensitive_boolean_values() {
+    let q1 = Parser::parse("SELECT * FROM t WHERE active = true").unwrap();
+    let q2 = Parser::parse("SELECT * FROM t WHERE active = TRUE").unwrap();
+    let q3 = Parser::parse("SELECT * FROM t WHERE active = True").unwrap();
+    assert!(q1.select.where_clause.is_some());
+    assert!(q2.select.where_clause.is_some());
+    assert!(q3.select.where_clause.is_some());
+}
+
+#[test]
+fn test_parse_case_insensitive_null_value() {
+    let q1 = Parser::parse("SELECT * FROM t WHERE x = null").unwrap();
+    let q2 = Parser::parse("SELECT * FROM t WHERE x = NULL").unwrap();
+    let q3 = Parser::parse("SELECT * FROM t WHERE x = Null").unwrap();
+    assert!(q1.select.where_clause.is_some());
+    assert!(q2.select.where_clause.is_some());
+    assert!(q3.select.where_clause.is_some());
+}
+
+#[test]
+fn test_parse_case_insensitive_similarity() {
+    let q1 = Parser::parse("SELECT * FROM t WHERE similarity(vec, $v) > 0.8").unwrap();
+    let q2 = Parser::parse("SELECT * FROM t WHERE SIMILARITY(vec, $v) > 0.8").unwrap();
+    let q3 = Parser::parse("SELECT * FROM t WHERE Similarity(vec, $v) > 0.8").unwrap();
+    assert!(q1.select.where_clause.is_some());
+    assert!(q2.select.where_clause.is_some());
+    assert!(q3.select.where_clause.is_some());
 }
 
 // ========== WITH clause tests ==========
@@ -321,4 +419,62 @@ fn test_parse_with_clause_float_value() {
     let with = query.select.with_clause.expect("Expected WITH clause");
     let value = with.get("threshold").expect("Expected threshold option");
     assert_eq!(value.as_float(), Some(0.95));
+}
+
+// ========== JOIN clause tests (EPIC-031 US-004) ==========
+
+#[test]
+fn test_parse_simple_join() {
+    let query =
+        Parser::parse("SELECT * FROM products JOIN prices ON prices.product_id = products.id")
+            .unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    let join = &query.select.joins[0];
+    assert_eq!(join.table, "prices");
+    assert!(join.alias.is_none());
+    assert_eq!(join.condition.left.table, Some("prices".to_string()));
+    assert_eq!(join.condition.left.column, "product_id");
+    assert_eq!(join.condition.right.table, Some("products".to_string()));
+    assert_eq!(join.condition.right.column, "id");
+}
+
+#[test]
+fn test_parse_join_with_alias() {
+    let query =
+        Parser::parse("SELECT * FROM products JOIN prices AS pr ON pr.product_id = products.id")
+            .unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    let join = &query.select.joins[0];
+    assert_eq!(join.table, "prices");
+    assert_eq!(join.alias, Some("pr".to_string()));
+    assert_eq!(join.condition.left.table, Some("pr".to_string()));
+    assert_eq!(join.condition.left.column, "product_id");
+}
+
+#[test]
+fn test_parse_multiple_joins() {
+    let query = Parser::parse(
+        "SELECT * FROM trips JOIN prices ON prices.trip_id = trips.id JOIN availability ON availability.trip_id = trips.id",
+    )
+    .unwrap();
+    assert_eq!(query.select.joins.len(), 2);
+    assert_eq!(query.select.joins[0].table, "prices");
+    assert_eq!(query.select.joins[1].table, "availability");
+}
+
+#[test]
+fn test_parse_join_with_where() {
+    // Note: WHERE currently only supports simple identifiers, not table.column
+    let query = Parser::parse(
+        "SELECT * FROM products JOIN prices ON prices.product_id = products.id WHERE value > 100",
+    )
+    .unwrap();
+    assert_eq!(query.select.joins.len(), 1);
+    assert!(query.select.where_clause.is_some());
+}
+
+#[test]
+fn test_parse_no_join() {
+    let query = Parser::parse("SELECT * FROM products WHERE id = 1").unwrap();
+    assert!(query.select.joins.is_empty());
 }

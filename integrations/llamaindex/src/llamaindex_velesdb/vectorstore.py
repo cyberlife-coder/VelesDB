@@ -19,14 +19,40 @@ from pydantic import ConfigDict
 
 import velesdb
 
+from llamaindex_velesdb.security import (
+    validate_path,
+    validate_dimension,
+    validate_k,
+    validate_text,
+    validate_query,
+    validate_metric,
+    validate_batch_size,
+    validate_collection_name,
+    validate_weight,
+    MAX_TEXT_LENGTH,
+    MAX_BATCH_SIZE,
+    SecurityError,
+)
+
 
 def _stable_hash_id(value: str) -> int:
     """Generate a stable numeric ID from a string using SHA256.
     
     Python's hash() is non-deterministic across processes, so we use
     SHA256 for consistent IDs across runs.
+    
+    Uses 63 bits (fits in i64/u64) from SHA256. For datasets >1M documents,
+    collision probability increases but remains acceptable (<0.01%).
+    For mission-critical deduplication, use explicit UUIDs.
+    
+    Args:
+        value: String to hash.
+        
+    Returns:
+        Positive 63-bit integer ID compatible with VelesDB Core.
     """
     hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
+    # Use 8 bytes (64 bits) and mask sign bit for positive i64
     return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
@@ -98,12 +124,20 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                 - "sq8": 8-bit scalar quantization (4x memory reduction)
                 - "binary": 1-bit binary quantization (32x memory reduction)
             **kwargs: Additional arguments.
+            
+        Raises:
+            SecurityError: If any parameter fails validation.
         """
+        # Security: Validate all inputs
+        validated_path = validate_path(path)
+        validated_collection = validate_collection_name(collection_name)
+        validated_metric = validate_metric(metric)
+        
         super().__init__(
-            path=path,
+            path=validated_path,
             storage_mode=storage_mode,
-            collection_name=collection_name,
-            metric=metric,
+            collection_name=validated_collection,
+            metric=validated_metric,
             **kwargs,
         )
 
@@ -114,7 +148,17 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         return self._db
 
     def _get_collection(self, dimension: int) -> velesdb.Collection:
-        """Get or create the collection."""
+        """Get or create the collection.
+        
+        Args:
+            dimension: Expected vector dimension.
+            
+        Returns:
+            The VelesDB collection.
+            
+        Raises:
+            ValueError: If collection exists with different dimension.
+        """
         if self._collection is None or self._dimension != dimension:
             db = self._get_db()
             self._collection = db.get_collection(self.collection_name)
@@ -125,6 +169,16 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                     metric=self.metric,
                 )
                 self._collection = db.get_collection(self.collection_name)
+            else:
+                # Validate existing collection dimension matches
+                info = self._collection.info()
+                existing_dim = info.get("dimension", 0)
+                if existing_dim != 0 and existing_dim != dimension:
+                    raise ValueError(
+                        f"Collection '{self.collection_name}' exists with dimension {existing_dim}, "
+                        f"but got vectors of dimension {dimension}. "
+                        f"Use a different collection name or matching dimension."
+                    )
             self._dimension = dimension
         return self._collection
 
@@ -146,9 +200,15 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         Returns:
             List of node IDs that were added.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
         if not nodes:
             return []
+
+        # Security: Validate batch size
+        validate_batch_size(len(nodes))
 
         # Get dimension from first node's embedding
         first_embedding = nodes[0].get_embedding()
@@ -221,6 +281,9 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         Returns:
             Query result with nodes and similarities.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
         if query.query_embedding is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
@@ -229,6 +292,9 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         collection = self._get_collection(dimension)
 
         k = query.similarity_top_k or 10
+        
+        # Security: Validate k
+        validate_k(k)
 
         results = collection.search(query.query_embedding, top_k=k)
 
@@ -330,7 +396,15 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         Returns:
             Query result with nodes and similarities.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
+        # Security: Validate inputs
+        validate_text(query_str)
+        validate_k(similarity_top_k)
+        validate_weight(vector_weight, "vector_weight")
+        
         dimension = len(query_embedding)
         collection = self._get_collection(dimension)
 
@@ -387,7 +461,14 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         Returns:
             Query result with nodes and similarities.
+            
+        Raises:
+            SecurityError: If parameters fail validation.
         """
+        # Security: Validate inputs
+        validate_text(query_str)
+        validate_k(similarity_top_k)
+        
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
 
@@ -429,9 +510,16 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         queries: List[VectorStoreQuery],
         **kwargs: Any,
     ) -> List[VectorStoreQueryResult]:
-        """Batch query with multiple embeddings in parallel."""
+        """Batch query with multiple embeddings in parallel.
+        
+        Raises:
+            SecurityError: If batch size exceeds limit.
+        """
         if not queries:
             return []
+        
+        # Security: Validate batch size
+        validate_batch_size(len(queries))
 
         first_emb = queries[0].query_embedding
         if first_emb is None:
@@ -460,9 +548,17 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         return all_results
 
     def add_bulk(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
-        """Bulk insert optimized for large batches."""
+        """Bulk insert optimized for large batches.
+        
+        Raises:
+            SecurityError: If batch size exceeds limit.
+        """
         if not nodes:
             return []
+        
+        # Security: Validate batch size
+        validate_batch_size(len(nodes))
+        
         first_emb = nodes[0].get_embedding()
         if first_emb is None:
             raise ValueError("Nodes must have embeddings")

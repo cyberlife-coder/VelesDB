@@ -46,6 +46,7 @@ fn test_query_serialization() {
         select: SelectStatement {
             columns: SelectColumns::All,
             from: "documents".to_string(),
+            joins: vec![],
             where_clause: None,
             order_by: None,
             limit: Some(10),

@@ -20,6 +20,8 @@ import type {
   TraverseRequest,
   TraverseResponse,
   DegreeResponse,
+  QueryOptions,
+  QueryResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -346,10 +348,12 @@ export class WasmBackend implements IVelesDBBackend {
   }
 
   async query(
+    _collection: string,
     _queryString: string,
-    _params?: Record<string, unknown>
-  ): Promise<SearchResult[]> {
-    // WASM backend doesn't support VelesQL
+    _params?: Record<string, unknown>,
+    _options?: QueryOptions
+  ): Promise<QueryResponse> {
+    // WASM backend doesn't support VelesQL multi-model queries
     // Use REST backend for VelesQL queries
     throw new VelesDBError(
       'VelesQL queries are not supported in WASM backend. Use REST backend for query support.',

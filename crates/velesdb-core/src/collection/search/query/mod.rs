@@ -17,12 +17,17 @@
 //! to leverage cost-based optimization for complex queries.
 
 mod extraction;
+pub mod join;
 mod ordering;
+pub mod pushdown;
 mod validation;
 
 // Re-export for potential external use
 #[allow(unused_imports)]
 pub use ordering::compare_json_values;
+// Re-export join functions for future integration with execute_query
+#[allow(unused_imports)]
+pub use join::{execute_join, JoinedResult};
 
 use crate::collection::types::Collection;
 use crate::error::Result;

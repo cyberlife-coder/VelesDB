@@ -237,6 +237,34 @@ pub struct SearchResult {
     pub payload: Option<serde_json::Value>,
 }
 
+/// Multi-model query result (EPIC-031 US-012).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HybridResult {
+    /// Node/point ID.
+    pub node_id: u64,
+    /// Vector similarity score (if applicable).
+    pub vector_score: Option<f32>,
+    /// Graph relevance score (if applicable).
+    pub graph_score: Option<f32>,
+    /// Combined fused score.
+    pub fused_score: f32,
+    /// Variable bindings/payload.
+    pub bindings: Option<serde_json::Value>,
+    /// Column data from JOIN (if applicable).
+    pub column_data: Option<serde_json::Value>,
+}
+
+/// Response for `VelesQL` query operations.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResponse {
+    /// Query results in multi-model format.
+    pub results: Vec<HybridResult>,
+    /// Query execution time in milliseconds.
+    pub timing_ms: f64,
+}
+
 /// Point output for get operations.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

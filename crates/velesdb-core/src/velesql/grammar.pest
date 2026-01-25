@@ -8,11 +8,17 @@ COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 // Main entry point
 query = { SOI ~ select_stmt ~ ";"? ~ EOI }
 
-// SELECT statement with optional WITH clause
+// SELECT statement with optional JOIN, WHERE, ORDER BY, LIMIT, OFFSET, WITH clauses
 select_stmt = { 
     ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
-    where_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
+    join_clause* ~ where_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
 }
+
+// JOIN clause for cross-store queries (EPIC-031 US-004)
+join_clause = { ^"JOIN" ~ identifier ~ alias_clause? ~ ^"ON" ~ join_condition }
+alias_clause = { ^"AS" ~ identifier }
+join_condition = { column_ref ~ "=" ~ column_ref }
+column_ref = @{ identifier ~ "." ~ identifier }
 
 // ORDER BY clause
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }

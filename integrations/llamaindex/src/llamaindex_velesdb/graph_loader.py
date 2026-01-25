@@ -19,6 +19,9 @@ Example:
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from llamaindex_velesdb.vectorstore import VelesDBVectorStore
@@ -208,8 +211,8 @@ class GraphLoader:
                     metadata=metadata,
                 )
                 nodes_added += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to add node {node.node_id}: {e}")
 
         return {"nodes": nodes_added, "edges": 0}
 

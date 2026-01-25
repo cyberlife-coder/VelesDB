@@ -218,6 +218,52 @@ export interface DegreeResponse {
 }
 
 // ============================================================================
+// VelesQL Multi-Model Query Types (EPIC-031 US-011)
+// ============================================================================
+
+/** VelesQL query options */
+export interface QueryOptions {
+  /** Timeout in milliseconds (default: 30000) */
+  timeoutMs?: number;
+  /** Enable streaming response */
+  stream?: boolean;
+}
+
+/** Query result from multi-model VelesQL query */
+export interface QueryResult {
+  /** Node/point ID */
+  nodeId: bigint | number;
+  /** Vector similarity score (if applicable) */
+  vectorScore: number | null;
+  /** Graph relevance score (if applicable) */
+  graphScore: number | null;
+  /** Combined fused score */
+  fusedScore: number;
+  /** Variable bindings from MATCH clause */
+  bindings: Record<string, unknown>;
+  /** Column data from JOIN (if applicable) */
+  columnData: Record<string, unknown> | null;
+}
+
+/** Query execution statistics */
+export interface QueryStats {
+  /** Execution time in milliseconds */
+  executionTimeMs: number;
+  /** Execution strategy used */
+  strategy: string;
+  /** Number of nodes scanned */
+  scannedNodes: number;
+}
+
+/** Full query response with results and stats */
+export interface QueryResponse {
+  /** Query results */
+  results: QueryResult[];
+  /** Execution statistics */
+  stats: QueryStats;
+}
+
+// ============================================================================
 // Index Management Types (EPIC-009)
 // ============================================================================
 
@@ -312,11 +358,13 @@ export interface IVelesDBBackend {
     options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]>;
   
-  /** Execute VelesQL query */
+  /** Execute VelesQL multi-model query (EPIC-031 US-011) */
   query(
+    collection: string,
     queryString: string,
-    params?: Record<string, unknown>
-  ): Promise<SearchResult[]>;
+    params?: Record<string, unknown>,
+    options?: QueryOptions
+  ): Promise<QueryResponse>;
 
   /** Multi-query fusion search */
   multiQuerySearch(

@@ -22,6 +22,24 @@ Example:
 
 from langchain_velesdb.vectorstore import VelesDBVectorStore
 from langchain_velesdb.graph_retriever import GraphRetriever, GraphQARetriever
+from langchain_velesdb.security import SecurityError
 
-__all__ = ["VelesDBVectorStore", "GraphRetriever", "GraphQARetriever"]
+# Memory classes require full langchain - optional import
+try:
+    from langchain_velesdb.memory import VelesDBChatMemory, VelesDBSemanticMemory
+    _HAS_MEMORY = True
+except ImportError:
+    VelesDBChatMemory = None  # type: ignore
+    VelesDBSemanticMemory = None  # type: ignore
+    _HAS_MEMORY = False
+
+__all__ = [
+    "VelesDBVectorStore",
+    "GraphRetriever",
+    "GraphQARetriever",
+    "SecurityError",
+]
+
+if _HAS_MEMORY:
+    __all__.extend(["VelesDBChatMemory", "VelesDBSemanticMemory"])
 __version__ = "0.8.10"

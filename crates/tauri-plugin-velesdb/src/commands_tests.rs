@@ -3,8 +3,9 @@
 use crate::helpers::{metric_to_string, parse_metric, parse_storage_mode, storage_mode_to_string};
 use crate::types::{
     default_metric, default_top_k, default_vector_weight, BatchSearchRequest, CollectionInfo,
-    CreateCollectionRequest, DeletePointsRequest, GetPointsRequest, HybridSearchRequest,
-    PointOutput, SearchRequest, SearchResponse, SearchResult, TextSearchRequest,
+    CreateCollectionRequest, DeletePointsRequest, GetPointsRequest, HybridResult,
+    HybridSearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest, SearchResponse,
+    SearchResult, TextSearchRequest,
 };
 
 #[test]
@@ -254,4 +255,133 @@ fn test_search_response_serialize() {
 
     assert!(json.contains("\"results\""));
     assert!(json.contains("\"timingMs\":1.5"));
+}
+
+// ============================================================================
+// VelesQL Query Tests (EPIC-031 US-012)
+// ============================================================================
+
+#[test]
+fn test_query_request_deserialize_simple() {
+    let json = r#"{"query": "MATCH (d:Doc) RETURN d"}"#;
+    let request: QueryRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.query, "MATCH (d:Doc) RETURN d");
+    assert!(request.params.is_empty());
+}
+
+#[test]
+fn test_query_request_deserialize_with_params() {
+    let json = r#"{
+        "query": "MATCH (d:Doc) WHERE similarity(d.embedding, $q) > 0.7 RETURN d",
+        "params": {"q": [0.1, 0.2, 0.3]}
+    }"#;
+    let request: QueryRequest = serde_json::from_str(json).unwrap();
+
+    assert!(request.query.contains("similarity"));
+    assert!(request.params.contains_key("q"));
+}
+
+#[test]
+fn test_query_request_camel_case() {
+    // Ensure camelCase deserialization works
+    let json = r#"{"query": "SELECT * FROM docs"}"#;
+    let request: QueryRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(request.query, "SELECT * FROM docs");
+}
+
+#[test]
+fn test_hybrid_result_serialize() {
+    let result = HybridResult {
+        node_id: 42,
+        vector_score: Some(0.95),
+        graph_score: Some(0.88),
+        fused_score: 0.92,
+        bindings: Some(serde_json::json!({"title": "Test Document"})),
+        column_data: None,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+
+    assert!(json.contains("\"nodeId\":42"));
+    assert!(json.contains("\"vectorScore\":0.95"));
+    assert!(json.contains("\"graphScore\":0.88"));
+    assert!(json.contains("\"fusedScore\":0.92"));
+    assert!(json.contains("\"title\":\"Test Document\""));
+}
+
+#[test]
+fn test_hybrid_result_serialize_minimal() {
+    let result = HybridResult {
+        node_id: 1,
+        vector_score: None,
+        graph_score: None,
+        fused_score: 0.5,
+        bindings: None,
+        column_data: None,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+
+    assert!(json.contains("\"nodeId\":1"));
+    assert!(json.contains("\"fusedScore\":0.5"));
+    assert!(json.contains("\"vectorScore\":null"));
+}
+
+#[test]
+fn test_hybrid_result_with_column_data() {
+    let result = HybridResult {
+        node_id: 10,
+        vector_score: Some(0.9),
+        graph_score: None,
+        fused_score: 0.9,
+        bindings: None,
+        column_data: Some(serde_json::json!({"price": 99.99, "currency": "USD"})),
+    };
+    let json = serde_json::to_string(&result).unwrap();
+
+    assert!(json.contains("\"columnData\""));
+    assert!(json.contains("\"price\":99.99"));
+    assert!(json.contains("\"currency\":\"USD\""));
+}
+
+#[test]
+fn test_query_response_serialize() {
+    let response = QueryResponse {
+        results: vec![
+            HybridResult {
+                node_id: 1,
+                vector_score: Some(0.95),
+                graph_score: None,
+                fused_score: 0.95,
+                bindings: Some(serde_json::json!({"name": "Doc1"})),
+                column_data: None,
+            },
+            HybridResult {
+                node_id: 2,
+                vector_score: Some(0.85),
+                graph_score: None,
+                fused_score: 0.85,
+                bindings: Some(serde_json::json!({"name": "Doc2"})),
+                column_data: None,
+            },
+        ],
+        timing_ms: 2.5,
+    };
+    let json = serde_json::to_string(&response).unwrap();
+
+    assert!(json.contains("\"results\""));
+    assert!(json.contains("\"timingMs\":2.5"));
+    assert!(json.contains("\"nodeId\":1"));
+    assert!(json.contains("\"nodeId\":2"));
+}
+
+#[test]
+fn test_query_response_empty_results() {
+    let response = QueryResponse {
+        results: vec![],
+        timing_ms: 0.1,
+    };
+    let json = serde_json::to_string(&response).unwrap();
+
+    assert!(json.contains("\"results\":[]"));
+    assert!(json.contains("\"timingMs\":0.1"));
 }

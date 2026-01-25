@@ -20,7 +20,17 @@ Example:
 
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
+import logging
 import requests
+
+from llamaindex_velesdb.security import (
+    validate_url,
+    validate_k,
+    validate_timeout,
+    SecurityError,
+)
+
+logger = logging.getLogger(__name__)
 
 try:
     from llama_index.core.retrievers import BaseRetriever
@@ -97,6 +107,12 @@ class GraphRetriever(BaseRetriever):
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
+        
+        # Security: Validate inputs
+        validate_url(server_url)
+        validate_k(seed_k, "seed_k")
+        validate_k(expand_k, "expand_k")
+        
         self._index = index
         self._server_url = server_url
         self._seed_k = seed_k
@@ -167,13 +183,14 @@ class GraphRetriever(BaseRetriever):
                             expanded_ids.add(neighbor_id)
                     except requests.exceptions.Timeout:
                         # Timeout: disable graph for remaining seeds
+                        logger.warning(f"Graph traversal timeout for node {node_id}, falling back to vector-only")
                         if self._fallback_on_timeout:
                             graph_available = False
                         else:
                             raise
-                    except Exception:
+                    except Exception as e:
                         # Graph traversal is optional - continue without it
-                        pass
+                        logger.debug(f"Graph traversal failed for node {node_id}: {e}")
         
         # Step 3: Build result list
         results = []
@@ -202,8 +219,8 @@ class GraphRetriever(BaseRetriever):
                             node=neighbor_node,
                             score=0.5  # Lower score for expanded nodes
                         ))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to fetch neighbor node {neighbor_id}: {e}")
         
         return results[:self._expand_k]
     

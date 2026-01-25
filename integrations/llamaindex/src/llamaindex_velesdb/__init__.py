@@ -14,6 +14,13 @@ Example:
 from llamaindex_velesdb.vectorstore import VelesDBVectorStore
 from llamaindex_velesdb.graph_loader import GraphLoader
 from llamaindex_velesdb.graph_retriever import GraphRetriever, GraphQARetriever
+from llamaindex_velesdb.security import SecurityError
 
-__all__ = ["VelesDBVectorStore", "GraphLoader", "GraphRetriever", "GraphQARetriever"]
+__all__ = [
+    "VelesDBVectorStore",
+    "GraphLoader",
+    "GraphRetriever",
+    "GraphQARetriever",
+    "SecurityError",
+]
 __version__ = "0.8.10"

@@ -20,6 +20,8 @@ import type {
   TraverseRequest,
   TraverseResponse,
   DegreeResponse,
+  QueryOptions,
+  QueryResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -117,6 +119,42 @@ export class RestBackend implements IVelesDBBackend {
     const messageField = payload.message ?? payload.error;
     const message = typeof messageField === 'string' ? messageField : undefined;
     return { code, message };
+  }
+
+  /**
+   * Parse node ID safely to handle u64 values above Number.MAX_SAFE_INTEGER.
+   * Returns bigint for large values, number for safe values.
+   */
+  private parseNodeId(value: unknown): bigint | number {
+    if (value === null || value === undefined) {
+      return 0;
+    }
+    
+    // If already a bigint, return as-is
+    if (typeof value === 'bigint') {
+      return value;
+    }
+    
+    // If string (JSON may serialize large numbers as strings), parse as BigInt
+    if (typeof value === 'string') {
+      const num = Number(value);
+      if (num > Number.MAX_SAFE_INTEGER) {
+        return BigInt(value);
+      }
+      return num;
+    }
+    
+    // If number, check if precision is at risk
+    if (typeof value === 'number') {
+      if (value > Number.MAX_SAFE_INTEGER) {
+        // Precision already lost, but return as-is (best effort)
+        // Note: This case indicates the API should return strings for large IDs
+        return value;
+      }
+      return value;
+    }
+    
+    return 0;
   }
 
   private async request<T>(
@@ -439,12 +477,18 @@ export class RestBackend implements IVelesDBBackend {
   }
 
   async query(
+    collection: string,
     queryString: string,
-    params?: Record<string, unknown>
-  ): Promise<SearchResult[]> {
+    params?: Record<string, unknown>,
+    _options?: QueryOptions
+  ): Promise<QueryResponse> {
     this.ensureInitialized();
 
-    const response = await this.request<{ results: SearchResult[] }>(
+    // Note: Server uses POST /query (not /collections/{name}/query)
+    // The collection name is extracted from the VelesQL query string (FROM clause)
+    // The `collection` param here is kept for API compatibility but not used in URL
+    // Server QueryRequest only accepts { query, params }
+    const response = await this.request<QueryResponse>(
       'POST',
       '/query',
       {
@@ -454,10 +498,37 @@ export class RestBackend implements IVelesDBBackend {
     );
 
     if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    return response.data?.results ?? [];
+    // Map server response to SDK QueryResponse
+    // Server returns: { results: [{id, score, payload}], timing_ms, rows_returned }
+    // SDK expects: { results: [{nodeId, vectorScore, ...}], stats: {...} }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawData = response.data as any;
+    return {
+      results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
+        // Server returns `id` (u64), map to nodeId with precision handling
+        nodeId: this.parseNodeId(r.id ?? r.node_id ?? r.nodeId),
+        // Server returns `score`, map to vectorScore (primary score for SELECT queries)
+        vectorScore: (r.score ?? r.vector_score ?? r.vectorScore) as number | null,
+        // graph_score not returned by SELECT queries, only by future MATCH queries
+        graphScore: (r.graph_score ?? r.graphScore) as number | null,
+        // Use score as fusedScore for compatibility
+        fusedScore: (r.score ?? r.fused_score ?? r.fusedScore ?? 0) as number,
+        // payload maps to bindings for compatibility
+        bindings: (r.payload ?? r.bindings) as Record<string, unknown> ?? {},
+        columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
+      })),
+      stats: {
+        executionTimeMs: rawData?.timing_ms ?? 0,
+        strategy: 'select',
+        scannedNodes: rawData?.rows_returned ?? 0,
+      },
+    };
   }
 
   async multiQuerySearch(

@@ -24,7 +24,9 @@
 //! results = collection.search([0.1, 0.2, ...], top_k=10)
 //! ```
 
+mod agent;
 mod collection;
+mod collection_helpers;
 mod graph;
 mod graph_store;
 mod utils;
@@ -173,6 +175,7 @@ impl FusionStrategy {
 #[pyclass]
 pub struct Database {
     inner: CoreDatabase,
+    path: PathBuf,
 }
 
 #[pymethods]
@@ -190,9 +193,13 @@ impl Database {
     #[new]
     #[pyo3(signature = (path))]
     fn new(path: &str) -> PyResult<Self> {
-        let db = CoreDatabase::open(PathBuf::from(path))
+        let path_buf = PathBuf::from(path);
+        let db = CoreDatabase::open(&path_buf)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {}", e)))?;
-        Ok(Self { inner: db })
+        Ok(Self {
+            inner: db,
+            path: path_buf,
+        })
     }
 
     /// Create a new vector collection.
@@ -318,6 +325,34 @@ impl Database {
 
         Ok(Collection::new(Arc::new(collection), name.to_string()))
     }
+
+    /// Create an AgentMemory instance for AI agent workflows.
+    ///
+    /// Args:
+    ///     dimension: Embedding dimension (default: 384)
+    ///
+    /// Returns:
+    ///     AgentMemory instance with semantic, episodic, and procedural subsystems
+    ///
+    /// Example:
+    ///     >>> memory = db.agent_memory()
+    ///     >>> memory.semantic.store(1, "Paris is in France", embedding)
+    #[pyo3(signature = (dimension = None))]
+    fn agent_memory(&self, dimension: Option<usize>) -> PyResult<agent::AgentMemory> {
+        agent::AgentMemory::new(self, dimension)
+    }
+}
+
+impl Database {
+    /// Get a reference to the inner CoreDatabase.
+    pub fn inner(&self) -> &CoreDatabase {
+        &self.inner
+    }
+
+    /// Get the database path.
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
 }
 
 /// Search result from a vector query.
@@ -350,6 +385,12 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GraphStore>()?;
     m.add_class::<StreamingConfig>()?;
     m.add_class::<TraversalResult>()?;
+
+    // Agent memory classes (EPIC-010/US-005)
+    m.add_class::<agent::AgentMemory>()?;
+    m.add_class::<agent::PySemanticMemory>()?;
+    m.add_class::<agent::PyEpisodicMemory>()?;
+    m.add_class::<agent::PyProceduralMemory>()?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

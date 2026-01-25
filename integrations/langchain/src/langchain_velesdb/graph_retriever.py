@@ -20,7 +20,17 @@ Example:
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 import hashlib
+import logging
 import requests
+
+from langchain_velesdb.security import (
+    validate_url,
+    validate_k,
+    validate_collection_name,
+    SecurityError,
+)
+
+logger = logging.getLogger(__name__)
 
 try:
     from langchain_core.retrievers import BaseRetriever
@@ -99,6 +109,13 @@ class GraphRetriever(BaseRetriever):
     class Config:
         arbitrary_types_allowed = True
     
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Security: Validate URL and parameters
+        validate_url(self.server_url)
+        validate_k(self.seed_k, "seed_k")
+        validate_k(self.expand_k, "expand_k")
+    
     def _get_relevant_documents(
         self,
         query: str,
@@ -157,13 +174,14 @@ class GraphRetriever(BaseRetriever):
                             expanded_ids.add(neighbor_id)
                     except requests.exceptions.Timeout:
                         # Timeout: disable graph for remaining seeds
+                        logger.warning(f"Graph traversal timeout for node {doc_id}, falling back to vector-only")
                         if self.fallback_on_timeout:
                             graph_available = False
                         else:
                             raise
-                    except Exception:
+                    except Exception as e:
                         # Graph traversal is optional - continue without it
-                        pass
+                        logger.debug(f"Graph traversal failed for node {doc_id}: {e}")
         
         # Step 3: Fetch expanded documents
         result_docs = []
@@ -190,8 +208,8 @@ class GraphRetriever(BaseRetriever):
                         neighbor_doc.metadata["graph_depth"] = 1
                         neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
                         result_docs.append(neighbor_doc)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to fetch neighbor document {neighbor_id}: {e}")
         
         return result_docs[:self.expand_k]
     

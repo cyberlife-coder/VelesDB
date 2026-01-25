@@ -19,6 +19,8 @@ import type {
   TraverseRequest,
   TraverseResponse,
   DegreeResponse,
+  QueryOptions,
+  QueryResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -357,23 +359,44 @@ export class VelesDB {
   }
 
   /**
-   * Execute a VelesQL query
+   * Execute a VelesQL multi-model query (EPIC-031 US-011)
    * 
+   * Supports hybrid vector + graph queries with VelesQL syntax.
+   * 
+   * @param collection - Collection name
    * @param queryString - VelesQL query string
-   * @param params - Optional query parameters
-   * @returns Query results
+   * @param params - Query parameters (vectors, scalars)
+   * @param options - Query options (timeout, streaming)
+   * @returns Query response with results and execution stats
+   * 
+   * @example
+   * ```typescript
+   * const response = await db.query('docs', `
+   *   MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20
+   * `, { q: queryVector });
+   * 
+   * for (const r of response.results) {
+   *   console.log(`Node ${r.nodeId}: ${r.fusedScore}`);
+   * }
+   * ```
    */
   async query(
+    collection: string,
     queryString: string,
-    params?: Record<string, unknown>
-  ): Promise<SearchResult[]> {
+    params?: Record<string, unknown>,
+    options?: QueryOptions
+  ): Promise<QueryResponse> {
     this.ensureInitialized();
+
+    if (!collection || typeof collection !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
 
     if (!queryString || typeof queryString !== 'string') {
       throw new ValidationError('Query string must be a non-empty string');
     }
 
-    return this.backend.query(queryString, params);
+    return this.backend.query(collection, queryString, params, options);
   }
 
   /**
