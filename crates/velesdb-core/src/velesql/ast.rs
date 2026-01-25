@@ -31,6 +31,12 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// WITH clause for query-time configuration (optional).
     pub with_clause: Option<WithClause>,
+    /// GROUP BY clause (optional).
+    #[serde(default)]
+    pub group_by: Option<GroupByClause>,
+    /// HAVING clause for filtering groups (optional).
+    #[serde(default)]
+    pub having: Option<HavingClause>,
 }
 
 /// JOIN clause for cross-store queries (EPIC-031 US-004).
@@ -249,6 +255,13 @@ pub enum SelectColumns {
     Columns(Vec<Column>),
     /// Select aggregate functions (COUNT, SUM, etc.).
     Aggregations(Vec<AggregateFunction>),
+    /// Mixed: columns + aggregations (for GROUP BY queries).
+    Mixed {
+        /// Regular columns (must appear in GROUP BY).
+        columns: Vec<Column>,
+        /// Aggregate functions.
+        aggregations: Vec<AggregateFunction>,
+    },
 }
 
 /// Aggregate function type.
@@ -573,6 +586,31 @@ impl From<bool> for Value {
     fn from(v: bool) -> Self {
         Self::Boolean(v)
     }
+}
+
+/// GROUP BY clause for aggregation queries.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GroupByClause {
+    /// Columns to group by.
+    pub columns: Vec<String>,
+}
+
+/// HAVING clause for filtering aggregation groups.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct HavingClause {
+    /// Conditions to filter groups (aggregate comparisons).
+    pub conditions: Vec<HavingCondition>,
+}
+
+/// A single HAVING condition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HavingCondition {
+    /// Aggregate function to compare.
+    pub aggregate: AggregateFunction,
+    /// Comparison operator.
+    pub operator: CompareOp,
+    /// Value to compare against.
+    pub value: Value,
 }
 
 // Graph Pattern Matching types are in graph_pattern.rs

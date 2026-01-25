@@ -39,6 +39,8 @@ mod explain_tests;
 mod graph_pattern;
 #[cfg(test)]
 mod graph_pattern_tests;
+#[cfg(test)]
+mod having_tests;
 mod parser;
 #[cfg(test)]
 mod parser_tests;
