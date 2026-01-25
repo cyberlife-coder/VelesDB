@@ -68,6 +68,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+### 📊 EPIC-017: VelesQL Aggregation Engine
+
+#### Added
+
+- **GROUP BY Support** (US-003)
+  - `GROUP BY column1, column2` syntax
+  - Streaming aggregation executor
+  - 33 complex parser tests with EXPLAIN scenarios
+
+- **Aggregate Functions** (US-002)
+  - `COUNT(*)`, `COUNT(column)` - row/column counting
+  - `SUM(column)`, `AVG(column)` - numeric aggregation
+  - `MIN(column)`, `MAX(column)` - extrema functions
+
+- **HAVING Clause** (US-006)
+  - Filter groups after aggregation
+  - Support for aggregate comparisons: `HAVING COUNT(*) > 5`
+
+#### Fixed
+
+- `COUNT(column)` returns correct per-column count
+- Relative epsilon for HAVING float comparisons
+
+---
+
+### ⚡ EPIC-018: Aggregation Performance Optimization
+
+#### Performance
+
+- **Parallel Aggregation** (US-001)
+  - Rayon-based parallelization for 10K+ datasets
+  - Pre-fetch optimization to avoid lock contention
+  - ~2x speedup on large aggregations
+
+- **GROUP BY Hash Optimization** (US-005)
+  - Pre-computed hash instead of JSON serialization
+  - Reduced memory allocations in hot path
+
+- **String Interning** (US-004)
+  - Avoid String allocation in `process_value`
+  - ~15% reduction in allocations
+
+- **SIMD-Friendly Batch Processing** (US-006)
+  - `process_batch()` for vectorized aggregation
+
+#### Lessons Learned
+
+> Always benchmark in the REAL pipeline context, not in isolation.
+> Optimizing a component that represents <10% of total time can cause regression.
+
+---
+
 ### 🔍 EPIC-031: Multi-model Query Engine
 
 #### Added
