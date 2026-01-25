@@ -118,10 +118,17 @@ This document describes the internal architecture of VelesDB.
 - Text search (BM25)
 - Hybrid search (vector + text)
 
-#### VelesQL Parser
+#### VelesQL Parser (v2.0)
 - SQL-like query language
 - ~1.3M queries/sec parsing
 - Bound parameters support
+- **v2.0 Features**:
+  - `GROUP BY` / `HAVING` (AND/OR)
+  - `ORDER BY` (multi-column, similarity)
+  - `JOIN` with aliases
+  - `UNION` / `INTERSECT` / `EXCEPT`
+  - `USING FUSION` (hybrid search)
+  - `WITH` (max_groups, group_limit)
 
 #### Filter Engine
 - ColumnStore-based filtering
@@ -307,6 +314,79 @@ Query Vector + Text Query
          │
          ▼
    Merged Results
+```
+
+### VelesQL v2.0 Query Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      VelesQL v2.0 Parser                         │
+├─────────────────────────────────────────────────────────────────┤
+│  SQL Query                                                       │
+│    │                                                             │
+│    ▼                                                             │
+│  ┌────────────────┐                                              │
+│  │  Pest Grammar  │  compound_query → select_stmt [set_op]       │
+│  └────────┬───────┘                                              │
+│           │                                                      │
+│           ▼                                                      │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                        AST                                  │ │
+│  ├────────────────────────────────────────────────────────────┤ │
+│  │  Query {                                                    │ │
+│  │    select: SelectStatement {                                │ │
+│  │      columns, from, joins[], where_clause,                  │ │
+│  │      group_by, having, order_by, limit, offset,             │ │
+│  │      with_clause, fusion_clause                             │ │
+│  │    },                                                       │ │
+│  │    compound: Option<CompoundQuery> {                        │ │
+│  │      operator: UNION|INTERSECT|EXCEPT,                      │ │
+│  │      right: SelectStatement                                 │ │
+│  │    }                                                        │ │
+│  │  }                                                          │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│           │                                                      │
+│           ▼                                                      │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                    Execution Engine                         │ │
+│  ├────────────────────────────────────────────────────────────┤ │
+│  │  1. Filter Pushdown → ColumnStore                           │ │
+│  │  2. Vector Search → HNSW (if NEAR clause)                   │ │
+│  │  3. JOIN Execution → Cross-collection merge                 │ │
+│  │  4. Aggregation → GROUP BY + HAVING                         │ │
+│  │  5. Ordering → ORDER BY (columns, similarity)               │ │
+│  │  6. Set Operations → UNION/INTERSECT/EXCEPT                 │ │
+│  │  7. Fusion → RRF/Weighted/Maximum (if USING FUSION)         │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**VelesQL v2.0 Supported Syntax:**
+
+```sql
+-- Aggregation with GROUP BY and HAVING
+SELECT category, COUNT(*), AVG(price) 
+FROM products 
+GROUP BY category 
+HAVING COUNT(*) > 5 AND AVG(price) > 50
+
+-- ORDER BY with similarity function
+SELECT * FROM docs 
+ORDER BY similarity(vector, $query) DESC 
+LIMIT 10
+
+-- JOIN across collections
+SELECT * FROM orders 
+JOIN customers AS c ON orders.customer_id = c.id
+WHERE status = 'active'
+
+-- Set operations
+SELECT * FROM active_users UNION SELECT * FROM archived_users
+
+-- Hybrid fusion search
+SELECT * FROM documents 
+USING FUSION(strategy='rrf', k=60)
+LIMIT 20
 ```
 
 ## Performance Characteristics
