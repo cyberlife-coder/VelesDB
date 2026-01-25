@@ -42,8 +42,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Documentation
 
 - `VELESQL_SPEC.md` updated to v2.0.0
+- `ARCHITECTURE.md` updated with VelesQL v2.0 query flow diagram
+- `README.md` updated with VelesQL v2.0 API examples
 - New sections: Aggregations, JOIN, Set Operations
 - 24 new integration tests
+
+### 🌐 EPIC-016: SDK Ecosystem Sync - VelesQL v2.0
+
+#### Added
+
+- **TypeScript SDK Tests** (US-051)
+  - 24 new tests for VelesQL v2.0 features
+  - README updated with VelesQL v2.0 examples
+  - GROUP BY, HAVING, ORDER BY, JOIN, UNION, FUSION tests
+
+- **LangChain Integration Tests** (US-052)
+  - 9 new tests for VelesQL v2.0 compatibility
+  - Filter syntax validation
+  - Similarity search with scores
+
+- **LlamaIndex Integration Tests** (US-053)
+  - 8 new tests for VelesQL v2.0 compatibility
+  - MetadataFilters support
+  - Query workflow tests
 
 ---
 
