@@ -115,7 +115,7 @@ impl Collection {
     pub fn execute_aggregate(
         &self,
         query: &Query,
-        _params: &HashMap<String, serde_json::Value>,
+        params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
 
@@ -137,6 +137,7 @@ impl Collection {
                 aggregations,
                 &group_by.columns,
                 stmt.having.as_ref(),
+                params,
             );
         }
 
@@ -147,11 +148,11 @@ impl Collection {
             ));
         }
 
-        // Build filter from WHERE clause if present
-        let filter = stmt
-            .where_clause
-            .as_ref()
-            .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond.clone())));
+        // BUG-5 FIX: Resolve parameter placeholders in WHERE clause before creating filter
+        let filter = stmt.where_clause.as_ref().map(|cond| {
+            let resolved = Self::resolve_condition_params(cond, params);
+            crate::filter::Filter::new(crate::filter::Condition::from(resolved))
+        });
 
         // Create aggregator
         let mut aggregator = Aggregator::new();
@@ -349,17 +350,18 @@ impl Collection {
         aggregations: &[AggregateFunction],
         group_by_columns: &[String],
         having: Option<&HavingClause>,
+        params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
 
         // EPIC-040 US-004: Extract max_groups from WITH clause if present
         let max_groups = Self::extract_max_groups_limit(stmt.with_clause.as_ref());
 
-        // Build filter from WHERE clause if present
-        let filter = stmt
-            .where_clause
-            .as_ref()
-            .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond.clone())));
+        // BUG-5 FIX: Build filter from WHERE clause with parameter resolution
+        let filter = stmt.where_clause.as_ref().map(|cond| {
+            let resolved = Self::resolve_condition_params(cond, params);
+            crate::filter::Filter::new(crate::filter::Condition::from(resolved))
+        });
 
         // HashMap: GroupKey -> Aggregator (optimized with pre-computed hash)
         let mut groups: HashMap<GroupKey, Aggregator> = HashMap::new();
@@ -628,5 +630,91 @@ impl Collection {
         }
 
         DEFAULT_MAX_GROUPS
+    }
+
+    /// BUG-5 FIX: Resolve parameter placeholders in a condition.
+    /// Replaces Value::Parameter("name") with the actual value from params HashMap.
+    fn resolve_condition_params(
+        cond: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> crate::velesql::Condition {
+        use crate::velesql::Condition;
+
+        match cond {
+            Condition::Comparison(cmp) => {
+                let resolved_value = Self::resolve_value(&cmp.value, params);
+                Condition::Comparison(crate::velesql::Comparison {
+                    column: cmp.column.clone(),
+                    operator: cmp.operator,
+                    value: resolved_value,
+                })
+            }
+            Condition::In(in_cond) => {
+                let resolved_values: Vec<Value> = in_cond
+                    .values
+                    .iter()
+                    .map(|v| Self::resolve_value(v, params))
+                    .collect();
+                Condition::In(crate::velesql::InCondition {
+                    column: in_cond.column.clone(),
+                    values: resolved_values,
+                })
+            }
+            Condition::Between(btw) => {
+                let resolved_low = Self::resolve_value(&btw.low, params);
+                let resolved_high = Self::resolve_value(&btw.high, params);
+                Condition::Between(crate::velesql::BetweenCondition {
+                    column: btw.column.clone(),
+                    low: resolved_low,
+                    high: resolved_high,
+                })
+            }
+            Condition::And(left, right) => Condition::And(
+                Box::new(Self::resolve_condition_params(left, params)),
+                Box::new(Self::resolve_condition_params(right, params)),
+            ),
+            Condition::Or(left, right) => Condition::Or(
+                Box::new(Self::resolve_condition_params(left, params)),
+                Box::new(Self::resolve_condition_params(right, params)),
+            ),
+            Condition::Not(inner) => {
+                Condition::Not(Box::new(Self::resolve_condition_params(inner, params)))
+            }
+            Condition::Group(inner) => {
+                Condition::Group(Box::new(Self::resolve_condition_params(inner, params)))
+            }
+            // These conditions don't have Value parameters to resolve
+            other => other.clone(),
+        }
+    }
+
+    /// Resolve a single Value, substituting Parameter with actual value from params.
+    fn resolve_value(value: &Value, params: &HashMap<String, serde_json::Value>) -> Value {
+        match value {
+            Value::Parameter(name) => {
+                if let Some(param_value) = params.get(name) {
+                    // Convert serde_json::Value to VelesQL Value
+                    match param_value {
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                Value::Integer(i)
+                            } else if let Some(f) = n.as_f64() {
+                                Value::Float(f)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        serde_json::Value::String(s) => Value::String(s.clone()),
+                        serde_json::Value::Bool(b) => Value::Boolean(*b),
+                        // Null, arrays, and objects not supported as params
+                        _ => Value::Null,
+                    }
+                } else {
+                    // Parameter not found, keep as null
+                    Value::Null
+                }
+            }
+            other => other.clone(),
+        }
     }
 }
