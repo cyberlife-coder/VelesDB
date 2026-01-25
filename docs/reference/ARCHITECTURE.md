@@ -135,6 +135,15 @@ This document describes the internal architecture of VelesDB.
 - RoaringBitmap for set operations
 - 122x faster than JSON filtering
 
+#### Aggregation Engine (EPIC-017/018)
+- Streaming aggregation executor
+- **Performance Optimizations**:
+  - `process_batch()` - SIMD-friendly vectorized aggregation
+  - Parallel aggregation with Rayon (10K+ datasets)
+  - Pre-computed hash for GROUP BY (vs JSON serialization)
+  - String interning to avoid allocations in hot path
+- ~2x speedup on large aggregations
+
 ### 4. Knowledge Graph Layer (EPIC-019)
 
 ```

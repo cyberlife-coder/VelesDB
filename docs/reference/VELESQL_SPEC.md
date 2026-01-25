@@ -70,7 +70,9 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
                     [<offset_clause>]
                     [<with_clause>]
 
-<join_clause>   ::= "JOIN" <identifier> ["AS" <identifier>] "ON" <join_condition>
+<join_clause>   ::= [<join_type>] "JOIN" <identifier> ["AS" <identifier>] <join_spec>
+<join_type>     ::= "LEFT" | "RIGHT" | "FULL" | ε
+<join_spec>     ::= ("ON" <join_condition>) | ("USING" "(" <column_list> ")")
 <join_condition>::= <column_ref> "=" <column_ref>
 <column_ref>    ::= <identifier> "." <identifier>
 
