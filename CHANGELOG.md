@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable aggregation limits
 
 - **Extended JOIN** (US-003)
+  - `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN` support
+  - `USING (column)` clause alternative to `ON`
   - JOIN with AS alias support
   - Multiple JOINs in single query
 

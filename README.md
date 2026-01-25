@@ -391,7 +391,7 @@ curl -X POST http://localhost:8080/collections \
   -d '{
     "name": "my_vectors",
     "dimension": 768,
-    "metric": "cosine"  # Options: cosine, euclidean, dot
+    "metric": "cosine"  # Options: cosine, euclidean, dot, hamming, jaccard
   }'
 ```
 
