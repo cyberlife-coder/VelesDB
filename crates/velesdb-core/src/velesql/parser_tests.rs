@@ -432,10 +432,14 @@ fn test_parse_simple_join() {
     let join = &query.select.joins[0];
     assert_eq!(join.table, "prices");
     assert!(join.alias.is_none());
-    assert_eq!(join.condition.left.table, Some("prices".to_string()));
-    assert_eq!(join.condition.left.column, "product_id");
-    assert_eq!(join.condition.right.table, Some("products".to_string()));
-    assert_eq!(join.condition.right.column, "id");
+    let cond = join
+        .condition
+        .as_ref()
+        .expect("condition should be present");
+    assert_eq!(cond.left.table, Some("prices".to_string()));
+    assert_eq!(cond.left.column, "product_id");
+    assert_eq!(cond.right.table, Some("products".to_string()));
+    assert_eq!(cond.right.column, "id");
 }
 
 #[test]
@@ -447,8 +451,12 @@ fn test_parse_join_with_alias() {
     let join = &query.select.joins[0];
     assert_eq!(join.table, "prices");
     assert_eq!(join.alias, Some("pr".to_string()));
-    assert_eq!(join.condition.left.table, Some("pr".to_string()));
-    assert_eq!(join.condition.left.column, "product_id");
+    let cond = join
+        .condition
+        .as_ref()
+        .expect("condition should be present");
+    assert_eq!(cond.left.table, Some("pr".to_string()));
+    assert_eq!(cond.left.column, "product_id");
 }
 
 #[test]
