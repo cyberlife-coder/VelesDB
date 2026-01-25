@@ -13,7 +13,75 @@ use crate::velesql::{
     HavingClause, Query, SelectColumns, Value,
 };
 use rayon::prelude::*;
+use rustc_hash::FxHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
+/// Group key for GROUP BY operations with pre-computed hash.
+/// Avoids JSON serialization overhead by using direct value hashing.
+#[derive(Clone)]
+struct GroupKey {
+    /// Original values for result construction
+    values: Vec<serde_json::Value>,
+    /// Pre-computed hash for fast HashMap lookup
+    hash: u64,
+}
+
+impl GroupKey {
+    fn new(values: Vec<serde_json::Value>) -> Self {
+        let hash = Self::compute_hash(&values);
+        Self { values, hash }
+    }
+
+    fn compute_hash(values: &[serde_json::Value]) -> u64 {
+        let mut hasher = FxHasher::default();
+        for v in values {
+            Self::hash_value(v, &mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
+        match value {
+            serde_json::Value::Null => 0u8.hash(hasher),
+            serde_json::Value::Bool(b) => {
+                1u8.hash(hasher);
+                b.hash(hasher);
+            }
+            serde_json::Value::Number(n) => {
+                2u8.hash(hasher);
+                // Use bits for consistent hashing of floats
+                if let Some(f) = n.as_f64() {
+                    f.to_bits().hash(hasher);
+                }
+            }
+            serde_json::Value::String(s) => {
+                3u8.hash(hasher);
+                s.hash(hasher);
+            }
+            _ => {
+                // Arrays and objects: fallback to string representation
+                4u8.hash(hasher);
+                value.to_string().hash(hasher);
+            }
+        }
+    }
+}
+
+impl Hash for GroupKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hash.hash(state);
+    }
+}
+
+impl PartialEq for GroupKey {
+    fn eq(&self, other: &Self) -> bool {
+        // Fast path: different hash means definitely different
+        self.hash == other.hash && self.values == other.values
+    }
+}
+
+impl Eq for GroupKey {}
 
 /// Maximum number of groups allowed (memory protection).
 const MAX_GROUPS: usize = 10000;
@@ -289,8 +357,8 @@ impl Collection {
             .as_ref()
             .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond.clone())));
 
-        // HashMap: GroupKey (serialized as String) -> Aggregator
-        let mut groups: HashMap<String, Aggregator> = HashMap::new();
+        // HashMap: GroupKey -> Aggregator (optimized with pre-computed hash)
+        let mut groups: HashMap<GroupKey, Aggregator> = HashMap::new();
 
         // Determine which columns we need to aggregate
         let columns_to_aggregate: std::collections::HashSet<&str> = aggregations
@@ -324,8 +392,8 @@ impl Collection {
                 }
             }
 
-            // Extract group key from payload
-            let group_key = Self::extract_group_key(payload.as_ref(), group_by_columns);
+            // Extract group key from payload (optimized: no JSON serialization)
+            let group_key = Self::extract_group_key_fast(payload.as_ref(), group_by_columns);
 
             // Check group limit
             if !groups.contains_key(&group_key) && groups.len() >= MAX_GROUPS {
@@ -367,11 +435,9 @@ impl Collection {
 
             let mut row = serde_json::Map::new();
 
-            // Parse group key back to values and add to result
-            let key_values: Vec<serde_json::Value> =
-                serde_json::from_str(&group_key).unwrap_or_default();
+            // Use group key values directly (no JSON parsing needed)
             for (i, col_name) in group_by_columns.iter().enumerate() {
-                if let Some(val) = key_values.get(i) {
+                if let Some(val) = group_key.values.get(i) {
                     row.insert(col_name.clone(), val.clone());
                 }
             }
@@ -433,11 +499,12 @@ impl Collection {
         Ok(serde_json::Value::Array(results))
     }
 
-    /// Extract group key from payload as serialized JSON array.
-    fn extract_group_key(
+    /// Extract group key from payload with pre-computed hash (optimized).
+    /// Avoids JSON serialization overhead by using direct value hashing.
+    fn extract_group_key_fast(
         payload: Option<&serde_json::Value>,
         group_by_columns: &[String],
-    ) -> String {
+    ) -> GroupKey {
         let values: Vec<serde_json::Value> = group_by_columns
             .iter()
             .map(|col| {
@@ -446,7 +513,7 @@ impl Collection {
                     .unwrap_or(serde_json::Value::Null)
             })
             .collect();
-        serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
+        GroupKey::new(values)
     }
 
     /// Evaluate HAVING clause against aggregation result.
