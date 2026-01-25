@@ -165,24 +165,27 @@ const results = await db.hybridSearch(
 );
 ```
 
-### `db.query(queryString, params)` (v0.8.5+)
+### `db.query(collection, queryString, params?, options?)` (v0.8.5+)
 
 Execute a VelesQL query.
 
 ```typescript
 // Simple query
 const results = await db.query(
+  'documents',
   "SELECT * FROM documents WHERE category = 'tech' LIMIT 10"
 );
 
 // With vector parameter
 const results = await db.query(
+  'documents',
   "SELECT * FROM documents WHERE VECTOR NEAR $query LIMIT 5",
   { query: [0.1, 0.2, ...] }
 );
 
 // Hybrid query
 const results = await db.query(
+  'docs',
   "SELECT * FROM docs WHERE VECTOR NEAR $v AND content MATCH 'rust' LIMIT 10",
   { v: queryVector }
 );
@@ -282,17 +285,30 @@ const degree = await db.getNodeDegree('social', 100);
 
 ## VelesQL Query Builder (v1.2.0+)
 
+Build type-safe VelesQL queries with the fluent builder API.
+
 ```typescript
 import { velesql } from '@wiscale/velesdb-sdk';
 
-const query = velesql()
-  .from('documents')
-  .near('$queryVector')
-  .where('category', '=', 'tech')
-  .limit(10)
-  .build();
+// Graph pattern query
+const builder = velesql()
+  .match('d', 'Document')
+  .nearVector('$queryVector', queryVector)
+  .andWhere('d.category = $cat', { cat: 'tech' })
+  .limit(10);
 
-const results = await db.query('collection', query.query, query.params);
+const queryString = builder.toVelesQL();
+const params = builder.getParams();
+const results = await db.query('documents', queryString, params);
+
+// Graph traversal with relationships
+const graphQuery = velesql()
+  .match('p', 'Person')
+  .rel('KNOWS')
+  .to('f', 'Person')
+  .where('p.age > 25')
+  .return(['p.name', 'f.name'])
+  .toVelesQL();
 ```
 
 ## Error Handling
