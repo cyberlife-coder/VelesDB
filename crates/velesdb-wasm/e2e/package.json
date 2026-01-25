@@ -1,0 +1,15 @@
+{
+  "name": "velesdb-wasm-e2e",
+  "version": "1.0.0",
+  "description": "E2E browser tests for VelesDB WASM",
+  "private": true,
+  "scripts": {
+    "build:wasm": "cd .. && wasm-pack build --target web --out-dir e2e/pkg",
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:ui": "npx playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VelesDB WASM E2E Tests</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 20px; }
+        #status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .pending { background: #fff3cd; color: #856404; }
+        pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>VelesDB WASM E2E Tests</h1>
+    <div id="status" class="pending">Loading WASM module...</div>
+    <div id="results"></div>
+
+    <script type="module">
+        import init, { VectorStore } from './pkg/velesdb_wasm.js';
+
+        // Expose to window for Playwright tests
+        window.VelesDB = { ready: false, VectorStore: null, error: null };
+
+        async function initWasm() {
+            const status = document.getElementById('status');
+            const results = document.getElementById('results');
+
+            try {
+                await init();
+                window.VelesDB.VectorStore = VectorStore;
+                window.VelesDB.ready = true;
+                status.className = 'success';
+                status.textContent = 'WASM module loaded successfully!';
+
+                // Run basic smoke test
+                const store = VectorStore.new(4, 'cosine');
+                store.insert(1, new Float32Array([1.0, 0.0, 0.0, 0.0]));
+                store.insert(2, new Float32Array([0.9, 0.1, 0.0, 0.0]));
+                store.insert(3, new Float32Array([0.0, 1.0, 0.0, 0.0]));
+
+                const searchResults = store.search(new Float32Array([1.0, 0.0, 0.0, 0.0]), 2);
+                
+                results.innerHTML = `
+                    <h2>Smoke Test Results</h2>
+                    <p><strong>Store dimension:</strong> ${store.dimension()}</p>
+                    <p><strong>Store size:</strong> ${store.len()}</p>
+                    <p><strong>Search results:</strong></p>
+                    <pre>${JSON.stringify(searchResults, null, 2)}</pre>
+                `;
+            } catch (e) {
+                window.VelesDB.error = e.message;
+                status.className = 'error';
+                status.textContent = `Error: ${e.message}`;
+                results.innerHTML = `<pre>${e.stack}</pre>`;
+            }
+        }
+
+        initWasm();
+    </script>
+</body>
+</html>
