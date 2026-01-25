@@ -33,8 +33,16 @@ with_option_list = { with_option ~ ("," ~ with_option)* }
 with_option = { identifier ~ "=" ~ with_value }
 with_value = { string | float | integer | boolean | identifier }
 
-// Select list: * or column list
-select_list = { "*" | column_list }
+// Select list: * or aggregations or column list
+select_list = { "*" | aggregation_list | column_list }
+
+// Aggregate functions: COUNT, SUM, AVG, MIN, MAX
+aggregation_list = { aggregation_item ~ ("," ~ aggregation_item)* }
+aggregation_item = { aggregate_function ~ (^"AS" ~ identifier)? }
+aggregate_function = { aggregate_type ~ "(" ~ aggregate_arg ~ ")" }
+aggregate_type = { ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
+aggregate_arg = { "*" | column_name }
+
 column_list = { column ~ ("," ~ column)* }
 column = { column_name ~ (^"AS" ~ identifier)? }
 column_name = @{ identifier ~ ("." ~ identifier)? }
