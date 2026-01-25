@@ -2,9 +2,9 @@
 
 use super::Rule;
 use crate::velesql::ast::{
-    AggregateArg, AggregateFunction, AggregateType, Column, ColumnRef, CompareOp, GroupByClause,
-    HavingClause, HavingCondition, JoinClause, JoinCondition, OrderByExpr, Query, SelectColumns,
-    SelectOrderBy, SelectStatement, SimilarityOrderBy,
+    AggregateArg, AggregateFunction, AggregateType, Column, ColumnRef, CompareOp, CompoundQuery,
+    GroupByClause, HavingClause, HavingCondition, JoinClause, JoinCondition, OrderByExpr, Query,
+    SelectColumns, SelectOrderBy, SelectStatement, SetOperator, SimilarityOrderBy,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -13,13 +13,60 @@ impl Parser {
     pub(crate) fn parse_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, ParseError> {
         let mut inner = pair.into_inner();
 
-        let select_pair = inner
-            .find(|p| p.as_rule() == Rule::select_stmt)
+        // Find compound_query (EPIC-040 US-006)
+        let compound_pair = inner
+            .find(|p| p.as_rule() == Rule::compound_query)
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected query"))?;
+
+        Self::parse_compound_query(compound_pair)
+    }
+
+    /// Parse compound query with optional set operator (EPIC-040 US-006).
+    fn parse_compound_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, ParseError> {
+        let mut select_stmts = Vec::new();
+        let mut set_op = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::select_stmt => {
+                    select_stmts.push(Self::parse_select_stmt(inner_pair)?);
+                }
+                Rule::set_operator => {
+                    set_op = Some(Self::parse_set_operator(inner_pair.as_str()));
+                }
+                _ => {}
+            }
+        }
+
+        let select = select_stmts
+            .first()
+            .cloned()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected SELECT statement"))?;
 
-        let select = Self::parse_select_stmt(select_pair)?;
+        let compound = if let (Some(op), Some(right)) = (set_op, select_stmts.get(1).cloned()) {
+            Some(CompoundQuery {
+                operator: op,
+                right: Box::new(right),
+            })
+        } else {
+            None
+        };
 
-        Ok(Query { select })
+        Ok(Query { select, compound })
+    }
+
+    /// Parse set operator (UNION, UNION ALL, INTERSECT, EXCEPT).
+    fn parse_set_operator(text: &str) -> SetOperator {
+        let upper = text.to_uppercase();
+        if upper.contains("UNION") && upper.contains("ALL") {
+            SetOperator::UnionAll
+        } else if upper.contains("UNION") {
+            SetOperator::Union
+        } else if upper.contains("INTERSECT") {
+            SetOperator::Intersect
+        } else {
+            SetOperator::Except
+        }
     }
 
     pub(crate) fn parse_select_stmt(

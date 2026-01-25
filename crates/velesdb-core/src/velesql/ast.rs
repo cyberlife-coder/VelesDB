@@ -9,6 +9,31 @@ use serde::{Deserialize, Serialize};
 pub struct Query {
     /// The SELECT statement.
     pub select: SelectStatement,
+    /// Compound query (UNION/INTERSECT/EXCEPT) - EPIC-040 US-006.
+    #[serde(default)]
+    pub compound: Option<CompoundQuery>,
+}
+
+/// SQL set operator for compound queries (EPIC-040 US-006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SetOperator {
+    /// UNION - merge results, remove duplicates.
+    Union,
+    /// UNION ALL - merge results, keep duplicates.
+    UnionAll,
+    /// INTERSECT - keep only common results.
+    Intersect,
+    /// EXCEPT - subtract second query from first.
+    Except,
+}
+
+/// Compound query combining two queries with a set operator (EPIC-040 US-006).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompoundQuery {
+    /// The set operator (UNION, INTERSECT, EXCEPT).
+    pub operator: SetOperator,
+    /// The second query (right-hand side).
+    pub right: Box<SelectStatement>,
 }
 
 /// A SELECT statement.
