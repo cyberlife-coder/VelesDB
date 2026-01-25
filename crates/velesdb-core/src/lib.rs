@@ -68,6 +68,7 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::unused_async)]
 
+pub mod agent;
 pub mod alloc_guard;
 #[cfg(test)]
 mod alloc_guard_tests;
