@@ -52,6 +52,8 @@ fn test_query_serialization() {
             limit: Some(10),
             offset: None,
             with_clause: None,
+            group_by: None,
+            having: None,
         },
     };
 
