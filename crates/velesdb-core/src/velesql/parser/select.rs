@@ -139,6 +139,11 @@ impl Parser {
                     let sim = Self::parse_order_by_similarity(inner_pair)?;
                     return Ok((OrderByExpr::Similarity(sim), true));
                 }
+                Rule::aggregate_function => {
+                    // EPIC-040 US-002: Support ORDER BY with aggregate functions
+                    let agg = Self::parse_aggregate_function_only(inner_pair)?;
+                    return Ok((OrderByExpr::Aggregate(agg), false));
+                }
                 Rule::identifier => {
                     return Ok((OrderByExpr::Field(inner_pair.as_str().to_string()), false));
                 }
