@@ -86,25 +86,39 @@ impl Aggregator {
     /// Process a value for a specific column's aggregation.
     ///
     /// Updates SUM, MIN, MAX, and count for AVG calculation.
+    /// Optimized to avoid String allocation in hot path when column already exists.
+    ///
+    /// # Panics
+    ///
+    /// This function will not panic under normal operation. The internal `expect()`
+    /// calls are guarded by invariant that all HashMaps are kept in sync.
     pub fn process_value(&mut self, column: &str, value: &serde_json::Value) {
         if let Some(num) = Self::extract_number(value) {
-            // Update sum
-            *self.sums.entry(column.to_string()).or_insert(0.0) += num;
-
-            // Update count for AVG
-            *self.counts.entry(column.to_string()).or_insert(0) += 1;
-
-            // Update min
-            let min = self.mins.entry(column.to_string()).or_insert(num);
-            if num < *min {
-                *min = num;
+            // Fast path: column already tracked - no allocation
+            if let Some(sum) = self.sums.get_mut(column) {
+                *sum += num;
+                // SAFETY: if sums has the key, counts/mins/maxs also have it
+                *self
+                    .counts
+                    .get_mut(column)
+                    .expect("counts synced with sums") += 1;
+                let min = self.mins.get_mut(column).expect("mins synced with sums");
+                if num < *min {
+                    *min = num;
+                }
+                let max = self.maxs.get_mut(column).expect("maxs synced with sums");
+                if num > *max {
+                    *max = num;
+                }
+                return;
             }
 
-            // Update max
-            let max = self.maxs.entry(column.to_string()).or_insert(num);
-            if num > *max {
-                *max = num;
-            }
+            // Slow path: first time seeing this column - allocate once
+            let col_owned = column.to_string();
+            self.sums.insert(col_owned.clone(), num);
+            self.counts.insert(col_owned.clone(), 1);
+            self.mins.insert(col_owned.clone(), num);
+            self.maxs.insert(col_owned, num);
         }
     }
 
