@@ -43,6 +43,7 @@ fn test_value_from_bool() {
 #[test]
 fn test_query_serialization() {
     let query = Query {
+        compound: None,
         select: SelectStatement {
             columns: SelectColumns::All,
             from: "documents".to_string(),
