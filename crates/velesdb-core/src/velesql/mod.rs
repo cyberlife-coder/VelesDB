@@ -58,6 +58,8 @@ mod planner;
 
 #[cfg(test)]
 mod similarity_tests;
+#[cfg(test)]
+mod with_options_tests;
 
 pub use aggregator::{AggregateResult, Aggregator};
 pub use ast::*;
