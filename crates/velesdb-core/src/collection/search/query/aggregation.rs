@@ -147,11 +147,8 @@ impl Collection {
                     serde_json::json!(agg_result.count)
                 }
                 (AggregateType::Count, AggregateArg::Column(col)) => {
-                    // COUNT(column) = number of non-null values
-                    let count = agg_result
-                        .sums
-                        .get(col.as_str())
-                        .map_or(0, |_| agg_result.count);
+                    // COUNT(column) = number of non-null values for this column
+                    let count = agg_result.counts.get(col.as_str()).copied().unwrap_or(0);
                     serde_json::json!(count)
                 }
                 (AggregateType::Sum, AggregateArg::Column(col)) => agg_result
@@ -328,10 +325,8 @@ impl Collection {
                         serde_json::json!(agg_result.count)
                     }
                     (AggregateType::Count, AggregateArg::Column(col)) => {
-                        let count = agg_result
-                            .sums
-                            .get(col.as_str())
-                            .map_or(0, |_| agg_result.count);
+                        // COUNT(column) = number of non-null values for this column
+                        let count = agg_result.counts.get(col.as_str()).copied().unwrap_or(0);
                         serde_json::json!(count)
                     }
                     (AggregateType::Sum, AggregateArg::Column(col)) => agg_result
@@ -392,7 +387,8 @@ impl Collection {
         match (&agg.function_type, &agg.argument) {
             (AggregateType::Count, AggregateArg::Wildcard) => Some(result.count as f64),
             (AggregateType::Count, AggregateArg::Column(col)) => {
-                result.sums.get(col.as_str()).map(|_| result.count as f64)
+                // COUNT(column) = number of non-null values for this column
+                result.counts.get(col.as_str()).map(|&c| c as f64)
             }
             (AggregateType::Sum, AggregateArg::Column(col)) => {
                 result.sums.get(col.as_str()).copied()
