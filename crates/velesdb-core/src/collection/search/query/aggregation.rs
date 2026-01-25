@@ -71,6 +71,13 @@ impl Collection {
             );
         }
 
+        // HAVING without GROUP BY is invalid - return error
+        if stmt.having.is_some() {
+            return Err(crate::error::Error::Config(
+                "HAVING clause requires GROUP BY clause".to_string(),
+            ));
+        }
+
         // Build filter from WHERE clause if present
         let filter = stmt
             .where_clause
