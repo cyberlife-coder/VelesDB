@@ -246,6 +246,55 @@ await db.flush('documents');
 
 Close the client and release resources.
 
+## Knowledge Graph API (v1.2.0+)
+
+VelesDB supports hybrid vector + graph queries.
+
+### `db.addEdge(collection, edge)`
+
+```typescript
+await db.addEdge('social', {
+  id: 1, source: 100, target: 200,
+  label: 'FOLLOWS',
+  properties: { since: '2024-01-01' }
+});
+```
+
+### `db.getEdges(collection, options?)`
+
+```typescript
+const edges = await db.getEdges('social', { label: 'FOLLOWS' });
+```
+
+### `db.traverseGraph(collection, request)`
+
+```typescript
+const result = await db.traverseGraph('social', {
+  source: 100, strategy: 'bfs', maxDepth: 3
+});
+```
+
+### `db.getNodeDegree(collection, nodeId)`
+
+```typescript
+const degree = await db.getNodeDegree('social', 100);
+```
+
+## VelesQL Query Builder (v1.2.0+)
+
+```typescript
+import { velesql } from '@wiscale/velesdb-sdk';
+
+const query = velesql()
+  .from('documents')
+  .near('$queryVector')
+  .where('category', '=', 'tech')
+  .limit(10)
+  .build();
+
+const results = await db.query('collection', query.query, query.params);
+```
+
 ## Error Handling
 
 ```typescript
