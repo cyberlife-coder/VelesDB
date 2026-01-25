@@ -35,7 +35,7 @@ fn test_parse_select_columns() {
             assert_eq!(cols[0].name, "id");
             assert_eq!(cols[1].name, "score");
         }
-        SelectColumns::All => panic!("Expected columns list"),
+        SelectColumns::All | SelectColumns::Aggregations(_) => panic!("Expected columns list"),
     }
 }
 
@@ -46,7 +46,7 @@ fn test_parse_select_nested_column() {
         SelectColumns::Columns(cols) => {
             assert_eq!(cols[0].name, "payload.title");
         }
-        SelectColumns::All => panic!("Expected columns list"),
+        SelectColumns::All | SelectColumns::Aggregations(_) => panic!("Expected columns list"),
     }
 }
 

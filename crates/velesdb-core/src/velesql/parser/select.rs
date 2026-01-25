@@ -2,8 +2,8 @@
 
 use super::Rule;
 use crate::velesql::ast::{
-    Column, ColumnRef, JoinClause, JoinCondition, OrderByExpr, Query, SelectColumns, SelectOrderBy,
-    SelectStatement, SimilarityOrderBy,
+    AggregateArg, AggregateFunction, AggregateType, Column, ColumnRef, JoinClause, JoinCondition,
+    OrderByExpr, Query, SelectColumns, SelectOrderBy, SelectStatement, SimilarityOrderBy,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -170,11 +170,114 @@ impl Parser {
         let inner = pair.into_inner().next();
 
         match inner {
+            Some(p) if p.as_rule() == Rule::aggregation_list => {
+                let aggs = Self::parse_aggregation_list(p)?;
+                Ok(SelectColumns::Aggregations(aggs))
+            }
             Some(p) if p.as_rule() == Rule::column_list => {
                 let columns = Self::parse_column_list(p)?;
                 Ok(SelectColumns::Columns(columns))
             }
             _ => Ok(SelectColumns::All),
+        }
+    }
+
+    /// Parse a list of aggregate functions.
+    pub(crate) fn parse_aggregation_list(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Vec<AggregateFunction>, ParseError> {
+        let mut aggs = Vec::new();
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::aggregation_item {
+                aggs.push(Self::parse_aggregation_item(inner_pair)?);
+            }
+        }
+        Ok(aggs)
+    }
+
+    /// Parse a single aggregation item (e.g., COUNT(*) AS total).
+    pub(crate) fn parse_aggregation_item(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<AggregateFunction, ParseError> {
+        let mut function_type = None;
+        let mut argument = None;
+        let mut alias = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::aggregate_function => {
+                    let (ft, arg) = Self::parse_aggregate_function(inner_pair)?;
+                    function_type = Some(ft);
+                    argument = Some(arg);
+                }
+                Rule::identifier => {
+                    alias = Some(inner_pair.as_str().to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let function_type = function_type
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate function"))?;
+        let argument =
+            argument.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate argument"))?;
+
+        Ok(AggregateFunction {
+            function_type,
+            argument,
+            alias,
+        })
+    }
+
+    /// Parse an aggregate function (e.g., COUNT(*), SUM(price)).
+    pub(crate) fn parse_aggregate_function(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(AggregateType, AggregateArg), ParseError> {
+        let mut agg_type = None;
+        let mut arg = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::aggregate_type => {
+                    agg_type = Some(Self::parse_aggregate_type(&inner_pair)?);
+                }
+                Rule::aggregate_arg => {
+                    arg = Some(Self::parse_aggregate_arg(inner_pair));
+                }
+                _ => {}
+            }
+        }
+
+        let agg_type =
+            agg_type.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate type"))?;
+        let arg = arg.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate argument"))?;
+
+        Ok((agg_type, arg))
+    }
+
+    /// Parse aggregate type (COUNT, SUM, AVG, MIN, MAX).
+    pub(crate) fn parse_aggregate_type(
+        pair: &pest::iterators::Pair<Rule>,
+    ) -> Result<AggregateType, ParseError> {
+        let type_str = pair.as_str().to_uppercase();
+        match type_str.as_str() {
+            "COUNT" => Ok(AggregateType::Count),
+            "SUM" => Ok(AggregateType::Sum),
+            "AVG" => Ok(AggregateType::Avg),
+            "MIN" => Ok(AggregateType::Min),
+            "MAX" => Ok(AggregateType::Max),
+            other => Err(ParseError::syntax(0, other, "Unknown aggregate function")),
+        }
+    }
+
+    /// Parse aggregate argument (* or column name).
+    pub(crate) fn parse_aggregate_arg(pair: pest::iterators::Pair<Rule>) -> AggregateArg {
+        let inner = pair.into_inner().next();
+        match inner {
+            Some(p) if p.as_rule() == Rule::column_name => {
+                AggregateArg::Column(p.as_str().to_string())
+            }
+            _ => AggregateArg::Wildcard,
         }
     }
 
