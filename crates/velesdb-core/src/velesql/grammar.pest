@@ -24,8 +24,12 @@ having_clause = { ^"HAVING" ~ having_condition }
 having_condition = { having_term ~ ((^"AND" | ^"OR") ~ having_term)* }
 having_term = { aggregate_function ~ compare_op ~ value }
 
-// JOIN clause for cross-store queries (EPIC-031 US-004)
-join_clause = { ^"JOIN" ~ identifier ~ alias_clause? ~ ^"ON" ~ join_condition }
+// JOIN clause for cross-store queries (EPIC-031 US-004, extended EPIC-040 US-003)
+join_clause = { join_type? ~ ^"JOIN" ~ identifier ~ alias_clause? ~ join_spec }
+join_type = { (^"LEFT" ~ ^"OUTER"?) | (^"RIGHT" ~ ^"OUTER"?) | (^"FULL" ~ ^"OUTER"?) | ^"INNER" }
+join_spec = { on_clause | using_clause }
+on_clause = { ^"ON" ~ join_condition }
+using_clause = { ^"USING" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ")" }
 alias_clause = { ^"AS" ~ identifier }
 join_condition = { column_ref ~ "=" ~ column_ref }
 column_ref = @{ identifier ~ "." ~ identifier }

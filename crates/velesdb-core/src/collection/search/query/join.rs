@@ -123,9 +123,19 @@ pub fn execute_join(
     join: &JoinClause,
     column_store: &ColumnStore,
 ) -> Vec<JoinedResult> {
+    // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
+    let condition = match &join.condition {
+        Some(cond) => cond,
+        None => {
+            // USING clause - not yet implemented for execution
+            // Would need to resolve column from both tables
+            return Vec::new();
+        }
+    };
+
     // 1. Validate that join column matches ColumnStore's primary key
     // This prevents silent incorrect results when joining on non-PK columns
-    let join_column = &join.condition.left.column;
+    let join_column = &condition.left.column;
     if let Some(pk_column) = column_store.primary_key_column() {
         if join_column != pk_column {
             // Cannot join on non-primary-key column - return empty results
@@ -138,7 +148,7 @@ pub fn execute_join(
     }
 
     // 2. Extract join keys from search results
-    let join_keys = extract_join_keys(results, &join.condition);
+    let join_keys = extract_join_keys(results, condition);
 
     if join_keys.is_empty() {
         return Vec::new();
@@ -285,9 +295,10 @@ mod tests {
 
     fn make_join_clause() -> JoinClause {
         JoinClause {
+            join_type: crate::velesql::JoinType::Inner,
             table: "prices".to_string(),
             alias: None,
-            condition: JoinCondition {
+            condition: Some(JoinCondition {
                 left: ColumnRef {
                     table: Some("prices".to_string()),
                     column: "product_id".to_string(),
@@ -296,7 +307,8 @@ mod tests {
                     table: Some("products".to_string()),
                     column: "id".to_string(),
                 },
-            },
+            }),
+            using_columns: None,
         }
     }
 
@@ -328,7 +340,7 @@ mod tests {
         ];
         let join = make_join_clause();
 
-        let keys = extract_join_keys(&results, &join.condition);
+        let keys = extract_join_keys(&results, join.condition.as_ref().unwrap());
 
         assert_eq!(keys.len(), 3);
         assert_eq!(keys[0], (0, 1));
@@ -510,9 +522,10 @@ mod tests {
 
         // Create join with WRONG left column (category_id instead of product_id)
         let wrong_join = JoinClause {
+            join_type: crate::velesql::JoinType::Inner,
             table: "prices".to_string(),
             alias: None,
-            condition: JoinCondition {
+            condition: Some(JoinCondition {
                 left: ColumnRef {
                     table: Some("prices".to_string()),
                     column: "category_id".to_string(), // NOT the PK!
@@ -521,7 +534,8 @@ mod tests {
                     table: Some("products".to_string()),
                     column: "id".to_string(),
                 },
-            },
+            }),
+            using_columns: None,
         };
 
         let joined = execute_join(&results, &wrong_join, &column_store);
@@ -543,9 +557,10 @@ mod tests {
 
         // Correct join with actual PK column
         let correct_join = JoinClause {
+            join_type: crate::velesql::JoinType::Inner,
             table: "prices".to_string(),
             alias: None,
-            condition: JoinCondition {
+            condition: Some(JoinCondition {
                 left: ColumnRef {
                     table: Some("prices".to_string()),
                     column: "product_id".to_string(), // Correct PK
@@ -554,7 +569,8 @@ mod tests {
                     table: Some("products".to_string()),
                     column: "id".to_string(),
                 },
-            },
+            }),
+            using_columns: None,
         };
 
         let joined = execute_join(&results, &correct_join, &column_store);
