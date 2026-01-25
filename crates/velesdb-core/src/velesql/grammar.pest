@@ -5,8 +5,12 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
-// Main entry point
-query = { SOI ~ select_stmt ~ ";"? ~ EOI }
+// Main entry point - supports compound queries (EPIC-040 US-006)
+query = { SOI ~ compound_query ~ ";"? ~ EOI }
+
+// Compound query: SELECT with optional UNION/INTERSECT/EXCEPT
+compound_query = { select_stmt ~ (set_operator ~ select_stmt)? }
+set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
 
 // SELECT statement with optional JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
 select_stmt = { 
