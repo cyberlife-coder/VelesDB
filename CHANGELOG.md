@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🚀 EPIC-040: VelesQL Language v2.0
+
+#### Added
+
+- **Set Operations** (US-006)
+  - `UNION` / `UNION ALL` - merge query results
+  - `INTERSECT` - common results only
+  - `EXCEPT` - subtract second query from first
+  - `SetOperator` enum and `CompoundQuery` AST structures
+
+- **USING FUSION Hybrid Search** (US-005)
+  - `USING FUSION(strategy, k, weights)` clause
+  - Strategies: `rrf` (Reciprocal Rank Fusion), `weighted`, `maximum`
+  - Default RRF k=60
+
+- **Extended WITH Clause** (US-004)
+  - `max_groups` / `group_limit` parameters
+  - Configurable aggregation limits
+
+- **Extended JOIN** (US-003)
+  - JOIN with AS alias support
+  - Multiple JOINs in single query
+
+- **ORDER BY Enhancements** (US-002)
+  - Multi-column ORDER BY
+  - `ORDER BY similarity(field, $vector)` support
+  - ASC/DESC direction
+
+- **HAVING Enhancements** (US-001)
+  - AND/OR logical operators in HAVING
+  - Multiple aggregate conditions
+
+#### Documentation
+
+- `VELESQL_SPEC.md` updated to v2.0.0
+- New sections: Aggregations, JOIN, Set Operations
+- 24 new integration tests
+
+---
+
 ### 🔍 EPIC-031: Multi-model Query Engine
 
 #### Added
