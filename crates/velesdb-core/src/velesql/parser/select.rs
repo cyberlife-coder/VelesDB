@@ -2,8 +2,9 @@
 
 use super::Rule;
 use crate::velesql::ast::{
-    AggregateArg, AggregateFunction, AggregateType, Column, ColumnRef, JoinClause, JoinCondition,
-    OrderByExpr, Query, SelectColumns, SelectOrderBy, SelectStatement, SimilarityOrderBy,
+    AggregateArg, AggregateFunction, AggregateType, Column, ColumnRef, CompareOp, GroupByClause,
+    HavingClause, HavingCondition, JoinClause, JoinCondition, OrderByExpr, Query, SelectColumns,
+    SelectOrderBy, SelectStatement, SimilarityOrderBy,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -32,6 +33,8 @@ impl Parser {
         let mut limit = None;
         let mut offset = None;
         let mut with_clause = None;
+        let mut group_by = None;
+        let mut having = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -46,6 +49,12 @@ impl Parser {
                 }
                 Rule::where_clause => {
                     where_clause = Some(Self::parse_where_clause(inner_pair)?);
+                }
+                Rule::group_by_clause => {
+                    group_by = Some(Self::parse_group_by_clause(inner_pair));
+                }
+                Rule::having_clause => {
+                    having = Some(Self::parse_having_clause(inner_pair)?);
                 }
                 Rule::order_by_clause => {
                     order_by = Some(Self::parse_order_by_clause(inner_pair)?);
@@ -72,6 +81,8 @@ impl Parser {
             limit,
             offset,
             with_clause,
+            group_by,
+            having,
         })
     }
 
@@ -170,19 +181,54 @@ impl Parser {
         let inner = pair.into_inner().next();
 
         match inner {
-            Some(p) if p.as_rule() == Rule::aggregation_list => {
-                let aggs = Self::parse_aggregation_list(p)?;
-                Ok(SelectColumns::Aggregations(aggs))
-            }
-            Some(p) if p.as_rule() == Rule::column_list => {
-                let columns = Self::parse_column_list(p)?;
-                Ok(SelectColumns::Columns(columns))
+            Some(p) if p.as_rule() == Rule::select_item_list => {
+                // Parse mixed list of columns and aggregations
+                let (columns, aggs) = Self::parse_select_item_list(p)?;
+                if aggs.is_empty() {
+                    Ok(SelectColumns::Columns(columns))
+                } else if columns.is_empty() {
+                    Ok(SelectColumns::Aggregations(aggs))
+                } else {
+                    // Mixed: columns + aggregations (for GROUP BY)
+                    Ok(SelectColumns::Mixed {
+                        columns,
+                        aggregations: aggs,
+                    })
+                }
             }
             _ => Ok(SelectColumns::All),
         }
     }
 
+    /// Parse a mixed list of columns and aggregations.
+    pub(crate) fn parse_select_item_list(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(Vec<Column>, Vec<AggregateFunction>), ParseError> {
+        let mut columns = Vec::new();
+        let mut aggs = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::select_item {
+                // Each select_item can be aggregation_item or column
+                for item in inner_pair.into_inner() {
+                    match item.as_rule() {
+                        Rule::aggregation_item => {
+                            aggs.push(Self::parse_aggregation_item(item)?);
+                        }
+                        Rule::column => {
+                            columns.push(Self::parse_column(item)?);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok((columns, aggs))
+    }
+
     /// Parse a list of aggregate functions.
+    #[allow(dead_code)]
     pub(crate) fn parse_aggregation_list(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<AggregateFunction>, ParseError> {
@@ -281,6 +327,7 @@ impl Parser {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn parse_column_list(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<Column>, ParseError> {
@@ -397,5 +444,96 @@ impl Parser {
             table: Some(parts[0].to_string()),
             column: parts[1].to_string(),
         })
+    }
+
+    /// Parse GROUP BY clause.
+    pub(crate) fn parse_group_by_clause(pair: pest::iterators::Pair<Rule>) -> GroupByClause {
+        let mut columns = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::group_by_list {
+                for col_pair in inner_pair.into_inner() {
+                    if col_pair.as_rule() == Rule::identifier {
+                        columns.push(col_pair.as_str().to_string());
+                    }
+                }
+            }
+        }
+
+        GroupByClause { columns }
+    }
+
+    /// Parse HAVING clause.
+    pub(crate) fn parse_having_clause(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<HavingClause, ParseError> {
+        let mut conditions = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::having_condition {
+                for term_pair in inner_pair.into_inner() {
+                    if term_pair.as_rule() == Rule::having_term {
+                        conditions.push(Self::parse_having_term(term_pair)?);
+                    }
+                }
+            }
+        }
+
+        Ok(HavingClause { conditions })
+    }
+
+    /// Parse a single HAVING term (aggregate op value).
+    fn parse_having_term(pair: pest::iterators::Pair<Rule>) -> Result<HavingCondition, ParseError> {
+        let mut aggregate = None;
+        let mut operator = None;
+        let mut value = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::aggregate_function => {
+                    aggregate = Some(Self::parse_aggregate_function_only(inner_pair)?);
+                }
+                Rule::compare_op => {
+                    operator = Some(Self::parse_compare_op(&inner_pair)?);
+                }
+                Rule::value => {
+                    value = Some(Self::parse_value(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(HavingCondition {
+            aggregate: aggregate
+                .ok_or_else(|| ParseError::syntax(0, "", "HAVING requires aggregate function"))?,
+            operator: operator
+                .ok_or_else(|| ParseError::syntax(0, "", "HAVING requires comparison operator"))?,
+            value: value.ok_or_else(|| ParseError::syntax(0, "", "HAVING requires value"))?,
+        })
+    }
+
+    /// Parse aggregate function for HAVING (returns AggregateFunction).
+    fn parse_aggregate_function_only(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<AggregateFunction, ParseError> {
+        let (function_type, argument) = Self::parse_aggregate_function(pair)?;
+        Ok(AggregateFunction {
+            function_type,
+            argument,
+            alias: None,
+        })
+    }
+
+    /// Parse comparison operator.
+    fn parse_compare_op(pair: &pest::iterators::Pair<Rule>) -> Result<CompareOp, ParseError> {
+        match pair.as_str() {
+            "=" => Ok(CompareOp::Eq),
+            "!=" | "<>" => Ok(CompareOp::NotEq),
+            ">" => Ok(CompareOp::Gt),
+            ">=" => Ok(CompareOp::Gte),
+            "<" => Ok(CompareOp::Lt),
+            "<=" => Ok(CompareOp::Lte),
+            other => Err(ParseError::syntax(0, other, "Unknown comparison operator")),
+        }
     }
 }
