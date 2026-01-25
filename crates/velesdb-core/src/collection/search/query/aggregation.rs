@@ -480,9 +480,13 @@ impl Collection {
             _ => return false,
         };
 
+        // Use relative epsilon for large values (precision loss in sums)
+        // Scale epsilon by max magnitude, with floor of 1.0 for small values
+        let relative_epsilon = f64::EPSILON * agg.abs().max(thresh.abs()).max(1.0);
+
         match op {
-            CompareOp::Eq => (agg - thresh).abs() < f64::EPSILON,
-            CompareOp::NotEq => (agg - thresh).abs() >= f64::EPSILON,
+            CompareOp::Eq => (agg - thresh).abs() < relative_epsilon,
+            CompareOp::NotEq => (agg - thresh).abs() >= relative_epsilon,
             CompareOp::Gt => agg > thresh,
             CompareOp::Gte => agg >= thresh,
             CompareOp::Lt => agg < thresh,
