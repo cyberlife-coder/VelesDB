@@ -190,15 +190,27 @@ fn test_executor_having_sum_filter() {
 // ========== Semantic Validation Tests ==========
 
 #[test]
-fn test_semantic_having_requires_groupby() {
-    // HAVING without GROUP BY should fail
-    let result = Parser::parse("SELECT COUNT(*) FROM items HAVING COUNT(*) > 10");
+fn test_executor_having_without_groupby_returns_error() {
+    let (collection, _tmp) = create_test_collection();
 
-    // This should either fail at parse time or be caught by semantic validation
-    // For now, we'll allow the parse but the executor should handle it
-    if let Ok(query) = result {
-        // If parsing succeeds, having should still be set
-        // Executor will validate GROUP BY requirement
-        assert!(query.select.having.is_some() || query.select.group_by.is_none());
-    }
+    // Insert some data
+    let points = vec![Point {
+        id: 1,
+        vector: vec![0.1; 4],
+        payload: Some(serde_json::json!({"value": 10})),
+    }];
+    collection.upsert(points).unwrap();
+
+    // HAVING without GROUP BY should return an error at execution time
+    let query = Parser::parse("SELECT COUNT(*) FROM items HAVING COUNT(*) > 10").unwrap();
+    let params = HashMap::new();
+    let result = collection.execute_aggregate(&query, &params);
+
+    // Should return error, not silently ignore HAVING
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("HAVING") && err_msg.contains("GROUP BY"),
+        "Error should mention HAVING requires GROUP BY, got: {err_msg}"
+    );
 }
