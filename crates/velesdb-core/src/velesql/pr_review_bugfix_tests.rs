@@ -182,6 +182,35 @@ fn test_bug_2_having_or_not_treated_as_and() {
 }
 
 // =============================================================================
+// BUG 1: GROUP BY/HAVING unreachable from /query
+// This is a DESIGN LIMITATION, not a bug:
+// - execute_query() returns Vec<SearchResult> (for vector/text search)
+// - execute_aggregate() returns serde_json::Value (for GROUP BY/HAVING)
+// The server /query endpoint uses execute_query, so aggregations need a dedicated endpoint.
+// TODO: Create /aggregate endpoint in velesdb-server (EPIC-042)
+// =============================================================================
+
+#[test]
+fn test_bug_1_groupby_parses_correctly() {
+    // GROUP BY is parsed correctly - the issue is execution dispatch, not parsing
+    let sql = "SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 5";
+    let result = Parser::parse(sql);
+
+    assert!(
+        result.is_ok(),
+        "GROUP BY + HAVING should parse: {:?}",
+        result.err()
+    );
+
+    let query = result.unwrap();
+    assert!(
+        query.select.group_by.is_some(),
+        "GROUP BY should be present"
+    );
+    assert!(query.select.having.is_some(), "HAVING should be present");
+}
+
+// =============================================================================
 // BUG 8: WITH(max_groups=...) is case-sensitive
 // =============================================================================
 
