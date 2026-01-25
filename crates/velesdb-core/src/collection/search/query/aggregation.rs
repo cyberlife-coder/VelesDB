@@ -101,19 +101,27 @@ impl Collection {
 
         // Use parallel aggregation for large datasets
         let agg_result = if total_count >= PARALLEL_THRESHOLD {
-            // PARALLEL: Split into chunks, aggregate each, merge results
+            // PARALLEL: Pre-fetch all payloads (sequential) to avoid lock contention
+            let payloads: Vec<Option<serde_json::Value>> = ids
+                .iter()
+                .map(|&id| payload_storage.retrieve(id).ok().flatten())
+                .collect();
+
+            // Drop the lock before parallel processing
+            drop(payload_storage);
+            drop(vector_storage);
+
             let columns_vec: Vec<String> = columns_to_aggregate
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect();
 
-            let partial_aggregators: Vec<Aggregator> = ids
+            // Parallel aggregation on pre-fetched data (no lock contention)
+            let partial_aggregators: Vec<Aggregator> = payloads
                 .par_chunks(CHUNK_SIZE)
                 .map(|chunk| {
                     let mut chunk_agg = Aggregator::new();
-                    for &id in chunk {
-                        let payload = payload_storage.retrieve(id).ok().flatten();
-
+                    for payload in chunk {
                         // Apply filter if present
                         if let Some(ref f) = filter {
                             let matches = match payload {
