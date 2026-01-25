@@ -54,6 +54,7 @@ fn test_query_serialization() {
             with_clause: None,
             group_by: None,
             having: None,
+            fusion_clause: None,
         },
     };
 

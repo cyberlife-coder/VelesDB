@@ -37,6 +37,9 @@ pub struct SelectStatement {
     /// HAVING clause for filtering groups (optional).
     #[serde(default)]
     pub having: Option<HavingClause>,
+    /// USING FUSION clause for hybrid search (EPIC-040 US-005).
+    #[serde(default)]
+    pub fusion_clause: Option<FusionClause>,
 }
 
 /// JOIN clause for cross-store queries (EPIC-031 US-004).
@@ -262,6 +265,52 @@ impl WithValue {
         match self {
             Self::Boolean(b) => Some(*b),
             _ => None,
+        }
+    }
+}
+
+/// Fusion strategy type for hybrid search (EPIC-040 US-005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FusionStrategyType {
+    /// Reciprocal Rank Fusion (default) - position-based fusion.
+    #[default]
+    Rrf,
+    /// Weighted sum of normalized scores.
+    Weighted,
+    /// Take maximum score from either source.
+    Maximum,
+}
+
+/// USING FUSION clause for hybrid vector+graph search (EPIC-040 US-005).
+///
+/// Combines results from NEAR (vector) and MATCH (graph) queries.
+///
+/// # Example
+/// ```sql
+/// SELECT * FROM docs
+/// NEAR([0.1, 0.2], 10)
+/// MATCH (d)-[:CITES]->(ref)
+/// USING FUSION(strategy = 'rrf', k = 60)
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FusionClause {
+    /// Fusion strategy (rrf, weighted, maximum).
+    pub strategy: FusionStrategyType,
+    /// RRF k parameter (default 60).
+    pub k: Option<u32>,
+    /// Vector weight for weighted fusion (0.0-1.0).
+    pub vector_weight: Option<f64>,
+    /// Graph weight for weighted fusion (0.0-1.0).
+    pub graph_weight: Option<f64>,
+}
+
+impl Default for FusionClause {
+    fn default() -> Self {
+        Self {
+            strategy: FusionStrategyType::Rrf,
+            k: Some(60),
+            vector_weight: None,
+            graph_weight: None,
         }
     }
 }

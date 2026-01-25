@@ -35,6 +35,7 @@ impl Parser {
         let mut with_clause = None;
         let mut group_by = None;
         let mut having = None;
+        let mut fusion_clause = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -68,6 +69,9 @@ impl Parser {
                 Rule::with_clause => {
                     with_clause = Some(Self::parse_with_clause(inner_pair)?);
                 }
+                Rule::using_fusion_clause => {
+                    fusion_clause = Some(Self::parse_using_fusion_clause(inner_pair));
+                }
                 _ => {}
             }
         }
@@ -83,6 +87,7 @@ impl Parser {
             with_clause,
             group_by,
             having,
+            fusion_clause,
         })
     }
 
@@ -599,6 +604,73 @@ impl Parser {
             "<" => Ok(CompareOp::Lt),
             "<=" => Ok(CompareOp::Lte),
             other => Err(ParseError::syntax(0, other, "Unknown comparison operator")),
+        }
+    }
+
+    /// Parse USING FUSION clause (EPIC-040 US-005).
+    fn parse_using_fusion_clause(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> crate::velesql::FusionClause {
+        let mut strategy = crate::velesql::FusionStrategyType::Rrf;
+        let mut k = None;
+        let mut vector_weight = None;
+        let mut graph_weight = None;
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::fusion_options {
+                for opt_pair in inner_pair.into_inner() {
+                    if opt_pair.as_rule() == Rule::fusion_option_list {
+                        for option in opt_pair.into_inner() {
+                            if option.as_rule() == Rule::fusion_option {
+                                let mut key = String::new();
+                                let mut value_str = String::new();
+
+                                for part in option.into_inner() {
+                                    match part.as_rule() {
+                                        Rule::identifier => key = part.as_str().to_lowercase(),
+                                        Rule::fusion_value => {
+                                            value_str =
+                                                part.as_str().trim_matches('\'').to_string();
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
+                                match key.as_str() {
+                                    "strategy" => {
+                                        strategy = match value_str.to_lowercase().as_str() {
+                                            "weighted" => {
+                                                crate::velesql::FusionStrategyType::Weighted
+                                            }
+                                            "maximum" => {
+                                                crate::velesql::FusionStrategyType::Maximum
+                                            }
+                                            _ => crate::velesql::FusionStrategyType::Rrf, // rrf is default
+                                        };
+                                    }
+                                    "k" => {
+                                        k = value_str.parse().ok();
+                                    }
+                                    "vector_weight" => {
+                                        vector_weight = value_str.parse().ok();
+                                    }
+                                    "graph_weight" => {
+                                        graph_weight = value_str.parse().ok();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        crate::velesql::FusionClause {
+            strategy,
+            k,
+            vector_weight,
+            graph_weight,
         }
     }
 }
