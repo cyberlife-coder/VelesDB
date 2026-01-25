@@ -30,6 +30,8 @@ mod ast_tests;
 mod cache;
 #[cfg(test)]
 mod cache_tests;
+#[cfg(test)]
+mod complex_parser_tests;
 mod error;
 #[cfg(test)]
 mod error_tests;
@@ -45,6 +47,7 @@ mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
+
 #[cfg(test)]
 mod similarity_tests;
 
