@@ -1,5 +1,5 @@
 //! `VelesQL` Execution Benchmarks - Scalability Testing
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 //!
 //! Benchmarks query EXECUTION (not just parsing) at different data scales:
 //! - 1K, 10K, 100K rows
