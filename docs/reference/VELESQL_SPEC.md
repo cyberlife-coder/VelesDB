@@ -41,7 +41,7 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
 | Feature | SQL | VelesQL |
 |---------|-----|---------|
 | Vector search | ❌ Not supported | ✅ `vector NEAR $v` |
-| Distance metrics | ❌ | ✅ `COSINE`, `EUCLIDEAN`, `DOT` |
+| Distance metrics | ❌ | ✅ `COSINE`, `EUCLIDEAN`, `DOT`, `HAMMING`, `JACCARD` |
 | Full-text search | `LIKE '%..%'` (slow) | ✅ `MATCH 'query'` (BM25) |
 | JOINs | ✅ | ✅ `JOIN ... ON` (v2.0) |
 | GROUP BY / HAVING | ✅ | ✅ With aggregates (v2.0) |
@@ -105,7 +105,7 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
                   | <compare_expr>
 
 <vector_search> ::= "vector" "NEAR" [<metric>] <vector_value>
-<metric>        ::= "COSINE" | "EUCLIDEAN" | "DOT"
+<metric>        ::= "COSINE" | "EUCLIDEAN" | "DOT" | "HAMMING" | "JACCARD"
 <vector_value>  ::= <vector_literal> | <parameter>
 <vector_literal>::= "[" <float> ("," <float>)* "]"
 
@@ -323,11 +323,13 @@ SELECT * FROM documents WHERE vector NEAR $query_vector LIMIT 10
 
 ### Distance Metrics
 
-| Metric | Keyword | Best For |
-|--------|---------|----------|
-| Cosine Similarity | `COSINE` (default) | Text embeddings, normalized vectors |
-| Euclidean Distance | `EUCLIDEAN` | Spatial data, image features |
-| Dot Product | `DOT` | Pre-normalized vectors, MIPS |
+| Metric | Keyword | Best For | Higher is Better |
+|--------|---------|----------|------------------|
+| Cosine Similarity | `COSINE` (default) | Text embeddings, normalized vectors | ✅ Yes |
+| Euclidean Distance | `EUCLIDEAN` | Spatial data, image features | ❌ No |
+| Dot Product | `DOT` | Pre-normalized vectors, MIPS | ✅ Yes |
+| Hamming Distance | `HAMMING` | Binary embeddings, LSH, fingerprints | ❌ No |
+| Jaccard Similarity | `JACCARD` | Sparse vectors, tags, set membership | ✅ Yes |
 
 ```sql
 -- Cosine (default)
@@ -341,6 +343,12 @@ WHERE vector NEAR EUCLIDEAN $v
 
 -- Dot product
 WHERE vector NEAR DOT $v
+
+-- Hamming (for binary vectors)
+WHERE vector NEAR HAMMING $binary_hash
+
+-- Jaccard (for set-like vectors)
+WHERE vector NEAR JACCARD $tag_vector
 ```
 
 ### Vector Literals
