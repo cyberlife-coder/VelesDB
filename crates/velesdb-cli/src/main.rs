@@ -16,7 +16,9 @@ mod license;
 mod repl;
 mod session;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Shell};
+use std::io;
 use std::path::PathBuf;
 use velesdb_core::{DistanceMetric, StorageMode};
 
@@ -252,6 +254,13 @@ enum Commands {
     Graph {
         #[command(subcommand)]
         action: graph::GraphAction,
+    },
+
+    /// Generate shell completions (EPIC-014 US-007)
+    Completions {
+        /// Shell type (bash, zsh, fish, powershell, elvish)
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -739,6 +748,10 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Graph { action } => {
             graph::handle(action);
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "velesdb", &mut io::stdout());
         }
     }
 
