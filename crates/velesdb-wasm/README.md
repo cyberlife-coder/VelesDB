@@ -246,6 +246,82 @@ Ultra-fast serialization thanks to contiguous memory layout:
 - **Electron/Tauri apps** - Desktop AI without a server
 - **PWA applications** - Full offline support with service workers
 
+## ⚠️ Limitations vs REST Backend
+
+The WASM build is optimized for client-side use cases but has some limitations compared to the full REST server.
+
+### Feature Comparison
+
+| Feature | WASM | REST Server |
+|---------|------|-------------|
+| Vector search (NEAR) | ✅ | ✅ |
+| Metadata filtering | ✅ | ✅ |
+| Full VelesQL queries | ❌ | ✅ |
+| Hybrid search (vector + BM25) | ❌ | ✅ |
+| Knowledge Graph operations | ❌ | ✅ |
+| MATCH clause (full-text) | ❌ | ✅ |
+| NEAR_FUSED (multi-query fusion) | ❌ | ✅ |
+| JOIN operations | ❌ | ✅ |
+| Aggregations (GROUP BY) | ❌ | ✅ |
+| Persistence | IndexedDB | Disk (mmap) |
+| Max vectors | ~100K (browser RAM) | Millions |
+
+### Unsupported Operations
+
+When you try to use unsupported features, you'll get clear error messages:
+
+```javascript
+// ❌ VelesQL string queries not supported in WASM
+// Use the native API instead:
+
+// Instead of: store.query("SELECT * FROM docs WHERE vector NEAR $v")
+// Use:
+const results = store.search(queryVector, 10);
+
+// Instead of: store.query("SELECT * FROM docs WHERE category = 'tech'")
+// Use:
+const results = store.search_with_filter(queryVector, 10, {
+  condition: { type: "eq", field: "category", value: "tech" }
+});
+```
+
+### When to Use REST Backend
+
+Consider using the [REST server](https://github.com/cyberlife-coder/VelesDB) if you need:
+
+- **Full VelesQL support** - Complex SQL-like queries
+- **Hybrid search** - Combine semantic + keyword search
+- **Knowledge Graph** - Entity relationships and graph traversal
+- **Large datasets** - More than 100K vectors
+- **Server-side processing** - Centralized vector database
+
+### Migration from WASM to REST
+
+```javascript
+// WASM (client-side)
+import { VectorStore } from '@wiscale/velesdb-wasm';
+const store = new VectorStore(768, 'cosine');
+const results = store.search(query, 10);
+
+// REST (server-side) - using fetch
+const response = await fetch('http://localhost:8080/v1/collections/docs/search', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ vector: query, limit: 10 })
+});
+const results = await response.json();
+
+// REST with VelesQL
+const response = await fetch('http://localhost:8080/v1/query', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    query: "SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10",
+    params: { v: query }
+  })
+});
+```
+
 ## Building from Source
 
 ```bash
