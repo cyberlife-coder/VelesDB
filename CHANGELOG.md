@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - USING FUSION hybrid search documentation
   - Updated EBNF grammar for v2.0
 
+- **SDK Hybrid Query Examples** (US-005)
+  - `examples/python/hybrid_queries.py` - 6 use case examples
+  - `sdks/typescript/examples/hybrid_queries.ts` - TypeScript patterns
+  - VelesQL + programmatic API patterns for each use case
+
 - **Integration Tests for Use Cases**
   - `tests/use_cases_integration_tests.rs` - 23 tests validating documented queries
   - Tests verify all VelesQL examples compile and execute correctly
