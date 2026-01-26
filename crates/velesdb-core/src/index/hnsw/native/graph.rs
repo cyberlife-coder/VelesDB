@@ -394,6 +394,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// - **FxHashSet**: Faster visited set (FNV-1a hash vs SipHash)
     /// - **Cached lock**: Single vectors lock acquisition for entire search
     /// - **Early termination**: Break when candidate distance exceeds result threshold
+    /// - **EPIC-033/US-006**: Dimension-adaptive prefetching for high dimensions (384D-3072D)
     fn search_layer(
         &self,
         query: &[f32],
@@ -411,6 +412,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // Perf: Cache vectors read lock for entire search (avoids repeated lock acquisition)
         let vectors = self.vectors.read();
 
+        // EPIC-033/US-006: Calculate prefetch distance based on vector dimension
+        // High dimensions (384D-3072D) benefit from aggressive prefetching
+        let dimension = if vectors.is_empty() {
+            0
+        } else {
+            vectors[0].len()
+        };
+        let prefetch_distance = crate::simd::calculate_prefetch_distance(dimension);
+
         for ep in entry_points {
             let dist = self.distance.distance(query, &vectors[ep]);
             candidates.push(Reverse((OrderedFloat(dist), ep)));
@@ -427,14 +437,32 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
             let neighbors = self.layers.read()[layer].get_neighbors(c_node);
 
-            for neighbor in neighbors {
-                if visited.insert(neighbor) {
-                    let dist = self.distance.distance(query, &vectors[neighbor]);
+            // EPIC-033/US-006: Batch prefetch neighbors for high-dimension vectors
+            // This hides memory latency by prefetching ahead of distance computation
+            if dimension >= 384 && neighbors.len() > prefetch_distance {
+                for &neighbor_id in neighbors.iter().take(prefetch_distance) {
+                    if neighbor_id < vectors.len() {
+                        crate::simd::prefetch_vector(&vectors[neighbor_id]);
+                    }
+                }
+            }
+
+            for (i, neighbor) in neighbors.iter().enumerate() {
+                // EPIC-033/US-006: Prefetch upcoming neighbors during iteration
+                if dimension >= 384 && i + prefetch_distance < neighbors.len() {
+                    let prefetch_id = neighbors[i + prefetch_distance];
+                    if prefetch_id < vectors.len() {
+                        crate::simd::prefetch_vector(&vectors[prefetch_id]);
+                    }
+                }
+
+                if visited.insert(*neighbor) {
+                    let dist = self.distance.distance(query, &vectors[*neighbor]);
                     let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
 
                     if dist < furthest || results.len() < ef {
-                        candidates.push(Reverse((OrderedFloat(dist), neighbor)));
-                        results.push((OrderedFloat(dist), neighbor));
+                        candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
+                        results.push((OrderedFloat(dist), *neighbor));
 
                         if results.len() > ef {
                             results.pop();
