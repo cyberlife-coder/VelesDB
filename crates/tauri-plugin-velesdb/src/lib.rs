@@ -336,6 +336,58 @@ pub fn init_default<R: Runtime>() -> TauriPlugin<R> {
     init()
 }
 
+/// Initializes the `VelesDB` plugin using the platform's app data directory.
+///
+/// This is the recommended way to initialize the plugin for production apps.
+/// Data is stored in the standard location for each platform:
+/// - **Windows**: `%APPDATA%\<app_name>\velesdb\`
+/// - **macOS**: `~/Library/Application Support/<app_name>/velesdb/`
+/// - **Linux**: `~/.local/share/<app_name>/velesdb/`
+///
+/// # Arguments
+///
+/// * `app_name` - Your application's name (used in the path)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// tauri::Builder::default()
+///     .plugin(tauri_plugin_velesdb::init_with_app_data("my-app"))
+///     .run(tauri::generate_context!())
+///     .expect("error while running tauri application");
+/// ```
+///
+/// # Panics
+///
+/// Panics if the app data directory cannot be determined for the platform.
+#[must_use]
+pub fn init_with_app_data<R: Runtime>(app_name: &str) -> TauriPlugin<R> {
+    let app_data_dir = get_app_data_dir(app_name);
+    init_with_path(app_data_dir)
+}
+
+/// Returns the platform-specific app data directory for `VelesDB`.
+///
+/// # Arguments
+///
+/// * `app_name` - Your application's name
+///
+/// # Returns
+///
+/// Path to `<app_data>/<app_name>/velesdb/`
+///
+/// # Panics
+///
+/// Panics if the app data directory cannot be determined.
+#[must_use]
+pub fn get_app_data_dir(app_name: &str) -> std::path::PathBuf {
+    let base_dir = dirs::data_dir()
+        .or_else(dirs::config_dir)
+        .expect("Could not determine app data directory for this platform");
+
+    base_dir.join(app_name).join("velesdb")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +402,25 @@ mod tests {
 
         // Assert
         assert_eq!(state.path(), &path);
+    }
+
+    #[test]
+    fn test_get_app_data_dir_structure() {
+        // Act
+        let path = get_app_data_dir("test-app");
+
+        // Assert - path should end with test-app/velesdb
+        assert!(path.ends_with("test-app/velesdb") || path.ends_with("test-app\\velesdb"));
+        assert!(path.to_string_lossy().contains("test-app"));
+    }
+
+    #[test]
+    fn test_get_app_data_dir_different_apps() {
+        // Act
+        let path1 = get_app_data_dir("app1");
+        let path2 = get_app_data_dir("app2");
+
+        // Assert - different apps should have different paths
+        assert_ne!(path1, path2);
     }
 }
