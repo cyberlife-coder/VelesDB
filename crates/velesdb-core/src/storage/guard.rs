@@ -26,6 +26,14 @@ use std::sync::atomic::AtomicU64;
 /// Zero-copy guard for vector data from mmap storage.
 /// Holds a read-lock on the mmap and validates that the underlying mapping
 /// hasn't been remapped via an *epoch* counter.
+///
+/// # Epoch Validation
+///
+/// The guard captures the epoch at creation and validates it on each access.
+/// If the mmap was remapped (epoch changed), access panics to prevent UB.
+///
+/// The epoch uses wrapping `u64` arithmetic. Overflow is theoretically possible
+/// after 2^64 remaps (~584 years at 1B/sec) but practically irrelevant.
 pub struct VectorSliceGuard<'a> {
     /// Read guard holding the mmap lock – guarantees the mapping is pinned for the guard lifetime
     pub(super) _guard: RwLockReadGuard<'a, MmapMut>,

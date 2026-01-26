@@ -59,6 +59,13 @@ pub struct MmapStorage {
     /// P0 Audit: Metrics for monitoring `ensure_capacity` latency
     metrics: Arc<StorageMetrics>,
     /// Epoch counter incremented every time the mmap is remapped.
+    ///
+    /// # Overflow Safety
+    ///
+    /// Uses wrapping arithmetic (guaranteed by `fetch_add`). Even at 1 billion
+    /// remaps/second, overflow would take ~584 years. The worst-case scenario
+    /// on wrap is a false-positive panic in `VectorSliceGuard::as_slice()`,
+    /// which is acceptable given the astronomical time required.
     remap_epoch: AtomicU64,
 }
 
