@@ -166,3 +166,106 @@ impl Default for QueryCache {
         Self::new(1000)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_stats_hit_rate_empty() {
+        let stats = CacheStats::default();
+        assert!((stats.hit_rate() - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cache_stats_hit_rate_all_hits() {
+        let stats = CacheStats {
+            hits: 10,
+            misses: 0,
+            evictions: 0,
+        };
+        assert!((stats.hit_rate() - 100.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cache_stats_hit_rate_half() {
+        let stats = CacheStats {
+            hits: 5,
+            misses: 5,
+            evictions: 0,
+        };
+        assert!((stats.hit_rate() - 50.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_query_cache_new() {
+        let cache = QueryCache::new(100);
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_query_cache_default() {
+        let cache = QueryCache::default();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_query_cache_parse_and_hit() {
+        let cache = QueryCache::new(10);
+        let query = "SELECT * FROM docs LIMIT 5";
+
+        // First parse - miss
+        let result1 = cache.parse(query);
+        assert!(result1.is_ok());
+        assert_eq!(cache.stats().misses, 1);
+        assert_eq!(cache.stats().hits, 0);
+
+        // Second parse - hit
+        let result2 = cache.parse(query);
+        assert!(result2.is_ok());
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn test_query_cache_clear() {
+        let cache = QueryCache::new(10);
+        let _ = cache.parse("SELECT * FROM docs LIMIT 1");
+        assert!(!cache.is_empty());
+
+        cache.clear();
+        assert!(cache.is_empty());
+        assert_eq!(cache.stats().hits, 0);
+        assert_eq!(cache.stats().misses, 0);
+    }
+
+    #[test]
+    fn test_query_cache_eviction() {
+        let cache = QueryCache::new(2);
+
+        // Fill cache
+        let _ = cache.parse("SELECT * FROM docs LIMIT 1");
+        let _ = cache.parse("SELECT * FROM docs LIMIT 2");
+        assert_eq!(cache.len(), 2);
+
+        // Add third query - should evict oldest
+        let _ = cache.parse("SELECT * FROM docs LIMIT 3");
+        assert_eq!(cache.len(), 2);
+        assert!(cache.stats().evictions >= 1);
+    }
+
+    #[test]
+    fn test_query_cache_min_size() {
+        // Even with 0, should have minimum size of 1
+        let cache = QueryCache::new(0);
+        let _ = cache.parse("SELECT * FROM docs LIMIT 1");
+        assert!(!cache.is_empty());
+    }
+
+    #[test]
+    fn test_query_cache_invalid_query() {
+        let cache = QueryCache::new(10);
+        let result = cache.parse("INVALID QUERY SYNTAX!!!");
+        assert!(result.is_err());
+    }
+}
