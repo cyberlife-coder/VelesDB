@@ -346,4 +346,105 @@ mod tests {
             );
         }
     }
+
+    // =========================================================================
+    // Issue #122: Union query with nested AND/OR
+    // =========================================================================
+
+    /// Regression test for Issue #122:
+    /// Union query fails to apply outer AND filters with nested OR.
+    ///
+    /// Pattern: `(similarity() OR metadata1) AND metadata2`
+    /// Bug: The outer AND filter (metadata2) was not applied to metadata-only results.
+    #[test]
+    fn test_issue_122_union_query_nested_and_or() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = PathBuf::from(temp_dir.path());
+        let collection = Collection::create(path, 4, DistanceMetric::Cosine).unwrap();
+
+        // Insert test data with category and status fields
+        let points = vec![
+            Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0], // High similarity to query
+                payload: Some(serde_json::json!({
+                    "category": "tech",
+                    "status": "active"
+                })),
+            },
+            Point {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0], // Low similarity
+                payload: Some(serde_json::json!({
+                    "category": "tech",
+                    "status": "active"  // Matches metadata AND outer filter
+                })),
+            },
+            Point {
+                id: 3,
+                vector: vec![0.0, 0.0, 1.0, 0.0], // Low similarity
+                payload: Some(serde_json::json!({
+                    "category": "tech",
+                    "status": "inactive"  // Does NOT match outer filter
+                })),
+            },
+            Point {
+                id: 4,
+                vector: vec![0.9, 0.1, 0.0, 0.0], // High similarity
+                payload: Some(serde_json::json!({
+                    "category": "sports",
+                    "status": "inactive"  // Does NOT match outer filter
+                })),
+            },
+        ];
+
+        collection.upsert(points).unwrap();
+
+        // Query: (similarity > 0.8 OR category = 'tech') AND status = 'active'
+        // Expected results:
+        // - id=1: High similarity AND status='active' ✓
+        // - id=2: category='tech' AND status='active' ✓
+        // - id=3: category='tech' BUT status='inactive' ✗ (outer AND not satisfied)
+        // - id=4: High similarity BUT status='inactive' ✗ (outer AND not satisfied)
+        let query = "SELECT * FROM test WHERE (similarity(vector, $v) > 0.8 OR category = 'tech') AND status = 'active' LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+
+        let mut params = HashMap::new();
+        params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+
+        let results = collection.execute_query(&parsed, &params).unwrap();
+
+        // All results MUST have status = 'active'
+        for result in &results {
+            let payload = result.point.payload.as_ref().expect("Should have payload");
+            let status = payload.get("status").and_then(|v| v.as_str());
+            assert_eq!(
+                status,
+                Some("active"),
+                "Issue #122: All results must satisfy outer AND filter (status='active'), but id={} has status={:?}",
+                result.point.id,
+                status
+            );
+        }
+
+        // Specifically, id=3 and id=4 should NOT be in results
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert!(
+            !ids.contains(&3),
+            "Issue #122: id=3 has status='inactive', should be filtered by outer AND, but got ids: {:?}",
+            ids
+        );
+        assert!(
+            !ids.contains(&4),
+            "Issue #122: id=4 has status='inactive', should be filtered by outer AND, but got ids: {:?}",
+            ids
+        );
+
+        // id=1 and id=2 should be in results
+        assert!(
+            ids.contains(&1) || ids.contains(&2),
+            "Should have at least one result matching the criteria, got ids: {:?}",
+            ids
+        );
+    }
 }
