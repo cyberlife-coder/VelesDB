@@ -158,26 +158,22 @@ pub struct ValidationConfig {
     /// If true, NOT similarity() without LIMIT is an error.
     /// If false, NOT similarity() with LIMIT is allowed.
     pub strict_not_similarity: bool,
-    /// If true, all warnings are treated as errors.
-    pub strict_mode: bool,
 }
 
 impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
             strict_not_similarity: true,
-            strict_mode: false,
         }
     }
 }
 
 impl ValidationConfig {
-    /// Creates a strict validation config (all warnings are errors).
+    /// Creates a strict validation config (NOT similarity always errors).
     #[must_use]
     pub fn strict() -> Self {
         Self {
             strict_not_similarity: true,
-            strict_mode: true,
         }
     }
 
@@ -186,7 +182,6 @@ impl ValidationConfig {
     pub fn lenient() -> Self {
         Self {
             strict_not_similarity: false,
-            strict_mode: false,
         }
     }
 }
@@ -343,20 +338,17 @@ mod tests {
     fn test_validation_config_default() {
         let config = ValidationConfig::default();
         assert!(config.strict_not_similarity);
-        assert!(!config.strict_mode);
     }
 
     #[test]
     fn test_validation_config_strict() {
         let config = ValidationConfig::strict();
         assert!(config.strict_not_similarity);
-        assert!(config.strict_mode);
     }
 
     #[test]
     fn test_validation_config_lenient() {
         let config = ValidationConfig::lenient();
         assert!(!config.strict_not_similarity);
-        assert!(!config.strict_mode);
     }
 }
