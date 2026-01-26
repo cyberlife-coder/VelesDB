@@ -17,6 +17,7 @@ mod histogram;
 mod log_payload;
 pub mod metrics;
 mod mmap;
+mod sharded_index;
 mod traits;
 mod vector_bytes;
 #[cfg(test)]

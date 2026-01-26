@@ -21,6 +21,7 @@
 use super::compaction::CompactionContext;
 use super::guard::VectorSliceGuard;
 use super::metrics::StorageMetrics;
+use super::sharded_index::ShardedIndex;
 use super::traits::VectorStorage;
 use super::vector_bytes::{bytes_to_vector, vector_to_bytes};
 
@@ -46,8 +47,8 @@ pub struct MmapStorage {
     /// Vector dimension
     dimension: usize,
     /// In-memory index of ID -> file offset
-    /// Perf: `FxHashMap` is faster than std `HashMap` for integer keys
-    index: RwLock<FxHashMap<u64, usize>>,
+    /// EPIC-033/US-004: Sharded for reduced lock contention on read-heavy workloads
+    index: ShardedIndex,
     /// Write-Ahead Log writer
     wal: RwLock<io::BufWriter<File>>,
     /// File handle for the data file (kept open for resizing)
@@ -123,30 +124,32 @@ impl MmapStorage {
             .open(&wal_path)?;
         let wal = io::BufWriter::new(wal_file);
 
-        // 3. Load Index
+        // 3. Load Index (EPIC-033/US-004: Convert to ShardedIndex)
         let index_path = path.join("vectors.idx");
         let (index, next_offset) = if index_path.exists() {
             let file = File::open(&index_path)?;
-            let index: FxHashMap<u64, usize> = bincode::deserialize_from(io::BufReader::new(file))
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let flat_index: FxHashMap<u64, usize> =
+                bincode::deserialize_from(io::BufReader::new(file))
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
             // Calculate next_offset based on stored data
-            // Simple approach: max(offset) + size
-            let max_offset = index.values().max().copied().unwrap_or(0);
-            let size = if index.is_empty() {
+            let max_offset = flat_index.values().max().copied().unwrap_or(0);
+            let size = if flat_index.is_empty() {
                 0
             } else {
                 max_offset + dimension * 4
             };
-            (index, size)
+
+            // Convert to ShardedIndex
+            (ShardedIndex::from_hashmap(flat_index), size)
         } else {
-            (FxHashMap::default(), 0)
+            (ShardedIndex::new(), 0)
         };
 
         Ok(Self {
             path,
             dimension,
-            index: RwLock::new(index),
+            index,
             wal: RwLock::new(wal),
             data_file,
             mmap: RwLock::new(mmap),
@@ -346,13 +349,10 @@ impl MmapStorage {
     ///
     /// Returns an error if the stored offset is out of bounds.
     pub fn retrieve_ref(&self, id: u64) -> io::Result<Option<VectorSliceGuard<'_>>> {
-        // First check if ID exists (separate lock to minimize contention)
-        let offset = {
-            let index = self.index.read();
-            match index.get(&id) {
-                Some(&offset) => offset,
-                None => return Ok(None),
-            }
+        // EPIC-033/US-004: Use sharded index for reduced contention
+        let offset = match self.index.get(id) {
+            Some(offset) => offset,
+            None => return Ok(None),
         };
 
         // Now acquire mmap read lock and validate bounds
@@ -419,18 +419,15 @@ impl VectorStorage for MmapStorage {
             wal.write_all(vector_bytes)?;
         }
 
-        // 2. Determine offset
+        // 2. Determine offset (EPIC-033/US-004: Use sharded index)
         let vector_size = vector_bytes.len();
 
-        let (offset, is_new) = {
-            let index = self.index.read();
-            if let Some(&existing_offset) = index.get(&id) {
-                (existing_offset, false)
-            } else {
-                let offset = self.next_offset.load(Ordering::Relaxed);
-                self.next_offset.fetch_add(vector_size, Ordering::Relaxed);
-                (offset, true)
-            }
+        let (offset, is_new) = if let Some(existing_offset) = self.index.get(id) {
+            (existing_offset, false)
+        } else {
+            let offset = self.next_offset.load(Ordering::Relaxed);
+            self.next_offset.fetch_add(vector_size, Ordering::Relaxed);
+            (offset, true)
         };
 
         // Ensure capacity and write
@@ -441,9 +438,9 @@ impl VectorStorage for MmapStorage {
             mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
         }
 
-        // 3. Update Index if new
+        // 3. Update Index if new (EPIC-033/US-004: Use sharded index)
         if is_new {
-            self.index.write().insert(id, offset);
+            self.index.insert(id, offset);
         }
 
         Ok(())
@@ -472,18 +469,16 @@ impl VectorStorage for MmapStorage {
 
         // 1. Calculate total space needed and prepare batch WAL entry
         // Perf: Use FxHashMap for O(1) lookup instead of Vec with O(n) find
+        // EPIC-033/US-004: Use sharded index for reduced contention
         let mut new_vector_offsets: FxHashMap<u64, usize> = FxHashMap::default();
         new_vector_offsets.reserve(vectors.len());
         let mut total_new_size = 0usize;
 
-        {
-            let index = self.index.read();
-            for &(id, _) in vectors {
-                if !index.contains_key(&id) {
-                    let offset = self.next_offset.load(Ordering::Relaxed) + total_new_size;
-                    new_vector_offsets.insert(id, offset);
-                    total_new_size += vector_size;
-                }
+        for &(id, _) in vectors {
+            if !self.index.contains_key(id) {
+                let offset = self.next_offset.load(Ordering::Relaxed) + total_new_size;
+                new_vector_offsets.insert(id, offset);
+                total_new_size += vector_size;
             }
         }
 
@@ -517,8 +512,8 @@ impl VectorStorage for MmapStorage {
         }
 
         // 4. Write all vectors to mmap contiguously
+        // EPIC-033/US-004: Use sharded index for reduced contention
         {
-            let index = self.index.read();
             let mut mmap = self.mmap.write();
 
             for &(id, vector) in vectors {
@@ -526,7 +521,7 @@ impl VectorStorage for MmapStorage {
 
                 // Get offset (existing or from new_vector_offsets)
                 // Perf: O(1) HashMap lookup instead of O(n) linear search
-                let offset = if let Some(&existing) = index.get(&id) {
+                let offset = if let Some(existing) = self.index.get(id) {
                     existing
                 } else {
                     new_vector_offsets.get(&id).copied().unwrap_or(0)
@@ -536,23 +531,19 @@ impl VectorStorage for MmapStorage {
             }
         }
 
-        // 5. Batch update index
-        if !new_vector_offsets.is_empty() {
-            let mut index = self.index.write();
-            for (id, offset) in new_vector_offsets {
-                index.insert(id, offset);
-            }
+        // 5. Batch update index (EPIC-033/US-004: Use sharded index)
+        for (id, offset) in new_vector_offsets {
+            self.index.insert(id, offset);
         }
 
         Ok(vectors.len())
     }
 
     fn retrieve(&self, id: u64) -> io::Result<Option<Vec<f32>>> {
-        let index = self.index.read();
-        let Some(&offset) = index.get(&id) else {
+        // EPIC-033/US-004: Use sharded index for reduced contention
+        let Some(offset) = self.index.get(id) else {
             return Ok(None);
         };
-        drop(index); // Release lock
 
         let mmap = self.mmap.read();
         let vector_size = self.dimension * std::mem::size_of::<f32>();
@@ -577,11 +568,21 @@ impl VectorStorage for MmapStorage {
             wal.write_all(&id.to_le_bytes())?;
         }
 
-        // 2. Remove from Index
-        let mut index = self.index.write();
-        index.remove(&id);
+        // 2. Get offset before removing from index (for hole-punch)
+        // EPIC-033/US-004: Use sharded index for reduced contention
+        let offset = self.index.get(id);
 
-        // Note: Space is reclaimed via compact() - see TS-CORE-004
+        // 3. Remove from Index
+        self.index.remove(id);
+
+        // 4. EPIC-033/US-003: Hole-punch to reclaim disk space immediately
+        // This releases disk blocks back to the filesystem without rewriting the file
+        if let Some(offset) = offset {
+            let vector_size = self.dimension * std::mem::size_of::<f32>();
+            // Best-effort: ignore errors (space will be reclaimed on compact())
+            let _ =
+                super::compaction::punch_hole(&self.data_file, offset as u64, vector_size as u64);
+        }
 
         Ok(())
     }
@@ -593,21 +594,21 @@ impl VectorStorage for MmapStorage {
         // 2. Flush WAL
         self.wal.write().flush()?;
 
-        // 3. Save Index
+        // 3. Save Index (EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization)
         let index_path = self.path.join("vectors.idx");
         let file = File::create(&index_path)?;
-        let index = self.index.read();
-        bincode::serialize_into(io::BufWriter::new(file), &*index).map_err(io::Error::other)?;
+        let flat_index = self.index.to_hashmap();
+        bincode::serialize_into(io::BufWriter::new(file), &flat_index).map_err(io::Error::other)?;
 
         Ok(())
     }
 
     fn len(&self) -> usize {
-        self.index.read().len()
+        self.index.len()
     }
 
     fn ids(&self) -> Vec<u64> {
-        self.index.read().keys().copied().collect()
+        self.index.keys()
     }
 }
 
