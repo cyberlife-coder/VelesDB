@@ -288,6 +288,15 @@ pub struct QueryResponse {
     pub rows_returned: usize,
 }
 
+/// Response from VelesQL aggregation query execution (BUG-1 FIX).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AggregationResponse {
+    /// Aggregation results (JSON object or array for GROUP BY).
+    pub result: serde_json::Value,
+    /// Query execution time in milliseconds.
+    pub timing_ms: f64,
+}
+
 /// VelesQL query error response.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct QueryErrorResponse {

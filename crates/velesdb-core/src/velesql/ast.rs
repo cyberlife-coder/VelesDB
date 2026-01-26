@@ -9,6 +9,31 @@ use serde::{Deserialize, Serialize};
 pub struct Query {
     /// The SELECT statement.
     pub select: SelectStatement,
+    /// Compound query (UNION/INTERSECT/EXCEPT) - EPIC-040 US-006.
+    #[serde(default)]
+    pub compound: Option<CompoundQuery>,
+}
+
+/// SQL set operator for compound queries (EPIC-040 US-006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SetOperator {
+    /// UNION - merge results, remove duplicates.
+    Union,
+    /// UNION ALL - merge results, keep duplicates.
+    UnionAll,
+    /// INTERSECT - keep only common results.
+    Intersect,
+    /// EXCEPT - subtract second query from first.
+    Except,
+}
+
+/// Compound query combining two queries with a set operator (EPIC-040 US-006).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompoundQuery {
+    /// The set operator (UNION, INTERSECT, EXCEPT).
+    pub operator: SetOperator,
+    /// The second query (right-hand side).
+    pub right: Box<SelectStatement>,
 }
 
 /// A SELECT statement.
@@ -31,6 +56,15 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// WITH clause for query-time configuration (optional).
     pub with_clause: Option<WithClause>,
+    /// GROUP BY clause (optional).
+    #[serde(default)]
+    pub group_by: Option<GroupByClause>,
+    /// HAVING clause for filtering groups (optional).
+    #[serde(default)]
+    pub having: Option<HavingClause>,
+    /// USING FUSION clause for hybrid search (EPIC-040 US-005).
+    #[serde(default)]
+    pub fusion_clause: Option<FusionClause>,
 }
 
 /// JOIN clause for cross-store queries (EPIC-031 US-004).
@@ -45,12 +79,30 @@ pub struct SelectStatement {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JoinClause {
+    /// Type of join (INNER, LEFT, RIGHT, FULL).
+    pub join_type: JoinType,
     /// Table/store name to join.
     pub table: String,
     /// Optional alias for the joined table.
     pub alias: Option<String>,
-    /// Join condition (ON clause).
-    pub condition: JoinCondition,
+    /// Join condition (ON clause) - None if USING is used.
+    pub condition: Option<JoinCondition>,
+    /// USING clause columns - alternative to ON condition.
+    pub using_columns: Option<Vec<String>>,
+}
+
+/// Type of SQL JOIN operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum JoinType {
+    /// INNER JOIN - only matching rows from both tables.
+    #[default]
+    Inner,
+    /// LEFT JOIN - all rows from left table, matching from right.
+    Left,
+    /// RIGHT JOIN - all rows from right table, matching from left.
+    Right,
+    /// FULL JOIN - all rows from both tables.
+    Full,
 }
 
 /// Join condition specifying how to link tables.
@@ -87,6 +139,8 @@ pub enum OrderByExpr {
     Field(String),
     /// Similarity function (e.g., `similarity(embedding, $v)`).
     Similarity(SimilarityOrderBy),
+    /// Aggregate function (e.g., `COUNT(*)`, `SUM(price)`).
+    Aggregate(AggregateFunction),
 }
 
 /// Similarity expression for ORDER BY.
@@ -240,6 +294,52 @@ impl WithValue {
     }
 }
 
+/// Fusion strategy type for hybrid search (EPIC-040 US-005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FusionStrategyType {
+    /// Reciprocal Rank Fusion (default) - position-based fusion.
+    #[default]
+    Rrf,
+    /// Weighted sum of normalized scores.
+    Weighted,
+    /// Take maximum score from either source.
+    Maximum,
+}
+
+/// USING FUSION clause for hybrid vector+graph search (EPIC-040 US-005).
+///
+/// Combines results from NEAR (vector) and MATCH (graph) queries.
+///
+/// # Example
+/// ```sql
+/// SELECT * FROM docs
+/// NEAR([0.1, 0.2], 10)
+/// MATCH (d)-[:CITES]->(ref)
+/// USING FUSION(strategy = 'rrf', k = 60)
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FusionClause {
+    /// Fusion strategy (rrf, weighted, maximum).
+    pub strategy: FusionStrategyType,
+    /// RRF k parameter (default 60).
+    pub k: Option<u32>,
+    /// Vector weight for weighted fusion (0.0-1.0).
+    pub vector_weight: Option<f64>,
+    /// Graph weight for weighted fusion (0.0-1.0).
+    pub graph_weight: Option<f64>,
+}
+
+impl Default for FusionClause {
+    fn default() -> Self {
+        Self {
+            strategy: FusionStrategyType::Rrf,
+            k: Some(60),
+            vector_weight: None,
+            graph_weight: None,
+        }
+    }
+}
+
 /// Columns in a SELECT statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SelectColumns {
@@ -247,6 +347,50 @@ pub enum SelectColumns {
     All,
     /// Select specific columns.
     Columns(Vec<Column>),
+    /// Select aggregate functions (COUNT, SUM, etc.).
+    Aggregations(Vec<AggregateFunction>),
+    /// Mixed: columns + aggregations (for GROUP BY queries).
+    Mixed {
+        /// Regular columns (must appear in GROUP BY).
+        columns: Vec<Column>,
+        /// Aggregate functions.
+        aggregations: Vec<AggregateFunction>,
+    },
+}
+
+/// Aggregate function type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AggregateType {
+    /// COUNT(*) or COUNT(column)
+    Count,
+    /// SUM(column)
+    Sum,
+    /// AVG(column)
+    Avg,
+    /// MIN(column)
+    Min,
+    /// MAX(column)
+    Max,
+}
+
+/// Argument to an aggregate function.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AggregateArg {
+    /// Wildcard (*) - only valid for COUNT.
+    Wildcard,
+    /// Column reference.
+    Column(String),
+}
+
+/// An aggregate function call in a SELECT statement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateFunction {
+    /// Type of aggregate function.
+    pub function_type: AggregateType,
+    /// Argument to the function.
+    pub argument: AggregateArg,
+    /// Optional alias (AS clause).
+    pub alias: Option<String>,
 }
 
 /// A column reference.
@@ -536,6 +680,44 @@ impl From<bool> for Value {
     fn from(v: bool) -> Self {
         Self::Boolean(v)
     }
+}
+
+/// GROUP BY clause for aggregation queries.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GroupByClause {
+    /// Columns to group by.
+    pub columns: Vec<String>,
+}
+
+/// Logical operator for combining HAVING conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogicalOp {
+    /// Logical AND - all conditions must be true.
+    And,
+    /// Logical OR - at least one condition must be true.
+    Or,
+}
+
+/// HAVING clause for filtering aggregation groups.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct HavingClause {
+    /// Conditions to filter groups (aggregate comparisons).
+    pub conditions: Vec<HavingCondition>,
+    /// Logical operators between conditions (len = conditions.len() - 1).
+    /// Empty means all AND (backward compatible).
+    #[serde(default)]
+    pub operators: Vec<LogicalOp>,
+}
+
+/// A single HAVING condition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HavingCondition {
+    /// Aggregate function to compare.
+    pub aggregate: AggregateFunction,
+    /// Comparison operator.
+    pub operator: CompareOp,
+    /// Value to compare against.
+    pub value: Value,
 }
 
 // Graph Pattern Matching types are in graph_pattern.rs

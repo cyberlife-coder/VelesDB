@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🚀 EPIC-040: VelesQL Language v2.0
+
+#### Added
+
+- **Set Operations** (US-006)
+  - `UNION` / `UNION ALL` - merge query results
+  - `INTERSECT` - common results only
+  - `EXCEPT` - subtract second query from first
+  - `SetOperator` enum and `CompoundQuery` AST structures
+
+- **USING FUSION Hybrid Search** (US-005)
+  - `USING FUSION(strategy, k, weights)` clause
+  - Strategies: `rrf` (Reciprocal Rank Fusion), `weighted`, `maximum`
+  - Default RRF k=60
+
+- **Extended WITH Clause** (US-004)
+  - `max_groups` / `group_limit` parameters
+  - Configurable aggregation limits
+
+- **Extended JOIN** (US-003)
+  - `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN` support
+  - `USING (column)` clause alternative to `ON`
+  - JOIN with AS alias support
+  - Multiple JOINs in single query
+
+- **ORDER BY Enhancements** (US-002)
+  - Multi-column ORDER BY
+  - `ORDER BY similarity(field, $vector)` support
+  - ASC/DESC direction
+
+- **HAVING Enhancements** (US-001)
+  - AND/OR logical operators in HAVING
+  - Multiple aggregate conditions
+
+#### Documentation
+
+- `VELESQL_SPEC.md` updated to v2.0.0
+- `ARCHITECTURE.md` updated with VelesQL v2.0 query flow diagram
+- `README.md` updated with VelesQL v2.0 API examples
+- New sections: Aggregations, JOIN, Set Operations
+- 24 new integration tests
+
+### 🌐 EPIC-016: SDK Ecosystem Sync - VelesQL v2.0
+
+#### Added
+
+- **TypeScript SDK Tests** (US-051)
+  - 24 new tests for VelesQL v2.0 features
+  - README updated with VelesQL v2.0 examples
+  - GROUP BY, HAVING, ORDER BY, JOIN, UNION, FUSION tests
+
+- **LangChain Integration Tests** (US-052)
+  - 9 new tests for VelesQL v2.0 compatibility
+  - Filter syntax validation
+  - Similarity search with scores
+
+- **LlamaIndex Integration Tests** (US-053)
+  - 8 new tests for VelesQL v2.0 compatibility
+  - MetadataFilters support
+  - Query workflow tests
+
+---
+
+### 📊 EPIC-017: VelesQL Aggregation Engine
+
+#### Added
+
+- **GROUP BY Support** (US-003)
+  - `GROUP BY column1, column2` syntax
+  - Streaming aggregation executor
+  - 33 complex parser tests with EXPLAIN scenarios
+
+- **Aggregate Functions** (US-002)
+  - `COUNT(*)`, `COUNT(column)` - row/column counting
+  - `SUM(column)`, `AVG(column)` - numeric aggregation
+  - `MIN(column)`, `MAX(column)` - extrema functions
+
+- **HAVING Clause** (US-006)
+  - Filter groups after aggregation
+  - Support for aggregate comparisons: `HAVING COUNT(*) > 5`
+
+#### Fixed
+
+- `COUNT(column)` returns correct per-column count
+- Relative epsilon for HAVING float comparisons
+
+---
+
+### ⚡ EPIC-018: Aggregation Performance Optimization
+
+#### Performance
+
+- **Parallel Aggregation** (US-001)
+  - Rayon-based parallelization for 10K+ datasets
+  - Pre-fetch optimization to avoid lock contention
+  - ~2x speedup on large aggregations
+
+- **GROUP BY Hash Optimization** (US-005)
+  - Pre-computed hash instead of JSON serialization
+  - Reduced memory allocations in hot path
+
+- **String Interning** (US-004)
+  - Avoid String allocation in `process_value`
+  - ~15% reduction in allocations
+
+- **SIMD-Friendly Batch Processing** (US-006)
+  - `process_batch()` for vectorized aggregation
+
+#### Lessons Learned
+
+> Always benchmark in the REAL pipeline context, not in isolation.
+> Optimizing a component that represents <10% of total time can cause regression.
+
+---
+
 ### 🔍 EPIC-031: Multi-model Query Engine
 
 #### Added

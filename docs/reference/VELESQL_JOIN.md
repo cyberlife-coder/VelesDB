@@ -24,10 +24,22 @@ RETURN p.name, prices.amount, prices.currency
 ### Basic JOIN
 
 ```bnf
-<join_clause> ::= "JOIN" <table_name> "ON" <join_condition>
+<join_clause> ::= [<join_type>] "JOIN" <table_name> [<alias>] <join_spec>
+<join_type>   ::= "LEFT" | "RIGHT" | "FULL" | ε
+<alias>       ::= "AS" <identifier>
+<join_spec>   ::= "ON" <join_condition> | "USING" "(" <column_list> ")"
 <join_condition> ::= <column_ref> "=" <column_ref>
 <column_ref> ::= <table_or_alias> "." <column_name>
 ```
+
+### JOIN Types (EPIC-040 US-003)
+
+| Type | Behavior |
+|------|----------|
+| `JOIN` / `INNER JOIN` | Only matching rows from both sides |
+| `LEFT JOIN` | All rows from left, matching from right (NULL if no match) |
+| `RIGHT JOIN` | All rows from right, matching from left (NULL if no match) |
+| `FULL JOIN` | All rows from both sides (NULL where no match) |
 
 ### Examples
 
@@ -38,13 +50,30 @@ JOIN metadata ON metadata.doc_id = doc.id
 WHERE vector NEAR $query
 LIMIT 20
 
--- JOIN with additional filters
-MATCH (product:Product)
-JOIN inventory ON inventory.sku = product.sku
-WHERE vector NEAR $embedding 
-  AND inventory.quantity > 0
-  AND inventory.warehouse = 'US-WEST'
-LIMIT 10
+-- LEFT JOIN - keep all orders even without customers
+SELECT * FROM orders 
+LEFT JOIN customers ON orders.customer_id = customers.id
+
+-- RIGHT JOIN - keep all customers even without orders
+SELECT * FROM orders 
+RIGHT JOIN customers ON orders.customer_id = customers.id
+
+-- FULL JOIN - keep all from both sides
+SELECT * FROM orders 
+FULL JOIN customers ON orders.customer_id = customers.id
+
+-- JOIN with alias
+SELECT * FROM orders 
+JOIN customers AS c ON orders.customer_id = c.id
+WHERE c.status = 'active'
+
+-- JOIN with USING clause (shared column name)
+SELECT * FROM orders 
+JOIN customers USING (customer_id)
+
+-- USING with multiple columns
+SELECT * FROM orders 
+JOIN customers USING (customer_id, region_id)
 ```
 
 ---

@@ -5,25 +5,52 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
-// Main entry point
-query = { SOI ~ select_stmt ~ ";"? ~ EOI }
+// Main entry point - supports compound queries (EPIC-040 US-006)
+query = { SOI ~ compound_query ~ ";"? ~ EOI }
 
-// SELECT statement with optional JOIN, WHERE, ORDER BY, LIMIT, OFFSET, WITH clauses
+// Compound query: SELECT with optional UNION/INTERSECT/EXCEPT
+compound_query = { select_stmt ~ (set_operator ~ select_stmt)? }
+set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
+
+// SELECT statement with optional JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
 select_stmt = { 
     ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
-    join_clause* ~ where_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause?
+    join_clause* ~ where_clause? ~ group_by_clause? ~ having_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause? ~ using_fusion_clause?
 }
 
-// JOIN clause for cross-store queries (EPIC-031 US-004)
-join_clause = { ^"JOIN" ~ identifier ~ alias_clause? ~ ^"ON" ~ join_condition }
+// USING FUSION clause for hybrid search (EPIC-040 US-005)
+using_fusion_clause = { ^"USING" ~ ^"FUSION" ~ fusion_options? }
+fusion_options = { "(" ~ fusion_option_list ~ ")" }
+fusion_option_list = { fusion_option ~ ("," ~ fusion_option)* }
+fusion_option = { identifier ~ "=" ~ fusion_value }
+fusion_value = { string | float | integer }
+
+// GROUP BY clause (EPIC-017 US-003)
+group_by_clause = { ^"GROUP" ~ ^"BY" ~ group_by_list }
+group_by_list = { identifier ~ ("," ~ identifier)* }
+
+// HAVING clause for filtering groups (EPIC-017 US-006)
+// Supports both AND and OR logical operators
+having_clause = { ^"HAVING" ~ having_condition }
+having_condition = { having_term ~ (having_logical_op ~ having_term)* }
+// BUG-6 FIX: Named rule so pest emits tokens for AND/OR operators
+having_logical_op = { ^"AND" | ^"OR" }
+having_term = { aggregate_function ~ compare_op ~ value }
+
+// JOIN clause for cross-store queries (EPIC-031 US-004, extended EPIC-040 US-003)
+join_clause = { join_type? ~ ^"JOIN" ~ identifier ~ alias_clause? ~ join_spec }
+join_type = { (^"LEFT" ~ ^"OUTER"?) | (^"RIGHT" ~ ^"OUTER"?) | (^"FULL" ~ ^"OUTER"?) | ^"INNER" }
+join_spec = { on_clause | using_clause }
+on_clause = { ^"ON" ~ join_condition }
+using_clause = { ^"USING" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ")" }
 alias_clause = { ^"AS" ~ identifier }
 join_condition = { column_ref ~ "=" ~ column_ref }
 column_ref = @{ identifier ~ "." ~ identifier }
 
-// ORDER BY clause
+// ORDER BY clause (EPIC-040 US-002: supports columns, aggregates, similarity)
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
 order_by_item = { order_by_expr ~ sort_direction? }
-order_by_expr = { order_by_similarity | identifier }
+order_by_expr = { order_by_similarity | aggregate_function | identifier }
 order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
 sort_direction = { ^"DESC" | ^"ASC" }
 
@@ -33,9 +60,19 @@ with_option_list = { with_option ~ ("," ~ with_option)* }
 with_option = { identifier ~ "=" ~ with_value }
 with_value = { string | float | integer | boolean | identifier }
 
-// Select list: * or column list
-select_list = { "*" | column_list }
-column_list = { column ~ ("," ~ column)* }
+// Select list: * or mixed items (columns and/or aggregations for GROUP BY)
+select_list = { "*" | select_item_list }
+
+// Mixed select items: columns and aggregations can be mixed (for GROUP BY)
+select_item_list = { select_item ~ ("," ~ select_item)* }
+select_item = { aggregation_item | column }
+
+// Aggregate functions: COUNT, SUM, AVG, MIN, MAX
+aggregation_item = { aggregate_function ~ (^"AS" ~ identifier)? }
+aggregate_function = { aggregate_type ~ "(" ~ aggregate_arg ~ ")" }
+aggregate_type = { ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
+aggregate_arg = { "*" | column_name }
+
 column = { column_name ~ (^"AS" ~ identifier)? }
 column_name = @{ identifier ~ ("." ~ identifier)? }
 

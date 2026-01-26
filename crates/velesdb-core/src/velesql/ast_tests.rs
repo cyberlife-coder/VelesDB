@@ -43,6 +43,7 @@ fn test_value_from_bool() {
 #[test]
 fn test_query_serialization() {
     let query = Query {
+        compound: None,
         select: SelectStatement {
             columns: SelectColumns::All,
             from: "documents".to_string(),
@@ -52,6 +53,9 @@ fn test_query_serialization() {
             limit: Some(10),
             offset: None,
             with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
         },
     };
 

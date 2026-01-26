@@ -16,6 +16,7 @@
 //! TODO: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
 //! to leverage cost-based optimization for complex queries.
 
+mod aggregation;
 mod extraction;
 pub mod join;
 mod ordering;

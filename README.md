@@ -346,11 +346,31 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/indexes` | `POST` | Create index on property |
 | `/collections/{name}/indexes/{label}/{property}` | `DELETE` | Delete index |
 
-### VelesQL (Unified Query)
+### VelesQL v2.0 (Unified Query)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/query` | `POST` | Execute VelesQL (Vector + Graph + ColumnStore queries) |
+
+**VelesQL v2.0 Features:**
+- `GROUP BY` / `HAVING` with AND/OR operators
+- `ORDER BY` multi-column + `similarity()` function
+- `JOIN` with aliases across collections
+- `UNION` / `INTERSECT` / `EXCEPT` set operations
+- `USING FUSION(strategy='rrf')` hybrid search
+- `WITH (max_groups=100)` query-time config
+
+```sql
+-- Example: Analytics with aggregation
+SELECT category, COUNT(*), AVG(price) FROM products 
+GROUP BY category HAVING COUNT(*) > 5
+
+-- Example: Hybrid search with fusion
+SELECT * FROM docs USING FUSION(strategy='rrf', k=60) LIMIT 20
+
+-- Example: Set operations
+SELECT * FROM active UNION SELECT * FROM archived
+```
 
 > **Note:** ColumnStore operations (INSERT, UPDATE, SELECT on structured data) are performed via the `/query` endpoint using VelesQL syntax.
 
@@ -371,7 +391,7 @@ curl -X POST http://localhost:8080/collections \
   -d '{
     "name": "my_vectors",
     "dimension": 768,
-    "metric": "cosine"  # Options: cosine, euclidean, dot
+    "metric": "cosine"  # Options: cosine, euclidean, dot, hamming, jaccard
   }'
 ```
 

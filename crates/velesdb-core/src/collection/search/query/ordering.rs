@@ -136,6 +136,11 @@ impl Collection {
                             .and_then(|p| p.get(field_name));
                         compare_json_values(val_i, val_j)
                     }
+                    OrderByExpr::Aggregate(_) => {
+                        // EPIC-040 US-002: ORDER BY aggregate requires pre-computed values
+                        // For raw results (not grouped), aggregates don't apply - skip
+                        Ordering::Equal
+                    }
                 };
 
                 // Apply direction (ASC/DESC)

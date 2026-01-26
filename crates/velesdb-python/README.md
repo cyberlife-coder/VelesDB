@@ -34,7 +34,7 @@ db = velesdb.Database("./my_vectors")
 collection = db.create_collection(
     name="documents",
     dimension=768,
-    metric="cosine"  # Options: "cosine", "euclidean", "dot"
+    metric="cosine"  # Options: "cosine", "euclidean", "dot", "hamming", "jaccard"
 )
 
 # Insert vectors with metadata

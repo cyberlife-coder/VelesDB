@@ -1,6 +1,6 @@
 # VelesQL Language Specification
 
-*Version 0.2.0 — December 2025*
+*Version 2.0.0 — January 2026*
 
 VelesQL is a **SQL-like query language** designed specifically for vector search operations. If you know SQL, you already know VelesQL.
 
@@ -15,10 +15,13 @@ VelesQL is a **SQL-like query language** designed specifically for vector search
 5. [Clauses](#clauses)
 6. [Vector Search](#vector-search)
 7. [Full-Text Search](#full-text-search)
-8. [Parameters](#parameters)
-9. [Examples](#examples)
-10. [Limitations](#limitations)
-11. [Troubleshooting](#troubleshooting)
+8. [Aggregations & GROUP BY](#aggregations--group-by)
+9. [JOIN](#join)
+10. [Set Operations](#set-operations)
+11. [Parameters](#parameters)
+12. [Examples](#examples)
+13. [Limitations](#limitations)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -38,25 +41,49 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
 | Feature | SQL | VelesQL |
 |---------|-----|---------|
 | Vector search | ❌ Not supported | ✅ `vector NEAR $v` |
-| Distance metrics | ❌ | ✅ `COSINE`, `EUCLIDEAN`, `DOT` |
+| Distance metrics | ❌ | ✅ `COSINE`, `EUCLIDEAN`, `DOT`, `HAMMING`, `JACCARD` |
 | Full-text search | `LIKE '%..%'` (slow) | ✅ `MATCH 'query'` (BM25) |
-| JOINs | ✅ | ❌ Not supported |
+| JOINs | ✅ | ✅ `JOIN ... ON` (v2.0) |
+| GROUP BY / HAVING | ✅ | ✅ With aggregates (v2.0) |
+| ORDER BY | ✅ | ✅ Columns & similarity (v2.0) |
+| UNION/INTERSECT/EXCEPT | ✅ | ✅ Set operations (v2.0) |
 | Subqueries | ✅ | ❌ Not supported |
-| ORDER BY | ✅ | ❌ Results ordered by similarity |
 
 ---
 
 ## Grammar (BNF)
 
 ```bnf
-<query>         ::= <select_stmt> [";"]
+<query>         ::= <compound_query> [";"]
+
+<compound_query>::= <select_stmt> [<set_operator> <select_stmt>]
+<set_operator>  ::= "UNION" ["ALL"] | "INTERSECT" | "EXCEPT"
 
 <select_stmt>   ::= "SELECT" <select_list>
                     "FROM" <identifier>
+                    [<join_clause>*]
                     [<where_clause>]
+                    [<group_by_clause>]
+                    [<having_clause>]
+                    [<order_by_clause>]
                     [<limit_clause>]
                     [<offset_clause>]
                     [<with_clause>]
+
+<join_clause>   ::= [<join_type>] "JOIN" <identifier> ["AS" <identifier>] <join_spec>
+<join_type>     ::= "LEFT" | "RIGHT" | "FULL" | ε
+<join_spec>     ::= ("ON" <join_condition>) | ("USING" "(" <column_list> ")")
+<join_condition>::= <column_ref> "=" <column_ref>
+<column_ref>    ::= <identifier> "." <identifier>
+
+<group_by_clause> ::= "GROUP" "BY" <identifier> ("," <identifier>)*
+<having_clause>   ::= "HAVING" <having_condition>
+<having_condition>::= <having_term> (("AND" | "OR") <having_term>)*
+<having_term>     ::= <aggregate_function> <compare_op> <value>
+
+<order_by_clause> ::= "ORDER" "BY" <order_item> ("," <order_item>)*
+<order_item>      ::= (<identifier> | <similarity_func>) ["ASC" | "DESC"]
+<similarity_func> ::= "similarity" "(" <identifier> "," <vector_value> ")"
 
 <select_list>   ::= "*" | <column_list>
 <column_list>   ::= <column> ("," <column>)*
@@ -78,7 +105,7 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
                   | <compare_expr>
 
 <vector_search> ::= "vector" "NEAR" [<metric>] <vector_value>
-<metric>        ::= "COSINE" | "EUCLIDEAN" | "DOT"
+<metric>        ::= "COSINE" | "EUCLIDEAN" | "DOT" | "HAMMING" | "JACCARD"
 <vector_value>  ::= <vector_literal> | <parameter>
 <vector_literal>::= "[" <float> ("," <float>)* "]"
 
@@ -296,11 +323,13 @@ SELECT * FROM documents WHERE vector NEAR $query_vector LIMIT 10
 
 ### Distance Metrics
 
-| Metric | Keyword | Best For |
-|--------|---------|----------|
-| Cosine Similarity | `COSINE` (default) | Text embeddings, normalized vectors |
-| Euclidean Distance | `EUCLIDEAN` | Spatial data, image features |
-| Dot Product | `DOT` | Pre-normalized vectors, MIPS |
+| Metric | Keyword | Best For | Higher is Better |
+|--------|---------|----------|------------------|
+| Cosine Similarity | `COSINE` (default) | Text embeddings, normalized vectors | ✅ Yes |
+| Euclidean Distance | `EUCLIDEAN` | Spatial data, image features | ❌ No |
+| Dot Product | `DOT` | Pre-normalized vectors, MIPS | ✅ Yes |
+| Hamming Distance | `HAMMING` | Binary embeddings, LSH, fingerprints | ❌ No |
+| Jaccard Similarity | `JACCARD` | Sparse vectors, tags, set membership | ✅ Yes |
 
 ```sql
 -- Cosine (default)
@@ -314,6 +343,12 @@ WHERE vector NEAR EUCLIDEAN $v
 
 -- Dot product
 WHERE vector NEAR DOT $v
+
+-- Hamming (for binary vectors)
+WHERE vector NEAR HAMMING $binary_hash
+
+-- Jaccard (for set-like vectors)
+WHERE vector NEAR JACCARD $tag_vector
 ```
 
 ### Vector Literals
@@ -360,6 +395,159 @@ SELECT * FROM documents
 WHERE vector NEAR $v
   AND content MATCH 'machine learning'
 LIMIT 10
+```
+
+---
+
+## Aggregations & GROUP BY
+
+*New in VelesQL v2.0*
+
+### Aggregate Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `COUNT(*)` | Count all rows | `SELECT COUNT(*) FROM products` |
+| `COUNT(col)` | Count non-null values | `SELECT COUNT(price) FROM products` |
+| `SUM(col)` | Sum of values | `SELECT SUM(price) FROM orders` |
+| `AVG(col)` | Average value | `SELECT AVG(rating) FROM reviews` |
+| `MIN(col)` | Minimum value | `SELECT MIN(price) FROM products` |
+| `MAX(col)` | Maximum value | `SELECT MAX(score) FROM results` |
+
+### GROUP BY
+
+Group rows by one or more columns:
+
+```sql
+-- Single column grouping
+SELECT category, COUNT(*) FROM products GROUP BY category
+
+-- Multiple columns
+SELECT category, status, COUNT(*) FROM products GROUP BY category, status
+
+-- With aggregates
+SELECT category, AVG(price), MIN(price), MAX(price) 
+FROM products 
+GROUP BY category
+```
+
+### HAVING
+
+Filter groups after aggregation (like WHERE but for groups):
+
+```sql
+-- Filter by aggregate value
+SELECT category, COUNT(*) 
+FROM products 
+GROUP BY category 
+HAVING COUNT(*) > 10
+
+-- Multiple conditions with AND/OR
+SELECT category, AVG(price) 
+FROM products 
+GROUP BY category 
+HAVING COUNT(*) > 5 AND AVG(price) > 50
+
+-- OR conditions
+SELECT category, SUM(quantity) 
+FROM products 
+GROUP BY category 
+HAVING SUM(quantity) > 100 OR AVG(price) > 200
+```
+
+### WITH (max_groups)
+
+Limit the number of groups to prevent memory issues:
+
+```sql
+SELECT category, COUNT(*) 
+FROM products 
+GROUP BY category 
+WITH (max_groups = 100)
+```
+
+---
+
+## JOIN
+
+*New in VelesQL v2.0*
+
+### Basic JOIN
+
+Join two collections on a condition:
+
+```sql
+-- Simple join
+SELECT * FROM orders 
+JOIN customers ON orders.customer_id = customers.id
+
+-- With alias
+SELECT * FROM orders 
+JOIN customers AS c ON orders.customer_id = c.id
+
+-- Multiple joins
+SELECT * FROM orders 
+JOIN customers ON orders.customer_id = customers.id
+JOIN products ON orders.product_id = products.id
+```
+
+### JOIN with WHERE
+
+Combine joins with filtering:
+
+```sql
+SELECT * FROM orders 
+JOIN customers ON orders.customer_id = customers.id
+WHERE status = 'completed'
+LIMIT 100
+```
+
+---
+
+## Set Operations
+
+*New in VelesQL v2.0*
+
+Combine results from multiple queries.
+
+### UNION
+
+Merge results from two queries, removing duplicates:
+
+```sql
+SELECT name, email FROM active_users
+UNION
+SELECT name, email FROM archived_users
+```
+
+### UNION ALL
+
+Merge results keeping all rows (including duplicates):
+
+```sql
+SELECT * FROM orders_2024
+UNION ALL
+SELECT * FROM orders_2025
+```
+
+### INTERSECT
+
+Return only rows that appear in both queries:
+
+```sql
+SELECT id FROM premium_users
+INTERSECT
+SELECT id FROM active_users
+```
+
+### EXCEPT
+
+Return rows from first query that don't appear in second:
+
+```sql
+SELECT id FROM all_users
+EXCEPT
+SELECT id FROM banned_users
 ```
 
 ---
@@ -531,18 +719,29 @@ LIMIT 10
 
 | Feature | Status | Workaround |
 |---------|--------|------------|
-| `JOIN` | ❌ Not supported | Query collections separately |
-| `GROUP BY` | ❌ Not supported | Aggregate in application |
-| `ORDER BY` | ❌ Not supported | Results ordered by similarity |
+| `LEFT/RIGHT/FULL JOIN` | ❌ Not supported | Use basic `JOIN` |
 | Subqueries | ❌ Not supported | Use multiple queries |
-| `UNION` | ❌ Not supported | Merge results in application |
-| Aggregations | ❌ Not supported | Use `COUNT` via API |
 | `DISTINCT` | ❌ Not supported | Dedupe in application |
+| `ORDER BY` aggregates | ❌ Not supported | Sort in application |
+| Nested `GROUP BY` fields | ❌ Not supported | Use simple column names |
+
+### ✅ Implemented Features (v2.0)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `JOIN ... ON` | ✅ Supported | Basic inner join |
+| `GROUP BY` | ✅ Supported | With aggregates |
+| `HAVING` | ✅ Supported | AND/OR operators |
+| `ORDER BY` | ✅ Supported | Columns, similarity() |
+| `UNION/INTERSECT/EXCEPT` | ✅ Supported | Set operations |
+| `COUNT/SUM/AVG/MIN/MAX` | ✅ Supported | Aggregate functions |
+| `WITH (options)` | ✅ Supported | Query-time config |
 
 ### Planned Features (Roadmap)
 
-- `ORDER BY` for custom sorting
-- `COUNT`, `AVG`, `SUM` aggregations
+- `LEFT/RIGHT/FULL OUTER JOIN`
+- `JOIN USING (column)`
+- `ORDER BY` with aggregates
 - `EXPLAIN` for query analysis
 - Prepared query caching
 

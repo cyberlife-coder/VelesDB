@@ -206,3 +206,11 @@ harness = false
 [[bench]]
 name = "orderby_similarity_benchmark"
 harness = false
+
+[[bench]]
+name = "aggregation_benchmark"
+harness = false
+
+[[bench]]
+name = "velesql_execution_benchmark"
+harness = false

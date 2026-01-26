@@ -78,7 +78,7 @@ VelesDBVectorStore(
 |-----------|------|---------|-------------|
 | `path` | `str` | `"./velesdb_data"` | Path to database directory |
 | `collection_name` | `str` | `"llamaindex"` | Name of the collection |
-| `metric` | `str` | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot` |
+| `metric` | `str` | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot`, `hamming`, `jaccard` |
 
 **Methods:**
 
