@@ -555,7 +555,13 @@ impl Collection {
             );
         }
 
-        // Full scan with similarity exclusion
+        // PR #120 Review Fix: Extract metadata filter for AND conditions
+        // e.g., WHERE NOT similarity(v, $v) > 0.8 AND category = 'tech'
+        let metadata_filter = Self::extract_metadata_filter(condition);
+        let filter = metadata_filter
+            .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
+
+        // Full scan with similarity exclusion + metadata filter
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
         let config = self.config.read();
@@ -592,20 +598,30 @@ impl Collection {
                     }
                 };
 
-                // Include if NOT excluded
+                // Include if NOT excluded by similarity
                 if !excluded {
                     let payload = payload_storage.retrieve(id).ok().flatten();
-                    results.push(SearchResult::new(
-                        Point {
-                            id,
-                            vector,
-                            payload,
-                        },
-                        score,
-                    ));
 
-                    if results.len() >= limit {
-                        break;
+                    // PR #120 Review Fix: Apply metadata filter if present
+                    let matches_metadata = match (&filter, &payload) {
+                        (Some(f), Some(p)) => f.matches(p),
+                        (Some(f), None) => f.matches(&serde_json::Value::Null),
+                        (None, _) => true, // No metadata filter = match all
+                    };
+
+                    if matches_metadata {
+                        results.push(SearchResult::new(
+                            Point {
+                                id,
+                                vector,
+                                payload,
+                            },
+                            score,
+                        ));
+
+                        if results.len() >= limit {
+                            break;
+                        }
                     }
                 }
             }
