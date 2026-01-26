@@ -22,6 +22,7 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | JOIN (LEFT, RIGHT, FULL) | ✅ Stable | 2.0 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
 | USING FUSION | ✅ Stable | 2.0 |
+| NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
 | MATCH graph traversal | 🔜 Planned | - |
 | Table aliases | 🔜 Planned | - |
 
@@ -123,6 +124,68 @@ SELECT * FROM docs WHERE id IN (1, 2, 3, 4, 5)
 SELECT * FROM docs WHERE price BETWEEN 10 AND 100
 SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31'
 ```
+
+### Temporal Functions (v2.1+)
+
+VelesQL supports temporal expressions for date/time filtering using `NOW()` and `INTERVAL`.
+
+#### NOW() Function
+
+Returns the current Unix timestamp (seconds since epoch):
+
+```sql
+-- Events after now
+SELECT * FROM events WHERE timestamp > NOW()
+
+-- Recently created items
+SELECT * FROM items WHERE created_at > NOW()
+```
+
+#### INTERVAL Expression
+
+Defines a time duration:
+
+```sql
+INTERVAL '<magnitude> <unit>'
+```
+
+**Supported Units:**
+
+| Unit | Aliases | Seconds |
+|------|---------|---------|
+| seconds | s, sec, second | 1 |
+| minutes | m, min, minute | 60 |
+| hours | h, hour | 3,600 |
+| days | d, day | 86,400 |
+| weeks | w, week | 604,800 |
+| months | month | ~2,592,000 |
+
+#### Temporal Arithmetic
+
+Combine `NOW()` with `INTERVAL` for relative time queries:
+
+```sql
+-- Last 7 days
+SELECT * FROM logs WHERE created_at > NOW() - INTERVAL '7 days'
+
+-- Last hour
+SELECT * FROM events WHERE timestamp > NOW() - INTERVAL '1 hour'
+
+-- Next week (future events)
+SELECT * FROM tasks WHERE due_date < NOW() + INTERVAL '7 days'
+
+-- Shorthand units
+SELECT * FROM metrics WHERE ts > NOW() - INTERVAL '30 min'
+```
+
+#### Common Patterns
+
+| Use Case | Query |
+|----------|-------|
+| Last 24 hours | `WHERE ts > NOW() - INTERVAL '24 hours'` |
+| This week | `WHERE ts > NOW() - INTERVAL '7 days'` |
+| Last month | `WHERE ts > NOW() - INTERVAL '1 month'` |
+| Recent activity | `WHERE last_seen > NOW() - INTERVAL '5 minutes'` |
 
 ### Logical Operators
 
