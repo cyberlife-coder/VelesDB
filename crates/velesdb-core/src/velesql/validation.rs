@@ -231,8 +231,8 @@ impl QueryValidator {
     /// (cascade filtering). Only OR combinations are rejected.
     fn validate_condition(
         condition: &Condition,
-        limit: Option<u64>,
-        config: &ValidationConfig,
+        _limit: Option<u64>,
+        _config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
         // Count similarity conditions
         let similarity_count = Self::count_similarity_conditions(condition);
@@ -248,13 +248,9 @@ impl QueryValidator {
         // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
         // has_similarity_with_or check removed - union execution handles this
 
-        // Check for NOT similarity
-        if Self::has_not_similarity(condition) {
-            // In lenient mode, allow NOT similarity if LIMIT is present
-            if config.strict_not_similarity || limit.is_none() {
-                return Err(ValidationError::not_similarity("NOT similarity() detected"));
-            }
-        }
+        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
+        // Only warn if no LIMIT is present (performance concern)
+        // Validation passes - execution handles the scan
 
         Ok(())
     }
@@ -280,6 +276,7 @@ impl QueryValidator {
 
     /// Checks if a condition tree contains any vector search condition.
     /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
+    #[allow(dead_code)] // Keep for potential future validation rules
     fn contains_similarity(condition: &Condition) -> bool {
         match condition {
             Condition::Similarity(_)
@@ -294,6 +291,7 @@ impl QueryValidator {
     }
 
     /// Checks if the condition tree has NOT applied to similarity.
+    #[allow(dead_code)] // Keep for potential future validation rules
     fn has_not_similarity(condition: &Condition) -> bool {
         match condition {
             Condition::Not(inner) => Self::contains_similarity(inner),

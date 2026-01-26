@@ -88,31 +88,29 @@ fn test_validate_and_with_similarity_passes() {
 // ============================================================================
 
 #[test]
-fn test_validate_not_similarity_detected() {
+fn test_validate_not_similarity_now_passes() {
+    // EPIC-044 US-003: NOT similarity() is NOW supported via full scan
     // Given: A query with NOT similarity()
     let query = create_query_with_not_similarity();
 
     // When: Validation is performed
     let result = QueryValidator::validate(&query);
 
-    // Then: ValidationError is returned (warning level)
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind, ValidationErrorKind::NotSimilarity);
-    assert!(err.suggestion.contains("LIMIT"));
+    // Then: No error - NOT similarity() is now supported
+    assert!(result.is_ok());
 }
 
 #[test]
-fn test_validate_not_similarity_with_limit_passes_in_lenient_mode() {
-    // Given: A query with NOT similarity() but has LIMIT
+fn test_validate_not_similarity_with_limit_passes() {
+    // EPIC-044 US-003: NOT similarity() with LIMIT is supported
+    // Given: A query with NOT similarity() and LIMIT
     let mut query = create_query_with_not_similarity();
     query.select.limit = Some(100);
 
-    // When: Validation is performed with lenient config
-    let config = ValidationConfig::lenient();
-    let result = QueryValidator::validate_with_config(&query, &config);
+    // When: Validation is performed
+    let result = QueryValidator::validate(&query);
 
-    // Then: No error (LIMIT mitigates the performance concern)
+    // Then: No error
     assert!(result.is_ok());
 }
 
@@ -149,7 +147,8 @@ fn test_validate_hybrid_query_with_and_passes() {
 // ============================================================================
 
 #[test]
-fn test_strict_mode_rejects_not_similarity_without_limit() {
+fn test_strict_mode_allows_not_similarity() {
+    // EPIC-044 US-003: NOT similarity() is now supported
     // Given: A query with NOT similarity() without LIMIT
     let query = create_query_with_not_similarity();
 
@@ -157,8 +156,8 @@ fn test_strict_mode_rejects_not_similarity_without_limit() {
     let config = ValidationConfig::strict();
     let result = QueryValidator::validate_with_config(&query, &config);
 
-    // Then: ValidationError is returned
-    assert!(result.is_err());
+    // Then: No error - NOT similarity() is supported via full scan
+    assert!(result.is_ok());
 }
 
 // ============================================================================

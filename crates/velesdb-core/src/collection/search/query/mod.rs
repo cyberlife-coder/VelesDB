@@ -77,6 +77,13 @@ impl Collection {
             false
         };
 
+        // EPIC-044 US-003: Check for NOT similarity() pattern (scan mode)
+        let is_not_similarity_query = if let Some(ref cond) = stmt.where_clause {
+            Self::has_similarity_under_not(cond)
+        } else {
+            false
+        };
+
         if let Some(ref cond) = stmt.where_clause {
             // Validate query structure before extraction
             Self::validate_similarity_query_structure(cond)?;
@@ -102,6 +109,20 @@ impl Collection {
         let first_similarity = similarity_conditions.first().cloned();
 
         // 3. Execute query based on extracted components
+        // EPIC-044 US-003: NOT similarity() requires full scan
+        if is_not_similarity_query {
+            if let Some(ref cond) = stmt.where_clause {
+                let mut results = self.execute_not_similarity_query(cond, params, limit)?;
+
+                // Apply ORDER BY if present
+                if let Some(ref order_by) = stmt.order_by {
+                    self.apply_order_by(&mut results, order_by, params)?;
+                }
+                results.truncate(limit);
+                return Ok(results);
+            }
+        }
+
         // EPIC-044 US-002: Union mode for similarity() OR metadata
         if is_union_query {
             if let Some(ref cond) = stmt.where_clause {
@@ -491,6 +512,148 @@ impl Collection {
                     (None, Some(condition.clone()))
                 }
             }
+        }
+    }
+
+    /// EPIC-044 US-003: Execute NOT similarity() query via full scan.
+    ///
+    /// This method handles queries like:
+    /// `WHERE NOT similarity(v, $v) > 0.8`
+    /// Which is equivalent to: `WHERE similarity(v, $v) <= 0.8`
+    ///
+    /// **Performance Warning**: This requires scanning ALL documents.
+    /// Always use with LIMIT for acceptable performance.
+    fn execute_not_similarity_query(
+        &self,
+        condition: &crate::velesql::Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        // Extract the NOT similarity condition
+        let (sim_field, sim_vec, sim_op, sim_threshold) =
+            self.extract_not_similarity_condition(condition, params)?;
+
+        // Validate field
+        if sim_field != "vector" {
+            return Err(crate::error::Error::Config(format!(
+                "similarity() field '{}' not found. Only 'vector' field is supported.",
+                sim_field
+            )));
+        }
+
+        // Log performance warning for large collections
+        let vector_storage = self.vector_storage.read();
+        let total_count = vector_storage.ids().len();
+        drop(vector_storage);
+
+        if total_count > 10_000 && limit > 1000 {
+            tracing::warn!(
+                "NOT similarity() query scanning {} documents with LIMIT {}. \
+                Consider using a smaller LIMIT for better performance.",
+                total_count,
+                limit
+            );
+        }
+
+        // PR #120 Review Fix: Extract metadata filter for AND conditions
+        // e.g., WHERE NOT similarity(v, $v) > 0.8 AND category = 'tech'
+        let metadata_filter = Self::extract_metadata_filter(condition);
+        let filter = metadata_filter
+            .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
+
+        // Full scan with similarity exclusion + metadata filter
+        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.vector_storage.read();
+        let config = self.config.read();
+        let higher_is_better = config.metric.higher_is_better();
+        drop(config);
+
+        let threshold_f32 = sim_threshold as f32;
+        let mut results = Vec::new();
+
+        for id in vector_storage.ids() {
+            if let Ok(Some(vector)) = vector_storage.retrieve(id) {
+                // Compute similarity score
+                let score = self.compute_metric_score(&vector, &sim_vec);
+
+                // Invert the condition: NOT (similarity > threshold) = similarity <= threshold
+                let excluded = if higher_is_better {
+                    match sim_op {
+                        crate::velesql::CompareOp::Gt => score > threshold_f32,
+                        crate::velesql::CompareOp::Gte => score >= threshold_f32,
+                        crate::velesql::CompareOp::Lt => score < threshold_f32,
+                        crate::velesql::CompareOp::Lte => score <= threshold_f32,
+                        crate::velesql::CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
+                        crate::velesql::CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
+                    }
+                } else {
+                    // Distance metrics: inverted
+                    match sim_op {
+                        crate::velesql::CompareOp::Gt => score < threshold_f32,
+                        crate::velesql::CompareOp::Gte => score <= threshold_f32,
+                        crate::velesql::CompareOp::Lt => score > threshold_f32,
+                        crate::velesql::CompareOp::Lte => score >= threshold_f32,
+                        crate::velesql::CompareOp::Eq => (score - threshold_f32).abs() < 0.001,
+                        crate::velesql::CompareOp::NotEq => (score - threshold_f32).abs() >= 0.001,
+                    }
+                };
+
+                // Include if NOT excluded by similarity
+                if !excluded {
+                    let payload = payload_storage.retrieve(id).ok().flatten();
+
+                    // PR #120 Review Fix: Apply metadata filter if present
+                    let matches_metadata = match (&filter, &payload) {
+                        (Some(f), Some(p)) => f.matches(p),
+                        (Some(f), None) => f.matches(&serde_json::Value::Null),
+                        (None, _) => true, // No metadata filter = match all
+                    };
+
+                    if matches_metadata {
+                        results.push(SearchResult::new(
+                            Point {
+                                id,
+                                vector,
+                                payload,
+                            },
+                            score,
+                        ));
+
+                        if results.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Extract similarity condition from inside a NOT clause.
+    fn extract_not_similarity_condition(
+        &self,
+        condition: &crate::velesql::Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(String, Vec<f32>, crate::velesql::CompareOp, f64)> {
+        match condition {
+            crate::velesql::Condition::Not(inner) => {
+                // Extract from inside NOT
+                let conditions = self.extract_all_similarity_conditions(inner, params)?;
+                conditions.into_iter().next().ok_or_else(|| {
+                    crate::error::Error::Config(
+                        "NOT clause does not contain a similarity condition".to_string(),
+                    )
+                })
+            }
+            crate::velesql::Condition::And(left, right) => {
+                // Try left, then right
+                self.extract_not_similarity_condition(left, params)
+                    .or_else(|_| self.extract_not_similarity_condition(right, params))
+            }
+            _ => Err(crate::error::Error::Config(
+                "Expected NOT similarity() condition".to_string(),
+            )),
         }
     }
 

@@ -54,14 +54,8 @@ impl Collection {
         // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
         // Only block when multiple similarity() are in OR (handled above)
 
-        // NOT similarity() is not supported
-        if similarity_count >= 1 && Self::has_similarity_under_not(condition) {
-            return Err(Error::Config(
-                "NOT similarity() is not supported. Negating similarity conditions \
-                cannot be efficiently executed. Consider using a threshold filter instead."
-                    .to_string(),
-            ));
-        }
+        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
+        // Warning: This requires scanning all documents - use with LIMIT for performance
 
         Ok(())
     }
