@@ -49,21 +49,32 @@ fn extract_trigrams_internal(text: &str, trailing_padding: bool) -> HashSet<Trig
         return HashSet::new();
     }
 
-    // Pad with spaces (PostgreSQL pg_trgm style)
-    let padded = if trailing_padding {
-        format!("  {text}  ")
-    } else {
-        format!("  {text}") // No trailing padding for patterns
-    };
-    let bytes = padded.as_bytes();
+    let text_bytes = text.as_bytes();
+    let text_len = text_bytes.len();
 
-    let mut trigrams = HashSet::new();
+    // Pre-calculate capacity to avoid reallocations
+    let trailing_pad = if trailing_padding { 2 } else { 0 };
+    let total_len = 2 + text_len + trailing_pad;
+    let trigram_count = if total_len >= 3 { total_len - 2 } else { 0 };
 
-    // Extract all 3-byte sequences
-    for window in bytes.windows(3) {
-        if let Ok(trigram) = <[u8; 3]>::try_from(window) {
-            trigrams.insert(trigram);
-        }
+    let mut trigrams = HashSet::with_capacity(trigram_count);
+
+    // Zero-copy extraction: handle padding virtually without format!
+    // Conceptual string: "  " + text + ("  " if trailing_padding else "")
+    // We extract trigrams by computing indices into this virtual string
+
+    for i in 0..trigram_count {
+        let trigram: [u8; 3] = std::array::from_fn(|j| {
+            let pos = i + j;
+            if pos < 2 {
+                b' ' // Leading padding
+            } else if pos < 2 + text_len {
+                text_bytes[pos - 2]
+            } else {
+                b' ' // Trailing padding
+            }
+        });
+        trigrams.insert(trigram);
     }
 
     trigrams
