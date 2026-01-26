@@ -223,3 +223,7 @@ harness = false
 [[bench]]
 name = "velesql_execution_benchmark"
 harness = false
+
+[[bench]]
+name = "prefetch_tuning_benchmark"
+harness = false
