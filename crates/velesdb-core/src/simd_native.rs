@@ -488,3 +488,307 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
 }
 
 // =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // SimdLevel Tests
+    // =========================================================================
+
+    #[test]
+    fn test_simd_level_detection() {
+        let level = simd_level();
+        assert!(matches!(
+            level,
+            SimdLevel::Avx512 | SimdLevel::Avx2 | SimdLevel::Neon | SimdLevel::Scalar
+        ));
+    }
+
+    #[test]
+    fn test_simd_level_cached() {
+        let level1 = simd_level();
+        let level2 = simd_level();
+        assert_eq!(level1, level2);
+    }
+
+    #[test]
+    fn test_simd_level_debug() {
+        let level = simd_level();
+        let debug = format!("{level:?}");
+        assert!(!debug.is_empty());
+    }
+
+    #[test]
+    fn test_simd_level_clone() {
+        let level = simd_level();
+        let cloned = level;
+        assert_eq!(level, cloned);
+    }
+
+    // =========================================================================
+    // Dot Product Tests
+    // =========================================================================
+
+    #[test]
+    fn test_dot_product_native_basic() {
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![5.0, 6.0, 7.0, 8.0];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 70.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_dot_product_native_zeros() {
+        let a = vec![0.0; 16];
+        let b = vec![1.0; 16];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_dot_product_native_ones() {
+        let a = vec![1.0; 32];
+        let b = vec![1.0; 32];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 32.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_dot_product_native_large_dimension() {
+        let a: Vec<f32> = (0..128).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..128).map(|i| (i as f32) * 0.5).collect();
+        let result = dot_product_native(&a, &b);
+        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        assert!((result - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_dot_product_native_remainder() {
+        let a: Vec<f32> = (0..19).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..19).map(|_| 1.0).collect();
+        let result = dot_product_native(&a, &b);
+        let expected: f32 = (0..19).map(|i| i as f32).sum();
+        assert!((result - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector dimensions must match")]
+    fn test_dot_product_native_length_mismatch() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 2.0];
+        let _ = dot_product_native(&a, &b);
+    }
+
+    // =========================================================================
+    // Squared L2 Tests
+    // =========================================================================
+
+    #[test]
+    fn test_squared_l2_native_identical() {
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let result = squared_l2_native(&a, &a);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_squared_l2_native_basic() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![3.0, 4.0, 0.0];
+        let result = squared_l2_native(&a, &b);
+        assert!((result - 25.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_squared_l2_native_large() {
+        let a: Vec<f32> = (0..64).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..64).map(|i| (i as f32) + 1.0).collect();
+        let result = squared_l2_native(&a, &b);
+        assert!((result - 64.0).abs() < 1e-5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector dimensions must match")]
+    fn test_squared_l2_native_length_mismatch() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0];
+        let _ = squared_l2_native(&a, &b);
+    }
+
+    // =========================================================================
+    // Euclidean Tests
+    // =========================================================================
+
+    #[test]
+    fn test_euclidean_native_basic() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![3.0, 4.0, 0.0];
+        let result = euclidean_native(&a, &b);
+        assert!((result - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_euclidean_native_identical() {
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let result = euclidean_native(&a, &a);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    // =========================================================================
+    // Cosine Normalized Tests
+    // =========================================================================
+
+    #[test]
+    fn test_cosine_normalized_native_identical() {
+        let a = vec![1.0, 0.0, 0.0];
+        let result = cosine_normalized_native(&a, &a);
+        assert!((result - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cosine_normalized_native_orthogonal() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        let result = cosine_normalized_native(&a, &b);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    // =========================================================================
+    // Cosine Similarity Tests
+    // =========================================================================
+
+    #[test]
+    fn test_cosine_similarity_native_identical() {
+        let a = vec![1.0, 2.0, 3.0];
+        let result = cosine_similarity_native(&a, &a);
+        assert!((result - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cosine_similarity_native_opposite() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![-1.0, -2.0, -3.0];
+        let result = cosine_similarity_native(&a, &b);
+        assert!((result - (-1.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cosine_similarity_native_orthogonal() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        let result = cosine_similarity_native(&a, &b);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cosine_similarity_native_zero_norm() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+        let result = cosine_similarity_native(&a, &b);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector dimensions must match")]
+    fn test_cosine_similarity_native_length_mismatch() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0];
+        let _ = cosine_similarity_native(&a, &b);
+    }
+
+    // =========================================================================
+    // Batch Dot Product Tests
+    // =========================================================================
+
+    #[test]
+    fn test_batch_dot_product_native_basic() {
+        let query = vec![1.0, 2.0, 3.0, 4.0];
+        let c1 = vec![1.0, 0.0, 0.0, 0.0];
+        let c2 = vec![0.0, 1.0, 0.0, 0.0];
+        let c3 = vec![0.0, 0.0, 1.0, 0.0];
+        let candidates: Vec<&[f32]> = vec![&c1, &c2, &c3];
+        let results = batch_dot_product_native(&candidates, &query);
+        assert_eq!(results.len(), 3);
+        assert!((results[0] - 1.0).abs() < 1e-5);
+        assert!((results[1] - 2.0).abs() < 1e-5);
+        assert!((results[2] - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_batch_dot_product_native_empty() {
+        let query = vec![1.0, 2.0, 3.0];
+        let candidates: Vec<&[f32]> = vec![];
+        let results = batch_dot_product_native(&candidates, &query);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_batch_dot_product_native_with_prefetch() {
+        let query: Vec<f32> = vec![1.0; 16];
+        let candidates: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 16]).collect();
+        let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
+        let results = batch_dot_product_native(&candidate_refs, &query);
+        assert_eq!(results.len(), 10);
+        for (i, &result) in results.iter().enumerate() {
+            let expected = (i as f32) * 16.0;
+            assert!((result - expected).abs() < 1e-3);
+        }
+    }
+
+    // =========================================================================
+    // Edge Cases
+    // =========================================================================
+
+    #[test]
+    fn test_empty_vectors() {
+        let a: Vec<f32> = vec![];
+        let b: Vec<f32> = vec![];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_single_element() {
+        let a = vec![3.0];
+        let b = vec![4.0];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 12.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_small_vectors_below_simd_threshold() {
+        let a = vec![1.0; 8];
+        let b = vec![2.0; 8];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 16.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_exact_simd_width() {
+        let a = vec![1.0; 16];
+        let b = vec![1.0; 16];
+        let result = dot_product_native(&a, &b);
+        assert!((result - 16.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_high_dimension_384() {
+        let a: Vec<f32> = (0..384).map(|i| (i as f32) / 384.0).collect();
+        let b: Vec<f32> = (0..384).map(|i| (i as f32) / 384.0).collect();
+        let result = dot_product_native(&a, &b);
+        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        assert!((result - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_high_dimension_1536() {
+        let a: Vec<f32> = (0..1536).map(|i| (i as f32) / 1536.0).collect();
+        let b: Vec<f32> = (0..1536).map(|i| ((i as f32) / 1536.0) * 0.5).collect();
+        let result = dot_product_native(&a, &b);
+        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        assert!((result - expected).abs() < 1e-2);
+    }
+}
