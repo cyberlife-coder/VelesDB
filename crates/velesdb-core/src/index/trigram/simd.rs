@@ -446,4 +446,99 @@ mod tests {
         // SIMD should not be slower than scalar
         assert!(simd_time <= scalar_time.mul_f32(1.5));
     }
+
+    // =========================================================================
+    // Additional tests for coverage
+    // =========================================================================
+
+    #[test]
+    fn test_extract_trigrams_scalar_empty() {
+        let trigrams = extract_trigrams_scalar("");
+        assert!(trigrams.is_empty());
+    }
+
+    #[test]
+    fn test_extract_trigrams_scalar_basic() {
+        let trigrams = extract_trigrams_scalar("abc");
+        assert!(!trigrams.is_empty());
+        // With padding "  abc  ", we get trigrams: "  a", " ab", "abc", "bc ", "c  "
+        assert!(trigrams.contains(b"abc"));
+    }
+
+    #[test]
+    fn test_extract_trigrams_scalar_short() {
+        let trigrams = extract_trigrams_scalar("a");
+        // With padding "  a  ", we get trigrams: "  a", " a ", "a  "
+        assert!(!trigrams.is_empty());
+    }
+
+    #[test]
+    fn test_extract_trigrams_scalar_two_chars() {
+        let trigrams = extract_trigrams_scalar("ab");
+        // With padding "  ab  ", we get trigrams
+        assert!(!trigrams.is_empty());
+    }
+
+    #[test]
+    fn test_trigram_simd_level_name() {
+        let level = TrigramSimdLevel::Scalar;
+        assert_eq!(level.name(), "Scalar");
+    }
+
+    #[test]
+    fn test_count_matching_trigrams_empty_query() {
+        let query: Vec<[u8; 3]> = vec![];
+        let doc_set: HashSet<[u8; 3]> = HashSet::new();
+        let count = count_matching_trigrams_simd(&query, &doc_set);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_count_matching_trigrams_no_match() {
+        let query: Vec<[u8; 3]> = vec![[b'a', b'b', b'c'], [b'd', b'e', b'f']];
+        let mut doc_set = HashSet::new();
+        doc_set.insert([b'x', b'y', b'z']);
+        let count = count_matching_trigrams_simd(&query, &doc_set);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_count_matching_trigrams_all_match() {
+        let query: Vec<[u8; 3]> = vec![[b'a', b'b', b'c'], [b'd', b'e', b'f']];
+        let mut doc_set = HashSet::new();
+        doc_set.insert([b'a', b'b', b'c']);
+        doc_set.insert([b'd', b'e', b'f']);
+        let count = count_matching_trigrams_simd(&query, &doc_set);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_count_matching_trigrams_large_query() {
+        // Test with > 16 trigrams to trigger SIMD path
+        let query: Vec<[u8; 3]> = (0..20).map(|i| [b'a' + i as u8, b'b', b'c']).collect();
+        let mut doc_set = HashSet::new();
+        doc_set.insert([b'a', b'b', b'c']);
+        doc_set.insert([b'b', b'b', b'c']);
+        doc_set.insert([b'c', b'b', b'c']);
+        let count = count_matching_trigrams_simd(&query, &doc_set);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_extract_trigrams_unicode() {
+        let trigrams = extract_trigrams_simd("héllo");
+        assert!(!trigrams.is_empty());
+    }
+
+    #[test]
+    fn test_extract_trigrams_spaces() {
+        let trigrams = extract_trigrams_simd("a b c");
+        assert!(!trigrams.is_empty());
+    }
+
+    #[test]
+    fn test_extract_trigrams_numbers() {
+        let trigrams = extract_trigrams_simd("123");
+        assert!(trigrams.contains(b"123"));
+    }
 }
