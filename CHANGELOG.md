@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 📚 EPIC-018: Documentation & Examples
+
+#### Added
+
+- **10 Hybrid Use Cases Documentation** (US-001)
+  - `docs/guides/USE_CASES.md` - Comprehensive guide with 10 real-world use cases
+  - Contextual RAG, Expert Finder, Knowledge Discovery, Document Clustering
+  - Semantic Search + Filters, Recommendation Engine, Entity Resolution
+  - Trend Analysis, Impact Analysis, Conversational Memory
+  - VelesQL support status table (stable vs planned features)
+  - Copy-pastable code examples for Python, TypeScript, Rust
+
+- **Integration Tests for Use Cases**
+  - `tests/use_cases_integration_tests.rs` - 23 tests validating documented queries
+  - Tests verify all VelesQL examples compile and execute correctly
+
 ### 🚀 EPIC-040: VelesQL Language v2.0
 
 #### Added
