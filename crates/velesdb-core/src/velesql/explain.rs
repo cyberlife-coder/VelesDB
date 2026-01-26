@@ -395,3 +395,161 @@ impl fmt::Display for QueryPlan {
         write!(f, "{}", self.to_tree())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use super::super::ast::SelectColumns;
+
+    fn make_simple_select(from: &str, limit: Option<u64>) -> SelectStatement {
+        SelectStatement {
+            columns: SelectColumns::All,
+            from: from.to_string(),
+            joins: vec![],
+            where_clause: None,
+            order_by: None,
+            limit,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        }
+    }
+
+    #[test]
+    fn test_query_plan_simple_scan() {
+        let stmt = make_simple_select("docs", Some(10));
+        let plan = QueryPlan::from_select(&stmt);
+
+        assert!(plan.index_used.is_none());
+        assert_eq!(plan.filter_strategy, FilterStrategy::None);
+        assert!(plan.estimated_cost_ms > 0.0);
+    }
+
+    #[test]
+    fn test_query_plan_with_limit_and_offset() {
+        let mut stmt = make_simple_select("docs", Some(10));
+        stmt.offset = Some(5);
+        let plan = QueryPlan::from_select(&stmt);
+
+        let tree = plan.to_tree();
+        assert!(tree.contains("Limit"));
+        assert!(tree.contains("Offset"));
+    }
+
+    #[test]
+    fn test_query_plan_to_json() {
+        let stmt = make_simple_select("docs", Some(10));
+        let plan = QueryPlan::from_select(&stmt);
+
+        let json = plan.to_json();
+        assert!(json.is_ok());
+        assert!(json.unwrap().contains("docs"));
+    }
+
+    #[test]
+    fn test_query_plan_display() {
+        let stmt = make_simple_select("docs", Some(10));
+        let plan = QueryPlan::from_select(&stmt);
+
+        let display = format!("{plan}");
+        assert!(display.contains("Query Plan"));
+    }
+
+    #[test]
+    fn test_index_type_as_str() {
+        assert_eq!(IndexType::Hnsw.as_str(), "HNSW");
+        assert_eq!(IndexType::Flat.as_str(), "Flat");
+        assert_eq!(IndexType::BinaryQuantization.as_str(), "BinaryQuantization");
+        assert_eq!(IndexType::Property.as_str(), "PropertyIndex");
+    }
+
+    #[test]
+    fn test_filter_strategy_as_str() {
+        assert_eq!(FilterStrategy::None.as_str(), "none");
+        assert_eq!(
+            FilterStrategy::PreFilter.as_str(),
+            "pre-filtering (high selectivity)"
+        );
+        assert_eq!(
+            FilterStrategy::PostFilter.as_str(),
+            "post-filtering (low selectivity)"
+        );
+    }
+
+    #[test]
+    fn test_filter_strategy_default() {
+        let strategy = FilterStrategy::default();
+        assert_eq!(strategy, FilterStrategy::None);
+    }
+
+    #[test]
+    fn test_node_cost_calculations() {
+        let vs_plan = VectorSearchPlan {
+            collection: "test".to_string(),
+            ef_search: 100,
+            candidates: 50,
+        };
+        let vs_cost = QueryPlan::node_cost(&PlanNode::VectorSearch(vs_plan));
+        assert!((vs_cost - 0.05).abs() < 1e-5);
+
+        let limit_cost = QueryPlan::node_cost(&PlanNode::Limit(LimitPlan { count: 10 }));
+        assert!((limit_cost - 0.001).abs() < 1e-5);
+
+        let ts_cost = QueryPlan::node_cost(&PlanNode::TableScan(TableScanPlan {
+            collection: "test".to_string(),
+        }));
+        assert!((ts_cost - 1.0).abs() < 1e-5);
+
+        let il_cost = QueryPlan::node_cost(&PlanNode::IndexLookup(IndexLookupPlan {
+            label: "Person".to_string(),
+            property: "id".to_string(),
+            value: "123".to_string(),
+        }));
+        assert!((il_cost - 0.0001).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_estimate_selectivity() {
+        let empty: Vec<String> = vec![];
+        let one = vec!["a = ?".to_string()];
+        let two = vec!["a = ?".to_string(), "b = ?".to_string()];
+
+        let s0 = QueryPlan::estimate_selectivity(&empty);
+        let s1 = QueryPlan::estimate_selectivity(&one);
+        let s2 = QueryPlan::estimate_selectivity(&two);
+
+        // More conditions = lower selectivity
+        assert!(s0 > s1);
+        assert!(s1 > s2);
+    }
+
+    #[test]
+    fn test_render_index_lookup() {
+        let il = PlanNode::IndexLookup(IndexLookupPlan {
+            label: "User".to_string(),
+            property: "email".to_string(),
+            value: "test@example.com".to_string(),
+        });
+
+        let mut output = String::new();
+        QueryPlan::render_node(&il, &mut output, "", true);
+        assert!(output.contains("IndexLookup"));
+        assert!(output.contains("User.email"));
+    }
+
+    #[test]
+    fn test_render_filter() {
+        let f = PlanNode::Filter(FilterPlan {
+            conditions: "status = ?".to_string(),
+            selectivity: 0.25,
+        });
+
+        let mut output = String::new();
+        QueryPlan::render_node(&f, &mut output, "", true);
+        assert!(output.contains("Filter"));
+        assert!(output.contains("Selectivity"));
+    }
+}
