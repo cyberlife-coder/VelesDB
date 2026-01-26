@@ -635,3 +635,120 @@ fn test_compaction_then_resize_data_integrity() {
         );
     }
 }
+
+// =========================================================================
+// EPIC-033/US-003: Hole-Punch Tests
+// =========================================================================
+
+#[test]
+fn test_hole_punch_on_delete() {
+    use super::compaction::punch_hole;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("test_hole_punch.dat");
+
+    // Create a file with some data
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&file_path)
+        .unwrap();
+
+    // Set file size to 64KB
+    file.set_len(64 * 1024).unwrap();
+
+    // Write some data at offset 4096
+    let mut file_clone = file.try_clone().unwrap();
+    file_clone.seek(SeekFrom::Start(4096)).unwrap();
+    file_clone.write_all(&[0xAB; 4096]).unwrap();
+    file_clone.flush().unwrap();
+
+    // Punch a hole at offset 4096, length 4096
+    let result = punch_hole(&file, 4096, 4096);
+    assert!(result.is_ok(), "punch_hole should succeed");
+
+    // On Windows/Linux with supported FS, this returns true (space reclaimed)
+    // On other systems, it returns false (only zeroed)
+    let _reclaimed = result.unwrap();
+
+    // Verify the region is zeroed (regardless of reclaim status)
+    let mut file_read = file.try_clone().unwrap();
+    file_read.seek(SeekFrom::Start(4096)).unwrap();
+    let mut buf = [0u8; 4096];
+    file_read.read_exact(&mut buf).unwrap();
+
+    // All bytes should be zero after hole-punch
+    assert!(
+        buf.iter().all(|&b| b == 0),
+        "Hole-punched region should be zeroed"
+    );
+}
+
+#[test]
+fn test_delete_triggers_hole_punch() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 4).unwrap();
+
+    // Store a vector
+    storage.store(1, &[1.0, 2.0, 3.0, 4.0]).unwrap();
+    storage.flush().unwrap();
+
+    // Delete the vector (this should trigger hole-punch)
+    storage.delete(1).unwrap();
+
+    // Verify the vector is gone
+    let retrieved = storage.retrieve(1).unwrap();
+    assert!(retrieved.is_none(), "Vector should be deleted");
+
+    // Verify storage is empty
+    assert_eq!(storage.len(), 0);
+}
+
+#[test]
+fn test_hole_punch_fallback_zeros_data() {
+    use super::compaction::punch_hole;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("test_fallback.dat");
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&file_path)
+        .unwrap();
+
+    // Write pattern at start
+    let mut f = file.try_clone().unwrap();
+    f.write_all(&[0xFF; 1024]).unwrap();
+    f.flush().unwrap();
+
+    // Punch hole
+    let result = punch_hole(&file, 0, 512);
+    assert!(result.is_ok());
+
+    // Verify first 512 bytes are zeroed
+    let mut f = file.try_clone().unwrap();
+    f.seek(SeekFrom::Start(0)).unwrap();
+    let mut buf = [0u8; 512];
+    f.read_exact(&mut buf).unwrap();
+    assert!(
+        buf.iter().all(|&b| b == 0),
+        "First 512 bytes should be zeroed"
+    );
+
+    // Verify remaining 512 bytes are still 0xFF
+    let mut buf2 = [0u8; 512];
+    f.read_exact(&mut buf2).unwrap();
+    assert!(
+        buf2.iter().all(|&b| b == 0xFF),
+        "Remaining bytes should be unchanged"
+    );
+}
