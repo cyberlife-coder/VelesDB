@@ -127,8 +127,11 @@ pub fn execute_join(
     let condition = match &join.condition {
         Some(cond) => cond,
         None => {
-            // USING clause - not yet implemented for execution
-            // Would need to resolve column from both tables
+            // BUG-003 FIX: Log instead of silent return
+            tracing::warn!(
+                "JOIN with USING clause not yet supported for execution on table '{}'",
+                join.table
+            );
             return Vec::new();
         }
     };
@@ -138,12 +141,20 @@ pub fn execute_join(
     let join_column = &condition.left.column;
     if let Some(pk_column) = column_store.primary_key_column() {
         if join_column != pk_column {
-            // Cannot join on non-primary-key column - return empty results
-            // In the future, this could use secondary indexes
+            // BUG-003 FIX: Log non-PK join attempt
+            tracing::warn!(
+                "Cannot join on non-primary-key column '{}' (PK is '{}'). Use PK column for JOIN.",
+                join_column,
+                pk_column
+            );
             return Vec::new();
         }
     } else {
-        // ColumnStore has no primary key configured - cannot perform PK-based join
+        // BUG-003 FIX: Log missing PK configuration
+        tracing::warn!(
+            "ColumnStore '{}' has no primary key configured - cannot perform PK-based join",
+            join.table
+        );
         return Vec::new();
     }
 
