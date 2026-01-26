@@ -91,24 +91,49 @@ pub fn extract_trigrams_simd(text: &str) -> HashSet<Trigram> {
     }
 }
 
-/// Scalar fallback implementation
+/// Scalar fallback implementation (zero-copy, no format! allocation).
 #[must_use]
 pub fn extract_trigrams_scalar(text: &str) -> HashSet<Trigram> {
     if text.is_empty() {
         return HashSet::new();
     }
 
-    let padded = format!("  {text}  ");
-    let bytes = padded.as_bytes();
-    let mut trigrams = HashSet::with_capacity(bytes.len());
+    let text_bytes = text.as_bytes();
+    let text_len = text_bytes.len();
+    let total_len = 2 + text_len + 2; // "  " + text + "  "
+    let trigram_count = total_len.saturating_sub(2);
 
-    for window in bytes.windows(3) {
-        if let Ok(trigram) = <[u8; 3]>::try_from(window) {
-            trigrams.insert(trigram);
-        }
+    let mut trigrams = HashSet::with_capacity(trigram_count);
+
+    // Zero-copy: compute trigrams from virtual padded string
+    for i in 0..trigram_count {
+        let trigram: [u8; 3] = std::array::from_fn(|j| {
+            let pos = i + j;
+            if pos < 2 {
+                b' ' // Leading padding
+            } else if pos < 2 + text_len {
+                text_bytes[pos - 2]
+            } else {
+                b' ' // Trailing padding
+            }
+        });
+        trigrams.insert(trigram);
     }
 
     trigrams
+}
+
+/// Build a padded byte buffer for SIMD processing (reusable buffer pattern).
+///
+/// Returns the padded bytes without heap allocation for small texts.
+#[inline]
+fn build_padded_bytes(text: &str) -> Vec<u8> {
+    let text_bytes = text.as_bytes();
+    let mut padded = Vec::with_capacity(text_bytes.len() + 4);
+    padded.extend_from_slice(b"  ");
+    padded.extend_from_slice(text_bytes);
+    padded.extend_from_slice(b"  ");
+    padded
 }
 
 /// AVX2 optimized trigram extraction (x86_64)
@@ -161,12 +186,11 @@ pub fn extract_trigrams_avx2(text: &str) -> HashSet<Trigram> {
         return HashSet::new();
     }
 
-    let padded = format!("  {text}  ");
-    let bytes = padded.as_bytes();
-
     if is_x86_feature_detected!("avx2") {
+        // Build padded buffer for SIMD processing (no format! allocation)
+        let padded = build_padded_bytes(text);
         // SAFETY: We've verified AVX2 is available
-        unsafe { extract_trigrams_avx2_inner(bytes) }
+        unsafe { extract_trigrams_avx2_inner(&padded) }
     } else {
         extract_trigrams_scalar(text)
     }
@@ -221,12 +245,11 @@ pub fn extract_trigrams_avx512(text: &str) -> HashSet<Trigram> {
         return HashSet::new();
     }
 
-    let padded = format!("  {text}  ");
-    let bytes = padded.as_bytes();
-
     if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+        // Build padded buffer for SIMD processing (no format! allocation)
+        let padded = build_padded_bytes(text);
         // SAFETY: We've verified AVX-512 is available
-        unsafe { extract_trigrams_avx512_inner(bytes) }
+        unsafe { extract_trigrams_avx512_inner(&padded) }
     } else {
         extract_trigrams_avx2(text)
     }
@@ -242,8 +265,9 @@ pub fn extract_trigrams_neon(text: &str) -> HashSet<Trigram> {
         return HashSet::new();
     }
 
-    let padded = format!("  {text}  ");
-    let bytes = padded.as_bytes();
+    // Build padded buffer for SIMD processing (no format! allocation)
+    let padded = build_padded_bytes(text);
+    let bytes = padded.as_slice();
     let mut trigrams = HashSet::with_capacity(bytes.len());
     let len = bytes.len();
 
