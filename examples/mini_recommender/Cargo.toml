@@ -1,0 +1,16 @@
+[package]
+name = "mini_recommender"
+version = "0.1.0"
+edition = "2021"
+description = "VelesDB Mini Recommender Tutorial Example"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "mini_recommender"
+path = "main.rs"
+
+[dependencies]
+velesdb-core = { path = "../../crates/velesdb-core" }
+serde_json = "1.0"
+tempfile = "3.10"

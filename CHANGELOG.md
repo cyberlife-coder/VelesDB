@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - VelesQL support status table (stable vs planned features)
   - Copy-pastable code examples for Python, TypeScript, Rust
 
+- **Mini Recommender Tutorial** (US-002)
+  - `docs/guides/TUTORIALS/MINI_RECOMMENDER.md` - Step-by-step tutorial
+  - `examples/mini_recommender/` - Complete working example
+  - Product ingestion, similarity search, filtered recommendations
+  - VelesQL query examples, catalog analytics
+
 - **Integration Tests for Use Cases**
   - `tests/use_cases_integration_tests.rs` - 23 tests validating documented queries
   - Tests verify all VelesQL examples compile and execute correctly
