@@ -40,6 +40,7 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+mod agent;
 mod distance;
 mod filter;
 mod fusion;
@@ -54,6 +55,7 @@ mod store_search;
 mod text_search;
 mod vector_ops;
 
+pub use agent::SemanticMemory;
 pub use distance::DistanceMetric;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
 
