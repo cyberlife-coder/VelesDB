@@ -247,6 +247,36 @@ WITH (mode = 'balanced', ef_search = 256, rerank = true)
 "double quotes also work"
 ```
 
+#### String Escaping
+
+To include a single quote inside a string, **double it** (`''`):
+
+```sql
+-- Correct: Use '' to escape single quotes
+SELECT * FROM docs WHERE name = 'O''Brien'      -- Matches "O'Brien"
+SELECT * FROM docs WHERE text = 'It''s working' -- Matches "It's working"
+
+-- Empty string
+SELECT * FROM docs WHERE name = ''
+```
+
+⚠️ **Backslash escaping is NOT supported**:
+
+```sql
+-- ❌ WRONG: This will cause a parse error
+SELECT * FROM docs WHERE name = 'O\'Brien'
+
+-- ✅ CORRECT: Use double single-quote
+SELECT * FROM docs WHERE name = 'O''Brien'
+```
+
+Unicode characters are fully supported:
+
+```sql
+SELECT * FROM docs WHERE title = '日本語テキスト'
+SELECT * FROM docs WHERE emoji = '🚀 Launch'
+```
+
 ### Numbers
 
 ```sql
@@ -294,6 +324,64 @@ SELECT, FROM, WHERE, AND, OR, NOT, IN, BETWEEN, LIKE, MATCH,
 IS, NULL, TRUE, FALSE, LIMIT, OFFSET, WITH, NEAR, ASC, DESC,
 ORDER, BY, AS, SIMILARITY
 ```
+
+### Identifier Quoting (v1.3+)
+
+To use reserved keywords as column or table names, quote them with **backticks** or **double quotes**:
+
+```sql
+-- Backtick escaping (MySQL-style)
+SELECT `select`, `from`, `order` FROM docs
+
+-- Double-quote escaping (SQL standard)
+SELECT "select", "from", "order" FROM docs
+
+-- Mixed styles in same query
+SELECT `select`, "order" FROM my_table WHERE `limit` > 10
+```
+
+#### Escaping Quotes Inside Identifiers
+
+To include a double-quote inside a double-quoted identifier, **double it**:
+
+```sql
+-- Column named: col"name
+SELECT "col""name" FROM docs
+```
+
+#### Examples with All Clauses
+
+```sql
+-- Reserved keyword as table name
+SELECT * FROM `order`
+
+-- Reserved keywords in WHERE
+SELECT * FROM docs WHERE `select` = 'value' AND `from` LIKE '%pattern%'
+
+-- Reserved keywords in ORDER BY
+SELECT * FROM docs ORDER BY `order` ASC
+
+-- Reserved keywords in GROUP BY
+SELECT `group`, COUNT(*) FROM docs GROUP BY `group`
+
+-- Reserved keyword as alias
+SELECT id AS `select` FROM docs
+```
+
+#### Complete List of Reserved Keywords
+
+| Keyword | Category |
+|---------|----------|
+| `SELECT`, `FROM`, `WHERE` | Query structure |
+| `AND`, `OR`, `NOT` | Logical operators |
+| `IN`, `BETWEEN`, `LIKE`, `MATCH` | Comparison operators |
+| `IS`, `NULL` | NULL handling |
+| `TRUE`, `FALSE` | Boolean literals |
+| `LIMIT`, `OFFSET` | Pagination |
+| `ORDER`, `BY`, `ASC`, `DESC` | Sorting |
+| `GROUP`, `HAVING` | Aggregation |
+| `WITH`, `AS` | Options and aliases |
+| `NEAR`, `SIMILARITY` | Vector operations |
 
 ## Grammar (EBNF)
 
