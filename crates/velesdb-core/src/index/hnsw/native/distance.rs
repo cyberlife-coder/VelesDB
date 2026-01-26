@@ -444,4 +444,183 @@ mod tests {
         // DotProduct distance is negative dot product
         assert!(dist < 0.0, "DotProduct distance should be negative");
     }
+
+    // =========================================================================
+    // Additional tests for 90% coverage
+    // =========================================================================
+
+    #[test]
+    fn test_cpu_distance_dot_product() {
+        let cpu = CpuDistance::new(DistanceMetric::DotProduct);
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![4.0, 5.0, 6.0];
+        let dist = cpu.distance(&a, &b);
+        // dot = 1*4 + 2*5 + 3*6 = 32, distance = -32
+        assert!((dist + 32.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cpu_distance_hamming() {
+        let cpu = CpuDistance::new(DistanceMetric::Hamming);
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![1.0, 1.0, 0.0, 0.0];
+        let dist = cpu.distance(&a, &b);
+        // 2 bits differ (positions 1 and 2)
+        assert!((dist - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cpu_distance_jaccard() {
+        let cpu = CpuDistance::new(DistanceMetric::Jaccard);
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 1.0, 0.0];
+        // intersection = min(1,1) + min(1,0) + min(0,1) + min(0,0) = 1
+        // union = max(1,1) + max(1,0) + max(0,1) + max(0,0) = 3
+        // similarity = 1/3, distance = 2/3
+        let dist = cpu.distance(&a, &b);
+        let expected = 1.0 - (1.0 / 3.0);
+        assert!((dist - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_cpu_distance_metric_accessor() {
+        let cpu = CpuDistance::new(DistanceMetric::Euclidean);
+        assert_eq!(cpu.metric(), DistanceMetric::Euclidean);
+    }
+
+    #[test]
+    fn test_simd_distance_metric_accessor() {
+        let simd = SimdDistance::new(DistanceMetric::Cosine);
+        assert_eq!(simd.metric(), DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn test_native_simd_metric_accessor() {
+        let native = NativeSimdDistance::new(DistanceMetric::DotProduct);
+        assert_eq!(native.metric(), DistanceMetric::DotProduct);
+    }
+
+    #[test]
+    fn test_simd_dot_product() {
+        let simd = SimdDistance::new(DistanceMetric::DotProduct);
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![1.0, 1.0, 1.0, 1.0];
+        let dist = simd.distance(&a, &b);
+        // dot = 10, distance = -10
+        assert!((dist + 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_simd_euclidean() {
+        let simd = SimdDistance::new(DistanceMetric::Euclidean);
+        let a = vec![0.0, 0.0, 0.0, 0.0];
+        let b = vec![3.0, 4.0, 0.0, 0.0];
+        let dist = simd.distance(&a, &b);
+        assert!((dist - 5.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_native_simd_hamming() {
+        let native = NativeSimdDistance::new(DistanceMetric::Hamming);
+        let a: Vec<f32> = (0..32)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f32> = (0..32)
+            .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let dist = native.distance(&a, &b);
+        assert!(dist >= 0.0);
+    }
+
+    #[test]
+    fn test_native_simd_jaccard() {
+        let native = NativeSimdDistance::new(DistanceMetric::Jaccard);
+        let a = vec![1.0, 1.0, 0.0, 0.0];
+        let b = vec![1.0, 1.0, 1.0, 0.0];
+        let dist = native.distance(&a, &b);
+        assert!((0.0..=1.0).contains(&dist));
+    }
+
+    #[test]
+    fn test_native_simd_batch_dot_product() {
+        let native = NativeSimdDistance::new(DistanceMetric::DotProduct);
+        let query: Vec<f32> = vec![1.0; 16];
+        let candidates: Vec<Vec<f32>> = (0..5).map(|i| vec![(i + 1) as f32; 16]).collect();
+        let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
+
+        let distances = native.batch_distance(&query, &candidate_refs);
+        assert_eq!(distances.len(), 5);
+        // Each dot product = 16 * (i+1), distance = -dot
+        for (i, &d) in distances.iter().enumerate() {
+            let expected = -16.0 * ((i + 1) as f32);
+            assert!(
+                (d - expected).abs() < 1e-3,
+                "i={i}: got {d}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_native_simd_batch_euclidean() {
+        let native = NativeSimdDistance::new(DistanceMetric::Euclidean);
+        let query = vec![0.0; 8];
+        let candidates: Vec<Vec<f32>> = vec![vec![1.0; 8], vec![2.0; 8]];
+        let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
+
+        let distances = native.batch_distance(&query, &candidate_refs);
+        assert_eq!(distances.len(), 2);
+    }
+
+    #[test]
+    fn test_cosine_scalar_zero_norm() {
+        // Test division by zero case
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+        let dist = cosine_distance_scalar(&a, &b);
+        assert!(
+            (dist - 1.0).abs() < 1e-5,
+            "Zero norm should return distance 1.0"
+        );
+    }
+
+    #[test]
+    fn test_jaccard_scalar_zero_union() {
+        // Test division by zero case
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 0.0];
+        let dist = jaccard_distance_scalar(&a, &b);
+        assert!(
+            (dist - 1.0).abs() < 1e-5,
+            "Zero union should return distance 1.0"
+        );
+    }
+
+    #[test]
+    fn test_cpu_batch_distance_default_impl() {
+        let cpu = CpuDistance::new(DistanceMetric::Euclidean);
+        let query = vec![0.0, 0.0, 0.0];
+        let c1 = vec![1.0, 0.0, 0.0];
+        let c2 = vec![0.0, 2.0, 0.0];
+        let candidates: Vec<&[f32]> = vec![&c1, &c2];
+
+        let distances = cpu.batch_distance(&query, &candidates);
+        assert_eq!(distances.len(), 2);
+        assert!((distances[0] - 1.0).abs() < 1e-5);
+        assert!((distances[1] - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_hamming_scalar_all_same() {
+        let a = vec![1.0, 2.0, 3.0];
+        let dist = hamming_distance_scalar(&a, &a);
+        assert!((dist - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_hamming_scalar_all_different() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![4.0, 5.0, 6.0];
+        let dist = hamming_distance_scalar(&a, &b);
+        assert!((dist - 3.0).abs() < 1e-5);
+    }
 }
