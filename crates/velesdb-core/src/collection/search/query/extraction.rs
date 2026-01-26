@@ -68,16 +68,16 @@ impl Collection {
         }
     }
 
-    /// Extract similarity condition from WHERE clause.
-    /// Returns (field, vector, operator, threshold) if found.
+    /// Extract ALL similarity conditions from WHERE clause (EPIC-044 US-001).
+    /// Returns Vec of (field, vector, operator, threshold) for cascade filtering.
     #[allow(clippy::type_complexity)]
     #[allow(clippy::only_used_in_recursion)]
     #[allow(clippy::self_only_used_in_recursion)]
-    pub(crate) fn extract_similarity_condition(
+    pub(crate) fn extract_all_similarity_conditions(
         &self,
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Option<(String, Vec<f32>, crate::velesql::CompareOp, f64)>> {
+    ) -> Result<Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)>> {
         use crate::velesql::VectorExpr;
 
         match condition {
@@ -106,24 +106,18 @@ impl Collection {
                         }
                     }
                 };
-                Ok(Some((sim.field.clone(), vec, sim.operator, sim.threshold)))
+                Ok(vec![(sim.field.clone(), vec, sim.operator, sim.threshold)])
             }
-            // Both AND and OR: recursively search for similarity conditions
-            // BUG-3 FIX: Extract similarity() from both AND and OR conditions
+            // AND/OR: collect from both sides (AND=cascade, OR=validation only)
             Condition::And(left, right) | Condition::Or(left, right) => {
-                if let Some(s) = self.extract_similarity_condition(left, params)? {
-                    return Ok(Some(s));
-                }
-                self.extract_similarity_condition(right, params)
+                let mut results = self.extract_all_similarity_conditions(left, params)?;
+                results.extend(self.extract_all_similarity_conditions(right, params)?);
+                Ok(results)
             }
-            // BUG FIX: Handle Condition::Not - similarity inside NOT should be extracted
-            // Note: NOT similarity() semantically means "exclude similar items" which
-            // cannot be efficiently executed with current architecture. We extract it
-            // so validation can detect and reject this unsupported pattern.
             Condition::Group(inner) | Condition::Not(inner) => {
-                self.extract_similarity_condition(inner, params)
+                self.extract_all_similarity_conditions(inner, params)
             }
-            _ => Ok(None),
+            _ => Ok(vec![]),
         }
     }
 

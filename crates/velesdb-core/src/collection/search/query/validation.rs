@@ -1,9 +1,17 @@
 //! Query validation for VelesQL similarity queries.
 //!
 //! Validates that similarity() queries don't use unsupported patterns:
-//! - Multiple similarity() conditions
+//! - Multiple similarity() in OR (requires union of results)
 //! - similarity() in OR with non-similarity conditions
 //! - NOT similarity() patterns
+//!
+//! # Supported Patterns (EPIC-044 US-001)
+//!
+//! Multiple similarity() with AND is supported:
+//! ```sql
+//! WHERE similarity(v, $v1) > 0.8 AND similarity(v, $v2) > 0.7
+//! ```
+//! This applies filters sequentially (cascade).
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -12,32 +20,40 @@ use crate::velesql::Condition;
 impl Collection {
     /// Validate that similarity() queries don't use unsupported patterns.
     ///
-    /// # Unsupported Patterns (BUG-4, BUG-5)
+    /// # Supported Patterns (EPIC-044 US-001)
     ///
-    /// 1. **similarity() in OR with non-similarity conditions** (BUG-4):
+    /// - **Multiple similarity() with AND**: Filters applied sequentially
+    ///   `WHERE similarity(v, $v1) > 0.8 AND similarity(v, $v2) > 0.7`
+    ///
+    /// # Unsupported Patterns
+    ///
+    /// 1. **similarity() in OR with non-similarity conditions**:
     ///    `WHERE similarity(v, $v) > 0.8 OR category = 'tech'`
     ///    This would require executing both a vector search AND a metadata scan,
     ///    then unioning results - not currently supported.
     ///
-    /// 2. **Multiple similarity() conditions** (BUG-5):
-    ///    `WHERE similarity(v, $v1) > 0.8 AND similarity(v, $v2) > 0.7`
-    ///    Only one vector search can be executed per query.
+    /// 2. **Multiple similarity() in OR**:
+    ///    `WHERE similarity(v, $v1) > 0.8 OR similarity(v, $v2) > 0.7`
+    ///    This would require union of two vector searches - not currently supported.
+    ///
+    /// 3. **NOT similarity()**:
+    ///    Cannot be efficiently executed with ANN indexes.
     ///
     /// Returns Ok(()) if the query structure is valid, or an error describing the issue.
     pub(crate) fn validate_similarity_query_structure(condition: &Condition) -> Result<()> {
         let similarity_count = Self::count_similarity_conditions(condition);
 
-        // BUG-5: Multiple similarity() conditions not supported
-        if similarity_count > 1 {
+        // Multiple similarity() in OR is not supported (would require union)
+        if similarity_count > 1 && Self::has_multiple_similarity_in_or(condition) {
             return Err(Error::Config(
-                "Multiple similarity() conditions in a single query are not supported. \
-                Use a single similarity() condition per query."
+                "Multiple similarity() conditions in OR are not supported. \
+                Use AND to apply filters sequentially, or split into separate queries."
                     .to_string(),
             ));
         }
 
-        // BUG-4: similarity() in OR with non-similarity conditions
-        if similarity_count == 1 && Self::has_similarity_in_problematic_or(condition) {
+        // similarity() in OR with non-similarity conditions
+        if similarity_count >= 1 && Self::has_similarity_in_problematic_or(condition) {
             return Err(Error::Config(
                 "similarity() in OR with non-vector conditions is not supported. \
                 Use AND instead, or split into separate queries."
@@ -45,9 +61,7 @@ impl Collection {
             ));
         }
 
-        // BUG FIX: NOT similarity() is not supported
-        // Semantically this would mean "exclude similar items" which cannot be
-        // efficiently executed with ANN indexes (would require full scan + exclusion)
+        // NOT similarity() is not supported
         if similarity_count >= 1 && Self::has_similarity_under_not(condition) {
             return Err(Error::Config(
                 "NOT similarity() is not supported. Negating similarity conditions \
@@ -77,6 +91,35 @@ impl Collection {
                 Self::has_similarity_under_not(left) || Self::has_similarity_under_not(right)
             }
             Condition::Group(inner) => Self::has_similarity_under_not(inner),
+            _ => false,
+        }
+    }
+
+    /// Check if multiple similarity() conditions appear under the same OR.
+    /// This pattern requires unioning two vector search results which is not supported.
+    ///
+    /// # Example (Unsupported)
+    /// ```sql
+    /// WHERE similarity(v, $v1) > 0.8 OR similarity(v, $v2) > 0.7
+    /// ```
+    pub(crate) fn has_multiple_similarity_in_or(condition: &Condition) -> bool {
+        match condition {
+            Condition::Or(left, right) => {
+                let left_sim = Self::count_similarity_conditions(left);
+                let right_sim = Self::count_similarity_conditions(right);
+                // If both sides have similarity(), it's a union (unsupported)
+                (left_sim > 0 && right_sim > 0)
+                    || Self::has_multiple_similarity_in_or(left)
+                    || Self::has_multiple_similarity_in_or(right)
+            }
+            Condition::And(left, right) => {
+                // AND is fine for multiple similarity, but check nested ORs
+                Self::has_multiple_similarity_in_or(left)
+                    || Self::has_multiple_similarity_in_or(right)
+            }
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::has_multiple_similarity_in_or(inner)
+            }
             _ => false,
         }
     }
@@ -192,15 +235,38 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_multiple_similarity_fails() {
-        // similarity() AND similarity() - should FAIL (BUG-5)
+    fn test_validate_multiple_similarity_with_and_ok() {
+        // EPIC-044 US-001: similarity() AND similarity() - should be OK (cascade filtering)
         let cond = Condition::And(
+            Box::new(make_similarity_condition()),
+            Box::new(make_similarity_condition()),
+        );
+        assert!(Collection::validate_similarity_query_structure(&cond).is_ok());
+    }
+
+    #[test]
+    fn test_validate_multiple_similarity_with_or_fails() {
+        // similarity() OR similarity() - should FAIL (would require union)
+        let cond = Condition::Or(
             Box::new(make_similarity_condition()),
             Box::new(make_similarity_condition()),
         );
         let result = Collection::validate_similarity_query_structure(&cond);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Multiple"));
+        assert!(result.unwrap_err().to_string().contains("OR"));
+    }
+
+    #[test]
+    fn test_validate_three_similarity_with_and_ok() {
+        // EPIC-044 US-001: Three similarity() with AND - should be OK
+        let cond = Condition::And(
+            Box::new(make_similarity_condition()),
+            Box::new(Condition::And(
+                Box::new(make_similarity_condition()),
+                Box::new(make_similarity_condition()),
+            )),
+        );
+        assert!(Collection::validate_similarity_query_structure(&cond).is_ok());
     }
 
     #[test]
