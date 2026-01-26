@@ -321,69 +321,101 @@ fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
 }
 
 // =============================================================================
-// Public API with runtime dispatch
+// Cached SIMD Level Detection (EPIC-033 US-002)
+// =============================================================================
+
+/// SIMD capability level detected at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimdLevel {
+    /// AVX-512F available (x86_64 only).
+    Avx512,
+    /// AVX2 + FMA available (x86_64 only).
+    Avx2,
+    /// NEON available (aarch64, always true).
+    Neon,
+    /// Scalar fallback.
+    Scalar,
+}
+
+/// Cached SIMD level - detected once at first use.
+static SIMD_LEVEL: std::sync::OnceLock<SimdLevel> = std::sync::OnceLock::new();
+
+/// Detects the best available SIMD level for the current CPU.
+fn detect_simd_level() -> SimdLevel {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") {
+            return SimdLevel::Avx512;
+        }
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return SimdLevel::Avx2;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        return SimdLevel::Neon;
+    }
+
+    #[allow(unreachable_code)]
+    SimdLevel::Scalar
+}
+
+/// Returns the cached SIMD capability level.
+#[inline]
+#[must_use]
+pub fn simd_level() -> SimdLevel {
+    *SIMD_LEVEL.get_or_init(detect_simd_level)
+}
+
+// =============================================================================
+// Public API with cached dispatch
 // =============================================================================
 
 /// Dot product with automatic dispatch to best available SIMD.
 ///
-/// Runtime detection selects: AVX-512 > AVX2 > NEON > Scalar
+/// Runtime detection is cached after first call for zero-overhead dispatch.
+/// Selects: AVX-512 > AVX2 > NEON > Scalar
 #[inline]
 #[must_use]
 pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") && a.len() >= 16 {
-            return unsafe { dot_product_avx512(a, b) };
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") && a.len() >= 16 {
-            return unsafe { dot_product_avx2(a, b) };
-        }
+    match simd_level() {
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 if a.len() >= 16 => unsafe { dot_product_avx512(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 if a.len() >= 16 => unsafe { dot_product_avx2(a, b) },
+        #[cfg(target_arch = "aarch64")]
+        SimdLevel::Neon if a.len() >= 4 => dot_product_neon(a, b),
+        _ => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(),
     }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if a.len() >= 4 {
-            return dot_product_neon(a, b);
-        }
-    }
-
-    // Scalar fallback
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 /// Squared L2 distance with automatic dispatch.
+///
+/// Runtime detection is cached after first call for zero-overhead dispatch.
 #[inline]
 #[must_use]
 pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") && a.len() >= 16 {
-            return unsafe { squared_l2_avx512(a, b) };
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") && a.len() >= 16 {
-            return unsafe { squared_l2_avx2(a, b) };
-        }
+    match simd_level() {
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 if a.len() >= 16 => unsafe { squared_l2_avx512(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 if a.len() >= 16 => unsafe { squared_l2_avx2(a, b) },
+        #[cfg(target_arch = "aarch64")]
+        SimdLevel::Neon if a.len() >= 4 => squared_l2_neon(a, b),
+        _ => a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| {
+                let d = x - y;
+                d * d
+            })
+            .sum(),
     }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if a.len() >= 4 {
-            return squared_l2_neon(a, b);
-        }
-    }
-
-    // Scalar fallback
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| {
-            let d = x - y;
-            d * d
-        })
-        .sum()
 }
 
 /// Euclidean distance with automatic dispatch.

@@ -1,8 +1,24 @@
 //! Tests for `simd_native` module - Native SIMD operations.
 
 use crate::simd_native::{
-    batch_dot_product_native, cosine_normalized_native, dot_product_native, squared_l2_native,
+    batch_dot_product_native, cosine_normalized_native, dot_product_native, simd_level,
+    squared_l2_native, SimdLevel,
 };
+
+#[test]
+fn test_simd_level_cached() {
+    // First call initializes the cache
+    let level1 = simd_level();
+    // Second call should return the same cached value
+    let level2 = simd_level();
+
+    assert_eq!(level1, level2, "SIMD level should be consistent");
+
+    // Verify it's a valid level
+    match level1 {
+        SimdLevel::Avx512 | SimdLevel::Avx2 | SimdLevel::Neon | SimdLevel::Scalar => {}
+    }
+}
 
 #[allow(clippy::cast_precision_loss)]
 #[test]
