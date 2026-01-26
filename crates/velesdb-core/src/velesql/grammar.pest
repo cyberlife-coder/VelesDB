@@ -163,5 +163,20 @@ string = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }
 integer = @{ "-"? ~ ASCII_DIGIT+ }
 float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 
-// Identifiers
-identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+// Identifiers - EPIC-044 US-005: Support quoted identifiers for reserved keywords
+// Supports: regular identifiers, backtick-quoted (`select`), double-quoted ("from")
+identifier = { quoted_identifier | regular_identifier }
+regular_identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// Quoted identifiers for escaping reserved keywords
+// Backtick style: `select`, `from`, `order`
+backtick_identifier = @{ "`" ~ backtick_inner ~ "`" }
+backtick_inner = @{ (!"`" ~ ANY)+ }
+
+// Double-quote style (SQL standard): "select", "from", "order"
+// Supports escaped quotes: "col""name" -> col"name
+doublequote_identifier = @{ "\"" ~ doublequote_inner ~ "\"" }
+doublequote_inner = @{ (doublequote_escape | !("\"") ~ ANY)* }
+doublequote_escape = @{ "\"\"" }
+
+quoted_identifier = { backtick_identifier | doublequote_identifier }

@@ -140,7 +140,7 @@ impl Parser {
                 Ok(WithValue::Boolean(b))
             }
             Rule::identifier => {
-                let s = inner.as_str().to_string();
+                let s = super::extract_identifier(&inner);
                 Ok(WithValue::Identifier(s))
             }
             _ => Err(ParseError::syntax(

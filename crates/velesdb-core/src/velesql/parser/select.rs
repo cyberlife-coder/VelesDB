@@ -1,6 +1,6 @@
 //! SELECT statement parsing.
 
-use super::Rule;
+use super::{extract_identifier, Rule};
 use crate::velesql::ast::{
     AggregateArg, AggregateFunction, AggregateType, Column, ColumnRef, CompareOp, CompoundQuery,
     GroupByClause, HavingClause, HavingCondition, JoinClause, JoinCondition, OrderByExpr, Query,
@@ -90,7 +90,7 @@ impl Parser {
                     columns = Self::parse_select_list(inner_pair)?;
                 }
                 Rule::identifier => {
-                    from = inner_pair.as_str().to_string();
+                    from = extract_identifier(&inner_pair);
                 }
                 Rule::join_clause => {
                     joins.push(Self::parse_join_clause(inner_pair)?);
@@ -197,7 +197,7 @@ impl Parser {
                     return Ok((OrderByExpr::Aggregate(agg), false));
                 }
                 Rule::identifier => {
-                    return Ok((OrderByExpr::Field(inner_pair.as_str().to_string()), false));
+                    return Ok((OrderByExpr::Field(extract_identifier(&inner_pair)), false));
                 }
                 _ => {}
             }
@@ -314,7 +314,7 @@ impl Parser {
                     argument = Some(arg);
                 }
                 Rule::identifier => {
-                    alias = Some(inner_pair.as_str().to_string());
+                    alias = Some(extract_identifier(&inner_pair));
                 }
                 _ => {}
             }
@@ -417,14 +417,42 @@ impl Parser {
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
 
         let name = Self::parse_column_name(&name_pair);
-        let alias = inner.next().map(|p| p.as_str().to_string());
+        let alias = inner.next().map(|p| extract_identifier(&p));
 
         Ok(Column { name, alias })
     }
 
     pub(crate) fn parse_column_name(pair: &pest::iterators::Pair<Rule>) -> String {
-        // column_name is atomic (@), so we get the full string directly
-        pair.as_str().to_string()
+        // column_name is atomic (@), but may contain quoted identifiers
+        // Handle: `col`, "col", col, `a`.`b`, "a"."b", a.b
+        let raw = pair.as_str();
+        Self::strip_quotes_from_column_name(raw)
+    }
+
+    /// Strip quotes from column name parts (handles dot-separated identifiers)
+    fn strip_quotes_from_column_name(raw: &str) -> String {
+        if raw.contains('.') {
+            // Handle dot-separated: `a`.`b` or "a"."b" or a.b
+            raw.split('.')
+                .map(Self::strip_single_identifier_quotes)
+                .collect::<Vec<_>>()
+                .join(".")
+        } else {
+            Self::strip_single_identifier_quotes(raw)
+        }
+    }
+
+    /// Strip quotes from a single identifier
+    fn strip_single_identifier_quotes(s: &str) -> String {
+        let s = s.trim();
+        if s.starts_with('`') && s.ends_with('`') && s.len() >= 2 {
+            s[1..s.len() - 1].to_string()
+        } else if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+            // Handle escaped quotes: "col""name" -> col"name
+            s[1..s.len() - 1].replace("\"\"", "\"")
+        } else {
+            s.to_string()
+        }
     }
 
     /// Parse JOIN clause (EPIC-031 US-004, extended EPIC-040 US-003).
@@ -443,12 +471,12 @@ impl Parser {
                     join_type = Self::parse_join_type(inner_pair.as_str());
                 }
                 Rule::identifier => {
-                    table = inner_pair.as_str().to_string();
+                    table = extract_identifier(&inner_pair);
                 }
                 Rule::alias_clause => {
                     for alias_inner in inner_pair.into_inner() {
                         if alias_inner.as_rule() == Rule::identifier {
-                            alias = Some(alias_inner.as_str().to_string());
+                            alias = Some(extract_identifier(&alias_inner));
                         }
                     }
                 }
@@ -466,7 +494,7 @@ impl Parser {
                                 let cols: Vec<String> = spec_inner
                                     .into_inner()
                                     .filter(|p| p.as_rule() == Rule::identifier)
-                                    .map(|p| p.as_str().to_string())
+                                    .map(|p| extract_identifier(&p))
                                     .collect();
                                 using_columns = Some(cols);
                             }
@@ -567,7 +595,7 @@ impl Parser {
             if inner_pair.as_rule() == Rule::group_by_list {
                 for col_pair in inner_pair.into_inner() {
                     if col_pair.as_rule() == Rule::identifier {
-                        columns.push(col_pair.as_str().to_string());
+                        columns.push(extract_identifier(&col_pair));
                     }
                 }
             }
@@ -686,7 +714,9 @@ impl Parser {
 
                                 for part in option.into_inner() {
                                     match part.as_rule() {
-                                        Rule::identifier => key = part.as_str().to_lowercase(),
+                                        Rule::identifier => {
+                                            key = extract_identifier(&part).to_lowercase();
+                                        }
                                         Rule::fusion_value => {
                                             value_str =
                                                 part.as_str().trim_matches('\'').to_string();

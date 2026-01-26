@@ -486,3 +486,218 @@ fn test_parse_no_join() {
     let query = Parser::parse("SELECT * FROM products WHERE id = 1").unwrap();
     assert!(query.select.joins.is_empty());
 }
+
+// ========== EPIC-044 US-005: Quoted identifier tests ==========
+
+#[test]
+fn test_parse_backtick_identifier_from() {
+    // Backtick-quoted table name (reserved keyword)
+    let query = Parser::parse("SELECT * FROM `select`").unwrap();
+    assert_eq!(query.select.from, "select");
+}
+
+#[test]
+fn test_parse_doublequote_identifier_from() {
+    // Double-quote table name (SQL standard)
+    let query = Parser::parse(r#"SELECT * FROM "order""#).unwrap();
+    assert_eq!(query.select.from, "order");
+}
+
+#[test]
+fn test_parse_backtick_identifier_where() {
+    // Backtick-quoted column in WHERE
+    let query = Parser::parse("SELECT * FROM docs WHERE `select` = 'value'").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Comparison(c)) => {
+            assert_eq!(c.column, "select");
+        }
+        _ => panic!("Expected comparison condition"),
+    }
+}
+
+#[test]
+fn test_parse_doublequote_identifier_where() {
+    // Double-quote column in WHERE
+    let query = Parser::parse(r#"SELECT * FROM docs WHERE "from" = 'value'"#).unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Comparison(c)) => {
+            assert_eq!(c.column, "from");
+        }
+        _ => panic!("Expected comparison condition"),
+    }
+}
+
+#[test]
+fn test_parse_mixed_quoted_identifiers() {
+    // Mix backticks and double quotes in same query
+    let query = Parser::parse(r#"SELECT * FROM `select` WHERE "order" = 1"#).unwrap();
+    assert_eq!(query.select.from, "select");
+    match &query.select.where_clause {
+        Some(Condition::Comparison(c)) => {
+            assert_eq!(c.column, "order");
+        }
+        _ => panic!("Expected comparison condition"),
+    }
+}
+
+#[test]
+fn test_parse_doublequote_escaped_quote() {
+    // Escaped double quote inside identifier: "col""name" -> col"name
+    let query = Parser::parse(r#"SELECT * FROM docs WHERE "col""name" = 1"#).unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Comparison(c)) => {
+            assert_eq!(c.column, "col\"name");
+        }
+        _ => panic!("Expected comparison condition"),
+    }
+}
+
+#[test]
+fn test_parse_reserved_keywords_as_identifiers() {
+    // All common reserved keywords should work when quoted
+    let keywords = vec![
+        "select", "from", "where", "order", "by", "limit", "offset", "and", "or", "not", "in",
+        "between", "like", "null", "true", "false", "join", "on", "as", "group", "having", "union",
+        "using",
+    ];
+
+    for kw in keywords {
+        let query_backtick = format!("SELECT * FROM `{}`", kw);
+        let result = Parser::parse(&query_backtick);
+        assert!(
+            result.is_ok(),
+            "Failed to parse backtick-quoted keyword: {}",
+            kw
+        );
+        assert_eq!(result.unwrap().select.from, kw);
+
+        let query_doublequote = format!(r#"SELECT * FROM "{}""#, kw);
+        let result = Parser::parse(&query_doublequote);
+        assert!(
+            result.is_ok(),
+            "Failed to parse double-quoted keyword: {}",
+            kw
+        );
+        assert_eq!(result.unwrap().select.from, kw);
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_order_by() {
+    // Quoted identifier in ORDER BY
+    let query = Parser::parse("SELECT * FROM docs ORDER BY `order` DESC").unwrap();
+    match &query.select.order_by {
+        Some(order_bys) => {
+            assert_eq!(order_bys.len(), 1);
+            match &order_bys[0].expr {
+                OrderByExpr::Field(f) => assert_eq!(f, "order"),
+                _ => panic!("Expected field in ORDER BY"),
+            }
+        }
+        None => panic!("Expected ORDER BY"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_group_by() {
+    // Quoted identifier in GROUP BY
+    let query = Parser::parse("SELECT COUNT(*) FROM docs GROUP BY `group`").unwrap();
+    match &query.select.group_by {
+        Some(gb) => {
+            assert_eq!(gb.columns.len(), 1);
+            assert_eq!(gb.columns[0], "group");
+        }
+        None => panic!("Expected GROUP BY"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_match() {
+    // PR #121 Review Fix: Quoted identifier in MATCH expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `select` MATCH 'query'").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Match(m)) => {
+            assert_eq!(m.column, "select");
+            assert_eq!(m.query, "query");
+        }
+        _ => panic!("Expected MATCH condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_in() {
+    // PR #121 Review Fix: Quoted identifier in IN expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `order` IN (1, 2, 3)").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::In(i)) => {
+            assert_eq!(i.column, "order");
+            assert_eq!(i.values.len(), 3);
+        }
+        _ => panic!("Expected IN condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_between() {
+    // PR #121 Review Fix: Quoted identifier in BETWEEN expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `limit` BETWEEN 1 AND 10").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Between(b)) => {
+            assert_eq!(b.column, "limit");
+        }
+        _ => panic!("Expected BETWEEN condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_like() {
+    // PR #121 Review Fix: Quoted identifier in LIKE expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `from` LIKE '%pattern%'").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Like(l)) => {
+            assert_eq!(l.column, "from");
+            assert_eq!(l.pattern, "%pattern%");
+        }
+        _ => panic!("Expected LIKE condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_ilike() {
+    // PR #121 Review Fix: Quoted identifier in ILIKE expression
+    let query = Parser::parse(r#"SELECT * FROM docs WHERE "where" ILIKE '%test%'"#).unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Like(l)) => {
+            assert_eq!(l.column, "where");
+            assert!(l.case_insensitive);
+        }
+        _ => panic!("Expected LIKE condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_select_column() {
+    // PR #121 Review Fix: Quoted identifier in SELECT column list
+    let query = Parser::parse("SELECT `order`, `select` FROM docs").unwrap();
+    match &query.select.columns {
+        SelectColumns::Columns(cols) => {
+            assert_eq!(cols.len(), 2);
+            assert_eq!(cols[0].name, "order");
+            assert_eq!(cols[1].name, "select");
+        }
+        _ => panic!("Expected columns"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_column_alias() {
+    // PR #121 Review Fix: Quoted identifier in column alias
+    let query = Parser::parse(r"SELECT id AS `order` FROM docs").unwrap();
+    match &query.select.columns {
+        SelectColumns::Columns(cols) => {
+            assert_eq!(cols[0].name, "id");
+            assert_eq!(cols[0].alias, Some("order".to_string()));
+        }
+        _ => panic!("Expected columns"),
+    }
+}
