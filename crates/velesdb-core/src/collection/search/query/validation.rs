@@ -117,14 +117,17 @@ impl Collection {
         }
     }
 
-    /// Count the number of similarity() conditions in a condition tree.
+    /// Count the number of vector search conditions in a condition tree.
+    /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
     pub(crate) fn count_similarity_conditions(condition: &Condition) -> usize {
         match condition {
-            Condition::Similarity(_) => 1,
+            // PR #119 Review Fix: Count ALL vector search conditions
+            Condition::Similarity(_)
+            | Condition::VectorSearch(_)
+            | Condition::VectorFusedSearch(_) => 1,
             Condition::And(left, right) | Condition::Or(left, right) => {
                 Self::count_similarity_conditions(left) + Self::count_similarity_conditions(right)
             }
-            // BUG FIX: Handle Condition::Not to find similarity inside NOT clauses
             Condition::Group(inner) | Condition::Not(inner) => {
                 Self::count_similarity_conditions(inner)
             }
