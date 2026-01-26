@@ -610,3 +610,67 @@ fn test_parse_quoted_identifier_group_by() {
         None => panic!("Expected GROUP BY"),
     }
 }
+
+#[test]
+fn test_parse_quoted_identifier_match() {
+    // PR #121 Review Fix: Quoted identifier in MATCH expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `select` MATCH 'query'").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Match(m)) => {
+            assert_eq!(m.column, "select");
+            assert_eq!(m.query, "query");
+        }
+        _ => panic!("Expected MATCH condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_in() {
+    // PR #121 Review Fix: Quoted identifier in IN expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `order` IN (1, 2, 3)").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::In(i)) => {
+            assert_eq!(i.column, "order");
+            assert_eq!(i.values.len(), 3);
+        }
+        _ => panic!("Expected IN condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_between() {
+    // PR #121 Review Fix: Quoted identifier in BETWEEN expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `limit` BETWEEN 1 AND 10").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Between(b)) => {
+            assert_eq!(b.column, "limit");
+        }
+        _ => panic!("Expected BETWEEN condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_like() {
+    // PR #121 Review Fix: Quoted identifier in LIKE expression
+    let query = Parser::parse("SELECT * FROM docs WHERE `from` LIKE '%pattern%'").unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Like(l)) => {
+            assert_eq!(l.column, "from");
+            assert_eq!(l.pattern, "%pattern%");
+        }
+        _ => panic!("Expected LIKE condition"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_ilike() {
+    // PR #121 Review Fix: Quoted identifier in ILIKE expression
+    let query = Parser::parse(r#"SELECT * FROM docs WHERE "where" ILIKE '%test%'"#).unwrap();
+    match &query.select.where_clause {
+        Some(Condition::Like(l)) => {
+            assert_eq!(l.column, "where");
+            assert!(l.case_insensitive);
+        }
+        _ => panic!("Expected LIKE condition"),
+    }
+}

@@ -274,11 +274,10 @@ impl Parser {
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
 
-        let column = inner
+        let column_pair = inner
             .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?
-            .as_str()
-            .to_string();
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        let column = extract_identifier(&column_pair);
 
         let query = inner
             .next()
@@ -295,11 +294,10 @@ impl Parser {
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
 
-        let column = inner
+        let column_pair = inner
             .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?
-            .as_str()
-            .to_string();
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        let column = extract_identifier(&column_pair);
 
         let value_list = inner
             .next()
@@ -322,11 +320,10 @@ impl Parser {
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
 
-        let column = inner
+        let column_pair = inner
             .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?
-            .as_str()
-            .to_string();
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        let column = extract_identifier(&column_pair);
 
         let low = Self::parse_value(
             inner
@@ -348,11 +345,10 @@ impl Parser {
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
 
-        let column = inner
+        let column_pair = inner
             .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?
-            .as_str()
-            .to_string();
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        let column = extract_identifier(&column_pair);
 
         // Parse LIKE or ILIKE operator
         let like_op = inner
