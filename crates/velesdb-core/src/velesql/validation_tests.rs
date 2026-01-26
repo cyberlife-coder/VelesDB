@@ -154,17 +154,19 @@ fn test_strict_mode_rejects_not_similarity_without_limit() {
 // ============================================================================
 
 #[test]
-fn test_validation_error_includes_position() {
+fn test_validation_error_kind_is_set() {
     // Given: A query with multiple similarity()
     let query = create_query_with_multiple_similarity();
 
     // When: Validation is performed
     let result = QueryValidator::validate(&query);
 
-    // Then: Error includes position information
+    // Then: Error kind is correctly set
     let err = result.unwrap_err();
-    // Position should be set (0 is valid for first occurrence)
-    assert!(err.position.is_some() || err.kind == ValidationErrorKind::MultipleSimilarity);
+    assert_eq!(err.kind, ValidationErrorKind::MultipleSimilarity);
+    // Note: Position tracking not yet implemented (always None)
+    // TODO: Implement position tracking in EPIC-044 US-008
+    assert!(err.position.is_none());
 }
 
 #[test]
