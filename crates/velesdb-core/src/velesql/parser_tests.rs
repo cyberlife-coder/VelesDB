@@ -674,3 +674,30 @@ fn test_parse_quoted_identifier_ilike() {
         _ => panic!("Expected LIKE condition"),
     }
 }
+
+#[test]
+fn test_parse_quoted_identifier_select_column() {
+    // PR #121 Review Fix: Quoted identifier in SELECT column list
+    let query = Parser::parse("SELECT `order`, `select` FROM docs").unwrap();
+    match &query.select.columns {
+        SelectColumns::Columns(cols) => {
+            assert_eq!(cols.len(), 2);
+            assert_eq!(cols[0].name, "order");
+            assert_eq!(cols[1].name, "select");
+        }
+        _ => panic!("Expected columns"),
+    }
+}
+
+#[test]
+fn test_parse_quoted_identifier_column_alias() {
+    // PR #121 Review Fix: Quoted identifier in column alias
+    let query = Parser::parse(r"SELECT id AS `order` FROM docs").unwrap();
+    match &query.select.columns {
+        SelectColumns::Columns(cols) => {
+            assert_eq!(cols[0].name, "id");
+            assert_eq!(cols[0].alias, Some("order".to_string()));
+        }
+        _ => panic!("Expected columns"),
+    }
+}

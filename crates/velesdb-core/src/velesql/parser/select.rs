@@ -417,14 +417,42 @@ impl Parser {
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
 
         let name = Self::parse_column_name(&name_pair);
-        let alias = inner.next().map(|p| p.as_str().to_string());
+        let alias = inner.next().map(|p| extract_identifier(&p));
 
         Ok(Column { name, alias })
     }
 
     pub(crate) fn parse_column_name(pair: &pest::iterators::Pair<Rule>) -> String {
-        // column_name is atomic (@), so we get the full string directly
-        pair.as_str().to_string()
+        // column_name is atomic (@), but may contain quoted identifiers
+        // Handle: `col`, "col", col, `a`.`b`, "a"."b", a.b
+        let raw = pair.as_str();
+        Self::strip_quotes_from_column_name(raw)
+    }
+
+    /// Strip quotes from column name parts (handles dot-separated identifiers)
+    fn strip_quotes_from_column_name(raw: &str) -> String {
+        if raw.contains('.') {
+            // Handle dot-separated: `a`.`b` or "a"."b" or a.b
+            raw.split('.')
+                .map(Self::strip_single_identifier_quotes)
+                .collect::<Vec<_>>()
+                .join(".")
+        } else {
+            Self::strip_single_identifier_quotes(raw)
+        }
+    }
+
+    /// Strip quotes from a single identifier
+    fn strip_single_identifier_quotes(s: &str) -> String {
+        let s = s.trim();
+        if s.starts_with('`') && s.ends_with('`') && s.len() >= 2 {
+            s[1..s.len() - 1].to_string()
+        } else if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+            // Handle escaped quotes: "col""name" -> col"name
+            s[1..s.len() - 1].replace("\"\"", "\"")
+        } else {
+            s.to_string()
+        }
     }
 
     /// Parse JOIN clause (EPIC-031 US-004, extended EPIC-040 US-003).
