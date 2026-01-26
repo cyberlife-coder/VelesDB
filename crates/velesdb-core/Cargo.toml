@@ -79,6 +79,15 @@ optional = true
 version = "2.4"
 features = ["std", "serde"]
 
+# EPIC-033/US-003: Windows hole-punch (FSCTL_SET_ZERO_DATA)
+[target.'cfg(target_os = "windows")'.dependencies.windows-sys]
+version = "0.59"
+features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO"]
+
+# EPIC-033/US-003: Linux hole-punch (fallocate)
+[target.'cfg(target_os = "linux")'.dependencies.libc]
+version = "0.2"
+
 [dependencies.pest]
 version = "2.7"
 

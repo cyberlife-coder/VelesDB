@@ -577,11 +577,25 @@ impl VectorStorage for MmapStorage {
             wal.write_all(&id.to_le_bytes())?;
         }
 
-        // 2. Remove from Index
+        // 2. Get offset before removing from index (for hole-punch)
+        let offset = {
+            let index = self.index.read();
+            index.get(&id).copied()
+        };
+
+        // 3. Remove from Index
         let mut index = self.index.write();
         index.remove(&id);
+        drop(index);
 
-        // Note: Space is reclaimed via compact() - see TS-CORE-004
+        // 4. EPIC-033/US-003: Hole-punch to reclaim disk space immediately
+        // This releases disk blocks back to the filesystem without rewriting the file
+        if let Some(offset) = offset {
+            let vector_size = self.dimension * std::mem::size_of::<f32>();
+            // Best-effort: ignore errors (space will be reclaimed on compact())
+            let _ =
+                super::compaction::punch_hole(&self.data_file, offset as u64, vector_size as u64);
+        }
 
         Ok(())
     }

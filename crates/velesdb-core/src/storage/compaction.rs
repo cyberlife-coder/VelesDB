@@ -2,6 +2,16 @@
 //!
 //! This module provides compaction functionality for `MmapStorage`,
 //! allowing reclamation of disk space from deleted vectors.
+//!
+//! # EPIC-033/US-003: Disk Hole-Punch
+//!
+//! Two strategies are available:
+//! - **Full compaction**: Rewrites entire file (best for high fragmentation)
+//! - **Hole-punch**: Releases disk blocks in-place (best for sparse deletions)
+//!
+//! Hole-punch uses:
+//! - Linux: `fallocate(FALLOC_FL_PUNCH_HOLE)`
+//! - Windows: `FSCTL_SET_ZERO_DATA`
 
 use memmap2::MmapMut;
 use parking_lot::RwLock;
@@ -10,6 +20,150 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+// =========================================================================
+// EPIC-033/US-003: Hole-Punch Implementation
+// =========================================================================
+
+/// Punches a hole in a file, releasing disk blocks for the specified range.
+///
+/// This operation zeros the data and releases the underlying disk blocks
+/// back to the filesystem, reducing actual disk usage without changing file size.
+///
+/// # Platform Support
+///
+/// - **Linux**: Uses `fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE)`
+/// - **Windows**: Uses `FSCTL_SET_ZERO_DATA` DeviceIoControl
+/// - **Other**: Falls back to writing zeros (no disk reclamation)
+///
+/// # Arguments
+///
+/// * `file` - Open file handle (must have write access)
+/// * `offset` - Start offset of the hole
+/// * `len` - Length of the hole in bytes
+///
+/// # Returns
+///
+/// `true` if disk space was actually reclaimed, `false` if only zeroed.
+#[allow(unused_variables)]
+pub fn punch_hole(file: &File, offset: u64, len: u64) -> io::Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        punch_hole_linux(file, offset, len)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        punch_hole_windows(file, offset, len)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        // Fallback: just zero the region (no disk reclamation)
+        punch_hole_fallback(file, offset, len)
+    }
+}
+
+/// Linux implementation using fallocate with FALLOC_FL_PUNCH_HOLE.
+#[cfg(target_os = "linux")]
+fn punch_hole_linux(file: &File, offset: u64, len: u64) -> io::Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // FALLOC_FL_PUNCH_HOLE = 0x02, FALLOC_FL_KEEP_SIZE = 0x01
+    const FALLOC_FL_KEEP_SIZE: i32 = 0x01;
+    const FALLOC_FL_PUNCH_HOLE: i32 = 0x02;
+
+    let fd = file.as_raw_fd();
+    let mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
+
+    // SAFETY: fallocate is a valid syscall, fd is a valid file descriptor
+    let ret = unsafe { libc::fallocate(fd, mode, offset as libc::off_t, len as libc::off_t) };
+
+    if ret == 0 {
+        Ok(true) // Disk space reclaimed
+    } else {
+        let err = io::Error::last_os_error();
+        // EOPNOTSUPP means filesystem doesn't support hole punching
+        if err.raw_os_error() == Some(libc::EOPNOTSUPP) {
+            // Fall back to zeroing
+            punch_hole_fallback(file, offset, len)
+        } else {
+            Err(err)
+        }
+    }
+}
+
+/// Windows implementation using FSCTL_SET_ZERO_DATA.
+#[cfg(target_os = "windows")]
+fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{FALSE, HANDLE};
+    use windows_sys::Win32::System::Ioctl::FSCTL_SET_ZERO_DATA;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    #[repr(C)]
+    struct FileZeroDataInformation {
+        file_offset: i64,
+        beyond_final_zero: i64,
+    }
+
+    let handle = file.as_raw_handle() as HANDLE;
+    let info = FileZeroDataInformation {
+        file_offset: offset as i64,
+        beyond_final_zero: (offset + len) as i64,
+    };
+
+    let mut bytes_returned: u32 = 0;
+
+    // SAFETY: DeviceIoControl is a valid Win32 API call
+    let result = unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_SET_ZERO_DATA,
+            std::ptr::addr_of!(info).cast(),
+            std::mem::size_of::<FileZeroDataInformation>() as u32,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::addr_of_mut!(bytes_returned),
+            std::ptr::null_mut(),
+        )
+    };
+
+    if result == FALSE {
+        // Fall back to zeroing if FSCTL fails
+        punch_hole_fallback(file, offset, len)
+    } else {
+        Ok(true) // Disk space may be reclaimed (depends on filesystem)
+    }
+}
+
+/// Fallback implementation: writes zeros (no disk reclamation).
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    target_os = "linux",
+    target_os = "windows"
+))]
+/// Chunk size for fallback zeroing (64KB).
+const FALLBACK_CHUNK_SIZE: usize = 64 * 1024;
+
+fn punch_hole_fallback(file: &File, offset: u64, len: u64) -> io::Result<bool> {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let mut file = file.try_clone()?;
+    file.seek(SeekFrom::Start(offset))?;
+
+    // Write zeros in chunks to avoid large allocations
+    let zeros = vec![0u8; FALLBACK_CHUNK_SIZE];
+    let mut remaining = len as usize;
+
+    while remaining > 0 {
+        let to_write = remaining.min(FALLBACK_CHUNK_SIZE);
+        file.write_all(&zeros[..to_write])?;
+        remaining -= to_write;
+    }
+
+    Ok(false) // No disk space reclaimed, only zeroed
+}
 
 /// Cross-platform atomic file replacement.
 ///
