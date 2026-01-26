@@ -15,6 +15,13 @@
 //! - Compute min/max from training data
 //! - Scale to [0, 255] range: `q = round((x - min) / (max - min) * 255)`
 //! - Store scale and offset for reconstruction
+//!
+//! # Safety (EPIC-032/US-007)
+//!
+//! All `as u32` casts in distance computation are proven safe:
+//! - Input: u8 values in [0, 255]
+//! - Difference: i32 in [-255, 255]
+//! - Squared: i32 in [0, 65025] (always non-negative, fits in u32)
 
 use std::sync::Arc;
 
@@ -58,17 +65,26 @@ fn distance_l2_quantized_simd(a: &[u8], b: &[u8]) -> u32 {
         let d6 = i32::from(a[base + 6]) - i32::from(b[base + 6]);
         let d7 = i32::from(a[base + 7]) - i32::from(b[base + 7]);
 
-        sum0 += (d0 * d0) as u32 + (d4 * d4) as u32;
-        sum1 += (d1 * d1) as u32 + (d5 * d5) as u32;
-        sum2 += (d2 * d2) as u32 + (d6 * d6) as u32;
-        sum3 += (d3 * d3) as u32 + (d7 * d7) as u32;
+        // SAFETY (EPIC-032/US-007): d_i in [-255, 255], so d_i*d_i in [0, 65025]
+        // This is always non-negative and fits in u32 (max 4,294,967,295)
+        #[allow(clippy::cast_sign_loss)] // Proven non-negative: square of integer
+        {
+            sum0 += (d0 * d0) as u32 + (d4 * d4) as u32;
+            sum1 += (d1 * d1) as u32 + (d5 * d5) as u32;
+            sum2 += (d2 * d2) as u32 + (d6 * d6) as u32;
+            sum3 += (d3 * d3) as u32 + (d7 * d7) as u32;
+        }
     }
 
     // Handle remainder
     let base = chunks * 8;
     for i in 0..remainder {
         let diff = i32::from(a[base + i]) - i32::from(b[base + i]);
-        sum0 += (diff * diff) as u32;
+        // SAFETY (EPIC-032/US-007): diff in [-255, 255], diff*diff in [0, 65025]
+        #[allow(clippy::cast_sign_loss)]
+        {
+            sum0 += (diff * diff) as u32;
+        }
     }
 
     sum0 + sum1 + sum2 + sum3
