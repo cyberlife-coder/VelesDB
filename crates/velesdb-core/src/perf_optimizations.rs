@@ -10,10 +10,16 @@
 //! - Bulk import: 50K+ vectors/sec at 768D
 //! - Search latency: < 1ms for 1M vectors
 //! - Memory efficiency: 50% reduction with FP16
+//!
+//! # Safety (EPIC-032/US-002)
+//!
+//! `ContiguousVectors` uses `NonNull<f32>` to encode non-nullness at the type level,
+//! eliminating null pointer checks and making invariants explicit. Memory is managed
+//! via RAII with `AllocGuard` for panic-safe resize operations.
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::fmt;
-use std::ptr;
+use std::ptr::{self, NonNull};
 
 // =============================================================================
 // Contiguous Vector Storage (Cache-Optimized)
@@ -29,9 +35,16 @@ use std::ptr;
 /// ```text
 /// [v0_d0, v0_d1, ..., v0_dn, v1_d0, v1_d1, ..., v1_dn, ...]
 /// ```
+///
+/// # Safety Invariants (EPIC-032/US-002)
+///
+/// - `data` is always non-null (enforced by `NonNull`)
+/// - `data` points to memory allocated with 64-byte alignment
+/// - `capacity * dimension * sizeof(f32)` bytes are always allocated
+/// - `count <= capacity` is always maintained
 pub struct ContiguousVectors {
-    /// Raw contiguous data buffer
-    data: *mut f32,
+    /// Non-null contiguous data buffer (EPIC-032/US-002: type-level non-null guarantee)
+    data: NonNull<f32>,
     /// Vector dimension
     dimension: usize,
     /// Number of vectors stored
@@ -73,10 +86,12 @@ impl ContiguousVectors {
         let capacity = capacity.max(16); // Minimum 16 vectors
         let layout = Self::layout(dimension, capacity);
 
-        // SAFETY: Layout is valid (non-zero, aligned)
-        let data = unsafe { alloc(layout).cast::<f32>() };
+        // SAFETY: Layout is valid (non-zero size due to dimension > 0 and capacity >= 16)
+        let ptr = unsafe { alloc(layout) };
 
-        assert!(!data.is_null(), "Failed to allocate ContiguousVectors");
+        // EPIC-032/US-002: Use NonNull for type-level non-null guarantee
+        let data = NonNull::new(ptr.cast::<f32>())
+            .expect("Failed to allocate ContiguousVectors: out of memory");
 
         Self {
             data,
@@ -156,9 +171,13 @@ impl ContiguousVectors {
         self.ensure_capacity(index + 1);
 
         let offset = index * self.dimension;
-        // SAFETY: We ensured capacity covers index
+        // SAFETY: We ensured capacity covers index, data is non-null (NonNull invariant)
         unsafe {
-            ptr::copy_nonoverlapping(vector.as_ptr(), self.data.add(offset), self.dimension);
+            ptr::copy_nonoverlapping(
+                vector.as_ptr(),
+                self.data.as_ptr().add(offset),
+                self.dimension,
+            );
         }
 
         // Update count if we're extending the "used" range
@@ -210,7 +229,8 @@ impl ContiguousVectors {
 
         let offset = index * self.dimension;
         // SAFETY: Index is within bounds (checked against count, which is <= capacity)
-        Some(unsafe { std::slice::from_raw_parts(self.data.add(offset), self.dimension) })
+        // data is non-null (NonNull invariant)
+        Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension) })
     }
 
     /// Gets a vector by index (unchecked).
@@ -232,7 +252,8 @@ impl ContiguousVectors {
             self.count
         );
         let offset = index * self.dimension;
-        std::slice::from_raw_parts(self.data.add(offset), self.dimension)
+        // SAFETY: Caller guarantees index < count, data is non-null (NonNull invariant)
+        std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
     }
 
     /// Prefetches a vector for upcoming access.
@@ -242,7 +263,8 @@ impl ContiguousVectors {
     pub fn prefetch(&self, index: usize) {
         if index < self.count {
             let offset = index * self.dimension;
-            let ptr = unsafe { self.data.add(offset) };
+            // SAFETY: index < count implies valid offset, data is non-null (NonNull invariant)
+            let ptr = unsafe { self.data.as_ptr().add(offset) };
 
             #[cfg(target_arch = "x86_64")]
             unsafe {
@@ -298,16 +320,17 @@ impl ContiguousVectors {
             )
         });
 
-        let new_data: *mut f32 = guard.cast();
+        // EPIC-032/US-002: Use NonNull for type-level guarantee
+        let new_data = NonNull::new(guard.cast::<f32>()).expect("AllocGuard returned null pointer");
 
         // Step 2: Copy existing data to new buffer
         // If this panics, guard drops and frees new_data automatically
         let copy_count = self.count;
         if copy_count > 0 {
             let copy_size = copy_count * self.dimension;
-            // SAFETY: Both pointers are valid, non-overlapping, and properly aligned
+            // SAFETY: Both pointers are valid (NonNull), non-overlapping, and properly aligned
             unsafe {
-                ptr::copy_nonoverlapping(self.data, new_data, copy_size);
+                ptr::copy_nonoverlapping(self.data.as_ptr(), new_data.as_ptr(), copy_size);
             }
         }
 
@@ -315,9 +338,9 @@ impl ContiguousVectors {
         let _ = guard.into_raw();
 
         // Step 4: Deallocate old buffer
-        // SAFETY: self.data was allocated with old_layout
+        // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant)
         unsafe {
-            dealloc(self.data.cast::<u8>(), old_layout);
+            dealloc(self.data.as_ptr().cast::<u8>(), old_layout);
         }
 
         // Step 5: Update state (all-or-nothing)
@@ -360,12 +383,11 @@ impl ContiguousVectors {
 
 impl Drop for ContiguousVectors {
     fn drop(&mut self) {
-        if !self.data.is_null() {
-            let layout = Self::layout(self.dimension, self.capacity);
-            // SAFETY: data was allocated with this layout
-            unsafe {
-                dealloc(self.data.cast::<u8>(), layout);
-            }
+        // EPIC-032/US-002: No null check needed - NonNull guarantees non-null
+        let layout = Self::layout(self.dimension, self.capacity);
+        // SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
+        unsafe {
+            dealloc(self.data.as_ptr().cast::<u8>(), layout);
         }
     }
 }
