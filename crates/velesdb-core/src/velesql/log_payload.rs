@@ -409,6 +409,9 @@ pub fn batch_cosine_normalized(candidates: &[&[f32]], query: &[f32]) -> Vec<f32>
         // Prefetch next vectors
         if i + 4 < candidates.len() {
             #[cfg(target_arch = "x86_64")]
+            // SAFETY (EPIC-032/US-003): _mm_prefetch is safe when:
+            // 1. Target has x86_64 architecture (cfg guard)
+            // 2. Index is valid (i + 4 < candidates.len() check above)
             unsafe {
                 use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
                 _mm_prefetch(candidates[i + 4].as_ptr().cast::<i8>(), _MM_HINT_T0);
