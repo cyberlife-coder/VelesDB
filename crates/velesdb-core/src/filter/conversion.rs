@@ -16,6 +16,10 @@ impl From<crate::velesql::Condition> for Condition {
                     crate::velesql::Value::Null | crate::velesql::Value::Parameter(_) => {
                         Value::Null
                     }
+                    crate::velesql::Value::Temporal(t) => {
+                        // Convert temporal to epoch seconds for comparison
+                        Value::Number(t.to_epoch_seconds().into())
+                    }
                 };
                 match cmp.operator {
                     crate::velesql::CompareOp::Eq => Self::eq(cmp.column, value),
@@ -49,6 +53,9 @@ impl From<crate::velesql::Condition> for Condition {
                         crate::velesql::Value::Boolean(b) => Value::Bool(b),
                         crate::velesql::Value::Null | crate::velesql::Value::Parameter(_) => {
                             Value::Null
+                        }
+                        crate::velesql::Value::Temporal(t) => {
+                            Value::Number(t.to_epoch_seconds().into())
                         }
                     })
                     .collect();

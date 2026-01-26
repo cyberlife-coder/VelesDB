@@ -152,11 +152,18 @@ compare_op = { ">=" | "<=" | "<>" | "!=" | "=" | ">" | "<" }
 limit_clause = { ^"LIMIT" ~ integer }
 offset_clause = { ^"OFFSET" ~ integer }
 
-// Values
-value = { float | integer | string | boolean | null_value | parameter }
+// Values - EPIC-038: Added temporal expressions (NOW, INTERVAL)
+value = { temporal_expr | float | integer | string | boolean | null_value | parameter }
 parameter = @{ "$" ~ identifier }
 null_value = { ^"NULL" }
 boolean = { ^"TRUE" | ^"FALSE" }
+
+// Temporal expressions (EPIC-038)
+temporal_expr = { temporal_arithmetic | now_function | interval_expr }
+temporal_arithmetic = { (now_function | interval_expr) ~ temporal_op ~ (now_function | interval_expr) }
+temporal_op = { "+" | "-" }
+now_function = { ^"NOW" ~ "(" ~ ")" }
+interval_expr = { ^"INTERVAL" ~ string }
 
 // Literals
 string = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }

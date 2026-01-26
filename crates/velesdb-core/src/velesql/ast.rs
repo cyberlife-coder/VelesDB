@@ -650,6 +650,90 @@ pub enum Value {
     Null,
     /// Parameter reference.
     Parameter(String),
+    /// Temporal function (EPIC-038).
+    Temporal(TemporalExpr),
+}
+
+/// Temporal expression for date/time operations (EPIC-038).
+///
+/// # Examples
+/// ```sql
+/// WHERE created_at > NOW()
+/// WHERE timestamp > NOW() - INTERVAL '7 days'
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TemporalExpr {
+    /// Current timestamp: `NOW()`
+    Now,
+    /// Interval expression: `INTERVAL '7 days'`
+    Interval(IntervalValue),
+    /// Arithmetic: `NOW() - INTERVAL '7 days'`
+    Subtract(Box<TemporalExpr>, Box<TemporalExpr>),
+    /// Arithmetic: `NOW() + INTERVAL '1 hour'`
+    Add(Box<TemporalExpr>, Box<TemporalExpr>),
+}
+
+/// Interval value with magnitude and unit (EPIC-038).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IntervalValue {
+    /// Numeric magnitude (e.g., 7 for '7 days').
+    pub magnitude: i64,
+    /// Time unit.
+    pub unit: IntervalUnit,
+}
+
+/// Time unit for INTERVAL expressions (EPIC-038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IntervalUnit {
+    /// Seconds.
+    Seconds,
+    /// Minutes.
+    Minutes,
+    /// Hours.
+    Hours,
+    /// Days.
+    Days,
+    /// Weeks.
+    Weeks,
+    /// Months.
+    Months,
+}
+
+impl IntervalValue {
+    /// Converts the interval to seconds.
+    #[must_use]
+    pub fn to_seconds(&self) -> i64 {
+        match self.unit {
+            IntervalUnit::Seconds => self.magnitude,
+            IntervalUnit::Minutes => self.magnitude * 60,
+            IntervalUnit::Hours => self.magnitude * 3600,
+            IntervalUnit::Days => self.magnitude * 86400,
+            IntervalUnit::Weeks => self.magnitude * 604_800,
+            IntervalUnit::Months => self.magnitude * 2_592_000, // ~30 days
+        }
+    }
+}
+
+impl TemporalExpr {
+    /// Evaluates the temporal expression to epoch seconds (Unix timestamp).
+    ///
+    /// Uses current system time for `NOW()`.
+    #[must_use]
+    pub fn to_epoch_seconds(&self) -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        match self {
+            Self::Now => now,
+            Self::Interval(iv) => iv.to_seconds(),
+            Self::Subtract(left, right) => left.to_epoch_seconds() - right.to_epoch_seconds(),
+            Self::Add(left, right) => left.to_epoch_seconds() + right.to_epoch_seconds(),
+        }
+    }
 }
 
 impl From<i64> for Value {

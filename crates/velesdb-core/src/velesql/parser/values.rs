@@ -1,7 +1,9 @@
 //! Value parsing (literals, parameters, WITH clause).
 
 use super::Rule;
-use crate::velesql::ast::{Value, WithClause, WithOption, WithValue};
+use crate::velesql::ast::{
+    IntervalUnit, IntervalValue, TemporalExpr, Value, WithClause, WithOption, WithValue,
+};
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
@@ -40,7 +42,121 @@ impl Parser {
                 let name = inner.as_str().trim_start_matches('$').to_string();
                 Ok(Value::Parameter(name))
             }
+            Rule::temporal_expr => {
+                let temporal = Self::parse_temporal_expr(inner)?;
+                Ok(Value::Temporal(temporal))
+            }
             _ => Err(ParseError::syntax(0, inner.as_str(), "Unknown value type")),
+        }
+    }
+
+    /// Parses a temporal expression (NOW(), INTERVAL, arithmetic).
+    pub(crate) fn parse_temporal_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<TemporalExpr, ParseError> {
+        let inner = pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected temporal expression"))?;
+
+        match inner.as_rule() {
+            Rule::now_function => Ok(TemporalExpr::Now),
+            Rule::interval_expr => Self::parse_interval_expr(inner),
+            Rule::temporal_arithmetic => Self::parse_temporal_arithmetic(inner),
+            _ => Err(ParseError::syntax(
+                0,
+                inner.as_str(),
+                "Unknown temporal expression",
+            )),
+        }
+    }
+
+    /// Parses an INTERVAL expression like `INTERVAL '7 days'`.
+    fn parse_interval_expr(pair: pest::iterators::Pair<Rule>) -> Result<TemporalExpr, ParseError> {
+        let string_pair = pair
+            .into_inner()
+            .find(|p| p.as_rule() == Rule::string)
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected interval string"))?;
+
+        let interval_str = string_pair.as_str().trim_matches('\'');
+        let interval_value = Self::parse_interval_string(interval_str)?;
+        Ok(TemporalExpr::Interval(interval_value))
+    }
+
+    /// Parses interval string like "7 days" or "1 hour".
+    fn parse_interval_string(s: &str) -> Result<IntervalValue, ParseError> {
+        let parts: Vec<&str> = s.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(ParseError::syntax(
+                0,
+                s,
+                "INTERVAL format: '<number> <unit>' (e.g., '7 days')",
+            ));
+        }
+
+        let magnitude = parts[0]
+            .parse::<i64>()
+            .map_err(|_| ParseError::syntax(0, parts[0], "Invalid interval magnitude"))?;
+
+        let unit = match parts[1].to_lowercase().as_str() {
+            "s" | "sec" | "second" | "seconds" => IntervalUnit::Seconds,
+            "m" | "min" | "minute" | "minutes" => IntervalUnit::Minutes,
+            "h" | "hour" | "hours" => IntervalUnit::Hours,
+            "d" | "day" | "days" => IntervalUnit::Days,
+            "w" | "week" | "weeks" => IntervalUnit::Weeks,
+            "month" | "months" => IntervalUnit::Months,
+            _ => {
+                return Err(ParseError::syntax(
+                    0,
+                    parts[1],
+                    "Unknown interval unit (use: seconds, minutes, hours, days, weeks, months)",
+                ))
+            }
+        };
+
+        Ok(IntervalValue { magnitude, unit })
+    }
+
+    /// Parses temporal arithmetic like `NOW() - INTERVAL '7 days'`.
+    fn parse_temporal_arithmetic(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<TemporalExpr, ParseError> {
+        let mut inner = pair.into_inner();
+
+        let left_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected left operand"))?;
+        let left = Self::parse_temporal_operand(left_pair)?;
+
+        let op_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected temporal operator"))?;
+        let is_subtract = op_pair.as_str() == "-";
+
+        let right_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected right operand"))?;
+        let right = Self::parse_temporal_operand(right_pair)?;
+
+        if is_subtract {
+            Ok(TemporalExpr::Subtract(Box::new(left), Box::new(right)))
+        } else {
+            Ok(TemporalExpr::Add(Box::new(left), Box::new(right)))
+        }
+    }
+
+    /// Parses a single temporal operand (NOW or INTERVAL).
+    fn parse_temporal_operand(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<TemporalExpr, ParseError> {
+        match pair.as_rule() {
+            Rule::now_function => Ok(TemporalExpr::Now),
+            Rule::interval_expr => Self::parse_interval_expr(pair),
+            _ => Err(ParseError::syntax(
+                0,
+                pair.as_str(),
+                "Expected NOW() or INTERVAL",
+            )),
         }
     }
 
