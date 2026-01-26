@@ -237,7 +237,7 @@ impl QueryValidator {
         // Count similarity conditions
         let similarity_count = Self::count_similarity_conditions(condition);
 
-        // EPIC-044 US-001: Multiple similarity() in OR is rejected (requires union)
+        // EPIC-044 US-001: Multiple similarity() in OR is rejected (requires union of vector searches)
         // Multiple similarity() in AND is allowed (cascade filtering)
         if similarity_count > 1 && Self::has_multiple_similarity_in_or(condition) {
             return Err(ValidationError::multiple_similarity(
@@ -245,12 +245,8 @@ impl QueryValidator {
             ));
         }
 
-        // Check for OR with similarity and non-similarity (mixed OR)
-        if Self::has_similarity_with_or(condition) {
-            return Err(ValidationError::similarity_with_or(
-                "similarity() in OR with non-vector conditions is not supported",
-            ));
-        }
+        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
+        // has_similarity_with_or check removed - union execution handles this
 
         // Check for NOT similarity
         if Self::has_not_similarity(condition) {
@@ -280,20 +276,7 @@ impl QueryValidator {
         }
     }
 
-    /// Checks if the condition tree has similarity with OR.
-    fn has_similarity_with_or(condition: &Condition) -> bool {
-        match condition {
-            Condition::Or(left, right) => {
-                // If either side contains similarity, this is invalid
-                Self::contains_similarity(left) || Self::contains_similarity(right)
-            }
-            Condition::And(left, right) => {
-                Self::has_similarity_with_or(left) || Self::has_similarity_with_or(right)
-            }
-            Condition::Not(inner) | Condition::Group(inner) => Self::has_similarity_with_or(inner),
-            _ => false,
-        }
-    }
+    // EPIC-044 US-002: has_similarity_with_or removed - no longer blocking similarity() OR metadata
 
     /// Checks if a condition tree contains any vector search condition.
     /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).

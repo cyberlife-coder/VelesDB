@@ -55,21 +55,20 @@ fn test_validate_single_similarity_passes() {
 
 // ============================================================================
 // US-007: OR with similarity() validation
+// EPIC-044 US-002: similarity() OR metadata is now supported (union mode)
 // ============================================================================
 
 #[test]
-fn test_validate_or_with_similarity_detected() {
+fn test_validate_or_with_similarity_now_passes() {
+    // EPIC-044 US-002: similarity() OR metadata is NOW supported (union mode)
     // Given: A query with similarity() OR metadata
     let query = create_query_with_similarity_or_metadata();
 
     // When: Validation is performed
     let result = QueryValidator::validate(&query);
 
-    // Then: ValidationError is returned
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind, ValidationErrorKind::SimilarityWithOr);
-    assert!(err.suggestion.contains("AND"));
+    // Then: No error - union mode handles this
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -444,8 +443,8 @@ fn test_validate_vector_search_near_with_or_detected() {
 }
 
 #[test]
-fn test_validate_vector_search_or_detected() {
-    // BUG-001 regression: VectorSearch with OR was not being validated
+fn test_validate_vector_search_or_now_passes() {
+    // EPIC-044 US-002: VectorSearch OR metadata is NOW supported (union mode)
     use crate::velesql::ast::VectorSearch;
 
     let near = Condition::VectorSearch(VectorSearch {
@@ -474,11 +473,9 @@ fn test_validate_vector_search_or_detected() {
         compound: None,
     };
 
-    // Should detect NEAR with OR
+    // EPIC-044 US-002: NEAR OR metadata is now supported
     let result = QueryValidator::validate(&query);
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind, ValidationErrorKind::SimilarityWithOr);
+    assert!(result.is_ok());
 }
 
 #[test]
