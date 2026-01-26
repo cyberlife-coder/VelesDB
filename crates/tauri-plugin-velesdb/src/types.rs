@@ -315,3 +315,84 @@ pub const fn default_vector_weight() -> f32 {
 pub fn default_fusion() -> String {
     "rrf".to_string()
 }
+
+// ============================================================================
+// AgentMemory DTOs (EPIC-016 US-003)
+// ============================================================================
+
+/// Request to store knowledge in semantic memory.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticStoreRequest {
+    /// Unique ID for this knowledge fact.
+    pub id: u64,
+    /// Text content of the knowledge.
+    pub content: String,
+    /// Embedding vector for the content.
+    pub embedding: Vec<f32>,
+}
+
+/// Request to query semantic memory.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticQueryRequest {
+    /// Query embedding vector.
+    pub embedding: Vec<f32>,
+    /// Number of results to return.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+}
+
+/// Result from semantic memory query.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticQueryResult {
+    /// Knowledge fact ID.
+    pub id: u64,
+    /// Similarity score.
+    pub score: f32,
+    /// Knowledge content text.
+    pub content: String,
+}
+
+/// Request to record an episode.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicRecordRequest {
+    /// Episode description/content.
+    pub content: String,
+    /// Embedding vector for the episode.
+    pub embedding: Vec<f32>,
+    /// Optional context metadata.
+    #[serde(default)]
+    pub context: Option<serde_json::Value>,
+}
+
+/// Request to query recent episodes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicRecentRequest {
+    /// Number of recent episodes to return.
+    #[serde(default = "default_top_k")]
+    pub limit: usize,
+}
+
+/// Result from episodic memory query.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicResult {
+    /// Episode ID.
+    pub id: u64,
+    /// Episode content.
+    pub content: String,
+    /// Timestamp (epoch seconds).
+    pub timestamp: u64,
+    /// Optional context.
+    pub context: Option<serde_json::Value>,
+}
+
+/// Default dimension for agent memory (384 for typical sentence transformers).
+#[must_use]
+pub const fn default_dimension() -> usize {
+    384
+}

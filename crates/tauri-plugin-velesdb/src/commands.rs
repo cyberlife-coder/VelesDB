@@ -570,6 +570,54 @@ pub async fn multi_query_search<R: Runtime>(
     })
 }
 
+// ============================================================================
+// AgentMemory Commands (EPIC-016 US-003)
+// ============================================================================
+
+use crate::types::{SemanticQueryRequest, SemanticQueryResult, SemanticStoreRequest};
+use velesdb_core::agent::SemanticMemory;
+
+/// Stores a knowledge fact in semantic memory.
+#[command]
+pub async fn semantic_store<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: SemanticStoreRequest,
+) -> std::result::Result<(), CommandError> {
+    state
+        .with_db(|db| {
+            let memory = SemanticMemory::new_from_db(db, request.embedding.len())
+                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            memory
+                .store(request.id, &request.content, &request.embedding)
+                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Queries semantic memory by similarity search.
+#[command]
+pub async fn semantic_query<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: SemanticQueryRequest,
+) -> std::result::Result<Vec<SemanticQueryResult>, CommandError> {
+    state
+        .with_db(|db| {
+            let memory = SemanticMemory::new_from_db(db, request.embedding.len())
+                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            let results = memory
+                .query(&request.embedding, request.top_k)
+                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            Ok(results
+                .into_iter()
+                .map(|(id, score, content)| SemanticQueryResult { id, score, content })
+                .collect())
+        })
+        .map_err(CommandError::from)
+}
+
 #[cfg(test)]
 #[path = "commands_tests.rs"]
 mod tests;

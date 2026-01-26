@@ -317,6 +317,9 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands::query,
             commands::is_empty,
             commands::flush,
+            // AgentMemory commands (EPIC-016 US-003)
+            commands::semantic_store,
+            commands::semantic_query,
         ])
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());
