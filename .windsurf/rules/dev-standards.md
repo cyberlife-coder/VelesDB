@@ -159,3 +159,34 @@ cargo deny check
 
 ### Anti-pattern à éviter
 Optimiser un composant qui représente <10% du temps total → effort gaspillé ou régression.
+
+---
+
+## ✅ Success Criteria (OBLIGATOIRE avant merge)
+
+Chaque implémentation DOIT valider TOUS ces critères:
+
+| # | Critère | Validation |
+|---|---------|------------|
+| 1 | ✅ Build sans erreurs | `cargo build --workspace` |
+| 2 | ✅ Zéro erreurs de compilation | `cargo check --workspace` |
+| 3 | ✅ Zéro warnings Clippy | `cargo clippy -- -D warnings` |
+| 4 | ✅ Code formaté | `cargo fmt --all --check` |
+| 5 | ✅ Zéro code mort | `-W dead_code -W unused_variables` |
+| 6 | ✅ Zéro duplication | DRY respecté, factoriser si >3 occurrences |
+| 7 | ✅ Tests passants | `cargo test --workspace` |
+| 8 | ✅ Build release OK | `cargo build --release` |
+| 9 | ✅ Hooks passants | pre-commit + pre-push |
+| 10 | ✅ Audit sécurité | `cargo deny check` |
+
+### Validation rapide
+
+```powershell
+# Script unique qui vérifie tout
+.\scripts\local-ci.ps1
+```
+
+### Règle d'or
+
+> **❌ 1 critère échoué = PAS de merge**
+> Corriger → Revalider → Merger
