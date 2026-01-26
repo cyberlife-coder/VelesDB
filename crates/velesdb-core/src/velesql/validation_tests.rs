@@ -11,21 +11,34 @@ use super::validation::{QueryValidator, ValidationConfig, ValidationError, Valid
 
 // ============================================================================
 // US-007: Multiple similarity() validation
+// EPIC-044 US-001: Multiple similarity() with AND is now supported
 // ============================================================================
 
 #[test]
-fn test_validate_multiple_similarity_detected() {
-    // Given: A query with multiple similarity() conditions
-    let query = create_query_with_multiple_similarity();
+fn test_validate_multiple_similarity_with_and_passes() {
+    // EPIC-044 US-001: Multiple similarity() with AND is now supported (cascade filtering)
+    // Given: A query with multiple similarity() conditions using AND
+    let query = create_query_with_multiple_similarity(); // Uses AND
 
     // When: Validation is performed
     let result = QueryValidator::validate(&query);
 
-    // Then: ValidationError is returned
+    // Then: No error - AND is allowed
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validate_multiple_similarity_with_or_detected() {
+    // Given: A query with multiple similarity() conditions using OR
+    let query = create_query_with_multiple_similarity_or();
+
+    // When: Validation is performed
+    let result = QueryValidator::validate(&query);
+
+    // Then: ValidationError is returned - OR is not supported
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.kind, ValidationErrorKind::MultipleSimilarity);
-    assert!(err.suggestion.contains("sequential queries"));
 }
 
 #[test]
@@ -155,8 +168,8 @@ fn test_strict_mode_rejects_not_similarity_without_limit() {
 
 #[test]
 fn test_validation_error_kind_is_set() {
-    // Given: A query with multiple similarity()
-    let query = create_query_with_multiple_similarity();
+    // Given: A query with multiple similarity() using OR (should fail)
+    let query = create_query_with_multiple_similarity_or();
 
     // When: Validation is performed
     let result = QueryValidator::validate(&query);
@@ -211,6 +224,39 @@ fn create_query_with_multiple_similarity() -> Query {
             from: "docs".to_string(),
             joins: vec![],
             where_clause: Some(Condition::And(Box::new(sim1), Box::new(sim2))),
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        compound: None,
+    }
+}
+
+/// Creates a query with multiple similarity() using OR (should fail validation).
+fn create_query_with_multiple_similarity_or() -> Query {
+    let sim1 = Condition::Similarity(SimilarityCondition {
+        field: "v".to_string(),
+        vector: VectorExpr::Parameter("v1".to_string()),
+        operator: CompareOp::Gt,
+        threshold: 0.8,
+    });
+    let sim2 = Condition::Similarity(SimilarityCondition {
+        field: "v".to_string(),
+        vector: VectorExpr::Parameter("v2".to_string()),
+        operator: CompareOp::Gt,
+        threshold: 0.7,
+    });
+
+    Query {
+        select: SelectStatement {
+            columns: SelectColumns::All,
+            from: "docs".to_string(),
+            joins: vec![],
+            where_clause: Some(Condition::Or(Box::new(sim1), Box::new(sim2))), // OR instead of AND
             order_by: None,
             limit: None,
             offset: None,
@@ -361,8 +407,9 @@ fn create_simple_query() -> Query {
 // ============================================================================
 
 #[test]
-fn test_validate_vector_search_near_detected() {
+fn test_validate_vector_search_near_with_or_detected() {
     // BUG-001 regression: VectorSearch (NEAR) was not being validated
+    // EPIC-044 US-001: Updated - multiple NEAR with OR should fail, AND should pass
     use crate::velesql::ast::VectorSearch;
 
     let near1 = Condition::VectorSearch(VectorSearch {
@@ -377,7 +424,7 @@ fn test_validate_vector_search_near_detected() {
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
-            where_clause: Some(Condition::And(Box::new(near1), Box::new(near2))),
+            where_clause: Some(Condition::Or(Box::new(near1), Box::new(near2))), // OR = invalid
             order_by: None,
             limit: None,
             offset: None,
@@ -389,7 +436,7 @@ fn test_validate_vector_search_near_detected() {
         compound: None,
     };
 
-    // Should detect multiple vector search conditions
+    // Should detect multiple vector search with OR
     let result = QueryValidator::validate(&query);
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -437,6 +484,7 @@ fn test_validate_vector_search_or_detected() {
 #[test]
 fn test_validate_compound_query_where_clause() {
     // BUG-002 regression: Compound query's WHERE clause was not being validated
+    // EPIC-044 US-001: Updated - multiple similarity with OR should fail, AND should pass
     use crate::velesql::ast::{CompoundQuery, SetOperator};
 
     let sim1 = Condition::Similarity(SimilarityCondition {
@@ -453,13 +501,13 @@ fn test_validate_compound_query_where_clause() {
     });
 
     // Main SELECT has no similarity
-    // But UNION's right side has multiple similarity conditions (invalid)
+    // UNION's right side has multiple similarity with OR (invalid)
     let query = Query {
         select: SelectStatement {
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
-            where_clause: None, // No similarity in main SELECT
+            where_clause: None,
             order_by: None,
             limit: Some(10),
             offset: None,
@@ -474,7 +522,7 @@ fn test_validate_compound_query_where_clause() {
                 columns: SelectColumns::All,
                 from: "docs".to_string(),
                 joins: vec![],
-                where_clause: Some(Condition::And(Box::new(sim1), Box::new(sim2))),
+                where_clause: Some(Condition::Or(Box::new(sim1), Box::new(sim2))), // OR = invalid
                 order_by: None,
                 limit: None,
                 offset: None,
@@ -486,7 +534,7 @@ fn test_validate_compound_query_where_clause() {
         }),
     };
 
-    // Should detect multiple similarity in compound query
+    // Should detect multiple similarity in OR in compound query
     let result = QueryValidator::validate(&query);
     assert!(result.is_err());
     let err = result.unwrap_err();

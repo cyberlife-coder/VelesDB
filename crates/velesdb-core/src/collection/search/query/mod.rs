@@ -64,22 +64,25 @@ impl Collection {
             .unwrap_or(MAX_LIMIT)
             .min(MAX_LIMIT);
 
-        // 1. Extract vector search (NEAR) or similarity() if present
+        // 1. Extract vector search (NEAR) or similarity() conditions if present
         let mut vector_search = None;
-        let mut similarity_condition = None;
+        let mut similarity_conditions: Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)> =
+            Vec::new();
         let mut filter_condition = None;
 
         if let Some(ref cond) = stmt.where_clause {
-            // BUG-4 FIX: Validate query structure before extraction
+            // Validate query structure before extraction
             Self::validate_similarity_query_structure(cond)?;
 
             let mut extracted_cond = cond.clone();
             vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
-            similarity_condition = self.extract_similarity_condition(&extracted_cond, params)?;
+            // EPIC-044 US-001: Extract ALL similarity conditions for cascade filtering
+            similarity_conditions =
+                self.extract_all_similarity_conditions(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);
 
             // NEAR + similarity() is supported: NEAR finds candidates, similarity() filters by threshold
-            // This is a common pattern in RAG/agentic memory: find top-k AND filter by confidence
+            // Multiple similarity() with AND is supported: filters applied sequentially (cascade)
         }
 
         // 2. Resolve WITH clause options
@@ -88,17 +91,20 @@ impl Collection {
             ef_search = with.get_ef_search();
         }
 
+        // Get first similarity condition for initial search (if any)
+        let first_similarity = similarity_conditions.first().cloned();
+
         // 3. Execute query based on extracted components
-        let mut results = match (&vector_search, &similarity_condition, &filter_condition) {
-            // similarity() function - use vector to search, then filter by threshold
+        // EPIC-044 US-001: Support multiple similarity() with AND (cascade filtering)
+        let mut results = match (&vector_search, &first_similarity, &filter_condition) {
+            // similarity() function - use first vector to search, then filter by ALL thresholds
             // Also apply any additional metadata filters from the WHERE clause
             //
-            // BUG-1/3 NOTE: This uses ANN (top-K) search, not exhaustive search.
+            // NOTE: This uses ANN (top-K) search, not exhaustive search.
             // Points outside the top-K window may match the threshold but won't be returned.
-            // For exact threshold semantics, use a larger LIMIT or consider full scan.
             // We use a 10x over-fetch factor to reduce false negatives.
             (None, Some((field, vec, op, threshold)), filter_cond) => {
-                // BUG-5 FIX: Validate field name - currently only "vector" is supported
+                // Validate field name - currently only "vector" is supported
                 if field != "vector" {
                     return Err(crate::error::Error::Config(format!(
                         "similarity() field '{}' not found. Only 'vector' field is supported. \
@@ -107,25 +113,43 @@ impl Collection {
                     )));
                 }
 
-                // BUG-1/3 FIX: Increase over-fetch factor from 4x to 10x to reduce false negatives
-                // This is a trade-off between performance and accuracy for threshold queries
-                let candidates_k = limit.saturating_mul(10).min(MAX_LIMIT);
+                // Increase over-fetch factor for multiple similarity conditions
+                let overfetch_factor = 10 * similarity_conditions.len().max(1);
+                let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
                 let candidates = self.search(vec, candidates_k)?;
 
-                // First filter by similarity threshold
+                // EPIC-044 US-001: Apply ALL similarity filters sequentially (cascade)
                 let filter_k = limit.saturating_mul(2);
-                let similarity_filtered =
+                let mut filtered =
                     self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
+
+                // Apply remaining similarity conditions (cascade filtering)
+                for (sim_field, sim_vec, sim_op, sim_threshold) in
+                    similarity_conditions.iter().skip(1)
+                {
+                    if sim_field != "vector" {
+                        return Err(crate::error::Error::Config(format!(
+                            "similarity() field '{}' not found. Only 'vector' field is supported.",
+                            sim_field
+                        )));
+                    }
+                    filtered = self.filter_by_similarity(
+                        filtered,
+                        sim_field,
+                        sim_vec,
+                        *sim_op,
+                        *sim_threshold,
+                        filter_k,
+                    );
+                }
 
                 // Then apply any additional metadata filters (e.g., AND category = 'tech')
                 if let Some(cond) = filter_cond {
-                    // Extract non-similarity parts of the condition for metadata filtering
                     let metadata_filter = Self::extract_metadata_filter(cond);
                     if let Some(filter_cond) = metadata_filter {
                         let filter =
                             crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
-                        // BUG-4 FIX: Don't drop points with null payload - check if filter matches null
-                        similarity_filtered
+                        filtered
                             .into_iter()
                             .filter(|r| match r.point.payload.as_ref() {
                                 Some(p) => filter.matches(p),
@@ -134,16 +158,16 @@ impl Collection {
                             .take(limit)
                             .collect()
                     } else {
-                        similarity_filtered
+                        filtered
                     }
                 } else {
-                    similarity_filtered
+                    filtered
                 }
             }
-            // NEAR + similarity() + optional metadata: find candidates, then filter by threshold
-            // Pattern: "Find top-k neighbors AND keep only those with similarity > threshold"
+            // NEAR + similarity() + optional metadata: find candidates, then filter by ALL thresholds
+            // Pattern: "Find top-k neighbors AND keep only those matching ALL similarity conditions"
             (Some(vector), Some((field, sim_vec, op, threshold)), filter_cond) => {
-                // BUG-5 FIX: Validate field name - currently only "vector" is supported
+                // Validate field name - currently only "vector" is supported
                 if field != "vector" {
                     return Err(crate::error::Error::Config(format!(
                         "similarity() field '{}' not found. Only 'vector' field is supported. \
@@ -153,14 +177,34 @@ impl Collection {
                 }
 
                 // 1. NEAR finds candidates (overfetch for filtering headroom)
-                // BUG-1/3 FIX: Increase over-fetch factor to 10x for better threshold accuracy
-                let candidates_k = limit.saturating_mul(10).min(MAX_LIMIT);
+                let overfetch_factor = 10 * similarity_conditions.len().max(1);
+                let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
                 let candidates = self.search(vector, candidates_k)?;
 
-                // 2. Apply similarity threshold filter
+                // 2. EPIC-044 US-001: Apply ALL similarity filters sequentially (cascade)
                 let filter_k = limit.saturating_mul(2);
-                let similarity_filtered = self
+                let mut filtered = self
                     .filter_by_similarity(candidates, field, sim_vec, *op, *threshold, filter_k);
+
+                // Apply remaining similarity conditions
+                for (sim_field, sim_vec, sim_op, sim_threshold) in
+                    similarity_conditions.iter().skip(1)
+                {
+                    if sim_field != "vector" {
+                        return Err(crate::error::Error::Config(format!(
+                            "similarity() field '{}' not found. Only 'vector' field is supported.",
+                            sim_field
+                        )));
+                    }
+                    filtered = self.filter_by_similarity(
+                        filtered,
+                        sim_field,
+                        sim_vec,
+                        *sim_op,
+                        *sim_threshold,
+                        filter_k,
+                    );
+                }
 
                 // 3. Apply additional metadata filters if present
                 if let Some(cond) = filter_cond {
@@ -168,8 +212,7 @@ impl Collection {
                     if let Some(filter_cond) = metadata_filter {
                         let filter =
                             crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
-                        // BUG-4 FIX: Don't drop points with null payload - check if filter matches null
-                        similarity_filtered
+                        filtered
                             .into_iter()
                             .filter(|r| match r.point.payload.as_ref() {
                                 Some(p) => filter.matches(p),
@@ -178,10 +221,10 @@ impl Collection {
                             .take(limit)
                             .collect()
                     } else {
-                        similarity_filtered
+                        filtered
                     }
                 } else {
-                    similarity_filtered
+                    filtered
                 }
             }
             (Some(vector), None, Some(ref cond)) => {
@@ -302,7 +345,10 @@ impl Collection {
                 };
 
                 if passes {
-                    // Update score to reflect the similarity() vector score
+                    // EPIC-044 US-001: Update score to reflect THIS similarity filter's score.
+                    // When multiple similarity() conditions are used (cascade filtering),
+                    // the final score will be from the LAST filter applied.
+                    // This is intentional: each filter re-scores against its vector.
                     r.score = score;
                     Some(r)
                 } else {
