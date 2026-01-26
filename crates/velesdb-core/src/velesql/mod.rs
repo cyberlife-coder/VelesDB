@@ -55,6 +55,9 @@ mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
+mod validation;
+#[cfg(test)]
+mod validation_tests;
 
 #[cfg(test)]
 mod aggregation_params_tests;
@@ -84,3 +87,4 @@ pub use explain::{
 pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{ExecutionStrategy, QueryPlanner, QueryStats};
+pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};
