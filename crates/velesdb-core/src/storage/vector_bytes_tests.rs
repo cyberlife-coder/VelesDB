@@ -80,3 +80,77 @@ fn test_vector_to_bytes_preserves_special_values() {
     assert!((recovered[2] - 0.0).abs() < f32::EPSILON);
     assert!((recovered[3] - 0.0).abs() < f32::EPSILON); // -0.0 == 0.0 in Rust
 }
+
+// ============================================================================
+// EPIC-032/US-001: Alignment Safety Tests
+// ============================================================================
+
+/// EPIC-032/US-001: Verify bytes_to_vector works with unaligned source bytes.
+/// This is safe because we use ptr::copy_nonoverlapping which doesn't require
+/// source alignment - it copies byte-by-byte into an aligned destination.
+#[test]
+fn test_bytes_to_vector_unaligned_source_is_safe() {
+    // Create a buffer with 1-byte offset to simulate unaligned data
+    let mut buffer = [0u8; 17]; // 1 extra byte + 4 f32s
+    let original = vec![1.0f32, 2.0, 3.0, 4.0];
+
+    // Copy vector bytes at offset 1 (unaligned for f32)
+    let bytes = vector_to_bytes(&original);
+    buffer[1..17].copy_from_slice(bytes);
+
+    // bytes_to_vector should handle unaligned source safely
+    let unaligned_slice = &buffer[1..17];
+    let recovered = bytes_to_vector(unaligned_slice, 4);
+
+    assert_eq!(original, recovered);
+}
+
+/// EPIC-032/US-001: Verify vector_to_bytes output is naturally aligned.
+#[test]
+fn test_vector_to_bytes_output_alignment() {
+    let vector = vec![1.0f32, 2.0, 3.0, 4.0];
+    let bytes = vector_to_bytes(&vector);
+
+    // The pointer should be f32-aligned since it comes from a Vec<f32>
+    let ptr_addr = bytes.as_ptr() as usize;
+    assert_eq!(
+        ptr_addr % std::mem::align_of::<f32>(),
+        0,
+        "vector_to_bytes output should be f32-aligned"
+    );
+}
+
+/// EPIC-032/US-001: Verify recovered vector is always properly aligned.
+#[test]
+fn test_bytes_to_vector_output_alignment() {
+    let bytes = [0u8; 16];
+    let vector = bytes_to_vector(&bytes, 4);
+
+    // The resulting Vec<f32> must be properly aligned
+    let ptr_addr = vector.as_ptr() as usize;
+    assert_eq!(
+        ptr_addr % std::mem::align_of::<f32>(),
+        0,
+        "bytes_to_vector output must be f32-aligned"
+    );
+}
+
+/// EPIC-032/US-001: Test with various dimensions to verify alignment invariant.
+#[test]
+fn test_alignment_various_dimensions() {
+    for dim in [1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 64, 128, 256] {
+        let original: Vec<f32> = (0..dim).map(|i| i as f32 * 0.5).collect();
+        let bytes = vector_to_bytes(&original);
+        let recovered = bytes_to_vector(bytes, dim);
+
+        assert_eq!(original, recovered, "Failed for dimension {dim}");
+
+        // Verify alignment
+        let ptr_addr = recovered.as_ptr() as usize;
+        assert_eq!(
+            ptr_addr % std::mem::align_of::<f32>(),
+            0,
+            "Output not aligned for dimension {dim}"
+        );
+    }
+}

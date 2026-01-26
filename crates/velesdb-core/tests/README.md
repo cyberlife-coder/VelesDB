@@ -1,6 +1,49 @@
 # VelesDB Integration Tests
 
 This directory contains integration tests that simulate real-world usage scenarios for VelesDB.
+These tests serve as **living documentation** - copy-pastable examples that are guaranteed to work.
+
+## Quick Start
+
+```bash
+# Run all integration tests
+cargo test -p velesdb-core --test integration_scenarios
+cargo test -p velesdb-core --test use_cases_integration_tests
+
+# Run specific use case
+cargo test -p velesdb-core --test use_cases_integration_tests use_case_1
+```
+
+---
+
+## 📚 Use Cases (10 Documented Patterns)
+
+See `use_cases_integration_tests.rs` for **23 tests** covering the 10 hybrid use cases from `docs/guides/USE_CASES.md`.
+
+| # | Use Case | Tests | Key Features |
+|---|----------|-------|--------------|
+| 1 | Contextual RAG | 2 | Vector similarity + graph context |
+| 2 | Expert Finder | 2 | Multi-hop graph + filtering |
+| 3 | Knowledge Discovery | 2 | Variable-depth traversal |
+| 4 | Document Clustering | 2 | GROUP BY + similarity |
+| 5 | Semantic Search + Filters | 2 | Vector NEAR + metadata |
+| 6 | Recommendation Engine | 2 | User-item similarity |
+| 7 | Entity Resolution | 2 | High-threshold deduplication |
+| 8 | Trend Analysis | 2 | Temporal aggregations |
+| 9 | Impact Analysis | 2 | Dependency graph |
+| 10 | Conversational Memory | 3 | Agent memory patterns |
+
+### Example: Use Case 1 - Contextual RAG
+
+```rust
+// Find documents similar to a query
+let results = collection.search(&query_embedding, 5)?;
+
+// VelesQL equivalent
+let query = "SELECT * FROM documents WHERE similarity(embedding, $q) > 0.75 LIMIT 20";
+```
+
+---
 
 ## Test Scenarios
 
@@ -134,7 +177,7 @@ These integration tests complement the 346 unit tests in `velesdb-core`, providi
 - **Concurrency safety verification**
 - **Multi-collection isolation testing**
 
-Total test count: **358 tests** (346 unit + 12 integration)
+Total test count: **381 tests** (346 unit + 12 integration + 23 use case tests)
 
 ---
 
