@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Product ingestion, similarity search, filtered recommendations
   - VelesQL query examples, catalog analytics
 
+- **VELESQL_SPEC.md v2.0 Update** (US-003)
+  - Feature support status table
+  - ORDER BY clause with similarity() support
+  - GROUP BY and HAVING with aggregate functions
+  - JOIN clause (INNER, LEFT, RIGHT, FULL, USING)
+  - Set operations (UNION, INTERSECT, EXCEPT)
+  - USING FUSION hybrid search documentation
+  - Updated EBNF grammar for v2.0
+
 - **Integration Tests for Use Cases**
   - `tests/use_cases_integration_tests.rs` - 23 tests validating documented queries
   - Tests verify all VelesQL examples compile and execute correctly
