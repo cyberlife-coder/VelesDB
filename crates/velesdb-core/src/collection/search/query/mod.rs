@@ -70,6 +70,13 @@ impl Collection {
             Vec::new();
         let mut filter_condition = None;
 
+        // EPIC-044 US-002: Check for similarity() OR metadata pattern (union mode)
+        let is_union_query = if let Some(ref cond) = stmt.where_clause {
+            Self::has_similarity_in_problematic_or(cond)
+        } else {
+            false
+        };
+
         if let Some(ref cond) = stmt.where_clause {
             // Validate query structure before extraction
             Self::validate_similarity_query_structure(cond)?;
@@ -95,6 +102,20 @@ impl Collection {
         let first_similarity = similarity_conditions.first().cloned();
 
         // 3. Execute query based on extracted components
+        // EPIC-044 US-002: Union mode for similarity() OR metadata
+        if is_union_query {
+            if let Some(ref cond) = stmt.where_clause {
+                let mut results = self.execute_union_query(cond, params, limit)?;
+
+                // Apply ORDER BY if present
+                if let Some(ref order_by) = stmt.order_by {
+                    self.apply_order_by(&mut results, order_by, params)?;
+                }
+                results.truncate(limit);
+                return Ok(results);
+            }
+        }
+
         // EPIC-044 US-001: Support multiple similarity() with AND (cascade filtering)
         let mut results = match (&vector_search, &first_similarity, &filter_condition) {
             // similarity() function - use first vector to search, then filter by ALL thresholds
@@ -357,6 +378,120 @@ impl Collection {
             })
             .take(limit)
             .collect()
+    }
+
+    /// EPIC-044 US-002: Execute union query for similarity() OR metadata patterns.
+    ///
+    /// This method handles queries like:
+    /// `WHERE similarity(v, $v) > 0.8 OR category = 'tech'`
+    ///
+    /// It executes:
+    /// 1. Vector search for similarity matches
+    /// 2. Metadata scan for non-similarity matches
+    /// 3. Merges results with deduplication (by point ID)
+    ///
+    /// Scoring:
+    /// - Similarity matches: use similarity score
+    /// - Metadata-only matches: use score 1.0
+    /// - Both matching: use similarity score (higher priority)
+    fn execute_union_query(
+        &self,
+        condition: &crate::velesql::Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        use std::collections::HashMap;
+
+        // Extract similarity and metadata parts from the OR condition
+        let (similarity_cond, metadata_cond) = self.split_or_condition(condition);
+
+        let mut results_map: HashMap<u64, SearchResult> = HashMap::new();
+
+        // 1. Execute similarity search if we have a similarity condition
+        if let Some(sim_cond) = similarity_cond {
+            let similarity_conditions =
+                self.extract_all_similarity_conditions(&sim_cond, params)?;
+            if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
+                if field != "vector" {
+                    return Err(crate::error::Error::Config(format!(
+                        "similarity() field '{}' not found. Only 'vector' field is supported.",
+                        field
+                    )));
+                }
+
+                let overfetch_factor = 10;
+                let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
+                let candidates = self.search(vec, candidates_k)?;
+
+                let filter_k = limit.saturating_mul(2);
+                let filtered =
+                    self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
+
+                for result in filtered {
+                    results_map.insert(result.point.id, result);
+                }
+            }
+        }
+
+        // 2. Execute metadata scan if we have a metadata condition
+        if let Some(meta_cond) = metadata_cond {
+            let filter = crate::filter::Filter::new(crate::filter::Condition::from(meta_cond));
+            let metadata_results = self.execute_scan_query(&filter, limit);
+
+            for result in metadata_results {
+                // Only add if not already found by similarity search
+                // If already present, keep the similarity score (higher priority)
+                results_map.entry(result.point.id).or_insert(result);
+            }
+        }
+
+        // 3. Collect and return results
+        let mut results: Vec<SearchResult> = results_map.into_values().collect();
+
+        // Sort by score descending (similarity matches first)
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+
+        Ok(results)
+    }
+
+    /// Split an OR condition into similarity and metadata parts.
+    ///
+    /// For `similarity() > 0.8 OR category = 'tech'`, returns:
+    /// - similarity_cond: Some(similarity() > 0.8)
+    /// - metadata_cond: Some(category = 'tech')
+    fn split_or_condition(
+        &self,
+        condition: &crate::velesql::Condition,
+    ) -> (
+        Option<crate::velesql::Condition>,
+        Option<crate::velesql::Condition>,
+    ) {
+        match condition {
+            crate::velesql::Condition::Or(left, right) => {
+                let left_has_sim = Self::count_similarity_conditions(left) > 0;
+                let right_has_sim = Self::count_similarity_conditions(right) > 0;
+
+                match (left_has_sim, right_has_sim) {
+                    (true, false) => (Some((**left).clone()), Some((**right).clone())),
+                    (false, true) => (Some((**right).clone()), Some((**left).clone())),
+                    // Both or neither - shouldn't happen with proper validation
+                    _ => (Some(condition.clone()), None),
+                }
+            }
+            // Not an OR condition - treat as similarity if it contains similarity
+            _ => {
+                if Self::count_similarity_conditions(condition) > 0 {
+                    (Some(condition.clone()), None)
+                } else {
+                    (None, Some(condition.clone()))
+                }
+            }
+        }
     }
 
     /// Fallback method for metadata-only queries without vector search.
