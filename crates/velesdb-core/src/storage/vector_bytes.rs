@@ -2,6 +2,12 @@
 //!
 //! Provides safe conversion between `&[f32]` vectors and `&[u8]` byte slices
 //! for persistence in memory-mapped storage.
+//!
+//! # Safety (EPIC-032/US-001)
+//!
+//! - `vector_to_bytes`: Safe because f32 has no invalid bit patterns
+//! - `bytes_to_vector`: Safe because it copies bytes into a new aligned Vec<f32>
+//!   using `ptr::copy_nonoverlapping`, which doesn't require source alignment
 
 /// Converts a vector slice to a byte slice.
 ///

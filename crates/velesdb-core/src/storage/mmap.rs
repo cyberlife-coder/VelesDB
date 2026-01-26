@@ -3,6 +3,13 @@
 //! Uses a combination of an index file (ID -> offset) and a data file (raw vectors).
 //! Also implements a simple WAL for durability.
 //!
+//! # Safety Guarantees (EPIC-032/US-001)
+//!
+//! All vector data is stored with f32 alignment (4 bytes):
+//! - Initial offset starts at 0 (aligned)
+//! - Each vector occupies `dimension * 4` bytes (always a multiple of 4)
+//! - Offsets are verified at runtime before pointer casting
+//!
 //! # P2 Optimization: Aggressive Pre-allocation
 //!
 //! To minimize blocking during `ensure_capacity` (which requires a write lock),
@@ -352,9 +359,18 @@ impl MmapStorage {
             ));
         }
 
-        // SAFETY: We've validated that offset + vector_size <= mmap.len()
-        // The pointer is derived from the mmap which is held by the guard
-        // Note: mmap data is written with f32 alignment via store(), so alignment is guaranteed
+        // EPIC-032/US-001: Verify alignment before pointer cast
+        // SAFETY: We've validated that:
+        // 1. offset + vector_size <= mmap.len() (bounds check above)
+        // 2. offset is 4-byte aligned (assertion below)
+        // 3. The pointer is derived from the mmap which is held by the guard
+        // 4. All writes via store() use f32-aligned offsets (dimension * 4)
+        debug_assert!(
+            offset % std::mem::align_of::<f32>() == 0,
+            "EPIC-032/US-001: offset {} is not f32-aligned (must be multiple of {})",
+            offset,
+            std::mem::align_of::<f32>()
+        );
         #[allow(clippy::cast_ptr_alignment)]
         let ptr = unsafe { mmap.as_ptr().add(offset).cast::<f32>() };
 
