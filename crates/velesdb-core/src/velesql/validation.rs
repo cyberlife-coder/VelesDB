@@ -224,6 +224,11 @@ impl QueryValidator {
     }
 
     /// Validates a condition tree.
+    ///
+    /// # EPIC-044 US-001: Multiple similarity() with AND is supported
+    ///
+    /// Multiple similarity() conditions are allowed when combined with AND
+    /// (cascade filtering). Only OR combinations are rejected.
     fn validate_condition(
         condition: &Condition,
         limit: Option<u64>,
@@ -231,16 +236,19 @@ impl QueryValidator {
     ) -> Result<(), ValidationError> {
         // Count similarity conditions
         let similarity_count = Self::count_similarity_conditions(condition);
-        if similarity_count > 1 {
+
+        // EPIC-044 US-001: Multiple similarity() in OR is rejected (requires union)
+        // Multiple similarity() in AND is allowed (cascade filtering)
+        if similarity_count > 1 && Self::has_multiple_similarity_in_or(condition) {
             return Err(ValidationError::multiple_similarity(
-                "Multiple similarity() conditions detected",
+                "Multiple similarity() in OR are not supported. Use AND instead.",
             ));
         }
 
-        // Check for OR with similarity
+        // Check for OR with similarity and non-similarity (mixed OR)
         if Self::has_similarity_with_or(condition) {
             return Err(ValidationError::similarity_with_or(
-                "similarity() used with OR operator",
+                "similarity() in OR with non-vector conditions is not supported",
             ));
         }
 
@@ -310,6 +318,30 @@ impl QueryValidator {
                 Self::has_not_similarity(left) || Self::has_not_similarity(right)
             }
             Condition::Group(inner) => Self::has_not_similarity(inner),
+            _ => false,
+        }
+    }
+
+    /// EPIC-044 US-001: Check if multiple similarity() appear under same OR.
+    /// Multiple similarity in AND is allowed (cascade), but OR requires union (unsupported).
+    fn has_multiple_similarity_in_or(condition: &Condition) -> bool {
+        match condition {
+            Condition::Or(left, right) => {
+                let left_sim = Self::count_similarity_conditions(left);
+                let right_sim = Self::count_similarity_conditions(right);
+                // Both sides have similarity = union required (unsupported)
+                (left_sim > 0 && right_sim > 0)
+                    || Self::has_multiple_similarity_in_or(left)
+                    || Self::has_multiple_similarity_in_or(right)
+            }
+            Condition::And(left, right) => {
+                // AND is fine, but check nested ORs
+                Self::has_multiple_similarity_in_or(left)
+                    || Self::has_multiple_similarity_in_or(right)
+            }
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::has_multiple_similarity_in_or(inner)
+            }
             _ => false,
         }
     }
