@@ -2,9 +2,28 @@
 
 > SQL-like query language for vector search in VelesDB.
 
+**Version**: 2.0.0 | **Last Updated**: 2026-01-26
+
 ## Overview
 
 VelesQL is a SQL-inspired query language designed specifically for vector similarity search. It combines familiar SQL syntax with vector-specific operations like `NEAR` for semantic search.
+
+### Feature Support Status
+
+| Feature | Status | Version |
+|---------|--------|---------|
+| SELECT, FROM, WHERE | ✅ Stable | 1.0 |
+| NEAR vector search | ✅ Stable | 1.0 |
+| similarity() function | ✅ Stable | 1.3 |
+| LIMIT, OFFSET | ✅ Stable | 1.0 |
+| WITH clause | ✅ Stable | 1.0 |
+| ORDER BY | ✅ Stable | 2.0 |
+| GROUP BY, HAVING | ✅ Stable | 2.0 |
+| JOIN (LEFT, RIGHT, FULL) | ✅ Stable | 2.0 |
+| Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
+| USING FUSION | ✅ Stable | 2.0 |
+| MATCH graph traversal | 🔜 Planned | - |
+| Table aliases | 🔜 Planned | - |
 
 ## Basic Syntax
 
@@ -191,6 +210,230 @@ SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 
 -- similarity(): "Give me docs with similarity > 0.8"
 SELECT * FROM docs WHERE similarity(vector, $v) > 0.8
+```
+
+## ORDER BY Clause (v2.0+)
+
+Sort results by one or more columns or expressions.
+
+### Basic Syntax
+
+```sql
+SELECT * FROM docs ORDER BY created_at DESC
+SELECT * FROM docs ORDER BY category ASC, price DESC
+```
+
+### Order by Similarity
+
+Sort by vector similarity score:
+
+```sql
+-- Order by similarity (highest first)
+SELECT * FROM docs 
+WHERE similarity(embedding, $query) > 0.5
+ORDER BY similarity(embedding, $query) DESC
+LIMIT 10
+
+-- Multi-column with similarity
+SELECT * FROM docs 
+WHERE vector NEAR $v
+ORDER BY similarity(vector, $v) DESC, created_at DESC
+LIMIT 20
+```
+
+### Direction
+
+| Direction | Description |
+|-----------|-------------|
+| `ASC` | Ascending (default) |
+| `DESC` | Descending |
+
+## GROUP BY and HAVING (v2.0+)
+
+Aggregate results by groups.
+
+### Basic Syntax
+
+```sql
+SELECT category, COUNT(*) FROM docs GROUP BY category
+SELECT category, AVG(price) FROM products GROUP BY category HAVING COUNT(*) > 5
+```
+
+### Aggregate Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `COUNT(*)` | Count rows | `COUNT(*)` |
+| `COUNT(field)` | Count non-null values | `COUNT(price)` |
+| `SUM(field)` | Sum of values | `SUM(quantity)` |
+| `AVG(field)` | Average value | `AVG(rating)` |
+| `MIN(field)` | Minimum value | `MIN(price)` |
+| `MAX(field)` | Maximum value | `MAX(score)` |
+
+### Examples
+
+```sql
+-- Count by category
+SELECT category, COUNT(*) FROM products GROUP BY category
+
+-- Average with filter
+SELECT category, AVG(price) 
+FROM products 
+WHERE similarity(embedding, $query) > 0.6
+GROUP BY category
+ORDER BY AVG(price) DESC
+
+-- HAVING clause
+SELECT category, COUNT(*) 
+FROM docs 
+GROUP BY category 
+HAVING COUNT(*) > 10
+ORDER BY COUNT(*) DESC
+
+-- Multiple aggregates
+SELECT category, COUNT(*), AVG(price), MAX(rating)
+FROM products
+GROUP BY category
+HAVING AVG(price) > 50
+```
+
+## JOIN Clause (v2.0+)
+
+Combine data from multiple collections.
+
+### Syntax
+
+```sql
+SELECT * FROM table1
+[INNER|LEFT|RIGHT|FULL] JOIN table2 ON condition
+```
+
+### Join Types
+
+| Type | Description |
+|------|-------------|
+| `JOIN` / `INNER JOIN` | Only matching rows |
+| `LEFT JOIN` | All from left + matching right |
+| `RIGHT JOIN` | All from right + matching left |
+| `FULL JOIN` | All from both tables |
+
+### Examples
+
+```sql
+-- Inner join
+SELECT orders.id, customers.name
+FROM orders
+JOIN customers ON orders.customer_id = customers.id
+
+-- Left join with filter
+SELECT p.title, c.name AS category_name
+FROM products p
+LEFT JOIN categories c ON p.category_id = c.id
+WHERE similarity(p.embedding, $query) > 0.7
+LIMIT 20
+
+-- Using clause (alternative to ON)
+SELECT * FROM orders JOIN customers USING (customer_id)
+
+-- Multiple joins
+SELECT o.id, c.name, p.title
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN products p ON o.product_id = p.id
+```
+
+## Set Operations (v2.0+)
+
+Combine results from multiple queries.
+
+### UNION
+
+Combine results, removing duplicates:
+
+```sql
+SELECT id, title FROM articles WHERE category = 'tech'
+UNION
+SELECT id, title FROM articles WHERE category = 'science'
+```
+
+### UNION ALL
+
+Combine results, keeping duplicates:
+
+```sql
+SELECT * FROM table1 WHERE similarity(v, $q) > 0.8
+UNION ALL
+SELECT * FROM table2 WHERE similarity(v, $q) > 0.8
+```
+
+### INTERSECT
+
+Only rows in both queries:
+
+```sql
+SELECT id FROM liked_items WHERE user_id = 1
+INTERSECT
+SELECT id FROM liked_items WHERE user_id = 2
+```
+
+### EXCEPT
+
+Rows in first query but not second:
+
+```sql
+SELECT id FROM all_items
+EXCEPT
+SELECT id FROM purchased_items
+```
+
+## USING FUSION - Hybrid Search (v2.0+)
+
+Combine multiple search strategies with result fusion.
+
+### Syntax
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $v AND text MATCH 'query'
+USING FUSION(strategy, k, weights)
+```
+
+### Fusion Strategies
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| `rrf` | Reciprocal Rank Fusion | Balanced ranking (default) |
+| `weighted` | Weighted combination | Custom importance |
+| `maximum` | Take highest score | Best match wins |
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `strategy` | string | `rrf` | Fusion algorithm |
+| `k` | integer | 60 | RRF constant |
+| `weights` | array | `[0.5, 0.5]` | Strategy weights |
+
+### Examples
+
+```sql
+-- Default RRF fusion
+SELECT * FROM docs
+WHERE vector NEAR $v
+USING FUSION(rrf)
+LIMIT 10
+
+-- Weighted fusion (70% vector, 30% text)
+SELECT * FROM docs
+WHERE vector NEAR $semantic AND content MATCH $keywords
+USING FUSION(weighted, weights = [0.7, 0.3])
+LIMIT 20
+
+-- Maximum score fusion
+SELECT * FROM docs
+WHERE similarity(embedding, $q1) > 0.5
+USING FUSION(maximum)
+LIMIT 10
 ```
 
 ## LIMIT and OFFSET
@@ -383,43 +626,100 @@ SELECT id AS `select` FROM docs
 | `WITH`, `AS` | Options and aliases |
 | `NEAR`, `SIMILARITY` | Vector operations |
 
-## Grammar (EBNF)
+## Grammar (EBNF) - v2.0
 
 ```ebnf
-query       = select_stmt ;
-select_stmt = "SELECT" select_list "FROM" identifier
-              [where_clause] [limit_clause] [offset_clause] [with_clause] ;
+(* Top-level query with optional set operations *)
+query           = select_stmt { set_operator select_stmt } ;
+set_operator    = "UNION" ["ALL"] | "INTERSECT" | "EXCEPT" ;
 
-select_list = "*" | column_list ;
-column_list = column ("," column)* ;
-column      = identifier ("." identifier)* ;
+(* SELECT statement with all clauses *)
+select_stmt     = "SELECT" select_list 
+                  "FROM" table_ref
+                  { join_clause }
+                  [where_clause] 
+                  [group_by_clause]
+                  [having_clause]
+                  [order_by_clause]
+                  [limit_clause] 
+                  [offset_clause] 
+                  [with_clause]
+                  [using_fusion_clause] ;
 
-where_clause  = "WHERE" or_expr ;
-or_expr       = and_expr ("OR" and_expr)* ;
-and_expr      = condition ("AND" condition)* ;
-condition     = comparison | vector_search | similarity_cond | in_cond 
-              | between_cond | like_cond | is_null_cond | "(" or_expr ")" ;
+(* SELECT list *)
+select_list     = "*" | select_item { "," select_item } ;
+select_item     = (column | aggregate_func) ["AS" identifier] ;
+column          = identifier { "." identifier } ;
 
-vector_search   = "vector" "NEAR" vector_expr ;
+(* Aggregate functions *)
+aggregate_func  = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX") 
+                  "(" ("*" | column) ")" ;
+
+(* Table reference *)
+table_ref       = identifier [alias] ;
+alias           = ["AS"] identifier ;
+
+(* JOIN clause *)
+join_clause     = [join_type] "JOIN" table_ref ("ON" condition | "USING" "(" identifier ")") ;
+join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTER"] ;
+
+(* WHERE clause *)
+where_clause    = "WHERE" or_expr ;
+or_expr         = and_expr { "OR" and_expr } ;
+and_expr        = condition { "AND" condition } ;
+condition       = comparison | vector_search | similarity_cond | in_cond 
+                | between_cond | like_cond | is_null_cond | "(" or_expr ")" ;
+
+(* Vector operations *)
+vector_search   = identifier "NEAR" vector_expr ;
 similarity_cond = "similarity" "(" identifier "," vector_expr ")" compare_op number ;
-vector_expr   = "$" identifier | "[" number ("," number)* "]" ;
+vector_expr     = "$" identifier | "[" number { "," number } "]" ;
 
-comparison    = identifier compare_op value ;
-compare_op    = "=" | "!=" | "<>" | ">" | ">=" | "<" | "<=" ;
+(* Comparisons *)
+comparison      = column compare_op value ;
+compare_op      = "=" | "!=" | "<>" | ">" | ">=" | "<" | "<=" ;
 
-in_cond       = identifier "IN" "(" value ("," value)* ")" ;
-between_cond  = identifier "BETWEEN" value "AND" value ;
-like_cond     = identifier "LIKE" string ;
-is_null_cond  = identifier "IS" ["NOT"] "NULL" ;
+(* Special conditions *)
+in_cond         = column "IN" "(" value { "," value } ")" ;
+between_cond    = column "BETWEEN" value "AND" value ;
+like_cond       = column ("LIKE" | "ILIKE") string ;
+is_null_cond    = column "IS" ["NOT"] "NULL" ;
 
-limit_clause  = "LIMIT" integer ;
-offset_clause = "OFFSET" integer ;
+(* GROUP BY and HAVING *)
+group_by_clause = "GROUP" "BY" column { "," column } ;
+having_clause   = "HAVING" having_expr ;
+having_expr     = having_cond { ("AND" | "OR") having_cond } ;
+having_cond     = aggregate_func compare_op value ;
 
-with_clause   = "WITH" "(" with_option ("," with_option)* ")" ;
-with_option   = identifier "=" value ;
+(* ORDER BY *)
+order_by_clause = "ORDER" "BY" order_item { "," order_item } ;
+order_item      = (column | similarity_expr) ["ASC" | "DESC"] ;
+similarity_expr = "similarity" "(" identifier "," vector_expr ")" ;
 
-value         = string | number | boolean | "NULL" ;
-identifier    = letter (letter | digit | "_")* ;
+(* Pagination *)
+limit_clause    = "LIMIT" integer ;
+offset_clause   = "OFFSET" integer ;
+
+(* WITH options *)
+with_clause     = "WITH" "(" with_option { "," with_option } ")" ;
+with_option     = identifier "=" value ;
+
+(* USING FUSION for hybrid search *)
+using_fusion_clause = "USING" "FUSION" "(" fusion_strategy ["," fusion_params] ")" ;
+fusion_strategy = "rrf" | "weighted" | "maximum" ;
+fusion_params   = fusion_param { "," fusion_param } ;
+fusion_param    = identifier "=" value ;
+
+(* Values *)
+value           = string | number | boolean | "NULL" | vector_literal ;
+vector_literal  = "[" number { "," number } "]" ;
+string          = "'" { char } "'" | '"' { char } '"' ;
+number          = ["-"] digit { digit } ["." digit { digit }] ;
+boolean         = "true" | "false" ;
+integer         = digit { digit } ;
+identifier      = (letter | "_") { letter | digit | "_" } 
+                | "`" { char } "`" 
+                | '"' { char } '"' ;
 ```
 
 ## Examples
