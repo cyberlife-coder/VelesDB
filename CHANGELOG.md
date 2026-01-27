@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧹 Code Quality Refactoring
+
+#### Changed
+
+- **Test Isolation Refactor** (2026-01-27)
+  - Extracted 27 inline test modules to separate `*_tests.rs` files
+  - Removed ~4,500 lines of inline tests from production code
+  - Compliance with project rule: tests must be in separate files
+  - Files affected: simd_native, explain, batch, guardrails, join, 
+    parallel_traversal, planner, lockfree, native_index, traversal,
+    conversion, streaming, match_exec, pushdown, score_fusion, json_path,
+    hybrid, aggregator, extraction, match_planner, match_metrics,
+    vector_ref, bloom, sharded_index, native_inner, label_table, async_ops
+
+### 📊 Ecosystem Sync Documentation
+
+#### Added
+
+- **Ecosystem Sync Report** (`docs/ecosystem-sync.md`)
+  - Comprehensive feature parity audit: Core ↔ SDKs/Integrations
+  - Gap analysis for all 10+ ecosystem components
+  - Priority actions for feature propagation
+  - Version compatibility matrix
+
 ### 🔒 EPIC-022: Unsafe Auditability
 
 #### Added
