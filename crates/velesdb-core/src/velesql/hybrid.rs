@@ -5,6 +5,8 @@
 //! - Weighted fusion for score-based merging
 //! - Parallel and sequential execution strategies
 
+#![allow(dead_code)] // Used by tests - will be integrated into main query execution
+
 use std::collections::HashMap;
 
 /// A search result with ID and score.
