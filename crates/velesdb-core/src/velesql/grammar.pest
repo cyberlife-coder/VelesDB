@@ -152,8 +152,11 @@ compare_op = { ">=" | "<=" | "<>" | "!=" | "=" | ">" | "<" }
 limit_clause = { ^"LIMIT" ~ integer }
 offset_clause = { ^"OFFSET" ~ integer }
 
-// Values - EPIC-038: Added temporal expressions (NOW, INTERVAL)
-value = { temporal_expr | float | integer | string | boolean | null_value | parameter }
+// Values - EPIC-038: Temporal, EPIC-039: Subquery
+value = { subquery_expr | temporal_expr | float | integer | string | boolean | null_value | parameter }
+
+// Scalar subquery expression (EPIC-039)
+subquery_expr = { "(" ~ ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~ where_clause? ~ group_by_clause? ~ having_clause? ~ limit_clause? ~ ")" }
 parameter = @{ "$" ~ identifier }
 null_value = { ^"NULL" }
 boolean = { ^"TRUE" | ^"FALSE" }

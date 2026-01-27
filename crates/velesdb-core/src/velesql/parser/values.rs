@@ -2,7 +2,7 @@
 
 use super::Rule;
 use crate::velesql::ast::{
-    IntervalUnit, IntervalValue, TemporalExpr, Value, WithClause, WithOption, WithValue,
+    IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, WithClause, WithOption, WithValue,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -45,6 +45,10 @@ impl Parser {
             Rule::temporal_expr => {
                 let temporal = Self::parse_temporal_expr(inner)?;
                 Ok(Value::Temporal(temporal))
+            }
+            Rule::subquery_expr => {
+                let subquery = Self::parse_subquery_expr(inner)?;
+                Ok(Value::Subquery(Box::new(subquery)))
             }
             _ => Err(ParseError::syntax(0, inner.as_str(), "Unknown value type")),
         }
@@ -265,5 +269,75 @@ impl Parser {
                 "Invalid WITH value type",
             )),
         }
+    }
+
+    /// Parses a scalar subquery expression (EPIC-039).
+    ///
+    /// Handles subqueries like: `(SELECT AVG(price) FROM products WHERE category = 'tech')`
+    pub(crate) fn parse_subquery_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Subquery, ParseError> {
+        use crate::velesql::ast::{GroupByClause, SelectColumns, SelectStatement};
+
+        let inner = pair.into_inner();
+        let mut columns = SelectColumns::All;
+        let mut from = String::new();
+        let mut where_clause = None;
+        let mut group_by = None;
+        let mut having = None;
+        let mut limit = None;
+
+        // Parse each component of the subquery
+        for sub_pair in inner {
+            match sub_pair.as_rule() {
+                Rule::select_list => {
+                    columns = Self::parse_select_list(sub_pair)?;
+                }
+                Rule::identifier => {
+                    from = super::extract_identifier(&sub_pair);
+                }
+                Rule::where_clause => {
+                    where_clause = Some(Self::parse_where_clause(sub_pair)?);
+                }
+                Rule::group_by_clause => {
+                    let cols: Vec<String> = sub_pair
+                        .into_inner()
+                        .filter(|p| p.as_rule() == Rule::group_by_list)
+                        .flat_map(pest::iterators::Pair::into_inner)
+                        .map(|p| super::extract_identifier(&p))
+                        .collect();
+                    group_by = Some(GroupByClause { columns: cols });
+                }
+                Rule::having_clause => {
+                    having = Some(Self::parse_having_clause(sub_pair)?);
+                }
+                Rule::limit_clause => {
+                    limit = Some(Self::parse_limit_clause(sub_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let select = SelectStatement {
+            columns,
+            from,
+            joins: Vec::new(),
+            where_clause,
+            order_by: None,
+            limit,
+            offset: None,
+            with_clause: None,
+            group_by,
+            having,
+            fusion_clause: None,
+        };
+
+        // TODO: Detect correlated columns by analyzing column references
+        let correlations = Vec::new();
+
+        Ok(Subquery {
+            select,
+            correlations,
+        })
     }
 }

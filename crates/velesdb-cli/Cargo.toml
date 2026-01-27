@@ -59,6 +59,8 @@ chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3.10"
+assert_cmd = "2.0"
+predicates = "3.1"
 
 # =============================================================================
 # Linux .deb package configuration (cargo-deb)
