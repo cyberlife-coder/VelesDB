@@ -21,7 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Checksum validation for data corruption detection
   - Uses public Collection API (get, len, upsert, delete)
 
-### �📚 EPIC-018: Documentation & Examples
+- **Corruption Tests** (US-002)
+  - `tests/crash_recovery/corruption.rs` - 10 corruption test scenarios
+  - `FileMutator` - Controlled file corruption utility
+  - Truncation tests: 50%, 0%, payloads.log
+  - Bitflip tests: header, payload data, snapshot, HNSW index
+  - Empty/missing file tests: config.json, vectors.bin
+  - Multiple corruption stress test
+  - All tests verify graceful error handling (no panics, no UB)
+
+### �� EPIC-018: Documentation & Examples
 
 #### Added
 
