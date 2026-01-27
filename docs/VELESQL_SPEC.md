@@ -23,7 +23,7 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
 | USING FUSION | ✅ Stable | 2.0 |
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
-| MATCH graph traversal | 🔜 Planned | - |
+| MATCH graph traversal | ✅ Stable | 2.1 |
 | Table aliases | 🔜 Planned | - |
 
 ## Basic Syntax
@@ -832,6 +832,81 @@ WHERE vector NEAR $v
   AND title LIKE '%AI%'
   AND published IS NOT NULL
 LIMIT 10
+```
+
+## MATCH Clause (v2.1+)
+
+Execute graph pattern matching queries with optional vector similarity filtering.
+
+### Basic Syntax
+
+```sql
+MATCH <pattern>
+[WHERE <conditions>]
+RETURN <projection>
+[ORDER BY <expression>]
+[LIMIT <n>]
+```
+
+### Pattern Syntax
+
+```sql
+-- Node pattern
+(alias:Label {property: value})
+
+-- Relationship pattern
+-[alias:TYPE]->    -- outgoing
+<-[alias:TYPE]-    -- incoming
+-[alias:TYPE]-     -- undirected
+
+-- Variable length paths
+-[*1..3]->         -- 1 to 3 hops
+```
+
+### Examples
+
+```sql
+-- Simple graph traversal
+MATCH (a:Person)-[:KNOWS]->(b:Person)
+RETURN a.name, b.name
+
+-- With similarity filter (RAG use case)
+MATCH (doc:Document)
+WHERE similarity(doc.embedding, $query) > 0.8
+RETURN doc.title, doc.content
+ORDER BY similarity() DESC
+LIMIT 5
+
+-- Combined graph + vector + column (AIOps)
+MATCH (incident:Ticket)-[:IMPACTS]->(service:Microservice)
+WHERE similarity(incident.log_embedding, $error_vec) > 0.85
+  AND incident.status = 'RESOLVED'
+  AND service.criticality = 'HIGH'
+RETURN incident.solution, service.name
+ORDER BY similarity() DESC
+LIMIT 3
+```
+
+### Execution Strategies
+
+The query planner automatically chooses the optimal execution strategy:
+
+| Strategy | When Used | Description |
+|----------|-----------|-------------|
+| **GraphFirst** | No similarity condition | Traverse graph, then filter |
+| **VectorFirst** | Similarity on start node | Vector search, then validate graph |
+| **Parallel** | Large collection, high threshold | Execute both in parallel |
+
+### REST API
+
+```
+POST /collections/{name}/match
+Content-Type: application/json
+
+{
+  "query": "MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name",
+  "params": { "v": [0.1, 0.2, ...] }
+}
 ```
 
 ## Error Handling
