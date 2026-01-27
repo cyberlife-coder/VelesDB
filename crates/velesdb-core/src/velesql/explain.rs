@@ -407,6 +407,7 @@ mod tests {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: from.to_string(),
+            from_alias: None,
             joins: vec![],
             where_clause: None,
             order_by: None,

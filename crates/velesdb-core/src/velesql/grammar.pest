@@ -14,10 +14,18 @@ set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
 
 // SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
 // EPIC-052 US-001: Added DISTINCT support
+// EPIC-052 US-003: Added FROM alias support for Self-JOIN
 select_stmt = { 
-    ^"SELECT" ~ distinct_modifier? ~ select_list ~ ^"FROM" ~ identifier ~
+    ^"SELECT" ~ distinct_modifier? ~ select_list ~ ^"FROM" ~ from_clause ~
     join_clause* ~ where_clause? ~ group_by_clause? ~ having_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause? ~ using_fusion_clause?
 }
+
+// FROM clause with optional alias (EPIC-052 US-003: Self-JOIN support)
+// Supports: FROM table, FROM table AS alias
+// Note: "FROM table alias" without AS is intentionally NOT supported to avoid
+// ambiguity with JOIN keywords. Use "FROM table AS alias" syntax.
+from_clause = { identifier ~ from_alias? }
+from_alias = { ^"AS" ~ identifier }
 
 // DISTINCT modifier (EPIC-052 US-001)
 distinct_modifier = { ^"DISTINCT" }
