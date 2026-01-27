@@ -1,6 +1,5 @@
 //! Tests for `batch` module - Batch operations for ColumnStore.
 
-use super::types::StringId;
 use super::{BatchUpdate, ColumnStore, ColumnType, ColumnValue, TypedColumn};
 
 fn create_test_store() -> ColumnStore {

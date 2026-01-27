@@ -1,8 +1,6 @@
 //! Tests for `join` module - JOIN execution for VelesQL.
 
-use super::join::{
-    adaptive_batch_size, execute_join, extract_join_keys, joined_to_search_results, JoinedResult,
-};
+use super::join::{adaptive_batch_size, execute_join, extract_join_keys, joined_to_search_results};
 use crate::column_store::{ColumnStore, ColumnType, ColumnValue};
 use crate::point::Point;
 use crate::point::SearchResult;

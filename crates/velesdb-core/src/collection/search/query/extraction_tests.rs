@@ -1,6 +1,5 @@
 //! Tests for `extraction` module - Query condition extraction utilities.
 
-use super::extraction::*;
 use crate::collection::types::Collection;
 use crate::velesql::{
     CompareOp, Comparison, Condition, MatchCondition, SimilarityCondition, Value, VectorExpr,
