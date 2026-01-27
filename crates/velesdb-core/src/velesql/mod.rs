@@ -58,6 +58,8 @@ mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
+#[cfg(test)]
+mod planner_tests;
 mod validation;
 #[cfg(test)]
 mod validation_tests;
