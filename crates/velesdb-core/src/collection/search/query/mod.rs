@@ -22,6 +22,8 @@ pub mod join;
 #[cfg(test)]
 mod join_tests;
 pub mod match_exec;
+#[cfg(test)]
+mod match_exec_tests;
 pub mod match_metrics;
 pub mod match_planner;
 mod ordering;
