@@ -224,42 +224,66 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 
 ### High Priority (P1)
 
-1. **VelesQL for Python SDK**
+1. **VelesQL for Python SDK** → **EPIC-056 US-001/002/003**
    - Add `collection.query(velesql_string)` method
    - Expose parser bindings via PyO3
 
-2. **VelesQL for WASM**
+2. **VelesQL for WASM** → **EPIC-056 US-004/005/006**
    - Add `store.query(velesql_string)` method
    - Enable browser-side query parsing
 
-3. **Server JOIN/EXPLAIN endpoints**
+3. **Server JOIN/EXPLAIN endpoints** → **EPIC-058 US-001/002**
    - `/api/v1/query/explain` endpoint
    - Full VelesQL support including JOINs
 
 ### Medium Priority (P2)
 
-4. **Mobile Hybrid Search**
+4. **Mobile Hybrid Search** → **EPIC-036 (existing)**
    - Add text_search and hybrid_search to UniFFI bindings
    - Add filter support
 
-5. **LangChain/LlamaIndex Quantization**
+5. **LangChain/LlamaIndex Quantization** → **EPIC-057**
    - Expose storage_mode parameter
    - Document memory savings
 
-6. **Streaming Traversal**
+6. **Streaming Traversal** → **EPIC-058 US-003**
    - Add to WASM, Server, TypeScript
    - Important for large graphs
 
 ### Low Priority (P3)
 
-7. **Examples Update**
+7. **Examples Update** → **EPIC-059 US-005/006/007**
    - Add VelesQL examples to all language examples
    - Add graph traversal examples
    - Add fusion strategy examples
 
-8. **CLI Enhancements**
+8. **CLI Enhancements** → **EPIC-059 US-001/002/003/004**
    - Add `--fusion` flag to search commands
    - Add `velesdb traverse` command
+
+---
+
+## EPICs Created for Gap Resolution
+
+| EPIC | Titre | Priorité | US | Estimation |
+|------|-------|----------|-----|------------|
+| **EPIC-053** | WASM Graph Support | P1 | 6 | 29h |
+| **EPIC-056** | VelesQL SDK Propagation | P1 | 8 | 35h |
+| **EPIC-057** | LangChain/LlamaIndex Parity | P2 | 9 | 33h |
+| **EPIC-058** | Server API Completeness | P1 | 6 | 28h |
+| **EPIC-059** | CLI & Examples Refresh | P3 | 7 | 20h |
+| **EPIC-036** | Mobile SDK UniFFI (existing) | P2 | 5 TODO | ~20h |
+
+**Total: ~165h de travail**
+
+### Implementation Order (Recommended)
+
+1. **EPIC-056** (VelesQL SDKs) - Foundation for Python/WASM users
+2. **EPIC-058** (Server API) - Enable backend integrations  
+3. **EPIC-053** (WASM Graph) - Browser graph support
+4. **EPIC-057** (LangChain/LlamaIndex) - Framework integrations
+5. **EPIC-036** (Mobile) - iOS/Android packaging
+6. **EPIC-059** (CLI/Examples) - Documentation and DX
 
 ---
 
