@@ -180,10 +180,7 @@ impl FusionStrategy {
         }
 
         // Apply multiplicative boosts
-        let boost = breakdown
-            .metadata_boost
-            .unwrap_or(1.0)
-            .max(0.0)
+        let boost = breakdown.metadata_boost.unwrap_or(1.0).max(0.0)
             * breakdown.recency_boost.unwrap_or(1.0).max(0.0)
             * breakdown
                 .custom_boosts
@@ -285,14 +282,14 @@ mod tests {
         let breakdown = ScoreBreakdown::new();
         assert!(breakdown.vector_similarity.is_none());
         assert!(breakdown.graph_distance.is_none());
-        assert_eq!(breakdown.final_score, 0.0);
+        assert!((breakdown.final_score - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_score_breakdown_from_vector() {
         let breakdown = ScoreBreakdown::from_vector(0.85);
         assert_eq!(breakdown.vector_similarity, Some(0.85));
-        assert_eq!(breakdown.final_score, 0.85);
+        assert!((breakdown.final_score - 0.85).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -309,9 +306,7 @@ mod tests {
 
     #[test]
     fn test_score_breakdown_components() {
-        let breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.8);
+        let breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
 
         let components = breakdown.components();
         assert_eq!(components.len(), 2);
@@ -321,9 +316,7 @@ mod tests {
 
     #[test]
     fn test_fusion_strategy_average() {
-        let mut breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.7);
+        let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.7);
 
         breakdown.compute_final(&FusionStrategy::Average);
         assert!((breakdown.final_score - 0.8).abs() < 0.001);
@@ -331,9 +324,7 @@ mod tests {
 
     #[test]
     fn test_fusion_strategy_maximum() {
-        let mut breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.7);
+        let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.7);
 
         breakdown.compute_final(&FusionStrategy::Maximum);
         assert!((breakdown.final_score - 0.9).abs() < 0.001);
@@ -341,9 +332,7 @@ mod tests {
 
     #[test]
     fn test_fusion_strategy_minimum() {
-        let mut breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.7);
+        let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.7);
 
         breakdown.compute_final(&FusionStrategy::Minimum);
         assert!((breakdown.final_score - 0.7).abs() < 0.001);
@@ -351,9 +340,7 @@ mod tests {
 
     #[test]
     fn test_fusion_strategy_product() {
-        let mut breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.8);
+        let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
 
         breakdown.compute_final(&FusionStrategy::Product);
         assert!((breakdown.final_score - 0.72).abs() < 0.001);
@@ -397,15 +384,13 @@ mod tests {
     fn test_scored_result_new() {
         let result = ScoredResult::new(42, 0.95);
         assert_eq!(result.id, 42);
-        assert_eq!(result.score, 0.95);
+        assert!((result.score - 0.95).abs() < f32::EPSILON);
         assert!(result.payload.is_none());
     }
 
     #[test]
     fn test_scored_result_with_breakdown() {
-        let breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.8);
+        let breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
 
         let mut bd = breakdown.clone();
         bd.compute_final(&FusionStrategy::Average);
@@ -425,9 +410,7 @@ mod tests {
 
     #[test]
     fn test_score_breakdown_json_serialization() {
-        let breakdown = ScoreBreakdown::new()
-            .with_vector(0.9)
-            .with_graph(0.8);
+        let breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
 
         let json = serde_json::to_string(&breakdown).unwrap();
         assert!(json.contains("vector_similarity"));

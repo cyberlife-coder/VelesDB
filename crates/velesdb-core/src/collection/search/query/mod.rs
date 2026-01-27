@@ -22,10 +22,10 @@ pub mod join;
 pub mod match_exec;
 pub mod match_metrics;
 pub mod match_planner;
-pub mod parallel_traversal;
-pub mod score_fusion;
 mod ordering;
+pub mod parallel_traversal;
 pub mod pushdown;
+pub mod score_fusion;
 mod validation;
 
 // Re-export for potential external use

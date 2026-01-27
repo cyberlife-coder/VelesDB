@@ -103,8 +103,7 @@ impl TraversalStats {
 
     /// Increments nodes visited (thread-safe).
     pub fn add_nodes_visited(&self, count: usize) {
-        self.nodes_visited
-            .fetch_add(count, AtomicOrdering::Relaxed);
+        self.nodes_visited.fetch_add(count, AtomicOrdering::Relaxed);
     }
 
     /// Increments edges traversed (thread-safe).
@@ -170,20 +169,20 @@ impl ParallelTraverser {
         stats.start_nodes_count = start_nodes.len();
 
         // Decide whether to parallelize based on threshold
-        let results: Vec<Vec<TraversalResult>> = if start_nodes.len() >= self.config.parallel_threshold
-        {
-            // Parallel execution
-            start_nodes
-                .par_iter()
-                .map(|&start| self.bfs_single(start, &get_neighbors, &stats))
-                .collect()
-        } else {
-            // Sequential execution for small inputs
-            start_nodes
-                .iter()
-                .map(|&start| self.bfs_single(start, &get_neighbors, &stats))
-                .collect()
-        };
+        let results: Vec<Vec<TraversalResult>> =
+            if start_nodes.len() >= self.config.parallel_threshold {
+                // Parallel execution
+                start_nodes
+                    .par_iter()
+                    .map(|&start| self.bfs_single(start, &get_neighbors, &stats))
+                    .collect()
+            } else {
+                // Sequential execution for small inputs
+                start_nodes
+                    .iter()
+                    .map(|&start| self.bfs_single(start, &get_neighbors, &stats))
+                    .collect()
+            };
 
         // Flatten results
         let flat_results: Vec<TraversalResult> = results.into_iter().flatten().collect();
@@ -272,13 +271,11 @@ impl ParallelTraverser {
         }
 
         // Sort by score (if present) then by depth
-        merged.sort_by(|a, b| {
-            match (a.score, b.score) {
-                (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(Ordering::Equal),
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => a.depth.cmp(&b.depth),
-            }
+        merged.sort_by(|a, b| match (a.score, b.score) {
+            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(Ordering::Equal),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => a.depth.cmp(&b.depth),
         });
 
         // Apply limit
@@ -300,18 +297,18 @@ impl ParallelTraverser {
         let mut stats = TraversalStats::new();
         stats.start_nodes_count = start_nodes.len();
 
-        let results: Vec<Vec<TraversalResult>> = if start_nodes.len() >= self.config.parallel_threshold
-        {
-            start_nodes
-                .par_iter()
-                .map(|&start| self.dfs_single(start, &get_neighbors, &stats))
-                .collect()
-        } else {
-            start_nodes
-                .iter()
-                .map(|&start| self.dfs_single(start, &get_neighbors, &stats))
-                .collect()
-        };
+        let results: Vec<Vec<TraversalResult>> =
+            if start_nodes.len() >= self.config.parallel_threshold {
+                start_nodes
+                    .par_iter()
+                    .map(|&start| self.dfs_single(start, &get_neighbors, &stats))
+                    .collect()
+            } else {
+                start_nodes
+                    .iter()
+                    .map(|&start| self.dfs_single(start, &get_neighbors, &stats))
+                    .collect()
+            };
 
         let flat_results: Vec<TraversalResult> = results.into_iter().flatten().collect();
         stats.raw_results = flat_results.len();
@@ -458,9 +455,8 @@ mod tests {
             relationship_types: vec![],
         });
 
-        let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
-            graph.get(&node).cloned().unwrap_or_default()
-        };
+        let get_neighbors =
+            |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
 
         let (results, stats) = traverser.bfs_parallel(&[1], get_neighbors);
 
@@ -480,9 +476,8 @@ mod tests {
             relationship_types: vec![],
         });
 
-        let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
-            graph.get(&node).cloned().unwrap_or_default()
-        };
+        let get_neighbors =
+            |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
 
         let (results, stats) = traverser.bfs_parallel(&[1, 3], get_neighbors);
 
@@ -501,9 +496,8 @@ mod tests {
             relationship_types: vec![],
         });
 
-        let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
-            graph.get(&node).cloned().unwrap_or_default()
-        };
+        let get_neighbors =
+            |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
 
         let (results, _) = traverser.bfs_parallel(&[1], get_neighbors);
 
@@ -522,9 +516,8 @@ mod tests {
             relationship_types: vec![],
         });
 
-        let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
-            graph.get(&node).cloned().unwrap_or_default()
-        };
+        let get_neighbors =
+            |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
 
         let (results, stats) = traverser.dfs_parallel(&[1], get_neighbors);
 
