@@ -47,6 +47,9 @@ mod graph_pattern_tests;
 mod groupby_tests;
 #[cfg(test)]
 mod having_tests;
+mod hybrid;
+#[cfg(test)]
+mod hybrid_tests;
 #[cfg(test)]
 mod join_extended_tests;
 pub mod json_path;
