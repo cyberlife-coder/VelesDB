@@ -57,6 +57,7 @@ impl PushdownAnalysis {
 /// # Returns
 ///
 /// A `PushdownAnalysis` with conditions classified by source.
+#[must_use]
 pub fn analyze_for_pushdown(
     condition: &Condition,
     graph_vars: &HashSet<String>,

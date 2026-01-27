@@ -19,7 +19,7 @@ pub mod auto_reindex;
 mod core;
 pub mod graph;
 pub mod query_cost;
-mod search;
+pub mod search;
 mod types;
 
 #[cfg(test)]

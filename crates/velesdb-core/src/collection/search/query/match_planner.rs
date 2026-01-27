@@ -80,6 +80,7 @@ impl MatchQueryPlanner {
     /// # Returns
     ///
     /// The optimal execution strategy.
+    #[must_use]
     pub fn plan(match_clause: &MatchClause, stats: &CollectionStats) -> MatchExecutionStrategy {
         let has_similarity = Self::has_similarity_condition(match_clause.where_clause.as_ref());
         let similarity_info = Self::extract_similarity_info(match_clause.where_clause.as_ref());
@@ -256,6 +257,7 @@ impl MatchQueryPlanner {
     }
 
     /// Generate a human-readable explanation of the chosen strategy.
+    #[must_use]
     pub fn explain(strategy: &MatchExecutionStrategy) -> String {
         match strategy {
             MatchExecutionStrategy::GraphFirst {

@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 ///
 /// Ordering priority (ascending): Null < Bool < Number < String < Array < Object
 /// This ensures deterministic sorting even with mixed types.
+#[must_use]
 pub fn compare_json_values(
     a: Option<&serde_json::Value>,
     b: Option<&serde_json::Value>,

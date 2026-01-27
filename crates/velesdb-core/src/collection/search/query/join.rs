@@ -59,6 +59,7 @@ pub fn adaptive_batch_size(key_count: usize) -> usize {
 ///
 /// # Note
 /// Point IDs > i64::MAX are filtered out to prevent overflow issues.
+#[must_use]
 pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) -> Vec<(usize, i64)> {
     let key_column = &condition.right.column;
 
@@ -224,6 +225,7 @@ fn batch_get_rows(
 ///
 /// This is useful when the query expects SearchResult format but
 /// we want to include joined column data in the payload.
+#[must_use]
 pub fn joined_to_search_results(joined: Vec<JoinedResult>) -> Vec<SearchResult> {
     joined
         .into_iter()
