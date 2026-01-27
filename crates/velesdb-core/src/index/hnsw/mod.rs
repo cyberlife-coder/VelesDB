@@ -23,10 +23,12 @@ mod backend;
 mod index;
 mod mappings;
 pub mod native;
-mod native_index;
+pub mod native_index;
 #[cfg(test)]
 mod native_index_tests;
 mod native_inner;
+#[cfg(test)]
+mod native_inner_tests;
 mod params;
 mod sharded_mappings;
 mod sharded_vectors;
