@@ -24,6 +24,9 @@ pub struct MatchResult {
     pub bindings: HashMap<String, u64>,
     /// Similarity score if combined with vector search.
     pub score: Option<f32>,
+    /// Projected properties from RETURN clause (EPIC-058 US-007).
+    /// Key format: "alias.property" (e.g., "author.name").
+    pub projected: HashMap<String, serde_json::Value>,
 }
 
 impl MatchResult {
@@ -36,6 +39,7 @@ impl MatchResult {
             path,
             bindings: HashMap::new(),
             score: None,
+            projected: HashMap::new(),
         }
     }
 
@@ -45,6 +49,35 @@ impl MatchResult {
         self.bindings.insert(alias, node_id);
         self
     }
+
+    /// Adds projected properties (EPIC-058 US-007).
+    #[must_use]
+    pub fn with_projected(mut self, projected: HashMap<String, serde_json::Value>) -> Self {
+        self.projected = projected;
+        self
+    }
+}
+
+/// Parses a property path expression like "alias.property" (EPIC-058 US-007).
+///
+/// Returns `Some((alias, property))` if valid, `None` otherwise.
+/// For nested paths like "doc.metadata.category", returns `("doc", "metadata.category")`.
+#[must_use]
+pub fn parse_property_path(expression: &str) -> Option<(&str, &str)> {
+    // Skip special cases
+    if expression == "*" || expression.contains('(') {
+        return None;
+    }
+
+    // Split on first dot
+    let dot_pos = expression.find('.')?;
+    if dot_pos == 0 || dot_pos == expression.len() - 1 {
+        return None;
+    }
+
+    let alias = &expression[..dot_pos];
+    let property = &expression[dot_pos + 1..];
+    Some((alias, property))
 }
 
 impl Collection {
@@ -403,6 +436,63 @@ impl Collection {
         }
     }
 
+    /// Projects properties from RETURN clause for a match result (EPIC-058 US-007).
+    ///
+    /// Resolves property paths like "author.name" by:
+    /// 1. Looking up the alias in bindings to get node_id
+    /// 2. Fetching the payload for that node
+    /// 3. Extracting the property value
+    fn project_properties(
+        &self,
+        bindings: &HashMap<String, u64>,
+        return_clause: &crate::velesql::ReturnClause,
+    ) -> HashMap<String, serde_json::Value> {
+        let payload_storage = self.payload_storage.read();
+        let mut projected = HashMap::new();
+
+        for item in &return_clause.items {
+            // Parse property path (e.g., "author.name" -> ("author", "name"))
+            if let Some((alias, property)) = parse_property_path(&item.expression) {
+                // Get node_id for this alias
+                if let Some(&node_id) = bindings.get(alias) {
+                    // Get payload for this node
+                    if let Ok(Some(payload)) = payload_storage.retrieve(node_id) {
+                        // Extract property value (support nested paths)
+                        if let Some(payload_map) = payload.as_object() {
+                            if let Some(value) = Self::get_nested_property(payload_map, property) {
+                                let key = item
+                                    .alias
+                                    .clone()
+                                    .unwrap_or_else(|| item.expression.clone());
+                                projected.insert(key, value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        projected
+    }
+
+    /// Gets a nested property from a JSON object (EPIC-058 US-007).
+    ///
+    /// Supports paths like "metadata.category" for nested access.
+    fn get_nested_property<'a>(
+        payload: &'a serde_json::Map<String, serde_json::Value>,
+        path: &str,
+    ) -> Option<&'a serde_json::Value> {
+        let parts: Vec<&str> = path.split('.').collect();
+        let first_key = *parts.first()?;
+        let mut current: &serde_json::Value = payload.get(first_key)?;
+
+        for part in parts.iter().skip(1) {
+            current = current.as_object()?.get(*part)?;
+        }
+
+        Some(current)
+    }
+
     /// Executes a MATCH query with similarity scoring (EPIC-045 US-003).
     ///
     /// This method combines graph pattern matching with vector similarity,
@@ -418,7 +508,7 @@ impl Collection {
     ///
     /// # Returns
     ///
-    /// Vector of `MatchResult` with similarity scores.
+    /// Vector of `MatchResult` with similarity scores and projected properties.
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &MatchClause,
@@ -451,6 +541,11 @@ impl Collection {
                 // Filter by threshold (higher is better for similarity)
                 if similarity >= similarity_threshold {
                     result.score = Some(similarity);
+
+                    // Project properties from RETURN clause (EPIC-058 US-007)
+                    result.projected =
+                        self.project_properties(&result.bindings, &match_clause.return_clause);
+
                     scored_results.push(result);
                 }
             }
