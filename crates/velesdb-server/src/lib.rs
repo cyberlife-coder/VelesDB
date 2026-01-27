@@ -32,7 +32,7 @@ pub use types::*;
 pub use handlers::{
     batch_search, create_collection, create_index, delete_collection, delete_index, delete_point,
     explain, get_collection, get_point, health_check, hybrid_search, list_collections,
-    list_indexes, multi_query_search, query, search, text_search, upsert_points,
+    list_indexes, match_query, multi_query_search, query, search, text_search, upsert_points,
 };
 
 // FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)

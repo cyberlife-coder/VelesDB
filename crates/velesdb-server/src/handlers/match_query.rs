@@ -2,7 +2,7 @@
 //!
 //! Provides endpoint for executing graph pattern matching queries.
 
-#![allow(dead_code)] // Handler to be wired in routes in future PR
+// EPIC-058 US-007: MATCH query handler now wired to /collections/{name}/match
 
 use axum::{
     extract::{Path, State},
@@ -82,6 +82,13 @@ pub struct MatchQueryError {
 ///   }
 /// }
 /// ```
+///
+/// # Errors
+///
+/// Returns error tuple with status code and JSON error in these cases:
+/// - `404 NOT_FOUND` - Collection not found
+/// - `400 BAD_REQUEST` - Parse error or not a MATCH query
+/// - `500 INTERNAL_SERVER_ERROR` - Execution error
 pub async fn match_query(
     Path(collection_name): Path<String>,
     State(state): State<Arc<AppState>>,
