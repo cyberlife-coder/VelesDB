@@ -7,7 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### �️ EPIC-024: Durability "Database-Grade"
+### 🔒 EPIC-022: Unsafe Auditability
+
+#### Added
+
+- **Soundness Documentation** (US-001)
+  - `docs/SOUNDNESS.md` - Complete soundness invariants for all unsafe code
+  - Categories: SIMD, Memory Allocation, Mmap, Pointers, Concurrency, FFI
+  - Safety guarantees and invariants for each unsafe block
+  - Pre/post conditions and violation consequences
+
+- **Unsafe Review Checklist** (US-002)
+  - `docs/UNSAFE_REVIEW_CHECKLIST.md` - PR review checklist for unsafe code
+  - Documentation, soundness, concurrency, and testing criteria
+  - Red flags section for common mistakes
+  - Updated `.github/PULL_REQUEST_TEMPLATE.md` with unsafe section
+
+### ⚡ EPIC-026: Reproducible Benchmarks
+
+#### Added
+
+- **Reproducible Benchmark Protocol** (US-001)
+  - `benchmarks/bench_run.ps1` - PowerShell script for deterministic runs
+  - Environment info collection (CPU, memory, Rust version)
+  - Multiple runs with aggregation (mean, std dev)
+  - JSON export for CI comparison
+
+- **Performance Smoke Test CI** (US-002)
+  - `crates/velesdb-core/benches/smoke_test.rs` - Fast Criterion benchmark
+  - `benchmarks/baseline.json` - Baseline metrics for regression detection
+  - `scripts/compare_perf.py` - Python comparison script
+  - Non-blocking `perf-smoke` job in CI workflow
+
+### 🔄 EPIC-034: Concurrency/Async Refactor
+
+#### Added
+
+- **Async Storage Wrappers** (US-001)
+  - `storage/async_ops.rs` - spawn_blocking wrappers for mmap operations
+  - `reserve_capacity_async`, `compact_async`, `flush_async`, `store_batch_async`
+
+- **Async Collection API** (US-005)
+  - `collection/async_ops.rs` - Async bulk insert API
+  - `upsert_bulk_async`, `upsert_bulk_streaming`, `search_async`, `flush_async`
+  - Progress callback support for streaming imports
+
+- **Loom Concurrency Tests** (US-004)
+  - `storage/loom_tests.rs` - Loom-based concurrency verification
+  - Tests for sharded index, epoch counter visibility
+  - Standard concurrency tests for non-loom builds
+
+- **Epoch Counter Overflow Safety** (US-003)
+  - Documented overflow safety in `mmap.rs`
+  - AtomicU64 with wrapping arithmetic (584 years at 1B ops/sec)
+
+- **Loom cfg Configuration**
+  - Added `[lints.rust]` check-cfg for loom in Cargo.toml
+
+### 🛡️ EPIC-024: Durability "Database-Grade"
 
 #### Added
 
