@@ -38,6 +38,8 @@
 mod edge;
 mod edge_concurrent;
 mod label_table;
+#[cfg(test)]
+mod label_table_tests;
 mod metrics;
 mod node;
 mod property_index;
