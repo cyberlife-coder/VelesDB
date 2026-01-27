@@ -83,6 +83,7 @@ pub async fn stream_traverse(
                 if (i + 1) % 100 == 0 {
                     let stats_event = StreamStatsEvent {
                         nodes_visited: i + 1,
+                        // SAFETY: elapsed time in ms won't exceed u64::MAX (584M years)
                         elapsed_ms: start_time.elapsed().as_millis() as u64,
                     };
                     let stats_data =
@@ -95,6 +96,7 @@ pub async fn stream_traverse(
             let done_event = StreamDoneEvent {
                 total_nodes: total,
                 max_depth_reached: max_depth,
+                // SAFETY: elapsed time in ms won't exceed u64::MAX
                 elapsed_ms: start_time.elapsed().as_millis() as u64,
             };
             let done_data = serde_json::to_string(&done_event).unwrap_or_else(|_| "{}".to_string());
