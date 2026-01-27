@@ -51,6 +51,8 @@ mod having_tests;
 mod join_extended_tests;
 pub mod json_path;
 #[cfg(test)]
+mod json_path_tests;
+#[cfg(test)]
 mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
