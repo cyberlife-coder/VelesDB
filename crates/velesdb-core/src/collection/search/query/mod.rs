@@ -26,6 +26,8 @@ pub mod match_metrics;
 pub mod match_planner;
 mod ordering;
 pub mod parallel_traversal;
+#[cfg(test)]
+mod parallel_traversal_tests;
 pub mod pushdown;
 pub mod score_fusion;
 mod validation;
