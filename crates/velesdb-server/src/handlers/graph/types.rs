@@ -127,3 +127,81 @@ pub struct AddEdgeRequest {
     #[serde(default)]
     pub properties: serde_json::Value,
 }
+
+// ============================================================================
+// SSE Streaming Types (EPIC-058 US-003)
+// ============================================================================
+
+/// Query parameters for streaming graph traversal.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct StreamTraverseParams {
+    /// Source node ID to start traversal from.
+    #[param(example = 123)]
+    pub start_node: u64,
+    /// Traversal algorithm: "bfs" or "dfs".
+    #[serde(default = "default_algorithm")]
+    #[param(example = "bfs")]
+    pub algorithm: String,
+    /// Maximum traversal depth.
+    #[serde(default = "default_stream_max_depth")]
+    #[param(example = 5)]
+    pub max_depth: u32,
+    /// Maximum number of results to stream.
+    #[serde(default = "default_stream_limit")]
+    #[param(example = 1000)]
+    pub limit: usize,
+    /// Filter by relationship types (comma-separated).
+    #[serde(default)]
+    #[param(example = "KNOWS,FOLLOWS")]
+    pub relationship_types: Option<String>,
+}
+
+fn default_algorithm() -> String {
+    "bfs".to_string()
+}
+
+fn default_stream_max_depth() -> u32 {
+    5
+}
+
+fn default_stream_limit() -> usize {
+    1000
+}
+
+/// SSE event: A node reached during traversal.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StreamNodeEvent {
+    /// Target node ID.
+    pub id: u64,
+    /// Depth from source.
+    pub depth: u32,
+    /// Path of edge IDs taken to reach this node.
+    pub path: Vec<u64>,
+}
+
+/// SSE event: Periodic statistics update.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StreamStatsEvent {
+    /// Number of nodes visited so far.
+    pub nodes_visited: usize,
+    /// Elapsed time in milliseconds.
+    pub elapsed_ms: u64,
+}
+
+/// SSE event: Traversal completed.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StreamDoneEvent {
+    /// Total nodes returned.
+    pub total_nodes: usize,
+    /// Maximum depth reached.
+    pub max_depth_reached: u32,
+    /// Total elapsed time in milliseconds.
+    pub elapsed_ms: u64,
+}
+
+/// SSE event: Error occurred.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct StreamErrorEvent {
+    /// Error message.
+    pub error: String,
+}

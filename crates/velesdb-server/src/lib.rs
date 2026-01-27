@@ -37,7 +37,8 @@ pub use handlers::{
 
 // FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
 pub use handlers::graph::{
-    add_edge, get_edges, get_node_degree, traverse_graph, DegreeResponse, GraphService,
+    add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
+    GraphService, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams,
     TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
 };
 

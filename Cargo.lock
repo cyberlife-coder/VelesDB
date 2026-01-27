@@ -6735,6 +6735,7 @@ dependencies = [
  "axum",
  "clap",
  "config",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",
