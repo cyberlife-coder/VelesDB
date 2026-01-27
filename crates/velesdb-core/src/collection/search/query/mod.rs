@@ -34,6 +34,8 @@ pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;
 pub mod score_fusion;
+#[cfg(test)]
+mod score_fusion_tests;
 mod validation;
 
 // Re-export for potential external use
