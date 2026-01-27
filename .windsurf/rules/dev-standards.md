@@ -11,6 +11,26 @@ trigger: always_on
 - Tests dans fichiers SÉPARÉS (`tests/*.rs` ou module `#[cfg(test)]`)
 - Nom de test explicite: `test_[fonction]_[scenario]_[resultat_attendu]`
 
+### Pyramide des Tests
+
+| Niveau | Fichiers | Objectif | Seuil |
+|--------|----------|----------|-------|
+| **Unit** | `src/*_tests.rs` | Fonctions isolées | < 100ms/test |
+| **Intégration** | `tests/*.rs` | Scénarios métier BDD | Use cases réels |
+| **E2E** | `crates/*/tests/` | API HTTP, CLI, SDKs | Workflow complet |
+
+### Règles BDD/Gherkin
+
+Chaque US DOIT avoir des scénarios Gherkin:
+```gherkin
+Scenario: [Action métier]
+  Given [contexte]
+  When [action]
+  Then [résultat attendu]
+```
+
+Voir: `.windsurf/rules/testing-strategy.md` pour détails complets.
+
 ## Modularité & Taille
 
 - Fichier >= 500 lignes = REFACTORISER immédiatement
