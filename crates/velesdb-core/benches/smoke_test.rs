@@ -108,11 +108,15 @@ fn smoke_hybrid(c: &mut Criterion) {
         .iter()
         .enumerate()
         .map(|(i, v)| {
+            #[allow(clippy::cast_possible_truncation)]
+            let score_idx = i as u16;
             let payload = serde_json::json!({
                 "category": if i % 2 == 0 { "tech" } else { "science" },
-            "score": f64::from(i as u16) / 1000.0,
+                "score": f64::from(score_idx) / 1000.0,
             });
-            Point::new(i as u64, v.clone(), Some(payload))
+            #[allow(clippy::cast_possible_truncation)]
+            let id = i as u64;
+            Point::new(id, v.clone(), Some(payload))
         })
         .collect();
     collection.upsert(points).unwrap();

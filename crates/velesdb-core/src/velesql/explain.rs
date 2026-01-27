@@ -404,6 +404,7 @@ mod tests {
 
     fn make_simple_select(from: &str, limit: Option<u64>) -> SelectStatement {
         SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: from.to_string(),
             joins: vec![],

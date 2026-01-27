@@ -218,6 +218,7 @@ fn create_query_with_multiple_similarity() -> Query {
 
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -251,6 +252,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
 
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -277,6 +279,7 @@ fn create_query_with_single_similarity() -> Query {
 
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -308,6 +311,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
 
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -339,6 +343,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
 
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -365,6 +370,7 @@ fn create_query_with_not_similarity() -> Query {
 
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -384,6 +390,7 @@ fn create_query_with_not_similarity() -> Query {
 fn create_simple_query() -> Query {
     Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -419,6 +426,7 @@ fn test_validate_vector_search_near_with_or_detected() {
 
     let query = Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -457,6 +465,7 @@ fn test_validate_vector_search_or_now_passes() {
 
     let query = Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -500,6 +509,7 @@ fn test_validate_compound_query_where_clause() {
     // UNION's right side has multiple similarity with OR (invalid)
     let query = Query {
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "docs".to_string(),
             joins: vec![],
@@ -515,6 +525,7 @@ fn test_validate_compound_query_where_clause() {
         compound: Some(CompoundQuery {
             operator: SetOperator::Union,
             right: Box::new(SelectStatement {
+                distinct: crate::velesql::DistinctMode::None,
                 columns: SelectColumns::All,
                 from: "docs".to_string(),
                 joins: vec![],

@@ -313,6 +313,11 @@ impl Collection {
             }
         };
 
+        // EPIC-052 US-001: Apply DISTINCT deduplication if requested
+        if stmt.distinct == crate::velesql::DistinctMode::All {
+            results = Self::apply_distinct(results, &stmt.columns);
+        }
+
         // Apply ORDER BY if present
         if let Some(ref order_by) = stmt.order_by {
             self.apply_order_by(&mut results, order_by, params)?;
@@ -322,6 +327,60 @@ impl Collection {
         results.truncate(limit);
 
         Ok(results)
+    }
+
+    /// Apply DISTINCT deduplication to results based on selected columns (EPIC-052 US-001).
+    ///
+    /// Uses HashSet for O(n) complexity and preserves insertion order.
+    fn apply_distinct(
+        results: Vec<SearchResult>,
+        columns: &crate::velesql::SelectColumns,
+    ) -> Vec<SearchResult> {
+        use rustc_hash::FxHashSet;
+
+        // If SELECT *, deduplicate by all payload fields
+        let column_names: Vec<String> = match columns {
+            crate::velesql::SelectColumns::Columns(cols) => {
+                cols.iter().map(|c| c.name.clone()).collect()
+            }
+            crate::velesql::SelectColumns::Mixed { columns: cols, .. } => {
+                cols.iter().map(|c| c.name.clone()).collect()
+            }
+            // All or Aggregations: use full payload or no deduplication
+            crate::velesql::SelectColumns::All | crate::velesql::SelectColumns::Aggregations(_) => {
+                Vec::new()
+            }
+        };
+
+        let mut seen: FxHashSet<String> = FxHashSet::default();
+        results
+            .into_iter()
+            .filter(|r| {
+                let key = Self::compute_distinct_key(r, &column_names);
+                seen.insert(key)
+            })
+            .collect()
+    }
+
+    /// Compute a unique key for DISTINCT deduplication.
+    fn compute_distinct_key(result: &SearchResult, columns: &[String]) -> String {
+        let payload = result.point.payload.as_ref();
+
+        if columns.is_empty() {
+            // SELECT * or SELECT DISTINCT *: use full payload as key
+            payload.map_or_else(|| "null".to_string(), ToString::to_string)
+        } else {
+            // SELECT DISTINCT col1, col2: use specific columns
+            columns
+                .iter()
+                .map(|col| {
+                    payload
+                        .and_then(|p| p.get(col))
+                        .map_or_else(|| "null".to_string(), ToString::to_string)
+                })
+                .collect::<Vec<_>>()
+                .join("\x1F") // ASCII Unit Separator
+        }
     }
 
     /// Filter search results by similarity threshold.
