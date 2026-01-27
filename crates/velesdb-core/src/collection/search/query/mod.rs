@@ -18,6 +18,8 @@
 
 mod aggregation;
 mod extraction;
+#[cfg(test)]
+mod extraction_tests;
 pub mod join;
 #[cfg(test)]
 mod join_tests;
