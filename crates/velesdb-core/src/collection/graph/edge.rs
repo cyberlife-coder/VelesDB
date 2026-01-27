@@ -345,6 +345,24 @@ impl EdgeStore {
         self.edges.contains_key(&edge_id)
     }
 
+    /// Returns the number of edges in the store.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// Returns true if the store contains no edges.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+
+    /// Returns all edges in the store.
+    #[must_use]
+    pub fn all_edges(&self) -> Vec<&GraphEdge> {
+        self.edges.values().collect()
+    }
+
     /// Removes an edge by ID.
     ///
     /// Cleans up all indices: outgoing, incoming, by_label, and outgoing_by_label.

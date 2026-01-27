@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### 🔒 EPIC-022: Unsafe Auditability
 
 #### Added
@@ -95,7 +96,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Checksums: CRC32 for snapshot integrity
   - Versioning and migration strategy
 
-### �� EPIC-018: Documentation & Examples
+### 🔌 EPIC-015: Tauri Plugin Updates (100%)
+
+#### Added
+
+- **Knowledge Graph API** (US-001)
+  - `Collection::add_edge()` - Add edges to knowledge graph
+  - `Collection::get_all_edges()` - Get all edges
+  - `Collection::get_edges_by_label()` - Filter edges by label
+  - `Collection::get_outgoing_edges()` / `get_incoming_edges()` - Directional queries
+  - `Collection::traverse_bfs()` / `traverse_dfs()` - Graph traversal algorithms
+  - `Collection::get_node_degree()` - Get in/out degree of nodes
+  - `Collection::remove_edge()` - Remove edges by ID
+  - `Collection::edge_count()` - Count total edges
+  - New file: `crates/velesdb-core/src/collection/core/graph_api.rs`
+
+- **Tauri Plugin Graph Commands** (US-001)
+  - `add_edge` - Add edge to knowledge graph
+  - `get_edges` - Get edges by label/source/target
+  - `traverse_graph` - BFS/DFS graph traversal
+  - `get_node_degree` - Get node in/out degree
+  - 7 new types: `AddEdgeRequest`, `GetEdgesRequest`, `TraverseGraphRequest`, etc.
+
+- **Event System** (US-004)
+  - `velesdb://collection-created` - Collection created event
+  - `velesdb://collection-deleted` - Collection deleted event
+  - `velesdb://collection-updated` - Collection modified event
+  - `velesdb://operation-progress` - Long operation progress
+  - `velesdb://operation-complete` - Operation completed
+  - New file: `crates/tauri-plugin-velesdb/src/events.rs`
+
+- **Documentation Updates** (US-006)
+  - Updated `crates/tauri-plugin-velesdb/README.md` with Graph API and Events
+  - Updated `demos/tauri-rag-app/README.md` with new features
+
+#### Changed
+
+- Commands `create_collection`, `delete_collection`, `upsert`, `upsert_metadata` now emit events
+
+### 📚 EPIC-018: Documentation & Examples
 
 #### Added
 
