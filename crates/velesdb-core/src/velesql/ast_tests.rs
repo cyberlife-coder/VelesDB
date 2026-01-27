@@ -48,6 +48,7 @@ fn test_query_serialization() {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "documents".to_string(),
+            from_alias: None,
             joins: vec![],
             where_clause: None,
             order_by: None,

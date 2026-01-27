@@ -56,6 +56,9 @@ pub struct SelectStatement {
     pub columns: SelectColumns,
     /// Collection name (FROM clause).
     pub from: String,
+    /// Alias for the FROM table (EPIC-052 US-003: Self-JOIN support).
+    #[serde(default)]
+    pub from_alias: Option<String>,
     /// JOIN clauses for cross-store queries (EPIC-031 US-004).
     #[serde(default)]
     pub joins: Vec<JoinClause>,

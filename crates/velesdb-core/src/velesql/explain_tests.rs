@@ -13,6 +13,7 @@ fn test_plan_from_simple_select() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -40,6 +41,7 @@ fn test_plan_from_vector_search() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "embeddings".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("query".to_string()),
@@ -68,6 +70,7 @@ fn test_plan_with_filter() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
@@ -103,6 +106,7 @@ fn test_plan_to_tree_format() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("q".to_string()),
@@ -134,6 +138,7 @@ fn test_plan_to_json() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -161,6 +166,7 @@ fn test_plan_with_offset() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "items".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -188,6 +194,7 @@ fn test_filter_strategy_post_filter_default() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
@@ -239,6 +246,7 @@ fn test_plan_display_impl() {
         distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,

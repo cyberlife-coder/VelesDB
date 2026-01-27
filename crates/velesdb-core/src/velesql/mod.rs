@@ -69,6 +69,8 @@ mod fusion_clause_tests;
 #[cfg(test)]
 mod pr_review_bugfix_tests;
 #[cfg(test)]
+mod self_join_tests;
+#[cfg(test)]
 mod set_operations_tests;
 #[cfg(test)]
 mod similarity_tests;

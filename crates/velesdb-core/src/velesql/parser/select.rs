@@ -75,6 +75,7 @@ impl Parser {
         let mut distinct = crate::velesql::DistinctMode::None;
         let mut columns = SelectColumns::All;
         let mut from = String::new();
+        let mut from_alias = None;
         let mut joins = Vec::new();
         let mut where_clause = None;
         let mut order_by = None;
@@ -94,8 +95,11 @@ impl Parser {
                 Rule::select_list => {
                     columns = Self::parse_select_list(inner_pair)?;
                 }
-                Rule::identifier => {
-                    from = extract_identifier(&inner_pair);
+                Rule::from_clause => {
+                    // EPIC-052 US-003: FROM with optional alias for Self-JOIN
+                    let (table, alias) = Self::parse_from_clause(inner_pair);
+                    from = table;
+                    from_alias = alias;
                 }
                 Rule::join_clause => {
                     joins.push(Self::parse_join_clause(inner_pair)?);
@@ -132,6 +136,7 @@ impl Parser {
             distinct,
             columns,
             from,
+            from_alias,
             joins,
             where_clause,
             order_by,
@@ -142,6 +147,34 @@ impl Parser {
             having,
             fusion_clause,
         })
+    }
+
+    /// Parse FROM clause with optional alias (EPIC-052 US-003: Self-JOIN support).
+    /// Returns (table_name, optional_alias).
+    fn parse_from_clause(pair: pest::iterators::Pair<Rule>) -> (String, Option<String>) {
+        let mut table = String::new();
+        let mut alias = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    if table.is_empty() {
+                        table = extract_identifier(&inner_pair);
+                    }
+                }
+                Rule::from_alias => {
+                    // Extract alias from from_alias rule
+                    for alias_inner in inner_pair.into_inner() {
+                        if alias_inner.as_rule() == Rule::identifier {
+                            alias = Some(extract_identifier(&alias_inner));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        (table, alias)
     }
 
     pub(crate) fn parse_order_by_clause(
