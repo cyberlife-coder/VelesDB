@@ -587,15 +587,22 @@ impl Parser {
         })
     }
 
-    /// Parse GROUP BY clause.
+    /// Parse GROUP BY clause (EPIC-052 US-005: supports nested paths like metadata.source).
     pub(crate) fn parse_group_by_clause(pair: pest::iterators::Pair<Rule>) -> GroupByClause {
         let mut columns = Vec::new();
 
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::group_by_list {
                 for col_pair in inner_pair.into_inner() {
-                    if col_pair.as_rule() == Rule::identifier {
-                        columns.push(extract_identifier(&col_pair));
+                    if col_pair.as_rule() == Rule::group_by_column {
+                        // group_by_column = { identifier ~ ("." ~ identifier)* }
+                        // Collect all identifier parts and join with dots
+                        let parts: Vec<String> = col_pair
+                            .into_inner()
+                            .filter(|p| p.as_rule() == Rule::identifier)
+                            .map(|p| extract_identifier(&p))
+                            .collect();
+                        columns.push(parts.join("."));
                     }
                 }
             }

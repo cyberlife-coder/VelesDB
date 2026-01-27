@@ -303,3 +303,218 @@ fn test_groupby_limit_protection() {
 
     assert!(result.is_ok());
 }
+
+// ========== EPIC-052 US-005: Nested GROUP BY Tests ==========
+
+#[test]
+fn test_parser_groupby_nested_field() {
+    let query =
+        Parser::parse("SELECT metadata.source, COUNT(*) FROM events GROUP BY metadata.source")
+            .unwrap();
+
+    let group_by = query
+        .select
+        .group_by
+        .as_ref()
+        .expect("GROUP BY should exist");
+    assert_eq!(group_by.columns.len(), 1);
+    assert_eq!(group_by.columns[0], "metadata.source");
+}
+
+#[test]
+fn test_parser_groupby_multiple_nested_fields() {
+    let query = Parser::parse(
+        "SELECT metadata.source, metadata.campaign, COUNT(*) FROM events GROUP BY metadata.source, metadata.campaign"
+    ).unwrap();
+
+    let group_by = query
+        .select
+        .group_by
+        .as_ref()
+        .expect("GROUP BY should exist");
+    assert_eq!(group_by.columns.len(), 2);
+    assert_eq!(group_by.columns[0], "metadata.source");
+    assert_eq!(group_by.columns[1], "metadata.campaign");
+}
+
+#[test]
+fn test_parser_groupby_deep_nested_field() {
+    let query = Parser::parse(
+        "SELECT profile.address.city, COUNT(*) FROM users GROUP BY profile.address.city",
+    )
+    .unwrap();
+
+    let group_by = query
+        .select
+        .group_by
+        .as_ref()
+        .expect("GROUP BY should exist");
+    assert_eq!(group_by.columns.len(), 1);
+    assert_eq!(group_by.columns[0], "profile.address.city");
+}
+
+#[test]
+fn test_executor_groupby_nested_field() {
+    let (collection, _tmp) = create_test_collection();
+
+    // Insert events with nested metadata
+    let points = vec![
+        Point {
+            id: 1,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "type": "click",
+                "metadata": {"source": "web", "campaign": "summer"}
+            })),
+        },
+        Point {
+            id: 2,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "type": "view",
+                "metadata": {"source": "mobile", "campaign": "summer"}
+            })),
+        },
+        Point {
+            id: 3,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "type": "click",
+                "metadata": {"source": "web", "campaign": "winter"}
+            })),
+        },
+        Point {
+            id: 4,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "type": "view",
+                "metadata": {"source": "web", "campaign": "summer"}
+            })),
+        },
+    ];
+    collection.upsert(points).unwrap();
+
+    // GROUP BY nested field metadata.source
+    let query = Parser::parse(
+        "SELECT metadata.source, COUNT(*) as cnt FROM events GROUP BY metadata.source",
+    )
+    .unwrap();
+    let params = HashMap::new();
+    let result = collection.execute_aggregate(&query, &params).unwrap();
+
+    let groups = result.as_array().expect("Result should be array");
+    assert_eq!(groups.len(), 2); // web (3) and mobile (1)
+
+    // Find web group
+    let web_group = groups
+        .iter()
+        .find(|g| g.get("metadata.source") == Some(&serde_json::json!("web")))
+        .expect("web group should exist");
+    assert_eq!(
+        web_group.get("cnt").and_then(serde_json::Value::as_u64),
+        Some(3)
+    );
+
+    // Find mobile group
+    let mobile_group = groups
+        .iter()
+        .find(|g| g.get("metadata.source") == Some(&serde_json::json!("mobile")))
+        .expect("mobile group should exist");
+    assert_eq!(
+        mobile_group.get("cnt").and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+}
+
+#[test]
+fn test_executor_groupby_deep_nested_field() {
+    let (collection, _tmp) = create_test_collection();
+
+    let points = vec![
+        Point {
+            id: 1,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "profile": {"address": {"city": "Paris", "country": "FR"}}
+            })),
+        },
+        Point {
+            id: 2,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "profile": {"address": {"city": "Lyon", "country": "FR"}}
+            })),
+        },
+        Point {
+            id: 3,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({
+                "profile": {"address": {"city": "Paris", "country": "FR"}}
+            })),
+        },
+    ];
+    collection.upsert(points).unwrap();
+
+    let query = Parser::parse(
+        "SELECT profile.address.city, COUNT(*) FROM users GROUP BY profile.address.city",
+    )
+    .unwrap();
+    let params = HashMap::new();
+    let result = collection.execute_aggregate(&query, &params).unwrap();
+
+    let groups = result.as_array().expect("Result should be array");
+    assert_eq!(groups.len(), 2); // Paris (2) and Lyon (1)
+
+    let paris_group = groups
+        .iter()
+        .find(|g| g.get("profile.address.city") == Some(&serde_json::json!("Paris")))
+        .expect("Paris group should exist");
+    assert_eq!(
+        paris_group.get("count").and_then(serde_json::Value::as_u64),
+        Some(2)
+    );
+}
+
+#[test]
+fn test_executor_groupby_nested_null_handling() {
+    let (collection, _tmp) = create_test_collection();
+
+    let points = vec![
+        Point {
+            id: 1,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({"metadata": {"source": "web"}})),
+        },
+        Point {
+            id: 2,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({"metadata": {}})), // No source
+        },
+        Point {
+            id: 3,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({})), // No metadata at all
+        },
+    ];
+    collection.upsert(points).unwrap();
+
+    let query =
+        Parser::parse("SELECT metadata.source, COUNT(*) FROM events GROUP BY metadata.source")
+            .unwrap();
+    let params = HashMap::new();
+    let result = collection.execute_aggregate(&query, &params).unwrap();
+
+    let groups = result.as_array().expect("Result should be array");
+    // Should have 2 groups: "web" and null (for missing metadata.source)
+    assert_eq!(groups.len(), 2);
+
+    // NULL group should contain 2 items (id 2 and 3)
+    let null_group = groups
+        .iter()
+        .find(|g| g.get("metadata.source") == Some(&serde_json::Value::Null))
+        .expect("null group should exist");
+    assert_eq!(
+        null_group.get("count").and_then(serde_json::Value::as_u64),
+        Some(2)
+    );
+}
