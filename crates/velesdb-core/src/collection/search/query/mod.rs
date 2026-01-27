@@ -31,6 +31,8 @@ pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;
 pub mod pushdown;
+#[cfg(test)]
+mod pushdown_tests;
 pub mod score_fusion;
 mod validation;
 
