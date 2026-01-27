@@ -91,10 +91,8 @@ impl Collection {
         // If no relationships in pattern, just return the start nodes
         if pattern.relationships.is_empty() {
             let mut results = Vec::new();
-            for (node_id, bindings) in start_nodes.into_iter().take(limit) {
-                let mut result = MatchResult::new(node_id, 0, Vec::new());
-                result.bindings = bindings;
-
+            // FIX: Apply WHERE filter BEFORE limit to ensure we return up to `limit` matching results
+            for (node_id, bindings) in start_nodes {
                 // Apply WHERE filter if present (EPIC-045 US-002)
                 if let Some(ref where_clause) = match_clause.where_clause {
                     if !self.evaluate_where_condition(node_id, where_clause)? {
@@ -102,7 +100,14 @@ impl Collection {
                     }
                 }
 
+                let mut result = MatchResult::new(node_id, 0, Vec::new());
+                result.bindings = bindings;
                 results.push(result);
+
+                // Check limit AFTER filtering
+                if results.len() >= limit {
+                    break;
+                }
             }
             return Ok(results);
         }
