@@ -12,7 +12,9 @@
 //! - Hybrid search combining vector and text similarity
 //! - Metadata-only collections (no vectors) for reference tables
 //! - Graph collections for knowledge graph storage (nodes, edges, traversal)
+//! - Async operations via `spawn_blocking` (EPIC-034/US-005)
 
+pub mod async_ops;
 pub mod auto_reindex;
 mod core;
 pub mod graph;
