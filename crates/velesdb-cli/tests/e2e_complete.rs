@@ -293,7 +293,7 @@ mod license_commands {
             .arg("show")
             .assert()
             .failure()
-            .stderr(predicate::str::contains("No license"));
+            .stdout(predicate::str::contains("No license"));
     }
 
     #[test]
