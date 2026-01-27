@@ -39,8 +39,9 @@ mod distinct_tests;
 mod error;
 #[cfg(test)]
 mod error_tests;
+#[cfg(feature = "persistence")]
 mod explain;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod explain_tests;
 mod graph_pattern;
 #[cfg(test)]
@@ -94,6 +95,7 @@ pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
+#[cfg(feature = "persistence")]
 pub use explain::{
     FilterPlan, FilterStrategy, IndexLookupPlan, IndexType, LimitPlan, OffsetPlan, PlanNode,
     QueryPlan, TableScanPlan, VectorSearchPlan,

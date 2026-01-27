@@ -23,6 +23,12 @@ pub struct MatchQueryRequest {
     /// Query parameters (e.g., vectors, values).
     #[serde(default)]
     pub params: HashMap<String, serde_json::Value>,
+    /// Query vector for similarity scoring (EPIC-058 US-007).
+    #[serde(default)]
+    pub vector: Option<Vec<f32>>,
+    /// Similarity threshold (0.0 to 1.0, default 0.0).
+    #[serde(default)]
+    pub threshold: Option<f32>,
 }
 
 /// Single result from MATCH query.
@@ -35,6 +41,9 @@ pub struct MatchQueryResultItem {
     pub score: Option<f32>,
     /// Traversal depth.
     pub depth: u32,
+    /// Projected properties from RETURN clause (EPIC-058 US-007).
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub projected: HashMap<String, serde_json::Value>,
 }
 
 /// Response for MATCH query execution.
@@ -113,26 +122,42 @@ pub async fn match_query(
         )
     })?;
 
-    // Execute MATCH query
-    let results = collection
-        .execute_match(&match_clause, &request.params)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(MatchQueryError {
-                    error: format!("Execution error: {}", e),
-                    code: "EXECUTION_ERROR".to_string(),
-                }),
-            )
-        })?;
+    // Execute MATCH query - use similarity variant if vector provided (EPIC-058 US-007)
+    let results = if let Some(ref vector) = request.vector {
+        let threshold = request.threshold.unwrap_or(0.0);
+        collection
+            .execute_match_with_similarity(&match_clause, vector, threshold, &request.params)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(MatchQueryError {
+                        error: format!("Execution error: {}", e),
+                        code: "EXECUTION_ERROR".to_string(),
+                    }),
+                )
+            })?
+    } else {
+        collection
+            .execute_match(&match_clause, &request.params)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(MatchQueryError {
+                        error: format!("Execution error: {}", e),
+                        code: "EXECUTION_ERROR".to_string(),
+                    }),
+                )
+            })?
+    };
 
-    // Convert results
+    // Convert results - include projected properties (EPIC-058 US-007)
     let result_items: Vec<MatchQueryResultItem> = results
         .into_iter()
         .map(|r| MatchQueryResultItem {
             bindings: r.bindings,
             score: r.score,
             depth: r.depth,
+            projected: r.projected,
         })
         .collect();
 
@@ -169,6 +194,7 @@ mod tests {
                 bindings: HashMap::from([("a".to_string(), 123)]),
                 score: Some(0.95),
                 depth: 1,
+                projected: HashMap::new(),
             }],
             took_ms: 15,
             count: 1,
@@ -177,5 +203,26 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("bindings"));
         assert!(json.contains("0.95"));
+    }
+
+    #[test]
+    fn test_match_query_response_with_projected_properties() {
+        let mut projected = HashMap::new();
+        projected.insert("author.name".to_string(), serde_json::json!("John Doe"));
+
+        let response = MatchQueryResponse {
+            results: vec![MatchQueryResultItem {
+                bindings: HashMap::from([("author".to_string(), 42)]),
+                score: Some(0.92),
+                depth: 1,
+                projected,
+            }],
+            took_ms: 10,
+            count: 1,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("John Doe"));
+        assert!(json.contains("author.name"));
     }
 }

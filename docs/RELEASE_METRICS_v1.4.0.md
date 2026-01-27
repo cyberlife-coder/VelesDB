@@ -141,5 +141,5 @@
 
 ---
 
-*Benchmarks run on: Windows 11, AMD Ryzen 9 5900X, 32GB RAM*
+*Benchmarks run on: Windows 11, i9 14900K RTX 4090, 64GB RAM*
 *Rust version: 1.75.0 (stable)*
