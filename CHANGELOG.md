@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multiple corruption stress test
   - All tests verify graceful error handling (no panics, no UB)
 
+- **Storage Format Documentation** (US-003)
+  - `docs/STORAGE_FORMAT.md` - Complete storage format specification
+  - Vector storage: mmap layout, alignment, pre-allocation
+  - Payload storage: append-only log, snapshot format
+  - WAL format: entry types, recovery process
+  - Checksums: CRC32 for snapshot integrity
+  - Versioning and migration strategy
+
 ### �� EPIC-018: Documentation & Examples
 
 #### Added
