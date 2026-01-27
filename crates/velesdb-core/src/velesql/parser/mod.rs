@@ -9,6 +9,8 @@ pub mod match_clause;
 #[cfg(test)]
 mod match_clause_tests;
 #[cfg(test)]
+mod subquery_tests;
+#[cfg(test)]
 mod temporal_tests;
 
 use pest::iterators::Pair;

@@ -652,6 +652,39 @@ pub enum Value {
     Parameter(String),
     /// Temporal function (EPIC-038).
     Temporal(TemporalExpr),
+    /// Scalar subquery (EPIC-039).
+    Subquery(Box<Subquery>),
+}
+
+/// Scalar subquery expression (EPIC-039).
+///
+/// A subquery that returns a single value, used in WHERE comparisons.
+///
+/// # Examples
+/// ```sql
+/// WHERE price < (SELECT AVG(price) FROM products)
+/// WHERE (SELECT COUNT(*) FROM items WHERE order_id = o.id) > 5
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Subquery {
+    /// The SELECT statement of the subquery.
+    pub select: SelectStatement,
+    /// Correlated columns (references to outer query).
+    #[serde(default)]
+    pub correlations: Vec<CorrelatedColumn>,
+}
+
+/// A correlated column reference in a subquery (EPIC-039).
+///
+/// Represents `outer_table.column` references in correlated subqueries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorrelatedColumn {
+    /// Outer query table/alias reference.
+    pub outer_table: String,
+    /// Column name in outer query.
+    pub outer_column: String,
+    /// Column in subquery that references it.
+    pub inner_column: String,
 }
 
 /// Temporal expression for date/time operations (EPIC-038).
