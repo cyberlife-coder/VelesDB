@@ -7,29 +7,169 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 🧹 Code Quality Refactoring
+## [1.4.0] - 2026-01-27
+
+### 🎯 Highlights
+
+This release brings **VelesQL v2.0** with MATCH queries, EXPLAIN plans, multi-score fusion, and parallel graph traversal. The ecosystem is now **100% feature-complete** with VelesQL support propagated to all SDKs.
+
+### 🆕 EPIC-045: VelesQL MATCH Queries
+
+#### Added
+
+- **MATCH Clause for Graph Queries** (US-001-005)
+  - `MATCH (n:Label)-[r:TYPE]->(m)` pattern syntax
+  - Graph pattern matching with relationship filtering
+  - Guard-rails for query complexity limits
+  - Metrics collection for query performance
+
+- **Query Planner** (US-006-008)
+  - Cost-based query optimization
+  - Filter pushdown to reduce data scanned
+  - REST handler: `POST /query/plan`
+  - Documentation in `docs/VELESQL_SPEC.md`
+
+### 🔍 EPIC-046: EXPLAIN Query Plans
+
+#### Added
+
+- **EXPLAIN MATCH** (US-004)
+  - `EXPLAIN SELECT * FROM docs WHERE ...` syntax
+  - Query plan visualization with step breakdown
+  - Cost estimates and optimization hints
+  - REST endpoint: `POST /query/explain`
+
+### 🔀 EPIC-049: Multi-Score Fusion
+
+#### Added
+
+- **Multi-Query Search with Fusion** (US-001, US-004)
+  - RRF (Reciprocal Rank Fusion) - default, robust to score scales
+  - Average/Maximum score fusion
+  - Weighted fusion with configurable weights
+  - `multi_query_search()` API in all SDKs
+
+### ⚡ EPIC-051: Parallel Graph Traversal
+
+#### Added
+
+- **Parallel BFS/DFS** (US-001, US-004)
+  - Rayon-based parallel graph traversal
+  - Configurable parallelism threshold
+  - 2-4x speedup on large graphs
+
+### 📝 EPIC-052: VelesQL Enhancements
+
+#### Added
+
+- **DISTINCT Keyword** (US-001)
+  - `SELECT DISTINCT category FROM docs`
+  
+- **Self-JOIN with FROM Alias** (US-003)
+  - `SELECT * FROM docs d1 JOIN docs d2 ON d1.ref = d2.id`
+  
+- **GROUP BY on Nested JSON Fields** (US-005)
+  - `GROUP BY metadata.author.name`
+  - JsonPath parser for nested field access
+
+### 🌐 EPIC-056: VelesQL SDK Propagation
+
+#### Added
+
+- **Python SDK VelesQL** (US-001-003)
+  - `VelesQL` parser class with `parse()` method
+  - `query_ids()` method for ID-only results
+  - Full VelesQL v2.0 support
+
+- **WASM SDK VelesQL** (US-004-006)
+  - `VelesQL` parser bindings
+  - `ParsedQuery` class with validation
+  - Browser-compatible query parsing
+
+### 🦜 EPIC-057: LangChain/LlamaIndex Completeness
+
+#### Added
+
+- **All 5 Distance Metrics** in both integrations
+  - Cosine, Euclidean, Dot, Hamming, Jaccard
+  
+- **All 3 Storage Modes**
+  - Full, SQ8 (4x compression), Binary (32x compression)
+
+### 🔌 EPIC-058: Server API Completeness
+
+#### Added
+
+- **EXPLAIN Endpoint** (US-002)
+  - `POST /query/explain` for query plan introspection
+  
+- **SSE Streaming Graph Traversal** (US-003)
+  - `POST /collections/{name}/graph/traverse/stream`
+  - Server-Sent Events for large graph results
+  
+- **Column Store Endpoints** (US-004)
+  - `POST /collections/{name}/indexes` - Create property index
+  - `GET /collections/{name}/indexes` - List indexes
+  - `DELETE /collections/{name}/indexes/{field}` - Delete index
+
+### 💻 EPIC-059: CLI & Examples Refresh
+
+#### Added
+
+- **Multi-Query Search CLI** (US-001)
+  - `velesdb multi-search` with fusion strategies
+  
+- **DFS Traverse CLI** (US-002)
+  - `velesdb graph traverse --strategy dfs`
+  
+- **Fusion Strategy Flags** (US-003)
+  - `--strategy rrf|average|maximum|weighted`
+  - `--rrf-k 60` parameter
+  
+- **Python Examples** (US-005-006)
+  - `examples/python/fusion_strategies.py`
+  - `examples/python/graph_traversal.py`
+
+### 🧪 EPIC-060: Complete E2E Test Coverage
+
+#### Added
+
+- **E2E Tests for All Components**
+  - WASM: `velesql.spec.ts`, `fusion.spec.ts` (Playwright)
+  - Python SDK: `test_e2e_complete.py`
+  - LangChain: `test_e2e_complete.py`
+  - LlamaIndex: `test_e2e_complete.py`
+  - CLI: `e2e_complete.rs`
+  - Core: 2,700+ tests passing
+
+### ⚡ Performance Improvements
 
 #### Changed
 
-- **Test Isolation Refactor** (2026-01-27)
+- **SIMD Optimizations** (EPIC-PERF-001/002)
+  - Newton-Raphson rsqrt for faster normalization
+  - AVX-512 masked loads for partial vectors
+  - ~15% speedup on cosine similarity
+
+### 🧹 Code Quality
+
+#### Changed
+
+- **Test Isolation Refactor**
   - Extracted 27 inline test modules to separate `*_tests.rs` files
   - Removed ~4,500 lines of inline tests from production code
-  - Compliance with project rule: tests must be in separate files
-  - Files affected: simd_native, explain, batch, guardrails, join, 
-    parallel_traversal, planner, lockfree, native_index, traversal,
-    conversion, streaming, match_exec, pushdown, score_fusion, json_path,
-    hybrid, aggregator, extraction, match_planner, match_metrics,
-    vector_ref, bloom, sharded_index, native_inner, label_table, async_ops
+  - Compliance with project rule: tests in separate files
 
-### 📊 Ecosystem Sync Documentation
+### 📊 Ecosystem Sync
 
 #### Added
 
 - **Ecosystem Sync Report** (`docs/ecosystem-sync.md`)
-  - Comprehensive feature parity audit: Core ↔ SDKs/Integrations
+  - Feature parity audit: Core ↔ SDKs/Integrations
   - Gap analysis for all 10+ ecosystem components
-  - Priority actions for feature propagation
   - Version compatibility matrix
+
+---
 
 ### 🔒 EPIC-022: Unsafe Auditability
 
