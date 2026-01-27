@@ -97,6 +97,8 @@ pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
 pub mod guardrails;
+#[cfg(test)]
+mod guardrails_tests;
 pub mod half_precision;
 #[cfg(test)]
 mod half_precision_tests;
