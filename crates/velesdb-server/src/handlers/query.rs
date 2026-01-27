@@ -4,11 +4,12 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 
 use crate::types::{
-    AggregationResponse, ErrorResponse, QueryErrorDetail, QueryErrorResponse, QueryRequest,
+    AggregationResponse, ErrorResponse, ExplainCost, ExplainFeatures, ExplainRequest,
+    ExplainResponse, ExplainStep, QueryErrorDetail, QueryErrorResponse, QueryRequest,
     QueryResponse, SearchResultResponse,
 };
 use crate::AppState;
-use velesdb_core::velesql::{self, SelectColumns};
+use velesdb_core::velesql::{self, Condition, SelectColumns};
 
 /// Execute a VelesQL query.
 ///
@@ -121,4 +122,223 @@ pub async fn query(
         rows_returned,
     })
     .into_response()
+}
+
+/// Explain a VelesQL query without executing it (EPIC-058 US-002).
+///
+/// Returns the query plan, estimated costs, and detected features.
+#[allow(clippy::too_many_lines)]
+#[utoipa::path(
+    post,
+    path = "/query/explain",
+    tag = "query",
+    request_body = ExplainRequest,
+    responses(
+        (status = 200, description = "Query plan", body = ExplainResponse),
+        (status = 400, description = "Query syntax error", body = QueryErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn explain(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ExplainRequest>,
+) -> impl IntoResponse {
+    // Parse the query
+    let parsed = match velesql::Parser::parse(&req.query) {
+        Ok(q) => q,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(QueryErrorResponse {
+                    error: QueryErrorDetail {
+                        error_type: format!("{:?}", e.kind),
+                        message: e.message.clone(),
+                        position: e.position,
+                        query: e.fragment.clone(),
+                    },
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let select = &parsed.select;
+
+    // Check collection exists
+    let collection_exists = state.db.get_collection(&select.from).is_some();
+    if !collection_exists && !select.from.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{}' not found", select.from),
+            }),
+        )
+            .into_response();
+    }
+
+    // Detect query features
+    let has_vector_search = select
+        .where_clause
+        .as_ref()
+        .map(condition_has_vector_search)
+        .unwrap_or(false);
+
+    let has_filter = select.where_clause.is_some() && !has_vector_search;
+
+    let has_aggregation = matches!(
+        &select.columns,
+        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
+    );
+
+    let features = ExplainFeatures {
+        has_vector_search,
+        has_filter,
+        has_order_by: select.order_by.is_some(),
+        has_group_by: select.group_by.is_some(),
+        has_aggregation,
+        has_join: !select.joins.is_empty(),
+        has_fusion: select.fusion_clause.is_some(),
+        limit: select.limit,
+        offset: select.offset,
+    };
+
+    // Build execution plan
+    let mut plan = Vec::new();
+    let mut step_num = 1;
+
+    // Step 1: Source scan or vector search
+    if has_vector_search {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "VectorSearch".to_string(),
+            description: "ANN search using HNSW index with NEAR clause".to_string(),
+            estimated_rows: select.limit.map(|l| l as usize),
+        });
+    } else {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "FullScan".to_string(),
+            description: format!("Scan collection '{}'", select.from),
+            estimated_rows: None,
+        });
+    }
+    step_num += 1;
+
+    // Step 2: Filter (if present and not just vector search)
+    if has_filter {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "Filter".to_string(),
+            description: "Apply WHERE clause predicates".to_string(),
+            estimated_rows: None,
+        });
+        step_num += 1;
+    }
+
+    // Step 3: JOIN (if present)
+    if !select.joins.is_empty() {
+        for join in &select.joins {
+            plan.push(ExplainStep {
+                step: step_num,
+                operation: format!("{:?}Join", join.join_type),
+                description: format!("Join with '{}'", join.table),
+                estimated_rows: None,
+            });
+            step_num += 1;
+        }
+    }
+
+    // Step 4: GROUP BY (if present)
+    if select.group_by.is_some() {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "GroupBy".to_string(),
+            description: "Group rows by specified columns".to_string(),
+            estimated_rows: None,
+        });
+        step_num += 1;
+    }
+
+    // Step 5: Aggregation (if present)
+    if has_aggregation {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "Aggregate".to_string(),
+            description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
+            estimated_rows: None,
+        });
+        step_num += 1;
+    }
+
+    // Step 6: ORDER BY (if present)
+    if select.order_by.is_some() {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "Sort".to_string(),
+            description: "Sort results by ORDER BY clause".to_string(),
+            estimated_rows: None,
+        });
+        step_num += 1;
+    }
+
+    // Step 7: LIMIT/OFFSET (if present)
+    if select.limit.is_some() || select.offset.is_some() {
+        plan.push(ExplainStep {
+            step: step_num,
+            operation: "Limit".to_string(),
+            description: format!(
+                "Apply LIMIT {} OFFSET {}",
+                select.limit.unwrap_or(0),
+                select.offset.unwrap_or(0)
+            ),
+            estimated_rows: select.limit.map(|l| l as usize),
+        });
+    }
+
+    // Estimate cost
+    let complexity = if has_vector_search {
+        "O(log n)"
+    } else {
+        "O(n)"
+    };
+
+    let estimated_cost = ExplainCost {
+        uses_index: has_vector_search,
+        index_name: if has_vector_search {
+            Some("HNSW".to_string())
+        } else {
+            None
+        },
+        selectivity: if has_vector_search { 0.01 } else { 1.0 },
+        complexity: complexity.to_string(),
+    };
+
+    let query_type = if parsed.is_match_query() {
+        "MATCH"
+    } else {
+        "SELECT"
+    };
+
+    Json(ExplainResponse {
+        query: req.query,
+        query_type: query_type.to_string(),
+        collection: select.from.clone(),
+        plan,
+        estimated_cost,
+        features,
+    })
+    .into_response()
+}
+
+/// Check if a condition contains vector search.
+fn condition_has_vector_search(cond: &Condition) -> bool {
+    match cond {
+        Condition::VectorSearch(_) | Condition::VectorFusedSearch { .. } => true,
+        Condition::And(left, right) | Condition::Or(left, right) => {
+            condition_has_vector_search(left) || condition_has_vector_search(right)
+        }
+        Condition::Group(inner) | Condition::Not(inner) => condition_has_vector_search(inner),
+        _ => false,
+    }
 }

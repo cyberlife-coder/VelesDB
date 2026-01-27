@@ -304,6 +304,88 @@ pub struct QueryErrorResponse {
     pub error: QueryErrorDetail,
 }
 
+// ============================================================================
+// EXPLAIN Types (EPIC-058 US-002)
+// ============================================================================
+
+/// Request for query EXPLAIN.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ExplainRequest {
+    /// The `VelesQL` query string to explain.
+    #[schema(example = "SELECT * FROM docs WHERE category = 'tech' AND vector NEAR $v LIMIT 10")]
+    pub query: String,
+    /// Named parameters for the query (optional, used for validation).
+    #[serde(default)]
+    pub params: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Response from query EXPLAIN.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExplainResponse {
+    /// The original query.
+    pub query: String,
+    /// Query type (SELECT, MATCH, etc.).
+    pub query_type: String,
+    /// Target collection name.
+    pub collection: String,
+    /// Query plan steps.
+    pub plan: Vec<ExplainStep>,
+    /// Estimated cost metrics.
+    pub estimated_cost: ExplainCost,
+    /// Query features detected.
+    pub features: ExplainFeatures,
+}
+
+/// A step in the query execution plan.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExplainStep {
+    /// Step number (1-indexed).
+    pub step: usize,
+    /// Operation type (e.g., "VectorSearch", "Filter", "Sort").
+    pub operation: String,
+    /// Description of what this step does.
+    pub description: String,
+    /// Estimated rows processed/produced.
+    pub estimated_rows: Option<usize>,
+}
+
+/// Estimated cost metrics for the query.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExplainCost {
+    /// Whether an index can be used.
+    pub uses_index: bool,
+    /// Index name if used.
+    pub index_name: Option<String>,
+    /// Estimated selectivity (0.0 - 1.0).
+    pub selectivity: f64,
+    /// Estimated complexity class.
+    pub complexity: String,
+}
+
+/// Features detected in the query.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExplainFeatures {
+    /// Has vector search (NEAR clause).
+    pub has_vector_search: bool,
+    /// Has metadata filter (WHERE without NEAR).
+    pub has_filter: bool,
+    /// Has ORDER BY clause.
+    pub has_order_by: bool,
+    /// Has GROUP BY clause.
+    pub has_group_by: bool,
+    /// Has aggregation functions.
+    pub has_aggregation: bool,
+    /// Has JOIN clause.
+    pub has_join: bool,
+    /// Has FUSION clause.
+    pub has_fusion: bool,
+    /// LIMIT value if present.
+    pub limit: Option<u64>,
+    /// OFFSET value if present.
+    pub offset: Option<u64>,
+}
+
 /// VelesQL query error detail.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct QueryErrorDetail {
