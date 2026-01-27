@@ -15,6 +15,8 @@
 //! 3. `LruCache.inner` (RwLock)
 
 mod bloom;
+#[cfg(test)]
+mod bloom_tests;
 mod lockfree;
 #[cfg(test)]
 mod lockfree_tests;
