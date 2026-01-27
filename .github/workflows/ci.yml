@@ -131,9 +131,7 @@ jobs:
     name: Python Integrations
     runs-on: ubuntu-latest
     needs: test
-    if: |
-      github.event_name == 'push' && github.ref == 'refs/heads/main' ||
-      contains(github.event.pull_request.changed_files, 'integrations/')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -183,6 +181,7 @@ jobs:
             --lcov --output-path lcov.info
 
       - uses: codecov/codecov-action@v4
+        continue-on-error: true
         with:
           files: lcov.info
           fail_ci_if_error: false
