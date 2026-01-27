@@ -27,6 +27,8 @@ pub mod match_exec;
 #[cfg(test)]
 mod match_exec_tests;
 pub mod match_metrics;
+#[cfg(test)]
+mod match_metrics_tests;
 pub mod match_planner;
 #[cfg(test)]
 mod match_planner_tests;
