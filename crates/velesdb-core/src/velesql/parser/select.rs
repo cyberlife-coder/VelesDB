@@ -72,6 +72,7 @@ impl Parser {
     pub(crate) fn parse_select_stmt(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<SelectStatement, ParseError> {
+        let mut distinct = crate::velesql::DistinctMode::None;
         let mut columns = SelectColumns::All;
         let mut from = String::new();
         let mut joins = Vec::new();
@@ -86,6 +87,10 @@ impl Parser {
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
+                Rule::distinct_modifier => {
+                    // EPIC-052 US-001: DISTINCT keyword
+                    distinct = crate::velesql::DistinctMode::All;
+                }
                 Rule::select_list => {
                     columns = Self::parse_select_list(inner_pair)?;
                 }
@@ -124,6 +129,7 @@ impl Parser {
         }
 
         Ok(SelectStatement {
+            distinct,
             columns,
             from,
             joins,

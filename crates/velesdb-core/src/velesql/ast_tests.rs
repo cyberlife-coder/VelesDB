@@ -45,6 +45,7 @@ fn test_query_serialization() {
     let query = Query {
         compound: None,
         select: SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: "documents".to_string(),
             joins: vec![],

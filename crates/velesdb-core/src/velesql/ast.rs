@@ -36,9 +36,22 @@ pub struct CompoundQuery {
     pub right: Box<SelectStatement>,
 }
 
+/// DISTINCT mode for SELECT queries (EPIC-052 US-001).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub enum DistinctMode {
+    /// No deduplication.
+    #[default]
+    None,
+    /// DISTINCT - deduplicate by all selected columns.
+    All,
+}
+
 /// A SELECT statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectStatement {
+    /// DISTINCT mode (EPIC-052 US-001).
+    #[serde(default)]
+    pub distinct: DistinctMode,
     /// Columns to select.
     pub columns: SelectColumns,
     /// Collection name (FROM clause).

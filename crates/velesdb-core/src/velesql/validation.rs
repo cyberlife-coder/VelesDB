@@ -339,6 +339,7 @@ mod tests {
     fn make_query(where_clause: Option<Condition>) -> Query {
         Query {
             select: SelectStatement {
+                distinct: crate::velesql::DistinctMode::None,
                 columns: SelectColumns::All,
                 from: "test".to_string(),
                 joins: vec![],

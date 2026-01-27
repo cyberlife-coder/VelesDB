@@ -319,6 +319,7 @@ impl Parser {
         }
 
         let select = SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns,
             from,
             joins: Vec::new(),

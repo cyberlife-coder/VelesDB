@@ -10,6 +10,7 @@ use super::explain::*;
 fn test_plan_from_simple_select() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
         joins: vec![],
@@ -36,6 +37,7 @@ fn test_plan_from_simple_select() {
 fn test_plan_from_vector_search() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "embeddings".to_string(),
         joins: vec![],
@@ -63,6 +65,7 @@ fn test_plan_from_vector_search() {
 fn test_plan_with_filter() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
         joins: vec![],
@@ -97,6 +100,7 @@ fn test_plan_with_filter() {
 fn test_plan_to_tree_format() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
         joins: vec![],
@@ -127,6 +131,7 @@ fn test_plan_to_tree_format() {
 fn test_plan_to_json() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
         joins: vec![],
@@ -153,6 +158,7 @@ fn test_plan_to_json() {
 fn test_plan_with_offset() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "items".to_string(),
         joins: vec![],
@@ -179,6 +185,7 @@ fn test_plan_with_offset() {
 fn test_filter_strategy_post_filter_default() {
     // Arrange: Single filter condition = 50% selectivity = post-filter
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
         joins: vec![],
@@ -229,6 +236,7 @@ fn test_compare_op_as_str() {
 fn test_plan_display_impl() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
         joins: vec![],
