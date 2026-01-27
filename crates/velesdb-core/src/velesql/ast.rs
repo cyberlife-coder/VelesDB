@@ -5,13 +5,67 @@
 use serde::{Deserialize, Serialize};
 
 /// A complete `VelesQL` query.
+///
+/// Supports both SELECT queries and MATCH queries (EPIC-045).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
-    /// The SELECT statement.
+    /// The SELECT statement (for SELECT queries).
     pub select: SelectStatement,
     /// Compound query (UNION/INTERSECT/EXCEPT) - EPIC-040 US-006.
     #[serde(default)]
     pub compound: Option<CompoundQuery>,
+    /// MATCH clause for graph pattern matching (EPIC-045 US-001).
+    /// When present, this is a MATCH query; `select` contains derived fields.
+    #[serde(default)]
+    pub match_clause: Option<crate::velesql::MatchClause>,
+}
+
+impl Query {
+    /// Returns true if this is a MATCH query (graph pattern matching).
+    #[must_use]
+    pub fn is_match_query(&self) -> bool {
+        self.match_clause.is_some()
+    }
+
+    /// Returns true if this is a SELECT query.
+    #[must_use]
+    pub fn is_select_query(&self) -> bool {
+        self.match_clause.is_none()
+    }
+
+    /// Creates a new SELECT query.
+    #[must_use]
+    pub fn new_select(select: SelectStatement) -> Self {
+        Self {
+            select,
+            compound: None,
+            match_clause: None,
+        }
+    }
+
+    /// Creates a new MATCH query (EPIC-045).
+    #[must_use]
+    pub fn new_match(match_clause: crate::velesql::MatchClause) -> Self {
+        // Create a minimal SelectStatement for compatibility
+        let select = SelectStatement {
+            columns: SelectColumns::All,
+            from: String::new(), // Will be derived from graph pattern
+            joins: Vec::new(),
+            where_clause: match_clause.where_clause.clone(),
+            order_by: None, // TODO: Convert from ReturnClause
+            limit: match_clause.return_clause.limit,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        };
+        Self {
+            select,
+            compound: None,
+            match_clause: Some(match_clause),
+        }
+    }
 }
 
 /// SQL set operator for compound queries (EPIC-040 US-006).

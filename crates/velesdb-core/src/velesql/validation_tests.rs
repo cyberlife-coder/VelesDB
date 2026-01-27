@@ -233,6 +233,7 @@ fn create_query_with_multiple_similarity() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -268,6 +269,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -296,6 +298,7 @@ fn create_query_with_single_similarity() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -329,6 +332,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -362,6 +366,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -390,6 +395,7 @@ fn create_query_with_not_similarity() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -411,6 +417,7 @@ fn create_simple_query() -> Query {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     }
 }
 
@@ -448,6 +455,7 @@ fn test_validate_vector_search_near_with_or_detected() {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     };
 
     // Should detect multiple vector search with OR
@@ -488,6 +496,7 @@ fn test_validate_vector_search_or_now_passes() {
             fusion_clause: None,
         },
         compound: None,
+        match_clause: None,
     };
 
     // EPIC-044 US-002: NEAR OR metadata is now supported
@@ -550,6 +559,7 @@ fn test_validate_compound_query_where_clause() {
                 fusion_clause: None,
             }),
         }),
+        match_clause: None,
     };
 
     // Should detect multiple similarity in OR in compound query
