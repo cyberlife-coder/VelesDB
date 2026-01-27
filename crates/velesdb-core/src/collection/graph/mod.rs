@@ -44,6 +44,8 @@ mod property_index;
 mod range_index;
 mod schema;
 mod streaming;
+#[cfg(test)]
+mod streaming_tests;
 mod traversal;
 #[cfg(test)]
 mod traversal_tests;
