@@ -10,15 +10,18 @@
 
 mod handlers;
 mod service;
+mod stream;
 mod types;
 
 // Re-export public API
 pub use handlers::{add_edge, get_edges, get_node_degree, traverse_graph};
 pub use service::GraphService;
+pub use stream::stream_traverse;
 #[allow(unused_imports)]
 pub use types::{
-    AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse,
-    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse, StreamDoneEvent,
+    StreamErrorEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams, TraversalResultItem,
+    TraversalStats, TraverseRequest, TraverseResponse,
 };
 
 #[cfg(test)]

@@ -63,6 +63,7 @@ use tauri::{
 
 pub mod commands;
 pub mod error;
+pub mod events;
 pub mod helpers;
 pub mod state;
 pub mod types;
@@ -320,6 +321,11 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             // AgentMemory commands (EPIC-016 US-003)
             commands::semantic_store,
             commands::semantic_query,
+            // Knowledge Graph commands (EPIC-015 US-001)
+            commands::add_edge,
+            commands::get_edges,
+            commands::traverse_graph,
+            commands::get_node_degree,
         ])
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());

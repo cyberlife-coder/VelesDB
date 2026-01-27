@@ -1,6 +1,6 @@
 //! Collection types and configuration.
 
-use crate::collection::graph::{GraphSchema, PropertyIndex, RangeIndex};
+use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
 use crate::distance::DistanceMetric;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
@@ -159,6 +159,9 @@ pub struct Collection {
 
     /// Range index for O(log n) range queries on graph nodes (EPIC-009).
     pub(super) range_index: Arc<RwLock<RangeIndex>>,
+
+    /// Edge store for knowledge graph relationships (EPIC-015).
+    pub(super) edge_store: Arc<RwLock<EdgeStore>>,
 }
 
 impl Collection {

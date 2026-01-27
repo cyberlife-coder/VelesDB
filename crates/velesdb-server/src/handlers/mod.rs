@@ -14,6 +14,7 @@ pub mod collections;
 pub mod graph;
 pub mod health;
 pub mod indexes;
+pub mod match_query;
 pub mod points;
 pub mod query;
 pub mod search;
@@ -25,7 +26,10 @@ pub use collections::{create_collection, delete_collection, get_collection, list
 pub use health::health_check;
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{delete_point, get_point, upsert_points};
-pub use query::query;
+// match_query handler available but not yet wired to routes
+#[allow(unused_imports)]
+pub use match_query::match_query;
+pub use query::{explain, query};
 pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
 
 // Graph handlers (EPIC-016) - exported via lib.rs

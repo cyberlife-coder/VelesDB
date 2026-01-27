@@ -54,6 +54,8 @@
 #![allow(clippy::doc_markdown)]
 // Code style preferences
 #![allow(clippy::single_match_else)]
+// Allow large stack arrays in tests (SIMD benchmarks use large test vectors)
+#![allow(clippy::large_stack_arrays)]
 #![allow(clippy::manual_let_else)]
 #![allow(clippy::unused_self)]
 #![allow(clippy::uninlined_format_args)]
@@ -96,6 +98,9 @@ pub mod fusion;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
+pub mod guardrails;
+#[cfg(test)]
+mod guardrails_tests;
 pub mod half_precision;
 #[cfg(test)]
 mod half_precision_tests;
@@ -129,13 +134,15 @@ mod simd_native_tests;
 mod simd_tests;
 pub mod storage;
 pub mod vector_ref;
+#[cfg(test)]
+mod vector_ref_tests;
 pub mod velesql;
 
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 pub use collection::{
     Collection, CollectionType, ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge,
-    GraphNode, GraphSchema, NodeType, ValueType,
+    GraphNode, GraphSchema, IndexInfo, NodeType, TraversalResult, ValueType,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};

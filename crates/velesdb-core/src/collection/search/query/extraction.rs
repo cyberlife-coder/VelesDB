@@ -225,3 +225,5 @@ impl Collection {
         metric.calculate(a, b)
     }
 }
+
+// Tests moved to extraction_tests.rs per project rules

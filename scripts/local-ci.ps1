@@ -4,18 +4,20 @@
 # Ce script reproduit les vérifications CI en local AVANT tout push vers origin.
 # Objectif: Réduire les coûts GitHub Actions en validant localement.
 #
-# Usage: .\scripts\local-ci.ps1 [-Quick] [-SkipTests] [-SkipSecurity]
+# Usage: .\scripts\local-ci.ps1 [-Quick] [-SkipTests] [-SkipSecurity] [-Miri]
 #
 # Options:
 #   -Quick       : Mode rapide (fmt + clippy uniquement)
 #   -SkipTests   : Sauter les tests
 #   -SkipSecurity: Sauter l'audit de sécurité
+#   -Miri        : Activer les tests Miri (EPIC-032/US-004, nécessite nightly)
 # =============================================================================
 
 param(
     [switch]$Quick,
     [switch]$SkipTests,
-    [switch]$SkipSecurity
+    [switch]$SkipSecurity,
+    [switch]$Miri
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,9 +100,46 @@ if ($Quick) {
     }
 
     # ============================================================================
-    # Check 5: File size validation
+    # Check 5: Miri (optional, EPIC-032/US-004)
     # ============================================================================
-    Write-Step "Check 5/5: File size validation (< 500 lines)"
+    if ($Miri) {
+        Write-Step "Check 5/6: Miri - Undefined Behavior Detection"
+        try {
+            # Check if nightly is available
+            $nightlyCheck = rustup run nightly rustc --version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                # Install miri if not present
+                rustup run nightly cargo miri --version 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "   Installing Miri..." -ForegroundColor Yellow
+                    rustup +nightly component add miri 2>&1 | Out-Host
+                }
+                # Run miri on core crate (limited scope for speed)
+                Write-Host "   Running Miri on velesdb-core (unsafe code audit)..." -ForegroundColor Cyan
+                Push-Location crates/velesdb-core
+                try {
+                    cargo +nightly miri test --lib -- --test-threads=1 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) { throw "Miri found UB" }
+                    Write-Success "Miri OK - No undefined behavior detected"
+                } finally {
+                    Pop-Location
+                }
+            } else {
+                Write-Warn "Nightly toolchain not installed - skipping Miri"
+                Write-Host "   Install with: rustup toolchain install nightly" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Fail "Miri detected undefined behavior!"
+            $errors += "Miri"
+        }
+    } else {
+        Write-Warn "Skipping Miri (use -Miri flag to enable)"
+    }
+
+    # ============================================================================
+    # Check 6: File size validation
+    # ============================================================================
+    Write-Step "Check 6/6: File size validation (< 500 lines)"
     $largeFiles = Get-ChildItem -Path "crates" -Recurse -Filter "*.rs" | 
         Where-Object { (Get-Content $_.FullName | Measure-Object -Line).Lines -gt 500 } |
         Select-Object FullName, @{N='Lines';E={(Get-Content $_.FullName | Measure-Object -Line).Lines}}

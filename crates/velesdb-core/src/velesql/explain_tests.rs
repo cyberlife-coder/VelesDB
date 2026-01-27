@@ -10,8 +10,10 @@ use super::explain::*;
 fn test_plan_from_simple_select() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -36,8 +38,10 @@ fn test_plan_from_simple_select() {
 fn test_plan_from_vector_search() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "embeddings".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("query".to_string()),
@@ -63,8 +67,10 @@ fn test_plan_from_vector_search() {
 fn test_plan_with_filter() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
@@ -97,8 +103,10 @@ fn test_plan_with_filter() {
 fn test_plan_to_tree_format() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "documents".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::VectorSearch(VsCondition {
             vector: VectorExpr::Parameter("q".to_string()),
@@ -127,8 +135,10 @@ fn test_plan_to_tree_format() {
 fn test_plan_to_json() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -153,8 +163,10 @@ fn test_plan_to_json() {
 fn test_plan_with_offset() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "items".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -179,8 +191,10 @@ fn test_plan_with_offset() {
 fn test_filter_strategy_post_filter_default() {
     // Arrange: Single filter condition = 50% selectivity = post-filter
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "docs".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: Some(Condition::And(
             Box::new(Condition::VectorSearch(VsCondition {
@@ -229,8 +243,10 @@ fn test_compare_op_as_str() {
 fn test_plan_display_impl() {
     // Arrange
     let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
         columns: SelectColumns::All,
         from: "test".to_string(),
+        from_alias: None,
         joins: vec![],
         where_clause: None,
         order_by: None,
@@ -346,4 +362,172 @@ fn test_index_lookup_json_serialization() {
     assert!(json.contains("Document"));
     assert!(json.contains("category"));
     assert!(json.contains("tech"));
+}
+
+// =========================================================================
+// EPIC-046 US-004: EXPLAIN MATCH tests (migrated from inline)
+// =========================================================================
+
+#[test]
+fn test_match_traversal_plan_node() {
+    let mt = MatchTraversalPlan {
+        strategy: "GraphFirst: Traverse from nodes with labels [Person], max depth 3".to_string(),
+        start_labels: vec!["Person".to_string()],
+        max_depth: 3,
+        relationship_count: 2,
+        has_similarity: false,
+        similarity_threshold: None,
+    };
+
+    let cost = QueryPlan::node_cost(&PlanNode::MatchTraversal(mt.clone()));
+    assert!(cost > 0.1);
+    assert!(cost < 1.0);
+}
+
+#[test]
+fn test_render_match_traversal() {
+    let mt = PlanNode::MatchTraversal(MatchTraversalPlan {
+        strategy: "GraphFirst: max depth 2".to_string(),
+        start_labels: vec!["Document".to_string()],
+        max_depth: 2,
+        relationship_count: 1,
+        has_similarity: false,
+        similarity_threshold: None,
+    });
+
+    let mut output = String::new();
+    QueryPlan::render_node(&mt, &mut output, "", true);
+    assert!(output.contains("MatchTraversal"));
+    assert!(output.contains("GraphFirst"));
+    assert!(output.contains("Document"));
+    assert!(output.contains("Max Depth: 2"));
+}
+
+#[test]
+fn test_render_match_traversal_with_similarity() {
+    let mt = PlanNode::MatchTraversal(MatchTraversalPlan {
+        strategy: "VectorFirst: top-100 candidates".to_string(),
+        start_labels: vec![],
+        max_depth: 1,
+        relationship_count: 0,
+        has_similarity: true,
+        similarity_threshold: Some(0.85),
+    });
+
+    let mut output = String::new();
+    QueryPlan::render_node(&mt, &mut output, "", true);
+    assert!(output.contains("MatchTraversal"));
+    assert!(output.contains("VectorFirst"));
+    assert!(output.contains("Similarity Threshold: 0.85"));
+}
+
+#[test]
+fn test_match_traversal_cost_with_depth() {
+    let shallow = MatchTraversalPlan {
+        strategy: "GraphFirst".to_string(),
+        start_labels: vec![],
+        max_depth: 1,
+        relationship_count: 1,
+        has_similarity: false,
+        similarity_threshold: None,
+    };
+
+    let deep = MatchTraversalPlan {
+        strategy: "GraphFirst".to_string(),
+        start_labels: vec![],
+        max_depth: 5,
+        relationship_count: 5,
+        has_similarity: false,
+        similarity_threshold: None,
+    };
+
+    let shallow_cost = QueryPlan::node_cost(&PlanNode::MatchTraversal(shallow));
+    let deep_cost = QueryPlan::node_cost(&PlanNode::MatchTraversal(deep));
+
+    assert!(deep_cost > shallow_cost);
+}
+
+#[test]
+fn test_explain_output_struct() {
+    let plan = QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "test".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+    };
+
+    let output = ExplainOutput {
+        plan,
+        actual_stats: Some(ActualStats {
+            actual_rows: 100,
+            actual_time_ms: 0.5,
+            loops: 1,
+            nodes_visited: 50,
+            edges_traversed: 25,
+        }),
+    };
+
+    assert_eq!(output.actual_stats.as_ref().unwrap().actual_rows, 100);
+    assert!(output.actual_stats.as_ref().unwrap().actual_time_ms < 1.0);
+}
+
+#[test]
+fn test_filter_strategy_default() {
+    let strategy = FilterStrategy::default();
+    assert_eq!(strategy, FilterStrategy::None);
+}
+
+#[test]
+fn test_filter_strategy_as_str() {
+    assert_eq!(FilterStrategy::None.as_str(), "none");
+    assert_eq!(
+        FilterStrategy::PreFilter.as_str(),
+        "pre-filtering (high selectivity)"
+    );
+    assert_eq!(
+        FilterStrategy::PostFilter.as_str(),
+        "post-filtering (low selectivity)"
+    );
+}
+
+#[test]
+fn test_node_cost_calculations() {
+    let vs_plan = VectorSearchPlan {
+        collection: "test".to_string(),
+        ef_search: 100,
+        candidates: 50,
+    };
+    let vs_cost = QueryPlan::node_cost(&PlanNode::VectorSearch(vs_plan));
+    assert!((vs_cost - 0.05).abs() < 1e-5);
+
+    let limit_cost = QueryPlan::node_cost(&PlanNode::Limit(LimitPlan { count: 10 }));
+    assert!((limit_cost - 0.001).abs() < 1e-5);
+
+    let ts_cost = QueryPlan::node_cost(&PlanNode::TableScan(TableScanPlan {
+        collection: "test".to_string(),
+    }));
+    assert!((ts_cost - 1.0).abs() < 1e-5);
+
+    let il_cost = QueryPlan::node_cost(&PlanNode::IndexLookup(IndexLookupPlan {
+        label: "Person".to_string(),
+        property: "id".to_string(),
+        value: "123".to_string(),
+    }));
+    assert!((il_cost - 0.0001).abs() < 1e-6);
+}
+
+#[test]
+fn test_estimate_selectivity() {
+    let empty: Vec<String> = vec![];
+    let one = vec!["a = ?".to_string()];
+    let two = vec!["a = ?".to_string(), "b = ?".to_string()];
+
+    let s0 = QueryPlan::estimate_selectivity(&empty);
+    let s1 = QueryPlan::estimate_selectivity(&one);
+    let s2 = QueryPlan::estimate_selectivity(&two);
+
+    assert!(s0 > s1);
+    assert!(s1 > s2);
 }

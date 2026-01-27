@@ -24,6 +24,8 @@ mod aggregation_executor_tests;
 #[cfg(test)]
 mod aggregation_tests;
 mod aggregator;
+#[cfg(test)]
+mod aggregator_tests;
 mod ast;
 #[cfg(test)]
 mod ast_tests;
@@ -32,6 +34,8 @@ mod cache;
 mod cache_tests;
 #[cfg(test)]
 mod complex_parser_tests;
+#[cfg(test)]
+mod distinct_tests;
 mod error;
 #[cfg(test)]
 mod error_tests;
@@ -45,8 +49,14 @@ mod graph_pattern_tests;
 mod groupby_tests;
 #[cfg(test)]
 mod having_tests;
+mod hybrid;
+#[cfg(test)]
+mod hybrid_tests;
 #[cfg(test)]
 mod join_extended_tests;
+pub mod json_path;
+#[cfg(test)]
+mod json_path_tests;
 #[cfg(test)]
 mod orderby_multi_tests;
 #[cfg(test)]
@@ -55,6 +65,8 @@ mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
+#[cfg(test)]
+mod planner_tests;
 mod validation;
 #[cfg(test)]
 mod validation_tests;
@@ -65,6 +77,8 @@ mod aggregation_params_tests;
 mod fusion_clause_tests;
 #[cfg(test)]
 mod pr_review_bugfix_tests;
+#[cfg(test)]
+mod self_join_tests;
 #[cfg(test)]
 mod set_operations_tests;
 #[cfg(test)]

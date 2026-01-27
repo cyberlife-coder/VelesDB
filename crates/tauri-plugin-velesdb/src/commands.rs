@@ -2,6 +2,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
+use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
 use crate::helpers::{
     metric_to_string, parse_fusion_strategy, parse_metric, parse_storage_mode,
     storage_mode_to_string,
@@ -11,17 +12,19 @@ pub use crate::types::{
     default_fusion, default_metric, default_storage_mode, default_top_k, default_vector_weight,
 };
 use crate::types::{
-    BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
-    DeletePointsRequest, GetPointsRequest, HybridResult, HybridSearchRequest,
-    MultiQuerySearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest,
-    SearchResponse, SearchResult, TextSearchRequest, UpsertMetadataRequest, UpsertRequest,
+    AddEdgeRequest, BatchSearchRequest, CollectionInfo, CreateCollectionRequest,
+    CreateMetadataCollectionRequest, DeletePointsRequest, EdgeOutput, GetEdgesRequest,
+    GetNodeDegreeRequest, GetPointsRequest, HybridResult, HybridSearchRequest,
+    MultiQuerySearchRequest, NodeDegreeOutput, PointOutput, QueryRequest, QueryResponse,
+    SearchRequest, SearchResponse, SearchResult, TextSearchRequest, TraversalOutput,
+    TraverseGraphRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
 /// Creates a new collection.
 #[command]
 pub async fn create_collection<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: CreateCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
@@ -29,7 +32,7 @@ pub async fn create_collection<R: Runtime>(
 
     let storage_mode = parse_storage_mode(&request.storage_mode).map_err(CommandError::from)?;
 
-    state
+    let result = state
         .with_db(|db| {
             db.create_collection_with_options(
                 &request.name,
@@ -45,17 +48,21 @@ pub async fn create_collection<R: Runtime>(
                 storage_mode: storage_mode_to_string(storage_mode),
             })
         })
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+
+    // Emit event
+    emit_collection_created(&app, &request.name);
+    Ok(result)
 }
 
 /// Creates a metadata-only collection (no vectors, just payloads).
 #[command]
 pub async fn create_metadata_collection<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: CreateMetadataCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
-    state
+    let result = state
         .with_db(|db| {
             db.create_collection_typed(&request.name, &velesdb_core::CollectionType::MetadataOnly)?;
             Ok(CollectionInfo {
@@ -66,13 +73,16 @@ pub async fn create_metadata_collection<R: Runtime>(
                 storage_mode: "metadata_only".to_string(),
             })
         })
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+
+    emit_collection_created(&app, &request.name);
+    Ok(result)
 }
 
 /// Deletes a collection.
 #[command]
 pub async fn delete_collection<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     name: String,
 ) -> std::result::Result<(), CommandError> {
@@ -81,7 +91,10 @@ pub async fn delete_collection<R: Runtime>(
             db.delete_collection(&name)?;
             Ok(())
         })
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+
+    emit_collection_deleted(&app, &name);
+    Ok(())
 }
 
 /// Lists all collections.
@@ -138,11 +151,12 @@ pub async fn get_collection<R: Runtime>(
 /// Upserts points into a collection.
 #[command]
 pub async fn upsert<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: UpsertRequest,
 ) -> std::result::Result<usize, CommandError> {
-    state
+    let collection_name = request.collection.clone();
+    let count = state
         .with_db(|db| {
             let coll = db
                 .get_collection(&request.collection)
@@ -158,17 +172,21 @@ pub async fn upsert<R: Runtime>(
             coll.upsert(points)?;
             Ok(count)
         })
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+
+    emit_collection_updated(&app, &collection_name, "upsert", count);
+    Ok(count)
 }
 
 /// Upserts metadata-only points into a collection.
 #[command]
 pub async fn upsert_metadata<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: UpsertMetadataRequest,
 ) -> std::result::Result<usize, CommandError> {
-    state
+    let collection_name = request.collection.clone();
+    let count = state
         .with_db(|db| {
             let coll = db
                 .get_collection(&request.collection)
@@ -184,7 +202,10 @@ pub async fn upsert_metadata<R: Runtime>(
             coll.upsert_metadata(points)?;
             Ok(count)
         })
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+
+    emit_collection_updated(&app, &collection_name, "upsert_metadata", count);
+    Ok(count)
 }
 
 /// Gets points by their IDs.
@@ -614,6 +635,154 @@ pub async fn semantic_query<R: Runtime>(
                 .into_iter()
                 .map(|(id, score, content)| SemanticQueryResult { id, score, content })
                 .collect())
+        })
+        .map_err(CommandError::from)
+}
+
+// ============================================================================
+// Knowledge Graph Commands (EPIC-015 US-001)
+// ============================================================================
+
+/// Adds an edge to the knowledge graph.
+#[command]
+pub async fn add_edge<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: AddEdgeRequest,
+) -> std::result::Result<(), CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            // Convert properties to HashMap
+            let properties: std::collections::HashMap<String, serde_json::Value> =
+                match request.properties {
+                    Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+                    _ => std::collections::HashMap::new(),
+                };
+
+            let edge = velesdb_core::GraphEdge::new(
+                request.id,
+                request.source,
+                request.target,
+                &request.label,
+            )
+            .map_err(|e| Error::InvalidConfig(e.to_string()))?
+            .with_properties(properties);
+
+            coll.add_edge(edge)
+                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Gets edges from the knowledge graph.
+#[command]
+pub async fn get_edges<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: GetEdgesRequest,
+) -> std::result::Result<Vec<EdgeOutput>, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let edges = if let Some(label) = &request.label {
+                coll.get_edges_by_label(label)
+            } else if let Some(source) = request.source {
+                coll.get_outgoing_edges(source)
+            } else if let Some(target) = request.target {
+                coll.get_incoming_edges(target)
+            } else {
+                coll.get_all_edges()
+            };
+
+            Ok(edges
+                .into_iter()
+                .map(|e| EdgeOutput {
+                    id: e.id(),
+                    source: e.source(),
+                    target: e.target(),
+                    label: e.label().to_string(),
+                    properties: serde_json::to_value(e.properties()).unwrap_or_default(),
+                })
+                .collect())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Traverses the knowledge graph.
+#[command]
+pub async fn traverse_graph<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: TraverseGraphRequest,
+) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let rel_types: Option<Vec<&str>> = request
+                .rel_types
+                .as_ref()
+                .map(|v| v.iter().map(String::as_str).collect());
+
+            let results = if request.algorithm == "dfs" {
+                coll.traverse_dfs(
+                    request.source,
+                    request.max_depth,
+                    rel_types.as_deref(),
+                    request.limit,
+                )
+            } else {
+                coll.traverse_bfs(
+                    request.source,
+                    request.max_depth,
+                    rel_types.as_deref(),
+                    request.limit,
+                )
+            }
+            .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+
+            Ok(results
+                .into_iter()
+                .map(|r| TraversalOutput {
+                    target_id: r.target_id,
+                    depth: r.depth,
+                    path: r.path,
+                })
+                .collect())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Gets the in-degree and out-degree of a node.
+#[command]
+pub async fn get_node_degree<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: GetNodeDegreeRequest,
+) -> std::result::Result<NodeDegreeOutput, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let (in_degree, out_degree) = coll.get_node_degree(request.node_id);
+
+            Ok(NodeDegreeOutput {
+                node_id: request.node_id,
+                in_degree,
+                out_degree,
+            })
         })
         .map_err(CommandError::from)
 }

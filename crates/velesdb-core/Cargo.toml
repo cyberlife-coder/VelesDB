@@ -79,6 +79,15 @@ optional = true
 version = "2.4"
 features = ["std", "serde"]
 
+# EPIC-033/US-003: Windows hole-punch (FSCTL_SET_ZERO_DATA)
+[target.'cfg(target_os = "windows")'.dependencies.windows-sys]
+version = "0.59"
+features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO"]
+
+# EPIC-033/US-003: Linux hole-punch (fallocate)
+[target.'cfg(target_os = "linux")'.dependencies.libc]
+version = "0.2"
+
 [dependencies.pest]
 version = "2.7"
 
@@ -97,6 +106,12 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
+clap = { version = "4.5", features = ["derive"] }
+rand = "0.8"
+
+[[example]]
+name = "crash_driver"
+path = "examples/crash_driver.rs"
 
 [[bench]]
 name = "search_benchmark"
@@ -214,3 +229,14 @@ harness = false
 [[bench]]
 name = "velesql_execution_benchmark"
 harness = false
+
+[[bench]]
+name = "prefetch_tuning_benchmark"
+harness = false
+
+[[bench]]
+name = "smoke_test"
+harness = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

@@ -175,12 +175,57 @@ This makes it perfect for:
 - No cloud dependencies
 - Use local LLMs (Ollama, llama.cpp) for complete privacy
 
-## 📚 Next Steps
+## �️ Knowledge Graph (NEW)
+
+Build relationships between documents:
+
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+
+// Add relationships between documents
+await invoke('plugin:velesdb|add_edge', {
+  request: {
+    collection: 'documents',
+    id: 1,
+    source: docA.id,
+    target: docB.id,
+    label: 'REFERENCES',
+    properties: { section: 'introduction' }
+  }
+});
+
+// Traverse related documents
+const related = await invoke('plugin:velesdb|traverse_graph', {
+  request: {
+    collection: 'documents',
+    source: docA.id,
+    maxDepth: 2,
+    limit: 10
+  }
+});
+```
+
+## 📡 Real-time Events (NEW)
+
+Listen to database changes:
+
+```typescript
+import { listen } from '@tauri-apps/api/event';
+
+// Get notified when documents are added
+await listen('velesdb://collection-updated', (event) => {
+  console.log(`${event.payload.count} documents added`);
+  refreshUI();
+});
+```
+
+## �📚 Next Steps
 
 1. **Add local LLM** - Integrate Ollama for complete offline RAG
 2. **PDF support** - Use `pdf-extract` crate for PDFs
 3. **Chunking strategies** - Implement smart text splitting
 4. **Hybrid search** - Combine vector + keyword search (BM25)
+5. **Knowledge Graph** - Build document relationships ⭐ NEW
 
 ## 📝 License
 

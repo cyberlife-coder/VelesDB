@@ -5,18 +5,74 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
-// Main entry point - supports compound queries (EPIC-040 US-006)
-query = { SOI ~ compound_query ~ ";"? ~ EOI }
+// Main entry point - supports compound queries (EPIC-040 US-006) and MATCH queries (EPIC-045)
+query = { SOI ~ (match_query | compound_query) ~ ";"? ~ EOI }
+
+// MATCH query for graph pattern matching (EPIC-045 US-001)
+// Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]
+match_query = {
+    ^"MATCH" ~ graph_pattern ~
+    where_clause? ~
+    return_clause ~
+    order_by_clause? ~
+    limit_clause?
+}
+
+// Graph pattern: (node)-[rel]->(node) chains
+graph_pattern = { node_pattern ~ (relationship_pattern ~ node_pattern)* }
+node_pattern = { "(" ~ node_spec? ~ ")" }
+node_spec = { node_alias? ~ node_labels? ~ node_properties? }
+node_alias = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+node_labels = { ":" ~ label_name ~ (":" ~ label_name)* }
+label_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+node_properties = { "{" ~ property_list ~ "}" }
+property_list = { property ~ ("," ~ property)* }
+property = { identifier ~ ":" ~ property_value }
+property_value = { string | float | integer | boolean | null_value | parameter }
+
+// Relationship pattern: -[r:TYPE*1..3]->
+relationship_pattern = { rel_incoming | rel_outgoing | rel_undirected }
+rel_incoming = { "<-" ~ rel_spec? ~ "-" }
+rel_outgoing = { "-" ~ rel_spec? ~ "->" }
+rel_undirected = { "-" ~ rel_spec? ~ "-" }
+rel_spec = { "[" ~ rel_details? ~ "]" }
+rel_details = { rel_alias? ~ rel_types? ~ rel_range? ~ node_properties? }
+rel_alias = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+rel_types = { ":" ~ rel_type_name ~ ("|" ~ rel_type_name)* }
+rel_type_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+rel_range = { "*" ~ range_spec? }
+range_spec = { range_bound ~ ".." ~ range_bound? | ".." ~ range_bound | integer }
+range_bound = @{ ASCII_DIGIT+ }
+
+// RETURN clause for MATCH queries
+return_clause = { ^"RETURN" ~ return_item_list }
+return_item_list = { return_item ~ ("," ~ return_item)* }
+return_item = { return_expr ~ (^"AS" ~ identifier)? }
+return_expr = { similarity_return | property_access | identifier | "*" }
+similarity_return = { ^"similarity" ~ "(" ~ ")" }
+property_access = @{ identifier ~ "." ~ identifier }
 
 // Compound query: SELECT with optional UNION/INTERSECT/EXCEPT
 compound_query = { select_stmt ~ (set_operator ~ select_stmt)? }
 set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
 
-// SELECT statement with optional JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
+// SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
+// EPIC-052 US-001: Added DISTINCT support
+// EPIC-052 US-003: Added FROM alias support for Self-JOIN
 select_stmt = { 
-    ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~
+    ^"SELECT" ~ distinct_modifier? ~ select_list ~ ^"FROM" ~ from_clause ~
     join_clause* ~ where_clause? ~ group_by_clause? ~ having_clause? ~ order_by_clause? ~ limit_clause? ~ offset_clause? ~ with_clause? ~ using_fusion_clause?
 }
+
+// FROM clause with optional alias (EPIC-052 US-003: Self-JOIN support)
+// Supports: FROM table, FROM table AS alias
+// Note: "FROM table alias" without AS is intentionally NOT supported to avoid
+// ambiguity with JOIN keywords. Use "FROM table AS alias" syntax.
+from_clause = { identifier ~ from_alias? }
+from_alias = { ^"AS" ~ identifier }
+
+// DISTINCT modifier (EPIC-052 US-001)
+distinct_modifier = { ^"DISTINCT" }
 
 // USING FUSION clause for hybrid search (EPIC-040 US-005)
 using_fusion_clause = { ^"USING" ~ ^"FUSION" ~ fusion_options? }
@@ -25,9 +81,11 @@ fusion_option_list = { fusion_option ~ ("," ~ fusion_option)* }
 fusion_option = { identifier ~ "=" ~ fusion_value }
 fusion_value = { string | float | integer }
 
-// GROUP BY clause (EPIC-017 US-003)
+// GROUP BY clause (EPIC-017 US-003, EPIC-052 US-005: nested fields support)
 group_by_clause = { ^"GROUP" ~ ^"BY" ~ group_by_list }
-group_by_list = { identifier ~ ("," ~ identifier)* }
+group_by_list = { group_by_column ~ ("," ~ group_by_column)* }
+// Support both simple identifiers (including quoted) and nested paths
+group_by_column = { identifier ~ ("." ~ identifier)* }
 
 // HAVING clause for filtering groups (EPIC-017 US-006)
 // Supports both AND and OR logical operators
@@ -74,7 +132,8 @@ aggregate_type = { ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
 aggregate_arg = { "*" | column_name }
 
 column = { column_name ~ (^"AS" ~ identifier)? }
-column_name = @{ identifier ~ ("." ~ identifier)? }
+// EPIC-052 US-005: Support nested field paths like metadata.source or profile.address.city
+column_name = @{ identifier ~ ("." ~ identifier)* }
 
 // WHERE clause
 where_clause = { ^"WHERE" ~ or_expr }
@@ -152,8 +211,11 @@ compare_op = { ">=" | "<=" | "<>" | "!=" | "=" | ">" | "<" }
 limit_clause = { ^"LIMIT" ~ integer }
 offset_clause = { ^"OFFSET" ~ integer }
 
-// Values - EPIC-038: Added temporal expressions (NOW, INTERVAL)
-value = { temporal_expr | float | integer | string | boolean | null_value | parameter }
+// Values - EPIC-038: Temporal, EPIC-039: Subquery
+value = { subquery_expr | temporal_expr | float | integer | string | boolean | null_value | parameter }
+
+// Scalar subquery expression (EPIC-039)
+subquery_expr = { "(" ~ ^"SELECT" ~ select_list ~ ^"FROM" ~ identifier ~ where_clause? ~ group_by_clause? ~ having_clause? ~ limit_clause? ~ ")" }
 parameter = @{ "$" ~ identifier }
 null_value = { ^"NULL" }
 boolean = { ^"TRUE" | ^"FALSE" }

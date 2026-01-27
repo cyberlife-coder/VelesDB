@@ -10,7 +10,7 @@
 mod batch;
 #[cfg(test)]
 mod distance_semantics_tests;
-mod query;
+pub mod query;
 #[cfg(test)]
 mod query_validation_tests;
 #[cfg(test)]

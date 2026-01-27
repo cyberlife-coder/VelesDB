@@ -560,4 +560,59 @@ impl Collection {
             .drop_index(label, property)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to drop index: {e}")))
     }
+
+    // ========================================================================
+    // VelesQL Query Execution (EPIC-056 US-002)
+    // ========================================================================
+
+    /// Execute a VelesQL query returning only IDs and scores (no payload).
+    ///
+    /// More efficient than `query()` when payload is not needed.
+    ///
+    /// Args:
+    ///     velesql: VelesQL query string
+    ///     params: Optional dict of query parameters
+    ///
+    /// Returns:
+    ///     List of dicts with 'id' and 'score' fields
+    ///
+    /// Example:
+    ///     >>> ids = collection.query_ids("SELECT * FROM docs WHERE price > 100 LIMIT 5")
+    #[pyo3(signature = (velesql, params = None))]
+    fn query_ids(
+        &self,
+        velesql: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let parsed_query = velesdb_core::velesql::Parser::parse(velesql).map_err(|e| {
+                PyRuntimeError::new_err(format!(
+                    "VelesQL syntax error at position {}: {}",
+                    e.position, e.message
+                ))
+            })?;
+
+            let json_params: std::collections::HashMap<String, serde_json::Value> = params
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+                .collect();
+
+            let results = self
+                .inner
+                .execute_query(&parsed_query, &json_params)
+                .map_err(|e| PyRuntimeError::new_err(format!("Query execution failed: {e}")))?;
+
+            // Return only IDs and scores
+            Ok(results
+                .into_iter()
+                .map(|r| {
+                    let mut dict = HashMap::new();
+                    dict.insert("id".to_string(), to_pyobject(py, r.point.id));
+                    dict.insert("score".to_string(), to_pyobject(py, r.score));
+                    dict
+                })
+                .collect())
+        })
+    }
 }

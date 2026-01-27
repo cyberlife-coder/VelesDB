@@ -7,6 +7,296 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-01-27
+
+### 🎯 Highlights
+
+This release brings **VelesQL v2.0** with MATCH queries, EXPLAIN plans, multi-score fusion, and parallel graph traversal. The ecosystem is now **100% feature-complete** with VelesQL support propagated to all SDKs.
+
+### 🆕 EPIC-045: VelesQL MATCH Queries
+
+#### Added
+
+- **MATCH Clause for Graph Queries** (US-001-005)
+  - `MATCH (n:Label)-[r:TYPE]->(m)` pattern syntax
+  - Graph pattern matching with relationship filtering
+  - Guard-rails for query complexity limits
+  - Metrics collection for query performance
+
+- **Query Planner** (US-006-008)
+  - Cost-based query optimization
+  - Filter pushdown to reduce data scanned
+  - REST handler: `POST /query/plan`
+  - Documentation in `docs/VELESQL_SPEC.md`
+
+### 🔍 EPIC-046: EXPLAIN Query Plans
+
+#### Added
+
+- **EXPLAIN MATCH** (US-004)
+  - `EXPLAIN SELECT * FROM docs WHERE ...` syntax
+  - Query plan visualization with step breakdown
+  - Cost estimates and optimization hints
+  - REST endpoint: `POST /query/explain`
+
+### 🔀 EPIC-049: Multi-Score Fusion
+
+#### Added
+
+- **Multi-Query Search with Fusion** (US-001, US-004)
+  - RRF (Reciprocal Rank Fusion) - default, robust to score scales
+  - Average/Maximum score fusion
+  - Weighted fusion with configurable weights
+  - `multi_query_search()` API in all SDKs
+
+### ⚡ EPIC-051: Parallel Graph Traversal
+
+#### Added
+
+- **Parallel BFS/DFS** (US-001, US-004)
+  - Rayon-based parallel graph traversal
+  - Configurable parallelism threshold
+  - 2-4x speedup on large graphs
+
+### 📝 EPIC-052: VelesQL Enhancements
+
+#### Added
+
+- **DISTINCT Keyword** (US-001)
+  - `SELECT DISTINCT category FROM docs`
+  
+- **Self-JOIN with FROM Alias** (US-003)
+  - `SELECT * FROM docs d1 JOIN docs d2 ON d1.ref = d2.id`
+  
+- **GROUP BY on Nested JSON Fields** (US-005)
+  - `GROUP BY metadata.author.name`
+  - JsonPath parser for nested field access
+
+### 🌐 EPIC-056: VelesQL SDK Propagation
+
+#### Added
+
+- **Python SDK VelesQL** (US-001-003)
+  - `VelesQL` parser class with `parse()` method
+  - `query_ids()` method for ID-only results
+  - Full VelesQL v2.0 support
+
+- **WASM SDK VelesQL** (US-004-006)
+  - `VelesQL` parser bindings
+  - `ParsedQuery` class with validation
+  - Browser-compatible query parsing
+
+### 🦜 EPIC-057: LangChain/LlamaIndex Completeness
+
+#### Added
+
+- **All 5 Distance Metrics** in both integrations
+  - Cosine, Euclidean, Dot, Hamming, Jaccard
+  
+- **All 3 Storage Modes**
+  - Full, SQ8 (4x compression), Binary (32x compression)
+
+### 🔌 EPIC-058: Server API Completeness
+
+#### Added
+
+- **EXPLAIN Endpoint** (US-002)
+  - `POST /query/explain` for query plan introspection
+  
+- **SSE Streaming Graph Traversal** (US-003)
+  - `POST /collections/{name}/graph/traverse/stream`
+  - Server-Sent Events for large graph results
+  
+- **Column Store Endpoints** (US-004)
+  - `POST /collections/{name}/indexes` - Create property index
+  - `GET /collections/{name}/indexes` - List indexes
+  - `DELETE /collections/{name}/indexes/{field}` - Delete index
+
+### 💻 EPIC-059: CLI & Examples Refresh
+
+#### Added
+
+- **Multi-Query Search CLI** (US-001)
+  - `velesdb multi-search` with fusion strategies
+  
+- **DFS Traverse CLI** (US-002)
+  - `velesdb graph traverse --strategy dfs`
+  
+- **Fusion Strategy Flags** (US-003)
+  - `--strategy rrf|average|maximum|weighted`
+  - `--rrf-k 60` parameter
+  
+- **Python Examples** (US-005-006)
+  - `examples/python/fusion_strategies.py`
+  - `examples/python/graph_traversal.py`
+
+### 🧪 EPIC-060: Complete E2E Test Coverage
+
+#### Added
+
+- **E2E Tests for All Components**
+  - WASM: `velesql.spec.ts`, `fusion.spec.ts` (Playwright)
+  - Python SDK: `test_e2e_complete.py`
+  - LangChain: `test_e2e_complete.py`
+  - LlamaIndex: `test_e2e_complete.py`
+  - CLI: `e2e_complete.rs`
+  - Core: 2,700+ tests passing
+
+### ⚡ Performance Improvements
+
+#### Changed
+
+- **SIMD Optimizations** (EPIC-PERF-001/002)
+  - Newton-Raphson rsqrt for faster normalization
+  - AVX-512 masked loads for partial vectors
+  - ~15% speedup on cosine similarity
+
+### 🧹 Code Quality
+
+#### Changed
+
+- **Test Isolation Refactor**
+  - Extracted 27 inline test modules to separate `*_tests.rs` files
+  - Removed ~4,500 lines of inline tests from production code
+  - Compliance with project rule: tests in separate files
+
+### 📊 Ecosystem Sync
+
+#### Added
+
+- **Ecosystem Sync Report** (`docs/ecosystem-sync.md`)
+  - Feature parity audit: Core ↔ SDKs/Integrations
+  - Gap analysis for all 10+ ecosystem components
+  - Version compatibility matrix
+
+---
+
+### 🔒 EPIC-022: Unsafe Auditability
+
+#### Added
+
+- **Soundness Documentation** (US-001)
+  - `docs/SOUNDNESS.md` - Complete soundness invariants for all unsafe code
+  - Categories: SIMD, Memory Allocation, Mmap, Pointers, Concurrency, FFI
+  - Safety guarantees and invariants for each unsafe block
+  - Pre/post conditions and violation consequences
+
+- **Unsafe Review Checklist** (US-002)
+  - `docs/UNSAFE_REVIEW_CHECKLIST.md` - PR review checklist for unsafe code
+  - Documentation, soundness, concurrency, and testing criteria
+  - Red flags section for common mistakes
+  - Updated `.github/PULL_REQUEST_TEMPLATE.md` with unsafe section
+
+### ⚡ EPIC-026: Reproducible Benchmarks
+
+#### Added
+
+- **Reproducible Benchmark Protocol** (US-001)
+  - `benchmarks/bench_run.ps1` - PowerShell script for deterministic runs
+  - Environment info collection (CPU, memory, Rust version)
+  - Multiple runs with aggregation (mean, std dev)
+  - JSON export for CI comparison
+
+- **Performance Smoke Test CI** (US-002)
+  - `crates/velesdb-core/benches/smoke_test.rs` - Fast Criterion benchmark
+  - `benchmarks/baseline.json` - Baseline metrics for regression detection
+  - `scripts/compare_perf.py` - Python comparison script
+  - Non-blocking `perf-smoke` job in CI workflow
+
+### 🔄 EPIC-034: Concurrency/Async Refactor
+
+#### Added
+
+- **Async Storage Wrappers** (US-001)
+  - `storage/async_ops.rs` - spawn_blocking wrappers for mmap operations
+  - `reserve_capacity_async`, `compact_async`, `flush_async`, `store_batch_async`
+
+- **Async Collection API** (US-005)
+  - `collection/async_ops.rs` - Async bulk insert API
+  - `upsert_bulk_async`, `upsert_bulk_streaming`, `search_async`, `flush_async`
+  - Progress callback support for streaming imports
+
+- **Loom Concurrency Tests** (US-004)
+  - `storage/loom_tests.rs` - Loom-based concurrency verification
+  - Tests for sharded index, epoch counter visibility
+  - Standard concurrency tests for non-loom builds
+
+- **Epoch Counter Overflow Safety** (US-003)
+  - Documented overflow safety in `mmap.rs`
+  - AtomicU64 with wrapping arithmetic (584 years at 1B ops/sec)
+
+- **Loom cfg Configuration**
+  - Added `[lints.rust]` check-cfg for loom in Cargo.toml
+
+### 🛡️ EPIC-024: Durability "Database-Grade"
+
+#### Added
+
+- **Crash Recovery Test Harness** (US-001)
+  - `tests/crash_recovery/` - Automated crash recovery testing module
+  - `CrashTestDriver` - Deterministic test driver with seed control
+  - `IntegrityValidator` - Post-crash integrity verification
+  - `examples/crash_driver.rs` - CLI binary for external crash simulation
+  - `scripts/crash_test.ps1` - PowerShell crash test script
+  - `scripts/soak_crash_test.ps1` - Multi-iteration soak testing
+  - Checksum validation for data corruption detection
+  - Uses public Collection API (get, len, upsert, delete)
+
+- **Corruption Tests** (US-002)
+  - `tests/crash_recovery/corruption.rs` - 10 corruption test scenarios
+  - `FileMutator` - Controlled file corruption utility
+  - Truncation tests: 50%, 0%, payloads.log
+  - Bitflip tests: header, payload data, snapshot, HNSW index
+  - Empty/missing file tests: config.json, vectors.bin
+  - Multiple corruption stress test
+  - All tests verify graceful error handling (no panics, no UB)
+
+- **Storage Format Documentation** (US-003)
+  - `docs/STORAGE_FORMAT.md` - Complete storage format specification
+  - Vector storage: mmap layout, alignment, pre-allocation
+  - Payload storage: append-only log, snapshot format
+  - WAL format: entry types, recovery process
+  - Checksums: CRC32 for snapshot integrity
+  - Versioning and migration strategy
+
+### 🔌 EPIC-015: Tauri Plugin Updates (100%)
+
+#### Added
+
+- **Knowledge Graph API** (US-001)
+  - `Collection::add_edge()` - Add edges to knowledge graph
+  - `Collection::get_all_edges()` - Get all edges
+  - `Collection::get_edges_by_label()` - Filter edges by label
+  - `Collection::get_outgoing_edges()` / `get_incoming_edges()` - Directional queries
+  - `Collection::traverse_bfs()` / `traverse_dfs()` - Graph traversal algorithms
+  - `Collection::get_node_degree()` - Get in/out degree of nodes
+  - `Collection::remove_edge()` - Remove edges by ID
+  - `Collection::edge_count()` - Count total edges
+  - New file: `crates/velesdb-core/src/collection/core/graph_api.rs`
+
+- **Tauri Plugin Graph Commands** (US-001)
+  - `add_edge` - Add edge to knowledge graph
+  - `get_edges` - Get edges by label/source/target
+  - `traverse_graph` - BFS/DFS graph traversal
+  - `get_node_degree` - Get node in/out degree
+  - 7 new types: `AddEdgeRequest`, `GetEdgesRequest`, `TraverseGraphRequest`, etc.
+
+- **Event System** (US-004)
+  - `velesdb://collection-created` - Collection created event
+  - `velesdb://collection-deleted` - Collection deleted event
+  - `velesdb://collection-updated` - Collection modified event
+  - `velesdb://operation-progress` - Long operation progress
+  - `velesdb://operation-complete` - Operation completed
+  - New file: `crates/tauri-plugin-velesdb/src/events.rs`
+
+- **Documentation Updates** (US-006)
+  - Updated `crates/tauri-plugin-velesdb/README.md` with Graph API and Events
+  - Updated `demos/tauri-rag-app/README.md` with new features
+
+#### Changed
+
+- Commands `create_collection`, `delete_collection`, `upsert`, `upsert_metadata` now emit events
+
 ### 📚 EPIC-018: Documentation & Examples
 
 #### Added

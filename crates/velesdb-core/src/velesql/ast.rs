@@ -5,13 +5,69 @@
 use serde::{Deserialize, Serialize};
 
 /// A complete `VelesQL` query.
+///
+/// Supports both SELECT queries and MATCH queries (EPIC-045).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
-    /// The SELECT statement.
+    /// The SELECT statement (for SELECT queries).
     pub select: SelectStatement,
     /// Compound query (UNION/INTERSECT/EXCEPT) - EPIC-040 US-006.
     #[serde(default)]
     pub compound: Option<CompoundQuery>,
+    /// MATCH clause for graph pattern matching (EPIC-045 US-001).
+    /// When present, this is a MATCH query; `select` contains derived fields.
+    #[serde(default)]
+    pub match_clause: Option<crate::velesql::MatchClause>,
+}
+
+impl Query {
+    /// Returns true if this is a MATCH query (graph pattern matching).
+    #[must_use]
+    pub fn is_match_query(&self) -> bool {
+        self.match_clause.is_some()
+    }
+
+    /// Returns true if this is a SELECT query.
+    #[must_use]
+    pub fn is_select_query(&self) -> bool {
+        self.match_clause.is_none()
+    }
+
+    /// Creates a new SELECT query.
+    #[must_use]
+    pub fn new_select(select: SelectStatement) -> Self {
+        Self {
+            select,
+            compound: None,
+            match_clause: None,
+        }
+    }
+
+    /// Creates a new MATCH query (EPIC-045).
+    #[must_use]
+    pub fn new_match(match_clause: crate::velesql::MatchClause) -> Self {
+        // Create a minimal SelectStatement for compatibility
+        let select = SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(), // Will be derived from graph pattern
+            from_alias: None,
+            joins: Vec::new(),
+            where_clause: match_clause.where_clause.clone(),
+            order_by: None, // TODO: Convert from ReturnClause
+            limit: match_clause.return_clause.limit,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        };
+        Self {
+            select,
+            compound: None,
+            match_clause: Some(match_clause),
+        }
+    }
 }
 
 /// SQL set operator for compound queries (EPIC-040 US-006).
@@ -36,13 +92,29 @@ pub struct CompoundQuery {
     pub right: Box<SelectStatement>,
 }
 
+/// DISTINCT mode for SELECT queries (EPIC-052 US-001).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub enum DistinctMode {
+    /// No deduplication.
+    #[default]
+    None,
+    /// DISTINCT - deduplicate by all selected columns.
+    All,
+}
+
 /// A SELECT statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectStatement {
+    /// DISTINCT mode (EPIC-052 US-001).
+    #[serde(default)]
+    pub distinct: DistinctMode,
     /// Columns to select.
     pub columns: SelectColumns,
     /// Collection name (FROM clause).
     pub from: String,
+    /// Alias for the FROM table (EPIC-052 US-003: Self-JOIN support).
+    #[serde(default)]
+    pub from_alias: Option<String>,
     /// JOIN clauses for cross-store queries (EPIC-031 US-004).
     #[serde(default)]
     pub joins: Vec<JoinClause>,
@@ -652,6 +724,39 @@ pub enum Value {
     Parameter(String),
     /// Temporal function (EPIC-038).
     Temporal(TemporalExpr),
+    /// Scalar subquery (EPIC-039).
+    Subquery(Box<Subquery>),
+}
+
+/// Scalar subquery expression (EPIC-039).
+///
+/// A subquery that returns a single value, used in WHERE comparisons.
+///
+/// # Examples
+/// ```sql
+/// WHERE price < (SELECT AVG(price) FROM products)
+/// WHERE (SELECT COUNT(*) FROM items WHERE order_id = o.id) > 5
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Subquery {
+    /// The SELECT statement of the subquery.
+    pub select: SelectStatement,
+    /// Correlated columns (references to outer query).
+    #[serde(default)]
+    pub correlations: Vec<CorrelatedColumn>,
+}
+
+/// A correlated column reference in a subquery (EPIC-039).
+///
+/// Represents `outer_table.column` references in correlated subqueries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorrelatedColumn {
+    /// Outer query table/alias reference.
+    pub outer_table: String,
+    /// Column name in outer query.
+    pub outer_column: String,
+    /// Column in subquery that references it.
+    pub inner_column: String,
 }
 
 /// Temporal expression for date/time operations (EPIC-038).
@@ -805,3 +910,330 @@ pub struct HavingCondition {
 }
 
 // Graph Pattern Matching types are in graph_pattern.rs
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // WithClause tests
+    // =========================================================================
+
+    #[test]
+    fn test_with_clause_new() {
+        let clause = WithClause::new();
+        assert!(clause.options.is_empty());
+    }
+
+    #[test]
+    fn test_with_clause_with_option() {
+        let clause = WithClause::new()
+            .with_option("mode", WithValue::String("accurate".to_string()))
+            .with_option("ef_search", WithValue::Integer(512));
+        assert_eq!(clause.options.len(), 2);
+    }
+
+    #[test]
+    fn test_with_clause_get() {
+        let clause = WithClause::new().with_option("mode", WithValue::String("fast".to_string()));
+        assert!(clause.get("mode").is_some());
+        assert!(clause.get("MODE").is_some()); // case insensitive
+        assert!(clause.get("unknown").is_none());
+    }
+
+    #[test]
+    fn test_with_clause_get_mode() {
+        let clause =
+            WithClause::new().with_option("mode", WithValue::String("accurate".to_string()));
+        assert_eq!(clause.get_mode(), Some("accurate"));
+    }
+
+    #[test]
+    fn test_with_clause_get_mode_identifier() {
+        let clause =
+            WithClause::new().with_option("mode", WithValue::Identifier("fast".to_string()));
+        assert_eq!(clause.get_mode(), Some("fast"));
+    }
+
+    #[test]
+    fn test_with_clause_get_ef_search() {
+        let clause = WithClause::new().with_option("ef_search", WithValue::Integer(256));
+        assert_eq!(clause.get_ef_search(), Some(256));
+    }
+
+    #[test]
+    fn test_with_clause_get_timeout_ms() {
+        let clause = WithClause::new().with_option("timeout_ms", WithValue::Integer(5000));
+        assert_eq!(clause.get_timeout_ms(), Some(5000));
+    }
+
+    #[test]
+    fn test_with_clause_get_rerank() {
+        let clause = WithClause::new().with_option("rerank", WithValue::Boolean(true));
+        assert_eq!(clause.get_rerank(), Some(true));
+    }
+
+    // =========================================================================
+    // WithValue tests
+    // =========================================================================
+
+    #[test]
+    fn test_with_value_as_str_string() {
+        let v = WithValue::String("test".to_string());
+        assert_eq!(v.as_str(), Some("test"));
+    }
+
+    #[test]
+    fn test_with_value_as_str_identifier() {
+        let v = WithValue::Identifier("ident".to_string());
+        assert_eq!(v.as_str(), Some("ident"));
+    }
+
+    #[test]
+    fn test_with_value_as_str_integer() {
+        let v = WithValue::Integer(42);
+        assert_eq!(v.as_str(), None);
+    }
+
+    #[test]
+    fn test_with_value_as_integer() {
+        let v = WithValue::Integer(100);
+        assert_eq!(v.as_integer(), Some(100));
+    }
+
+    #[test]
+    fn test_with_value_as_integer_from_string() {
+        let v = WithValue::String("not an int".to_string());
+        assert_eq!(v.as_integer(), None);
+    }
+
+    #[test]
+    fn test_with_value_as_float_from_float() {
+        let v = WithValue::Float(1.234);
+        assert!((v.as_float().unwrap() - 1.234).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_with_value_as_float_from_integer() {
+        let v = WithValue::Integer(42);
+        assert!((v.as_float().unwrap() - 42.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_with_value_as_float_from_string() {
+        let v = WithValue::String("not a float".to_string());
+        assert_eq!(v.as_float(), None);
+    }
+
+    #[test]
+    fn test_with_value_as_bool() {
+        let v = WithValue::Boolean(true);
+        assert_eq!(v.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn test_with_value_as_bool_from_integer() {
+        let v = WithValue::Integer(1);
+        assert_eq!(v.as_bool(), None);
+    }
+
+    // =========================================================================
+    // IntervalValue tests
+    // =========================================================================
+
+    #[test]
+    fn test_interval_to_seconds() {
+        assert_eq!(
+            IntervalValue {
+                magnitude: 30,
+                unit: IntervalUnit::Seconds
+            }
+            .to_seconds(),
+            30
+        );
+        assert_eq!(
+            IntervalValue {
+                magnitude: 5,
+                unit: IntervalUnit::Minutes
+            }
+            .to_seconds(),
+            300
+        );
+        assert_eq!(
+            IntervalValue {
+                magnitude: 2,
+                unit: IntervalUnit::Hours
+            }
+            .to_seconds(),
+            7200
+        );
+        assert_eq!(
+            IntervalValue {
+                magnitude: 1,
+                unit: IntervalUnit::Days
+            }
+            .to_seconds(),
+            86400
+        );
+        assert_eq!(
+            IntervalValue {
+                magnitude: 1,
+                unit: IntervalUnit::Weeks
+            }
+            .to_seconds(),
+            604_800
+        );
+        assert_eq!(
+            IntervalValue {
+                magnitude: 1,
+                unit: IntervalUnit::Months
+            }
+            .to_seconds(),
+            2_592_000
+        );
+    }
+
+    // =========================================================================
+    // TemporalExpr tests
+    // =========================================================================
+
+    #[test]
+    fn test_temporal_now() {
+        let expr = TemporalExpr::Now;
+        let epoch = expr.to_epoch_seconds();
+        // Should be a reasonable Unix timestamp (after 2020)
+        assert!(epoch > 1_577_836_800);
+    }
+
+    #[test]
+    fn test_temporal_interval() {
+        let expr = TemporalExpr::Interval(IntervalValue {
+            magnitude: 60,
+            unit: IntervalUnit::Seconds,
+        });
+        assert_eq!(expr.to_epoch_seconds(), 60);
+    }
+
+    #[test]
+    fn test_temporal_subtract() {
+        let left = TemporalExpr::Interval(IntervalValue {
+            magnitude: 100,
+            unit: IntervalUnit::Seconds,
+        });
+        let right = TemporalExpr::Interval(IntervalValue {
+            magnitude: 30,
+            unit: IntervalUnit::Seconds,
+        });
+        let expr = TemporalExpr::Subtract(Box::new(left), Box::new(right));
+        assert_eq!(expr.to_epoch_seconds(), 70);
+    }
+
+    #[test]
+    fn test_temporal_add() {
+        let left = TemporalExpr::Interval(IntervalValue {
+            magnitude: 50,
+            unit: IntervalUnit::Seconds,
+        });
+        let right = TemporalExpr::Interval(IntervalValue {
+            magnitude: 25,
+            unit: IntervalUnit::Seconds,
+        });
+        let expr = TemporalExpr::Add(Box::new(left), Box::new(right));
+        assert_eq!(expr.to_epoch_seconds(), 75);
+    }
+
+    // =========================================================================
+    // Value From implementations tests
+    // =========================================================================
+
+    #[test]
+    fn test_value_from_i64() {
+        let v: Value = 42i64.into();
+        assert_eq!(v, Value::Integer(42));
+    }
+
+    #[test]
+    fn test_value_from_f64() {
+        let v: Value = 1.234f64.into();
+        assert_eq!(v, Value::Float(1.234));
+    }
+
+    #[test]
+    fn test_value_from_str() {
+        let v: Value = "hello".into();
+        assert_eq!(v, Value::String("hello".to_string()));
+    }
+
+    #[test]
+    fn test_value_from_string() {
+        let v: Value = String::from("world").into();
+        assert_eq!(v, Value::String("world".to_string()));
+    }
+
+    #[test]
+    fn test_value_from_bool() {
+        let v: Value = true.into();
+        assert_eq!(v, Value::Boolean(true));
+    }
+
+    // =========================================================================
+    // FusionConfig tests
+    // =========================================================================
+
+    #[test]
+    fn test_fusion_config_default() {
+        let config = FusionConfig::default();
+        assert_eq!(config.strategy, "rrf");
+        assert!(config.params.is_empty());
+    }
+
+    #[test]
+    fn test_fusion_config_rrf() {
+        let config = FusionConfig::rrf();
+        assert_eq!(config.strategy, "rrf");
+        assert!((config.params.get("k").unwrap() - 60.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_fusion_config_weighted() {
+        let config = FusionConfig::weighted(0.5, 0.3, 0.2);
+        assert_eq!(config.strategy, "weighted");
+        assert!((config.params.get("avg_weight").unwrap() - 0.5).abs() < 1e-5);
+        assert!((config.params.get("max_weight").unwrap() - 0.3).abs() < 1e-5);
+        assert!((config.params.get("hit_weight").unwrap() - 0.2).abs() < 1e-5);
+    }
+
+    // =========================================================================
+    // FusionClause tests
+    // =========================================================================
+
+    #[test]
+    fn test_fusion_clause_default() {
+        let clause = FusionClause::default();
+        assert_eq!(clause.strategy, FusionStrategyType::Rrf);
+        assert_eq!(clause.k, Some(60));
+        assert!(clause.vector_weight.is_none());
+        assert!(clause.graph_weight.is_none());
+    }
+
+    // =========================================================================
+    // GroupByClause tests
+    // =========================================================================
+
+    #[test]
+    fn test_group_by_clause_default() {
+        let clause = GroupByClause::default();
+        assert!(clause.columns.is_empty());
+    }
+
+    // =========================================================================
+    // HavingClause tests
+    // =========================================================================
+
+    #[test]
+    fn test_having_clause_default() {
+        let clause = HavingClause::default();
+        assert!(clause.conditions.is_empty());
+        assert!(clause.operators.is_empty());
+    }
+}

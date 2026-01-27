@@ -10,15 +10,20 @@
 //! - [`LogPayloadStorage`]: Log-structured payload storage
 //! - [`VectorSliceGuard`]: Zero-copy vector slice guard
 //! - [`metrics`]: Storage operation metrics (P0 audit - latency monitoring)
+//! - [`async_ops`]: Async wrappers for blocking I/O (EPIC-034/US-001)
 
+pub mod async_ops;
 mod compaction;
 mod guard;
 mod histogram;
 mod log_payload;
 pub mod metrics;
 mod mmap;
+mod sharded_index;
+#[cfg(test)]
+mod sharded_index_tests;
 mod traits;
-mod vector_bytes;
+pub mod vector_bytes;
 #[cfg(test)]
 mod vector_bytes_tests;
 
@@ -26,6 +31,8 @@ mod vector_bytes_tests;
 mod histogram_tests;
 #[cfg(test)]
 mod log_payload_tests;
+#[cfg(test)]
+mod loom_tests;
 #[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]

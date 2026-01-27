@@ -17,7 +17,7 @@ name = "velesdb"
 path = "src/main.rs"
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core", version = "1.1.2" }
+velesdb-core = { path = "../velesdb-core", version = "1.4.0" }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -59,6 +59,8 @@ chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3.10"
+assert_cmd = "2.0"
+predicates = "3.1"
 
 # =============================================================================
 # Linux .deb package configuration (cargo-deb)

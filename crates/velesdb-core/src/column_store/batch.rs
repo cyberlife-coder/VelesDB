@@ -373,3 +373,5 @@ impl ColumnStore {
             .unwrap_or(0)
     }
 }
+
+// Tests moved to batch_tests.rs per project rules

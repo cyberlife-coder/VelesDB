@@ -20,6 +20,11 @@ impl From<crate::velesql::Condition> for Condition {
                         // Convert temporal to epoch seconds for comparison
                         Value::Number(t.to_epoch_seconds().into())
                     }
+                    crate::velesql::Value::Subquery(_) => {
+                        // Subqueries need runtime evaluation - return Null as placeholder
+                        // Actual execution happens in the query executor (EPIC-039)
+                        Value::Null
+                    }
                 };
                 match cmp.operator {
                     crate::velesql::CompareOp::Eq => Self::eq(cmp.column, value),
@@ -56,6 +61,10 @@ impl From<crate::velesql::Condition> for Condition {
                         }
                         crate::velesql::Value::Temporal(t) => {
                             Value::Number(t.to_epoch_seconds().into())
+                        }
+                        crate::velesql::Value::Subquery(_) => {
+                            // Subqueries in IN clause need runtime evaluation
+                            Value::Null
                         }
                     })
                     .collect();
@@ -138,3 +147,5 @@ impl From<crate::velesql::Condition> for Condition {
         }
     }
 }
+
+// Tests moved to conversion_tests.rs per project rules

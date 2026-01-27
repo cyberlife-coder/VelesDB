@@ -63,6 +63,26 @@ For contributors and developers:
 
 ---
 
+## 🌐 Ecosystem
+
+VelesDB provides a complete ecosystem of SDKs and integrations:
+
+| Component | Type | Description |
+|-----------|------|-------------|
+| [Ecosystem Sync Report](./ecosystem-sync.md) | **Overview** | Feature parity matrix across all components |
+| [velesdb-core](../crates/velesdb-core/README.md) | Core | Rust core library |
+| [velesdb-server](../crates/velesdb-server/README.md) | Server | REST API server |
+| [velesdb-cli](../crates/velesdb-cli/README.md) | CLI | Command-line interface & REPL |
+| [velesdb-wasm](../crates/velesdb-wasm/README.md) | SDK | WebAssembly for browsers |
+| [velesdb-python](../crates/velesdb-python/README.md) | SDK | Python bindings (PyO3) |
+| [velesdb-mobile](../crates/velesdb-mobile/README.md) | SDK | iOS/Android (UniFFI) |
+| [TypeScript SDK](../sdks/typescript/README.md) | SDK | TypeScript/JavaScript client |
+| [tauri-plugin-velesdb](../crates/tauri-plugin-velesdb/README.md) | Plugin | Tauri desktop integration |
+| [LangChain](../integrations/langchain/README.md) | Integration | LangChain VectorStore |
+| [LlamaIndex](../integrations/llamaindex/README.md) | Integration | LlamaIndex VectorStore |
+
+---
+
 ## 📦 Crate Documentation
 
 Each crate has its own README with specific documentation:

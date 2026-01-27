@@ -30,6 +30,7 @@ mod collection_helpers;
 mod graph;
 mod graph_store;
 mod utils;
+mod velesql;
 
 pub use collection::Collection;
 pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversal_to_dict};
@@ -391,6 +392,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PySemanticMemory>()?;
     m.add_class::<agent::PyEpisodicMemory>()?;
     m.add_class::<agent::PyProceduralMemory>()?;
+
+    // VelesQL query language classes (EPIC-056/US-001)
+    velesql::register_velesql_module(m)?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
