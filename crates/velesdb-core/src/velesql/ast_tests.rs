@@ -44,6 +44,7 @@ fn test_value_from_bool() {
 fn test_query_serialization() {
     let query = Query {
         compound: None,
+        match_clause: None,
         select: SelectStatement {
             distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,

@@ -19,6 +19,8 @@
 mod aggregation;
 mod extraction;
 pub mod join;
+pub mod match_exec;
+pub mod match_metrics;
 mod ordering;
 pub mod pushdown;
 mod validation;

@@ -354,6 +354,7 @@ mod tests {
                 fusion_clause: None,
             },
             compound: None,
+            match_clause: None,
         }
     }
 

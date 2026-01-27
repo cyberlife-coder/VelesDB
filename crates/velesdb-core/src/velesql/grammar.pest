@@ -5,8 +5,52 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
-// Main entry point - supports compound queries (EPIC-040 US-006)
-query = { SOI ~ compound_query ~ ";"? ~ EOI }
+// Main entry point - supports compound queries (EPIC-040 US-006) and MATCH queries (EPIC-045)
+query = { SOI ~ (match_query | compound_query) ~ ";"? ~ EOI }
+
+// MATCH query for graph pattern matching (EPIC-045 US-001)
+// Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]
+match_query = {
+    ^"MATCH" ~ graph_pattern ~
+    where_clause? ~
+    return_clause ~
+    order_by_clause? ~
+    limit_clause?
+}
+
+// Graph pattern: (node)-[rel]->(node) chains
+graph_pattern = { node_pattern ~ (relationship_pattern ~ node_pattern)* }
+node_pattern = { "(" ~ node_spec? ~ ")" }
+node_spec = { node_alias? ~ node_labels? ~ node_properties? }
+node_alias = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+node_labels = { ":" ~ label_name ~ (":" ~ label_name)* }
+label_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+node_properties = { "{" ~ property_list ~ "}" }
+property_list = { property ~ ("," ~ property)* }
+property = { identifier ~ ":" ~ property_value }
+property_value = { string | float | integer | boolean | null_value | parameter }
+
+// Relationship pattern: -[r:TYPE*1..3]->
+relationship_pattern = { rel_incoming | rel_outgoing | rel_undirected }
+rel_incoming = { "<-" ~ rel_spec? ~ "-" }
+rel_outgoing = { "-" ~ rel_spec? ~ "->" }
+rel_undirected = { "-" ~ rel_spec? ~ "-" }
+rel_spec = { "[" ~ rel_details? ~ "]" }
+rel_details = { rel_alias? ~ rel_types? ~ rel_range? ~ node_properties? }
+rel_alias = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+rel_types = { ":" ~ rel_type_name ~ ("|" ~ rel_type_name)* }
+rel_type_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+rel_range = { "*" ~ range_spec? }
+range_spec = { range_bound ~ ".." ~ range_bound? | ".." ~ range_bound | integer }
+range_bound = @{ ASCII_DIGIT+ }
+
+// RETURN clause for MATCH queries
+return_clause = { ^"RETURN" ~ return_item_list }
+return_item_list = { return_item ~ ("," ~ return_item)* }
+return_item = { return_expr ~ (^"AS" ~ identifier)? }
+return_expr = { similarity_return | property_access | identifier | "*" }
+similarity_return = { ^"similarity" ~ "(" ~ ")" }
+property_access = @{ identifier ~ "." ~ identifier }
 
 // Compound query: SELECT with optional UNION/INTERSECT/EXCEPT
 compound_query = { select_stmt ~ (set_operator ~ select_stmt)? }
