@@ -48,8 +48,10 @@ impl Query {
     pub fn new_match(match_clause: crate::velesql::MatchClause) -> Self {
         // Create a minimal SelectStatement for compatibility
         let select = SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
             columns: SelectColumns::All,
             from: String::new(), // Will be derived from graph pattern
+            from_alias: None,
             joins: Vec::new(),
             where_clause: match_clause.where_clause.clone(),
             order_by: None, // TODO: Convert from ReturnClause
