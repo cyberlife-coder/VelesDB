@@ -28,6 +28,8 @@ pub mod match_exec;
 mod match_exec_tests;
 pub mod match_metrics;
 pub mod match_planner;
+#[cfg(test)]
+mod match_planner_tests;
 mod ordering;
 pub mod parallel_traversal;
 #[cfg(test)]

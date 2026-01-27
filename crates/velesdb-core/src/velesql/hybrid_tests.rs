@@ -62,7 +62,11 @@ fn test_maximum_fusion() {
 
     let fused = fuse_maximum(&vector, &graph, 10);
 
-    assert_eq!(fused[0].id, 1);
+    // After normalization, ID 1 and ID 2 both get score 1.0
+    // (ID 1 is max in vector, ID 2 is max in graph)
+    // So either can be first due to HashMap iteration order
+    assert!(fused[0].id == 1 || fused[0].id == 2);
+    assert_eq!(fused.len(), 3);
 }
 
 #[test]
