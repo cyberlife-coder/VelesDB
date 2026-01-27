@@ -1,6 +1,6 @@
 //! CLI Integration Tests (EPIC-041 US-002)
 //!
-//! Tests for VelesDB CLI commands using assert_cmd.
+//! Tests for `VelesDB` CLI commands using `assert_cmd`.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -8,6 +8,7 @@ use std::fs;
 use tempfile::TempDir;
 
 /// Get the CLI binary command
+#[allow(deprecated)]
 fn velesdb_cmd() -> Command {
     Command::cargo_bin("velesdb").unwrap()
 }

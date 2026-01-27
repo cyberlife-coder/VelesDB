@@ -110,7 +110,7 @@ fn smoke_hybrid(c: &mut Criterion) {
         .map(|(i, v)| {
             let payload = serde_json::json!({
                 "category": if i % 2 == 0 { "tech" } else { "science" },
-                "score": i as f64 / 1000.0,
+            "score": f64::from(i as u16) / 1000.0,
             });
             Point::new(i as u64, v.clone(), Some(payload))
         })
