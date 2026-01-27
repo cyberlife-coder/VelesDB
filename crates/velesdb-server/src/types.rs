@@ -277,6 +277,20 @@ pub struct QueryRequest {
     pub params: std::collections::HashMap<String, serde_json::Value>,
 }
 
+/// Query type for unified /query endpoint (EPIC-052 US-006).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum QueryType {
+    /// Vector similarity search (contains similarity() or NEAR).
+    Search,
+    /// Aggregation query (GROUP BY, COUNT, SUM, etc.).
+    Aggregation,
+    /// Simple SELECT returning rows.
+    Rows,
+    /// Graph pattern matching (MATCH clause).
+    Graph,
+}
+
 /// Response from VelesQL query execution.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct QueryResponse {
@@ -286,6 +300,23 @@ pub struct QueryResponse {
     pub timing_ms: f64,
     /// Number of rows returned.
     pub rows_returned: usize,
+}
+
+/// Unified response from /query endpoint (EPIC-052 US-006).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UnifiedQueryResponse {
+    /// Type of query executed.
+    #[serde(rename = "type")]
+    pub query_type: QueryType,
+    /// Number of results.
+    pub count: usize,
+    /// Execution time in milliseconds.
+    pub timing_ms: f64,
+    /// Results (structure depends on query_type).
+    pub results: serde_json::Value,
+    /// Optional warnings (e.g., truncated, deprecated).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Response from VelesQL aggregation query execution (BUG-1 FIX).
