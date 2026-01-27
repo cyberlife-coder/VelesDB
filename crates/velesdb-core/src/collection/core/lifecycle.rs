@@ -1,6 +1,6 @@
 //! Collection lifecycle methods (create, open, flush).
 
-use crate::collection::graph::{PropertyIndex, RangeIndex};
+use crate::collection::graph::{EdgeStore, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -85,6 +85,7 @@ impl Collection {
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
+            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
         };
 
         collection.save_config()?;
@@ -171,6 +172,7 @@ impl Collection {
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
+            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
         };
 
         collection.save_config()?;
@@ -279,6 +281,7 @@ impl Collection {
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
+            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
         })
     }
 

@@ -10,9 +10,11 @@ A Tauri plugin for **VelesDB** - Vector search in desktop applications.
 - 🚀 **Fast Vector Search** - Microsecond latency similarity search
 - 📝 **Text Search** - BM25 full-text search across payloads
 - 🔀 **Hybrid Search** - Combined vector + text with RRF fusion
-- 🔄 **Multi-Query Fusion** - MQG support with RRF/Weighted strategies ⭐ NEW
+- 🔄 **Multi-Query Fusion** - MQG support with RRF/Weighted strategies
 - 🗃️ **Collection Management** - Create, list, and delete collections
 - 📊 **VelesQL** - SQL-like query language
+- 🕸️ **Knowledge Graph** - Add edges, traverse, get node degrees ⭐ NEW
+- 📡 **Event System** - Real-time notifications for data changes ⭐ NEW
 - 🔒 **Local-First** - All data stays on the user's device
 
 ## Installation
@@ -163,6 +165,80 @@ const queryResults = await invoke('plugin:velesdb|query', {
 
 // Delete collection
 await invoke('plugin:velesdb|delete_collection', { name: 'documents' });
+
+// ============================================
+// Knowledge Graph API ⭐ NEW
+// ============================================
+
+// Add an edge to the knowledge graph
+await invoke('plugin:velesdb|add_edge', {
+  request: {
+    collection: 'documents',
+    id: 1,
+    source: 100,  // source node ID
+    target: 200,  // target node ID
+    label: 'REFERENCES',
+    properties: { weight: 0.8, created: '2026-01-27' }
+  }
+});
+
+// Get edges (by label, source, or target)
+const edges = await invoke('plugin:velesdb|get_edges', {
+  request: {
+    collection: 'documents',
+    label: 'REFERENCES'  // or source: 100, or target: 200
+  }
+});
+
+// Traverse the graph (BFS or DFS)
+const traversal = await invoke('plugin:velesdb|traverse_graph', {
+  request: {
+    collection: 'documents',
+    source: 100,
+    maxDepth: 3,
+    relTypes: ['REFERENCES', 'CITES'],  // optional filter
+    limit: 50,
+    algorithm: 'bfs'  // or 'dfs'
+  }
+});
+
+// Get node degree (in/out connections)
+const degree = await invoke('plugin:velesdb|get_node_degree', {
+  request: {
+    collection: 'documents',
+    nodeId: 100
+  }
+});
+console.log(degree);
+// { nodeId: 100, inDegree: 5, outDegree: 3 }
+```
+
+### Event System ⭐ NEW
+
+Listen to real-time database changes:
+
+```javascript
+import { listen } from '@tauri-apps/api/event';
+
+// Collection created
+await listen('velesdb://collection-created', (event) => {
+  console.log('New collection:', event.payload.collection);
+});
+
+// Collection updated (upsert/delete)
+await listen('velesdb://collection-updated', (event) => {
+  console.log(`${event.payload.operation}: ${event.payload.count} items`);
+});
+
+// Collection deleted
+await listen('velesdb://collection-deleted', (event) => {
+  console.log('Deleted:', event.payload.collection);
+});
+
+// Operation progress (for long operations)
+await listen('velesdb://operation-progress', (event) => {
+  console.log(`Progress: ${event.payload.progress}%`);
+});
 ```
 
 ## API Reference
@@ -180,10 +256,24 @@ await invoke('plugin:velesdb|delete_collection', { name: 'documents' });
 | `delete_points` | Delete points by IDs |
 | `search` | Vector similarity search |
 | `batch_search` | Batch vector search (multiple queries) |
-| `multi_query_search` | **Multi-query fusion search** ⭐ NEW |
+| `multi_query_search` | Multi-query fusion search |
 | `text_search` | BM25 full-text search |
 | `hybrid_search` | Combined vector + text search |
 | `query` | Execute VelesQL query |
+| `add_edge` | Add edge to knowledge graph ⭐ NEW |
+| `get_edges` | Get edges by label/source/target ⭐ NEW |
+| `traverse_graph` | BFS/DFS graph traversal ⭐ NEW |
+| `get_node_degree` | Get node in/out degree ⭐ NEW |
+
+### Events
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `velesdb://collection-created` | `{ collection, operation }` | Collection created |
+| `velesdb://collection-deleted` | `{ collection, operation }` | Collection deleted |
+| `velesdb://collection-updated` | `{ collection, operation, count }` | Data modified |
+| `velesdb://operation-progress` | `{ operationId, progress, total, processed }` | Progress update |
+| `velesdb://operation-complete` | `{ operationId, success, error?, durationMs? }` | Operation done |
 
 ### Storage Modes
 

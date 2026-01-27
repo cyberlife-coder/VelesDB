@@ -358,5 +358,140 @@ class TestVelesDBVectorStoreBatch:
         assert hasattr(results, 'nodes')
 
 
+class TestMultiQuerySearch:
+    """Tests for multi_query_search functionality (EPIC-016 US-046)."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """Create a temporary directory for tests."""
+        path = tempfile.mkdtemp()
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    @pytest.fixture
+    def vector_store(self, temp_dir):
+        """Create a VelesDBVectorStore instance."""
+        return VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="multi_query_test",
+            metric="cosine",
+        )
+
+    def test_multi_query_search_basic(self, vector_store):
+        """Test basic multi-query search with default RRF fusion."""
+        nodes = [
+            TextNode(text="Greece travel guide", id_="g1", embedding=[0.1] * 768),
+            TextNode(text="Athens vacation tips", id_="g2", embedding=[0.15] * 768),
+            TextNode(text="Python programming", id_="p1", embedding=[0.9] * 768),
+        ]
+        vector_store.add(nodes)
+
+        # Multi-query search with reformulations
+        query_embeddings = [
+            [0.1] * 768,  # Similar to Greece
+            [0.12] * 768,  # Similar to Athens
+        ]
+        result = vector_store.multi_query_search(
+            query_embeddings=query_embeddings,
+            similarity_top_k=3,
+        )
+
+        assert hasattr(result, 'nodes')
+        assert len(result.nodes) <= 3
+
+    def test_multi_query_search_with_rrf(self, vector_store):
+        """Test multi-query search with explicit RRF fusion."""
+        nodes = [
+            TextNode(text="Machine learning basics", id_="ml1", embedding=[0.2] * 768),
+            TextNode(text="Deep learning tutorial", id_="ml2", embedding=[0.25] * 768),
+        ]
+        vector_store.add(nodes)
+
+        query_embeddings = [
+            [0.2] * 768,
+            [0.22] * 768,
+        ]
+        result = vector_store.multi_query_search(
+            query_embeddings=query_embeddings,
+            similarity_top_k=2,
+            fusion="rrf",
+        )
+
+        assert len(result.nodes) <= 2
+
+    def test_multi_query_search_with_weighted(self, vector_store):
+        """Test multi-query search with weighted fusion."""
+        nodes = [
+            TextNode(text="Cloud computing AWS", id_="c1", embedding=[0.3] * 768),
+            TextNode(text="Azure cloud services", id_="c2", embedding=[0.35] * 768),
+        ]
+        vector_store.add(nodes)
+
+        query_embeddings = [
+            [0.3] * 768,
+            [0.32] * 768,
+        ]
+        result = vector_store.multi_query_search(
+            query_embeddings=query_embeddings,
+            similarity_top_k=2,
+            fusion="weighted",
+            fusion_params={"avg_weight": 0.5, "max_weight": 0.3, "hit_weight": 0.2},
+        )
+
+        assert len(result.nodes) <= 2
+
+    def test_multi_query_search_empty_queries(self, vector_store):
+        """Test multi-query search with empty queries list."""
+        nodes = [TextNode(text="Some document", id_="d1", embedding=[0.1] * 768)]
+        vector_store.add(nodes)
+
+        result = vector_store.multi_query_search(
+            query_embeddings=[],
+            similarity_top_k=5,
+        )
+
+        assert len(result.nodes) == 0
+
+    def test_multi_query_search_average_fusion(self, vector_store):
+        """Test multi-query search with average fusion strategy."""
+        nodes = [
+            TextNode(text="Database optimization", id_="db1", embedding=[0.4] * 768),
+            TextNode(text="SQL performance tuning", id_="db2", embedding=[0.45] * 768),
+        ]
+        vector_store.add(nodes)
+
+        query_embeddings = [
+            [0.4] * 768,
+            [0.42] * 768,
+        ]
+        result = vector_store.multi_query_search(
+            query_embeddings=query_embeddings,
+            similarity_top_k=2,
+            fusion="average",
+        )
+
+        assert len(result.nodes) <= 2
+
+    def test_multi_query_search_maximum_fusion(self, vector_store):
+        """Test multi-query search with maximum fusion strategy."""
+        nodes = [
+            TextNode(text="API design patterns", id_="api1", embedding=[0.5] * 768),
+            TextNode(text="REST API best practices", id_="api2", embedding=[0.55] * 768),
+        ]
+        vector_store.add(nodes)
+
+        query_embeddings = [
+            [0.5] * 768,
+            [0.52] * 768,
+        ]
+        result = vector_store.multi_query_search(
+            query_embeddings=query_embeddings,
+            similarity_top_k=2,
+            fusion="maximum",
+        )
+
+        assert len(result.nodes) <= 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

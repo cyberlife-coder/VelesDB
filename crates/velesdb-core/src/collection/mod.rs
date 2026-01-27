@@ -28,7 +28,7 @@ mod tests;
 #[cfg(test)]
 mod metadata_only_tests;
 
-pub use core::IndexInfo;
+pub use core::{IndexInfo, TraversalResult};
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, ValueType,
