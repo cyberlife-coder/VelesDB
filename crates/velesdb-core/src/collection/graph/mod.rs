@@ -45,6 +45,8 @@ mod range_index;
 mod schema;
 mod streaming;
 mod traversal;
+#[cfg(test)]
+mod traversal_tests;
 
 #[cfg(test)]
 mod edge_concurrent_tests;
