@@ -132,6 +132,8 @@ mod simd_native_tests;
 mod simd_tests;
 pub mod storage;
 pub mod vector_ref;
+#[cfg(test)]
+mod vector_ref_tests;
 pub mod velesql;
 
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
