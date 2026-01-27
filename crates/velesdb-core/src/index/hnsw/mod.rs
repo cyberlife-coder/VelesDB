@@ -24,6 +24,8 @@ mod index;
 mod mappings;
 pub mod native;
 mod native_index;
+#[cfg(test)]
+mod native_index_tests;
 mod native_inner;
 mod params;
 mod sharded_mappings;
