@@ -106,6 +106,12 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
 serial_test = "3.1"
+clap = { version = "4.5", features = ["derive"] }
+rand = "0.8"
+
+[[example]]
+name = "crash_driver"
+path = "examples/crash_driver.rs"
 
 [[bench]]
 name = "search_benchmark"
