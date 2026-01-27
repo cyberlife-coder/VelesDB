@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 📚 EPIC-018: Documentation & Examples
+### �️ EPIC-024: Durability "Database-Grade"
+
+#### Added
+
+- **Crash Recovery Test Harness** (US-001)
+  - `tests/crash_recovery/` - Automated crash recovery testing module
+  - `CrashTestDriver` - Deterministic test driver with seed control
+  - `IntegrityValidator` - Post-crash integrity verification
+  - `examples/crash_driver.rs` - CLI binary for external crash simulation
+  - `scripts/crash_test.ps1` - PowerShell crash test script
+  - `scripts/soak_crash_test.ps1` - Multi-iteration soak testing
+  - Checksum validation for data corruption detection
+  - Uses public Collection API (get, len, upsert, delete)
+
+### �📚 EPIC-018: Documentation & Examples
 
 #### Added
 

@@ -204,12 +204,10 @@ fn run_integrity_check(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         let id = i as u64;
         let points = collection.get(&[id]);
 
-        if points.is_empty() || points[0].is_none() {
+        let Some(point) = points.first().and_then(|p| p.as_ref()) else {
             // Point might not exist (normal if crash happened before this ID)
             continue;
-        }
-
-        let point = points[0].as_ref().unwrap();
+        };
 
         // Check vector dimension
         if point.vector.len() != args.dimension {

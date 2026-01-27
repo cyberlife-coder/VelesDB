@@ -153,11 +153,9 @@ impl IntegrityValidator {
             let id = i as u64;
             let points = collection.get(&[id]);
 
-            if points.is_empty() || points[0].is_none() {
+            let Some(point) = points.first().and_then(|p| p.as_ref()) else {
                 continue;
-            }
-
-            let point = points[0].as_ref().unwrap();
+            };
 
             // Check vector dimension
             let expected_dim = collection.config().dimension;
