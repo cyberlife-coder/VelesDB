@@ -29,9 +29,11 @@ fusion_option_list = { fusion_option ~ ("," ~ fusion_option)* }
 fusion_option = { identifier ~ "=" ~ fusion_value }
 fusion_value = { string | float | integer }
 
-// GROUP BY clause (EPIC-017 US-003)
+// GROUP BY clause (EPIC-017 US-003, EPIC-052 US-005: nested fields support)
 group_by_clause = { ^"GROUP" ~ ^"BY" ~ group_by_list }
-group_by_list = { identifier ~ ("," ~ identifier)* }
+group_by_list = { group_by_column ~ ("," ~ group_by_column)* }
+// Support both simple identifiers (including quoted) and nested paths
+group_by_column = { identifier ~ ("." ~ identifier)* }
 
 // HAVING clause for filtering groups (EPIC-017 US-006)
 // Supports both AND and OR logical operators
@@ -78,7 +80,8 @@ aggregate_type = { ^"COUNT" | ^"SUM" | ^"AVG" | ^"MIN" | ^"MAX" }
 aggregate_arg = { "*" | column_name }
 
 column = { column_name ~ (^"AS" ~ identifier)? }
-column_name = @{ identifier ~ ("." ~ identifier)? }
+// EPIC-052 US-005: Support nested field paths like metadata.source or profile.address.city
+column_name = @{ identifier ~ ("." ~ identifier)* }
 
 // WHERE clause
 where_clause = { ^"WHERE" ~ or_expr }

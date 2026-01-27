@@ -49,6 +49,7 @@ mod groupby_tests;
 mod having_tests;
 #[cfg(test)]
 mod join_extended_tests;
+pub mod json_path;
 #[cfg(test)]
 mod orderby_multi_tests;
 #[cfg(test)]
