@@ -533,21 +533,4 @@ impl Collection {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_match_result_creation() {
-        let result = MatchResult::new(42, 2, vec![1, 2]);
-        assert_eq!(result.node_id, 42);
-        assert_eq!(result.depth, 2);
-        assert_eq!(result.path, vec![1, 2]);
-    }
-
-    #[test]
-    fn test_match_result_with_binding() {
-        let result = MatchResult::new(42, 0, vec![]).with_binding("n".to_string(), 42);
-        assert_eq!(result.bindings.get("n"), Some(&42));
-    }
-}
+// Tests moved to match_exec_tests.rs per project rules
