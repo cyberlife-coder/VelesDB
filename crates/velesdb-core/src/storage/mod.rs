@@ -20,8 +20,10 @@ mod log_payload;
 pub mod metrics;
 mod mmap;
 mod sharded_index;
+#[cfg(test)]
+mod sharded_index_tests;
 mod traits;
-mod vector_bytes;
+pub mod vector_bytes;
 #[cfg(test)]
 mod vector_bytes_tests;
 
