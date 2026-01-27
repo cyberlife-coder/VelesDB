@@ -1,7 +1,7 @@
 # VelesDB Ecosystem Sync Report
 
-> Generated: 2026-01-27  
-> Status: Comprehensive audit of Core ↔ Ecosystem feature parity
+> Generated: 2026-01-27 (Updated after EPIC-056/057/058 merge)  
+> Status: ✅ Major gaps resolved - Near full parity achieved
 
 ## Executive Summary
 
@@ -15,15 +15,15 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 | Cosine | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Euclidean | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | DotProduct | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Hamming | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 | 🔴 |
-| Jaccard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 | 🔴 |
+| Hamming | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Jaccard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Storage Modes (Quantization)
 | Mode | Core | WASM | Python | Mobile | TypeScript | Server | CLI | LangChain | LlamaIndex |
 |------|------|------|--------|--------|------------|--------|-----|-----------|------------|
 | Full (f32) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| SQ8 (8-bit) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 | 🔴 |
-| Binary (1-bit) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 | 🔴 |
+| SQ8 (8-bit) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Binary (1-bit) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Search Features
 | Feature | Core | WASM | Python | Mobile | TypeScript | Server | CLI | LangChain | LlamaIndex |
@@ -31,8 +31,8 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 | Vector Search | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Text Search (BM25) | ✅ | ✅ | ✅ | 🔴 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hybrid Search | ✅ | ✅ | ✅ | 🔴 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Multi-Query Search | ✅ | ✅ | ✅ | 🔴 | ✅ | ✅ | 🔴 | 🔴 | 🔴 |
-| Batch Search | ✅ | 🔴 | ✅ | 🔴 | ✅ | ✅ | 🔴 | 🔴 | 🔴 |
+| Multi-Query Search | ✅ | ✅ | ✅ | 🔴 | ✅ | ✅ | 🔴 | ✅ | ✅ |
+| Batch Search | ✅ | ✅ | ✅ | 🔴 | ✅ | ✅ | 🔴 | ✅ | ✅ |
 | Filter Expressions | ✅ | ✅ | ✅ | 🔴 | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Fusion Strategies
@@ -49,21 +49,21 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 | Node CRUD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Edge CRUD | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | BFS Traversal | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| DFS Traversal | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 | 🔴 |
-| Streaming Traversal | ✅ | 🔴 | ✅ | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 |
+| DFS Traversal | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 | ✅ |
+| Streaming Traversal | ✅ | 🔴 | ✅ | 🔴 | 🔴 | ✅ | 🔴 | 🔴 |
 | Graph Schema | ✅ | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 |
 
 ### VelesQL Query Language
 | Feature | Core | WASM | Python | TypeScript | Server | CLI |
 |---------|------|------|--------|------------|--------|-----|
-| SELECT | ✅ | 🔴 | 🔴 | ✅ | ✅ | ✅ |
-| WHERE filters | ✅ | 🔴 | 🔴 | ✅ | ✅ | ✅ |
-| NEAR (vector) | ✅ | 🔴 | 🔴 | ✅ | ✅ | ✅ |
-| ORDER BY | ✅ | 🔴 | 🔴 | ✅ | ✅ | ✅ |
-| LIMIT/OFFSET | ✅ | 🔴 | 🔴 | ✅ | ✅ | ✅ |
-| JOIN | ✅ | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 |
-| USING FUSION | ✅ | 🔴 | 🔴 | ✅ | 🔴 | 🔴 |
-| EXPLAIN | ✅ | 🔴 | 🔴 | 🔴 | 🔴 | 🔴 |
+| SELECT | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| WHERE filters | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| NEAR (vector) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ORDER BY | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LIMIT/OFFSET | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| JOIN | ✅ | 🔴 | 🔴 | 🔴 | ✅ | 🔴 |
+| USING FUSION | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 |
+| EXPLAIN | ✅ | 🔴 | 🔴 | 🔴 | ✅ | 🔴 |
 
 ### Column Store (EPIC-007)
 | Feature | Core | WASM | Python | TypeScript | Server | CLI |
@@ -87,27 +87,36 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 ## Gap Analysis by Component
 
 ### 1. velesdb-wasm (crates/velesdb-wasm)
-**Status**: 🟡 Good coverage, some gaps
+**Status**: � Excellent coverage after EPIC-056
 
-**Missing Features**:
-- VelesQL query execution
-- Batch search
+**Implemented (EPIC-056)**:
+- ✅ VelesQL query parsing (SELECT, WHERE, NEAR, FUSION)
+- ✅ Batch search
+- ✅ Multi-query search
+
+**Remaining Gaps**:
 - Streaming graph traversal
 - Graph schema support
 - Column store integration
+- JOIN/EXPLAIN queries
 
-**Priority**: P1 - VelesQL support would enable advanced queries in browser
+**Priority**: P3 - Core functionality complete
 
 ### 2. velesdb-python (crates/velesdb-python)
-**Status**: 🟡 Good coverage, VelesQL missing
+**Status**: � Excellent coverage after EPIC-056
 
-**Missing Features**:
-- VelesQL query execution
+**Implemented (EPIC-056)**:
+- ✅ VelesQL query execution (collection.query())
+- ✅ VelesQL parser bindings (velesql.VelesQL class)
+- ✅ Parameterized queries with numpy support
+
+**Remaining Gaps**:
 - Graph schema
 - Half precision support
 - Column store APIs
+- JOIN/EXPLAIN queries
 
-**Priority**: P1 - VelesQL critical for Python data science workflows
+**Priority**: P3 - Core functionality complete
 
 ### 3. velesdb-mobile (crates/velesdb-mobile)
 **Status**: 🔴 Significant gaps
@@ -134,15 +143,19 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 **Priority**: P2 - Core functionality present
 
 ### 5. velesdb-server (crates/velesdb-server)
-**Status**: 🟢 Good coverage
+**Status**: 🟢 Excellent coverage after EPIC-058
 
-**Missing Features**:
-- VelesQL JOIN endpoint
-- EXPLAIN endpoint
-- Streaming traversal endpoint
-- Column store endpoints
+**Implemented (EPIC-058)**:
+- ✅ VelesQL JOIN via /query endpoint
+- ✅ EXPLAIN endpoint (/query/explain)
+- ✅ SSE Streaming traversal (/graph/{collection}/traverse/stream)
+- ✅ Batch search endpoint
+- ✅ OpenAPI documentation (17 endpoints)
 
-**Priority**: P1 - Server should expose all Core features
+**Remaining Gaps**:
+- Column store endpoints (P3)
+
+**Priority**: P3 - Near complete
 
 ### 6. velesdb-cli (crates/velesdb-cli)
 **Status**: 🟡 Good for REPL, missing advanced features
@@ -157,29 +170,34 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 **Priority**: P3 - CLI sufficient for basic operations
 
 ### 7. LangChain Integration (integrations/langchain)
-**Status**: 🟡 VectorStore OK, missing advanced
+**Status**: � Full parity after EPIC-057
 
-**Missing Features**:
-- Hamming/Jaccard metrics
-- SQ8/Binary storage modes
-- Multi-query search
-- Batch search
-- DFS traversal
+**Implemented (EPIC-057)**:
+- ✅ Hamming/Jaccard metrics (ALLOWED_METRICS)
+- ✅ SQ8/Binary storage modes (storage_mode param)
+- ✅ Multi-query search (multi_query_search())
+- ✅ Batch search (batch_search())
+- ✅ DFS traversal (expansion_strategy=depth_first)
+
+**Remaining Gaps**:
 - Streaming traversal
 
-**Priority**: P2 - Quantization useful for large datasets
+**Priority**: P3 - Near complete
 
 ### 8. LlamaIndex Integration (integrations/llamaindex)
-**Status**: 🟡 Basic VectorStore
+**Status**: � Full parity after EPIC-057
 
-**Missing Features**:
-- Hamming/Jaccard metrics
-- SQ8/Binary storage modes
-- Multi-query search
-- Batch search
+**Implemented (EPIC-057)**:
+- ✅ Hamming/Jaccard metrics (ALLOWED_METRICS)
+- ✅ SQ8/Binary storage modes (storage_mode param)
+- ✅ Multi-query search (multi_query_search())
+- ✅ Batch search (batch_query())
+
+**Remaining Gaps**:
 - Graph features
+- Streaming traversal
 
-**Priority**: P2 - Similar to LangChain gaps
+**Priority**: P3 - Near complete
 
 ### 9. Tauri Plugin (crates/tauri-plugin-velesdb)
 **Status**: 🟢 Good coverage for desktop apps
@@ -263,18 +281,18 @@ This document tracks feature parity between `velesdb-core` and all ecosystem com
 
 ---
 
-## EPICs Created for Gap Resolution
+## EPICs Status (Updated 2026-01-27)
 
-| EPIC | Titre | Priorité | US | Estimation |
-|------|-------|----------|-----|------------|
-| **EPIC-053** | WASM Graph Support | P1 | 6 | 29h |
-| **EPIC-056** | VelesQL SDK Propagation | P1 | 8 | 35h |
-| **EPIC-057** | LangChain/LlamaIndex Parity | P2 | 9 | 33h |
-| **EPIC-058** | Server API Completeness | P1 | 6 | 28h |
-| **EPIC-059** | CLI & Examples Refresh | P3 | 7 | 20h |
-| **EPIC-036** | Mobile SDK UniFFI (existing) | P2 | 5 TODO | ~20h |
+| EPIC | Titre | Priorité | US | Status |
+|------|-------|----------|-----|--------|
+| **EPIC-053** | WASM Graph Support | P1 | 6 | 🟡 In Progress |
+| **EPIC-056** | VelesQL SDK Propagation | P1 | 8/8 | ✅ **COMPLETE** |
+| **EPIC-057** | LangChain/LlamaIndex Parity | P2 | 9/9 | ✅ **COMPLETE** |
+| **EPIC-058** | Server API Completeness | P1 | 6/6 | ✅ **COMPLETE** |
+| **EPIC-059** | CLI & Examples Refresh | P3 | 7 | 🔴 TODO |
+| **EPIC-036** | Mobile SDK UniFFI (existing) | P2 | 5 | 🔴 TODO |
 
-**Total: ~165h de travail**
+**Completed: 3 EPICs (23 US) | Remaining: 3 EPICs (~18 US)**
 
 ### Implementation Order (Recommended)
 
