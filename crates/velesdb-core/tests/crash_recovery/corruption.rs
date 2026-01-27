@@ -39,7 +39,11 @@ impl FileMutator {
     pub fn truncate_to_percent(&self, percent: f64) -> std::io::Result<u64> {
         let metadata = std::fs::metadata(&self.path)?;
         let original_size = metadata.len();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
         let new_size = (original_size as f64 * percent / 100.0) as u64;
 
         let file = OpenOptions::new().write(true).open(&self.path)?;
@@ -230,7 +234,7 @@ fn test_truncation_to_zero() {
         let result = Collection::open(temp.path().to_path_buf());
 
         // Empty file should cause an error
-        assert!(result.is_err() || result.as_ref().map(|c| c.len()).unwrap_or(0) == 0);
+        assert!(result.is_err() || result.as_ref().map(Collection::len).unwrap_or(0) == 0);
     }
 }
 
@@ -444,7 +448,8 @@ fn test_corrupted_hnsw_index() {
                 eprintln!("Collection opened with {} documents", coll.len());
 
                 // Try a search - might fail or return wrong results
-                let query: Vec<f32> = (0..64).map(|i| i as f32 / 100.0).collect();
+                #[allow(clippy::cast_precision_loss)]
+                let query: Vec<f32> = (0..64).map(|i: i32| i as f32 / 100.0).collect();
                 match coll.search(&query, 5) {
                     Ok(results) => {
                         eprintln!("Search returned {} results", results.len());
