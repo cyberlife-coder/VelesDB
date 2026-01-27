@@ -20,6 +20,8 @@
 
 mod builders;
 mod conversion;
+#[cfg(test)]
+mod conversion_tests;
 mod matching;
 
 use serde::{Deserialize, Serialize};
