@@ -54,6 +54,8 @@
 #![allow(clippy::doc_markdown)]
 // Code style preferences
 #![allow(clippy::single_match_else)]
+// Allow large stack arrays in tests (SIMD benchmarks use large test vectors)
+#![allow(clippy::large_stack_arrays)]
 #![allow(clippy::manual_let_else)]
 #![allow(clippy::unused_self)]
 #![allow(clippy::uninlined_format_args)]
