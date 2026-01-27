@@ -24,6 +24,8 @@ mod aggregation_executor_tests;
 #[cfg(test)]
 mod aggregation_tests;
 mod aggregator;
+#[cfg(test)]
+mod aggregator_tests;
 mod ast;
 #[cfg(test)]
 mod ast_tests;
