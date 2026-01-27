@@ -38,6 +38,18 @@ Please describe the tests that you ran to verify your changes. Provide instructi
 - [ ] New and existing unit tests pass locally with my changes
 - [ ] Any dependent changes have been merged and published
 
+## Unsafe Code Checklist
+
+> **Skip this section if your PR does not add or modify `unsafe` code.**
+> See [docs/UNSAFE_REVIEW_CHECKLIST.md](../docs/UNSAFE_REVIEW_CHECKLIST.md) for details.
+
+- [ ] All `unsafe fn` have `# Safety` documentation describing preconditions
+- [ ] All `unsafe {}` blocks have `// SAFETY:` comments explaining why it's sound
+- [ ] Invariants documented in [docs/SOUNDNESS.md](../docs/SOUNDNESS.md) (if new unsafe module)
+- [ ] No undefined behavior possible with valid inputs
+- [ ] Edge cases tested (empty, boundary values, alignment)
+- [ ] Miri tests pass (if applicable): `cargo +nightly miri test <test_name>`
+
 ## Screenshots (if applicable)
 
 Add screenshots to help explain your changes.
