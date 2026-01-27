@@ -16,6 +16,8 @@
 
 mod bloom;
 mod lockfree;
+#[cfg(test)]
+mod lockfree_tests;
 mod lru;
 
 pub use bloom::BloomFilter;
