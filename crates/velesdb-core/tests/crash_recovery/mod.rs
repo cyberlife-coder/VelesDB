@@ -20,6 +20,7 @@
 //! .\scripts\crash_test.ps1 -Seed 42 -Count 10000
 //! ```
 
+mod corruption;
 mod driver;
 mod validator;
 
