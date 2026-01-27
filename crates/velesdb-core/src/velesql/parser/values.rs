@@ -322,6 +322,7 @@ impl Parser {
             distinct: crate::velesql::DistinctMode::None,
             columns,
             from,
+            from_alias: None,
             joins: Vec::new(),
             where_clause,
             order_by: None,
