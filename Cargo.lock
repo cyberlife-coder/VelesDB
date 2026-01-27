@@ -6761,6 +6761,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "velesdb-core",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

@@ -31,8 +31,8 @@ pub use types::*;
 // Re-export handlers for routing
 pub use handlers::{
     batch_search, create_collection, create_index, delete_collection, delete_index, delete_point,
-    get_collection, get_point, health_check, hybrid_search, list_collections, list_indexes,
-    multi_query_search, query, search, text_search, upsert_points,
+    explain, get_collection, get_point, health_check, hybrid_search, list_collections,
+    list_indexes, multi_query_search, query, search, text_search, upsert_points,
 };
 
 // FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
@@ -86,6 +86,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::search::text_search,
         handlers::search::hybrid_search,
         handlers::query::query,
+        handlers::query::explain,
         handlers::indexes::create_index,
         handlers::indexes::list_indexes,
         handlers::indexes::delete_index
@@ -108,6 +109,11 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             QueryResponse,
             QueryErrorResponse,
             QueryErrorDetail,
+            ExplainRequest,
+            ExplainResponse,
+            ExplainStep,
+            ExplainCost,
+            ExplainFeatures,
             CreateIndexRequest,
             IndexResponse,
             ListIndexesResponse

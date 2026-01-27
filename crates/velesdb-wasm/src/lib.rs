@@ -54,6 +54,7 @@ mod store_new;
 mod store_search;
 mod text_search;
 mod vector_ops;
+mod velesql;
 
 pub use agent::SemanticMemory;
 pub use distance::DistanceMetric;
