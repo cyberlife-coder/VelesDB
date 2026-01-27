@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-01-27
+
+### 🎯 Highlights
+
+This patch release adds the `/match` REST endpoint for hybrid Vector+Graph queries and introduces unified query types for the `/query` endpoint.
+
+### 🆕 EPIC-058: Server API Completeness
+
+#### Added
+
+- **`/match` REST Endpoint** (US-007)
+  - `POST /collections/{name}/match` for graph pattern matching
+  - Support for hybrid queries with `vector` and `threshold` parameters
+  - Property projection in MATCH results
+  - 12 E2E tests for API contract validation
+
+### 📝 EPIC-052: VelesQL Advanced Features
+
+#### Added
+
+- **QueryType Enum** (US-006)
+  - `QueryType::Search` - Vector similarity queries
+  - `QueryType::Aggregation` - GROUP BY, COUNT, SUM queries
+  - `QueryType::Rows` - Simple SELECT queries
+  - `QueryType::Graph` - MATCH pattern queries
+  - `UnifiedQueryResponse` type with query type metadata
+  - 17 unit tests for query type detection
+
+### 🔧 Internal
+
+- Wired `match_query` handler to server routes
+- Added `# Errors` documentation to match_query handler
+- Exported `QueryType` and `UnifiedQueryResponse` from types module
+
 ## [1.4.0] - 2026-01-27
 
 ### 🎯 Highlights
