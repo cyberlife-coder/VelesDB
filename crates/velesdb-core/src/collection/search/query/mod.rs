@@ -19,6 +19,8 @@
 mod aggregation;
 mod extraction;
 pub mod join;
+#[cfg(test)]
+mod join_tests;
 pub mod match_exec;
 pub mod match_metrics;
 pub mod match_planner;
