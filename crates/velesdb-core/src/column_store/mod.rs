@@ -21,6 +21,8 @@
 //! ```
 
 mod batch;
+#[cfg(test)]
+mod batch_tests;
 mod filter;
 mod string_table;
 mod types;
