@@ -591,14 +591,25 @@ impl VectorStorage for MmapStorage {
         // 1. Flush Mmap
         self.mmap.write().flush()?;
 
-        // 2. Flush WAL
-        self.wal.write().flush()?;
+        // 2. Flush WAL and fsync for durability
+        {
+            let mut wal = self.wal.write();
+            wal.flush()?;
+            wal.get_ref().sync_all()?;
+        }
 
         // 3. Save Index (EPIC-033/US-004: Convert ShardedIndex to flat HashMap for serialization)
+        // EPIC-069/US-001: fsync index file for crash recovery on Windows
         let index_path = self.path.join("vectors.idx");
         let file = File::create(&index_path)?;
+        let mut writer = io::BufWriter::new(file);
         let flat_index = self.index.to_hashmap();
-        bincode::serialize_into(io::BufWriter::new(file), &flat_index).map_err(io::Error::other)?;
+        bincode::serialize_into(&mut writer, &flat_index).map_err(io::Error::other)?;
+        writer.flush()?;
+        writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?
+            .sync_all()?;
 
         Ok(())
     }
