@@ -130,7 +130,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         let quantizer = Arc::new(ScalarQuantizer::train(&refs));
 
         // Create quantized store and quantize all existing vectors
-        let mut store = QuantizedVectorStore::new(quantizer.clone(), self.inner.len() + 1000);
+        let mut store = QuantizedVectorStore::new(Arc::clone(&quantizer), self.inner.len() + 1000);
 
         // Quantize training buffer (already in order)
         for vec in &self.training_buffer {
