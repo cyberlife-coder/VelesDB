@@ -13,7 +13,7 @@
 //! - Runtime statistics (latency, selectivity)
 //! - Over-fetch factor for filtered queries
 //!
-//! TODO: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
+//! Future: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
 //! to leverage cost-based optimization for complex queries.
 
 mod aggregation;

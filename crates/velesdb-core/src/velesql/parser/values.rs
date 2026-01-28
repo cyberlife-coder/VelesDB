@@ -334,7 +334,7 @@ impl Parser {
             fusion_clause: None,
         };
 
-        // TODO: Detect correlated columns by analyzing column references
+        // Note: Correlated column detection deferred to EPIC-039 implementation
         let correlations = Vec::new();
 
         Ok(Subquery {
