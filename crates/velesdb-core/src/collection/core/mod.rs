@@ -11,6 +11,7 @@ mod index_management;
 #[cfg(test)]
 mod index_management_tests;
 mod lifecycle;
+mod statistics;
 
 pub use graph_api::TraversalResult;
 pub use index_management::IndexInfo;

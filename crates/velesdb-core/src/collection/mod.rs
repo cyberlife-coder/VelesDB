@@ -22,6 +22,7 @@ mod core;
 pub mod graph;
 pub mod query_cost;
 pub mod search;
+pub mod stats;
 mod types;
 
 #[cfg(test)]
