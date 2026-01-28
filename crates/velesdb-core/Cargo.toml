@@ -102,6 +102,8 @@ gpu = ["wgpu", "pollster", "bytemuck"]
 # Persistence feature: includes tokio, memmap2, rayon (not WASM-compatible)
 # Disable for WASM builds: velesdb-core = { default-features = false }
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
+# Update check feature: enables HTTP client for version checking
+update-check = ["dep:reqwest", "dep:tokio"]
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -258,6 +260,24 @@ optional = true
 
 [dependencies.tokio]
 workspace = true
+optional = true
+
+# Update check dependencies
+[dependencies.sha2]
+version = "0.10"
+
+[dependencies.hex]
+version = "0.4"
+
+[dependencies.hostname]
+version = "0.4"
+
+[dependencies.whoami]
+version = "1.5"
+
+[dependencies.reqwest]
+version = "0.11"
+features = ["json"]
 optional = true
 
 [lints.rust]
