@@ -267,6 +267,8 @@ impl ContiguousVectors {
             let ptr = unsafe { self.data.as_ptr().add(offset) };
 
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: _mm_prefetch is a hint instruction that cannot cause undefined behavior.
+            // The pointer is valid (derived from data.as_ptr() with bounds-checked offset).
             unsafe {
                 use std::arch::x86_64::_mm_prefetch;
                 // Prefetch for read, into L2 cache

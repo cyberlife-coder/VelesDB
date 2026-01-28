@@ -54,8 +54,24 @@ impl Parser {
                     return_clause = Self::parse_return_clause(inner_pair)?;
                 }
                 Rule::order_by_clause => {
-                    // TODO: EPIC-045 US-005 - Parse ORDER BY for MATCH queries
-                    let _order_by = Self::parse_order_by_clause(inner_pair)?;
+                    // EPIC-045 US-005: Parse ORDER BY for MATCH queries
+                    let order_by = Self::parse_order_by_clause(inner_pair)?;
+                    // Convert SelectOrderBy to graph_pattern::OrderByItem
+                    return_clause.order_by = Some(
+                        order_by
+                            .into_iter()
+                            .map(|ob| crate::velesql::graph_pattern::OrderByItem {
+                                expression: match ob.expr {
+                                    OrderByExpr::Field(f) => f,
+                                    OrderByExpr::Similarity(s) => {
+                                        format!("similarity({}, $query)", s.field)
+                                    }
+                                    OrderByExpr::Aggregate(a) => format!("{:?}()", a.function_type),
+                                },
+                                descending: ob.descending,
+                            })
+                            .collect(),
+                    );
                 }
                 Rule::limit_clause => {
                     for lp in inner_pair.into_inner() {

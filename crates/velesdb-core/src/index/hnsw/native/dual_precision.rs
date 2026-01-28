@@ -186,7 +186,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         ef_search: usize,
     ) -> Vec<(NodeId, f32)> {
         // Step 1: Get more candidates than needed using graph traversal
-        // TODO: Future optimization - use quantized distances for traversal
+        // Future optimization: use quantized distances for traversal (EPIC-055)
         let rerank_k = (ef_search * 2).max(k * 4);
         let candidates = self.inner.search(query, rerank_k, ef_search);
 
