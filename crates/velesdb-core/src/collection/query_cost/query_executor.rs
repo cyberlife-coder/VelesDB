@@ -80,7 +80,10 @@ impl PlanCache {
     }
 
     /// Recursively checks if a plan references a collection.
-    fn plan_references_collection(plan: &super::plan_generator::PhysicalPlan, collection: &str) -> bool {
+    fn plan_references_collection(
+        plan: &super::plan_generator::PhysicalPlan,
+        collection: &str,
+    ) -> bool {
         match plan {
             super::plan_generator::PhysicalPlan::SeqScan { collection: c, .. }
             | super::plan_generator::PhysicalPlan::IndexScan { collection: c, .. }
