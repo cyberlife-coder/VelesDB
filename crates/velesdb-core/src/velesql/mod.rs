@@ -70,6 +70,8 @@ mod planner;
 mod planner_tests;
 mod validation;
 #[cfg(test)]
+mod validation_parity_tests;
+#[cfg(test)]
 mod validation_tests;
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! This module provides intelligent query planning for hybrid graph-vector queries,
 //! choosing the optimal execution strategy based on estimated selectivity.
 //!
-//! # TODO: Cost-Based Optimization (v2.0)
+//! # Future: Cost-Based Optimization (v2.0)
 //!
 //! The current planner uses heuristic-based strategy selection. Future improvements:
 //! - Collect runtime statistics for actual selectivity estimation
