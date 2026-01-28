@@ -15,11 +15,12 @@ use velesdb_core::distance::DistanceMetric;
 use velesdb_core::point::Point;
 use velesdb_core::Collection;
 
+#[allow(clippy::cast_precision_loss)]
 fn generate_vector(dimension: usize, seed: u64) -> Vec<f32> {
     let mut v = Vec::with_capacity(dimension);
     let mut x = seed;
     for _ in 0..dimension {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
         v.push((x as f32 / u64::MAX as f32) * 2.0 - 1.0);
     }
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -45,11 +46,12 @@ fn test_stress_medium_20_threads() {
 
 /// Heavy stress: 25+25 threads × 100 ops (ignored for CI)
 #[test]
-#[ignore]
+#[ignore = "Heavy stress test, run manually"]
 fn test_stress_50_threads() {
     run_collection_stress(25, 25, 100, 128, 500);
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn run_collection_stress(
     num_readers: usize,
     num_writers: usize,
@@ -60,9 +62,8 @@ fn run_collection_stress(
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("stress");
 
-    let collection = Arc::new(
-        Collection::create(path, dimension, DistanceMetric::Cosine).expect("create"),
-    );
+    let collection =
+        Arc::new(Collection::create(path, dimension, DistanceMetric::Cosine).expect("create"));
 
     // Seed
     let initial: Vec<Point> = (0..initial_points as u64)
@@ -127,11 +128,13 @@ fn run_collection_stress(
         (s + w) as f64 / elapsed.as_secs_f64()
     );
 
-    assert!(collection.search(&generate_vector(dimension, 999), 5).is_ok());
+    assert!(collection
+        .search(&generate_vector(dimension, 999), 5)
+        .is_ok());
     assert!(collection.flush().is_ok());
 }
 
-/// Graph stress: 10+10 threads × 100 ops on ConcurrentEdgeStore
+/// Graph stress: 10+10 threads × 100 ops on `ConcurrentEdgeStore`
 #[test]
 fn test_graph_concurrent_stress() {
     let store = Arc::new(ConcurrentEdgeStore::new());
@@ -147,6 +150,7 @@ fn test_graph_concurrent_stress() {
         handles.push(thread::spawn(move || {
             for i in 0..ops {
                 let id = eid.fetch_add(1, Ordering::Relaxed);
+                #[allow(clippy::cast_sign_loss)]
                 let src = (t as u64 * 1000 + i as u64) % 1000;
                 let tgt = (src + 1) % 1000;
                 if let Ok(e) = GraphEdge::new(id, src, tgt, "LINK") {
@@ -164,6 +168,7 @@ fn test_graph_concurrent_stress() {
         let s = Arc::clone(&store);
         handles.push(thread::spawn(move || {
             for i in 0..ops {
+                #[allow(clippy::cast_sign_loss)]
                 let n = ((t * 100 + i) % 1000) as u64;
                 let _ = s.get_outgoing(n);
                 let _ = s.get_incoming(n);
