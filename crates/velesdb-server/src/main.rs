@@ -18,7 +18,7 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
     delete_point, get_collection, get_edges, get_node_degree, get_point, health_check,
-    list_collections, list_indexes, multi_query_search, query, search, traverse_graph,
+    list_collections, list_indexes, match_query, multi_query_search, query, search, traverse_graph,
     upsert_points, ApiDoc, AppState, GraphService,
 };
 
@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
             delete(delete_index),
         )
         .route("/query", post(query))
+        .route("/collections/{name}/match", post(match_query))
         .with_state(state)
         // FLAG-2 FIX: Merge graph router with its own state
         .merge(graph_router);
