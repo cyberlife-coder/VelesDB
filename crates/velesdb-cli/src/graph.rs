@@ -40,6 +40,10 @@ pub enum GraphAction {
         /// Output format (table, json)
         #[arg(short, long, default_value = "table")]
         format: String,
+
+        /// Stream results as NDJSON (one JSON per line)
+        #[arg(long)]
+        stream: bool,
     },
 
     /// Get the degree of a node
@@ -102,7 +106,26 @@ pub fn handle(action: GraphAction) {
             limit,
             rel_types,
             format: _,
+            stream,
         } => {
+            if stream {
+                // EPIC-059 US-004: Stream mode - show SSE endpoint
+                println!("{} Streaming traversal via SSE endpoint:", "📡".cyan());
+                println!(
+                    "  curl -N 'http://localhost:8080/collections/{}/graph/stream-traverse?start_node={}&algorithm={}&max_depth={}&limit={}'",
+                    collection, source, strategy, max_depth, limit
+                );
+                println!();
+                println!(
+                    "{} Or use the streaming client (NDJSON output):",
+                    "💡".yellow()
+                );
+                println!(
+                    "  velesdb-cli graph traverse {} {} --stream | jq -c '.'",
+                    collection, source
+                );
+                return;
+            }
             let rel_types_json = rel_types
                 .map(|s| {
                     let types: Vec<&str> = s.split(',').map(str::trim).collect();
