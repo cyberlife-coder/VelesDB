@@ -1329,7 +1329,35 @@ pie title VelesDB Feature Distribution
 
 ---
 
-## 📜 License
+## � Update Check
+
+VelesDB checks for updates at startup to help you stay secure. This is similar to VS Code, Firefox, and most modern software.
+
+### What Data is Sent
+
+| Data | Purpose |
+|------|---------|
+| Version | Know which versions are in use |
+| OS/Arch | Prioritize platform support |
+| Instance Hash | Anonymous counter (SHA256, not reversible) |
+
+**We do NOT collect:** Your IP address is not logged, no query content or patterns, no personal or identifiable information.
+
+### Disabling Update Check
+
+```bash
+export VELESDB_NO_UPDATE_CHECK=1
+```
+
+Or in your config file:
+```toml
+[update_check]
+enabled = false
+```
+
+---
+
+## �📜 License
 
 VelesDB is licensed under the [Elastic License 2.0 (ELv2)](LICENSE).
 
