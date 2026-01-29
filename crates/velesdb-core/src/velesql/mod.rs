@@ -68,6 +68,7 @@ mod parser_tests;
 mod planner;
 #[cfg(test)]
 mod planner_tests;
+mod subquery_optimizer;
 mod validation;
 #[cfg(test)]
 mod validation_parity_tests;
