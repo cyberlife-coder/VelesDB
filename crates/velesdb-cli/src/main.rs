@@ -14,6 +14,7 @@ mod graph;
 mod import;
 mod license;
 mod repl;
+mod repl_output;
 mod session;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
