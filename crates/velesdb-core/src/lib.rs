@@ -180,14 +180,16 @@ mod simd_tests;
 #[cfg(feature = "persistence")]
 pub mod storage;
 pub mod sync;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod update_check;
 pub mod vector_ref;
 #[cfg(test)]
 mod vector_ref_tests;
 pub mod velesql;
 
-#[cfg(feature = "update-check")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub use update_check::{check_for_updates, spawn_update_check};
+#[cfg(not(target_arch = "wasm32"))]
 pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 
 #[cfg(feature = "persistence")]

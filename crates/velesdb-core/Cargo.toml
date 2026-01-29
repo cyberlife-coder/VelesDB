@@ -30,7 +30,8 @@ toml = { workspace = true }
 # HNSW: Native implementation only (v1.0+)
 # hnsw_rs dependency removed - native HNSW is 1.2x faster
 
-[dependencies.uuid]
+# UUID - target-specific for WASM compatibility
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.uuid]
 version = "1.7"
 features = ["v4", "serde"]
 
@@ -276,17 +277,17 @@ optional = true
 workspace = true
 optional = true
 
-# Update check dependencies
-[dependencies.sha2]
+# Update check dependencies (non-WASM only)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.sha2]
 version = "0.10"
 
-[dependencies.hex]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.hex]
 version = "0.4"
 
-[dependencies.hostname]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.hostname]
 version = "0.4"
 
-[dependencies.whoami]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.whoami]
 version = "1.5"
 
 [dependencies.reqwest]
