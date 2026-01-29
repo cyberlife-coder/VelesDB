@@ -280,11 +280,13 @@ export class RestBackend implements IVelesDBBackend {
 
     const response = await this.request(
       'POST',
-      `/collections/${encodeURIComponent(collection)}/vectors`,
+      `/collections/${encodeURIComponent(collection)}/points`,
       {
-        id: doc.id,
-        vector,
-        payload: doc.payload,
+        points: [{
+          id: doc.id,
+          vector,
+          payload: doc.payload,
+        }],
       }
     );
 
@@ -307,8 +309,8 @@ export class RestBackend implements IVelesDBBackend {
 
     const response = await this.request(
       'POST',
-      `/collections/${encodeURIComponent(collection)}/vectors/batch`,
-      { vectors }
+      `/collections/${encodeURIComponent(collection)}/points`,
+      { points: vectors }
     );
 
     if (response.error) {
@@ -386,7 +388,7 @@ export class RestBackend implements IVelesDBBackend {
 
     const response = await this.request<{ deleted: boolean }>(
       'DELETE',
-      `/collections/${encodeURIComponent(collection)}/vectors/${encodeURIComponent(String(id))}`
+      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(id))}`
     );
 
     if (response.error) {
@@ -404,7 +406,7 @@ export class RestBackend implements IVelesDBBackend {
 
     const response = await this.request<VectorDocument>(
       'GET',
-      `/collections/${encodeURIComponent(collection)}/vectors/${encodeURIComponent(String(id))}`
+      `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(id))}`
     );
 
     if (response.error) {

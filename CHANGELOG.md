@@ -9,11 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.4.1] - 2026-01-29
 
-### 🎯 Highlights
+### � Highlights
 
-Major performance release with **SIMD pipeline optimizations** (2.3x Jaccard speedup), **parallel graph traversal** (2-4x BFS speedup), and **dual-precision quantization** (4x memory bandwidth reduction). Includes 7 critical bugfixes and comprehensive code quality improvements across 15+ EPICs.
+Major performance release with **SIMD pipeline optimizations** (2.3x Jaccard speedup), **parallel graph traversal** (2-4x BFS speedup), and **dual-precision quantization** (4x memory bandwidth reduction). Includes 7 critical bugfixes, comprehensive code quality improvements across 15+ EPICs, and the **flagship E-commerce Recommendation demo**.
 
-### 🆕 Added
+### � Added
+
+- **E-commerce Recommendation Example** - Flagship demo showcasing Vector + Graph + MultiColumn capabilities
+  - 5,000 products with 128-dim embeddings and 11 metadata fields
+  - ~20,000 co-purchase relationships for graph-like queries
+  - 4 query types: Vector similarity (187µs), Filtered search (55µs), Graph lookup (88µs), Combined (202µs)
+  - 15 Playwright E2E tests validating data generation, query execution, and performance
+  - Full documentation and README at `examples/ecommerce_recommendation/`
+- **README Performance Metrics Alignment** - Corrected all badges and metrics to match verified benchmarks
 
 #### EPIC-073: SIMD Pipeline Optimizations ✅
 - `prefetch_vector_multi_cache_line()` - Multi-level cache prefetch (L1/L2/L3)

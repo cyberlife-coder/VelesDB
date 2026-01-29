@@ -162,13 +162,15 @@ describe('RestBackend', () => {
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:8080/collections/test/vectors',
+        'http://localhost:8080/collections/test/points',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            id: '1',
-            vector: [1.0, 0.0, 0.0],
-            payload: { title: 'Test' },
+            points: [{
+              id: '1',
+              vector: [1.0, 0.0, 0.0],
+              payload: { title: 'Test' },
+            }],
           }),
         })
       );
@@ -186,7 +188,7 @@ describe('RestBackend', () => {
       ]);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:8080/collections/test/vectors/batch',
+        'http://localhost:8080/collections/test/points',
         expect.objectContaining({ method: 'POST' })
       );
     });

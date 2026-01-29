@@ -13,6 +13,7 @@ members = [
 exclude = [
     "demos/tauri-rag-app/src-tauri",
     "examples/mini_recommender",
+    "examples/ecommerce_recommendation",
 ]
 
 [workspace.package]

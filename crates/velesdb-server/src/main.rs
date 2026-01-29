@@ -17,9 +17,10 @@ use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
-    delete_point, get_collection, get_edges, get_node_degree, get_point, health_check,
-    list_collections, list_indexes, match_query, multi_query_search, query, search, traverse_graph,
-    upsert_points, ApiDoc, AppState, GraphService,
+    delete_point, flush_collection, get_collection, get_edges, get_node_degree, get_point,
+    health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
+    multi_query_search, query, search, text_search, traverse_graph, upsert_points, ApiDoc,
+    AppState, GraphService,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -95,6 +96,8 @@ async fn main() -> anyhow::Result<()> {
             "/collections/{name}",
             get(get_collection).delete(delete_collection),
         )
+        .route("/collections/{name}/empty", get(is_empty))
+        .route("/collections/{name}/flush", post(flush_collection))
         // 100MB limit for batch vector uploads (1000 vectors × 768D × 4 bytes = ~3MB typical)
         .route("/collections/{name}/points", post(upsert_points))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
@@ -105,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
+        .route("/collections/{name}/search/text", post(text_search))
+        .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route(
             "/collections/{name}/indexes",
             get(list_indexes).post(create_index),

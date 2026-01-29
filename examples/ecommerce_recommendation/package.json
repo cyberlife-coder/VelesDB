@@ -1,0 +1,15 @@
+{
+  "name": "ecommerce-recommendation-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for VelesDB e-commerce recommendation example",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:report": "npx playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

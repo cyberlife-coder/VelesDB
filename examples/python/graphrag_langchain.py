@@ -8,7 +8,8 @@ Demonstrates the "Seed + Expand" pattern for Graph-enhanced RAG:
 3. Combined context for LLM generation
 
 Requirements:
-    pip install langchain-velesdb langchain-openai
+    pip install langchain-velesdb langchain-openai httpx
+    # Start VelesDB server: velesdb-server --port 8080
 
 Usage:
     export OPENAI_API_KEY=your-key
@@ -18,6 +19,8 @@ Usage:
 import os
 from typing import List
 
+import httpx
+
 # LangChain imports
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
@@ -25,6 +28,24 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 # VelesDB LangChain integration
 from langchain_velesdb import VelesDBVectorStore, GraphRetriever
+
+VELESDB_SERVER = "http://localhost:8080"
+
+
+def add_graph_edge(collection: str, edge_id: int, source: int, target: int, label: str):
+    """Add a graph edge via VelesDB HTTP API."""
+    url = f"{VELESDB_SERVER}/collections/{collection}/graph/edges"
+    payload = {
+        "id": edge_id,
+        "source": source,
+        "target": target,
+        "label": label,
+    }
+    try:
+        response = httpx.post(url, json=payload, timeout=5.0)
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        print(f"⚠️  Could not add edge {edge_id}: {e}")
 
 
 def create_sample_knowledge_base() -> VelesDBVectorStore:
@@ -59,21 +80,21 @@ def create_sample_knowledge_base() -> VelesDBVectorStore:
         collection_name="knowledge_base",
     )
     
-    # Add graph edges (concept relationships)
-    collection = vectorstore._get_collection()
+    # Add graph edges via HTTP API (concept relationships)
+    collection_name = "knowledge_base"
     
     # ML → DL (ML includes DL)
-    collection.add_edge(id=1, source=1, target=2, label="INCLUDES")
+    add_graph_edge(collection_name, 1, source=1, target=2, label="INCLUDES")
     # ML → NLP (ML includes NLP)
-    collection.add_edge(id=2, source=1, target=3, label="INCLUDES")
+    add_graph_edge(collection_name, 2, source=1, target=3, label="INCLUDES")
     # NLP → Transformers (NLP uses Transformers)
-    collection.add_edge(id=3, source=3, target=4, label="USES")
+    add_graph_edge(collection_name, 3, source=3, target=4, label="USES")
     # Transformers → GPT (Transformers basis for GPT)
-    collection.add_edge(id=4, source=4, target=5, label="BASIS_FOR")
+    add_graph_edge(collection_name, 4, source=4, target=5, label="BASIS_FOR")
     # Transformers → BERT (Transformers basis for BERT)
-    collection.add_edge(id=5, source=4, target=6, label="BASIS_FOR")
+    add_graph_edge(collection_name, 5, source=4, target=6, label="BASIS_FOR")
     # VelesDB → VectorDB (VelesDB is a VectorDB)
-    collection.add_edge(id=6, source=8, target=7, label="IS_A")
+    add_graph_edge(collection_name, 6, source=8, target=7, label="IS_A")
     
     print("✅ Knowledge base created with 8 documents and 6 relationships")
     return vectorstore
@@ -99,7 +120,8 @@ def graphrag_query(
     # Create retriever (with or without graph expansion)
     if use_graph:
         retriever = GraphRetriever(
-            vectorstore=vectorstore,
+            vector_store=vectorstore,
+            server_url=VELESDB_SERVER,
             seed_k=2,      # Initial vector search results
             expand_k=5,    # Max results after graph expansion
             max_depth=2,   # Graph traversal depth

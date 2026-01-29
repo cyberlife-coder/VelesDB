@@ -453,19 +453,46 @@ impl Collection {
         // Compute similarity using collection's metric
         let config = self.config.read();
         let metric = config.metric;
+        let higher_is_better = metric.higher_is_better();
         drop(config);
 
         let score = metric.calculate(&node_vector, &query_vector);
 
-        // Evaluate threshold comparison
+        // Evaluate threshold comparison with metric awareness
+        // For distance metrics (Euclidean, Hamming): lower = more similar
+        // So "similarity > X" means "distance < X" (inverted comparison)
         #[allow(clippy::cast_possible_truncation)]
         let threshold = sim.threshold as f32;
 
         Ok(match sim.operator {
-            crate::velesql::CompareOp::Gt => score > threshold,
-            crate::velesql::CompareOp::Gte => score >= threshold,
-            crate::velesql::CompareOp::Lt => score < threshold,
-            crate::velesql::CompareOp::Lte => score <= threshold,
+            crate::velesql::CompareOp::Gt => {
+                if higher_is_better {
+                    score > threshold
+                } else {
+                    score < threshold
+                }
+            }
+            crate::velesql::CompareOp::Gte => {
+                if higher_is_better {
+                    score >= threshold
+                } else {
+                    score <= threshold
+                }
+            }
+            crate::velesql::CompareOp::Lt => {
+                if higher_is_better {
+                    score < threshold
+                } else {
+                    score > threshold
+                }
+            }
+            crate::velesql::CompareOp::Lte => {
+                if higher_is_better {
+                    score <= threshold
+                } else {
+                    score >= threshold
+                }
+            }
             crate::velesql::CompareOp::Eq => (score - threshold).abs() < f32::EPSILON,
             crate::velesql::CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
         })

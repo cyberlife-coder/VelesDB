@@ -208,3 +208,78 @@ pub async fn delete_collection(
             .into_response(),
     }
 }
+
+/// Check if a collection is empty.
+#[utoipa::path(
+    get,
+    path = "/collections/{name}/empty",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Empty status", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+pub async fn is_empty(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_collection(&name) {
+        Some(collection) => Json(serde_json::json!({
+            "is_empty": collection.is_empty()
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{}' not found", name),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Flush pending changes to disk.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/flush",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Flushed successfully", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Flush failed", body = ErrorResponse)
+    )
+)]
+pub async fn flush_collection(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_collection(&name) {
+        Some(collection) => match collection.flush() {
+            Ok(()) => Json(serde_json::json!({
+                "message": "Flushed successfully",
+                "collection": name
+            }))
+            .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Flush failed: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{}' not found", name),
+            }),
+        )
+            .into_response(),
+    }
+}
