@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🆕 Added
+
+- **EPIC-051: Parallel Graph Traversal** (US-002)
+  - `FrontierParallelBFS` - Level-by-level parallel BFS traversal
+  - 2-4x speedup on wide graphs with rayon parallelism
+  - 5 new tests for frontier parallelization
+
+- **EPIC-052: VelesQL Advanced Features** (US-007)
+  - OR/NOT similarity patterns in WHERE clauses
+  - `evaluate_similarity_condition()` for complex boolean logic
+  - 8 new tests for similarity condition evaluation
+
+- **EPIC-054: ARM64 SIMD Optimization** (US-001)
+  - NEON SIMD implementations for ARM64 platforms
+  - `simd_neon.rs` with dot_product, euclidean, cosine
+  - Runtime SIMD dispatch for cross-platform support
+  - 7 new tests for NEON implementations
+
+### 🔧 Internal
+
+- Added `#[allow(clippy::cognitive_complexity)]` with justifications to 6 complex functions
+- Cleaned up duplicate EPIC folders (067-072)
+- Updated ecosystem sync report
+
 ## [1.4.1] - 2026-01-27
 
 ### 🎯 Highlights

@@ -49,8 +49,8 @@ This document describes the internal architecture of VelesDB.
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
 │  │  (81ns)  │   (49ns)    │    (39ns)     │   (6ns)   │   (SIMD)   │   │
 │  │                                                                  │   │
-│  │  AVX2/AVX-512 │ WASM SIMD128 │ Auto-vectorization │ Fallback   │   │
-│  │               │              │                    │ (ARM64)    │   │
+│  │  AVX2/AVX-512 │ WASM SIMD128 │ ARM64 NEON │ Auto-vectorization │   │
+│  │               │              │ (simd_neon)│     Fallback       │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 └────────────────────────────────────┬────────────────────────────────────┘
