@@ -1,5 +1,7 @@
+// Python SDK - pedantic/nursery lints relaxed for PyO3 FFI boundary
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(clippy::useless_conversion)]
-#![allow(clippy::pedantic)] // PyO3 binding code has many style differences
 //! Python bindings for `VelesDB` vector database.
 //!
 //! This module provides a Pythonic interface to VelesDB using PyO3.

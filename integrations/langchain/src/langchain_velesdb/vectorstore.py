@@ -491,13 +491,14 @@ class VelesDBVectorStore(VectorStore):
             **kwargs: Additional arguments.
 
         Returns:
-            True if deletion was successful.
+            True if deletion was successful, False if no collection exists,
+            None if no IDs were provided.
         """
         if not ids:
-            return True
+            return None
 
         if self._collection is None:
-            return True
+            return False
 
         # Convert string IDs to int
         int_ids = [_stable_hash_id(id_str) for id_str in ids]

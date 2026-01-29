@@ -1,4 +1,6 @@
-// UniFFI requires owned types (String, Vec) for FFI bindings - references not supported
+// Mobile SDK - pedantic/nursery lints relaxed for UniFFI FFI boundary
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(clippy::needless_pass_by_value)]
 // FFI boundary - pedantic lints relaxed for UniFFI compatibility
 #![allow(clippy::missing_errors_doc)]
