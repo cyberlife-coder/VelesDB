@@ -6,10 +6,10 @@ use std::sync::Arc;
 use crate::types::{
     AggregationResponse, ErrorResponse, ExplainCost, ExplainFeatures, ExplainRequest,
     ExplainResponse, ExplainStep, QueryErrorDetail, QueryErrorResponse, QueryRequest,
-    QueryResponse, SearchResultResponse,
+    QueryResponse, QueryType, SearchResultResponse,
 };
 use crate::AppState;
-use velesdb_core::velesql::{self, Condition, SelectColumns};
+use velesdb_core::velesql::{self, Condition, Query, SelectColumns};
 
 /// Execute a VelesQL query.
 ///
@@ -334,11 +334,100 @@ pub async fn explain(
 /// Check if a condition contains vector search.
 fn condition_has_vector_search(cond: &Condition) -> bool {
     match cond {
-        Condition::VectorSearch(_) | Condition::VectorFusedSearch { .. } => true,
+        Condition::VectorSearch(_)
+        | Condition::VectorFusedSearch { .. }
+        | Condition::Similarity(_) => true,
         Condition::And(left, right) | Condition::Or(left, right) => {
             condition_has_vector_search(left) || condition_has_vector_search(right)
         }
         Condition::Group(inner) | Condition::Not(inner) => condition_has_vector_search(inner),
         _ => false,
+    }
+}
+
+/// Detect query type from parsed AST (EPIC-052 US-006).
+///
+/// Priority order:
+/// 1. MATCH clause → Graph
+/// 2. GROUP BY or aggregates → Aggregation
+/// 3. Vector search → Search
+/// 4. Default → Rows
+#[allow(dead_code)] // Used in tests, will be used in unified handler
+pub fn detect_query_type(query: &Query) -> QueryType {
+    // Check for MATCH clause first
+    if query.is_match_query() {
+        return QueryType::Graph;
+    }
+
+    let select = &query.select;
+
+    // Check for aggregation
+    let is_aggregation = matches!(
+        &select.columns,
+        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
+    ) || select.group_by.is_some();
+
+    if is_aggregation {
+        return QueryType::Aggregation;
+    }
+
+    // Check for vector search
+    let has_vector = select
+        .where_clause
+        .as_ref()
+        .map(condition_has_vector_search)
+        .unwrap_or(false);
+
+    if has_vector {
+        return QueryType::Search;
+    }
+
+    QueryType::Rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_query_type_search() {
+        let parsed = velesql::Parser::parse(
+            "SELECT * FROM docs WHERE similarity(embedding, $v) > 0.8 LIMIT 10",
+        )
+        .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Search);
+    }
+
+    #[test]
+    fn test_detect_query_type_aggregation() {
+        let parsed =
+            velesql::Parser::parse("SELECT category, COUNT(*) FROM products GROUP BY category")
+                .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Aggregation);
+    }
+
+    #[test]
+    fn test_detect_query_type_rows() {
+        let parsed =
+            velesql::Parser::parse("SELECT name, price FROM products WHERE price > 100").unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Rows);
+    }
+
+    #[test]
+    fn test_detect_query_type_graph() {
+        let parsed =
+            velesql::Parser::parse("MATCH (n:Person)-[:KNOWS]->(m) RETURN n.name, m.name LIMIT 10")
+                .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Graph);
+    }
+
+    #[test]
+    fn test_detect_query_type_hybrid_vector_aggregation() {
+        // When both vector search and aggregation, aggregation takes priority
+        let parsed = velesql::Parser::parse(
+            "SELECT category, COUNT(*) FROM docs WHERE similarity(embedding, $v) > 0.7 GROUP BY category",
+        )
+        .unwrap();
+        assert_eq!(detect_query_type(&parsed), QueryType::Aggregation);
     }
 }

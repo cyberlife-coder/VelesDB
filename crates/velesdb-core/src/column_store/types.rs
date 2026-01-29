@@ -182,3 +182,152 @@ pub struct BatchUpsertResult {
     /// List of failed operations with their errors.
     pub failed: Vec<(i64, ColumnStoreError)>,
 }
+
+// =============================================================================
+// EPIC-043 US-001: Vacuum Types
+// =============================================================================
+
+/// Configuration for vacuum operation.
+#[derive(Debug, Clone)]
+pub struct VacuumConfig {
+    /// Process tombstones in batches of this size.
+    pub batch_size: usize,
+    /// Sync to disk after vacuum.
+    pub sync: bool,
+    /// Yield interval for cooperative multitasking (0 = no yielding).
+    pub yield_interval_ms: u64,
+}
+
+impl Default for VacuumConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 10_000,
+            sync: true,
+            yield_interval_ms: 0,
+        }
+    }
+}
+
+impl VacuumConfig {
+    /// Creates a new vacuum config with default values.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder: set batch size.
+    #[must_use]
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Builder: set sync option.
+    #[must_use]
+    pub fn with_sync(mut self, sync: bool) -> Self {
+        self.sync = sync;
+        self
+    }
+}
+
+/// Statistics from a vacuum operation.
+#[derive(Debug, Default, Clone)]
+pub struct VacuumStats {
+    /// Number of tombstones found.
+    pub tombstones_found: usize,
+    /// Number of tombstones removed.
+    pub tombstones_removed: usize,
+    /// Bytes reclaimed (estimated).
+    pub bytes_reclaimed: u64,
+    /// Duration of the vacuum operation in milliseconds.
+    pub duration_ms: u64,
+    /// Whether vacuum completed successfully.
+    pub completed: bool,
+}
+
+// =============================================================================
+// EPIC-043 US-003: Auto-Vacuum Configuration
+// =============================================================================
+
+/// Configuration for automatic vacuum triggering.
+///
+/// Based on PostgreSQL best practices:
+/// - Default threshold: 20% (same as PostgreSQL autovacuum_vacuum_scale_factor)
+/// - Check interval: 300s (5 minutes)
+#[derive(Debug, Clone)]
+pub struct AutoVacuumConfig {
+    /// Enable automatic vacuum.
+    pub enabled: bool,
+    /// Trigger when deletion ratio exceeds this (0.0-1.0).
+    /// PostgreSQL default is 0.20 (20%).
+    pub threshold_ratio: f64,
+    /// Minimum number of deleted rows before considering vacuum.
+    /// PostgreSQL default is 50.
+    pub min_dead_rows: usize,
+    /// How often to check for vacuum need (seconds).
+    pub check_interval_secs: u64,
+}
+
+impl Default for AutoVacuumConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold_ratio: 0.20, // PostgreSQL default
+            min_dead_rows: 50,     // PostgreSQL default
+            check_interval_secs: 300,
+        }
+    }
+}
+
+impl AutoVacuumConfig {
+    /// Creates a new auto-vacuum config with default values.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder: enable/disable auto-vacuum.
+    #[must_use]
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Builder: set threshold ratio (0.0-1.0).
+    #[must_use]
+    pub fn with_threshold(mut self, threshold: f64) -> Self {
+        self.threshold_ratio = threshold.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Builder: set minimum dead rows.
+    #[must_use]
+    pub fn with_min_dead_rows(mut self, min: usize) -> Self {
+        self.min_dead_rows = min;
+        self
+    }
+
+    /// Builder: set check interval in seconds.
+    #[must_use]
+    pub fn with_check_interval(mut self, secs: u64) -> Self {
+        self.check_interval_secs = secs;
+        self
+    }
+
+    /// Checks if vacuum should be triggered based on current stats.
+    #[must_use]
+    pub fn should_trigger(&self, row_count: usize, deleted_count: usize) -> bool {
+        if !self.enabled || row_count == 0 {
+            return false;
+        }
+
+        // Must have minimum dead rows
+        if deleted_count < self.min_dead_rows {
+            return false;
+        }
+
+        // Check threshold ratio
+        let ratio = deleted_count as f64 / row_count as f64;
+        ratio >= self.threshold_ratio
+    }
+}

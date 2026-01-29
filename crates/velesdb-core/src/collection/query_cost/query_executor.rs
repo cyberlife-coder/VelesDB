@@ -198,6 +198,8 @@ impl QueryOptimizer {
 
         if let Some(sel) = query.filter_selectivity {
             // Quantize selectivity to reduce cache misses
+            // SAFETY: sel is in [0.0, 1.0], so sel * 100.0 is in [0.0, 100.0], fits in u32
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let quantized = (sel * 100.0) as u32;
             quantized.hash(&mut hasher);
         }

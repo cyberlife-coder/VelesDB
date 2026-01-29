@@ -1,4 +1,5 @@
 //! Tests for DISTINCT keyword support (EPIC-052 US-001).
+#![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::Collection;
 use crate::velesql::{DistinctMode, Parser};

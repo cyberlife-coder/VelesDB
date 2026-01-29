@@ -7,7 +7,7 @@ VelesDB Mobile brings microsecond vector search to edge devices - perfect for on
 ## Features
 
 - **Native Performance**: Direct Rust bindings, no FFI overhead
-- **Multi-Query Fusion**: Native MQG with RRF/Weighted strategies ⭐ NEW v1.1.0
+- **Multi-Query Fusion**: Native MQG with RRF/Weighted strategies
 - **Binary Quantization**: 32x memory reduction for constrained devices
 - **ARM NEON SIMD**: Optimized for mobile processors (Apple A-series, Snapdragon)
 - **Offline-First**: Full functionality without network connectivity

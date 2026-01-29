@@ -1,6 +1,7 @@
 //! Tests for `vector_ref` module - Zero-copy vector references.
 
 #![allow(clippy::float_cmp)]
+#![allow(unstable_name_collisions)]
 
 use super::vector_ref::*;
 use std::borrow::Cow;

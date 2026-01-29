@@ -132,6 +132,9 @@ impl NativeHnswInner {
 // Send + Sync for thread safety
 // ============================================================================
 
+// SAFETY: NativeHnswInner wraps NativeHnsw<CpuDistance> which uses parking_lot::RwLock
+// for all mutable state (vectors, layers, entry_point). parking_lot::RwLock is Send+Sync,
+// and all atomic fields use proper Ordering. The inner type is thread-safe by construction.
 unsafe impl Send for NativeHnswInner {}
 unsafe impl Sync for NativeHnswInner {}
 

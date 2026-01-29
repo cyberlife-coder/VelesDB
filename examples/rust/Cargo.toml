@@ -1,0 +1,18 @@
+[package]
+name = "multimodel_search"
+version = "0.1.0"
+edition = "2021"
+description = "VelesDB Multi-Model Search Example"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "multimodel_search"
+path = "multimodel_search.rs"
+
+[dependencies]
+velesdb-core = { path = "../../crates/velesdb-core" }
+serde_json = "1.0"
+tempfile = "3.10"

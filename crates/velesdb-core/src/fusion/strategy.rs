@@ -188,6 +188,8 @@ impl FusionStrategy {
         let mut fused: Vec<(u64, f32)> = doc_scores
             .into_iter()
             .map(|(id, scores)| {
+                // SAFETY: scores.len() is typically < 1000, fits in f32 with full precision
+                #[allow(clippy::cast_precision_loss)]
                 let avg = scores.iter().sum::<f32>() / scores.len() as f32;
                 (id, avg)
             })
@@ -221,6 +223,8 @@ impl FusionStrategy {
     /// RRF fusion: reciprocal rank fusion.
     fn fuse_rrf(results: Vec<Vec<(u64, f32)>>, k: u32) -> Result<Vec<(u64, f32)>, FusionError> {
         let mut doc_rrf: HashMap<u64, f32> = HashMap::new();
+        // SAFETY: k is typically 60, fits in f32 with full precision
+        #[allow(clippy::cast_precision_loss)]
         let k_f32 = k as f32;
 
         for query_results in results {
@@ -232,6 +236,8 @@ impl FusionStrategy {
             }
 
             for (id, rank) in seen {
+                // SAFETY: rank is typically < 1000, fits in f32 with full precision
+                #[allow(clippy::cast_precision_loss)]
                 let rrf_score = 1.0 / (k_f32 + (rank + 1) as f32);
                 *doc_rrf.entry(id).or_insert(0.0) += rrf_score;
             }
@@ -269,13 +275,18 @@ impl FusionStrategy {
             }
         }
 
+        // SAFETY: total_queries is typically < 100, fits in f32 with full precision
+        #[allow(clippy::cast_precision_loss)]
         let total_q = total_queries as f32;
 
         let mut fused: Vec<(u64, f32)> = doc_scores
             .into_iter()
             .map(|(id, scores)| {
+                // SAFETY: scores.len() is typically < 1000, fits in f32 with full precision
+                #[allow(clippy::cast_precision_loss)]
                 let avg = scores.iter().sum::<f32>() / scores.len() as f32;
                 let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                #[allow(clippy::cast_precision_loss)]
                 let hit_ratio = scores.len() as f32 / total_q;
 
                 let combined = avg_weight * avg + max_weight * max + hit_weight * hit_ratio;

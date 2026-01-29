@@ -1,5 +1,8 @@
 //! Tauri commands for RAG operations
 
+#[cfg(test)]
+mod tests;
+
 use crate::embeddings;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

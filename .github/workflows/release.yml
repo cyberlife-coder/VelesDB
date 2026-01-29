@@ -11,6 +11,26 @@ on:
         description: 'Version to release (e.g., 0.8.5)'
         required: true
         type: string
+      publish_binaries:
+        description: 'Build binaries'
+        type: boolean
+        default: true
+      publish_crates:
+        description: 'Publish to crates.io'
+        type: boolean
+        default: true
+      publish_pypi:
+        description: 'Publish to PyPI'
+        type: boolean
+        default: true
+      publish_npm:
+        description: 'Publish to npm'
+        type: boolean
+        default: true
+      publish_github:
+        description: 'Create GitHub Release'
+        type: boolean
+        default: true
 
 concurrency:
   group: release-${{ github.ref }}
@@ -32,7 +52,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Extract version
         id: version
@@ -56,6 +76,7 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: validate
+    if: github.event_name == 'push' || inputs.publish_binaries
     strategy:
       fail-fast: false
       matrix:
@@ -66,10 +87,10 @@ jobs:
           - { target: x86_64-apple-darwin, os: macos-latest, ext: tar.gz }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
           toolchain: ${{ env.RUST_VERSION }}
       
@@ -78,20 +99,18 @@ jobs:
 
       - name: Cache apt packages (Linux)
         if: runner.os == 'Linux'
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
         with:
           shared-key: "release-${{ matrix.target }}"
 
       - name: Install cargo-deb (Linux)
         if: runner.os == 'Linux'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deb
+        run: cargo install cargo-deb --locked
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p velesdb-cli -p velesdb-server -p velesdb-migrate
@@ -117,7 +136,7 @@ jobs:
           cargo deb -p velesdb-cli --no-build --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/debian/*.deb velesdb-${{ needs.validate.outputs.version }}-amd64.deb
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
         with:
           name: binaries-${{ matrix.target }}
           path: |
@@ -126,55 +145,81 @@ jobs:
             *.deb
 
   # ===========================================================================
-  # 3. Publish to crates.io
+  # 3. Publish to crates.io (each crate independently)
   # ===========================================================================
   publish-crates:
-    name: Publish crates.io
+    name: Publish ${{ matrix.crate }}
     runs-on: ubuntu-latest
     needs: validate
-    if: needs.validate.outputs.is_prerelease == 'false'
+    if: |
+      needs.validate.outputs.is_prerelease == 'false' &&
+      (github.event_name == 'push' || inputs.publish_crates)
     environment: crates-io
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        crate:
+          - velesdb-core
+          - velesdb-server
+          - velesdb-cli
+          - velesdb-migrate
+          - velesdb-mobile
+          - tauri-plugin-velesdb
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
 
       - name: Cache apt packages
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - name: Publish (ordered by deps)
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "publish-crates"
+
+      - name: Publish ${{ matrix.crate }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          for crate in velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb; do
-            echo "📦 Publishing $crate..."
-            cargo publish -p $crate --allow-dirty 2>/dev/null || echo "⏭️ $crate already published"
-            sleep 10
-          done
+          echo "📦 Publishing ${{ matrix.crate }}..."
+          cargo publish -p ${{ matrix.crate }} --allow-dirty || echo "⏭️ ${{ matrix.crate }} already published or failed"
 
   # ===========================================================================
-  # 4. Publish to PyPI
+  # 4. Publish to PyPI (each package independently)
   # ===========================================================================
   publish-pypi:
-    name: Publish PyPI
+    name: Publish PyPI ${{ matrix.package }}
     runs-on: ubuntu-latest
     needs: validate
-    if: needs.validate.outputs.is_prerelease == 'false'
+    if: |
+      needs.validate.outputs.is_prerelease == 'false' &&
+      (github.event_name == 'push' || inputs.publish_pypi)
     environment: pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - velesdb
+          - langchain-velesdb
+          - llamaindex-velesdb
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust (velesdb only)
+        if: matrix.package == 'velesdb'
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Build wheel
+      - name: Build velesdb wheel
+        if: matrix.package == 'velesdb'
         env:
-          # Clear any cached/polluted Python paths to avoid cross-platform issues
           PYTHONHOME: ""
           PYTHONPATH: ""
         run: |
@@ -183,70 +228,81 @@ jobs:
           maturin build --release --out dist
 
       - name: Publish velesdb to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        if: matrix.package == 'velesdb'
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
         with:
           packages-dir: crates/velesdb-python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
 
-      # LangChain Integration
-      - name: Build & Publish langchain-velesdb
+      - name: Build langchain-velesdb
+        if: matrix.package == 'langchain-velesdb'
         run: |
           cd integrations/langchain
           pip install build
           python -m build
-        continue-on-error: true
 
       - name: Publish langchain-velesdb to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        if: matrix.package == 'langchain-velesdb'
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
         with:
           packages-dir: integrations/langchain/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-        continue-on-error: true
 
-      # LlamaIndex Integration
-      - name: Build & Publish llama-index-vector-stores-velesdb
+      - name: Build llamaindex-velesdb
+        if: matrix.package == 'llamaindex-velesdb'
         run: |
           cd integrations/llamaindex
           pip install build hatchling
           python -m build
-        continue-on-error: true
 
-      - name: Publish llama-index-vector-stores-velesdb to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish llamaindex-velesdb to PyPI
+        if: matrix.package == 'llamaindex-velesdb'
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
         with:
           packages-dir: integrations/llamaindex/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-        continue-on-error: true
 
   # ===========================================================================
-  # 5. Publish to npm (WASM + SDK)
+  # 5. Publish to npm (each package independently)
   # ===========================================================================
   publish-npm:
-    name: Publish npm
+    name: Publish npm ${{ matrix.package }}
     runs-on: ubuntu-latest
     needs: validate
-    if: needs.validate.outputs.is_prerelease == 'false'
+    if: |
+      needs.validate.outputs.is_prerelease == 'false' &&
+      (github.event_name == 'push' || inputs.publish_npm)
     environment: npm
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - wasm
+          - typescript-sdk
+          - tauri-plugin
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust (wasm only)
+        if: matrix.package == 'wasm'
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack
+      - name: Install wasm-pack
+        if: matrix.package == 'wasm'
+        run: cargo install wasm-pack --locked
 
-      # WASM package
       - name: Build & Publish WASM
+        if: matrix.package == 'wasm'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -257,8 +313,8 @@ jobs:
           node -e "const p=require('./package.json'); p.name='@wiscale/velesdb-wasm'; p.version='$VERSION'; require('fs').writeFileSync('package.json',JSON.stringify(p,null,2))"
           npm publish --access public || echo "⏭️ WASM already published"
 
-      # TypeScript SDK
-      - name: Build & Publish SDK
+      - name: Build & Publish TypeScript SDK
+        if: matrix.package == 'typescript-sdk'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -266,8 +322,8 @@ jobs:
           npm install && npm run build
           npm publish --access public || echo "⏭️ SDK already published"
 
-      # Tauri Plugin
       - name: Build & Publish Tauri Plugin
+        if: matrix.package == 'tauri-plugin'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -282,14 +338,19 @@ jobs:
     name: GitHub Release
     runs-on: ubuntu-latest
     needs: [validate, build]
+    if: |
+      always() &&
+      needs.validate.result == 'success' &&
+      (github.event_name == 'push' || inputs.publish_github) &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           path: artifacts
           pattern: binaries-*
@@ -302,7 +363,7 @@ jobs:
           [ -n "$PREV" ] && git log --pretty="- %s" $PREV..HEAD >> RELEASE_NOTES.md || echo "- Initial release" >> RELEASE_NOTES.md
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           name: VelesDB v${{ needs.validate.outputs.version }}
           body_path: RELEASE_NOTES.md
@@ -322,10 +383,18 @@ jobs:
       - name: Summary
         run: |
           echo "## 🚀 Release v${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Results" >> $GITHUB_STEP_SUMMARY
           echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Binaries | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| crates.io | ${{ needs.publish-crates.result == 'success' && '✅' || '⏭️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| PyPI | ${{ needs.publish-pypi.result == 'success' && '✅' || '⏭️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| npm | ${{ needs.publish-npm.result == 'success' && '✅' || '⏭️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Binaries | ${{ needs.build.result == 'success' && '✅' || (needs.build.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| crates.io | ${{ needs.publish-crates.result == 'success' && '✅' || (needs.publish-crates.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyPI | ${{ needs.publish-pypi.result == 'success' && '✅' || (needs.publish-pypi.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| npm | ${{ needs.publish-npm.result == 'success' && '✅' || (needs.publish-npm.result == 'skipped' && '⏭️' || '⚠️') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || (needs.github-release.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Re-run Options" >> $GITHUB_STEP_SUMMARY
+          echo "Use **workflow_dispatch** to re-run specific components without re-tagging:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Select only failed components" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Each crate/package runs independently" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ fail-fast: false - one failure doesn't block others" >> $GITHUB_STEP_SUMMARY

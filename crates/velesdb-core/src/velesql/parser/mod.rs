@@ -1,6 +1,7 @@
 //! `VelesQL` parser implementation using pest.
 
 mod conditions;
+mod match_parser;
 mod select;
 mod values;
 

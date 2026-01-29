@@ -340,6 +340,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     // =========================================================================
 
     fn get_vector(&self, node_id: NodeId) -> Vec<f32> {
+        // Clone needed: returns owned copy to allow lock release before caller uses data
         self.vectors.read()[node_id].clone()
     }
 
@@ -571,6 +572,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         } else {
             // Pruning case: need to compute distances
             // BUG-CORE-001 FIX Phase 3: Pre-fetch ALL vectors BEFORE acquiring layers lock
+            // Clone needed: current_neighbors borrowed from layer, need owned copy to extend
             let mut all_neighbors = current_neighbors.clone();
             all_neighbors.push(new_node);
 

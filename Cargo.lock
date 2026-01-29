@@ -1890,6 +1890,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "generator"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52f04ae4152da20c76fe800fa48659201d5cf627c5149ca0b707b69d7eef6cf9"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3003,6 +3018,19 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "loom"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
+dependencies = [
+ "cfg-if",
+ "generator",
+ "scoped-tls",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "mac"
@@ -4877,6 +4905,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5855,7 +5889,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "dirs 5.0.1",
  "parking_lot",
@@ -6785,7 +6819,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -6811,7 +6845,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -6828,6 +6862,7 @@ dependencies = [
  "hostname",
  "indexmap 2.12.1",
  "libc",
+ "loom",
  "memmap2",
  "parking_lot",
  "pest",
@@ -6858,7 +6893,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-migrate"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6886,7 +6921,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-mobile"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -6898,7 +6933,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "numpy",
  "pyo3",
@@ -6909,7 +6944,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -6934,7 +6969,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-wasm"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "half",
  "js-sys",

@@ -104,6 +104,11 @@ gpu = ["wgpu", "pollster", "bytemuck"]
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
 # Update check feature: enables HTTP client for version checking
 update-check = ["dep:reqwest", "dep:tokio"]
+# Loom feature: enables concurrency testing with loom (EPIC-023)
+# Run with: cargo +nightly test --features loom --test loom_tests
+loom = ["dep:loom"]
+# Portable SIMD evaluation (EPIC-054/US-004) - requires nightly
+portable-simd = []
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -113,6 +118,11 @@ tokio-test = "0.4"
 serial_test = "3.1"
 clap = { version = "4.5", features = ["derive"] }
 rand = "0.8"
+
+# Loom for concurrency testing (EPIC-023) - optional dependency, not dev-dependency
+[dependencies.loom]
+version = "0.7"
+optional = true
 
 [[example]]
 name = "crash_driver"
@@ -241,6 +251,10 @@ harness = false
 
 [[bench]]
 name = "smoke_test"
+harness = false
+
+[[bench]]
+name = "portable_simd_eval"
 harness = false
 
 # ============================================================================

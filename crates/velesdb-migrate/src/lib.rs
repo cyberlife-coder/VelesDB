@@ -1,5 +1,6 @@
-// Migration tool - pedantic lints relaxed for CLI ergonomics
+// Migration tool - pedantic/nursery lints relaxed for CLI ergonomics
 #![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 
 //! # `VelesDB` Migration Tool
 //!

@@ -38,6 +38,9 @@ where
     l2_hits: AtomicU64,
     /// Total miss counter.
     misses: AtomicU64,
+    /// L1 eviction overflow counter (P2 Audit 2026-01-29).
+    /// Counts times when L1 exceeded capacity after max eviction attempts.
+    l1_overflow: AtomicU64,
 }
 
 /// Statistics for the two-tier cache.
@@ -53,6 +56,8 @@ pub struct LockFreeCacheStats {
     pub l1_size: usize,
     /// L2 current size.
     pub l2_size: usize,
+    /// L1 overflow count (times L1 exceeded capacity after max eviction attempts).
+    pub l1_overflow: u64,
 }
 
 impl LockFreeCacheStats {
@@ -99,6 +104,7 @@ where
             l1_hits: AtomicU64::new(0),
             l2_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            l1_overflow: AtomicU64::new(0),
         }
     }
 
@@ -172,6 +178,7 @@ where
             misses: self.misses.load(Ordering::Relaxed),
             l1_size: self.l1.len(),
             l2_size: self.l2.len(),
+            l1_overflow: self.l1_overflow.load(Ordering::Relaxed),
         }
     }
 
@@ -218,6 +225,11 @@ where
             for key in keys_to_remove {
                 self.l1.remove(&key);
             }
+        }
+
+        // P2 Audit 2026-01-29: Track overflow when L1 still exceeds capacity after max attempts
+        if self.l1.len() > self.l1_capacity {
+            self.l1_overflow.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

@@ -22,7 +22,10 @@ pub mod search;
 #[cfg(feature = "prometheus")]
 pub mod metrics;
 
-pub use collections::{create_collection, delete_collection, get_collection, list_collections};
+pub use collections::{
+    create_collection, delete_collection, flush_collection, get_collection, is_empty,
+    list_collections,
+};
 pub use health::health_check;
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{delete_point, get_point, upsert_points};

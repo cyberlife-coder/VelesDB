@@ -1,3 +1,6 @@
+// CLI - pedantic/nursery lints relaxed
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::cast_precision_loss)]
@@ -14,6 +17,7 @@ mod graph;
 mod import;
 mod license;
 mod repl;
+mod repl_output;
 mod session;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};

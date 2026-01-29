@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 223µs Search • 2,765 Tests • 80% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57µs Search • 3,000+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -24,9 +24,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Search-223_µs-blue?style=for-the-badge" alt="Search Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-2,765-green?style=for-the-badge" alt="Tests"/>
-  <img src="https://img.shields.io/badge/📊_Coverage-80.71%25-success?style=for-the-badge" alt="Coverage"/>
+  <img src="https://img.shields.io/badge/🏎️_Search-57us-blue?style=for-the-badge" alt="Search Latency"/>
+  <img src="https://img.shields.io/badge/🧪_Tests-3,000+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
 </p>
 
@@ -42,7 +42,7 @@
 
 | Pain Point | Business Impact | VelesDB Solution |
 |------------|-----------------|------------------|
-| **🐌 Latency kills UX** | Cloud vector DBs add 50-100ms/query. 10 retrievals = **1+ second delay** | **223µs local** — 500x faster |
+| **🐌 Latency kills UX** | Cloud vector DBs add 50-100ms/query. 10 retrievals = **1+ second delay** | **57µs local** — 1000x faster |
 | **🔗 Vectors alone aren't enough** | Semantic similarity misses relationships ("Who authored this?") | **Vector + Graph unified** in one query |
 | **🔒 Privacy & deployment friction** | Cloud dependencies, API keys, GDPR concerns | **15MB binary** — works offline, air-gapped |
 
@@ -67,8 +67,8 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 223µs Search</h3>
-<p>Native HNSW + AVX-512 SIMD.<br/><strong>500x faster than cloud.</strong></p>
+<h3>⚡ 57µs Search</h3>
+<p>Native HNSW + AVX-512 SIMD.<br/><strong>877x faster than pgvector.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📦 15MB Binary</h3>
@@ -90,11 +90,11 @@
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 2,765</h3>
-<p><strong>Tests</strong><br/>97.6% passing</p>
+<h3>🧪 3,000</h3>
+<p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
-<h3>📈 80.71%</h3>
+<h3>📈 82.30%</h3>
 <p><strong>Code Coverage</strong><br/>Line coverage</p>
 </td>
 <td align="center" width="20%">
@@ -102,7 +102,7 @@
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 46 ns</h3>
+<h3>⚡ 57 ns</h3>
 <p><strong>Dot Product</strong><br/>768D vectors</p>
 </td>
 <td align="center" width="20%">
@@ -116,20 +116,20 @@
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 46 ns | 21.7M ops/sec |
-| **SIMD Cosine (768D)** | 105 ns | 9.5M ops/sec |
-| **SIMD Hamming (binary)** | 8 ns | 125M ops/sec |
-| **HNSW Search (10K vectors)** | 223 µs | k=10, 128D |
-| **Hybrid Search** | 139 µs | Vector + filter |
-| **Bulk Insert (10K)** | 4.6s | With HNSW indexing |
+| **SIMD Dot Product (768D)** | 57 ns | 17.5M ops/sec |
+| **SIMD Cosine (768D)** | 68 ns | 14.7M ops/sec |
+| **SIMD Hamming (binary)** | 6 ns | 167M ops/sec |
+| **HNSW Search (10K vectors)** | 57 µs | k=10, 768D |
+| **ColumnStore Filter (100K)** | 88 µs | 44x vs JSON |
+| **VelesQL Cache Hit** | 84 ns | 12M qps |
 
 ### Codebase Health
 
 | Metric | Value |
 |--------|-------|
-| **Total Rust LoC** | ~95,000 |
+| **Total Rust LoC** | ~133,000 |
 | **Crates** | 8 production crates |
-| **Benchmarks** | 31 criterion suites |
+| **Benchmarks** | 35 criterion suites |
 | **E2E Test Suites** | 6 (Rust, Python, WASM, CLI, LangChain, LlamaIndex) |
 | **Security Advisories** | 0 ✅ |
 
@@ -138,10 +138,10 @@
 ```
 ✅ cargo check --workspace
 ✅ cargo clippy -- -D warnings  
-✅ cargo test --workspace (2,698 passing)
+✅ cargo test --workspace (3,000 passing)
 ✅ cargo deny check (0 advisories)
 ✅ cargo fmt --check
-✅ Code coverage > 75% (80.71%)
+✅ Code coverage > 75% (82.30%)
 ```
 
 > 📊 **Full metrics:** [docs/RELEASE_METRICS_v1.4.0.md](docs/RELEASE_METRICS_v1.4.0.md)
@@ -204,6 +204,59 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | **Browser-side Search**       | WASM module, zero backend           |
 | **Edge/IoT Devices**          | 15MB footprint, ARM NEON optimized  |
 | **On-Prem / Air-Gapped**      | No cloud dependency, full data sovereignty |
+
+---
+
+## 🎪 Demos & Examples
+
+> **See VelesDB in action** with production-ready examples demonstrating real-world use cases.
+
+### ⭐ Flagship: E-commerce Recommendation Engine
+
+The ultimate showcase of VelesDB's **Vector + Graph + MultiColumn** combined power:
+
+```bash
+cd examples/ecommerce_recommendation
+cargo run --release
+```
+
+| Feature | Details |
+|---------|---------|
+| **📦 Dataset** | 5,000 products, 128-dim embeddings, 11 metadata fields |
+| **🔗 Graph** | ~20,000 co-purchase relationships |
+| **🔍 Query Types** | Vector similarity, Filtered search, Graph lookup, Combined |
+
+#### Measured Performance (5,000 products, 128D)
+
+| Query Type | Latency | Description |
+|------------|---------|-------------|
+| **Vector Similarity** | **187 µs** | Find semantically similar products |
+| **Vector + Filter** | **55 µs** | In-stock, price < $500, rating ≥ 4.0 |
+| **Graph Lookup** | **88 µs** | Co-purchased products (BOUGHT_TOGETHER) |
+| **Combined (Full Power)** | **202 µs** | Union of Vector + Graph + Filters |
+
+> 💡 **Real-world latency** — includes payload retrieval, filtering, and result construction. Pure HNSW search is 57µs.
+
+**Includes 15 Playwright E2E tests** validating data generation, query execution, and performance thresholds.
+
+📖 **Full documentation:** [examples/ecommerce_recommendation/README.md](examples/ecommerce_recommendation/README.md)
+
+### Other Demos
+
+| Demo | Description | Tech |
+|------|-------------|------|
+| [**rag-pdf-demo**](demos/rag-pdf-demo/) | PDF document Q&A with RAG | Python, FastAPI |
+| [**tauri-rag-app**](demos/tauri-rag-app/) | Desktop RAG application | Tauri v2, React |
+| [**wasm-browser-demo**](examples/wasm-browser-demo/) | In-browser vector search | WASM, vanilla JS |
+| [**mini_recommender**](examples/mini_recommender/) | Simple product recommendations | Rust |
+
+### Quick Examples by Language
+
+| Language | Example | Run |
+|----------|---------|-----|
+| **Rust** | Multi-model search | `cd examples/rust && cargo run` |
+| **Python** | Hybrid queries, Graph traversal | `python examples/python/hybrid_queries.py` |
+| **TypeScript** | REST API client | `cd sdks/typescript && npm test` |
 
 ---
 
@@ -997,27 +1050,27 @@ LIMIT 10
 | **Hamming (Binary)**| **8 ns** | **125M ops/sec** | 🚀 **10x faster** |
 | **Jaccard (768D)** | **175 ns** | **5.7M ops/sec** | 🚀 **3x faster** |
 
-### 📊 System Performance (10K Vectors, 128D)
+### 📊 System Performance (10K Vectors, 768D)
 
 | Benchmark | Result | Details |
 |-----------|--------|----------|
-| **HNSW Search** | **223 µs** | p50 latency (Cosine) |
+| **HNSW Search** | **57 µs** | Balanced mode (ef=128) |
 | **Hybrid Search** | **139 µs** | Vector + filter |
-| **Bulk Insert 10K** | **4.6s** | With HNSW indexing |
-| **VelesQL Parsing**| **554 ns** | Simple SELECT |
+| **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
+| **VelesQL Parsing**| **84 ns** | Cache hit (12M qps) |
 | **Recall@10** | **100%** | Accurate mode |
-| **Code Coverage** | **80.71%** | 2,765 tests |
+| **Code Coverage** | **82.30%** | 3,000+ tests |
 
-### 🎯 Search Quality (Recall)
+### Search Quality (Recall)
 
-| Mode | Recall@10 | Latency (128D) | Use Case |
-|------|-----------|----------------|----------|
-| Fast | 95.2% | ~71µs | Real-time, high throughput |
-| Balanced | 98.8% | ~85µs | Production recommended |
-| Accurate | 100% | ~112µs | High precision |
-| **Perfect** | **100%** | ~163µs | Maximum recall |
+| Mode | Recall@10 | Latency (10K/128D) | Use Case |
+|------|-----------|--------------------|-----------|
+| Fast (ef=64) | 92.2% | **36µs** | Real-time, high throughput |
+| Balanced (ef=128) | 98.8% | **57µs** | Production recommended |
+| Accurate (ef=256) | 100% | **130µs** | High precision |
+| **Perfect (ef=2048)** | **100%** | **200µs** | Maximum recall |
 
-### 🛠️ Optimizations Under the Hood
+### Optimizations Under the Hood
 
 - **SIMD**: AVX-512/AVX2 auto-detection with 32-wide FMA
 - **Prefetch**: CPU cache warming for HNSW traversal (+12% throughput)

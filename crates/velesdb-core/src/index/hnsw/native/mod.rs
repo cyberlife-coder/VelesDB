@@ -47,7 +47,7 @@ mod search;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
 pub use distance::{CpuDistance, DistanceEngine, NativeSimdDistance, SimdDistance};
-pub use dual_precision::DualPrecisionHnsw;
+pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::NativeHnsw;
 pub use layer::{Layer, NodeId};
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};

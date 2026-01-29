@@ -9,7 +9,7 @@ Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) - a hi
 ## Features
 
 - **Vector Similarity Search**: HNSW index with SIMD-optimized distance calculations
-- **Multi-Query Fusion**: Native MQG support with RRF/Weighted fusion strategies ⭐ NEW
+- **Multi-Query Fusion**: Native MQG support with RRF/Weighted fusion strategies
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **Persistent Storage**: Memory-mapped files for efficient disk I/O
 - **Metadata Support**: Store and retrieve JSON payloads with vectors

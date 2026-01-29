@@ -303,7 +303,8 @@ impl Collection {
 
         // Default to at least 1 if we have relationships
         if max_depth == 0 && !pattern.relationships.is_empty() {
-            max_depth = pattern.relationships.len() as u32;
+            // SAFETY: Pattern relationships count is typically < 10, capped at 10 anyway
+            max_depth = u32::try_from(pattern.relationships.len()).unwrap_or(10);
         }
 
         max_depth.min(10) // Cap at 10 for safety
@@ -387,9 +388,114 @@ impl Collection {
                 let inner_result = self.evaluate_where_condition(node_id, inner, params)?;
                 Ok(!inner_result)
             }
-            // For other condition types, default to true (not filtered)
+            Condition::Group(inner) => self.evaluate_where_condition(node_id, inner, params),
+            Condition::Similarity(sim) => {
+                // EPIC-052 US-007: Evaluate similarity condition in WHERE clause
+                self.evaluate_similarity_condition(node_id, sim, params)
+            }
+            // For other condition types (VectorSearch, VectorFusedSearch, etc.),
+            // default to true as they are handled separately in execute_match_with_similarity
             _ => Ok(true),
         }
+    }
+
+    /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).
+    ///
+    /// Computes the similarity between the node's vector and the query vector,
+    /// then compares it against the threshold using the specified operator.
+    fn evaluate_similarity_condition(
+        &self,
+        node_id: u64,
+        sim: &crate::velesql::SimilarityCondition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        use crate::velesql::VectorExpr;
+
+        // Get query vector from parameters
+        let query_vector = match &sim.vector {
+            VectorExpr::Literal(v) => v.clone(),
+            VectorExpr::Parameter(name) => {
+                let param_value = params
+                    .get(name)
+                    .ok_or_else(|| Error::Config(format!("Missing vector parameter: ${}", name)))?;
+
+                // Convert JSON array to Vec<f32>
+                match param_value {
+                    serde_json::Value::Array(arr) => arr
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                    _ => {
+                        return Err(Error::Config(format!(
+                            "Parameter ${} must be a vector array",
+                            name
+                        )));
+                    }
+                }
+            }
+        };
+
+        if query_vector.is_empty() {
+            return Ok(false);
+        }
+
+        // Get node vector
+        let vector_storage = self.vector_storage.read();
+        let node_vector = match vector_storage.retrieve(node_id)? {
+            Some(v) => v,
+            None => return Ok(false), // No vector = no match
+        };
+
+        if node_vector.len() != query_vector.len() {
+            return Ok(false); // Dimension mismatch
+        }
+
+        // Compute similarity using collection's metric
+        let config = self.config.read();
+        let metric = config.metric;
+        let higher_is_better = metric.higher_is_better();
+        drop(config);
+
+        let score = metric.calculate(&node_vector, &query_vector);
+
+        // Evaluate threshold comparison with metric awareness
+        // For distance metrics (Euclidean, Hamming): lower = more similar
+        // So "similarity > X" means "distance < X" (inverted comparison)
+        #[allow(clippy::cast_possible_truncation)]
+        let threshold = sim.threshold as f32;
+
+        Ok(match sim.operator {
+            crate::velesql::CompareOp::Gt => {
+                if higher_is_better {
+                    score > threshold
+                } else {
+                    score < threshold
+                }
+            }
+            crate::velesql::CompareOp::Gte => {
+                if higher_is_better {
+                    score >= threshold
+                } else {
+                    score <= threshold
+                }
+            }
+            crate::velesql::CompareOp::Lt => {
+                if higher_is_better {
+                    score < threshold
+                } else {
+                    score > threshold
+                }
+            }
+            crate::velesql::CompareOp::Lte => {
+                if higher_is_better {
+                    score <= threshold
+                } else {
+                    score >= threshold
+                }
+            }
+            crate::velesql::CompareOp::Eq => (score - threshold).abs() < f32::EPSILON,
+            crate::velesql::CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
+        })
     }
 
     /// Resolves a Value for WHERE clause, substituting parameters from the params map.

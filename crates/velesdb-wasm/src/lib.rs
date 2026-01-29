@@ -1,4 +1,6 @@
-// WASM bindings have different conventions - relax pedantic lints for FFI boundary
+// WASM bindings have different conventions - relax pedantic/nursery lints for FFI boundary
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::must_use_candidate)]
@@ -45,6 +47,8 @@ mod distance;
 mod filter;
 mod fusion;
 mod graph;
+mod graph_persistence;
+mod graph_worker;
 mod persistence;
 mod serialization;
 mod simd;

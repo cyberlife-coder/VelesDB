@@ -5,6 +5,47 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Quantization mode for vector search (EPIC-055 US-005).
+///
+/// Controls the precision/speed tradeoff for similarity search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QuantizationMode {
+    /// Use full f32 precision (exact, slower).
+    F32,
+    /// Use int8 quantization only (fast, approximate).
+    Int8,
+    /// Use dual-precision: int8 for candidate selection, f32 for reranking.
+    Dual,
+    /// Let the system decide based on index configuration.
+    #[default]
+    Auto,
+}
+
+impl QuantizationMode {
+    /// Parses a quantization mode from a string (case-insensitive).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "f32" | "full" | "exact" => Some(Self::F32),
+            "int8" | "sq8" | "quantized" => Some(Self::Int8),
+            "dual" | "hybrid" => Some(Self::Dual),
+            "auto" | "default" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    /// Returns the string representation.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::Int8 => "int8",
+            Self::Dual => "dual",
+            Self::Auto => "auto",
+        }
+    }
+}
+
 /// WITH clause for query-time configuration overrides.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct WithClause {
@@ -66,6 +107,27 @@ impl WithClause {
     #[must_use]
     pub fn get_rerank(&self) -> Option<bool> {
         self.get("rerank").and_then(WithValue::as_bool)
+    }
+
+    /// Gets quantization mode if specified (EPIC-055 US-005).
+    ///
+    /// Supported values: 'f32', 'int8', 'dual', 'auto'.
+    #[must_use]
+    pub fn get_quantization(&self) -> Option<QuantizationMode> {
+        self.get("quantization")
+            .and_then(WithValue::as_str)
+            .and_then(QuantizationMode::parse)
+    }
+
+    /// Gets oversampling ratio if specified (EPIC-055 US-005).
+    ///
+    /// Used with dual-precision mode to control candidate pool size.
+    #[must_use]
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    pub fn get_oversampling(&self) -> Option<usize> {
+        self.get("oversampling")
+            .and_then(WithValue::as_integer)
+            .map(|v| v.max(1) as usize)
     }
 }
 

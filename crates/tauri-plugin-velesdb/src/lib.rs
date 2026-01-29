@@ -1,3 +1,7 @@
+// Tauri plugin - pedantic/nursery lints relaxed
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+
 //! # tauri-plugin-velesdb
 //!
 //! A Tauri plugin for `VelesDB` - Vector search in desktop applications.
@@ -62,6 +66,7 @@ use tauri::{
 };
 
 pub mod commands;
+pub mod commands_graph;
 pub mod error;
 pub mod events;
 pub mod helpers;
@@ -321,11 +326,11 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             // AgentMemory commands (EPIC-016 US-003)
             commands::semantic_store,
             commands::semantic_query,
-            // Knowledge Graph commands (EPIC-015 US-001)
-            commands::add_edge,
-            commands::get_edges,
-            commands::traverse_graph,
-            commands::get_node_degree,
+            // Knowledge Graph commands (EPIC-015 US-001) - moved to commands_graph.rs
+            commands_graph::add_edge,
+            commands_graph::get_edges,
+            commands_graph::traverse_graph,
+            commands_graph::get_node_degree,
         ])
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());

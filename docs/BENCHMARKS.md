@@ -1,6 +1,6 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: January 20, 2026 (v1.2.0)*
+*Last updated: January 29, 2026 (v1.4.1 - EPIC-073 SIMD Pipeline Optimizations)*
 
 ---
 
@@ -8,10 +8,10 @@
 
 | Metric | Baseline | VelesDB | Winner |
 |--------|----------|---------|--------|
-| **SIMD Dot Product (1536D)** | 280ns (Naive) | **66ns** | **VelesDB 4x** ✅ |
-| **HNSW Search (10K/128D)** | ~50ms (pgvector) | **3.6ms** (fast) | **VelesDB 14x** ✅ |
-| **Hybrid Search (1K)** | N/A | **64µs** | **VelesDB** ✅ |
-| **BM25 Text Search (1K)** | N/A | **33µs** | **VelesDB** ✅ |
+| **SIMD Dot Product (1536D)** | 280ns (Naive) | **110ns** | **VelesDB 2.5x** ✅ |
+| **HNSW Search (10K/768D)** | ~50ms (pgvector) | **57µs** | **VelesDB 877x** ✅ |
+| **ColumnStore Filter (100K)** | 3.9ms (JSON) | **88µs** | **VelesDB 44x** ✅ |
+| **VelesQL Parse** | N/A | **84ns** (cache) | **VelesDB** ✅ |
 | **Recall@10** | 100% | **100%** | **VelesDB Perfect** ✅ |
 
 ### When to Choose VelesDB
@@ -28,32 +28,47 @@
 
 ---
 
-## ⚡ SIMD Performance Summary (1536D)
+## ⚡ SIMD Performance Summary
 
-| Operation | Latency | Throughput | Speedup vs Naive |
-|-----------|---------|------------|------------------|
-| **Dot Product** | 66ns | 15M/s | 4x |
-| **Euclidean** | ~70ns | 14M/s | 4x |
-| **Cosine** | ~100ns | 10M/s | 3x |
-| **Hamming** | ~6ns | 164M/s | 34x |
-| **Jaccard (50%)** | 165ns | 6M/s | **10% improved** ✅ |
+| Operation | 384D | 768D | 1536D |
+|-----------|------|------|-------|
+| **Dot Product** | 31ns | 57ns | 110ns |
+| **Euclidean** | 35ns | 66ns | 126ns |
+| **Cosine** | 36ns | 68ns | 131ns |
+| **Hamming (u64)** | 6ns | 6ns | 11ns |
+| **Jaccard** | 80ns | 154ns | 306ns |
+| **Jaccard ILP** (EPIC-073) | 35ns | 67ns | 133ns |
+
+### EPIC-073 SIMD Pipeline Optimizations
+
+| Feature | Description | Performance |
+|---------|-------------|-------------|
+| **Multi-level Prefetch** | L1/L2/L3 cache hints | 10-30% cold cache improvement |
+| **Jaccard 4-way ILP** | Instruction-level parallelism | **2.3x** faster than baseline |
+| **Binary Jaccard POPCNT** | Hardware popcount | **10x** faster for u64 packed |
+| **Batch Dot Product** | M×N matrix computation | Amortized overhead |
+| **Batch Top-K** | Multi-query similarity | Cache reuse optimization |
 
 ---
 
-## 🔍 Hybrid Search Performance
+## 🔍 HNSW Vector Search
 
-| Scale | Vector+Text | Vector Only | Text Only |
-|-------|-------------|-------------|-----------|
-| 100 docs | 55µs | 54µs | 33µs |
-| 1K docs | 64µs | 65µs | 43µs |
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **Search k=10** | 57µs | 9.2K qps |
+| **Search k=50** | 90µs | - |
+| **Search k=100** | 174µs | - |
+| **Insert 1K×768D** | 696ms | 1.4K elem/s |
 
 ---
 
 ## 🔍 ColumnStore Filtering
 
-| Scale | Throughput | vs JSON |
-|-------|------------|----------|
-| 100k items | 3.7M/s | **122x faster** |
+| Scale | ColumnStore | JSON | Speedup |
+|-------|-------------|------|---------|
+| 10K rows | 8.6µs | 397µs | **46x** |
+| 100K rows | 88µs | 3.9ms | **44x** |
+| 500K rows | 136µs | 18.6ms | **137x** |
 
 ---
 
@@ -61,8 +76,11 @@
 
 | Mode | Latency | Throughput |
 |------|---------|------------|
-| Parse | 570ns | 1.7M qps |
-| **Cache Hit** | **49ns** | **20M qps** |
+| Simple Parse | 1.4µs | 707K qps |
+| Vector Query | 2.0µs | 490K qps |
+| Complex Query | 7.9µs | 122K qps |
+| **Cache Hit** | **84ns** | **12M qps** |
+| EXPLAIN Plan | 61ns | 16M qps |
 
 ```rust
 use velesdb_core::velesql::QueryCache;
@@ -169,8 +187,20 @@ cargo bench --bench hnsw_comparison_benchmark
 
 ---
 
+## 🔗 Graph (EdgeStore)
+
+| Operation | Latency |
+|-----------|---------|
+| **get_neighbors (degree 10)** | 155ns |
+| **get_neighbors (degree 50)** | 508ns |
+| **add_edge** | 278ns |
+| **BFS depth 3** | 3.6µs |
+| **Parallel reads (8 threads)** | 346µs |
+
+---
+
 ## 🧪 Methodology
 
 - **Hardware**: 8-core CPU, 32GB RAM
-- **Environment**: Rust 1.83, `--release`, `target-cpu=native`
+- **Environment**: Rust 1.85, `--release`, `target-cpu=native`
 - **Framework**: Criterion.rs

@@ -13,10 +13,11 @@ members = [
 exclude = [
     "demos/tauri-rag-app/src-tauri",
     "examples/mini_recommender",
+    "examples/ecommerce_recommendation",
 ]
 
 [workspace.package]
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 rust-version = "1.83"
 license-file = "LICENSE"

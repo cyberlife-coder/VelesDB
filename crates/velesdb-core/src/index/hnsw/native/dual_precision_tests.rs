@@ -1,7 +1,7 @@
 //! Tests for `dual_precision` module
 
 use super::distance::SimdDistance;
-use super::dual_precision::*;
+use super::dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 use crate::distance::DistanceMetric;
 
 // =========================================================================
@@ -250,4 +250,93 @@ fn test_quantized_reranking_maintains_recall() {
         found_exact,
         "Quantized reranking should maintain high recall"
     );
+}
+
+// =========================================================================
+// TDD Tests: TRUE int8 traversal (EPIC-055/US-003 requirement)
+// =========================================================================
+
+#[test]
+fn test_search_with_int8_traversal_enabled() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 64, 16, 100, 500);
+
+    // Insert vectors
+    for i in 0..200 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i * 64 + j) as f32 * 0.01).sin())
+            .collect();
+        hnsw.insert(v);
+    }
+
+    hnsw.force_train_quantizer();
+
+    // Search with TRUE int8 traversal
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.01).sin()).collect();
+    let config = DualPrecisionConfig {
+        oversampling_ratio: 4,
+        use_int8_traversal: true, // Force int8 graph traversal
+        ..Default::default()
+    };
+    let results = hnsw.search_with_config(&query, 10, 50, &config);
+
+    assert!(!results.is_empty());
+    // Results should be sorted by distance
+    for i in 1..results.len() {
+        assert!(results[i].1 >= results[i - 1].1, "Results should be sorted");
+    }
+}
+
+#[test]
+fn test_int8_traversal_recall_vs_f32() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000);
+
+    // Insert 500 vectors
+    let vectors: Vec<Vec<f32>> = (0..500)
+        .map(|i| {
+            (0..128)
+                .map(|j| ((i * 128 + j) as f32 * 0.001).cos())
+                .collect()
+        })
+        .collect();
+
+    for v in &vectors {
+        hnsw.insert(v.clone());
+    }
+
+    hnsw.force_train_quantizer();
+
+    // Search with f32 (baseline)
+    let query = vectors[0].clone();
+    let f32_results = hnsw.search(&query, 10, 100);
+
+    // Search with int8 traversal
+    let config = DualPrecisionConfig {
+        oversampling_ratio: 4,
+        use_int8_traversal: true,
+        ..Default::default()
+    };
+    let int8_results = hnsw.search_with_config(&query, 10, 100, &config);
+
+    // Compute recall: how many of f32 results are in int8 results
+    let f32_ids: std::collections::HashSet<_> = f32_results.iter().map(|(id, _)| *id).collect();
+    let int8_ids: std::collections::HashSet<_> = int8_results.iter().map(|(id, _)| *id).collect();
+    let overlap = f32_ids.intersection(&int8_ids).count();
+    let recall = overlap as f64 / f32_results.len().max(1) as f64;
+
+    // Recall should be >= 90% (int8 traversal with 4x oversampling)
+    assert!(
+        recall >= 0.90,
+        "Int8 traversal recall should be >= 90%, got {:.2}%",
+        recall * 100.0
+    );
+}
+
+#[test]
+fn test_dual_precision_config_defaults() {
+    let config = DualPrecisionConfig::default();
+    assert_eq!(config.oversampling_ratio, 4);
+    assert!(config.use_int8_traversal);
+    assert_eq!(config.min_index_size, 10_000);
 }

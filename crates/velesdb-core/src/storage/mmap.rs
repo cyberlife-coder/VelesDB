@@ -348,6 +348,11 @@ impl MmapStorage {
     /// # Errors
     ///
     /// Returns an error if the stored offset is out of bounds.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stored offset is not f32-aligned (must be multiple of 4).
+    /// This should never happen with properly stored data.
     pub fn retrieve_ref(&self, id: u64) -> io::Result<Option<VectorSliceGuard<'_>>> {
         // EPIC-033/US-004: Use sharded index for reduced contention
         let offset = match self.index.get(id) {
@@ -369,10 +374,11 @@ impl MmapStorage {
         // EPIC-032/US-001: Verify alignment before pointer cast
         // SAFETY: We've validated that:
         // 1. offset + vector_size <= mmap.len() (bounds check above)
-        // 2. offset is 4-byte aligned (assertion below)
+        // 2. offset is 4-byte aligned (assertion below - enforced in release too)
         // 3. The pointer is derived from the mmap which is held by the guard
         // 4. All writes via store() use f32-aligned offsets (dimension * 4)
-        debug_assert!(
+        // P2 Audit 2026-01-29: Converted from debug_assert to assert for memory safety
+        assert!(
             offset % std::mem::align_of::<f32>() == 0,
             "EPIC-032/US-001: offset {} is not f32-aligned (must be multiple of {})",
             offset,

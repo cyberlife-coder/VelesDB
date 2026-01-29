@@ -105,9 +105,11 @@ impl TemporalExpr {
     pub fn to_epoch_seconds(&self) -> i64 {
         use std::time::{SystemTime, UNIX_EPOCH};
 
+        // SAFETY: Current Unix timestamps fit in i64 until year 292 billion.
+        // Use saturating conversion for theoretical future-proofing.
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
             .unwrap_or(0);
 
         match self {

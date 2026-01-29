@@ -1790,4 +1790,393 @@ mod tests {
             "expire_rows should return empty pks for manually deleted rows"
         );
     }
+
+    // =========================================================================
+    // EPIC-043 US-001: Vacuum Tests
+    // =========================================================================
+
+    #[test]
+    fn test_vacuum_removes_tombstones() {
+        // Arrange: Create store with deleted rows
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("val", ColumnType::Int)],
+            "id",
+        );
+
+        for i in 0..100 {
+            store
+                .insert_row(&[
+                    ("id", ColumnValue::Int(i)),
+                    ("val", ColumnValue::Int(i * 10)),
+                ])
+                .unwrap();
+        }
+
+        // Delete 50 rows
+        for i in 0..50 {
+            store.delete_by_pk(i);
+        }
+
+        assert_eq!(store.deleted_row_count(), 50);
+        assert_eq!(store.row_count(), 100);
+
+        // Act
+        let stats = store.vacuum(VacuumConfig::default());
+
+        // Assert
+        assert!(stats.completed);
+        assert_eq!(stats.tombstones_found, 50);
+        assert_eq!(stats.tombstones_removed, 50);
+        assert_eq!(store.deleted_row_count(), 0);
+        assert_eq!(store.row_count(), 50);
+        assert_eq!(store.active_row_count(), 50);
+    }
+
+    #[test]
+    fn test_vacuum_preserves_live_data() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("name", ColumnType::String)],
+            "id",
+        );
+
+        let name_id = store.string_table_mut().intern("Alice");
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("name", ColumnValue::String(name_id)),
+            ])
+            .unwrap();
+
+        let name_id2 = store.string_table_mut().intern("Bob");
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(2)),
+                ("name", ColumnValue::String(name_id2)),
+            ])
+            .unwrap();
+
+        // Delete Bob
+        store.delete_by_pk(2);
+
+        // Act
+        let stats = store.vacuum(VacuumConfig::default());
+
+        // Assert: Alice should still be accessible
+        assert!(stats.completed);
+        assert_eq!(stats.tombstones_removed, 1);
+
+        let alice_idx = store.get_row_idx_by_pk(1);
+        assert!(alice_idx.is_some(), "Alice should still exist after vacuum");
+
+        let bob_idx = store.get_row_idx_by_pk(2);
+        assert!(bob_idx.is_none(), "Bob should be gone after vacuum");
+    }
+
+    #[test]
+    fn test_vacuum_empty_store() {
+        // Arrange
+        let mut store = ColumnStore::with_schema(&[("id", ColumnType::Int)]);
+
+        // Act
+        let stats = store.vacuum(VacuumConfig::default());
+
+        // Assert
+        assert!(stats.completed);
+        assert_eq!(stats.tombstones_found, 0);
+        assert_eq!(stats.tombstones_removed, 0);
+    }
+
+    #[test]
+    fn test_vacuum_no_tombstones() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..10 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Act (no deletions)
+        let stats = store.vacuum(VacuumConfig::default());
+
+        // Assert
+        assert!(stats.completed);
+        assert_eq!(stats.tombstones_found, 0);
+        assert_eq!(store.row_count(), 10);
+    }
+
+    #[test]
+    fn test_should_vacuum_threshold() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..100 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Delete 20% of rows
+        for i in 0..20 {
+            store.delete_by_pk(i);
+        }
+
+        // Assert
+        assert!(!store.should_vacuum(0.25)); // 20% < 25%
+        assert!(store.should_vacuum(0.20)); // 20% >= 20%
+        assert!(store.should_vacuum(0.10)); // 20% >= 10%
+    }
+
+    #[test]
+    fn test_vacuum_reclaims_bytes() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("id", ColumnType::Int),
+                ("val", ColumnType::Float),
+                ("flag", ColumnType::Bool),
+            ],
+            "id",
+        );
+
+        for i in 0..10 {
+            store
+                .insert_row(&[
+                    ("id", ColumnValue::Int(i)),
+                    ("val", ColumnValue::Float(i as f64)),
+                    ("flag", ColumnValue::Bool(i % 2 == 0)),
+                ])
+                .unwrap();
+        }
+
+        // Delete 5 rows
+        for i in 0..5 {
+            store.delete_by_pk(i);
+        }
+
+        // Act
+        let stats = store.vacuum(VacuumConfig::default());
+
+        // Assert: should reclaim bytes (5 rows * (8+8+1) = 85 bytes per column set)
+        assert!(stats.completed);
+        assert!(stats.bytes_reclaimed > 0);
+    }
+
+    // =========================================================================
+    // EPIC-043 US-002: RoaringBitmap Filtering Tests
+    // =========================================================================
+
+    #[test]
+    fn test_roaring_bitmap_sync_with_deleted_rows() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..100 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Act: Delete some rows
+        for i in 0..30 {
+            store.delete_by_pk(i);
+        }
+
+        // Assert: Both FxHashSet and RoaringBitmap should be in sync
+        assert_eq!(store.deleted_row_count(), 30);
+        assert_eq!(store.deleted_count_bitmap(), 30);
+    }
+
+    #[test]
+    fn test_is_row_deleted_bitmap() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..50 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Delete rows 10, 20, 30
+        store.delete_by_pk(10);
+        store.delete_by_pk(20);
+        store.delete_by_pk(30);
+
+        // Assert
+        assert!(store.is_row_deleted_bitmap(10));
+        assert!(store.is_row_deleted_bitmap(20));
+        assert!(store.is_row_deleted_bitmap(30));
+        assert!(!store.is_row_deleted_bitmap(0));
+        assert!(!store.is_row_deleted_bitmap(15));
+        assert!(!store.is_row_deleted_bitmap(49));
+    }
+
+    #[test]
+    fn test_live_row_indices_iterator() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..10 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Delete rows 2, 5, 8
+        store.delete_by_pk(2);
+        store.delete_by_pk(5);
+        store.delete_by_pk(8);
+
+        // Act
+        let live_indices: Vec<usize> = store.live_row_indices().collect();
+
+        // Assert
+        assert_eq!(live_indices.len(), 7);
+        assert!(!live_indices.contains(&2));
+        assert!(!live_indices.contains(&5));
+        assert!(!live_indices.contains(&8));
+        assert!(live_indices.contains(&0));
+        assert!(live_indices.contains(&9));
+    }
+
+    #[test]
+    fn test_vacuum_clears_deletion_bitmap() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..50 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Delete 20 rows
+        for i in 0..20 {
+            store.delete_by_pk(i);
+        }
+
+        assert_eq!(store.deleted_count_bitmap(), 20);
+
+        // Act: Vacuum
+        store.vacuum(VacuumConfig::default());
+
+        // Assert: Both should be cleared
+        assert_eq!(store.deleted_row_count(), 0);
+        assert_eq!(store.deleted_count_bitmap(), 0);
+        assert!(store.deletion_bitmap().is_empty());
+    }
+
+    #[test]
+    fn test_deletion_bitmap_accessor() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+
+        for i in 0..20 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        store.delete_by_pk(5);
+        store.delete_by_pk(10);
+        store.delete_by_pk(15);
+
+        // Act
+        let bitmap = store.deletion_bitmap();
+
+        // Assert
+        assert_eq!(bitmap.len(), 3);
+        assert!(bitmap.contains(5));
+        assert!(bitmap.contains(10));
+        assert!(bitmap.contains(15));
+    }
+
+    // =========================================================================
+    // EPIC-043 US-003: Auto-Vacuum Configuration Tests
+    // =========================================================================
+
+    #[test]
+    fn test_auto_vacuum_config_defaults() {
+        let config = AutoVacuumConfig::default();
+
+        // PostgreSQL-inspired defaults
+        assert!(config.enabled);
+        assert!((config.threshold_ratio - 0.20).abs() < f64::EPSILON);
+        assert_eq!(config.min_dead_rows, 50);
+        assert_eq!(config.check_interval_secs, 300);
+    }
+
+    #[test]
+    fn test_auto_vacuum_config_builder() {
+        let config = AutoVacuumConfig::new()
+            .with_enabled(false)
+            .with_threshold(0.30)
+            .with_min_dead_rows(100)
+            .with_check_interval(600);
+
+        assert!(!config.enabled);
+        assert!((config.threshold_ratio - 0.30).abs() < f64::EPSILON);
+        assert_eq!(config.min_dead_rows, 100);
+        assert_eq!(config.check_interval_secs, 600);
+    }
+
+    #[test]
+    fn test_auto_vacuum_threshold_clamping() {
+        // Should clamp to valid range
+        let config = AutoVacuumConfig::new().with_threshold(1.5);
+        assert!((config.threshold_ratio - 1.0).abs() < f64::EPSILON);
+
+        let config = AutoVacuumConfig::new().with_threshold(-0.5);
+        assert!((config.threshold_ratio - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_auto_vacuum_should_trigger() {
+        let config = AutoVacuumConfig::new()
+            .with_threshold(0.20)
+            .with_min_dead_rows(10);
+
+        // Below threshold (15%)
+        assert!(!config.should_trigger(100, 15));
+
+        // At threshold (20%)
+        assert!(config.should_trigger(100, 20));
+
+        // Above threshold (30%)
+        assert!(config.should_trigger(100, 30));
+
+        // Below min_dead_rows
+        assert!(!config.should_trigger(100, 5));
+    }
+
+    #[test]
+    fn test_auto_vacuum_disabled() {
+        let config = AutoVacuumConfig::new().with_enabled(false);
+
+        // Should never trigger when disabled
+        assert!(!config.should_trigger(100, 50));
+        assert!(!config.should_trigger(100, 100));
+    }
+
+    #[test]
+    fn test_auto_vacuum_empty_store() {
+        let config = AutoVacuumConfig::new();
+
+        // Should not trigger for empty store
+        assert!(!config.should_trigger(0, 0));
+    }
+
+    #[test]
+    fn test_auto_vacuum_integration_with_store() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let config = AutoVacuumConfig::new()
+            .with_threshold(0.20)
+            .with_min_dead_rows(5);
+
+        for i in 0..100 {
+            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
+        }
+
+        // Delete 15 rows (15% < 20% threshold)
+        for i in 0..15 {
+            store.delete_by_pk(i);
+        }
+        assert!(!config.should_trigger(store.row_count(), store.deleted_row_count()));
+
+        // Delete 10 more rows (25% > 20% threshold)
+        for i in 15..25 {
+            store.delete_by_pk(i);
+        }
+        assert!(config.should_trigger(store.row_count(), store.deleted_row_count()));
+    }
 }

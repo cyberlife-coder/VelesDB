@@ -2,7 +2,8 @@
 
 use super::Rule;
 use crate::velesql::ast::{
-    IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, WithClause, WithOption, WithValue,
+    Condition, CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value,
+    WithClause, WithOption, WithValue,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -334,12 +335,92 @@ impl Parser {
             fusion_clause: None,
         };
 
-        // Note: Correlated column detection deferred to EPIC-039 implementation
-        let correlations = Vec::new();
+        // EPIC-039 US-003: Detect correlated columns in WHERE clause
+        let correlations =
+            Self::detect_correlated_columns(select.where_clause.as_ref(), &select.from);
 
         Ok(Subquery {
             select,
             correlations,
         })
+    }
+
+    /// Detects correlated columns in a subquery's WHERE clause (EPIC-039 US-003).
+    ///
+    /// A correlated column is a reference to an outer query's table/column,
+    /// identified by a qualified name (e.g., `outer_table.column`).
+    fn detect_correlated_columns(
+        where_clause: Option<&Condition>,
+        subquery_from: &str,
+    ) -> Vec<CorrelatedColumn> {
+        let mut correlations = Vec::new();
+
+        if let Some(condition) = where_clause {
+            Self::extract_correlations_from_condition(condition, subquery_from, &mut correlations);
+        }
+
+        correlations
+    }
+
+    /// Recursively extracts correlated column references from a condition.
+    fn extract_correlations_from_condition(
+        condition: &Condition,
+        subquery_from: &str,
+        correlations: &mut Vec<CorrelatedColumn>,
+    ) {
+        match condition {
+            Condition::Comparison(comp) => {
+                // Check left side for qualified column reference
+                if let Some(corr) =
+                    Self::extract_correlation_from_field(&comp.column, subquery_from)
+                {
+                    // BUG-5 FIX: Deduplicate correlations
+                    if !correlations.iter().any(|c| {
+                        c.outer_table == corr.outer_table && c.outer_column == corr.outer_column
+                    }) {
+                        correlations.push(corr);
+                    }
+                }
+                // BUG-5 FIX: Do NOT check Value::String for correlations.
+                // String literals (e.g., 'user@example.com', 'domain.name') are NOT
+                // column references and should not be interpreted as table.column.
+                // Column references on the right side would be represented as
+                // Value::Parameter or a dedicated ColumnRef variant, not Value::String.
+            }
+            Condition::And(left, right) | Condition::Or(left, right) => {
+                Self::extract_correlations_from_condition(left, subquery_from, correlations);
+                Self::extract_correlations_from_condition(right, subquery_from, correlations);
+            }
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::extract_correlations_from_condition(inner, subquery_from, correlations);
+            }
+            _ => {}
+        }
+    }
+
+    /// Extracts a correlated column from a qualified field reference.
+    ///
+    /// Returns Some(CorrelatedColumn) if the field is `outer_table.column`
+    /// where `outer_table` is not the subquery's FROM table.
+    fn extract_correlation_from_field(
+        field: &str,
+        subquery_from: &str,
+    ) -> Option<CorrelatedColumn> {
+        // Check for qualified name: table.column
+        if let Some(dot_pos) = field.find('.') {
+            let table = &field[..dot_pos];
+            let column = &field[dot_pos + 1..];
+
+            // If the table is NOT the subquery's own table, it's a correlation
+            if !table.eq_ignore_ascii_case(subquery_from) && !table.is_empty() && !column.is_empty()
+            {
+                return Some(CorrelatedColumn {
+                    outer_table: table.to_string(),
+                    outer_column: column.to_string(),
+                    inner_column: field.to_string(),
+                });
+            }
+        }
+        None
     }
 }

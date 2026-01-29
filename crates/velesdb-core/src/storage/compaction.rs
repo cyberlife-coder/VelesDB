@@ -109,9 +109,12 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     }
 
     let handle = file.as_raw_handle() as HANDLE;
+    // SAFETY: Win32 API requires i64 for file offsets. offset and len are typically < i64::MAX
+    // on any realistic file system. Saturate to prevent undefined behavior on edge cases.
+    #[allow(clippy::cast_possible_wrap)]
     let info = FileZeroDataInformation {
-        file_offset: offset as i64,
-        beyond_final_zero: (offset + len) as i64,
+        file_offset: i64::try_from(offset).unwrap_or(i64::MAX),
+        beyond_final_zero: i64::try_from(offset.saturating_add(len)).unwrap_or(i64::MAX),
     };
 
     let mut bytes_returned: u32 = 0;

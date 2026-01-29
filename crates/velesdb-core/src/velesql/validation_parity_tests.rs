@@ -2,8 +2,8 @@
 //!
 //! These tests ensure that the public QueryValidator and internal Collection
 //! validation methods produce consistent results.
+#![cfg(all(test, feature = "persistence"))]
 
-#[cfg(test)]
 mod tests {
     use crate::velesql::ast::{
         CompareOp, Comparison, Condition, SelectColumns, SelectStatement, SimilarityCondition,

@@ -68,6 +68,7 @@ mod parser_tests;
 mod planner;
 #[cfg(test)]
 mod planner_tests;
+mod subquery_optimizer;
 mod validation;
 #[cfg(test)]
 mod validation_parity_tests;
@@ -80,6 +81,8 @@ mod aggregation_params_tests;
 mod fusion_clause_tests;
 #[cfg(test)]
 mod pr_review_bugfix_tests;
+#[cfg(test)]
+mod quantization_hints_tests;
 #[cfg(test)]
 mod self_join_tests;
 #[cfg(test)]

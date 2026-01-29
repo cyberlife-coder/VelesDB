@@ -132,6 +132,10 @@ impl ColumnStore {
         for row_idx in expired_rows {
             if let Some(&pk) = self.row_idx_to_pk.get(&row_idx) {
                 self.deleted_rows.insert(row_idx);
+                // BUG-2 FIX: Also update RoaringBitmap to keep both in sync
+                if let Ok(idx) = u32::try_from(row_idx) {
+                    self.deletion_bitmap.insert(idx);
+                }
                 self.row_expiry.remove(&row_idx);
                 result.pks.push(pk);
                 result.expired_count += 1;

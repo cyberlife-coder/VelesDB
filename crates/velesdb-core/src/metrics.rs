@@ -419,6 +419,716 @@ fn percentile(sorted: &[Duration], p: usize) -> Duration {
     sorted[idx.min(n - 1)]
 }
 
+// =============================================================================
+// EPIC-050 US-001: Prometheus Operational Metrics
+// =============================================================================
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// Operational metrics for VelesDB monitoring (EPIC-050 US-001).
+///
+/// Thread-safe counters and gauges that can be exported in Prometheus format.
+#[derive(Debug, Default)]
+pub struct OperationalMetrics {
+    /// Total queries executed
+    pub queries_total: AtomicU64,
+    /// Total query errors
+    pub query_errors: AtomicU64,
+    /// Vector search queries
+    pub vector_queries: AtomicU64,
+    /// Graph traversal queries
+    pub graph_queries: AtomicU64,
+    /// Hybrid queries (vector + graph)
+    pub hybrid_queries: AtomicU64,
+    /// Total documents across all collections
+    pub documents_total: AtomicU64,
+    /// Total index size in bytes
+    pub index_size_bytes: AtomicU64,
+    /// Active connections (for server)
+    pub active_connections: AtomicU64,
+}
+
+impl OperationalMetrics {
+    /// Creates a new metrics instance.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a shared metrics instance.
+    #[must_use]
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::new())
+    }
+
+    /// Increments the total query counter.
+    pub fn inc_queries(&self) {
+        self.queries_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increments the query error counter.
+    pub fn inc_errors(&self) {
+        self.query_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a vector search query.
+    pub fn record_vector_query(&self) {
+        self.inc_queries();
+        self.vector_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a graph traversal query.
+    pub fn record_graph_query(&self) {
+        self.inc_queries();
+        self.graph_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a hybrid query.
+    pub fn record_hybrid_query(&self) {
+        self.inc_queries();
+        self.hybrid_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Sets the document count.
+    pub fn set_documents(&self, count: u64) {
+        self.documents_total.store(count, Ordering::Relaxed);
+    }
+
+    /// Sets the index size.
+    pub fn set_index_size(&self, bytes: u64) {
+        self.index_size_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    /// Increments active connections.
+    pub fn inc_connections(&self) {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrements active connections.
+    ///
+    /// Uses a CAS loop to saturate at 0, preventing underflow wrap to u64::MAX.
+    pub fn dec_connections(&self) {
+        // BUG-3 FIX: Use CAS loop to prevent underflow
+        loop {
+            let current = self.active_connections.load(Ordering::Relaxed);
+            if current == 0 {
+                return; // Already at 0, don't underflow
+            }
+            if self
+                .active_connections
+                .compare_exchange_weak(current, current - 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+            // CAS failed, retry
+        }
+    }
+
+    /// Exports metrics in Prometheus text format.
+    #[must_use]
+    pub fn export_prometheus(&self) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
+        // Queries total
+        // BUG-4 FIX: success = total - errors, not total (which includes errors)
+        let total = self.queries_total.load(Ordering::Relaxed);
+        let errors = self.query_errors.load(Ordering::Relaxed);
+        let success = total.saturating_sub(errors);
+
+        output.push_str("# HELP velesdb_queries_total Total number of queries executed\n");
+        output.push_str("# TYPE velesdb_queries_total counter\n");
+        let _ = writeln!(
+            output,
+            "velesdb_queries_total{{status=\"success\"}} {}",
+            success
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_queries_total{{status=\"error\"}} {}\n",
+            errors
+        );
+
+        // Query types
+        output.push_str("# HELP velesdb_queries_by_type Queries by type\n");
+        output.push_str("# TYPE velesdb_queries_by_type counter\n");
+        let _ = writeln!(
+            output,
+            "velesdb_queries_by_type{{type=\"vector\"}} {}",
+            self.vector_queries.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_queries_by_type{{type=\"graph\"}} {}",
+            self.graph_queries.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_queries_by_type{{type=\"hybrid\"}} {}\n",
+            self.hybrid_queries.load(Ordering::Relaxed)
+        );
+
+        // Documents
+        output.push_str("# HELP velesdb_documents_total Total documents in database\n");
+        output.push_str("# TYPE velesdb_documents_total gauge\n");
+        let _ = writeln!(
+            output,
+            "velesdb_documents_total {}\n",
+            self.documents_total.load(Ordering::Relaxed)
+        );
+
+        // Index size
+        output.push_str("# HELP velesdb_index_size_bytes Total index size in bytes\n");
+        output.push_str("# TYPE velesdb_index_size_bytes gauge\n");
+        let _ = writeln!(
+            output,
+            "velesdb_index_size_bytes {}\n",
+            self.index_size_bytes.load(Ordering::Relaxed)
+        );
+
+        // Active connections
+        output.push_str("# HELP velesdb_active_connections Current active connections\n");
+        output.push_str("# TYPE velesdb_active_connections gauge\n");
+        let _ = writeln!(
+            output,
+            "velesdb_active_connections {}",
+            self.active_connections.load(Ordering::Relaxed)
+        );
+
+        output
+    }
+}
+
+/// Query duration histogram buckets (in seconds).
+pub const DURATION_BUCKETS: [f64; 8] = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0];
+
+/// Traversal depth histogram buckets.
+pub const DEPTH_BUCKETS: [u64; 6] = [1, 2, 3, 5, 10, 20];
+
+/// Nodes visited histogram buckets.
+pub const NODES_BUCKETS: [u64; 7] = [10, 50, 100, 500, 1000, 5000, 10000];
+
+// =============================================================================
+// EPIC-050 US-002: Traversal Metrics
+// =============================================================================
+
+/// Metrics specific to graph traversal operations.
+#[derive(Debug, Default)]
+pub struct TraversalMetrics {
+    /// Total nodes visited across all traversals
+    pub nodes_visited_total: AtomicU64,
+    /// Maximum depth reached in traversals
+    pub max_depth_reached: AtomicU64,
+    /// Total edges scanned
+    pub edges_scanned_total: AtomicU64,
+    /// Traversal count
+    pub traversal_count: AtomicU64,
+}
+
+impl TraversalMetrics {
+    /// Creates new traversal metrics.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records a traversal operation.
+    pub fn record_traversal(&self, nodes_visited: u64, depth: u64, edges_scanned: u64) {
+        self.traversal_count.fetch_add(1, Ordering::Relaxed);
+        self.nodes_visited_total
+            .fetch_add(nodes_visited, Ordering::Relaxed);
+        self.edges_scanned_total
+            .fetch_add(edges_scanned, Ordering::Relaxed);
+
+        // Update max depth if this traversal went deeper
+        let mut current_max = self.max_depth_reached.load(Ordering::Relaxed);
+        while depth > current_max {
+            match self.max_depth_reached.compare_exchange_weak(
+                current_max,
+                depth,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current_max = actual,
+            }
+        }
+    }
+
+    /// Exports traversal metrics in Prometheus format.
+    #[must_use]
+    pub fn export_prometheus(&self) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_traversal_nodes_visited_total Total nodes visited in traversals"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_traversal_nodes_visited_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_traversal_nodes_visited_total {}",
+            self.nodes_visited_total.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(output);
+
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_traversal_max_depth Maximum traversal depth reached"
+        );
+        let _ = writeln!(output, "# TYPE velesdb_traversal_max_depth gauge");
+        let _ = writeln!(
+            output,
+            "velesdb_traversal_max_depth {}",
+            self.max_depth_reached.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(output);
+
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_traversal_edges_scanned_total Total edges scanned"
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_traversal_edges_scanned_total counter"
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_traversal_edges_scanned_total {}",
+            self.edges_scanned_total.load(Ordering::Relaxed)
+        );
+
+        output
+    }
+}
+
+// =============================================================================
+// EPIC-050 US-003: Guard-Rails Metrics
+// =============================================================================
+
+/// Types of limits that can be exceeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LimitType {
+    /// Query timeout exceeded
+    Timeout,
+    /// Maximum traversal depth exceeded
+    Depth,
+    /// Cardinality limit exceeded
+    Cardinality,
+    /// Memory limit exceeded
+    Memory,
+    /// Rate limit exceeded
+    RateLimit,
+}
+
+impl LimitType {
+    /// Returns the string representation for metrics.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Depth => "depth",
+            Self::Cardinality => "cardinality",
+            Self::Memory => "memory",
+            Self::RateLimit => "rate_limit",
+        }
+    }
+}
+
+/// Metrics for guard-rails and rate limiting.
+#[derive(Debug, Default)]
+pub struct GuardRailsMetrics {
+    /// Timeout limits exceeded
+    pub timeout_exceeded: AtomicU64,
+    /// Depth limits exceeded
+    pub depth_exceeded: AtomicU64,
+    /// Cardinality limits exceeded
+    pub cardinality_exceeded: AtomicU64,
+    /// Memory limits exceeded
+    pub memory_exceeded: AtomicU64,
+    /// Rate limit requests allowed
+    pub rate_limit_allowed: AtomicU64,
+    /// Rate limit requests rejected
+    pub rate_limit_rejected: AtomicU64,
+}
+
+impl GuardRailsMetrics {
+    /// Creates new guard-rails metrics.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records a limit exceeded event.
+    pub fn record_limit_exceeded(&self, limit_type: LimitType) {
+        match limit_type {
+            LimitType::Timeout => self.timeout_exceeded.fetch_add(1, Ordering::Relaxed),
+            LimitType::Depth => self.depth_exceeded.fetch_add(1, Ordering::Relaxed),
+            LimitType::Cardinality => self.cardinality_exceeded.fetch_add(1, Ordering::Relaxed),
+            LimitType::Memory => self.memory_exceeded.fetch_add(1, Ordering::Relaxed),
+            LimitType::RateLimit => self.rate_limit_rejected.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
+    /// Records a rate limit decision.
+    pub fn record_rate_limit(&self, allowed: bool) {
+        if allowed {
+            self.rate_limit_allowed.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.rate_limit_rejected.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Exports guard-rails metrics in Prometheus format.
+    #[must_use]
+    pub fn export_prometheus(&self) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_limits_exceeded_total Guard-rail limits exceeded"
+        );
+        let _ = writeln!(output, "# TYPE velesdb_limits_exceeded_total counter");
+        let _ = writeln!(
+            output,
+            "velesdb_limits_exceeded_total{{limit_type=\"timeout\"}} {}",
+            self.timeout_exceeded.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_limits_exceeded_total{{limit_type=\"depth\"}} {}",
+            self.depth_exceeded.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_limits_exceeded_total{{limit_type=\"cardinality\"}} {}",
+            self.cardinality_exceeded.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_limits_exceeded_total{{limit_type=\"memory\"}} {}",
+            self.memory_exceeded.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(output);
+
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_rate_limit_requests_total Rate limit decisions"
+        );
+        let _ = writeln!(output, "# TYPE velesdb_rate_limit_requests_total counter");
+        let _ = writeln!(
+            output,
+            "velesdb_rate_limit_requests_total{{decision=\"allowed\"}} {}",
+            self.rate_limit_allowed.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_rate_limit_requests_total{{decision=\"rejected\"}} {}",
+            self.rate_limit_rejected.load(Ordering::Relaxed)
+        );
+
+        output
+    }
+}
+
+// =============================================================================
+// EPIC-050 US-004: Slow Query Logging
+// =============================================================================
+
+/// Statistics about a query execution.
+#[derive(Debug, Clone, Default)]
+pub struct QueryStats {
+    /// Number of rows scanned
+    pub rows_scanned: u64,
+    /// Number of nodes visited (for graph queries)
+    pub nodes_visited: u64,
+    /// Number of vectors compared (for vector queries)
+    pub vectors_compared: u64,
+    /// Collection name
+    pub collection: String,
+}
+
+/// Slow query logger that logs queries exceeding a threshold.
+#[derive(Debug, Clone)]
+pub struct SlowQueryLogger {
+    /// Threshold duration above which queries are considered slow
+    threshold: Duration,
+    /// Whether logging is enabled
+    enabled: bool,
+}
+
+impl Default for SlowQueryLogger {
+    fn default() -> Self {
+        Self {
+            threshold: Duration::from_millis(100),
+            enabled: true,
+        }
+    }
+}
+
+impl SlowQueryLogger {
+    /// Creates a new slow query logger with the given threshold.
+    #[must_use]
+    pub fn new(threshold: Duration) -> Self {
+        Self {
+            threshold,
+            enabled: true,
+        }
+    }
+
+    /// Creates a disabled logger.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            threshold: Duration::MAX,
+            enabled: false,
+        }
+    }
+
+    /// Sets the threshold.
+    pub fn set_threshold(&mut self, threshold: Duration) {
+        self.threshold = threshold;
+    }
+
+    /// Returns true if the duration exceeds the slow query threshold.
+    #[must_use]
+    pub fn is_slow(&self, duration: Duration) -> bool {
+        self.enabled && duration >= self.threshold
+    }
+
+    /// Logs a slow query if it exceeds the threshold.
+    /// Returns true if the query was logged.
+    pub fn log_if_slow(&self, query: &str, duration: Duration, stats: &QueryStats) -> bool {
+        if !self.is_slow(duration) {
+            return false;
+        }
+
+        let sanitized = Self::sanitize_query(query);
+        tracing::warn!(
+            query = %sanitized,
+            duration_ms = duration.as_millis() as u64,
+            rows_scanned = stats.rows_scanned,
+            nodes_visited = stats.nodes_visited,
+            vectors_compared = stats.vectors_compared,
+            collection = %stats.collection,
+            "Slow query detected"
+        );
+        true
+    }
+
+    /// Sanitizes a query string by removing potential sensitive values.
+    #[must_use]
+    pub fn sanitize_query(query: &str) -> String {
+        // Remove string literals (potential PII)
+        let mut result = String::with_capacity(query.len());
+        let mut in_string = false;
+        let mut escape_next = false;
+
+        for ch in query.chars() {
+            if escape_next {
+                escape_next = false;
+                if !in_string {
+                    result.push(ch);
+                }
+                continue;
+            }
+
+            match ch {
+                '\\' => escape_next = true,
+                '"' | '\'' => {
+                    if in_string {
+                        in_string = false;
+                        result.push('?');
+                    } else {
+                        in_string = true;
+                    }
+                }
+                _ => {
+                    if !in_string {
+                        result.push(ch);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}
+
+// =============================================================================
+// EPIC-050 US-005: Tracing Span Helpers
+// =============================================================================
+
+/// Query execution phases for tracing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryPhase {
+    /// Parsing the query
+    Parse,
+    /// Planning the execution
+    Plan,
+    /// Executing vector search
+    VectorSearch,
+    /// Executing graph traversal
+    GraphTraversal,
+    /// Fusing scores from multiple sources
+    ScoreFusion,
+    /// Filtering results
+    Filter,
+    /// Sorting and limiting results
+    Sort,
+}
+
+impl QueryPhase {
+    /// Returns the span name for this phase.
+    #[must_use]
+    pub fn span_name(&self) -> &'static str {
+        match self {
+            Self::Parse => "parse",
+            Self::Plan => "plan",
+            Self::VectorSearch => "vector_search",
+            Self::GraphTraversal => "graph_traversal",
+            Self::ScoreFusion => "score_fusion",
+            Self::Filter => "filter",
+            Self::Sort => "sort",
+        }
+    }
+}
+
+/// Helper struct for creating tracing spans with consistent attributes.
+#[derive(Debug, Clone)]
+pub struct SpanBuilder {
+    /// Collection name
+    pub collection: String,
+    /// Number of rows processed
+    pub rows_processed: u64,
+    /// Additional context
+    pub context: String,
+}
+
+impl SpanBuilder {
+    /// Creates a new span builder.
+    #[must_use]
+    pub fn new(collection: impl Into<String>) -> Self {
+        Self {
+            collection: collection.into(),
+            rows_processed: 0,
+            context: String::new(),
+        }
+    }
+
+    /// Sets the number of rows processed.
+    #[must_use]
+    pub fn with_rows(mut self, rows: u64) -> Self {
+        self.rows_processed = rows;
+        self
+    }
+
+    /// Sets additional context.
+    #[must_use]
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = context.into();
+        self
+    }
+
+    /// Creates a tracing span for the given phase.
+    #[must_use]
+    pub fn span(&self, phase: QueryPhase) -> tracing::Span {
+        tracing::info_span!(
+            "query_phase",
+            phase = phase.span_name(),
+            collection = %self.collection,
+            rows = self.rows_processed,
+            context = %self.context
+        )
+    }
+}
+
+/// Simple histogram for query durations.
+#[derive(Debug)]
+pub struct DurationHistogram {
+    buckets: [AtomicU64; 8],
+    sum: AtomicU64, // Sum in microseconds
+    count: AtomicU64,
+}
+
+impl Default for DurationHistogram {
+    fn default() -> Self {
+        Self {
+            buckets: Default::default(),
+            sum: AtomicU64::new(0),
+            count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl DurationHistogram {
+    /// Creates a new histogram.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Observes a duration value (in seconds).
+    pub fn observe(&self, seconds: f64) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let micros = (seconds * 1_000_000.0) as u64;
+        self.sum.fetch_add(micros, Ordering::Relaxed);
+
+        // Increment appropriate bucket
+        for (i, &bucket) in DURATION_BUCKETS.iter().enumerate() {
+            if seconds <= bucket {
+                self.buckets[i].fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        // Value exceeds all buckets - count in last bucket
+        self.buckets[7].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Exports histogram in Prometheus format.
+    #[must_use]
+    pub fn export_prometheus(&self, name: &str, help: &str) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
+        let _ = writeln!(output, "# HELP {name} {help}");
+        let _ = writeln!(output, "# TYPE {name} histogram");
+
+        let mut cumulative = 0u64;
+        for (i, &bucket_bound) in DURATION_BUCKETS.iter().enumerate() {
+            cumulative += self.buckets[i].load(Ordering::Relaxed);
+            let _ = writeln!(
+                output,
+                "{name}_bucket{{le=\"{bucket_bound}\"}} {cumulative}"
+            );
+        }
+        let _ = writeln!(
+            output,
+            "{name}_bucket{{le=\"+Inf\"}} {}",
+            self.count.load(Ordering::Relaxed)
+        );
+
+        #[allow(clippy::cast_precision_loss)]
+        let sum_secs = self.sum.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let _ = writeln!(output, "{name}_sum {sum_secs}");
+        let _ = writeln!(
+            output,
+            "{name}_count {}",
+            self.count.load(Ordering::Relaxed)
+        );
+
+        output
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +1237,279 @@ mod tests {
         assert_eq!(stats.min, Duration::ZERO);
         assert_eq!(stats.max, Duration::ZERO);
         assert_eq!(stats.mean, Duration::ZERO);
+    }
+
+    // =========================================================================
+    // EPIC-050 US-001: Operational Metrics Tests
+    // =========================================================================
+
+    #[test]
+    fn test_operational_metrics_counters() {
+        let metrics = OperationalMetrics::new();
+
+        metrics.record_vector_query();
+        metrics.record_vector_query();
+        metrics.record_graph_query();
+        metrics.record_hybrid_query();
+        metrics.inc_errors();
+
+        assert_eq!(metrics.queries_total.load(Ordering::Relaxed), 4);
+        assert_eq!(metrics.vector_queries.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.graph_queries.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.hybrid_queries.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.query_errors.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_operational_metrics_gauges() {
+        let metrics = OperationalMetrics::new();
+
+        metrics.set_documents(1000);
+        metrics.set_index_size(1024 * 1024);
+        metrics.inc_connections();
+        metrics.inc_connections();
+        metrics.dec_connections();
+
+        assert_eq!(metrics.documents_total.load(Ordering::Relaxed), 1000);
+        assert_eq!(
+            metrics.index_size_bytes.load(Ordering::Relaxed),
+            1024 * 1024
+        );
+        assert_eq!(metrics.active_connections.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_operational_metrics_prometheus_export() {
+        let metrics = OperationalMetrics::new();
+        metrics.record_vector_query();
+        metrics.set_documents(100);
+
+        let output = metrics.export_prometheus();
+
+        assert!(output.contains("velesdb_queries_total"));
+        assert!(output.contains("velesdb_documents_total 100"));
+        assert!(output.contains("# TYPE"));
+        assert!(output.contains("# HELP"));
+    }
+
+    #[test]
+    fn test_duration_histogram_observe() {
+        let histogram = DurationHistogram::new();
+
+        histogram.observe(0.002); // 2ms -> bucket 0.005
+        histogram.observe(0.02); // 20ms -> bucket 0.05
+        histogram.observe(0.5); // 500ms -> bucket 0.5
+
+        assert_eq!(histogram.count.load(Ordering::Relaxed), 3);
+        assert!(histogram.sum.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn test_duration_histogram_prometheus_export() {
+        let histogram = DurationHistogram::new();
+        histogram.observe(0.01);
+        histogram.observe(0.1);
+
+        let output = histogram.export_prometheus(
+            "velesdb_query_duration_seconds",
+            "Query duration in seconds",
+        );
+
+        assert!(output.contains("velesdb_query_duration_seconds_bucket"));
+        assert!(output.contains("velesdb_query_duration_seconds_sum"));
+        assert!(output.contains("velesdb_query_duration_seconds_count 2"));
+        assert!(output.contains("le=\"+Inf\""));
+    }
+
+    #[test]
+    fn test_operational_metrics_shared() {
+        let metrics = OperationalMetrics::shared();
+        metrics.record_vector_query();
+
+        // Clone Arc and verify shared state
+        let metrics2 = Arc::clone(&metrics);
+        metrics2.record_vector_query();
+
+        assert_eq!(metrics.queries_total.load(Ordering::Relaxed), 2);
+    }
+
+    // =========================================================================
+    // EPIC-050 US-002: Traversal Metrics Tests
+    // =========================================================================
+
+    #[test]
+    fn test_traversal_metrics_record() {
+        let metrics = TraversalMetrics::new();
+
+        metrics.record_traversal(100, 3, 250);
+        metrics.record_traversal(50, 2, 100);
+
+        assert_eq!(metrics.traversal_count.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.nodes_visited_total.load(Ordering::Relaxed), 150);
+        assert_eq!(metrics.edges_scanned_total.load(Ordering::Relaxed), 350);
+        assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn test_traversal_metrics_max_depth_updates() {
+        let metrics = TraversalMetrics::new();
+
+        metrics.record_traversal(10, 2, 20);
+        assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 2);
+
+        metrics.record_traversal(10, 5, 20);
+        assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 5);
+
+        // Smaller depth doesn't decrease max
+        metrics.record_traversal(10, 3, 20);
+        assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn test_traversal_metrics_prometheus_export() {
+        let metrics = TraversalMetrics::new();
+        metrics.record_traversal(100, 5, 200);
+
+        let output = metrics.export_prometheus();
+
+        assert!(output.contains("velesdb_traversal_nodes_visited_total 100"));
+        assert!(output.contains("velesdb_traversal_max_depth 5"));
+        assert!(output.contains("velesdb_traversal_edges_scanned_total 200"));
+    }
+
+    // =========================================================================
+    // EPIC-050 US-003: Guard-Rails Metrics Tests
+    // =========================================================================
+
+    #[test]
+    fn test_guardrails_record_limits() {
+        let metrics = GuardRailsMetrics::new();
+
+        metrics.record_limit_exceeded(LimitType::Timeout);
+        metrics.record_limit_exceeded(LimitType::Timeout);
+        metrics.record_limit_exceeded(LimitType::Depth);
+        metrics.record_limit_exceeded(LimitType::Memory);
+
+        assert_eq!(metrics.timeout_exceeded.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.depth_exceeded.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.memory_exceeded.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.cardinality_exceeded.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_guardrails_rate_limit() {
+        let metrics = GuardRailsMetrics::new();
+
+        metrics.record_rate_limit(true);
+        metrics.record_rate_limit(true);
+        metrics.record_rate_limit(false);
+
+        assert_eq!(metrics.rate_limit_allowed.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.rate_limit_rejected.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_guardrails_prometheus_export() {
+        let metrics = GuardRailsMetrics::new();
+        metrics.record_limit_exceeded(LimitType::Timeout);
+        metrics.record_rate_limit(false);
+
+        let output = metrics.export_prometheus();
+
+        assert!(output.contains("velesdb_limits_exceeded_total"));
+        assert!(output.contains("limit_type=\"timeout\""));
+        assert!(output.contains("velesdb_rate_limit_requests_total"));
+    }
+
+    #[test]
+    fn test_limit_type_as_str() {
+        assert_eq!(LimitType::Timeout.as_str(), "timeout");
+        assert_eq!(LimitType::Depth.as_str(), "depth");
+        assert_eq!(LimitType::Cardinality.as_str(), "cardinality");
+        assert_eq!(LimitType::Memory.as_str(), "memory");
+        assert_eq!(LimitType::RateLimit.as_str(), "rate_limit");
+    }
+
+    // =========================================================================
+    // EPIC-050 US-004: Slow Query Logging Tests
+    // =========================================================================
+
+    #[test]
+    fn test_slow_query_is_slow() {
+        let logger = SlowQueryLogger::new(Duration::from_millis(100));
+
+        assert!(!logger.is_slow(Duration::from_millis(50)));
+        assert!(logger.is_slow(Duration::from_millis(100)));
+        assert!(logger.is_slow(Duration::from_millis(150)));
+    }
+
+    #[test]
+    fn test_slow_query_disabled() {
+        let logger = SlowQueryLogger::disabled();
+
+        assert!(!logger.is_slow(Duration::from_secs(1000)));
+    }
+
+    #[test]
+    fn test_slow_query_sanitize() {
+        let query = r#"SELECT * FROM users WHERE name = "John Doe" AND age > 30"#;
+        let sanitized = SlowQueryLogger::sanitize_query(query);
+
+        assert!(!sanitized.contains("John Doe"));
+        assert!(sanitized.contains('?'));
+        assert!(sanitized.contains("SELECT"));
+        assert!(sanitized.contains("age > 30"));
+    }
+
+    #[test]
+    fn test_slow_query_sanitize_single_quotes() {
+        let query = "SELECT * FROM docs WHERE title = 'Secret Document'";
+        let sanitized = SlowQueryLogger::sanitize_query(query);
+
+        assert!(!sanitized.contains("Secret Document"));
+        assert!(sanitized.contains('?'));
+    }
+
+    #[test]
+    fn test_query_stats_default() {
+        let stats = QueryStats::default();
+
+        assert_eq!(stats.rows_scanned, 0);
+        assert_eq!(stats.nodes_visited, 0);
+        assert_eq!(stats.vectors_compared, 0);
+        assert!(stats.collection.is_empty());
+    }
+
+    // =========================================================================
+    // EPIC-050 US-005: Tracing Span Tests
+    // =========================================================================
+
+    #[test]
+    fn test_query_phase_span_names() {
+        assert_eq!(QueryPhase::Parse.span_name(), "parse");
+        assert_eq!(QueryPhase::Plan.span_name(), "plan");
+        assert_eq!(QueryPhase::VectorSearch.span_name(), "vector_search");
+        assert_eq!(QueryPhase::GraphTraversal.span_name(), "graph_traversal");
+        assert_eq!(QueryPhase::ScoreFusion.span_name(), "score_fusion");
+        assert_eq!(QueryPhase::Filter.span_name(), "filter");
+        assert_eq!(QueryPhase::Sort.span_name(), "sort");
+    }
+
+    #[test]
+    fn test_span_builder() {
+        let builder = SpanBuilder::new("test_collection")
+            .with_rows(100)
+            .with_context("test context");
+
+        assert_eq!(builder.collection, "test_collection");
+        assert_eq!(builder.rows_processed, 100);
+        assert_eq!(builder.context, "test context");
+    }
+
+    #[test]
+    fn test_span_builder_creates_span() {
+        let builder = SpanBuilder::new("my_collection").with_rows(50);
+        // Span creation should not panic (span may be disabled without subscriber)
+        let _span = builder.span(QueryPhase::VectorSearch);
     }
 }

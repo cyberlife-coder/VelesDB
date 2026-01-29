@@ -214,6 +214,97 @@ impl ParsedQuery {
     pub fn join_count(&self) -> usize {
         self.inner.select.joins.len()
     }
+
+    // === MATCH Query Introspection (EPIC-053 US-004) ===
+
+    /// Get the number of node patterns in the MATCH clause.
+    #[wasm_bindgen(getter, js_name = matchNodeCount)]
+    pub fn match_node_count(&self) -> usize {
+        self.inner
+            .match_clause
+            .as_ref()
+            .map_or(0, |mc| mc.patterns.first().map_or(0, |p| p.nodes.len()))
+    }
+
+    /// Get the number of relationship patterns in the MATCH clause.
+    #[wasm_bindgen(getter, js_name = matchRelationshipCount)]
+    pub fn match_relationship_count(&self) -> usize {
+        self.inner.match_clause.as_ref().map_or(0, |mc| {
+            mc.patterns.first().map_or(0, |p| p.relationships.len())
+        })
+    }
+
+    /// Get node labels from the MATCH clause as JSON array of arrays.
+    /// Each inner array contains the labels for one node pattern.
+    #[wasm_bindgen(getter, js_name = matchNodeLabels)]
+    pub fn match_node_labels(&self) -> JsValue {
+        let labels: Vec<Vec<String>> = self
+            .inner
+            .match_clause
+            .as_ref()
+            .map(|mc| {
+                mc.patterns
+                    .first()
+                    .map(|p| p.nodes.iter().map(|n| n.labels.clone()).collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        serde_wasm_bindgen::to_value(&labels).unwrap_or(JsValue::NULL)
+    }
+
+    /// Get relationship types from the MATCH clause as JSON array of arrays.
+    /// Each inner array contains the types for one relationship pattern.
+    #[wasm_bindgen(getter, js_name = matchRelationshipTypes)]
+    pub fn match_relationship_types(&self) -> JsValue {
+        let types: Vec<Vec<String>> = self
+            .inner
+            .match_clause
+            .as_ref()
+            .map(|mc| {
+                mc.patterns
+                    .first()
+                    .map(|p| p.relationships.iter().map(|r| r.types.clone()).collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        serde_wasm_bindgen::to_value(&types).unwrap_or(JsValue::NULL)
+    }
+
+    /// Get RETURN items from the MATCH clause as JSON array.
+    #[wasm_bindgen(getter, js_name = matchReturnItems)]
+    pub fn match_return_items(&self) -> JsValue {
+        let items: Vec<(String, Option<String>)> = self
+            .inner
+            .match_clause
+            .as_ref()
+            .map(|mc| {
+                mc.return_clause
+                    .items
+                    .iter()
+                    .map(|i| (i.expression.clone(), i.alias.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        serde_wasm_bindgen::to_value(&items).unwrap_or(JsValue::NULL)
+    }
+
+    /// Get the LIMIT from the MATCH RETURN clause.
+    #[wasm_bindgen(getter, js_name = matchLimit)]
+    pub fn match_limit(&self) -> Option<u64> {
+        self.inner
+            .match_clause
+            .as_ref()
+            .and_then(|mc| mc.return_clause.limit)
+    }
+
+    /// Check if the MATCH clause has a WHERE condition.
+    #[wasm_bindgen(getter, js_name = matchHasWhere)]
+    pub fn match_has_where(&self) -> bool {
+        self.inner
+            .match_clause
+            .as_ref()
+            .is_some_and(|mc| mc.where_clause.is_some())
+    }
 }
 
 impl ParsedQuery {
@@ -238,6 +329,93 @@ impl ParsedQuery {
 #[cfg(test)]
 mod tests {
     use velesdb_core::velesql::Parser;
+
+    // === MATCH Query Tests (EPIC-053 US-004) ===
+
+    #[test]
+    fn test_parse_match_query() {
+        let parsed = Parser::parse("MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN f.name");
+        assert!(parsed.is_ok(), "MATCH query should parse: {parsed:?}");
+        let query = parsed.unwrap();
+        assert!(query.is_match_query());
+        assert!(!query.is_select_query());
+    }
+
+    #[test]
+    fn test_match_query_node_count() {
+        let parsed = Parser::parse("MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN f.name").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        assert_eq!(mc.patterns[0].nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_match_query_relationship_count() {
+        let parsed = Parser::parse("MATCH (a)-[:REL1]->(b)-[:REL2]->(c) RETURN a, b, c").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        assert_eq!(mc.patterns[0].relationships.len(), 2);
+    }
+
+    #[test]
+    fn test_match_query_node_labels() {
+        let parsed = Parser::parse("MATCH (p:Person:Author) RETURN p").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        let node = &mc.patterns[0].nodes[0];
+        assert!(node.labels.contains(&"Person".to_string()));
+    }
+
+    #[test]
+    fn test_match_query_relationship_types() {
+        let parsed = Parser::parse("MATCH (a)-[:WROTE]->(b) RETURN b").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        let rel = &mc.patterns[0].relationships[0];
+        assert!(rel.types.contains(&"WROTE".to_string()));
+    }
+
+    #[test]
+    fn test_match_query_without_where() {
+        // MATCH queries without WHERE work correctly
+        let parsed = Parser::parse("MATCH (p:Person) RETURN p.name").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        assert!(mc.where_clause.is_none());
+    }
+
+    #[test]
+    fn test_match_query_return_items() {
+        let parsed = Parser::parse("MATCH (p:Person) RETURN p.name, p.age AS years").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        assert_eq!(mc.return_clause.items.len(), 2);
+        assert_eq!(mc.return_clause.items[1].alias, Some("years".to_string()));
+    }
+
+    #[test]
+    fn test_match_query_limit() {
+        let parsed = Parser::parse("MATCH (p:Person) RETURN p LIMIT 10").unwrap();
+        let mc = parsed
+            .match_clause
+            .as_ref()
+            .expect("should have match_clause");
+        assert_eq!(mc.return_clause.limit, Some(10));
+    }
+
+    // === Original SELECT Tests ===
 
     #[test]
     fn test_parse_simple_select() {

@@ -1,7 +1,12 @@
-//! Tests for PropertyIndex.
+//! Tests for PropertyIndex and CompositeGraphIndex.
 
-use super::property_index::PropertyIndex;
+use super::property_index::{
+    CompositeGraphIndex, CompositeIndexManager, CompositeIndexType, CompositeRangeIndex,
+    EdgePropertyIndex, IndexAdvisor, IndexIntersection, PredicateType, PropertyIndex, QueryPattern,
+    QueryPatternTracker,
+};
 use serde_json::json;
+use std::collections::HashMap;
 
 #[test]
 fn test_create_property_index() {
@@ -522,4 +527,374 @@ fn test_index_consistency_after_multiple_mutations() {
             .len(),
         2
     );
+}
+
+// =============================================================================
+// EPIC-047 US-001: Composite Graph Index Tests
+// =============================================================================
+
+#[test]
+fn test_composite_index_create() {
+    let index = CompositeGraphIndex::new(
+        "Person",
+        vec!["name".to_string(), "city".to_string()],
+        CompositeIndexType::Hash,
+    );
+
+    assert_eq!(index.label(), "Person");
+    assert_eq!(index.properties(), &["name", "city"]);
+    assert_eq!(index.index_type(), CompositeIndexType::Hash);
+}
+
+#[test]
+fn test_composite_index_insert_and_lookup() {
+    let mut index = CompositeGraphIndex::new(
+        "Person",
+        vec!["name".to_string(), "city".to_string()],
+        CompositeIndexType::Hash,
+    );
+
+    index.insert(1, &[json!("Alice"), json!("Paris")]);
+    index.insert(2, &[json!("Bob"), json!("London")]);
+    index.insert(3, &[json!("Alice"), json!("Paris")]); // Duplicate values
+
+    let nodes = index.lookup(&[json!("Alice"), json!("Paris")]);
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.contains(&1));
+    assert!(nodes.contains(&3));
+
+    let nodes2 = index.lookup(&[json!("Bob"), json!("London")]);
+    assert_eq!(nodes2, &[2]);
+
+    // Non-existent combination
+    let nodes3 = index.lookup(&[json!("Alice"), json!("London")]);
+    assert!(nodes3.is_empty());
+}
+
+#[test]
+fn test_composite_index_remove() {
+    let mut index =
+        CompositeGraphIndex::new("Person", vec!["name".to_string()], CompositeIndexType::Hash);
+
+    index.insert(1, &[json!("Alice")]);
+    index.insert(2, &[json!("Alice")]);
+
+    assert_eq!(index.lookup(&[json!("Alice")]).len(), 2);
+
+    let removed = index.remove(1, &[json!("Alice")]);
+    assert!(removed);
+    assert_eq!(index.lookup(&[json!("Alice")]).len(), 1);
+    assert_eq!(index.lookup(&[json!("Alice")])[0], 2);
+}
+
+#[test]
+fn test_composite_index_covers() {
+    let index = CompositeGraphIndex::new(
+        "Person",
+        vec!["name".to_string(), "age".to_string()],
+        CompositeIndexType::Hash,
+    );
+
+    assert!(index.covers("Person", &["name"]));
+    assert!(index.covers("Person", &["age"]));
+    assert!(index.covers("Person", &["name", "age"]));
+    assert!(!index.covers("Company", &["name"]));
+    assert!(!index.covers("Person", &["email"]));
+}
+
+#[test]
+fn test_composite_index_cardinality() {
+    let mut index =
+        CompositeGraphIndex::new("Person", vec!["city".to_string()], CompositeIndexType::Hash);
+
+    index.insert(1, &[json!("Paris")]);
+    index.insert(2, &[json!("London")]);
+    index.insert(3, &[json!("Paris")]);
+
+    assert_eq!(index.cardinality(), 2); // Paris and London
+    assert_eq!(index.node_count(), 3);
+}
+
+#[test]
+fn test_composite_index_manager() {
+    let mut manager = CompositeIndexManager::new();
+
+    let created = manager.create_index(
+        "idx_person_name",
+        "Person",
+        vec!["name".to_string()],
+        CompositeIndexType::Hash,
+    );
+    assert!(created);
+
+    // Duplicate name should fail
+    let created2 = manager.create_index(
+        "idx_person_name",
+        "Person",
+        vec!["email".to_string()],
+        CompositeIndexType::Hash,
+    );
+    assert!(!created2);
+
+    let index = manager.get_mut("idx_person_name").unwrap();
+    index.insert(1, &[json!("Alice")]);
+
+    let covering = manager.find_covering_indexes("Person", &["name"]);
+    assert_eq!(covering, vec!["idx_person_name"]);
+
+    let dropped = manager.drop_index("idx_person_name");
+    assert!(dropped);
+    assert!(manager.get("idx_person_name").is_none());
+}
+
+#[test]
+fn test_composite_index_manager_hooks() {
+    let mut manager = CompositeIndexManager::new();
+    manager.create_index(
+        "idx_person_name_city",
+        "Person",
+        vec!["name".to_string(), "city".to_string()],
+        CompositeIndexType::Hash,
+    );
+
+    let mut props = HashMap::new();
+    props.insert("name".to_string(), json!("Alice"));
+    props.insert("city".to_string(), json!("Paris"));
+
+    manager.on_add_node("Person", 1, &props);
+
+    // Check after add
+    {
+        let index = manager.get("idx_person_name_city").unwrap();
+        let nodes = index.lookup(&[json!("Alice"), json!("Paris")]);
+        assert_eq!(nodes, &[1]);
+    }
+
+    manager.on_remove_node("Person", 1, &props);
+
+    // Check after remove
+    {
+        let index = manager.get("idx_person_name_city").unwrap();
+        let nodes2 = index.lookup(&[json!("Alice"), json!("Paris")]);
+        assert!(nodes2.is_empty());
+    }
+}
+
+// =============================================================================
+// EPIC-047 US-002: Range Index Tests
+// =============================================================================
+
+#[test]
+fn test_range_index_create() {
+    let index = CompositeRangeIndex::new("Person", "age");
+    assert_eq!(index.label(), "Person");
+    assert_eq!(index.property(), "age");
+}
+
+#[test]
+fn test_range_index_insert_and_lookup() {
+    let mut index = CompositeRangeIndex::new("Person", "age");
+
+    index.insert(1, &json!(25));
+    index.insert(2, &json!(30));
+    index.insert(3, &json!(35));
+    index.insert(4, &json!(30)); // Duplicate value
+
+    assert_eq!(index.lookup_exact(&json!(30)).len(), 2);
+    assert_eq!(index.lookup_exact(&json!(25)), &[1]);
+}
+
+#[test]
+fn test_range_index_range_lookup() {
+    let mut index = CompositeRangeIndex::new("Person", "age");
+
+    index.insert(1, &json!(20));
+    index.insert(2, &json!(25));
+    index.insert(3, &json!(30));
+    index.insert(4, &json!(35));
+    index.insert(5, &json!(40));
+
+    // Range [25, 35]
+    let result = index.lookup_range(Some(&json!(25)), Some(&json!(35)));
+    assert_eq!(result.len(), 3);
+    assert!(result.contains(&2));
+    assert!(result.contains(&3));
+    assert!(result.contains(&4));
+}
+
+#[test]
+fn test_range_index_gt_lt() {
+    let mut index = CompositeRangeIndex::new("Person", "age");
+
+    index.insert(1, &json!(20));
+    index.insert(2, &json!(30));
+    index.insert(3, &json!(40));
+
+    let gt_result = index.lookup_gt(&json!(25));
+    assert_eq!(gt_result.len(), 2);
+
+    let lt_result = index.lookup_lt(&json!(35));
+    assert_eq!(lt_result.len(), 2);
+}
+
+// =============================================================================
+// EPIC-047 US-003: Edge Property Index Tests
+// =============================================================================
+
+#[test]
+fn test_edge_index_create() {
+    let index = EdgePropertyIndex::new("KNOWS", "since");
+    assert_eq!(index.rel_type(), "KNOWS");
+    assert_eq!(index.property(), "since");
+}
+
+#[test]
+fn test_edge_index_insert_and_lookup() {
+    let mut index = EdgePropertyIndex::new("KNOWS", "since");
+
+    index.insert(100, &json!(2020));
+    index.insert(101, &json!(2021));
+    index.insert(102, &json!(2020));
+
+    assert_eq!(index.lookup_exact(&json!(2020)).len(), 2);
+    assert_eq!(index.lookup_exact(&json!(2021)), &[101]);
+}
+
+#[test]
+fn test_edge_index_range() {
+    let mut index = EdgePropertyIndex::new("KNOWS", "since");
+
+    index.insert(1, &json!(2018));
+    index.insert(2, &json!(2020));
+    index.insert(3, &json!(2022));
+
+    let result = index.lookup_range(Some(&json!(2019)), Some(&json!(2021)));
+    assert_eq!(result, vec![2]);
+}
+
+// =============================================================================
+// EPIC-047 US-004: Index Intersection Tests
+// =============================================================================
+
+#[test]
+fn test_intersect_two_sets() {
+    let a = vec![1, 2, 3, 4, 5];
+    let b = vec![3, 4, 5, 6, 7];
+
+    let result = IndexIntersection::intersect_two(&a, &b);
+    assert_eq!(result.len(), 3);
+    assert!(result.contains(&3));
+    assert!(result.contains(&4));
+    assert!(result.contains(&5));
+}
+
+#[test]
+fn test_intersect_vecs() {
+    let a = vec![1u64, 2, 3, 4, 5];
+    let b = vec![3u64, 4, 5, 6, 7];
+    let c = vec![4u64, 5, 8, 9];
+
+    let result = IndexIntersection::intersect_vecs(&[&a, &b, &c]);
+    assert_eq!(result.len(), 2);
+    assert!(result.contains(&4));
+    assert!(result.contains(&5));
+}
+
+#[test]
+fn test_intersect_empty() {
+    let a = vec![1u64, 2, 3];
+    let b = vec![4u64, 5, 6];
+
+    let result = IndexIntersection::intersect_two(&a, &b);
+    assert!(result.is_empty());
+}
+
+// =============================================================================
+// EPIC-047 US-005: Auto-Index Suggestions Tests
+// =============================================================================
+
+#[test]
+fn test_pattern_tracker_record() {
+    let mut tracker = QueryPatternTracker::new();
+
+    let pattern = QueryPattern {
+        labels: vec!["Person".to_string()],
+        properties: vec!["name".to_string()],
+        predicates: vec![PredicateType::Equality],
+    };
+
+    tracker.record(pattern.clone(), 50);
+    tracker.record(pattern.clone(), 100);
+
+    let patterns = tracker.expensive_patterns();
+    assert_eq!(patterns.len(), 1);
+    assert_eq!(patterns[0].1.count, 2);
+    assert_eq!(patterns[0].1.total_time_ms, 150);
+}
+
+#[test]
+fn test_pattern_tracker_slow_patterns() {
+    let mut tracker = QueryPatternTracker::new();
+    tracker.set_threshold(50);
+
+    let fast_pattern = QueryPattern {
+        labels: vec!["Fast".to_string()],
+        properties: vec!["prop".to_string()],
+        predicates: vec![PredicateType::Equality],
+    };
+
+    let slow_pattern = QueryPattern {
+        labels: vec!["Slow".to_string()],
+        properties: vec!["prop".to_string()],
+        predicates: vec![PredicateType::Equality],
+    };
+
+    tracker.record(fast_pattern, 30);
+    tracker.record(slow_pattern, 100);
+
+    let slow = tracker.slow_patterns();
+    assert_eq!(slow.len(), 1);
+    assert_eq!(slow[0].0.labels[0], "Slow");
+}
+
+#[test]
+fn test_index_advisor_suggest() {
+    let mut tracker = QueryPatternTracker::new();
+
+    let pattern = QueryPattern {
+        labels: vec!["Person".to_string()],
+        properties: vec!["email".to_string()],
+        predicates: vec![PredicateType::Equality],
+    };
+
+    // Record multiple times to make it expensive
+    for _ in 0..10 {
+        tracker.record(pattern.clone(), 100);
+    }
+
+    let advisor = IndexAdvisor::new();
+    let suggestions = advisor.suggest(&tracker);
+
+    assert!(!suggestions.is_empty());
+    assert!(suggestions[0].ddl.contains("email"));
+    assert!(suggestions[0].estimated_improvement > 0.5);
+}
+
+#[test]
+fn test_index_advisor_skip_existing() {
+    let mut tracker = QueryPatternTracker::new();
+
+    let pattern = QueryPattern {
+        labels: vec!["Person".to_string()],
+        properties: vec!["name".to_string()],
+        predicates: vec![PredicateType::Equality],
+    };
+
+    tracker.record(pattern, 100);
+
+    let mut advisor = IndexAdvisor::new();
+    advisor.register_index("idx_person_name");
+
+    let suggestions = advisor.suggest(&tracker);
+    assert!(suggestions.is_empty());
 }
