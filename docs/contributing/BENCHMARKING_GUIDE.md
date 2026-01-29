@@ -218,7 +218,57 @@ export CARGO_INCREMENTAL=1
 
 ---
 
-## 📚 References
+## � ARM64 Benchmarks (EPIC-054)
+
+### CI/CD Integration
+
+ARM64 benchmarks run automatically via GitHub Actions on:
+- Push to `main` (SIMD/index path changes)
+- Pull requests modifying SIMD code
+
+**Workflow**: `.github/workflows/bench-arm64.yml`
+
+### Running ARM64 Benchmarks Locally
+
+```bash
+# On ARM64 hardware (Apple Silicon, AWS Graviton, etc.)
+cargo bench -p velesdb-core --bench search_benchmark
+
+# Cross-compilation (requires target installed)
+rustup target add aarch64-unknown-linux-gnu
+cargo bench --target aarch64-unknown-linux-gnu
+```
+
+### Comparing Architectures
+
+Use the comparison script to analyze x86_64 vs ARM64 performance:
+
+```powershell
+# PowerShell
+.\scripts\compare-arch-benchmarks.ps1 `
+    -x86ResultsPath ".\benchmark-results\x86_64" `
+    -arm64ResultsPath ".\benchmark-results\arm64" `
+    -OutputFormat markdown
+```
+
+### Interpreting ARM64 Results
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| 🟢 ARM64 FASTER | ARM64 >10% faster | Document win |
+| 🔴 x86 FASTER | x86_64 >10% faster | Investigate NEON codegen |
+| 🟡 PARITY | Within ±10% | Acceptable |
+
+### ARM64-Specific Considerations
+
+1. **NEON vs AVX2**: ARM NEON has 128-bit vectors vs AVX2's 256-bit
+2. **Prefetch**: `stdarch_aarch64_prefetch` not yet stable (rust#117217)
+3. **FMA**: ARM64 has native FMA instructions
+4. **Memory alignment**: 16-byte alignment for NEON (vs 32 for AVX2)
+
+---
+
+## �📚 References
 
 - [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
 - [Rust Performance Book](https://nnethercote.github.io/perf-book/)

@@ -35,11 +35,14 @@
 //! let flexible_schema = GraphSchema::schemaless();
 //! ```
 
+mod clustered_index;
+mod degree_router;
 mod edge;
 mod edge_concurrent;
 mod label_table;
 #[cfg(test)]
 mod label_table_tests;
+mod memory_pool;
 mod metrics;
 mod node;
 mod property_index;
@@ -65,9 +68,15 @@ mod range_index_tests;
 #[cfg(test)]
 mod schema_tests;
 
+pub use clustered_index::{ClusteredEdgeIndex, ClusteredIndex};
+pub use degree_router::{
+    DegreeAdaptiveStorage, DegreeRouter, EdgeIndex, HashSetEdgeIndex, VecEdgeIndex,
+    DEFAULT_DEGREE_THRESHOLD,
+};
 pub use edge::{EdgeStore, GraphEdge};
 pub use edge_concurrent::ConcurrentEdgeStore;
 pub use label_table::{LabelId, LabelTable};
+pub use memory_pool::{ConcurrentMemoryPool, ConcurrentPoolHandle, MemoryPool, PoolIndex};
 pub use metrics::{GraphMetrics, LatencyHistogram};
 pub use node::{Element, GraphNode};
 pub use property_index::PropertyIndex;

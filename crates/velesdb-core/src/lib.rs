@@ -158,6 +158,7 @@ pub mod simd_neon;
 mod simd_tests;
 #[cfg(feature = "persistence")]
 pub mod storage;
+pub mod sync;
 pub mod update_check;
 pub mod vector_ref;
 #[cfg(test)]

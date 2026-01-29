@@ -1,0 +1,161 @@
+name: ARM64 Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/velesdb-core/src/simd/**'
+      - 'crates/velesdb-core/src/index/**'
+      - 'crates/velesdb-core/benches/**'
+  pull_request:
+    paths:
+      - 'crates/velesdb-core/src/simd/**'
+      - 'crates/velesdb-core/src/index/**'
+      - 'crates/velesdb-core/benches/**'
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: 'Baseline to compare against (e.g., main)'
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C target-cpu=native"
+
+jobs:
+  bench-arm64:
+    name: ARM64 Benchmarks
+    runs-on: ubuntu-22.04-arm64
+    if: github.repository == 'cyberlife-coder/VelesDB'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            arm64-cargo-
+
+      - name: Install criterion
+        run: cargo install cargo-criterion --locked || true
+
+      - name: Run benchmarks
+        run: |
+          mkdir -p benchmark-results
+          cargo bench -p velesdb-core --bench search_benchmark -- --noplot \
+            | tee benchmark-results/arm64-raw.txt
+          
+          # Extract JSON results if criterion generates them
+          if [ -d "target/criterion" ]; then
+            cp -r target/criterion benchmark-results/criterion-arm64
+          fi
+
+      - name: Generate benchmark summary
+        run: |
+          echo "# ARM64 Benchmark Results" > benchmark-results/SUMMARY.md
+          echo "" >> benchmark-results/SUMMARY.md
+          echo "**Commit**: ${{ github.sha }}" >> benchmark-results/SUMMARY.md
+          echo "**Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> benchmark-results/SUMMARY.md
+          echo "**Runner**: ARM64 (ubuntu-22.04-arm64)" >> benchmark-results/SUMMARY.md
+          echo "" >> benchmark-results/SUMMARY.md
+          echo "## Raw Results" >> benchmark-results/SUMMARY.md
+          echo '```' >> benchmark-results/SUMMARY.md
+          cat benchmark-results/arm64-raw.txt >> benchmark-results/SUMMARY.md
+          echo '```' >> benchmark-results/SUMMARY.md
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-arm64-${{ github.sha }}
+          path: benchmark-results/
+          retention-days: 90
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('benchmark-results/SUMMARY.md', 'utf8');
+            
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(c => 
+              c.user.type === 'Bot' && c.body.includes('ARM64 Benchmark Results')
+            );
+            
+            const body = `## 🚀 ARM64 Benchmark Results\n\n${summary}`;
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+  compare-architectures:
+    name: Compare x86_64 vs ARM64
+    runs-on: ubuntu-latest
+    needs: [bench-arm64]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download ARM64 results
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-arm64-${{ github.sha }}
+          path: arm64-results/
+
+      - name: Generate comparison report
+        run: |
+          echo "# Architecture Comparison Report" > ARCH_COMPARISON.md
+          echo "" >> ARCH_COMPARISON.md
+          echo "**Commit**: ${{ github.sha }}" >> ARCH_COMPARISON.md
+          echo "**Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> ARCH_COMPARISON.md
+          echo "" >> ARCH_COMPARISON.md
+          echo "## ARM64 Results" >> ARCH_COMPARISON.md
+          echo "" >> ARCH_COMPARISON.md
+          cat arm64-results/SUMMARY.md >> ARCH_COMPARISON.md
+          echo "" >> ARCH_COMPARISON.md
+          echo "---" >> ARCH_COMPARISON.md
+          echo "" >> ARCH_COMPARISON.md
+          echo "*Note: x86_64 benchmarks run in separate workflow (bench-regression.yml)*" >> ARCH_COMPARISON.md
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-comparison-${{ github.sha }}
+          path: ARCH_COMPARISON.md
+          retention-days: 90
