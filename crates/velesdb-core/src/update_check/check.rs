@@ -74,7 +74,7 @@ pub async fn check_for_updates(config: &UpdateCheckConfig, data_dir: &Path, edit
     let timeout = Duration::from_millis(config.timeout_ms);
 
     match tokio::time::timeout(timeout, send_update_check(&config.endpoint, &payload)).await {
-        Ok(Ok(response)) => handle_response(&payload.version, response),
+        Ok(Ok(response)) => handle_response(&payload.version, &response),
         Ok(Err(_)) => {
             tracing::trace!("Update check skipped (network unavailable)");
         }
@@ -103,7 +103,7 @@ async fn send_update_check(
     Ok(response)
 }
 
-fn handle_response(current_version: &str, response: UpdateCheckResponse) {
+fn handle_response(current_version: &str, response: &UpdateCheckResponse) {
     if response.update_available {
         let message = response.message.as_deref().unwrap_or("");
         tracing::info!(
