@@ -1,0 +1,249 @@
+# =============================================================================
+# VelesDB Core - Deep Quality Checks (Cost-Optimized)
+# =============================================================================
+# Stratégie: Weekly + Manual trigger pour éviter les coûts quotidiens
+# Contient: Miri (UB detection), Loom (concurrency), Fuzz (robustness)
+# Estimation: ~15-20 min de CI par run au lieu de chaque push
+# =============================================================================
+
+name: Quality Deep
+
+on:
+  # Weekly: Dimanche 3h du matin UTC (faible charge GitHub)
+  schedule:
+    - cron: '0 3 * * 0'
+  
+  # Manual trigger avec options
+  workflow_dispatch:
+    inputs:
+      run_miri:
+        description: 'Run Miri UB detection'
+        type: boolean
+        default: true
+      run_loom:
+        description: 'Run Loom concurrency tests'
+        type: boolean
+        default: true
+      run_fuzz:
+        description: 'Run fuzzing (5 min per target)'
+        type: boolean
+        default: true
+      fuzz_duration:
+        description: 'Fuzz duration in seconds'
+        type: number
+        default: 300
+
+# Pas de concurrency cancel - ces tests sont importants
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+
+jobs:
+  # ===========================================================================
+  # Miri UB Detection - Détecte undefined behavior dans unsafe code
+  # ===========================================================================
+  miri:
+    name: Miri UB Detection
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || inputs.run_miri }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Miri
+        run: |
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
+          cargo miri setup
+
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.7
+        with:
+          shared-key: "velesdb-miri"
+          save-if: true
+
+      # Distance module - code SIMD scalaire (pas les intrinsics)
+      - name: Miri - distance module
+        run: |
+          cargo miri test --no-default-features \
+            -p velesdb-core -- \
+            distance:: --test-threads=1
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
+
+      # Parser VelesQL - parsing user input
+      - name: Miri - VelesQL parser
+        run: |
+          cargo miri test --no-default-features \
+            -p velesdb-core -- \
+            velesql::parser:: --test-threads=1
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+
+      # Storage vector_bytes - raw pointer manipulation
+      - name: Miri - vector bytes storage
+        run: |
+          cargo miri test --no-default-features \
+            -p velesdb-core -- \
+            storage::vector_bytes:: --test-threads=1
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
+        continue-on-error: true
+
+  # ===========================================================================
+  # Loom Concurrency Tests - Détecte deadlocks et data races
+  # ===========================================================================
+  loom:
+    name: Loom Concurrency Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || inputs.run_loom }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@a6c3917cc929dd0345bfb2d3feaf9101823370ad # v1.4.2
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.7
+        with:
+          shared-key: "velesdb-loom"
+          save-if: true
+
+      # Tests Loom existants (storage, sync primitives)
+      - name: Run Loom tests
+        run: |
+          cargo +nightly test --features loom,persistence \
+            -p velesdb-core --test loom_tests \
+            -- --test-threads=1
+        env:
+          RUSTFLAGS: "--cfg loom"
+          # Limite les permutations pour éviter explosion combinatoire
+          LOOM_MAX_PREEMPTIONS: 3
+
+      # Tests Loom inline dans storage/
+      - name: Run Loom storage tests
+        run: |
+          cargo +nightly test --features loom,persistence \
+            -p velesdb-core storage::loom \
+            -- --test-threads=1
+        env:
+          RUSTFLAGS: "--cfg loom"
+          LOOM_MAX_PREEMPTIONS: 3
+        continue-on-error: true
+
+  # ===========================================================================
+  # Fuzzing - Robustesse des parsers et APIs exposées
+  # ===========================================================================
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || inputs.run_fuzz }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.7
+        with:
+          shared-key: "velesdb-fuzz"
+          save-if: true
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      # VelesQL Parser - input utilisateur critique
+      - name: Fuzz VelesQL parser
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run fuzz_velesql_parser \
+            -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
+        continue-on-error: true
+
+      # Distance metrics - données vectorielles
+      - name: Fuzz distance metrics
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run fuzz_distance_metrics \
+            -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
+        continue-on-error: true
+
+      # Snapshot parser - fichiers de persistance
+      - name: Fuzz snapshot parser
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run fuzz_snapshot_parser \
+            -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
+        continue-on-error: true
+
+      # Upload crash artifacts si trouvés
+      - name: Upload crash artifacts
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: fuzz/artifacts/
+          retention-days: 30
+
+  # ===========================================================================
+  # cargo-careful - Debug assertions dans la std (optionnel)
+  # ===========================================================================
+  careful:
+    name: Careful (extra checks)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' }}
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install cargo-careful
+        run: cargo install cargo-careful
+
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@a6c3917cc929dd0345bfb2d3feaf9101823370ad # v1.4.2
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.7
+        with:
+          shared-key: "velesdb-careful"
+
+      # Tests avec assertions std activées
+      - name: Run careful tests
+        run: |
+          cargo +nightly careful test \
+            -p velesdb-core \
+            --no-default-features \
+            -- --test-threads=1
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  summary:
+    name: Quality Summary
+    runs-on: ubuntu-latest
+    needs: [miri, loom, fuzz]
+    if: always()
+    steps:
+      - name: Results
+        run: |
+          echo "## Quality Deep Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Miri | ${{ needs.miri.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Loom | ${{ needs.loom.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fuzz | ${{ needs.fuzz.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
