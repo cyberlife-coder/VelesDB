@@ -172,6 +172,8 @@ pub mod simd_neon;
 pub mod simd_neon_prefetch;
 pub mod simd_portable;
 #[cfg(test)]
+mod simd_prefetch_x86_tests;
+#[cfg(test)]
 mod simd_tests;
 #[cfg(feature = "persistence")]
 pub mod storage;

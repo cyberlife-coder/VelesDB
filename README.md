@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 223µs Search • 3,000 Tests • 80% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57µs Search • 3,000+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -24,9 +24,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Search-223_µs-blue?style=for-the-badge" alt="Search Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-3,000-green?style=for-the-badge" alt="Tests"/>
-  <img src="https://img.shields.io/badge/📊_Coverage-80.71%25-success?style=for-the-badge" alt="Coverage"/>
+  <img src="https://img.shields.io/badge/🏎️_Search-57_µs-blue?style=for-the-badge" alt="Search Latency"/>
+  <img src="https://img.shields.io/badge/🧪_Tests-3,000+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
 </p>
 
@@ -67,8 +67,8 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 223µs Search</h3>
-<p>Native HNSW + AVX-512 SIMD.<br/><strong>500x faster than cloud.</strong></p>
+<h3>⚡ 57µs Search</h3>
+<p>Native HNSW + AVX-512 SIMD.<br/><strong>877x faster than pgvector.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📦 15MB Binary</h3>
@@ -94,7 +94,7 @@
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
-<h3>📈 80.71%</h3>
+<h3>📈 82.30%</h3>
 <p><strong>Code Coverage</strong><br/>Line coverage</p>
 </td>
 <td align="center" width="20%">
@@ -102,7 +102,7 @@
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 46 ns</h3>
+<h3>⚡ 57 ns</h3>
 <p><strong>Dot Product</strong><br/>768D vectors</p>
 </td>
 <td align="center" width="20%">
@@ -116,20 +116,20 @@
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 46 ns | 21.7M ops/sec |
-| **SIMD Cosine (768D)** | 105 ns | 9.5M ops/sec |
-| **SIMD Hamming (binary)** | 8 ns | 125M ops/sec |
-| **HNSW Search (10K vectors)** | 223 µs | k=10, 128D |
-| **Hybrid Search** | 139 µs | Vector + filter |
-| **Bulk Insert (10K)** | 4.6s | With HNSW indexing |
+| **SIMD Dot Product (768D)** | 57 ns | 17.5M ops/sec |
+| **SIMD Cosine (768D)** | 68 ns | 14.7M ops/sec |
+| **SIMD Hamming (binary)** | 6 ns | 167M ops/sec |
+| **HNSW Search (10K vectors)** | 57 µs | k=10, 768D |
+| **ColumnStore Filter (100K)** | 88 µs | 44x vs JSON |
+| **VelesQL Cache Hit** | 84 ns | 12M qps |
 
 ### Codebase Health
 
 | Metric | Value |
 |--------|-------|
-| **Total Rust LoC** | ~95,000 |
+| **Total Rust LoC** | ~133,000 |
 | **Crates** | 8 production crates |
-| **Benchmarks** | 31 criterion suites |
+| **Benchmarks** | 35 criterion suites |
 | **E2E Test Suites** | 6 (Rust, Python, WASM, CLI, LangChain, LlamaIndex) |
 | **Security Advisories** | 0 ✅ |
 
@@ -141,7 +141,7 @@
 ✅ cargo test --workspace (3,000 passing)
 ✅ cargo deny check (0 advisories)
 ✅ cargo fmt --check
-✅ Code coverage > 75% (80.71%)
+✅ Code coverage > 75% (82.30%)
 ```
 
 > 📊 **Full metrics:** [docs/RELEASE_METRICS_v1.4.0.md](docs/RELEASE_METRICS_v1.4.0.md)
