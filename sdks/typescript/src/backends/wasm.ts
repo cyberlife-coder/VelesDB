@@ -177,7 +177,7 @@ export class WasmBackend implements IVelesDBBackend {
 
     // Validate all documents first
     for (const doc of docs) {
-      const vectorLen = Array.isArray(doc.vector) ? doc.vector.length : doc.vector.length;
+      const vectorLen = doc.vector.length;
       if (vectorLen !== collection.config.dimension) {
         throw new VelesDBError(
           `Vector dimension mismatch for doc ${doc.id}: expected ${collection.config.dimension}, got ${vectorLen}`,

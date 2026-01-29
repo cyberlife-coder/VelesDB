@@ -72,7 +72,7 @@ class TestVelesDBClient:
             results = await client.search("test_collection", query_vector, top_k=5)
             
             assert len(results["results"]) == 2
-            assert results["results"][0]["score"] == 0.95
+            assert abs(results["results"][0]["score"] - 0.95) < 1e-6
 
     @pytest.mark.asyncio
     async def test_health_check(self):
