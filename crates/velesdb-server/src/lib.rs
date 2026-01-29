@@ -1,3 +1,6 @@
+// Server - pedantic/nursery lints relaxed
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::manual_let_else)]

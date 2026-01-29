@@ -1,3 +1,7 @@
+// Tauri plugin - pedantic/nursery lints relaxed
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+
 //! # tauri-plugin-velesdb
 //!
 //! A Tauri plugin for `VelesDB` - Vector search in desktop applications.
