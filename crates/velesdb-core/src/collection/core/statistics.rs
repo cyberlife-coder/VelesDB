@@ -62,7 +62,16 @@ impl Collection {
         // For now, always compute fresh stats
         // Future: implement caching with TTL
         // Design: returns default on error for convenience (caller can use analyze() for errors)
-        self.analyze().unwrap_or_default()
+        match self.analyze() {
+            Ok(stats) => stats,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to compute collection statistics: {}. Returning defaults.",
+                    e
+                );
+                CollectionStats::default()
+            }
+        }
     }
 
     /// Returns the selectivity estimate for a column.

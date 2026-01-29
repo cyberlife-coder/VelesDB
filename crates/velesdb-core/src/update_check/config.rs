@@ -51,17 +51,29 @@ impl Default for UpdateCheckConfig {
 impl UpdateCheckConfig {
     /// Check if update check is enabled.
     ///
-    /// Environment variable takes precedence over configuration file.
+    /// Environment variables take precedence over configuration file:
+    /// - `VELESDB_NO_UPDATE_CHECK=1` or `true` → disabled
+    /// - `VELESDB_UPDATE_CHECK=0` or `false` → disabled
+    /// - `VELESDB_UPDATE_CHECK=1` or `true` → enabled
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        // Env var takes absolute precedence
-        if std::env::var("VELESDB_NO_UPDATE_CHECK").is_ok() {
-            return false;
+        // Check negative form: VELESDB_NO_UPDATE_CHECK
+        // Only disable if explicitly set to a truthy value (not just existing)
+        if let Ok(val) = std::env::var("VELESDB_NO_UPDATE_CHECK") {
+            let val_lower = val.to_lowercase();
+            // Truthy values: "1", "true", "yes", "on", or any non-empty non-falsy value
+            if val_lower != "0" && val_lower != "false" && val_lower != "no" && val_lower != "off" {
+                return false;
+            }
         }
 
-        // Also support the positive form
+        // Check positive form: VELESDB_UPDATE_CHECK
         if let Ok(val) = std::env::var("VELESDB_UPDATE_CHECK") {
-            return val != "0" && val.to_lowercase() != "false";
+            let val_lower = val.to_lowercase();
+            return val_lower != "0"
+                && val_lower != "false"
+                && val_lower != "no"
+                && val_lower != "off";
         }
 
         self.enabled

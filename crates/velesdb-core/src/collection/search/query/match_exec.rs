@@ -104,7 +104,7 @@ impl Collection {
     pub fn execute_match(
         &self,
         match_clause: &MatchClause,
-        _params: &HashMap<String, serde_json::Value>,
+        params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
         // Get limit from return clause
         let limit = match_clause.return_clause.limit.map_or(100, |l| l as usize);
@@ -128,7 +128,7 @@ impl Collection {
             for (node_id, bindings) in start_nodes {
                 // Apply WHERE filter if present (EPIC-045 US-002)
                 if let Some(ref where_clause) = match_clause.where_clause {
-                    if !self.evaluate_where_condition(node_id, where_clause)? {
+                    if !self.evaluate_where_condition(node_id, where_clause, params)? {
                         continue;
                     }
                 }
@@ -193,7 +193,11 @@ impl Collection {
 
                 // Apply WHERE filter if present (EPIC-045 US-002)
                 if let Some(ref where_clause) = match_clause.where_clause {
-                    if !self.evaluate_where_condition(traversal_result.target_id, where_clause)? {
+                    if !self.evaluate_where_condition(
+                        traversal_result.target_id,
+                        where_clause,
+                        params,
+                    )? {
                         continue;
                     }
                 }
@@ -327,10 +331,12 @@ impl Collection {
     /// Evaluates a WHERE condition against a node's payload (EPIC-045 US-002).
     ///
     /// Supports basic comparisons: =, <>, <, >, <=, >=
+    /// Parameters are resolved from the `params` map.
     fn evaluate_where_condition(
         &self,
         node_id: u64,
         condition: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
     ) -> Result<bool> {
         use crate::velesql::Condition;
 
@@ -349,29 +355,79 @@ impl Collection {
                     return Ok(false);
                 };
 
+                // Resolve parameter if needed
+                let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
+
                 // Compare based on operator
-                Self::evaluate_comparison(cmp.operator, actual, &cmp.value)
+                Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
             }
             Condition::And(left, right) => {
-                let left_result = self.evaluate_where_condition(node_id, left)?;
+                let left_result = self.evaluate_where_condition(node_id, left, params)?;
                 if !left_result {
                     return Ok(false);
                 }
-                self.evaluate_where_condition(node_id, right)
+                self.evaluate_where_condition(node_id, right, params)
             }
             Condition::Or(left, right) => {
-                let left_result = self.evaluate_where_condition(node_id, left)?;
+                let left_result = self.evaluate_where_condition(node_id, left, params)?;
                 if left_result {
                     return Ok(true);
                 }
-                self.evaluate_where_condition(node_id, right)
+                self.evaluate_where_condition(node_id, right, params)
             }
             Condition::Not(inner) => {
-                let inner_result = self.evaluate_where_condition(node_id, inner)?;
+                let inner_result = self.evaluate_where_condition(node_id, inner, params)?;
                 Ok(!inner_result)
             }
             // For other condition types, default to true (not filtered)
             _ => Ok(true),
+        }
+    }
+
+    /// Resolves a Value for WHERE clause, substituting parameters from the params map.
+    ///
+    /// If the value is a Parameter, looks it up in params and converts to appropriate Value type.
+    /// Otherwise, returns the value unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a required parameter is missing.
+    fn resolve_where_param(
+        value: &crate::velesql::Value,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::Value> {
+        use crate::velesql::Value;
+
+        match value {
+            Value::Parameter(name) => {
+                let param_value = params
+                    .get(name)
+                    .ok_or_else(|| Error::Config(format!("Missing parameter: ${}", name)))?;
+
+                // Convert JSON value to VelesQL Value
+                Ok(match param_value {
+                    serde_json::Value::Number(n) => {
+                        if let Some(i) = n.as_i64() {
+                            Value::Integer(i)
+                        } else if let Some(f) = n.as_f64() {
+                            Value::Float(f)
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    serde_json::Value::String(s) => Value::String(s.clone()),
+                    serde_json::Value::Bool(b) => Value::Boolean(*b),
+                    serde_json::Value::Null => Value::Null,
+                    _ => {
+                        return Err(Error::Config(format!(
+                            "Unsupported parameter type for ${}: {:?}",
+                            name, param_value
+                        )));
+                    }
+                })
+            }
+            // Non-parameter values pass through unchanged
+            other => Ok(other.clone()),
         }
     }
 

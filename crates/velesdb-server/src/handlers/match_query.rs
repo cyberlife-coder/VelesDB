@@ -129,6 +129,22 @@ pub async fn match_query(
         )
     })?;
 
+    // Validate threshold if provided (must be 0.0 to 1.0)
+    if let Some(threshold) = request.threshold {
+        if !(0.0..=1.0).contains(&threshold) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(MatchQueryError {
+                    error: format!(
+                        "Invalid threshold: {}. Must be between 0.0 and 1.0",
+                        threshold
+                    ),
+                    code: "INVALID_THRESHOLD".to_string(),
+                }),
+            ));
+        }
+    }
+
     // Execute MATCH query - use similarity variant if vector provided (EPIC-058 US-007)
     let results = if let Some(ref vector) = request.vector {
         let threshold = request.threshold.unwrap_or(0.0);

@@ -129,7 +129,19 @@ impl TrigramIndex {
     /// Insert a document into the index.
     ///
     /// If a document with the same ID exists, it will be updated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `doc_id` exceeds `u32::MAX` (4 billion documents).
+    /// This is a limitation of the underlying RoaringBitmap storage.
     pub fn insert(&mut self, doc_id: u64, text: &str) {
+        // Bounds check: RoaringBitmap uses u32 internally
+        assert!(
+            u32::try_from(doc_id).is_ok(),
+            "TrigramIndex: doc_id {} exceeds u32::MAX limit. Maximum 4B documents supported.",
+            doc_id
+        );
+
         // Remove old entry if exists
         if self.doc_trigrams.contains_key(&doc_id) {
             self.remove(doc_id);
@@ -142,7 +154,7 @@ impl TrigramIndex {
         self.doc_trigrams.insert(doc_id, trigram_set);
 
         // Add to inverted index
-        // SAFETY (EPIC-067/US-002): RoaringBitmap uses u32, limiting to 4B docs
+        // SAFETY: Bounds checked above, truncation is safe
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
         for trigram in trigrams {
@@ -154,8 +166,16 @@ impl TrigramIndex {
     }
 
     /// Remove a document from the index.
+    ///
+    /// # Note
+    ///
+    /// If `doc_id` exceeds `u32::MAX`, the document won't exist in the index anyway.
     pub fn remove(&mut self, doc_id: u64) {
-        // SAFETY (EPIC-067/US-002): RoaringBitmap uses u32, limiting to 4B docs
+        // If doc_id > u32::MAX, it was never inserted (bounds checked in insert)
+        if u32::try_from(doc_id).is_err() {
+            return;
+        }
+        // SAFETY: Bounds checked above
         #[allow(clippy::cast_possible_truncation)]
         let doc_id_u32 = doc_id as u32;
         if let Some(trigrams) = self.doc_trigrams.remove(&doc_id) {
