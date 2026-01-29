@@ -392,6 +392,21 @@ fn format_parse_error(e: &CoreParseError) -> String {
     )
 }
 
+/// Register VelesQL classes with the Python module.
+pub fn register_velesql_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<VelesQL>()?;
+    m.add_class::<ParsedStatement>()?;
+    m.add(
+        "VelesQLSyntaxError",
+        m.py().get_type::<VelesQLSyntaxError>(),
+    )?;
+    m.add(
+        "VelesQLParameterError",
+        m.py().get_type::<VelesQLParameterError>(),
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,19 +479,4 @@ mod tests {
         let query = result.unwrap();
         assert!(query.select.group_by.is_some());
     }
-}
-
-/// Register VelesQL classes with the Python module.
-pub fn register_velesql_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<VelesQL>()?;
-    m.add_class::<ParsedStatement>()?;
-    m.add(
-        "VelesQLSyntaxError",
-        m.py().get_type::<VelesQLSyntaxError>(),
-    )?;
-    m.add(
-        "VelesQLParameterError",
-        m.py().get_type::<VelesQLParameterError>(),
-    )?;
-    Ok(())
 }

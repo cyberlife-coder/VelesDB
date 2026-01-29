@@ -167,6 +167,7 @@ pub fn is_retryable_error(error: &Error) -> bool {
 /// # Returns
 ///
 /// The result of the operation, or the last error if all retries failed.
+#[allow(clippy::cognitive_complexity)] // Reason: Retry logic with backoff requires tracking multiple states
 pub async fn with_retry<F, Fut, T>(
     config: &RetryConfig,
     operation_name: &str,

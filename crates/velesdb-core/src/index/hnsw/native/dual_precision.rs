@@ -130,7 +130,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         let quantizer = Arc::new(ScalarQuantizer::train(&refs));
 
         // Create quantized store and quantize all existing vectors
-        let mut store = QuantizedVectorStore::new(quantizer.clone(), self.inner.len() + 1000);
+        let mut store = QuantizedVectorStore::new(Arc::clone(&quantizer), self.inner.len() + 1000);
 
         // Quantize training buffer (already in order)
         for vec in &self.training_buffer {
@@ -186,7 +186,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         ef_search: usize,
     ) -> Vec<(NodeId, f32)> {
         // Step 1: Get more candidates than needed using graph traversal
-        // TODO: Future optimization - use quantized distances for traversal
+        // Future optimization: use quantized distances for traversal (EPIC-055)
         let rerank_k = (ef_search * 2).max(k * 4);
         let candidates = self.inner.search(query, rerank_k, ef_search);
 
@@ -208,7 +208,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             .collect();
 
         // Sort by exact distance
-        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
 
         // Return top k
         reranked.truncate(k);

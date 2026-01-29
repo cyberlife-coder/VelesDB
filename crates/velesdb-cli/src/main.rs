@@ -286,7 +286,7 @@ enum LicenseAction {
     },
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)] // Reason: CLI entry point with command dispatch
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 

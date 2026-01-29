@@ -177,7 +177,7 @@ impl Collection {
             .into_iter()
             .map(|Reverse((OrderedFloat(s), id))| (id, s))
             .collect();
-        scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_ids.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Fetch full point data
         let vector_storage = self.vector_storage.read();
@@ -266,7 +266,7 @@ impl Collection {
 
         // Sort by fused score
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
-        scored_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_ids.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Fetch full point data and apply filter
         let vector_storage = self.vector_storage.read();

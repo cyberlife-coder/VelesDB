@@ -9,11 +9,20 @@
 
 # Windsurf local config (accessible by Cascade but not pushed)
 .windsurf/
-.epics/
-.research/
 AGENTS.md
 *.swo
 *~
+
+# Internal tracking (development only - DO NOT COMMIT)
+.epics/
+.research/
+.audit/
+.notes/
+.todo/
+.progress/
+progress.md
+TODO.md
+NOTES.md
 
 # OS
 .DS_Store
@@ -93,3 +102,17 @@ docs/TECHNICAL_AUDIT*.md
 **/GAP_ANALYSIS*.md
 **/*CONFIDENTIAL*.md
 **/*INTERNAL*.md
+**/SPRINT-*.md
+**/PRIORITY_MATRIX*.md
+**/FLAGS_REVIEW*.md
+**/EXPERT_REVIEW*.md
+
+# Local session artifacts
+*.session.md
+*_session_*.md
+scratch/
+tmp/
+
+# Tarpaulin coverage reports (local)
+tarpaulin-report.html
+cobertura.xml

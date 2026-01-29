@@ -70,14 +70,17 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::unused_async)]
 
+#[cfg(feature = "persistence")]
 pub mod agent;
 pub mod alloc_guard;
 #[cfg(test)]
 mod alloc_guard_tests;
 pub mod cache;
+#[cfg(feature = "persistence")]
 pub mod collection;
+#[cfg(feature = "persistence")]
 pub mod column_store;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod column_store_tests;
 pub mod compression;
 pub mod config;
@@ -98,12 +101,14 @@ pub mod fusion;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
+#[cfg(feature = "persistence")]
 pub mod guardrails;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod guardrails_tests;
 pub mod half_precision;
 #[cfg(test)]
 mod half_precision_tests;
+#[cfg(feature = "persistence")]
 pub mod index;
 pub mod metrics;
 #[cfg(test)]
@@ -132,14 +137,22 @@ pub mod simd_native;
 mod simd_native_tests;
 #[cfg(test)]
 mod simd_tests;
+#[cfg(feature = "persistence")]
 pub mod storage;
+pub mod update_check;
 pub mod vector_ref;
 #[cfg(test)]
 mod vector_ref_tests;
 pub mod velesql;
 
+#[cfg(feature = "update-check")]
+pub use update_check::{check_for_updates, spawn_update_check};
+pub use update_check::{compute_instance_hash, UpdateCheckConfig};
+
+#[cfg(feature = "persistence")]
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
+#[cfg(feature = "persistence")]
 pub use collection::{
     Collection, CollectionType, ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge,
     GraphNode, GraphSchema, IndexInfo, NodeType, TraversalResult, ValueType,
@@ -154,6 +167,7 @@ pub use quantization::{
     BinaryQuantizedVector, QuantizedVector, StorageMode,
 };
 
+#[cfg(feature = "persistence")]
 pub use column_store::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStore, ColumnStoreError, ColumnType,
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,
@@ -169,6 +183,7 @@ pub use metrics::{
 };
 
 /// Database instance managing collections and storage.
+#[cfg(feature = "persistence")]
 pub struct Database {
     /// Path to the data directory
     data_dir: std::path::PathBuf,
@@ -176,6 +191,7 @@ pub struct Database {
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
 }
 
+#[cfg(feature = "persistence")]
 impl Database {
     /// Opens or creates a database at the specified path.
     ///
@@ -380,7 +396,7 @@ impl Database {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod tests {
     use super::*;
     use tempfile::tempdir;

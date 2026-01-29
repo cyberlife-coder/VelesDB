@@ -275,7 +275,7 @@ impl ParallelTraverser {
 
         // Sort by score (if present) then by depth
         merged.sort_by(|a, b| match (a.score, b.score) {
-            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(Ordering::Equal),
+            (Some(sa), Some(sb)) => sb.total_cmp(&sa),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => a.depth.cmp(&b.depth),

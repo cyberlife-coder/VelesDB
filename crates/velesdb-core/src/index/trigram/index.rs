@@ -129,7 +129,19 @@ impl TrigramIndex {
     /// Insert a document into the index.
     ///
     /// If a document with the same ID exists, it will be updated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `doc_id` exceeds `u32::MAX` (4 billion documents).
+    /// This is a limitation of the underlying RoaringBitmap storage.
     pub fn insert(&mut self, doc_id: u64, text: &str) {
+        // Bounds check: RoaringBitmap uses u32 internally
+        assert!(
+            u32::try_from(doc_id).is_ok(),
+            "TrigramIndex: doc_id {} exceeds u32::MAX limit. Maximum 4B documents supported.",
+            doc_id
+        );
+
         // Remove old entry if exists
         if self.doc_trigrams.contains_key(&doc_id) {
             self.remove(doc_id);
@@ -142,24 +154,35 @@ impl TrigramIndex {
         self.doc_trigrams.insert(doc_id, trigram_set);
 
         // Add to inverted index
+        // SAFETY: Bounds checked above, truncation is safe
+        #[allow(clippy::cast_possible_truncation)]
+        let doc_id_u32 = doc_id as u32;
         for trigram in trigrams {
-            self.inverted
-                .entry(trigram)
-                .or_default()
-                .insert(doc_id as u32);
+            self.inverted.entry(trigram).or_default().insert(doc_id_u32);
         }
 
         // Track document
-        self.all_docs.insert(doc_id as u32);
+        self.all_docs.insert(doc_id_u32);
     }
 
     /// Remove a document from the index.
+    ///
+    /// # Note
+    ///
+    /// If `doc_id` exceeds `u32::MAX`, the document won't exist in the index anyway.
     pub fn remove(&mut self, doc_id: u64) {
+        // If doc_id > u32::MAX, it was never inserted (bounds checked in insert)
+        if u32::try_from(doc_id).is_err() {
+            return;
+        }
+        // SAFETY: Bounds checked above
+        #[allow(clippy::cast_possible_truncation)]
+        let doc_id_u32 = doc_id as u32;
         if let Some(trigrams) = self.doc_trigrams.remove(&doc_id) {
             // Remove from inverted index
             for trigram in trigrams {
                 if let Some(bitmap) = self.inverted.get_mut(&trigram) {
-                    bitmap.remove(doc_id as u32);
+                    bitmap.remove(doc_id_u32);
                     // Clean up empty bitmaps
                     if bitmap.is_empty() {
                         self.inverted.remove(&trigram);
@@ -168,7 +191,7 @@ impl TrigramIndex {
             }
         }
 
-        self.all_docs.remove(doc_id as u32);
+        self.all_docs.remove(doc_id_u32);
     }
 
     /// Search for documents matching a LIKE pattern.
@@ -293,7 +316,7 @@ impl TrigramIndex {
             .collect();
 
         // Sort by score descending
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         results
     }

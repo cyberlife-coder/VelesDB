@@ -14,17 +14,18 @@ categories.workspace = true
 authors.workspace = true
 
 [dependencies]
-tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-memmap2 = { workspace = true }
 bincode = { workspace = true }
 roaring = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
+
+# WASM-incompatible deps - only for non-WASM targets
+# memmap2 moved to target-specific section below
 
 # HNSW: Native implementation only (v1.0+)
 # hnsw_rs dependency removed - native HNSW is 1.2x faster
@@ -39,8 +40,7 @@ version = "0.12"
 [dependencies.crossbeam-channel]
 version = "0.5"
 
-[dependencies.rayon]
-version = "1.10"
+# rayon moved to optional deps section (persistence feature)
 
 [dependencies.arc-swap]
 version = "1.7"
@@ -97,8 +97,13 @@ version = "2.7"
 [features]
 # Native HNSW is the only implementation (v1.0+)
 # hnsw_rs dependency has been removed
-default = []
+default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
+# Persistence feature: includes tokio, memmap2, rayon (not WASM-compatible)
+# Disable for WASM builds: velesdb-core = { default-features = false }
+persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
+# Update check feature: enables HTTP client for version checking
+update-check = ["dep:reqwest", "dep:tokio"]
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -237,6 +242,43 @@ harness = false
 [[bench]]
 name = "smoke_test"
 harness = false
+
+# ============================================================================
+# Target-specific dependencies (WASM compatibility)
+# ============================================================================
+
+# ============================================================================
+# Optional deps for persistence feature (not WASM-compatible)
+# ============================================================================
+[dependencies.memmap2]
+workspace = true
+optional = true
+
+[dependencies.rayon]
+version = "1.10"
+optional = true
+
+[dependencies.tokio]
+workspace = true
+optional = true
+
+# Update check dependencies
+[dependencies.sha2]
+version = "0.10"
+
+[dependencies.hex]
+version = "0.4"
+
+[dependencies.hostname]
+version = "0.4"
+
+[dependencies.whoami]
+version = "1.5"
+
+[dependencies.reqwest]
+version = "0.11"
+features = ["json"]
+optional = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
