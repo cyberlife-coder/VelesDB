@@ -58,5 +58,12 @@ serde-wasm-bindgen = "0.6"
 # No explicit [[bench]] needed - Cargo handles it automatically
 
 [package.metadata.wasm-pack.profile.release]
+# Enable wasm-opt with size optimization (EPIC-053/US-006)
+wasm-opt = ["-Os", "--enable-simd"]
+
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.dev]
 wasm-opt = false
 
