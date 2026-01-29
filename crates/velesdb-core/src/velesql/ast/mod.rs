@@ -30,7 +30,7 @@ pub use select::{
 pub use values::{
     CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value, VectorExpr,
 };
-pub use with_clause::{WithClause, WithOption, WithValue};
+pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 
 /// A complete VelesQL query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
