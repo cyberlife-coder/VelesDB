@@ -45,6 +45,7 @@ mod distance;
 mod filter;
 mod fusion;
 mod graph;
+mod graph_persistence;
 mod persistence;
 mod serialization;
 mod simd;

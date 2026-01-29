@@ -524,6 +524,19 @@ impl GraphStore {
     }
 }
 
+/// Internal methods for `GraphStore` (not exposed to WASM).
+impl GraphStore {
+    /// Returns all nodes in the graph (for persistence - internal use).
+    pub(crate) fn get_all_nodes_internal(&self) -> Vec<GraphNode> {
+        self.nodes.values().cloned().collect()
+    }
+
+    /// Returns all edges in the graph (for persistence - internal use).
+    pub(crate) fn get_all_edges_internal(&self) -> Vec<GraphEdge> {
+        self.edges.values().cloned().collect()
+    }
+}
+
 impl Default for GraphStore {
     fn default() -> Self {
         Self::new()
