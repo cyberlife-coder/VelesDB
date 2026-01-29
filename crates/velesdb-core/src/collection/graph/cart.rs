@@ -27,6 +27,8 @@
 use super::degree_router::EdgeIndex;
 
 /// Maximum entries per leaf node (horizontal compression).
+/// TODO: Use for leaf splitting when implemented.
+#[allow(dead_code)]
 const MAX_LEAF_ENTRIES: usize = 256;
 
 /// Compressed Adaptive Radix Tree for high-degree vertices.
@@ -276,15 +278,10 @@ impl CARTNode {
                 match entries.binary_search(&value) {
                     Ok(_) => false, // Already exists
                     Err(pos) => {
-                        if entries.len() < MAX_LEAF_ENTRIES {
-                            entries.insert(pos, value);
-                            true
-                        } else {
-                            // Leaf is full, need to split (TODO: implement leaf splitting)
-                            // For now, just insert anyway
-                            entries.insert(pos, value);
-                            true
-                        }
+                        // Note: Leaf splitting not yet implemented (TODO)
+                        // Insert regardless of capacity for now
+                        entries.insert(pos, value);
+                        true
                     }
                 }
             }
