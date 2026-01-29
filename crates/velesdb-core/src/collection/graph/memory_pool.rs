@@ -95,15 +95,14 @@ impl<T> MemoryPool<T> {
 
     /// Gets a reference to the value at the given index.
     ///
-    /// # Safety
-    ///
-    /// The index must have been obtained from `allocate()`, had a value stored,
-    /// and not yet deallocated.
+    /// Returns `None` if the index is out of bounds or the slot was never initialized
+    /// via `store()`.
     #[must_use]
     pub fn get(&self, index: PoolIndex) -> Option<&T> {
         let (chunk_idx, slot_idx) = self.index_to_chunk_slot(index.0);
-        if chunk_idx < self.chunks.len() {
-            // SAFETY: Caller guarantees index is valid and initialized
+        // BUG-1 FIX: Check initialized BEFORE assume_init_ref to prevent UB
+        if chunk_idx < self.chunks.len() && self.initialized.contains(&index.0) {
+            // SAFETY: Slot is in initialized set, meaning store() was called
             Some(unsafe { self.chunks[chunk_idx][slot_idx].assume_init_ref() })
         } else {
             None

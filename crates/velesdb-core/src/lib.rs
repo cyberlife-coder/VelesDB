@@ -44,11 +44,26 @@
 #![warn(clippy::all)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
-// SOTA 2026 performance code - allow common numeric casts
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_wrap)]
-// Pedantic/nursery lints - stylistic, not bugs (Task Force decision 2026-01-29)
+// =============================================================================
+// NUMERIC CAST LINTS - USE WITH CAUTION
+// =============================================================================
+// These are allowed globally for SIMD/performance code but can hide real bugs.
+// RECOMMENDATION: Prefer local #[allow(...)] on specific functions instead.
+// Review PR #163 FLAG-1: These may mask truncation/overflow bugs elsewhere.
+//
+// For new code: Use try_from() or explicit bounds checks instead of `as`.
+// Example: u32::try_from(len).map_err(|_| Error::Overflow)?
+// =============================================================================
+#![allow(clippy::cast_possible_truncation)] // Can hide integer truncation bugs
+#![allow(clippy::cast_precision_loss)] // Acceptable for f32/f64 conversions
+#![allow(clippy::cast_possible_wrap)] // Can hide overflow bugs
+#![allow(clippy::cast_sign_loss)] // Can hide sign conversion bugs
+#![allow(clippy::cast_lossless)]
+// Safe - just suggests Into instead of as
+
+// =============================================================================
+// STYLISTIC LINTS - Safe to allow globally (no bug risk)
+// =============================================================================
 #![allow(clippy::option_if_let_else)]
 #![allow(clippy::significant_drop_tightening)]
 #![allow(clippy::redundant_clone)]
@@ -58,20 +73,13 @@
 #![allow(clippy::if_not_else)]
 #![allow(clippy::redundant_pub_crate)]
 #![allow(clippy::unused_peekable)]
-// NOTE: clippy::hashset_insert_after_contains removed - lint not available in current Rust version
 #![allow(clippy::use_self)]
 #![allow(clippy::significant_drop_in_scrutinee)]
-#![allow(clippy::non_send_fields_in_send_ty)]
 #![allow(clippy::imprecise_flops)]
 #![allow(clippy::set_contains_or_insert)]
 #![allow(clippy::useless_let_if_seq)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_lossless)]
-// Documentation style preferences
 #![allow(clippy::doc_markdown)]
-// Code style preferences
 #![allow(clippy::single_match_else)]
-// Allow large stack arrays in tests (SIMD benchmarks use large test vectors)
 #![allow(clippy::large_stack_arrays)]
 #![allow(clippy::manual_let_else)]
 #![allow(clippy::unused_self)]
@@ -86,6 +94,13 @@
 #![allow(clippy::assertions_on_constants)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::unused_async)]
+// =============================================================================
+// THREAD SAFETY LINT - REQUIRES CAREFUL REVIEW
+// =============================================================================
+// FLAG-1 WARNING: This lint can hide thread safety issues. Each unsafe Send/Sync
+// impl should have a // SAFETY: comment explaining why it's correct.
+// See: native_inner.rs Send/Sync impl for NativeHnswInner
+#![allow(clippy::non_send_fields_in_send_ty)]
 
 #[cfg(feature = "persistence")]
 pub mod agent;

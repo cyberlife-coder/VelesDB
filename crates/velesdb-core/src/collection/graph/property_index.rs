@@ -827,17 +827,42 @@ impl IndexIntersection {
     }
 
     /// Intersects multiple Vec<u64> sets, converting to bitmaps.
+    ///
+    /// # Warning
+    ///
+    /// IDs greater than `u32::MAX` will be dropped and logged as a warning,
+    /// since `RoaringBitmap` only supports 32-bit integers.
     #[must_use]
     pub fn intersect_vecs(sets: &[&[u64]]) -> Vec<u64> {
         if sets.is_empty() {
             return Vec::new();
         }
 
-        // Convert to bitmaps (only supports u32)
+        // BUG-2 FIX: Log warning when IDs > u32::MAX are dropped
+        let mut dropped_count = 0usize;
         let bitmaps: Vec<RoaringBitmap> = sets
             .iter()
-            .map(|s| s.iter().filter_map(|&id| u32::try_from(id).ok()).collect())
+            .map(|s| {
+                s.iter()
+                    .filter_map(|&id| match u32::try_from(id) {
+                        Ok(id32) => Some(id32),
+                        Err(_) => {
+                            dropped_count += 1;
+                            None
+                        }
+                    })
+                    .collect()
+            })
             .collect();
+
+        if dropped_count > 0 {
+            tracing::warn!(
+                dropped_count,
+                "intersect_vecs: {} IDs > u32::MAX were silently dropped. \
+                 Consider using intersect_two() for large ID ranges.",
+                dropped_count
+            );
+        }
 
         Self::intersect_bitmaps(&bitmaps)
             .iter()

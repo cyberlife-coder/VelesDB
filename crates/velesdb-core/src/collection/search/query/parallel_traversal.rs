@@ -533,7 +533,7 @@ impl FrontierParallelBFS {
         use parking_lot::RwLock;
         use std::collections::HashSet;
 
-        let stats = TraversalStats::new();
+        let mut stats = TraversalStats::new();
         stats.add_nodes_visited(1);
 
         // Thread-safe visited set using RwLock
@@ -550,8 +550,9 @@ impl FrontierParallelBFS {
         while !current_frontier.is_empty() && depth < self.config.max_depth {
             depth += 1;
 
-            // Parallel expansion of frontier
-            let next_frontier: Vec<(u64, Vec<u64>, u64)> =
+            // BUG-5 FIX: Collect all candidates in parallel WITHOUT locking,
+            // then deduplicate in a single pass to avoid lock serialization.
+            let candidates: Vec<(u64, Vec<u64>, u64)> =
                 if current_frontier.len() >= self.config.parallel_threshold {
                     current_frontier
                         .par_iter()
@@ -561,17 +562,10 @@ impl FrontierParallelBFS {
 
                             neighbors
                                 .into_iter()
-                                .filter_map(|(neighbor, edge_id)| {
-                                    // Check and insert atomically
-                                    let mut visited_guard = visited.write();
-                                    if visited_guard.insert(neighbor) {
-                                        stats.add_nodes_visited(1);
-                                        let mut new_path = path.clone();
-                                        new_path.push(edge_id);
-                                        Some((neighbor, new_path, edge_id))
-                                    } else {
-                                        None
-                                    }
+                                .map(|(neighbor, edge_id)| {
+                                    let mut new_path = path.clone();
+                                    new_path.push(edge_id);
+                                    (neighbor, new_path, edge_id)
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -586,21 +580,30 @@ impl FrontierParallelBFS {
 
                             neighbors
                                 .into_iter()
-                                .filter_map(|(neighbor, edge_id)| {
-                                    let mut visited_guard = visited.write();
-                                    if visited_guard.insert(neighbor) {
-                                        stats.add_nodes_visited(1);
-                                        let mut new_path = path.clone();
-                                        new_path.push(edge_id);
-                                        Some((neighbor, new_path, edge_id))
-                                    } else {
-                                        None
-                                    }
+                                .map(|(neighbor, edge_id)| {
+                                    let mut new_path = path.clone();
+                                    new_path.push(edge_id);
+                                    (neighbor, new_path, edge_id)
                                 })
                                 .collect::<Vec<_>>()
                         })
                         .collect()
                 };
+
+            // Deduplicate in a single pass (no lock contention)
+            let mut visited_guard = visited.write();
+            let next_frontier: Vec<(u64, Vec<u64>, u64)> = candidates
+                .into_iter()
+                .filter(|(neighbor, _, _)| {
+                    if visited_guard.insert(*neighbor) {
+                        stats.add_nodes_visited(1);
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            drop(visited_guard);
 
             // Add results from this level
             for (neighbor, path, _) in &next_frontier {
@@ -608,11 +611,11 @@ impl FrontierParallelBFS {
 
                 // Early exit if limit reached
                 if all_results.len() >= self.config.limit {
-                    let mut final_stats = TraversalStats::new();
-                    final_stats.start_nodes_count = 1;
-                    final_stats.raw_results = all_results.len();
-                    final_stats.deduplicated_results = all_results.len();
-                    return (all_results, final_stats);
+                    // BUG-8 FIX: Use accumulated stats instead of creating new empty ones
+                    stats.start_nodes_count = 1;
+                    stats.raw_results = all_results.len();
+                    stats.deduplicated_results = all_results.len();
+                    return (all_results, stats);
                 }
             }
 
@@ -623,12 +626,12 @@ impl FrontierParallelBFS {
                 .collect();
         }
 
-        let mut final_stats = TraversalStats::new();
-        final_stats.start_nodes_count = 1;
-        final_stats.raw_results = all_results.len();
-        final_stats.deduplicated_results = all_results.len();
+        // BUG-8 FIX: Use accumulated stats (nodes_visited, edges_traversed already set)
+        stats.start_nodes_count = 1;
+        stats.raw_results = all_results.len();
+        stats.deduplicated_results = all_results.len();
 
-        (all_results, final_stats)
+        (all_results, stats)
     }
 }
 
