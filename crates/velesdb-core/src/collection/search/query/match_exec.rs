@@ -387,9 +387,87 @@ impl Collection {
                 let inner_result = self.evaluate_where_condition(node_id, inner, params)?;
                 Ok(!inner_result)
             }
-            // For other condition types, default to true (not filtered)
+            Condition::Group(inner) => self.evaluate_where_condition(node_id, inner, params),
+            Condition::Similarity(sim) => {
+                // EPIC-052 US-007: Evaluate similarity condition in WHERE clause
+                self.evaluate_similarity_condition(node_id, sim, params)
+            }
+            // For other condition types (VectorSearch, VectorFusedSearch, etc.),
+            // default to true as they are handled separately in execute_match_with_similarity
             _ => Ok(true),
         }
+    }
+
+    /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).
+    ///
+    /// Computes the similarity between the node's vector and the query vector,
+    /// then compares it against the threshold using the specified operator.
+    fn evaluate_similarity_condition(
+        &self,
+        node_id: u64,
+        sim: &crate::velesql::SimilarityCondition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        use crate::velesql::VectorExpr;
+
+        // Get query vector from parameters
+        let query_vector = match &sim.vector {
+            VectorExpr::Literal(v) => v.clone(),
+            VectorExpr::Parameter(name) => {
+                let param_value = params
+                    .get(name)
+                    .ok_or_else(|| Error::Config(format!("Missing vector parameter: ${}", name)))?;
+
+                // Convert JSON array to Vec<f32>
+                match param_value {
+                    serde_json::Value::Array(arr) => arr
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                    _ => {
+                        return Err(Error::Config(format!(
+                            "Parameter ${} must be a vector array",
+                            name
+                        )));
+                    }
+                }
+            }
+        };
+
+        if query_vector.is_empty() {
+            return Ok(false);
+        }
+
+        // Get node vector
+        let vector_storage = self.vector_storage.read();
+        let node_vector = match vector_storage.retrieve(node_id)? {
+            Some(v) => v,
+            None => return Ok(false), // No vector = no match
+        };
+
+        if node_vector.len() != query_vector.len() {
+            return Ok(false); // Dimension mismatch
+        }
+
+        // Compute similarity using collection's metric
+        let config = self.config.read();
+        let metric = config.metric;
+        drop(config);
+
+        let score = metric.calculate(&node_vector, &query_vector);
+
+        // Evaluate threshold comparison
+        #[allow(clippy::cast_possible_truncation)]
+        let threshold = sim.threshold as f32;
+
+        Ok(match sim.operator {
+            crate::velesql::CompareOp::Gt => score > threshold,
+            crate::velesql::CompareOp::Gte => score >= threshold,
+            crate::velesql::CompareOp::Lt => score < threshold,
+            crate::velesql::CompareOp::Lte => score <= threshold,
+            crate::velesql::CompareOp::Eq => (score - threshold).abs() < f32::EPSILON,
+            crate::velesql::CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
+        })
     }
 
     /// Resolves a Value for WHERE clause, substituting parameters from the params map.
