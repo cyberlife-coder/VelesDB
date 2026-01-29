@@ -98,6 +98,55 @@ let id = u32::try_from(len).map_err(|_| Error::Overflow)?;
 fn test_gpu_xxx() { ... }
 ```
 
+---
+
+## WASM Patterns (velesdb-wasm)
+
+### Async Constructor - INTERDIT
+```rust
+// ❌ DÉPRÉCIÉ - Produit TypeScript invalide
+#[wasm_bindgen(constructor)]
+pub async fn new() -> Result<Self, JsValue> { ... }
+
+// ✅ Séparer new() sync et init() async
+#[wasm_bindgen(constructor)]
+pub fn new() -> Self { Self { db: None } }
+
+#[wasm_bindgen]
+pub async fn init(&mut self) -> Result<(), JsValue> {
+    self.db = Some(open_db().await?);
+    Ok(())
+}
+```
+
+### Méthodes internes - Impl block séparé
+```rust
+// ❌ Dans #[wasm_bindgen] impl → pas accessible depuis Rust
+#[wasm_bindgen]
+impl MyStruct {
+    pub fn internal_method(&self) { ... } // Non accessible!
+}
+
+// ✅ Impl block séparé pour méthodes internes
+impl MyStruct {
+    pub(crate) fn get_all_internal(&self) -> Vec<T> { ... }
+}
+```
+
+### IndexedDB - Namespaced keys
+```rust
+// ✅ Préfixer les clés pour multi-graph
+let key = format!("{graph_name}:{}", node.id());
+store.put_with_key(&value, &JsValue::from_str(&key))?;
+```
+
+### Validation WASM
+```powershell
+cargo check -p velesdb-wasm
+cargo test -p velesdb-wasm
+wasm-pack test --headless --chrome crates/velesdb-wasm  # Browser tests
+```
+
 ## Cycle Qualité Obligatoire (Boucle max 25 itérations)
 
 ```
