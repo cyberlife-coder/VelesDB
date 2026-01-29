@@ -134,7 +134,11 @@ impl Collection {
                 }
 
                 let mut result = MatchResult::new(node_id, 0, Vec::new());
-                result.bindings = bindings;
+                result.bindings.clone_from(&bindings);
+
+                // Project properties from RETURN clause (EPIC-058 US-007)
+                result.projected = self.project_properties(&bindings, &match_clause.return_clause);
+
                 results.push(result);
 
                 // Check limit AFTER filtering
@@ -201,6 +205,10 @@ impl Collection {
                         continue;
                     }
                 }
+
+                // Project properties from RETURN clause (EPIC-058 US-007)
+                match_result.projected =
+                    self.project_properties(&match_result.bindings, &match_clause.return_clause);
 
                 results.push(match_result);
             }
@@ -534,11 +542,26 @@ impl Collection {
     /// Gets a nested property from a JSON object (EPIC-058 US-007).
     ///
     /// Supports paths like "metadata.category" for nested access.
+    /// Limited to 10 levels of nesting to prevent abuse.
     fn get_nested_property<'a>(
         payload: &'a serde_json::Map<String, serde_json::Value>,
         path: &str,
     ) -> Option<&'a serde_json::Value> {
+        // Limit nesting depth to prevent potential abuse
+        const MAX_NESTING_DEPTH: usize = 10;
+
         let parts: Vec<&str> = path.split('.').collect();
+
+        // Bounds check on nesting depth
+        if parts.len() > MAX_NESTING_DEPTH {
+            tracing::warn!(
+                "Property path '{}' exceeds max nesting depth of {}",
+                path,
+                MAX_NESTING_DEPTH
+            );
+            return None;
+        }
+
         let first_key = *parts.first()?;
         let mut current: &serde_json::Value = payload.get(first_key)?;
 
@@ -584,19 +607,28 @@ impl Collection {
         let metric = config.metric;
         drop(config);
 
-        // Score each result by similarity
+        // Score each result by similarity/distance
         let vector_storage = self.vector_storage.read();
         let mut scored_results = Vec::new();
+        let higher_is_better = metric.higher_is_better();
 
         for mut result in results {
             // Get vector for this node
             if let Ok(Some(node_vector)) = vector_storage.retrieve(result.node_id) {
-                // Calculate similarity
-                let similarity = metric.calculate(&node_vector, query_vector);
+                // Calculate similarity/distance
+                let score = metric.calculate(&node_vector, query_vector);
 
-                // Filter by threshold (higher is better for similarity)
-                if similarity >= similarity_threshold {
-                    result.score = Some(similarity);
+                // Filter by threshold - metric-aware comparison
+                // For similarity metrics (Cosine, DotProduct, Jaccard): higher >= threshold
+                // For distance metrics (Euclidean, Hamming): lower <= threshold
+                let passes_threshold = if higher_is_better {
+                    score >= similarity_threshold
+                } else {
+                    score <= similarity_threshold
+                };
+
+                if passes_threshold {
+                    result.score = Some(score);
 
                     // Project properties from RETURN clause (EPIC-058 US-007)
                     result.projected =
@@ -607,8 +639,19 @@ impl Collection {
             }
         }
 
-        // Sort by similarity (descending)
-        scored_results.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+        // Sort by score - metric-aware ordering
+        // For similarity: descending (higher = more similar)
+        // For distance: ascending (lower = more similar)
+        if higher_is_better {
+            scored_results
+                .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+        } else {
+            scored_results.sort_by(|a, b| {
+                a.score
+                    .unwrap_or(f32::MAX)
+                    .total_cmp(&b.score.unwrap_or(f32::MAX))
+            });
+        }
 
         Ok(scored_results)
     }

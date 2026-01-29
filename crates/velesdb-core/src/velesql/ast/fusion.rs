@@ -72,8 +72,29 @@ impl FusionConfig {
     }
 
     /// Creates a weighted fusion config.
+    ///
+    /// # Panics
+    ///
+    /// Panics if weights are negative or if their sum is not approximately 1.0 (±0.001).
     #[must_use]
     pub fn weighted(avg_weight: f64, max_weight: f64, hit_weight: f64) -> Self {
+        // Validate weights are non-negative
+        assert!(
+            avg_weight >= 0.0 && max_weight >= 0.0 && hit_weight >= 0.0,
+            "FusionConfig::weighted: all weights must be non-negative, got avg={}, max={}, hit={}",
+            avg_weight,
+            max_weight,
+            hit_weight
+        );
+
+        // Validate weights sum to 1.0 (with tolerance for floating-point errors)
+        let sum = avg_weight + max_weight + hit_weight;
+        assert!(
+            (sum - 1.0).abs() < 0.001,
+            "FusionConfig::weighted: weights must sum to 1.0, got sum={}",
+            sum
+        );
+
         let mut params = std::collections::HashMap::new();
         params.insert("avg_weight".to_string(), avg_weight);
         params.insert("max_weight".to_string(), max_weight);
