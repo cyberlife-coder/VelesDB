@@ -1,0 +1,182 @@
+   Compiling velesdb-core v1.4.0 (D:\Projets-dev\velesDB\velesdb-core\crates\velesdb-core)
+    Finished `bench` profile [optimized] target(s) in 2.51s
+     Running benches\velesql_benchmark.rs (target\release\deps\velesql_benchmark-6cf05468f6c38453.exe)
+Gnuplot not found, using plotters backend
+Benchmarking velesql_parse_simple
+Benchmarking velesql_parse_simple: Warming up for 3.0000 s
+Benchmarking velesql_parse_simple: Collecting 100 samples in estimated 5.0002 s (3.5M iterations)
+Benchmarking velesql_parse_simple: Analyzing
+velesql_parse_simple    time:   [1.4112 ┬Ás 1.4140 ┬Ás 1.4172 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking velesql_parse_vector
+Benchmarking velesql_parse_vector: Warming up for 3.0000 s
+Benchmarking velesql_parse_vector: Collecting 100 samples in estimated 5.0008 s (2.4M iterations)
+Benchmarking velesql_parse_vector: Analyzing
+velesql_parse_vector    time:   [2.0324 ┬Ás 2.0350 ┬Ás 2.0378 ┬Ás]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking velesql_parse_complex
+Benchmarking velesql_parse_complex: Warming up for 3.0000 s
+Benchmarking velesql_parse_complex: Collecting 100 samples in estimated 5.0130 s (636k iterations)
+Benchmarking velesql_parse_complex: Analyzing
+velesql_parse_complex   time:   [7.8576 ┬Ás 7.8713 ┬Ás 7.8868 ┬Ás]
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking velesql_parse_multi_condition
+Benchmarking velesql_parse_multi_condition: Warming up for 3.0000 s
+Benchmarking velesql_parse_multi_condition: Collecting 100 samples in estimated 5.0203 s (833k iterations)
+Benchmarking velesql_parse_multi_condition: Analyzing
+velesql_parse_multi_condition
+                        time:   [6.0358 ┬Ás 6.0810 ┬Ás 6.1399 ┬Ás]
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking velesql_throughput/simple_qps
+Benchmarking velesql_throughput/simple_qps: Warming up for 3.0000 s
+Benchmarking velesql_throughput/simple_qps: Collecting 100 samples in estimated 5.0062 s (3.5M iterations)
+Benchmarking velesql_throughput/simple_qps: Analyzing
+velesql_throughput/simple_qps
+                        time:   [1.4141 ┬Ás 1.4177 ┬Ás 1.4220 ┬Ás]
+                        thrpt:  [703.22 Kelem/s 705.35 Kelem/s 707.16 Kelem/s]
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking velesql_throughput/vector_qps
+Benchmarking velesql_throughput/vector_qps: Warming up for 3.0000 s
+Benchmarking velesql_throughput/vector_qps: Collecting 100 samples in estimated 5.0090 s (2.5M iterations)
+Benchmarking velesql_throughput/vector_qps: Analyzing
+velesql_throughput/vector_qps
+                        time:   [2.0357 ┬Ás 2.0392 ┬Ás 2.0431 ┬Ás]
+                        thrpt:  [489.45 Kelem/s 490.39 Kelem/s 491.22 Kelem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) low mild
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+Benchmarking velesql_throughput/complex_qps
+Benchmarking velesql_throughput/complex_qps: Warming up for 3.0000 s
+Benchmarking velesql_throughput/complex_qps: Collecting 100 samples in estimated 5.0262 s (616k iterations)
+Benchmarking velesql_throughput/complex_qps: Analyzing
+velesql_throughput/complex_qps
+                        time:   [8.1365 ┬Ás 8.1648 ┬Ás 8.2033 ┬Ás]
+                        thrpt:  [121.90 Kelem/s 122.48 Kelem/s 122.90 Kelem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking velesql_cache_hit
+Benchmarking velesql_cache_hit: Warming up for 3.0000 s
+Benchmarking velesql_cache_hit: Collecting 100 samples in estimated 5.0003 s (58M iterations)
+Benchmarking velesql_cache_hit: Analyzing
+velesql_cache_hit       time:   [83.543 ns 83.655 ns 83.773 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking velesql_cache_comparison/direct_parse
+Benchmarking velesql_cache_comparison/direct_parse: Warming up for 3.0000 s
+Benchmarking velesql_cache_comparison/direct_parse: Collecting 100 samples in estimated 5.0287 s (631k iterations)
+Benchmarking velesql_cache_comparison/direct_parse: Analyzing
+velesql_cache_comparison/direct_parse
+                        time:   [7.8682 ┬Ás 7.8873 ┬Ás 7.9083 ┬Ás]
+                        thrpt:  [126.45 Kelem/s 126.79 Kelem/s 127.09 Kelem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking velesql_cache_comparison/cache_miss
+Benchmarking velesql_cache_comparison/cache_miss: Warming up for 3.0000 s
+Benchmarking velesql_cache_comparison/cache_miss: Collecting 100 samples in estimated 5.0019 s (3.0M iterations)
+Benchmarking velesql_cache_comparison/cache_miss: Analyzing
+velesql_cache_comparison/cache_miss
+                        time:   [1.6796 ┬Ás 1.6982 ┬Ás 1.7225 ┬Ás]
+                        thrpt:  [580.54 Kelem/s 588.86 Kelem/s 595.39 Kelem/s]
+Found 9 outliers among 100 measurements (9.00%)
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+Benchmarking velesql_cache_comparison/cache_hit
+Benchmarking velesql_cache_comparison/cache_hit: Warming up for 3.0000 s
+Benchmarking velesql_cache_comparison/cache_hit: Collecting 100 samples in estimated 5.0011 s (8.8M iterations)
+Benchmarking velesql_cache_comparison/cache_hit: Analyzing
+velesql_cache_comparison/cache_hit
+                        time:   [564.68 ns 566.15 ns 568.08 ns]
+                        thrpt:  [1.7603 Melem/s 1.7663 Melem/s 1.7709 Melem/s]
+Found 8 outliers among 100 measurements (8.00%)
+  2 (2.00%) high mild
+  6 (6.00%) high severe
+
+Benchmarking velesql_realistic/without_cache
+Benchmarking velesql_realistic/without_cache: Warming up for 3.0000 s
+Benchmarking velesql_realistic/without_cache: Collecting 100 samples in estimated 5.0513 s (485k iterations)
+Benchmarking velesql_realistic/without_cache: Analyzing
+velesql_realistic/without_cache
+                        time:   [10.472 ┬Ás 10.517 ┬Ás 10.564 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high mild
+  2 (2.00%) high severe
+Benchmarking velesql_realistic/with_cache
+Benchmarking velesql_realistic/with_cache: Warming up for 3.0000 s
+Benchmarking velesql_realistic/with_cache: Collecting 100 samples in estimated 5.0018 s (8.2M iterations)
+Benchmarking velesql_realistic/with_cache: Analyzing
+velesql_realistic/with_cache
+                        time:   [609.32 ns 610.64 ns 612.38 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking explain_plan_simple
+Benchmarking explain_plan_simple: Warming up for 3.0000 s
+Benchmarking explain_plan_simple: Collecting 100 samples in estimated 5.0002 s (81M iterations)
+Benchmarking explain_plan_simple: Analyzing
+explain_plan_simple     time:   [61.054 ns 61.135 ns 61.244 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking explain_plan_vector
+Benchmarking explain_plan_vector: Warming up for 3.0000 s
+Benchmarking explain_plan_vector: Collecting 100 samples in estimated 5.0001 s (80M iterations)
+Benchmarking explain_plan_vector: Analyzing
+explain_plan_vector     time:   [62.243 ns 62.352 ns 62.484 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking explain_plan_complex
+Benchmarking explain_plan_complex: Warming up for 3.0000 s
+Benchmarking explain_plan_complex: Collecting 100 samples in estimated 5.0009 s (15M iterations)
+Benchmarking explain_plan_complex: Analyzing
+explain_plan_complex    time:   [336.73 ns 340.24 ns 344.76 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking explain_to_tree
+Benchmarking explain_to_tree: Warming up for 3.0000 s
+Benchmarking explain_to_tree: Collecting 100 samples in estimated 5.0008 s (7.4M iterations)
+Benchmarking explain_to_tree: Analyzing
+explain_to_tree         time:   [679.57 ns 680.75 ns 682.04 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  3 (3.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking explain_to_json
+Benchmarking explain_to_json: Warming up for 3.0000 s
+Benchmarking explain_to_json: Collecting 100 samples in estimated 5.0012 s (8.5M iterations)
+Benchmarking explain_to_json: Analyzing
+explain_to_json         time:   [589.18 ns 590.38 ns 592.22 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+

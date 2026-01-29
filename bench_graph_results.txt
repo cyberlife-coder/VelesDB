@@ -1,0 +1,125 @@
+   Compiling velesdb-core v1.4.0 (D:\Projets-dev\velesDB\velesdb-core\crates\velesdb-core)
+    Finished `bench` profile [optimized] target(s) in 14.47s
+     Running benches\edge_store_benchmark.rs (target\release\deps\edge_store_benchmark-2b25d3db8eeb3d00.exe)
+Gnuplot not found, using plotters backend
+Benchmarking EdgeStore::get_neighbors/degree/5
+Benchmarking EdgeStore::get_neighbors/degree/5: Warming up for 3.0000 s
+Benchmarking EdgeStore::get_neighbors/degree/5: Collecting 100 samples in estimated 5.0004 s (50M iterations)
+Benchmarking EdgeStore::get_neighbors/degree/5: Analyzing
+EdgeStore::get_neighbors/degree/5
+                        time:   [98.411 ns 99.232 ns 100.25 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  2 (2.00%) high mild
+  6 (6.00%) high severe
+Benchmarking EdgeStore::get_neighbors/degree/10
+Benchmarking EdgeStore::get_neighbors/degree/10: Warming up for 3.0000 s
+Benchmarking EdgeStore::get_neighbors/degree/10: Collecting 100 samples in estimated 5.0004 s (32M iterations)
+Benchmarking EdgeStore::get_neighbors/degree/10: Analyzing
+EdgeStore::get_neighbors/degree/10
+                        time:   [154.81 ns 155.40 ns 156.06 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high mild
+  2 (2.00%) high severe
+Benchmarking EdgeStore::get_neighbors/degree/50
+Benchmarking EdgeStore::get_neighbors/degree/50: Warming up for 3.0000 s
+Benchmarking EdgeStore::get_neighbors/degree/50: Collecting 100 samples in estimated 5.0009 s (9.7M iterations)
+Benchmarking EdgeStore::get_neighbors/degree/50: Analyzing
+EdgeStore::get_neighbors/degree/50
+                        time:   [505.51 ns 507.60 ns 509.80 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking EdgeStore::add_edge
+Benchmarking EdgeStore::add_edge: Warming up for 3.0000 s
+Benchmarking EdgeStore::add_edge: Collecting 100 samples in estimated 5.0011 s (13M iterations)
+Benchmarking EdgeStore::add_edge: Analyzing
+EdgeStore::add_edge     time:   [271.13 ns 277.96 ns 284.46 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking EdgeStore::cascade_delete/degree/10
+Benchmarking EdgeStore::cascade_delete/degree/10: Warming up for 3.0000 s
+Benchmarking EdgeStore::cascade_delete/degree/10: Collecting 100 samples in estimated 5.0332 s (556k iterations)
+Benchmarking EdgeStore::cascade_delete/degree/10: Analyzing
+EdgeStore::cascade_delete/degree/10
+                        time:   [2.5712 ┬Ás 2.6228 ┬Ás 2.6685 ┬Ás]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+Benchmarking EdgeStore::cascade_delete/degree/50
+Benchmarking EdgeStore::cascade_delete/degree/50: Warming up for 3.0000 s
+Benchmarking EdgeStore::cascade_delete/degree/50: Collecting 100 samples in estimated 5.0017 s (121k iterations)
+Benchmarking EdgeStore::cascade_delete/degree/50: Analyzing
+EdgeStore::cascade_delete/degree/50
+                        time:   [14.063 ┬Ás 14.354 ┬Ás 14.621 ┬Ás]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+Benchmarking EdgeStore::cascade_delete/degree/100
+Benchmarking EdgeStore::cascade_delete/degree/100: Warming up for 3.0000 s
+Benchmarking EdgeStore::cascade_delete/degree/100: Collecting 100 samples in estimated 5.1941 s (61k iterations)
+Benchmarking EdgeStore::cascade_delete/degree/100: Analyzing
+EdgeStore::cascade_delete/degree/100
+                        time:   [28.978 ┬Ás 29.912 ┬Ás 31.014 ┬Ás]
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking ConcurrentEdgeStore::get_neighbors
+Benchmarking ConcurrentEdgeStore::get_neighbors: Warming up for 3.0000 s
+Benchmarking ConcurrentEdgeStore::get_neighbors: Collecting 100 samples in estimated 5.0006 s (9.6M iterations)
+Benchmarking ConcurrentEdgeStore::get_neighbors: Analyzing
+ConcurrentEdgeStore::get_neighbors
+                        time:   [524.24 ns 525.49 ns 526.86 ns]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking ConcurrentEdgeStore::add_edge
+Benchmarking ConcurrentEdgeStore::add_edge: Warming up for 3.0000 s
+Benchmarking ConcurrentEdgeStore::add_edge: Collecting 100 samples in estimated 5.0022 s (7.0M iterations)
+Benchmarking ConcurrentEdgeStore::add_edge: Analyzing
+ConcurrentEdgeStore::add_edge
+                        time:   [390.07 ns 398.61 ns 408.60 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/1
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/1: Warming up for 3.0000 s
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/1: Collecting 100 samples in estimated 5.0029 s (3.7M iterations)
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/1: Analyzing
+ConcurrentEdgeStore::traverse_bfs/depth/1
+                        time:   [1.3128 ┬Ás 1.3163 ┬Ás 1.3204 ┬Ás]
+Found 6 outliers among 100 measurements (6.00%)
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/2
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/2: Warming up for 3.0000 s
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/2: Collecting 100 samples in estimated 5.0095 s (2.0M iterations)
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/2: Analyzing
+ConcurrentEdgeStore::traverse_bfs/depth/2
+                        time:   [2.4290 ┬Ás 2.4390 ┬Ás 2.4500 ┬Ás]
+Found 10 outliers among 100 measurements (10.00%)
+  7 (7.00%) high mild
+  3 (3.00%) high severe
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/3
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/3: Warming up for 3.0000 s
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/3: Collecting 100 samples in estimated 5.0160 s (1.3M iterations)
+Benchmarking ConcurrentEdgeStore::traverse_bfs/depth/3: Analyzing
+ConcurrentEdgeStore::traverse_bfs/depth/3
+                        time:   [3.6123 ┬Ás 3.6371 ┬Ás 3.6714 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking ConcurrentEdgeStore::parallel_reads_8_threads
+Benchmarking ConcurrentEdgeStore::parallel_reads_8_threads: Warming up for 3.0000 s
+Benchmarking ConcurrentEdgeStore::parallel_reads_8_threads: Collecting 100 samples in estimated 5.0699 s (15k iterations)
+Benchmarking ConcurrentEdgeStore::parallel_reads_8_threads: Analyzing
+ConcurrentEdgeStore::parallel_reads_8_threads
+                        time:   [333.85 ┬Ás 345.57 ┬Ás 361.20 ┬Ás]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  6 (6.00%) high severe
+

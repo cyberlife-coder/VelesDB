@@ -1,0 +1,343 @@
+    Blocking waiting for file lock on build directory
+   Compiling velesdb-core v1.4.0 (D:\Projets-dev\velesDB\velesdb-core\crates\velesdb-core)
+    Finished `bench` profile [optimized] target(s) in 14.61s
+     Running benches\column_filter_benchmark.rs (target\release\deps\column_filter_benchmark-277ba6c2eafb2073.exe)
+Gnuplot not found, using plotters backend
+Benchmarking filter_eq_string/json/1000
+Benchmarking filter_eq_string/json/1000: Warming up for 3.0000 s
+Benchmarking filter_eq_string/json/1000: Collecting 100 samples in estimated 5.0683 s (348k iterations)
+Benchmarking filter_eq_string/json/1000: Analyzing
+filter_eq_string/json/1000
+                        time:   [14.227 ┬Ás 14.351 ┬Ás 14.506 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking filter_eq_string/column_store/1000
+Benchmarking filter_eq_string/column_store/1000: Warming up for 3.0000 s
+Benchmarking filter_eq_string/column_store/1000: Collecting 100 samples in estimated 5.0002 s (8.5M iterations)
+Benchmarking filter_eq_string/column_store/1000: Analyzing
+filter_eq_string/column_store/1000
+                        time:   [583.41 ns 588.13 ns 595.95 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high severe
+Benchmarking filter_eq_string/json/10000
+Benchmarking filter_eq_string/json/10000: Warming up for 3.0000 s
+Benchmarking filter_eq_string/json/10000: Collecting 100 samples in estimated 5.5425 s (40k iterations)
+Benchmarking filter_eq_string/json/10000: Analyzing
+filter_eq_string/json/10000
+                        time:   [137.42 ┬Ás 138.60 ┬Ás 140.11 ┬Ás]
+Found 11 outliers among 100 measurements (11.00%)
+  4 (4.00%) high mild
+  7 (7.00%) high severe
+Benchmarking filter_eq_string/column_store/10000
+Benchmarking filter_eq_string/column_store/10000: Warming up for 3.0000 s
+Benchmarking filter_eq_string/column_store/10000: Collecting 100 samples in estimated 5.0083 s (1.3M iterations)
+Benchmarking filter_eq_string/column_store/10000: Analyzing
+filter_eq_string/column_store/10000
+                        time:   [3.7628 ┬Ás 3.7814 ┬Ás 3.8113 ┬Ás]
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) high mild
+  4 (4.00%) high severe
+Benchmarking filter_eq_string/json/100000
+Benchmarking filter_eq_string/json/100000: Warming up for 3.0000 s
+Benchmarking filter_eq_string/json/100000: Collecting 100 samples in estimated 5.0289 s (1300 iterations)
+Benchmarking filter_eq_string/json/100000: Analyzing
+filter_eq_string/json/100000
+                        time:   [3.8139 ms 3.8677 ms 3.9300 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+Benchmarking filter_eq_string/column_store/100000
+Benchmarking filter_eq_string/column_store/100000: Warming up for 3.0000 s
+Benchmarking filter_eq_string/column_store/100000: Collecting 100 samples in estimated 5.0099 s (126k iterations)
+Benchmarking filter_eq_string/column_store/100000: Analyzing
+filter_eq_string/column_store/100000
+                        time:   [40.046 ┬Ás 40.323 ┬Ás 40.680 ┬Ás]
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking filter_eq_int/json/1000
+Benchmarking filter_eq_int/json/1000: Warming up for 3.0000 s
+Benchmarking filter_eq_int/json/1000: Collecting 100 samples in estimated 5.0734 s (308k iterations)
+Benchmarking filter_eq_int/json/1000: Analyzing
+filter_eq_int/json/1000 time:   [16.377 ┬Ás 16.525 ┬Ás 16.722 ┬Ás]
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) high severe
+Benchmarking filter_eq_int/column_store/1000
+Benchmarking filter_eq_int/column_store/1000: Warming up for 3.0000 s
+Benchmarking filter_eq_int/column_store/1000: Collecting 100 samples in estimated 5.0007 s (15M iterations)
+Benchmarking filter_eq_int/column_store/1000: Analyzing
+filter_eq_int/column_store/1000
+                        time:   [322.54 ns 323.87 ns 325.66 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking filter_eq_int/json/10000
+Benchmarking filter_eq_int/json/10000: Warming up for 3.0000 s
+Benchmarking filter_eq_int/json/10000: Collecting 100 samples in estimated 5.0355 s (30k iterations)
+Benchmarking filter_eq_int/json/10000: Analyzing
+filter_eq_int/json/10000
+                        time:   [162.98 ┬Ás 163.80 ┬Ás 164.85 ┬Ás]
+Found 10 outliers among 100 measurements (10.00%)
+  3 (3.00%) high mild
+  7 (7.00%) high severe
+Benchmarking filter_eq_int/column_store/10000
+Benchmarking filter_eq_int/column_store/10000: Warming up for 3.0000 s
+Benchmarking filter_eq_int/column_store/10000: Collecting 100 samples in estimated 5.0064 s (1.7M iterations)
+Benchmarking filter_eq_int/column_store/10000: Analyzing
+filter_eq_int/column_store/10000
+                        time:   [3.0089 ┬Ás 3.0420 ┬Ás 3.0820 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+Benchmarking filter_eq_int/json/100000
+Benchmarking filter_eq_int/json/100000: Warming up for 3.0000 s
+Benchmarking filter_eq_int/json/100000: Collecting 100 samples in estimated 5.2988 s (1200 iterations)
+Benchmarking filter_eq_int/json/100000: Analyzing
+filter_eq_int/json/100000
+                        time:   [4.1678 ms 4.2128 ms 4.2682 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking filter_eq_int/column_store/100000
+Benchmarking filter_eq_int/column_store/100000: Warming up for 3.0000 s
+Benchmarking filter_eq_int/column_store/100000: Collecting 100 samples in estimated 5.1173 s (167k iterations)
+Benchmarking filter_eq_int/column_store/100000: Analyzing
+filter_eq_int/column_store/100000
+                        time:   [31.700 ┬Ás 32.217 ┬Ás 32.803 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking filter_range_int/json/1000
+Benchmarking filter_range_int/json/1000: Warming up for 3.0000 s
+Benchmarking filter_range_int/json/1000: Collecting 100 samples in estimated 5.0294 s (136k iterations)
+Benchmarking filter_range_int/json/1000: Analyzing
+filter_range_int/json/1000
+                        time:   [36.447 ┬Ás 37.180 ┬Ás 38.074 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high mild
+  2 (2.00%) high severe
+Benchmarking filter_range_int/column_store/1000
+Benchmarking filter_range_int/column_store/1000: Warming up for 3.0000 s
+Benchmarking filter_range_int/column_store/1000: Collecting 100 samples in estimated 5.0029 s (6.4M iterations)
+Benchmarking filter_range_int/column_store/1000: Analyzing
+filter_range_int/column_store/1000
+                        time:   [774.14 ns 775.09 ns 776.08 ns]
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking filter_range_int/json/10000
+Benchmarking filter_range_int/json/10000: Warming up for 3.0000 s
+Benchmarking filter_range_int/json/10000: Collecting 100 samples in estimated 5.1737 s (15k iterations)
+Benchmarking filter_range_int/json/10000: Analyzing
+filter_range_int/json/10000
+                        time:   [338.07 ┬Ás 339.69 ┬Ás 341.94 ┬Ás]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+Benchmarking filter_range_int/column_store/10000
+Benchmarking filter_range_int/column_store/10000: Warming up for 3.0000 s
+Benchmarking filter_range_int/column_store/10000: Collecting 100 samples in estimated 5.0153 s (828k iterations)
+Benchmarking filter_range_int/column_store/10000: Analyzing
+filter_range_int/column_store/10000
+                        time:   [6.0398 ┬Ás 6.0522 ┬Ás 6.0658 ┬Ás]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking filter_range_int/json/100000
+Benchmarking filter_range_int/json/100000: Warming up for 3.0000 s
+Benchmarking filter_range_int/json/100000: Collecting 100 samples in estimated 5.1196 s (800 iterations)
+Benchmarking filter_range_int/json/100000: Analyzing
+filter_range_int/json/100000
+                        time:   [6.4426 ms 6.4955 ms 6.5573 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+Benchmarking filter_range_int/column_store/100000
+Benchmarking filter_range_int/column_store/100000: Warming up for 3.0000 s
+Benchmarking filter_range_int/column_store/100000: Collecting 100 samples in estimated 5.1369 s (81k iterations)
+Benchmarking filter_range_int/column_store/100000: Analyzing
+filter_range_int/column_store/100000
+                        time:   [63.182 ┬Ás 63.280 ┬Ás 63.388 ┬Ás]
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high mild
+
+Benchmarking filter_in_string/json/1000
+Benchmarking filter_in_string/json/1000: Warming up for 3.0000 s
+Benchmarking filter_in_string/json/1000: Collecting 100 samples in estimated 5.0751 s (323k iterations)
+Benchmarking filter_in_string/json/1000: Analyzing
+filter_in_string/json/1000
+                        time:   [15.670 ┬Ás 15.723 ┬Ás 15.790 ┬Ás]
+Found 10 outliers among 100 measurements (10.00%)
+  3 (3.00%) high mild
+  7 (7.00%) high severe
+Benchmarking filter_in_string/column_store/1000
+Benchmarking filter_in_string/column_store/1000: Warming up for 3.0000 s
+Benchmarking filter_in_string/column_store/1000: Collecting 100 samples in estimated 5.0056 s (4.3M iterations)
+Benchmarking filter_in_string/column_store/1000: Analyzing
+filter_in_string/column_store/1000
+                        time:   [1.1478 ┬Ás 1.1513 ┬Ás 1.1553 ┬Ás]
+Found 8 outliers among 100 measurements (8.00%)
+  2 (2.00%) high mild
+  6 (6.00%) high severe
+Benchmarking filter_in_string/json/10000
+Benchmarking filter_in_string/json/10000: Warming up for 3.0000 s
+Benchmarking filter_in_string/json/10000: Collecting 100 samples in estimated 5.5596 s (35k iterations)
+Benchmarking filter_in_string/json/10000: Analyzing
+filter_in_string/json/10000
+                        time:   [156.33 ┬Ás 156.78 ┬Ás 157.32 ┬Ás]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking filter_in_string/column_store/10000
+Benchmarking filter_in_string/column_store/10000: Warming up for 3.0000 s
+Benchmarking filter_in_string/column_store/10000: Collecting 100 samples in estimated 5.0176 s (581k iterations)
+Benchmarking filter_in_string/column_store/10000: Analyzing
+filter_in_string/column_store/10000
+                        time:   [8.6156 ┬Ás 8.6353 ┬Ás 8.6613 ┬Ás]
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+Benchmarking filter_in_string/json/100000
+Benchmarking filter_in_string/json/100000: Warming up for 3.0000 s
+Benchmarking filter_in_string/json/100000: Collecting 100 samples in estimated 5.0140 s (1300 iterations)
+Benchmarking filter_in_string/json/100000: Analyzing
+filter_in_string/json/100000
+                        time:   [3.8565 ms 3.9064 ms 3.9628 ms]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+Benchmarking filter_in_string/column_store/100000
+Benchmarking filter_in_string/column_store/100000: Warming up for 3.0000 s
+Benchmarking filter_in_string/column_store/100000: Collecting 100 samples in estimated 5.3534 s (61k iterations)
+Benchmarking filter_in_string/column_store/100000: Analyzing
+filter_in_string/column_store/100000
+                        time:   [88.018 ┬Ás 88.321 ┬Ás 88.776 ┬Ás]
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking throughput_scaling/json/1000
+Benchmarking throughput_scaling/json/1000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/json/1000: Collecting 50 samples in estimated 5.0140 s (366k iterations)
+Benchmarking throughput_scaling/json/1000: Analyzing
+throughput_scaling/json/1000
+                        time:   [13.702 ┬Ás 13.749 ┬Ás 13.809 ┬Ás]
+Found 4 outliers among 50 measurements (8.00%)
+  4 (8.00%) high severe
+Benchmarking throughput_scaling/column_store/1000
+Benchmarking throughput_scaling/column_store/1000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/column_store/1000: Collecting 50 samples in estimated 5.0001 s (19M iterations)
+Benchmarking throughput_scaling/column_store/1000: Analyzing
+throughput_scaling/column_store/1000
+                        time:   [289.58 ns 290.46 ns 291.54 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) high mild
+  2 (4.00%) high severe
+Benchmarking throughput_scaling/json/10000
+Benchmarking throughput_scaling/json/10000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/json/10000: Collecting 50 samples in estimated 5.0096 s (37k iterations)
+Benchmarking throughput_scaling/json/10000: Analyzing
+throughput_scaling/json/10000
+                        time:   [134.65 ┬Ás 135.59 ┬Ás 136.77 ┬Ás]
+Found 6 outliers among 50 measurements (12.00%)
+  2 (4.00%) low mild
+  1 (2.00%) high mild
+  3 (6.00%) high severe
+Benchmarking throughput_scaling/column_store/10000
+Benchmarking throughput_scaling/column_store/10000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/column_store/10000: Collecting 50 samples in estimated 5.0018 s (1.9M iterations)
+Benchmarking throughput_scaling/column_store/10000: Analyzing
+throughput_scaling/column_store/10000
+                        time:   [2.6987 ┬Ás 2.7083 ┬Ás 2.7215 ┬Ás]
+Found 4 outliers among 50 measurements (8.00%)
+  1 (2.00%) high mild
+  3 (6.00%) high severe
+Benchmarking throughput_scaling/json/100000
+Benchmarking throughput_scaling/json/100000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/json/100000: Collecting 50 samples in estimated 9.0852 s (2550 iterations)
+Benchmarking throughput_scaling/json/100000: Analyzing
+throughput_scaling/json/100000
+                        time:   [3.4904 ms 3.5275 ms 3.5680 ms]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking throughput_scaling/column_store/100000
+Benchmarking throughput_scaling/column_store/100000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/column_store/100000: Collecting 50 samples in estimated 5.0244 s (193k iterations)
+Benchmarking throughput_scaling/column_store/100000: Analyzing
+throughput_scaling/column_store/100000
+                        time:   [27.282 ┬Ás 27.391 ┬Ás 27.512 ┬Ás]
+Found 6 outliers among 50 measurements (12.00%)
+  6 (12.00%) high mild
+Benchmarking throughput_scaling/json/500000
+Benchmarking throughput_scaling/json/500000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/json/500000: Collecting 50 samples in estimated 5.7500 s (300 iterations)
+Benchmarking throughput_scaling/json/500000: Analyzing
+throughput_scaling/json/500000
+                        time:   [18.338 ms 18.649 ms 18.975 ms]
+Benchmarking throughput_scaling/column_store/500000
+Benchmarking throughput_scaling/column_store/500000: Warming up for 3.0000 s
+Benchmarking throughput_scaling/column_store/500000: Collecting 50 samples in estimated 5.1329 s (40k iterations)
+Benchmarking throughput_scaling/column_store/500000: Analyzing
+throughput_scaling/column_store/500000
+                        time:   [135.23 ┬Ás 135.55 ┬Ás 135.95 ┬Ás]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high severe
+
+Benchmarking bitmap_scaling/filter_vec/10000
+Benchmarking bitmap_scaling/filter_vec/10000: Warming up for 3.0000 s
+Benchmarking bitmap_scaling/filter_vec/10000: Collecting 50 samples in estimated 5.0008 s (1.3M iterations)
+Benchmarking bitmap_scaling/filter_vec/10000: Analyzing
+bitmap_scaling/filter_vec/10000
+                        time:   [3.6891 ┬Ás 3.6954 ┬Ás 3.7023 ┬Ás]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking bitmap_scaling/filter_bitmap/10000
+Benchmarking bitmap_scaling/filter_bitmap/10000: Warming up for 3.0000 s
+Benchmarking bitmap_scaling/filter_bitmap/10000: Collecting 50 samples in estimated 5.0348 s (184k iterations)
+Benchmarking bitmap_scaling/filter_bitmap/10000: Analyzing
+bitmap_scaling/filter_bitmap/10000
+                        time:   [27.085 ┬Ás 27.189 ┬Ás 27.290 ┬Ás]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking bitmap_scaling/filter_vec/100000
+Benchmarking bitmap_scaling/filter_vec/100000: Warming up for 3.0000 s
+Benchmarking bitmap_scaling/filter_vec/100000: Collecting 50 samples in estimated 5.0067 s (128k iterations)
+Benchmarking bitmap_scaling/filter_vec/100000: Analyzing
+bitmap_scaling/filter_vec/100000
+                        time:   [38.741 ┬Ás 39.079 ┬Ás 39.484 ┬Ás]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking bitmap_scaling/filter_bitmap/100000
+Benchmarking bitmap_scaling/filter_bitmap/100000: Warming up for 3.0000 s
+Benchmarking bitmap_scaling/filter_bitmap/100000: Collecting 50 samples in estimated 5.0368 s (33k iterations)
+Benchmarking bitmap_scaling/filter_bitmap/100000: Analyzing
+bitmap_scaling/filter_bitmap/100000
+                        time:   [151.91 ┬Ás 152.68 ┬Ás 153.41 ┬Ás]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) low mild
+  1 (2.00%) high mild
+Benchmarking bitmap_scaling/filter_vec/500000
+Benchmarking bitmap_scaling/filter_vec/500000: Warming up for 3.0000 s
+Benchmarking bitmap_scaling/filter_vec/500000: Collecting 50 samples in estimated 5.2785 s (19k iterations)
+Benchmarking bitmap_scaling/filter_vec/500000: Analyzing
+bitmap_scaling/filter_vec/500000
+                        time:   [276.13 ┬Ás 276.86 ┬Ás 277.73 ┬Ás]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking bitmap_scaling/filter_bitmap/500000
+Benchmarking bitmap_scaling/filter_bitmap/500000: Warming up for 3.0000 s
+Benchmarking bitmap_scaling/filter_bitmap/500000: Collecting 50 samples in estimated 5.0459 s (7650 iterations)
+Benchmarking bitmap_scaling/filter_bitmap/500000: Analyzing
+bitmap_scaling/filter_bitmap/500000
+                        time:   [655.02 ┬Ás 657.56 ┬Ás 659.97 ┬Ás]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) low severe
+

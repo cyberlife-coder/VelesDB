@@ -216,7 +216,7 @@ impl Default for LoggingConfig {
     }
 }
 
-/// Quantization configuration section.
+/// Quantization configuration section (EPIC-073/US-005).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct QuantizationConfig {
@@ -226,6 +226,10 @@ pub struct QuantizationConfig {
     pub rerank_enabled: bool,
     /// Reranking multiplier for candidates.
     pub rerank_multiplier: usize,
+    /// Auto-enable quantization for large collections (EPIC-073/US-005).
+    pub auto_quantization: bool,
+    /// Threshold for auto-quantization (number of vectors).
+    pub auto_quantization_threshold: usize,
 }
 
 impl Default for QuantizationConfig {
@@ -234,7 +238,17 @@ impl Default for QuantizationConfig {
             default_type: "none".to_string(),
             rerank_enabled: true,
             rerank_multiplier: 2,
+            auto_quantization: true,
+            auto_quantization_threshold: 10_000,
         }
+    }
+}
+
+impl QuantizationConfig {
+    /// Returns whether quantization should be used based on vector count (EPIC-073/US-005).
+    #[must_use]
+    pub fn should_quantize(&self, vector_count: usize) -> bool {
+        self.auto_quantization && vector_count >= self.auto_quantization_threshold
     }
 }
 
