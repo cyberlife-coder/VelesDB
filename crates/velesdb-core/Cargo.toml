@@ -58,6 +58,10 @@ version = "2.7"
 [dependencies.dashmap]
 version = "5.5"
 
+# CPU detection for auto-tuning parallel config (EPIC-051 US-006)
+[dependencies.num_cpus]
+version = "1.16"
+
 [dependencies.wide]
 version = "0.7"
 

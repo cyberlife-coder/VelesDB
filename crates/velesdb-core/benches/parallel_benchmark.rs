@@ -228,11 +228,168 @@ fn bench_thread_scaling(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// EPIC-051 US-005: Graph Traversal Benchmarks
+// =============================================================================
+
+use std::collections::HashMap;
+use velesdb_core::collection::search::query::parallel_traversal::{
+    FrontierParallelBFS, ParallelConfig, ParallelTraverser, ShardedTraverser,
+};
+
+/// Generate a random graph with given size and average degree
+fn generate_graph(num_nodes: usize, avg_degree: usize, seed: u64) -> HashMap<u64, Vec<(u64, u64)>> {
+    let mut graph = HashMap::new();
+    let mut state = seed;
+
+    for node in 0..num_nodes {
+        let mut edges = Vec::new();
+        for _ in 0..avg_degree {
+            state = state.wrapping_mul(1103515245).wrapping_add(12345);
+            #[allow(clippy::cast_possible_truncation)]
+            let target = ((state >> 16) as usize) % num_nodes;
+            let edge_id = (node * 1000 + edges.len()) as u64;
+            edges.push((target as u64, edge_id));
+        }
+        graph.insert(node as u64, edges);
+    }
+    graph
+}
+
+/// Benchmark: Sequential vs Parallel BFS from multiple start nodes
+fn bench_parallel_bfs(c: &mut Criterion) {
+    let mut group = c.benchmark_group("graph_parallel_bfs");
+    group.sample_size(20);
+
+    for &size in &[1_000, 10_000] {
+        let graph = generate_graph(size, 5, 42);
+        let start_nodes: Vec<u64> = (0..100).collect();
+
+        // Sequential BFS (threshold very high)
+        let seq_config = ParallelConfig::new()
+            .with_max_depth(3)
+            .with_parallel_threshold(100_000) // Force sequential
+            .with_limit(1000);
+        let seq_traverser = ParallelTraverser::with_config(seq_config);
+
+        group.bench_function(BenchmarkId::new("sequential", format!("{size}n")), |b| {
+            let graph_ref = &graph;
+            b.iter(|| {
+                let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
+                    graph_ref.get(&node).cloned().unwrap_or_default()
+                };
+                let (results, _) = seq_traverser.bfs_parallel(&start_nodes, get_neighbors);
+                black_box(results)
+            });
+        });
+
+        // Parallel BFS
+        let par_config = ParallelConfig::new()
+            .with_max_depth(3)
+            .with_parallel_threshold(10)
+            .with_limit(1000);
+        let par_traverser = ParallelTraverser::with_config(par_config);
+
+        group.bench_function(BenchmarkId::new("parallel", format!("{size}n")), |b| {
+            let graph_ref = &graph;
+            b.iter(|| {
+                let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
+                    graph_ref.get(&node).cloned().unwrap_or_default()
+                };
+                let (results, _) = par_traverser.bfs_parallel(&start_nodes, get_neighbors);
+                black_box(results)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Benchmark: Frontier-parallel BFS (single start, wide fanout)
+fn bench_frontier_parallel_bfs(c: &mut Criterion) {
+    let mut group = c.benchmark_group("graph_frontier_bfs");
+    group.sample_size(20);
+
+    // High-degree graph (average 20 neighbors)
+    let graph = generate_graph(10_000, 20, 42);
+
+    // Sequential frontier expansion
+    let seq_config = ParallelConfig::new()
+        .with_max_depth(4)
+        .with_min_frontier(100_000) // Force sequential
+        .with_limit(5000);
+    let seq_bfs = FrontierParallelBFS::with_config(seq_config);
+
+    group.bench_function("sequential_frontier", |b| {
+        let graph_ref = &graph;
+        b.iter(|| {
+            let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
+                graph_ref.get(&node).cloned().unwrap_or_default()
+            };
+            let (results, _) = seq_bfs.traverse(0, get_neighbors);
+            black_box(results)
+        });
+    });
+
+    // Parallel frontier expansion
+    let par_config = ParallelConfig::new()
+        .with_max_depth(4)
+        .with_min_frontier(10)
+        .with_limit(5000);
+    let par_bfs = FrontierParallelBFS::with_config(par_config);
+
+    group.bench_function("parallel_frontier", |b| {
+        let graph_ref = &graph;
+        b.iter(|| {
+            let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
+                graph_ref.get(&node).cloned().unwrap_or_default()
+            };
+            let (results, _) = par_bfs.traverse(0, get_neighbors);
+            black_box(results)
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark: Shard-parallel traversal scaling
+fn bench_shard_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("graph_shard_parallel");
+    group.sample_size(20);
+
+    let graph = generate_graph(10_000, 5, 42);
+    let start_nodes: Vec<u64> = (0..200).collect();
+
+    for &num_shards in &[1, 2, 4, 8] {
+        let config = ParallelConfig::new()
+            .with_max_depth(3)
+            .with_parallel_threshold(10)
+            .with_limit(2000);
+        let traverser = ShardedTraverser::with_config(num_shards, config);
+
+        group.bench_function(BenchmarkId::new("shards", format!("{num_shards}s")), |b| {
+            let graph_ref = &graph;
+            b.iter(|| {
+                let get_neighbors = |node: u64| -> Vec<(u64, u64)> {
+                    graph_ref.get(&node).cloned().unwrap_or_default()
+                };
+                let (results, _) = traverser.traverse_parallel(&start_nodes, get_neighbors);
+                black_box(results)
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_batch_search,
     bench_brute_force,
     bench_parallel_insert,
-    bench_thread_scaling
+    bench_thread_scaling,
+    bench_parallel_bfs,
+    bench_frontier_parallel_bfs,
+    bench_shard_parallel
 );
 criterion_main!(benches);
