@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🆕 Added
 
+- **EPIC-053: WASM Graph Support** ✅ COMPLETE
+  - `GraphWorkerConfig` and `TraversalProgress` for Web Worker offloading
+  - `should_use_worker()` decision function for traversal strategies
+  - wasm-opt -Os optimization for bundle size
+  - Bundle optimization documentation (`docs/wasm/bundle-optimization.md`)
+  - 6 new TDD tests for worker infrastructure
+
+- **EPIC-039: Correlated Subqueries** ✅ COMPLETE
+  - `detect_correlated_columns()` for automatic correlation detection
+  - `SubqueryStrategy` enum: CacheResult, PerRow, RewriteAsJoin, Materialize
+  - `SubqueryOptConfig` and `SubqueryHint` for execution optimization
+  - 10 new TDD tests for subquery parsing and optimization
+
 - **EPIC-055: Dual-Precision Quantization** (US-003, US-005) ✅ COMPLETE
   - `DualPrecisionConfig` struct for search configuration
   - `search_with_config()` with TRUE int8 graph traversal
