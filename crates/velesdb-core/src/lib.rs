@@ -160,6 +160,8 @@ pub mod simd_avx512;
 mod simd_avx512_tests;
 pub mod simd_dispatch;
 #[cfg(test)]
+mod simd_dispatch_tests;
+#[cfg(test)]
 mod simd_epic073_tests;
 pub mod simd_explicit;
 #[cfg(test)]
