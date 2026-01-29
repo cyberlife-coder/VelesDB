@@ -78,6 +78,11 @@ pub const fn calculate_prefetch_distance(dimension: usize) -> usize {
 /// prefetched 4-16 iterations ahead of actual use.
 #[inline]
 pub fn prefetch_vector(vector: &[f32]) {
+    // Early return for empty vectors (consistent with prefetch_vector_multi_cache_line)
+    if vector.is_empty() {
+        return;
+    }
+
     #[cfg(target_arch = "x86_64")]
     {
         // SAFETY: _mm_prefetch is a hint instruction that cannot fault
@@ -101,8 +106,7 @@ pub fn prefetch_vector(vector: &[f32]) {
     }
 }
 
-/// Cache line size in bytes for prefetch calculations.
-const PREFETCH_CACHE_LINE_SIZE: usize = 64;
+// Note: Using L2_CACHE_LINE_BYTES (line 22) for consistency - removed duplicate constant
 
 /// Prefetches a vector into multiple cache levels for larger vectors (EPIC-073/US-001).
 ///
@@ -140,20 +144,20 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
 
             // Prefetch second cache line into L2 (near-term use)
-            if vector_bytes > PREFETCH_CACHE_LINE_SIZE {
-                let ptr = (vector.as_ptr() as *const i8).add(PREFETCH_CACHE_LINE_SIZE);
+            if vector_bytes > L2_CACHE_LINE_BYTES {
+                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES);
                 _mm_prefetch(ptr, _MM_HINT_T1);
             }
 
             // Prefetch third cache line into L3 (later use)
-            if vector_bytes > PREFETCH_CACHE_LINE_SIZE * 2 {
-                let ptr = (vector.as_ptr() as *const i8).add(PREFETCH_CACHE_LINE_SIZE * 2);
+            if vector_bytes > L2_CACHE_LINE_BYTES * 2 {
+                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 2);
                 _mm_prefetch(ptr, _MM_HINT_T2);
             }
 
             // For very large vectors (768D+), prefetch additional lines
-            if vector_bytes > PREFETCH_CACHE_LINE_SIZE * 4 {
-                let ptr = (vector.as_ptr() as *const i8).add(PREFETCH_CACHE_LINE_SIZE * 4);
+            if vector_bytes > L2_CACHE_LINE_BYTES * 4 {
+                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 4);
                 _mm_prefetch(ptr, _MM_HINT_T2);
             }
         }
