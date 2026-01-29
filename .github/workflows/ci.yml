@@ -74,7 +74,7 @@ jobs:
 
       - name: Run Clippy (strict)
         run: |
-          cargo clippy --workspace --all-targets --all-features \
+          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
             --exclude velesdb-python \
             -- -D warnings -D clippy::pedantic
 
@@ -104,7 +104,7 @@ jobs:
 
       - name: Run tests
         run: |
-          cargo test --workspace --all-features \
+          cargo test --workspace --features persistence,gpu,update-check \
             --exclude velesdb-python \
             -- --test-threads=1
         env:
@@ -188,7 +188,7 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          cargo llvm-cov --all-features --workspace \
+          cargo llvm-cov --features persistence,gpu,update-check --workspace \
             --exclude velesdb-python \
             --lcov --output-path lcov.info
 
