@@ -190,6 +190,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // Write header: version, count, dimension
         let version: u32 = 1;
         let count = vectors.len() as u64;
+        // SAFETY (EPIC-067/US-002): Vector dimensions are always < 65536 in practice
+        #[allow(clippy::cast_possible_truncation)]
         let dimension = vectors.first().map_or(0, Vec::len) as u32;
 
         writer.write_all(&version.to_le_bytes())?;
@@ -211,11 +213,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let mut writer = BufWriter::new(File::create(&graph_path)?);
 
         // Write header
+        // SAFETY (EPIC-067/US-002): HNSW params are always small (<256 for layers, <1024 for connections)
+        #[allow(clippy::cast_possible_truncation)]
         let num_layers = layers.len() as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let max_connections = self.max_connections as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let max_connections_0 = self.max_connections_0 as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let ef_construction = self.ef_construction as u32;
         let entry_point = self.entry_point.read().unwrap_or(0) as u64;
+        #[allow(clippy::cast_possible_truncation)]
         let max_layer = self.max_layer.load(std::sync::atomic::Ordering::Relaxed) as u32;
 
         writer.write_all(&version.to_le_bytes())?;
@@ -234,10 +242,16 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
             for node_neighbors in &layer.neighbors {
                 let neighbors = node_neighbors.read();
+                // SAFETY (EPIC-067/US-002): num_neighbors <= max_connections < 1024
+                #[allow(clippy::cast_possible_truncation)]
                 let num_neighbors = neighbors.len() as u32;
                 writer.write_all(&num_neighbors.to_le_bytes())?;
                 for &neighbor in neighbors.iter() {
-                    writer.write_all(&(neighbor as u32).to_le_bytes())?;
+                    // SAFETY (EPIC-067/US-002): NodeId stored as u32 in file format v1
+                    // This limits graph to 4B nodes which is acceptable for HNSW
+                    #[allow(clippy::cast_possible_truncation)]
+                    let neighbor_u32 = neighbor as u32;
+                    writer.write_all(&neighbor_u32.to_le_bytes())?;
                 }
             }
         }

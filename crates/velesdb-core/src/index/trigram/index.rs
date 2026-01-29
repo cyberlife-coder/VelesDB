@@ -142,24 +142,27 @@ impl TrigramIndex {
         self.doc_trigrams.insert(doc_id, trigram_set);
 
         // Add to inverted index
+        // SAFETY (EPIC-067/US-002): RoaringBitmap uses u32, limiting to 4B docs
+        #[allow(clippy::cast_possible_truncation)]
+        let doc_id_u32 = doc_id as u32;
         for trigram in trigrams {
-            self.inverted
-                .entry(trigram)
-                .or_default()
-                .insert(doc_id as u32);
+            self.inverted.entry(trigram).or_default().insert(doc_id_u32);
         }
 
         // Track document
-        self.all_docs.insert(doc_id as u32);
+        self.all_docs.insert(doc_id_u32);
     }
 
     /// Remove a document from the index.
     pub fn remove(&mut self, doc_id: u64) {
+        // SAFETY (EPIC-067/US-002): RoaringBitmap uses u32, limiting to 4B docs
+        #[allow(clippy::cast_possible_truncation)]
+        let doc_id_u32 = doc_id as u32;
         if let Some(trigrams) = self.doc_trigrams.remove(&doc_id) {
             // Remove from inverted index
             for trigram in trigrams {
                 if let Some(bitmap) = self.inverted.get_mut(&trigram) {
-                    bitmap.remove(doc_id as u32);
+                    bitmap.remove(doc_id_u32);
                     // Clean up empty bitmaps
                     if bitmap.is_empty() {
                         self.inverted.remove(&trigram);
@@ -168,7 +171,7 @@ impl TrigramIndex {
             }
         }
 
-        self.all_docs.remove(doc_id as u32);
+        self.all_docs.remove(doc_id_u32);
     }
 
     /// Search for documents matching a LIKE pattern.

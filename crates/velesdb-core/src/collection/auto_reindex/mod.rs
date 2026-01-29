@@ -54,6 +54,8 @@ pub struct AutoReindexManager {
     last_reindex_timestamp: RwLock<Option<std::time::Instant>>,
 }
 
+// SAFETY (EPIC-067/US-002): ReindexState enum has only 4 variants, always fits in u8
+#[allow(clippy::cast_possible_truncation)]
 impl AutoReindexManager {
     /// Creates a new manager with the given configuration
     #[must_use]
