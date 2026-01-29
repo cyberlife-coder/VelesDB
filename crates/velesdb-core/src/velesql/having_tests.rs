@@ -1,4 +1,5 @@
 //! Tests for VelesQL HAVING clause (EPIC-017 US-006).
+#![cfg(all(test, feature = "persistence"))]
 
 use crate::distance::DistanceMetric;
 use crate::point::Point;

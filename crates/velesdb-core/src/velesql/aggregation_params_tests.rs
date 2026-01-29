@@ -1,6 +1,7 @@
 //! Bug 5 Fix Tests: Aggregation params resolution
 //!
 //! Tests that params are properly resolved in execute_aggregate queries.
+#![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::Collection;
 use crate::velesql::Parser;

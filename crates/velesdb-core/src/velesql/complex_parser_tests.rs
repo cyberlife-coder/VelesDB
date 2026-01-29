@@ -2,6 +2,7 @@
 //!
 //! Tests combining: aggregates, multicolumn, vector search, graph patterns, EXPLAIN.
 //! Based on research: VLDB 2024 hybrid vector+graph queries, cost estimation patterns.
+#![cfg(all(test, feature = "persistence"))]
 
 use crate::velesql::{Parser, QueryPlan, SelectColumns};
 
