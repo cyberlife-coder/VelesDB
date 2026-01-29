@@ -46,6 +46,7 @@ mod filter;
 mod fusion;
 mod graph;
 mod graph_persistence;
+mod graph_worker;
 mod persistence;
 mod serialization;
 mod simd;
