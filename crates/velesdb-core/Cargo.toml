@@ -111,6 +111,8 @@ update-check = ["dep:reqwest", "dep:tokio"]
 # Loom feature: enables concurrency testing with loom (EPIC-023)
 # Run with: cargo +nightly test --features loom --test loom_tests
 loom = ["dep:loom"]
+# Portable SIMD evaluation (EPIC-054/US-004) - requires nightly
+portable-simd = []
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -253,6 +255,10 @@ harness = false
 
 [[bench]]
 name = "smoke_test"
+harness = false
+
+[[bench]]
+name = "portable_simd_eval"
 harness = false
 
 # ============================================================================

@@ -154,6 +154,7 @@ pub mod simd_native;
 mod simd_native_tests;
 #[cfg(target_arch = "aarch64")]
 pub mod simd_neon;
+pub mod simd_portable;
 #[cfg(test)]
 mod simd_tests;
 #[cfg(feature = "persistence")]
