@@ -64,6 +64,7 @@ impl Pipeline {
     /// # Errors
     ///
     /// Returns an error if the migration fails.
+    #[allow(clippy::cognitive_complexity)] // Reason: Pipeline orchestration requires sequential steps, refactoring would fragment the migration flow
     pub async fn run(&mut self) -> Result<MigrationStats> {
         let start = std::time::Instant::now();
         let mut stats = MigrationStats::default();

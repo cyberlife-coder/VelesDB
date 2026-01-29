@@ -627,6 +627,7 @@ impl VectorStorage for MmapStorage {
 // Drop implementation – guarantees durability on graceful shutdown
 // -----------------------------------------------------------------------------
 impl Drop for MmapStorage {
+    #[allow(clippy::cognitive_complexity)] // Reason: Drop must handle WAL+mmap flush atomically, splitting risks data loss
     fn drop(&mut self) {
         // 1. Flush WAL first (durability of operation log)
         if let Some(mut wal) = self.wal.try_write() {

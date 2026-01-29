@@ -138,7 +138,7 @@ enum CommandResult {
     Error(String),
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)] // Reason: REPL command dispatcher with many branches
 fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> CommandResult {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let cmd = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
