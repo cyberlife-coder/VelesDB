@@ -1,6 +1,6 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: January 28, 2026 (v1.4.0)*
+*Last updated: January 29, 2026 (v1.4.1 - EPIC-073 SIMD Pipeline Optimizations)*
 
 ---
 
@@ -37,6 +37,17 @@
 | **Cosine** | 36ns | 68ns | 131ns |
 | **Hamming (u64)** | 6ns | 6ns | 11ns |
 | **Jaccard** | 80ns | 154ns | 306ns |
+| **Jaccard ILP** (EPIC-073) | 35ns | 67ns | 133ns |
+
+### EPIC-073 SIMD Pipeline Optimizations
+
+| Feature | Description | Performance |
+|---------|-------------|-------------|
+| **Multi-level Prefetch** | L1/L2/L3 cache hints | 10-30% cold cache improvement |
+| **Jaccard 4-way ILP** | Instruction-level parallelism | **2.3x** faster than baseline |
+| **Binary Jaccard POPCNT** | Hardware popcount | **10x** faster for u64 packed |
+| **Batch Dot Product** | M×N matrix computation | Amortized overhead |
+| **Batch Top-K** | Multi-query similarity | Cache reuse optimization |
 
 ---
 

@@ -361,7 +361,20 @@ use velesdb_core::{
 use velesdb_core::{Filter, Condition};
 
 // Quantization
-use velesdb_core::{QuantizedVector, BinaryQuantizedVector};
+use velesdb_core::{QuantizedVector, BinaryQuantizedVector, QuantizationConfig};
+
+// SIMD Operations (EPIC-073)
+use velesdb_core::simd::{
+    prefetch_vector,                  // L1 cache prefetch
+    prefetch_vector_multi_cache_line, // Multi-level prefetch (L1/L2/L3)
+    calculate_prefetch_distance,      // Optimal prefetch distance
+};
+use velesdb_core::simd_explicit::{
+    jaccard_similarity_simd,    // 4-way ILP Jaccard
+    jaccard_similarity_binary,  // POPCNT binary Jaccard
+    batch_dot_product,          // M×N matrix computation
+    batch_similarity_top_k,     // Batch top-k search
+};
 
 // Metrics
 use velesdb_core::{recall_at_k, precision_at_k, mrr, ndcg_at_k};
