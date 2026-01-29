@@ -52,7 +52,14 @@ fn select_dot_product() -> DistanceFn {
         if is_x86_feature_detected!("avx2") {
             return dot_product_avx2;
         }
+        dot_product_scalar
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
+        return crate::simd_neon::dot_product_neon_safe;
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     dot_product_scalar
 }
 
@@ -66,7 +73,14 @@ fn select_euclidean() -> DistanceFn {
         if is_x86_feature_detected!("avx2") {
             return euclidean_avx2;
         }
+        euclidean_scalar
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
+        return crate::simd_neon::euclidean_neon_safe;
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     euclidean_scalar
 }
 
@@ -80,7 +94,14 @@ fn select_cosine() -> DistanceFn {
         if is_x86_feature_detected!("avx2") {
             return cosine_avx2;
         }
+        cosine_scalar
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
+        return crate::simd_neon::cosine_neon_safe;
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     cosine_scalar
 }
 
@@ -94,7 +115,14 @@ fn select_cosine_normalized() -> DistanceFn {
         if is_x86_feature_detected!("avx2") {
             return cosine_normalized_avx2;
         }
+        cosine_normalized_scalar
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
+        return crate::simd_neon::cosine_normalized_neon_safe;
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     cosine_normalized_scalar
 }
 
