@@ -87,12 +87,9 @@ jobs:
         with:
           shared-key: "release-${{ matrix.target }}"
 
-      # Note: taiki-e/install-action - uses version tags (downloads tools at runtime)
       - name: Install cargo-deb (Linux)
         if: runner.os == 'Linux'
-        uses: taiki-e/install-action@v2.67.15
-        with:
-          tool: cargo-deb
+        run: cargo install cargo-deb --locked
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p velesdb-cli -p velesdb-server -p velesdb-migrate
@@ -242,10 +239,8 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
-      # Note: taiki-e/install-action - uses version tags (downloads tools at runtime)
-      - uses: taiki-e/install-action@v2.67.15
-        with:
-          tool: wasm-pack
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
 
       # WASM package
       - name: Build & Publish WASM

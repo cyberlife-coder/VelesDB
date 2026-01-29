@@ -51,10 +51,8 @@ jobs:
         with:
           shared-key: "velesdb-ci"
 
-      # Note: taiki-e/install-action - uses version tags (downloads tools at runtime)
-      - uses: taiki-e/install-action@v2.67.15
-        with:
-          tool: critcmp
+      - name: Install critcmp
+        run: cargo install critcmp --locked
 
       - name: Baseline benchmarks
         working-directory: base

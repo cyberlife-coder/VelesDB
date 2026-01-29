@@ -119,10 +119,12 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # Note: taiki-e/install-action - uses version tags (downloads tools at runtime)
-      - uses: taiki-e/install-action@v2.67.15
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
-          tool: cargo-audit
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Run security audit
         run: cargo audit --ignore RUSTSEC-2024-0320 || true
@@ -181,10 +183,8 @@ jobs:
         with:
           shared-key: "velesdb-ci"
 
-      # Note: taiki-e/install-action - uses version tags (downloads tools at runtime)
-      - uses: taiki-e/install-action@v2.67.15
-        with:
-          tool: cargo-llvm-cov
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
 
       - name: Generate coverage report
         run: |
