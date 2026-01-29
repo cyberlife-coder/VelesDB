@@ -1,9 +1,11 @@
 """FastAPI application for RAG demo."""
 
 import json
-import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+import aiofiles
+import aiofiles.tempfile
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -121,9 +123,9 @@ async def upload_document(file: UploadFile = File(...)):
             detail=f"File too large. Maximum size is 50MB, got {len(content) / (1024*1024):.1f}MB"
         )
     
-    # Save uploaded file temporarily
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(content)
+    # Save uploaded file temporarily using async file API
+    async with aiofiles.tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        await tmp.write(content)
         tmp_path = Path(tmp.name)
     
     try:
@@ -213,8 +215,9 @@ async def load_demo_data():
         raise HTTPException(status_code=404, detail="Demo data not found")
     
     try:
-        with open(demo_file, "r", encoding="utf-8") as f:
-            demo_data = json.load(f)
+        async with aiofiles.open(demo_file, "r", encoding="utf-8") as f:
+            content = await f.read()
+            demo_data = json.loads(content)
         
         results = []
         for doc in demo_data.get("documents", []):

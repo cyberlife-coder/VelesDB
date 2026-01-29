@@ -66,9 +66,9 @@ class TestRAGEngine:
             engine = RAGEngine()
             results = await engine.search("What is machine learning?", top_k=5)
             
-            assert len(results) > 0
-            assert results[0]["score"] == 0.95
-            assert "Machine learning" in results[0]["text"]
+            assert len(results["results"]) > 0
+            assert abs(results["results"][0]["score"] - 0.95) < 1e-6
+            assert "Machine learning" in results["results"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_get_documents_list(self):
