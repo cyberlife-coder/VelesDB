@@ -236,7 +236,7 @@ impl<'a> EpisodicMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let all_ids: Vec<u64> = (0..100000).collect();
+        let all_ids = self.temporal_index.all_ids();
         let points: Vec<_> = collection.get(&all_ids).into_iter().flatten().collect();
 
         let serialized =

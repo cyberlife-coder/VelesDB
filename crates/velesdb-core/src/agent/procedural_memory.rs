@@ -5,7 +5,9 @@
 //! Includes extensible reinforcement strategies for adaptive confidence updates.
 
 use crate::{Database, DistanceMetric, Point};
+use parking_lot::RwLock;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::error::AgentMemoryError;
@@ -27,6 +29,7 @@ pub struct ProceduralMemory<'a> {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     reinforcement_strategy: Arc<dyn ReinforcementStrategy>,
+    stored_ids: RwLock<HashSet<u64>>,
 }
 
 impl<'a> ProceduralMemory<'a> {
@@ -63,6 +66,7 @@ impl<'a> ProceduralMemory<'a> {
             dimension: actual_dimension,
             ttl,
             reinforcement_strategy: Arc::new(FixedRate::default()),
+            stored_ids: RwLock::new(HashSet::new()),
         })
     }
 
@@ -124,6 +128,7 @@ impl<'a> ProceduralMemory<'a> {
             .upsert(vec![point])
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
+        self.stored_ids.write().insert(procedure_id);
         Ok(())
     }
 
@@ -311,7 +316,7 @@ impl<'a> ProceduralMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let all_ids: Vec<u64> = (0..100000).collect();
+        let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
         let points = collection.get(&all_ids);
 
         Ok(points
@@ -350,6 +355,7 @@ impl<'a> ProceduralMemory<'a> {
             .delete(&[id])
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
+        self.stored_ids.write().remove(&id);
         self.ttl.remove(id);
         Ok(())
     }
@@ -360,7 +366,7 @@ impl<'a> ProceduralMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let all_ids: Vec<u64> = (0..100000).collect();
+        let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
         let points: Vec<_> = collection.get(&all_ids).into_iter().flatten().collect();
 
         let serialized =
@@ -381,6 +387,13 @@ impl<'a> ProceduralMemory<'a> {
             .db
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+
+        {
+            let mut ids = self.stored_ids.write();
+            for point in &points {
+                ids.insert(point.id);
+            }
+        }
 
         collection
             .upsert(points)

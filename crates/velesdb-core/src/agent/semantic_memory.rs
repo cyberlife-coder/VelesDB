@@ -4,7 +4,9 @@
 //! Each fact has an ID, content text, and embedding vector.
 
 use crate::{Database, DistanceMetric, Point};
+use parking_lot::RwLock;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::error::AgentMemoryError;
@@ -15,6 +17,7 @@ pub struct SemanticMemory<'a> {
     db: &'a Database,
     dimension: usize,
     ttl: Arc<MemoryTtl>,
+    stored_ids: RwLock<HashSet<u64>>,
 }
 
 impl<'a> SemanticMemory<'a> {
@@ -50,6 +53,7 @@ impl<'a> SemanticMemory<'a> {
             db,
             dimension: actual_dimension,
             ttl,
+            stored_ids: RwLock::new(HashSet::new()),
         })
     }
 
@@ -81,6 +85,7 @@ impl<'a> SemanticMemory<'a> {
             .upsert(vec![point])
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
+        self.stored_ids.write().insert(id);
         Ok(())
     }
 
@@ -144,6 +149,7 @@ impl<'a> SemanticMemory<'a> {
             .delete(&[id])
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
+        self.stored_ids.write().remove(&id);
         self.ttl.remove(id);
         Ok(())
     }
@@ -154,7 +160,7 @@ impl<'a> SemanticMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let all_ids: Vec<u64> = (0..100000).collect();
+        let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
         let points: Vec<_> = collection.get(&all_ids).into_iter().flatten().collect();
 
         let serialized =
@@ -175,6 +181,13 @@ impl<'a> SemanticMemory<'a> {
             .db
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+
+        {
+            let mut ids = self.stored_ids.write();
+            for point in &points {
+                ids.insert(point.id);
+            }
+        }
 
         collection
             .upsert(points)

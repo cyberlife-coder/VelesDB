@@ -270,7 +270,7 @@ impl<'a> AgentMemory<'a> {
         let mut consolidated = 0;
 
         for (id, description, _timestamp) in old_events {
-            let embedding = vec![0.0f32; DEFAULT_DIMENSION];
+            let embedding = vec![0.0f32; self.semantic.dimension()];
             self.semantic.store(id, &description, &embedding)?;
             self.episodic.delete(id)?;
             consolidated += 1;
