@@ -132,7 +132,7 @@ impl Bm25Index {
     /// internally which only supports 32-bit document IDs.
     pub fn add_document(&self, id: u64, text: &str) {
         assert!(
-            id <= u64::from(u32::MAX),
+            u32::try_from(id).is_ok(),
             "BM25 document ID {} exceeds u32::MAX ({}). \
              The BM25 index uses RoaringBitmap which only supports 32-bit IDs.",
             id,
@@ -212,7 +212,7 @@ impl Bm25Index {
     /// Panics if `id` exceeds `u32::MAX`.
     pub fn remove_document(&self, id: u64) -> bool {
         assert!(
-            id <= u64::from(u32::MAX),
+            u32::try_from(id).is_ok(),
             "BM25 document ID {} exceeds u32::MAX",
             id
         );

@@ -13,6 +13,7 @@ use thiserror::Error;
 pub const DEFAULT_DIMENSION: usize = 384;
 
 /// Default retention period for episodic memory (7 days in seconds).
+#[allow(dead_code)]
 pub const DEFAULT_RETENTION_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 /// A matched procedure from procedural memory recall.
@@ -289,7 +290,7 @@ impl<'a> SemanticMemory<'a> {
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
         let points = collection.get(&[id]);
-        Ok(points.first().map_or(false, |p| p.is_some()))
+        Ok(points.first().is_some_and(Option::is_some))
     }
 
     /// Stores a knowledge fact with its embedding vector.
