@@ -197,3 +197,80 @@ fn test_recall_with_heuristic_selection() {
         );
     }
 }
+
+// =========================================================================
+// Concurrent insertion tests (Flag 6 fix - tests PRNG thread-safety indirectly)
+// =========================================================================
+
+#[test]
+fn test_concurrent_insertions() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = CpuDistance::new(DistanceMetric::Euclidean);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 1000));
+
+    let handles: Vec<_> = (0..4)
+        .map(|thread_id| {
+            let hnsw_clone = Arc::clone(&hnsw);
+            thread::spawn(move || {
+                for i in 0..50 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let v: Vec<f32> = (0..32)
+                        .map(|j| ((thread_id * 50 + i) * 32 + j) as f32)
+                        .collect();
+                    hnsw_clone.insert(v);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("Thread should not panic");
+    }
+
+    assert_eq!(hnsw.len(), 200, "All insertions should succeed");
+}
+
+#[test]
+fn test_concurrent_insert_and_search() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = CpuDistance::new(DistanceMetric::Euclidean);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 1000));
+
+    for i in 0..100 {
+        #[allow(clippy::cast_precision_loss)]
+        let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
+        hnsw.insert(v);
+    }
+
+    let handles: Vec<_> = (0..4)
+        .map(|thread_id| {
+            let hnsw_clone = Arc::clone(&hnsw);
+            thread::spawn(move || {
+                for i in 0..25 {
+                    if thread_id % 2 == 0 {
+                        #[allow(clippy::cast_precision_loss)]
+                        let v: Vec<f32> = (0..32)
+                            .map(|j| ((100 + thread_id * 25 + i) * 32 + j) as f32)
+                            .collect();
+                        hnsw_clone.insert(v);
+                    } else {
+                        #[allow(clippy::cast_precision_loss)]
+                        let query: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
+                        let results = hnsw_clone.search(&query, 5, 50);
+                        assert!(!results.is_empty(), "Search should return results");
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("Thread should not panic");
+    }
+
+    assert!(hnsw.len() >= 100, "Index should have at least initial vectors");
+}

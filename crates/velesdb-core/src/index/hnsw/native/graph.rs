@@ -313,18 +313,30 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // Generate additional random entry points for diversity
         let mut entry_points = vec![current_ep];
         if num_probes > 1 && count > 10 {
-            let mut state = self.rng_state.load(Ordering::Relaxed);
             for _ in 1..num_probes.min(4) {
-                // Simple xorshift for random selection
+                // Atomic xorshift64 PRNG for thread-safe random selection
+                // Uses fetch_update to ensure thread-safe read-modify-write
+                let old_state = self
+                    .rng_state
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut state| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        Some(state)
+                    })
+                    .unwrap_or_else(|s| s);
+
+                // fetch_update returns the OLD state, re-apply transformation
+                let mut state = old_state;
                 state ^= state << 13;
                 state ^= state >> 7;
                 state ^= state << 17;
+
                 let random_id = (state as usize) % count;
                 if !entry_points.contains(&random_id) {
                     entry_points.push(random_id);
                 }
             }
-            self.rng_state.store(state, Ordering::Relaxed);
         }
 
         // Search from all entry points - use full ef_search budget
@@ -354,22 +366,34 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         clippy::cast_sign_loss
     )]
     fn random_layer(&self) -> usize {
-        // Simple xorshift64 PRNG for layer selection
-        let mut state = self.rng_state.load(Ordering::Relaxed);
+        // Atomic xorshift64 PRNG for layer selection
+        // Uses fetch_update to ensure thread-safe read-modify-write
+        // This prevents race conditions where multiple threads could read
+        // the same state and generate identical random layers
+        let old_state = self
+            .rng_state
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut state| {
+                if state == 0 {
+                    state = 0x853c_49e6_748f_ea9b;
+                }
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                Some(state)
+            })
+            .unwrap_or_else(|s| s);
 
-        // Handle edge case: xorshift64 produces 0 if state is 0, which would cause
-        // -ln(0) = infinity. Reset to a non-zero seed if state becomes 0.
+        // fetch_update returns the OLD state, so we need to re-apply the
+        // transformation to get the NEW state that was actually stored
+        let mut state = old_state;
         if state == 0 {
-            state = 0x853c_49e6_748f_ea9b; // Golden ratio-based seed
+            state = 0x853c_49e6_748f_ea9b;
         }
-
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
-        self.rng_state.store(state, Ordering::Relaxed);
 
         // Convert to uniform (0, 1) and apply exponential distribution
-        // Note: state is guaranteed non-zero after xorshift, so uniform > 0
         let uniform = (state as f64) / (u64::MAX as f64);
 
         // Additional safety: clamp uniform to avoid -ln(0) = infinity

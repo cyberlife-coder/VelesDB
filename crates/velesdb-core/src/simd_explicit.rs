@@ -221,12 +221,39 @@ pub fn norm_simd(v: &[f32]) -> f32 {
 ///
 /// For packed binary data, use `hamming_distance_binary` which is ~50x faster.
 ///
+/// # Returns
+///
+/// Returns the count as f32 for API compatibility. For the native u32 result,
+/// use [`hamming_distance_simd_u32`].
+///
 /// # Panics
 ///
 /// Panics if vectors have different lengths.
 #[inline]
 #[must_use]
 pub fn hamming_distance_simd(a: &[f32], b: &[f32]) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        hamming_distance_simd_u32(a, b) as f32
+    }
+}
+
+/// Computes Hamming distance for f32 binary vectors, returning u32.
+///
+/// Values > 0.5 are treated as 1, else 0. Counts differing positions.
+/// Uses 8-wide loop unrolling for better cache utilization.
+///
+/// This is the preferred function when the result will be used as an integer,
+/// avoiding the unnecessary f32 conversion and back.
+///
+/// For packed binary data, use `hamming_distance_binary` which is ~50x faster.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
+#[inline]
+#[must_use]
+pub fn hamming_distance_simd_u32(a: &[f32], b: &[f32]) -> u32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
 
     let len = a.len();
@@ -256,10 +283,7 @@ pub fn hamming_distance_simd(a: &[f32], b: &[f32]) -> f32 {
         }
     }
 
-    #[allow(clippy::cast_precision_loss)]
-    {
-        count as f32
-    }
+    count
 }
 
 /// Computes Hamming distance for packed binary vectors (u64 chunks).

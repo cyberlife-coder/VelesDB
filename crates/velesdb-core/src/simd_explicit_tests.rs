@@ -329,4 +329,51 @@ mod tests {
             "Jaccard mismatch: {scalar} vs {simd}"
         );
     }
+
+    // =========================================================================
+    // Hamming distance u32 tests (Flag 7 fix)
+    // =========================================================================
+
+    #[test]
+    fn test_hamming_distance_simd_u32_identical() {
+        let a = vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        let result = hamming_distance_simd_u32(&a, &a);
+        assert_eq!(result, 0, "Identical vectors should have distance 0");
+    }
+
+    #[test]
+    fn test_hamming_distance_simd_u32_all_different() {
+        let a = vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        let result = hamming_distance_simd_u32(&a, &b);
+        assert_eq!(result, 8, "All different = 8");
+    }
+
+    #[test]
+    fn test_hamming_distance_simd_u32_partial() {
+        let a = vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0];
+        let result = hamming_distance_simd_u32(&a, &b);
+        assert_eq!(result, 4, "Expected 4 differences");
+    }
+
+    #[test]
+    fn test_hamming_distance_simd_u32_consistency_with_f32() {
+        let a: Vec<f32> = (0..768)
+            .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f32> = (0..768)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+
+        let f32_result = hamming_distance_simd(&a, &b);
+        let u32_result = hamming_distance_simd_u32(&a, &b);
+
+        #[allow(clippy::cast_precision_loss)]
+        let expected_f32 = u32_result as f32;
+        assert!(
+            (f32_result - expected_f32).abs() < 1.0,
+            "u32 and f32 results should match: {u32_result} vs {f32_result}"
+        );
+    }
 }
