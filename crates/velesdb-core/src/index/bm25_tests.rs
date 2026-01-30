@@ -309,3 +309,31 @@ fn test_concurrent_reads() {
         handle.join().expect("Thread panicked");
     }
 }
+
+// =========================================================================
+// ID validation tests (Flag 1 fix)
+// =========================================================================
+
+#[test]
+#[should_panic(expected = "BM25 document ID")]
+fn test_add_document_id_exceeds_u32_max() {
+    let index = Bm25Index::new();
+    // ID exceeds u32::MAX - should panic
+    index.add_document(u64::from(u32::MAX) + 1, "test document");
+}
+
+#[test]
+fn test_add_document_id_at_u32_max() {
+    let index = Bm25Index::new();
+    // ID exactly at u32::MAX - should succeed
+    index.add_document(u64::from(u32::MAX), "test document");
+    assert_eq!(index.len(), 1);
+}
+
+#[test]
+#[should_panic(expected = "BM25 document ID")]
+fn test_remove_document_id_exceeds_u32_max() {
+    let index = Bm25Index::new();
+    // ID exceeds u32::MAX - should panic
+    index.remove_document(u64::from(u32::MAX) + 1);
+}

@@ -507,3 +507,18 @@ fn test_binary_from_bytes_invalid() {
     // Assert
     assert!(result.is_err());
 }
+
+// =========================================================================
+// Dimension validation tests (Flag 3 fix)
+// =========================================================================
+
+#[test]
+fn test_binary_serialization_normal_dimension() {
+    let vector: Vec<f32> = (0..1024)
+        .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
+        .collect();
+    let binary = BinaryQuantizedVector::from_f32(&vector);
+    let bytes = binary.to_bytes();
+    let deserialized = BinaryQuantizedVector::from_bytes(&bytes).unwrap();
+    assert_eq!(deserialized.dimension(), 1024);
+}

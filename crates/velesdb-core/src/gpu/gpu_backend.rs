@@ -143,11 +143,16 @@ impl GpuAccelerator {
     ///
     /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
     /// * `query` - Query vector
-    /// * `dimension` - Vector dimension
+    /// * `dimension` - Vector dimension (must be <= u32::MAX)
     ///
     /// # Returns
     ///
     /// Vector of cosine similarities, one per input vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `dimension` or `num_vectors` exceeds `u32::MAX`.
+    /// The GPU shader uses 32-bit parameters.
     #[must_use]
     pub fn batch_cosine_similarity(
         &self,
@@ -155,10 +160,25 @@ impl GpuAccelerator {
         query: &[f32],
         dimension: usize,
     ) -> Vec<f32> {
+        if dimension == 0 || vectors.is_empty() {
+            return Vec::new();
+        }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
             return Vec::new();
         }
+
+        // Validate GPU shader parameter constraints
+        assert!(
+            dimension <= u32::MAX as usize,
+            "GPU batch_cosine_similarity: dimension {} exceeds u32::MAX",
+            dimension
+        );
+        assert!(
+            num_vectors <= u32::MAX as usize,
+            "GPU batch_cosine_similarity: num_vectors {} exceeds u32::MAX",
+            num_vectors
+        );
 
         // Create buffers
         let query_buffer = self
@@ -193,27 +213,9 @@ impl GpuAccelerator {
         });
 
         // Params: [dimension, num_vectors]
-        // SAFETY: Vector dimensions are validated at collection creation to be < 65536.
-        // num_vectors is bounded by GPU buffer size limits. We use try_from to verify
-        // these invariants at runtime and saturate to u32::MAX if exceeded (which would
-        // indicate a bug in the caller or an extremely large batch).
-        let dim_u32 = u32::try_from(dimension).unwrap_or_else(|_| {
-            debug_assert!(
-                dimension <= u32::MAX as usize,
-                "GPU: dimension {} exceeds u32::MAX",
-                dimension
-            );
-            u32::MAX
-        });
-        let num_vec_u32 = u32::try_from(num_vectors).unwrap_or_else(|_| {
-            debug_assert!(
-                num_vectors <= u32::MAX as usize,
-                "GPU: num_vectors {} exceeds u32::MAX",
-                num_vectors
-            );
-            u32::MAX
-        });
-        let params = [dim_u32, num_vec_u32];
+        // SAFETY: dimension and num_vectors validated above to fit in u32
+        #[allow(clippy::cast_possible_truncation)]
+        let params = [dimension as u32, num_vectors as u32];
         let params_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -356,6 +358,9 @@ impl GpuAccelerator {
         query: &[f32],
         dimension: usize,
     ) -> Vec<f32> {
+        if dimension == 0 || vectors.is_empty() {
+            return Vec::new();
+        }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
             return Vec::new();
@@ -390,6 +395,9 @@ impl GpuAccelerator {
     /// Vector of dot products, one per input vector.
     #[must_use]
     pub fn batch_dot_product(&self, vectors: &[f32], query: &[f32], dimension: usize) -> Vec<f32> {
+        if dimension == 0 || vectors.is_empty() {
+            return Vec::new();
+        }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
             return Vec::new();

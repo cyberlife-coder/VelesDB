@@ -38,29 +38,29 @@ impl Collection {
                             Error::Config(format!("Missing query parameter: ${name}"))
                         })?;
                         if let serde_json::Value::Array(arr) = val {
-                            // SAFETY: f64 to f32 cast may lose precision for values outside
-                            // f32 range. We validate that values are finite after conversion.
-                            // Vector values are typically normalized floats in [-1, 1] where
-                            // f32 precision is sufficient for similarity search.
-                            #[allow(clippy::cast_possible_truncation)]
                             arr.iter()
                                 .map(|v| {
                                     v.as_f64()
-                                        .map(|f| {
-                                            let f32_val = f as f32;
-                                            // Validate the conversion didn't produce infinity
-                                            if !f32_val.is_finite() && f.is_finite() {
-                                                return Err(Error::Config(format!(
-                                                    "Vector value {f} exceeds f32 range"
-                                                )));
+                                        .and_then(|f| {
+                                            // Validate f64 value is within f32 representable range
+                                            if f.is_finite()
+                                                && f >= f64::from(f32::MIN)
+                                                && f <= f64::from(f32::MAX)
+                                            {
+                                                #[allow(clippy::cast_possible_truncation)]
+                                                Some(f as f32)
+                                            } else if f.is_finite() {
+                                                None
+                                            } else {
+                                                #[allow(clippy::cast_possible_truncation)]
+                                                Some(f as f32)
                                             }
-                                            Ok(f32_val)
                                         })
                                         .ok_or_else(|| {
                                             Error::Config(format!(
-                                                "Invalid vector parameter ${name}: expected numbers"
+                                                "Invalid vector parameter ${name}: value out of f32 range or not a number"
                                             ))
-                                        })?
+                                        })
                                 })
                                 .collect::<Result<Vec<f32>>>()?
                         } else {
@@ -104,28 +104,28 @@ impl Collection {
                             Error::Config(format!("Missing query parameter: ${name}"))
                         })?;
                         if let serde_json::Value::Array(arr) = val {
-                            // SAFETY: f64 to f32 cast may lose precision for values outside
-                            // f32 range. We validate that values are finite after conversion.
-                            // Vector values are typically normalized floats in [-1, 1] where
-                            // f32 precision is sufficient for similarity search.
-                            #[allow(clippy::cast_possible_truncation)]
                             arr.iter()
                                 .map(|v| {
                                     v.as_f64()
-                                        .map(|f| {
-                                            let f32_val = f as f32;
-                                            if !f32_val.is_finite() && f.is_finite() {
-                                                return Err(Error::Config(format!(
-                                                    "Vector value {f} exceeds f32 range"
-                                                )));
+                                        .and_then(|f| {
+                                            if f.is_finite()
+                                                && f >= f64::from(f32::MIN)
+                                                && f <= f64::from(f32::MAX)
+                                            {
+                                                #[allow(clippy::cast_possible_truncation)]
+                                                Some(f as f32)
+                                            } else if f.is_finite() {
+                                                None
+                                            } else {
+                                                #[allow(clippy::cast_possible_truncation)]
+                                                Some(f as f32)
                                             }
-                                            Ok(f32_val)
                                         })
                                         .ok_or_else(|| {
                                             Error::Config(format!(
-                                                "Invalid vector parameter ${name}: expected numbers"
+                                                "Invalid vector parameter ${name}: value out of f32 range or not a number"
                                             ))
-                                        })?
+                                        })
                                 })
                                 .collect::<Result<Vec<f32>>>()?
                         } else {
@@ -200,6 +200,13 @@ impl Collection {
     }
 
     /// Resolve a vector expression to actual vector values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The parameter is missing
+    /// - The parameter is not an array
+    /// - Any value is not a number or is outside f32 representable range
     pub(crate) fn resolve_vector(
         &self,
         vector: &crate::velesql::VectorExpr,
@@ -214,28 +221,28 @@ impl Collection {
                     .get(name)
                     .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
                 if let serde_json::Value::Array(arr) = val {
-                    // SAFETY: f64 to f32 cast may lose precision for values outside
-                    // f32 range. We validate that values are finite after conversion.
-                    // Vector values are typically normalized floats in [-1, 1] where
-                    // f32 precision is sufficient for similarity search.
-                    #[allow(clippy::cast_possible_truncation)]
                     arr.iter()
                         .map(|v| {
                             v.as_f64()
-                                .map(|f| {
-                                    let f32_val = f as f32;
-                                    if !f32_val.is_finite() && f.is_finite() {
-                                        return Err(Error::Config(format!(
-                                            "Vector value {f} exceeds f32 range"
-                                        )));
+                                .and_then(|f| {
+                                    if f.is_finite()
+                                        && f >= f64::from(f32::MIN)
+                                        && f <= f64::from(f32::MAX)
+                                    {
+                                        #[allow(clippy::cast_possible_truncation)]
+                                        Some(f as f32)
+                                    } else if f.is_finite() {
+                                        None
+                                    } else {
+                                        #[allow(clippy::cast_possible_truncation)]
+                                        Some(f as f32)
                                     }
-                                    Ok(f32_val)
                                 })
                                 .ok_or_else(|| {
                                     Error::Config(format!(
-                                        "Invalid vector parameter ${name}: expected numbers"
+                                        "Invalid vector parameter ${name}: value out of f32 range or not a number"
                                     ))
-                                })?
+                                })
                         })
                         .collect::<Result<Vec<f32>>>()
                 } else {
