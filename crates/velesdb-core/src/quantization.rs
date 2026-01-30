@@ -154,7 +154,7 @@ impl BinaryQuantizedVector {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         assert!(
-            self.dimension <= u32::MAX as usize,
+            u32::try_from(self.dimension).is_ok(),
             "BinaryQuantizedVector dimension {} exceeds u32::MAX for serialization",
             self.dimension
         );

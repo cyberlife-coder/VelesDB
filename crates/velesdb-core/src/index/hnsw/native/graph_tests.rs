@@ -272,5 +272,8 @@ fn test_concurrent_insert_and_search() {
         handle.join().expect("Thread should not panic");
     }
 
-    assert!(hnsw.len() >= 100, "Index should have at least initial vectors");
+    assert!(
+        hnsw.len() >= 100,
+        "Index should have at least initial vectors"
+    );
 }
