@@ -398,6 +398,13 @@ impl<'a> ProceduralMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
+        let existing_ids = collection.all_ids();
+        if !existing_ids.is_empty() {
+            collection
+                .delete(&existing_ids)
+                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        }
+
         {
             let mut ids = self.stored_ids.write();
             ids.clear();
