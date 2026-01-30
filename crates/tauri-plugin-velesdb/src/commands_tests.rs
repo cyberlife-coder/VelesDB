@@ -7,6 +7,7 @@ use crate::types::{
     HybridSearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest, SearchResponse,
     SearchResult, TextSearchRequest,
 };
+use toml;
 
 #[test]
 fn test_parse_metric_cosine() {
@@ -390,44 +391,120 @@ fn test_query_response_empty_results() {
 // Permission Regression Tests (Issue #169)
 // ============================================================================
 
-/// Test to ensure all registered commands have corresponding permissions.
-/// This prevents the "Command not found" error when permissions are missing.
+/// Canonical list of all commands registered in lib.rs invoke_handler.
+///
+/// IMPORTANT: This list MUST be kept in sync with:
+/// - `src/lib.rs` invoke_handler registration
+/// - `build.rs` COMMANDS array
+/// - `permissions/default.toml` [default] permissions
+///
+/// When adding a new command:
+/// 1. Add the command function to commands.rs or commands_graph.rs
+/// 2. Register it in lib.rs invoke_handler
+/// 3. Add it to build.rs COMMANDS array (triggers permission file generation)
+/// 4. Add "allow-{command-name}" to default.toml [default] section
+/// 5. Add it to this REGISTERED_COMMANDS array
+const REGISTERED_COMMANDS: &[&str] = &[
+    // Collection management
+    "create_collection",
+    "create_metadata_collection",
+    "delete_collection",
+    "list_collections",
+    "get_collection",
+    "is_empty",
+    "flush",
+    // Point operations
+    "upsert",
+    "upsert_metadata",
+    "get_points",
+    "delete_points",
+    // Search operations
+    "search",
+    "batch_search",
+    "text_search",
+    "hybrid_search",
+    "multi_query_search",
+    "query",
+    // AgentMemory (semantic)
+    "semantic_store",
+    "semantic_query",
+    // Knowledge Graph
+    "add_edge",
+    "get_edges",
+    "traverse_graph",
+    "get_node_degree",
+];
+
+/// Test to ensure all registered commands have corresponding permissions
+/// in the [default] section specifically (not just anywhere in the file).
+///
+/// Uses TOML parsing for robust section-specific validation.
 ///
 /// Regression test for: <https://github.com/cyberlife-coder/VelesDB/issues/169>
 #[test]
-fn test_all_commands_have_default_permissions() {
-    // List of all commands registered in lib.rs invoke_handler
-    let registered_commands = [
-        "create_collection",
-        "create_metadata_collection",
-        "delete_collection",
-        "list_collections",
-        "get_collection",
-        "upsert",
-        "upsert_metadata",
-        "get_points",
-        "delete_points", // Issue #169: was missing from default permissions
-        "search",
-        "batch_search",
-        "text_search",
-        "hybrid_search",
-        "multi_query_search",
-        "query",
-        "is_empty",
-        "flush",
-        "semantic_store",
-        "semantic_query",
-        "add_edge",
-        "get_edges",
-        "traverse_graph",
-        "get_node_degree",
-    ];
+fn test_all_commands_have_default_permissions_toml_parsed() {
+    let default_toml_content = include_str!("../permissions/default.toml");
+    let parsed: toml::Value =
+        toml::from_str(default_toml_content).expect("Failed to parse default.toml as valid TOML");
 
-    // Read the default.toml file content
+    let default_section = parsed
+        .get("default")
+        .expect("Missing [default] section in default.toml");
+
+    let permissions = default_section
+        .get("permissions")
+        .expect("Missing 'permissions' array in [default] section")
+        .as_array()
+        .expect("'permissions' should be an array");
+
+    let permission_strings: Vec<&str> = permissions.iter().filter_map(|v| v.as_str()).collect();
+
+    for cmd in REGISTERED_COMMANDS {
+        let expected_permission = format!("allow-{}", cmd.replace('_', "-"));
+        assert!(
+            permission_strings.contains(&expected_permission.as_str()),
+            "Missing permission '{expected_permission}' in [default] section for command '{cmd}'.\n\
+             Add '\"{expected_permission}\"' to the [default] permissions array in default.toml.\n\
+             Note: The permission must be in the [default] section, not just anywhere in the file."
+        );
+    }
+}
+
+/// Test that the number of permissions in [default] matches the number of registered commands.
+/// This catches cases where permissions exist but commands were removed.
+#[test]
+fn test_default_permissions_count_matches_commands() {
+    let default_toml_content = include_str!("../permissions/default.toml");
+    let parsed: toml::Value =
+        toml::from_str(default_toml_content).expect("Failed to parse default.toml as valid TOML");
+
+    let default_section = parsed
+        .get("default")
+        .expect("Missing [default] section in default.toml");
+
+    let permissions = default_section
+        .get("permissions")
+        .expect("Missing 'permissions' array in [default] section")
+        .as_array()
+        .expect("'permissions' should be an array");
+
+    assert_eq!(
+        permissions.len(),
+        REGISTERED_COMMANDS.len(),
+        "Mismatch between number of permissions ({}) and registered commands ({}).\n\
+         This may indicate orphaned permissions or missing command registrations.",
+        permissions.len(),
+        REGISTERED_COMMANDS.len()
+    );
+}
+
+/// Legacy test using simple string contains (kept for backward compatibility).
+/// Prefer test_all_commands_have_default_permissions_toml_parsed for new code.
+#[test]
+fn test_all_commands_have_default_permissions() {
     let default_toml = include_str!("../permissions/default.toml");
 
-    // Verify each command has a corresponding "allow-{command}" permission
-    for cmd in registered_commands {
+    for cmd in REGISTERED_COMMANDS {
         let permission = format!("allow-{}", cmd.replace('_', "-"));
         assert!(
             default_toml.contains(&permission),
@@ -445,4 +522,19 @@ fn test_delete_points_permission_exists() {
         default_toml.contains("allow-delete-points"),
         "Regression: 'allow-delete-points' permission missing from default.toml (Issue #169)"
     );
+}
+
+/// Test that build.rs COMMANDS array matches REGISTERED_COMMANDS.
+/// This ensures the autogeneration process covers all commands.
+#[test]
+fn test_build_rs_commands_match_registered() {
+    let build_rs_content = include_str!("../build.rs");
+
+    for cmd in REGISTERED_COMMANDS {
+        assert!(
+            build_rs_content.contains(&format!("\"{cmd}\"")),
+            "Command '{cmd}' is registered but missing from build.rs COMMANDS array.\n\
+             Add '\"{cmd}\"' to the COMMANDS array in build.rs to generate its permission file."
+        );
+    }
 }

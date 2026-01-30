@@ -2,6 +2,11 @@
 #
 # This file defines the default permission set that applications
 # can use to enable VelesDB functionality.
+#
+# IMPORTANT: This list MUST be kept in sync with:
+# - `src/lib.rs` invoke_handler registration
+# - `build.rs` COMMANDS array
+# - `src/commands_tests.rs` REGISTERED_COMMANDS array
 
 [default]
 description = "Default permissions for VelesDB plugin - allows all database operations"

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-batch-search"
+description = "Enables the batch_search command without any pre-configured scope."
+commands.allow = ["batch_search"]
+
+[[permission]]
+identifier = "deny-batch-search"
+description = "Denies the batch_search command without any pre-configured scope."
+commands.deny = ["batch_search"]

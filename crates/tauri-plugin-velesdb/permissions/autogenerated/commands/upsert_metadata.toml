@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-upsert-metadata"
+description = "Enables the upsert_metadata command without any pre-configured scope."
+commands.allow = ["upsert_metadata"]
+
+[[permission]]
+identifier = "deny-upsert-metadata"
+description = "Denies the upsert_metadata command without any pre-configured scope."
+commands.deny = ["upsert_metadata"]

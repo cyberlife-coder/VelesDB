@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-traverse-graph"
+description = "Enables the traverse_graph command without any pre-configured scope."
+commands.allow = ["traverse_graph"]
+
+[[permission]]
+identifier = "deny-traverse-graph"
+description = "Denies the traverse_graph command without any pre-configured scope."
+commands.deny = ["traverse_graph"]
