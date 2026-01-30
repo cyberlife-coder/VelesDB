@@ -197,3 +197,29 @@ fn test_recall_with_heuristic_selection() {
         );
     }
 }
+
+// =========================================================================
+// Regression test for PR #179: Infinite loop in next_random() when rng_state is 0
+// =========================================================================
+
+#[test]
+fn test_next_random_zero_state_no_infinite_loop() {
+    use std::sync::atomic::Ordering;
+
+    let engine = CpuDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Force rng_state to 0 (edge case that caused infinite loop before fix)
+    hnsw.rng_state.store(0, Ordering::Relaxed);
+
+    // This should NOT hang - if it does, the test times out
+    // The fix ensures CAS compares against original value (0), not the seed
+    hnsw.insert(vec![1.0; 32]);
+
+    // Verify the state was properly updated (no longer 0)
+    let state_after = hnsw.rng_state.load(Ordering::Relaxed);
+    assert_ne!(state_after, 0, "State should be non-zero after insert");
+
+    // Verify the vector was actually inserted
+    assert_eq!(hnsw.len(), 1, "Vector should be inserted");
+}

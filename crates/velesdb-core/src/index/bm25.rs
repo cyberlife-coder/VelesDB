@@ -132,7 +132,7 @@ impl Bm25Index {
     /// for memory efficiency. Use document IDs in the range [0, 4_294_967_295].
     pub fn add_document(&self, id: u64, text: &str) {
         assert!(
-            id <= u64::from(u32::MAX),
+            u32::try_from(id).is_ok(),
             "BM25 document ID {} exceeds u32::MAX ({}). Use IDs in range [0, {}]",
             id,
             u32::MAX,
@@ -163,11 +163,6 @@ impl Bm25Index {
 
         // Update inverted index with adaptive PostingList
         // PostingList auto-promotes to Roaring when cardinality exceeds threshold
-<<<<<<< HEAD
-        // Safety: id is validated above to be <= u32::MAX
-        #[allow(clippy::cast_possible_truncation)]
-        let id_u32 = id as u32;
-=======
         // SAFETY: BM25 uses Roaring bitmaps which require u32 IDs. IDs > u32::MAX are
         // truncated to lower 32 bits. This is acceptable because:
         // 1. BM25 is designed for text search where 4B documents is sufficient
@@ -178,14 +173,13 @@ impl Bm25Index {
         let id_u32 = u32::try_from(id).unwrap_or_else(|_| {
             // Log warning in debug builds for IDs that exceed u32::MAX
             debug_assert!(
-                id <= u64::from(u32::MAX),
+                u32::try_from(id).is_ok(),
                 "BM25: Document ID {} exceeds u32::MAX, truncating to {}",
                 id,
                 id as u32
             );
             id as u32
         });
->>>>>>> 3b8fc46 (fix(core): add SAFETY comments to cast operations in critical files (#176))
         {
             let mut inv_idx = self.inverted_index.write();
             for term in doc.term_freqs.keys() {
@@ -232,7 +226,7 @@ impl Bm25Index {
     /// Panics if `id` exceeds `u32::MAX`.
     pub fn remove_document(&self, id: u64) -> bool {
         assert!(
-            id <= u64::from(u32::MAX),
+            u32::try_from(id).is_ok(),
             "BM25 document ID {} exceeds u32::MAX ({})",
             id,
             u32::MAX

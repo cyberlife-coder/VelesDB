@@ -391,19 +391,19 @@ fn test_query_response_empty_results() {
 // Permission Regression Tests (Issue #169)
 // ============================================================================
 
-/// Canonical list of all commands registered in lib.rs invoke_handler.
+/// Canonical list of all commands registered in `lib.rs` `invoke_handler`.
 ///
 /// IMPORTANT: This list MUST be kept in sync with:
-/// - `src/lib.rs` invoke_handler registration
+/// - `src/lib.rs` `invoke_handler` registration
 /// - `build.rs` COMMANDS array
 /// - `permissions/default.toml` [default] permissions
 ///
 /// When adding a new command:
-/// 1. Add the command function to commands.rs or commands_graph.rs
-/// 2. Register it in lib.rs invoke_handler
+/// 1. Add the command function to `commands.rs` or `commands_graph.rs`
+/// 2. Register it in `lib.rs` `invoke_handler`
 /// 3. Add it to build.rs COMMANDS array (triggers permission file generation)
 /// 4. Add "allow-{command-name}" to default.toml [default] section
-/// 5. Add it to this REGISTERED_COMMANDS array
+/// 5. Add it to this `REGISTERED_COMMANDS` array
 const REGISTERED_COMMANDS: &[&str] = &[
     // Collection management
     "create_collection",
@@ -499,7 +499,7 @@ fn test_default_permissions_count_matches_commands() {
 }
 
 /// Legacy test using simple string contains (kept for backward compatibility).
-/// Prefer test_all_commands_have_default_permissions_toml_parsed for new code.
+/// Prefer `test_all_commands_have_default_permissions_toml_parsed` for new code.
 #[test]
 fn test_all_commands_have_default_permissions() {
     let default_toml = include_str!("../permissions/default.toml");
@@ -524,7 +524,7 @@ fn test_delete_points_permission_exists() {
     );
 }
 
-/// Test that build.rs COMMANDS array matches REGISTERED_COMMANDS.
+/// Test that `build.rs` COMMANDS array matches `REGISTERED_COMMANDS`.
 /// This ensures the autogeneration process covers all commands.
 #[test]
 fn test_build_rs_commands_match_registered() {

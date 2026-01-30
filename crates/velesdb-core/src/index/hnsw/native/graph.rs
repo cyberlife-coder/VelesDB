@@ -344,28 +344,31 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// This prevents race conditions where two threads could read the same state
     /// and generate identical random values. Used by both `random_layer()` and
     /// `search_multi_entry()` for consistent thread-safe random number generation.
+    /// Handles edge case where xorshift would produce 0 (would lead to -ln(0)).
     fn next_random(&self) -> u64 {
         loop {
-            let state = self.rng_state.load(Ordering::Relaxed);
-            let mut next = if state == 0 {
+            let original_state = self.rng_state.load(Ordering::Relaxed);
+
+            // Handle edge case: reset to non-zero seed if state is 0
+            let mut next = if original_state == 0 {
                 0x853c_49e6_748f_ea9b // Golden ratio-based seed
             } else {
-                state
+                original_state
             };
+
             next ^= next << 13;
             next ^= next >> 7;
             next ^= next << 17;
 
             // Atomic compare-and-swap ensures only one thread updates the state
-            match self.rng_state.compare_exchange_weak(
-                state,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return next,
-                Err(_) => continue, // Another thread updated, retry
+            if self
+                .rng_state
+                .compare_exchange_weak(original_state, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return next;
             }
+            // Another thread updated, retry
         }
     }
 
