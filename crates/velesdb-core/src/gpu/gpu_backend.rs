@@ -160,6 +160,9 @@ impl GpuAccelerator {
         query: &[f32],
         dimension: usize,
     ) -> Vec<f32> {
+        if dimension == 0 || vectors.is_empty() {
+            return Vec::new();
+        }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
             return Vec::new();
@@ -355,6 +358,9 @@ impl GpuAccelerator {
         query: &[f32],
         dimension: usize,
     ) -> Vec<f32> {
+        if dimension == 0 || vectors.is_empty() {
+            return Vec::new();
+        }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
             return Vec::new();
@@ -389,6 +395,9 @@ impl GpuAccelerator {
     /// Vector of dot products, one per input vector.
     #[must_use]
     pub fn batch_dot_product(&self, vectors: &[f32], query: &[f32], dimension: usize) -> Vec<f32> {
+        if dimension == 0 || vectors.is_empty() {
+            return Vec::new();
+        }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
             return Vec::new();
