@@ -148,10 +148,19 @@ impl BinaryQuantizedVector {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(4 + self.data.len());
-        // SAFETY: Vector dimensions are validated at collection creation to be < 65536,
-        // which fits in u32 (max 4,294,967,295)
-        #[allow(clippy::cast_possible_truncation)]
-        bytes.extend_from_slice(&(self.dimension as u32).to_le_bytes());
+        // SAFETY: Vector dimensions are validated at collection creation to be < 65536.
+        // We use try_from to verify this invariant at runtime and panic in debug builds
+        // if the invariant is violated, indicating a bug in the validation logic.
+        let dim_u32 = u32::try_from(self.dimension).unwrap_or_else(|_| {
+            debug_assert!(
+                self.dimension <= u32::MAX as usize,
+                "BinaryQuantizedVector: dimension {} exceeds u32::MAX",
+                self.dimension
+            );
+            // In release builds, saturate to u32::MAX (should never happen with proper validation)
+            u32::MAX
+        });
+        bytes.extend_from_slice(&dim_u32.to_le_bytes());
         bytes.extend_from_slice(&self.data);
         bytes
     }

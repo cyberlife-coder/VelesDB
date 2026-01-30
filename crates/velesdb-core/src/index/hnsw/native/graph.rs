@@ -356,14 +356,25 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     fn random_layer(&self) -> usize {
         // Simple xorshift64 PRNG for layer selection
         let mut state = self.rng_state.load(Ordering::Relaxed);
+
+        // Handle edge case: xorshift64 produces 0 if state is 0, which would cause
+        // -ln(0) = infinity. Reset to a non-zero seed if state becomes 0.
+        if state == 0 {
+            state = 0x853c_49e6_748f_ea9b; // Golden ratio-based seed
+        }
+
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
         self.rng_state.store(state, Ordering::Relaxed);
 
-        // Convert to uniform [0, 1) and apply exponential distribution
+        // Convert to uniform (0, 1) and apply exponential distribution
+        // Note: state is guaranteed non-zero after xorshift, so uniform > 0
         let uniform = (state as f64) / (u64::MAX as f64);
-        let level = (-uniform.ln() * self.level_mult).floor() as usize;
+
+        // Additional safety: clamp uniform to avoid -ln(0) = infinity
+        let uniform_safe = uniform.max(f64::MIN_POSITIVE);
+        let level = (-uniform_safe.ln() * self.level_mult).floor() as usize;
         level.min(15) // Cap at 16 layers
     }
 
