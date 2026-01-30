@@ -6,15 +6,34 @@
 [default]
 description = "Default permissions for VelesDB plugin - allows all database operations"
 permissions = [
+    # Collection management
     "allow-create-collection",
+    "allow-create-metadata-collection",
     "allow-delete-collection",
     "allow-list-collections",
     "allow-get-collection",
+    "allow-is-empty",
+    "allow-flush",
+    # Point operations
     "allow-upsert",
+    "allow-upsert-metadata",
+    "allow-get-points",
+    "allow-delete-points",
+    # Search operations
     "allow-search",
+    "allow-batch-search",
     "allow-text-search",
     "allow-hybrid-search",
+    "allow-multi-query-search",
     "allow-query",
+    # AgentMemory (semantic)
+    "allow-semantic-store",
+    "allow-semantic-query",
+    # Knowledge Graph
+    "allow-add-edge",
+    "allow-get-edges",
+    "allow-traverse-graph",
+    "allow-get-node-degree",
 ]
 
 # Read-only permission set
@@ -23,10 +42,18 @@ description = "Read-only permissions - search and list operations only"
 permissions = [
     "allow-list-collections",
     "allow-get-collection",
+    "allow-is-empty",
+    "allow-get-points",
     "allow-search",
+    "allow-batch-search",
     "allow-text-search",
     "allow-hybrid-search",
+    "allow-multi-query-search",
     "allow-query",
+    "allow-semantic-query",
+    "allow-get-edges",
+    "allow-traverse-graph",
+    "allow-get-node-degree",
 ]
 
 # Search-only permission set
