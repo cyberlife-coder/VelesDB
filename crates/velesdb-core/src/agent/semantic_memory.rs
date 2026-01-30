@@ -184,6 +184,7 @@ impl<'a> SemanticMemory<'a> {
 
         {
             let mut ids = self.stored_ids.write();
+            ids.clear();
             for point in &points {
                 ids.insert(point.id);
             }

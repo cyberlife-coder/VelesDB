@@ -258,6 +258,7 @@ impl<'a> EpisodicMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
+        self.temporal_index.clear();
         for point in &points {
             if let Some(payload) = &point.payload {
                 if let Some(ts) = payload.get("timestamp").and_then(|v| v.as_i64()) {

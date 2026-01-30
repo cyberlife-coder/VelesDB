@@ -390,6 +390,7 @@ impl<'a> ProceduralMemory<'a> {
 
         {
             let mut ids = self.stored_ids.write();
+            ids.clear();
             for point in &points {
                 ids.insert(point.id);
             }
