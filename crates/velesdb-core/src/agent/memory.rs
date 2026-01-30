@@ -205,7 +205,14 @@ impl<'a> AgentMemory<'a> {
 
         // Fallback: use random-ish ID based on current time + counter
         let fallback_id = base_id ^ 0xDEAD_BEEF_CAFE_BABE;
-        Ok(fallback_id)
+        if !self.semantic.exists(fallback_id)? {
+            return Ok(fallback_id);
+        }
+
+        // If even the fallback collides, return an error
+        Err(AgentMemoryError::CollectionError(
+            "Unable to generate unique semantic ID after exhausting all candidates".to_string(),
+        ))
     }
 }
 
