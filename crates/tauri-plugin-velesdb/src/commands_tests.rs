@@ -385,3 +385,64 @@ fn test_query_response_empty_results() {
     assert!(json.contains("\"results\":[]"));
     assert!(json.contains("\"timingMs\":0.1"));
 }
+
+// ============================================================================
+// Permission Regression Tests (Issue #169)
+// ============================================================================
+
+/// Test to ensure all registered commands have corresponding permissions.
+/// This prevents the "Command not found" error when permissions are missing.
+///
+/// Regression test for: <https://github.com/cyberlife-coder/VelesDB/issues/169>
+#[test]
+fn test_all_commands_have_default_permissions() {
+    // List of all commands registered in lib.rs invoke_handler
+    let registered_commands = [
+        "create_collection",
+        "create_metadata_collection",
+        "delete_collection",
+        "list_collections",
+        "get_collection",
+        "upsert",
+        "upsert_metadata",
+        "get_points",
+        "delete_points", // Issue #169: was missing from default permissions
+        "search",
+        "batch_search",
+        "text_search",
+        "hybrid_search",
+        "multi_query_search",
+        "query",
+        "is_empty",
+        "flush",
+        "semantic_store",
+        "semantic_query",
+        "add_edge",
+        "get_edges",
+        "traverse_graph",
+        "get_node_degree",
+    ];
+
+    // Read the default.toml file content
+    let default_toml = include_str!("../permissions/default.toml");
+
+    // Verify each command has a corresponding "allow-{command}" permission
+    for cmd in registered_commands {
+        let permission = format!("allow-{}", cmd.replace('_', "-"));
+        assert!(
+            default_toml.contains(&permission),
+            "Missing permission '{permission}' in default.toml for command '{cmd}'.\n\
+             Add '\"{permission}\"' to the [default] permissions array."
+        );
+    }
+}
+
+/// Test that `delete_points` permission is specifically included (regression for #169)
+#[test]
+fn test_delete_points_permission_exists() {
+    let default_toml = include_str!("../permissions/default.toml");
+    assert!(
+        default_toml.contains("allow-delete-points"),
+        "Regression: 'allow-delete-points' permission missing from default.toml (Issue #169)"
+    );
+}
