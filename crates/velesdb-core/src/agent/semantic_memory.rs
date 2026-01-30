@@ -34,6 +34,8 @@ impl<'a> SemanticMemory<'a> {
     ) -> Result<Self, AgentMemoryError> {
         let collection_name = Self::COLLECTION_NAME.to_string();
 
+        let stored_ids = RwLock::new(HashSet::new());
+
         let actual_dimension = if let Some(collection) = db.get_collection(&collection_name) {
             let existing_dim = collection.config().dimension;
             if existing_dim != dimension {
@@ -42,6 +44,14 @@ impl<'a> SemanticMemory<'a> {
                     actual: dimension,
                 });
             }
+
+            let all_ids = collection.all_ids();
+            let mut ids = stored_ids.write();
+            for id in all_ids {
+                ids.insert(id);
+            }
+            drop(ids);
+
             existing_dim
         } else {
             db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
@@ -53,7 +63,7 @@ impl<'a> SemanticMemory<'a> {
             db,
             dimension: actual_dimension,
             ttl,
-            stored_ids: RwLock::new(HashSet::new()),
+            stored_ids,
         })
     }
 

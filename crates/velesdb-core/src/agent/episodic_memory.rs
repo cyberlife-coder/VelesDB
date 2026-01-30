@@ -48,6 +48,11 @@ impl<'a> EpisodicMemory<'a> {
                     actual: dimension,
                 });
             }
+
+            if temporal_index.len() == 0 {
+                Self::rebuild_temporal_index(&collection, &temporal_index);
+            }
+
             existing_dim
         } else {
             db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
@@ -61,6 +66,18 @@ impl<'a> EpisodicMemory<'a> {
             ttl,
             temporal_index,
         })
+    }
+
+    fn rebuild_temporal_index(collection: &crate::Collection, temporal_index: &TemporalIndex) {
+        let all_ids = collection.all_ids();
+        let points = collection.get(&all_ids);
+        for point in points.into_iter().flatten() {
+            if let Some(payload) = &point.payload {
+                if let Some(ts) = payload.get("timestamp").and_then(|v| v.as_i64()) {
+                    temporal_index.insert(point.id, ts);
+                }
+            }
+        }
     }
 
     #[must_use]
@@ -132,22 +149,39 @@ impl<'a> EpisodicMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let recent_entries = self.temporal_index.recent(limit, since_timestamp);
-        let recent_ids: Vec<u64> = recent_entries.iter().map(|e| e.id).collect();
+        let mut events = Vec::with_capacity(limit);
+        let mut fetch_limit = limit * 2;
+        let max_fetch = self.temporal_index.len().max(limit);
 
-        let points = collection.get(&recent_ids);
+        while events.len() < limit && fetch_limit <= max_fetch * 2 {
+            let recent_entries = self.temporal_index.recent(fetch_limit, since_timestamp);
+            let recent_ids: Vec<u64> = recent_entries.iter().map(|e| e.id).collect();
 
-        let events: Vec<(u64, String, i64)> = points
-            .into_iter()
-            .flatten()
-            .filter(|p| !self.ttl.is_expired(p.id))
-            .filter_map(|p| {
-                let payload = p.payload.as_ref()?;
-                let desc = payload.get("description")?.as_str()?.to_string();
-                let ts = payload.get("timestamp")?.as_i64()?;
-                Some((p.id, desc, ts))
-            })
-            .collect();
+            if recent_ids.is_empty() {
+                break;
+            }
+
+            let points = collection.get(&recent_ids);
+
+            events = points
+                .into_iter()
+                .flatten()
+                .filter(|p| !self.ttl.is_expired(p.id))
+                .filter_map(|p| {
+                    let payload = p.payload.as_ref()?;
+                    let desc = payload.get("description")?.as_str()?.to_string();
+                    let ts = payload.get("timestamp")?.as_i64()?;
+                    Some((p.id, desc, ts))
+                })
+                .take(limit)
+                .collect();
+
+            if events.len() >= limit || recent_ids.len() < fetch_limit {
+                break;
+            }
+
+            fetch_limit *= 2;
+        }
 
         Ok(events)
     }
@@ -162,22 +196,39 @@ impl<'a> EpisodicMemory<'a> {
             .get_collection(&self.collection_name)
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
-        let old_entries = self.temporal_index.older_than(timestamp, limit);
-        let old_ids: Vec<u64> = old_entries.iter().map(|e| e.id).collect();
+        let mut events = Vec::with_capacity(limit);
+        let mut fetch_limit = limit * 2;
+        let max_fetch = self.temporal_index.len().max(limit);
 
-        let points = collection.get(&old_ids);
+        while events.len() < limit && fetch_limit <= max_fetch * 2 {
+            let old_entries = self.temporal_index.older_than(timestamp, fetch_limit);
+            let old_ids: Vec<u64> = old_entries.iter().map(|e| e.id).collect();
 
-        let events: Vec<(u64, String, i64)> = points
-            .into_iter()
-            .flatten()
-            .filter(|p| !self.ttl.is_expired(p.id))
-            .filter_map(|p| {
-                let payload = p.payload.as_ref()?;
-                let desc = payload.get("description")?.as_str()?.to_string();
-                let ts = payload.get("timestamp")?.as_i64()?;
-                Some((p.id, desc, ts))
-            })
-            .collect();
+            if old_ids.is_empty() {
+                break;
+            }
+
+            let points = collection.get(&old_ids);
+
+            events = points
+                .into_iter()
+                .flatten()
+                .filter(|p| !self.ttl.is_expired(p.id))
+                .filter_map(|p| {
+                    let payload = p.payload.as_ref()?;
+                    let desc = payload.get("description")?.as_str()?.to_string();
+                    let ts = payload.get("timestamp")?.as_i64()?;
+                    Some((p.id, desc, ts))
+                })
+                .take(limit)
+                .collect();
+
+            if events.len() >= limit || old_ids.len() < fetch_limit {
+                break;
+            }
+
+            fetch_limit *= 2;
+        }
 
         Ok(events)
     }
