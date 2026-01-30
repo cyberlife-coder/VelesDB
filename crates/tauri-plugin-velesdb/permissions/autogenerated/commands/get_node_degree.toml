@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-get-node-degree"
+description = "Enables the get_node_degree command without any pre-configured scope."
+commands.allow = ["get_node_degree"]
+
+[[permission]]
+identifier = "deny-get-node-degree"
+description = "Denies the get_node_degree command without any pre-configured scope."
+commands.deny = ["get_node_degree"]

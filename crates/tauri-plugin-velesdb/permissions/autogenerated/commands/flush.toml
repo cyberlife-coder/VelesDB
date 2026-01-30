@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-flush"
+description = "Enables the flush command without any pre-configured scope."
+commands.allow = ["flush"]
+
+[[permission]]
+identifier = "deny-flush"
+description = "Denies the flush command without any pre-configured scope."
+commands.deny = ["flush"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-multi-query-search"
+description = "Enables the multi_query_search command without any pre-configured scope."
+commands.allow = ["multi_query_search"]
+
+[[permission]]
+identifier = "deny-multi-query-search"
+description = "Denies the multi_query_search command without any pre-configured scope."
+commands.deny = ["multi_query_search"]
