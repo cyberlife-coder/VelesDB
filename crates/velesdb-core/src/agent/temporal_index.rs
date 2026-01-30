@@ -191,8 +191,10 @@ impl TemporalIndex {
 
     /// Clears all entries from the index.
     pub fn clear(&self) {
-        self.by_timestamp.write().clear();
-        self.id_to_timestamp.write().clear();
+        let mut id_to_ts = self.id_to_timestamp.write();
+        let mut by_ts = self.by_timestamp.write();
+        by_ts.clear();
+        id_to_ts.clear();
     }
 
     /// Returns all IDs in the index.
