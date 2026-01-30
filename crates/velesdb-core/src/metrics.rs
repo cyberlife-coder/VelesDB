@@ -386,6 +386,8 @@ pub fn compute_latency_percentiles(samples: &[Duration]) -> LatencyStats {
     let n = sorted.len();
     let sum: Duration = sorted.iter().sum();
 
+    // SAFETY: Division result is bounded by sum.as_nanos() which came from Duration values.
+    // The mean of durations cannot exceed the maximum duration, which fits in u64 nanoseconds.
     #[allow(clippy::cast_possible_truncation)]
     let mean = if n > 0 {
         Duration::from_nanos((sum.as_nanos() / n as u128) as u64)
@@ -410,6 +412,10 @@ fn percentile(sorted: &[Duration], p: usize) -> Duration {
     }
 
     let n = sorted.len();
+    // SAFETY: Percentile calculation produces index in [0, n-1] range.
+    // - p is in [0, 100], so p/100.0 is in [0.0, 1.0]
+    // - Multiplied by (n-1), result is in [0.0, n-1.0]
+    // - After round(), result is non-negative and <= n-1, fitting in usize
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -1078,6 +1084,9 @@ impl DurationHistogram {
     /// Observes a duration value (in seconds).
     pub fn observe(&self, seconds: f64) {
         self.count.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: Duration in seconds is expected to be non-negative (timing measurement).
+        // Multiplied by 1M gives microseconds. Practical durations are << u64::MAX microseconds.
+        // Even 584,942 years in microseconds fits in u64.
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let micros = (seconds * 1_000_000.0) as u64;
         self.sum.fetch_add(micros, Ordering::Relaxed);

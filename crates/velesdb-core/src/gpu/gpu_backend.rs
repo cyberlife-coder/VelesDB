@@ -193,8 +193,27 @@ impl GpuAccelerator {
         });
 
         // Params: [dimension, num_vectors]
-        #[allow(clippy::cast_possible_truncation)]
-        let params = [dimension as u32, num_vectors as u32];
+        // SAFETY: Vector dimensions are validated at collection creation to be < 65536.
+        // num_vectors is bounded by GPU buffer size limits. We use try_from to verify
+        // these invariants at runtime and saturate to u32::MAX if exceeded (which would
+        // indicate a bug in the caller or an extremely large batch).
+        let dim_u32 = u32::try_from(dimension).unwrap_or_else(|_| {
+            debug_assert!(
+                dimension <= u32::MAX as usize,
+                "GPU: dimension {} exceeds u32::MAX",
+                dimension
+            );
+            u32::MAX
+        });
+        let num_vec_u32 = u32::try_from(num_vectors).unwrap_or_else(|_| {
+            debug_assert!(
+                num_vectors <= u32::MAX as usize,
+                "GPU: num_vectors {} exceeds u32::MAX",
+                num_vectors
+            );
+            u32::MAX
+        });
+        let params = [dim_u32, num_vec_u32];
         let params_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -243,6 +262,8 @@ impl GpuAccelerator {
             compute_pass.set_pipeline(&self.cosine_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
+            // SAFETY: num_vectors is bounded by GPU buffer limits. div_ceil(256) reduces
+            // the value further. Even 4B vectors / 256 = 16M workgroups, fitting in u32.
             #[allow(clippy::cast_possible_truncation)]
             let workgroups = num_vectors.div_ceil(256) as u32;
             compute_pass.dispatch_workgroups(workgroups, 1, 1);

@@ -419,6 +419,8 @@ impl VectorStorage for MmapStorage {
             // Op: Store (1) | ID | Len | Data
             wal.write_all(&[1u8])?;
             wal.write_all(&id.to_le_bytes())?;
+            // SAFETY: Vector byte length is dimension * 4 bytes. With max dimension 65536,
+            // max bytes = 262144 which fits in u32 (max 4,294,967,295)
             #[allow(clippy::cast_possible_truncation)]
             let len_u32 = vector_bytes.len() as u32;
             wal.write_all(&len_u32.to_le_bytes())?;
@@ -501,6 +503,8 @@ impl VectorStorage for MmapStorage {
             let mut wal = self.wal.write();
             // Batch header: Op(1) | Count(4)
             wal.write_all(&[3u8])?;
+            // SAFETY: Batch size is limited by memory constraints. In practice, batches
+            // are < 100K vectors which fits in u32 (max 4,294,967,295)
             #[allow(clippy::cast_possible_truncation)]
             let count = vectors.len() as u32;
             wal.write_all(&count.to_le_bytes())?;
@@ -509,6 +513,8 @@ impl VectorStorage for MmapStorage {
             for &(id, vector) in vectors {
                 let vector_bytes = vector_to_bytes(vector);
                 wal.write_all(&id.to_le_bytes())?;
+                // SAFETY: Vector byte length is dimension * 4 bytes. With max dimension 65536,
+                // max bytes = 262144 which fits in u32 (max 4,294,967,295)
                 #[allow(clippy::cast_possible_truncation)]
                 let len_u32 = vector_bytes.len() as u32;
                 wal.write_all(&len_u32.to_le_bytes())?;

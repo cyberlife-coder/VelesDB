@@ -346,6 +346,9 @@ fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
 
 fn hamming_scalar(a: &[f32], b: &[f32]) -> u32 {
     assert_eq!(a.len(), b.len(), "Vector length mismatch");
+    // SAFETY: Hamming distance counts differing bits, bounded by vector length.
+    // Vector dimensions are validated at collection creation to be < 65536,
+    // which fits in u32 (max 4,294,967,295).
     #[allow(clippy::cast_possible_truncation)]
     let count = a
         .iter()
@@ -356,9 +359,10 @@ fn hamming_scalar(a: &[f32], b: &[f32]) -> u32 {
 }
 
 #[cfg(target_arch = "x86_64")]
+// SAFETY: Hamming distance is always a non-negative count of differing bits.
+// The result is bounded by vector length which is < 65536, fitting in u32.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn hamming_popcnt(a: &[f32], b: &[f32]) -> u32 {
-    // Use existing implementation - safe cast as hamming distance is always positive integer
     crate::simd_explicit::hamming_distance_simd(a, b) as u32
 }
 
