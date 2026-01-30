@@ -269,11 +269,12 @@ impl<'a> AgentMemory<'a> {
         let old_events = self.episodic.older_than(cutoff_timestamp, 1000)?;
         let mut consolidated = 0;
 
-        for (id, description, _timestamp) in old_events {
-            let embedding = vec![0.0f32; self.semantic.dimension()];
-            self.semantic.store(id, &description, &embedding)?;
-            self.episodic.delete(id)?;
-            consolidated += 1;
+        for (id, _description, _timestamp) in old_events {
+            if let Some((description, _ts, embedding)) = self.episodic.get_with_embedding(id)? {
+                self.semantic.store(id, &description, &embedding)?;
+                self.episodic.delete(id)?;
+                consolidated += 1;
+            }
         }
 
         Ok(consolidated)

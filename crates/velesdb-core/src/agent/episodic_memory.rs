@@ -215,6 +215,43 @@ impl<'a> EpisodicMemory<'a> {
             .collect())
     }
 
+    pub fn get_with_embedding(
+        &self,
+        id: u64,
+    ) -> Result<Option<(String, i64, Vec<f32>)>, AgentMemoryError> {
+        let collection = self
+            .db
+            .get_collection(&self.collection_name)
+            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+
+        let points = collection.get(&[id]);
+        let point = match points.into_iter().flatten().next() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        if self.ttl.is_expired(point.id) {
+            return Ok(None);
+        }
+
+        let payload = match point.payload.as_ref() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let desc = payload
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ts = payload
+            .get("timestamp")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        Ok(Some((desc, ts, point.vector.clone())))
+    }
+
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
