@@ -60,8 +60,10 @@ serde-wasm-bindgen = "0.6"
 
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt with size optimization (EPIC-053/US-006)
-# --enable-bulk-memory required for Rust's memory.copy/fill operations
-wasm-opt = ["-Os", "--enable-simd", "--enable-bulk-memory"]
+# Required features for Rust-generated WASM:
+# - bulk-memory: memory.copy/fill operations
+# - nontrapping-float-to-int: i32.trunc_sat_f32_u etc.
+wasm-opt = ["-Os", "--enable-simd", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 
 [package.metadata.wasm-pack.profile.profiling]
 wasm-opt = false
