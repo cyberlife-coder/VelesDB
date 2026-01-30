@@ -195,7 +195,8 @@ impl Default for AdaptiveLearningRate {
 impl AdaptiveLearningRate {
     /// Calculates the learning rate multiplier based on usage count.
     fn rate_multiplier(&self, usage_count: u64) -> f32 {
-        let decay = 0.5_f32.powf(usage_count as f32 / self.half_life_usage as f32);
+        let half_life = self.half_life_usage.max(1);
+        let decay = 0.5_f32.powf(usage_count as f32 / half_life as f32);
         decay.max(self.min_rate_multiplier)
     }
 }
@@ -259,7 +260,8 @@ impl TemporalDecay {
 
     /// Calculates the decay factor based on time since last use.
     fn decay_factor(&self, time_since_last_use: u64) -> f32 {
-        let decay = 0.5_f32.powf(time_since_last_use as f32 / self.decay_half_life as f32);
+        let half_life = self.decay_half_life.max(1);
+        let decay = 0.5_f32.powf(time_since_last_use as f32 / half_life as f32);
         (1.0 - decay).min(self.max_decay_per_update)
     }
 }
