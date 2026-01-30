@@ -260,6 +260,8 @@ impl<'a> AgentMemory<'a> {
 
         if let Some(ttl) = MemoryTtl::deserialize(&state.ttl) {
             self.ttl.replace_from(&ttl);
+        } else {
+            self.ttl.clear();
         }
 
         Ok(())
