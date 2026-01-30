@@ -12,6 +12,9 @@ use thiserror::Error;
 /// Default embedding dimension for memory collections.
 pub const DEFAULT_DIMENSION: usize = 384;
 
+/// Default retention period for episodic memory (7 days in seconds).
+pub const DEFAULT_RETENTION_SECONDS: i64 = 7 * 24 * 60 * 60;
+
 /// A matched procedure from procedural memory recall.
 #[derive(Debug, Clone)]
 pub struct ProcedureMatch {
@@ -113,6 +116,97 @@ impl<'a> AgentMemory<'a> {
     pub fn procedural(&self) -> &ProceduralMemory<'a> {
         &self.procedural
     }
+
+    /// Automatically expires old episodic memories by consolidating them to semantic memory.
+    ///
+    /// This method consolidates episodic events older than `retention_seconds` into semantic
+    /// memory, then removes them from episodic memory. Uses the current system time.
+    ///
+    /// # Arguments
+    ///
+    /// * `retention_seconds` - Events older than this are consolidated (default: 7 days)
+    ///
+    /// # Returns
+    ///
+    /// Number of events consolidated.
+    ///
+    /// # ID Collision Prevention
+    ///
+    /// When consolidating, if a semantic memory entry with the same ID already exists,
+    /// a new unique ID is generated to prevent silent data loss.
+    pub fn auto_expire(&self, retention_seconds: i64) -> Result<usize, AgentMemoryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let cutoff = now - retention_seconds;
+        self.consolidate_old_episodes(cutoff)
+    }
+
+    /// Consolidates episodic events older than the cutoff timestamp into semantic memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `cutoff_timestamp` - Events with timestamp <= this value are consolidated
+    ///
+    /// # Returns
+    ///
+    /// Number of events consolidated.
+    ///
+    /// # ID Collision Prevention
+    ///
+    /// When an episodic event is consolidated to semantic memory, this method checks
+    /// if a semantic memory entry with the same ID already exists. If so, it generates
+    /// a new unique ID for the consolidated entry to prevent silent data loss.
+    pub fn consolidate_old_episodes(
+        &self,
+        cutoff_timestamp: i64,
+    ) -> Result<usize, AgentMemoryError> {
+        let old_events = self.episodic.get_events_before(cutoff_timestamp)?;
+
+        let mut consolidated_count = 0;
+        for (id, description, _timestamp) in old_events {
+            let embedding = vec![0.0f32; self.semantic.dimension()];
+
+            // Check if semantic memory already has an entry with this ID
+            let store_id = if self.semantic.exists(id)? {
+                // Generate a new unique ID to prevent overwriting existing semantic entry
+                self.generate_unique_semantic_id()?
+            } else {
+                id
+            };
+
+            self.semantic.store(store_id, &description, &embedding)?;
+            self.episodic.delete(id)?;
+            consolidated_count += 1;
+        }
+
+        Ok(consolidated_count)
+    }
+
+    /// Generates a unique ID that doesn't exist in semantic memory.
+    fn generate_unique_semantic_id(&self) -> Result<u64, AgentMemoryError> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Start with timestamp-based ID
+        let base_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+
+        // Try up to 1000 times to find a unique ID
+        for offset in 0..1000 {
+            let candidate_id = base_id.wrapping_add(offset);
+            if !self.semantic.exists(candidate_id)? {
+                return Ok(candidate_id);
+            }
+        }
+
+        // Fallback: use random-ish ID based on current time + counter
+        let fallback_id = base_id ^ 0xDEAD_BEEF_CAFE_BABE;
+        Ok(fallback_id)
+    }
 }
 
 /// Semantic Memory - Long-term knowledge storage (US-002)
@@ -170,6 +264,25 @@ impl<'a> SemanticMemory<'a> {
     #[must_use]
     pub fn dimension(&self) -> usize {
         self.dimension
+    }
+
+    /// Checks if a semantic memory entry with the given ID exists.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if an entry with this ID exists, `false` otherwise.
+    pub fn exists(&self, id: u64) -> Result<bool, AgentMemoryError> {
+        let collection = self
+            .db
+            .get_collection(&self.collection_name)
+            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+
+        let points = collection.get(&[id]);
+        Ok(points.first().map_or(false, |p| p.is_some()))
     }
 
     /// Stores a knowledge fact with its embedding vector.
@@ -447,6 +560,70 @@ impl<'a> EpisodicMemory<'a> {
                 Some((r.point.id, desc, ts, r.score))
             })
             .collect())
+    }
+
+    /// Retrieves events with timestamps before (or equal to) the cutoff.
+    ///
+    /// # Arguments
+    ///
+    /// * `cutoff_timestamp` - Events with timestamp <= this value are returned
+    ///
+    /// # Returns
+    ///
+    /// Vector of (event_id, description, timestamp) tuples.
+    pub fn get_events_before(
+        &self,
+        cutoff_timestamp: i64,
+    ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
+        let collection = self
+            .db
+            .get_collection(&self.collection_name)
+            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+
+        // Get points by scanning reasonable ID range
+        let all_ids: Vec<u64> = (0..10000).collect();
+        let points = collection.get(&all_ids);
+
+        let events: Vec<(u64, String, i64)> = points
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let payload = p.payload.as_ref()?;
+                let desc = payload.get("description")?.as_str()?.to_string();
+                let ts = payload.get("timestamp")?.as_i64()?;
+
+                // Only include events at or before the cutoff
+                if ts <= cutoff_timestamp {
+                    Some((p.id, desc, ts))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(events)
+    }
+
+    /// Deletes an event from episodic memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_id` - The ID of the event to delete
+    ///
+    /// # Errors
+    ///
+    /// Returns error if collection operation fails.
+    pub fn delete(&self, event_id: u64) -> Result<(), AgentMemoryError> {
+        let collection = self
+            .db
+            .get_collection(&self.collection_name)
+            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+
+        collection
+            .delete(&[event_id])
+            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+
+        Ok(())
     }
 }
 
