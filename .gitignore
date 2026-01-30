@@ -21,6 +21,8 @@ AGENTS.md
 .todo/
 .progress/
 .internal/
+.opencode/
+#prd/
 progress.md
 TODO.md
 NOTES.md
