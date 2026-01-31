@@ -5,14 +5,28 @@ Default permissions for VelesDB plugin - allows all database operations
 #### This default permission set includes the following:
 
 - `allow-create-collection`
+- `allow-create-metadata-collection`
 - `allow-delete-collection`
 - `allow-list-collections`
 - `allow-get-collection`
+- `allow-is-empty`
+- `allow-flush`
 - `allow-upsert`
+- `allow-upsert-metadata`
+- `allow-get-points`
+- `allow-delete-points`
 - `allow-search`
+- `allow-batch-search`
 - `allow-text-search`
 - `allow-hybrid-search`
+- `allow-multi-query-search`
 - `allow-query`
+- `allow-semantic-store`
+- `allow-semantic-query`
+- `allow-add-edge`
+- `allow-get-edges`
+- `allow-traverse-graph`
+- `allow-get-node-degree`
 
 ## Permission Table
 
