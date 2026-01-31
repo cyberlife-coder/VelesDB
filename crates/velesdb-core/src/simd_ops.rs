@@ -936,16 +936,22 @@ mod tests {
 
         // Distance should be -32.0 (negation), not 1.0 - 32.0 = -31.0
         let dist = distance(DistanceMetric::DotProduct, &a, &b);
-        assert!((dist - (-32.0)).abs() < 1e-5, 
-            "DotProduct distance should be -dot_product = -32.0, got {}", dist);
+        assert!(
+            (dist - (-32.0)).abs() < 1e-5,
+            "DotProduct distance should be -dot_product = -32.0, got {}",
+            dist
+        );
 
         // Test with dot product > 1 (the bug case)
         let c = vec![10.0, 0.0, 0.0];
         let d = vec![10.0, 0.0, 0.0];
         // dot_product = 100.0
         let dist2 = distance(DistanceMetric::DotProduct, &c, &d);
-        assert!((dist2 - (-100.0)).abs() < 1e-5,
-            "DotProduct distance for value > 1 should be -100.0, got {}", dist2);
+        assert!(
+            (dist2 - (-100.0)).abs() < 1e-5,
+            "DotProduct distance for value > 1 should be -100.0, got {}",
+            dist2
+        );
     }
 
     #[test]
@@ -954,6 +960,6 @@ mod tests {
         // Bug: dot_product lacked length validation at public API
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![4.0, 5.0]; // Different length
-        dot_product(&a, &b); // Should panic with clear message
+        let _ = dot_product(&a, &b); // Should panic with clear message
     }
 }
