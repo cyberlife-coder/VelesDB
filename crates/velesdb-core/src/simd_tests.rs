@@ -217,7 +217,7 @@ fn test_small_vectors() {
 }
 
 #[test]
-#[should_panic(expected = "Vector dimensions must match")]
+#[should_panic(expected = "Vector length mismatch")]
 fn test_dimension_mismatch_panics() {
     let a = vec![1.0, 2.0, 3.0];
     let b = vec![1.0, 2.0];
