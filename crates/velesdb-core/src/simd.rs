@@ -8,11 +8,13 @@
 //!
 //! # Implementation Strategy
 //!
-//! This module delegates to `simd_explicit` and `simd_native` for all distance functions,
-//! using AVX-512/AVX2 native intrinsics with `wide` crate fallback for portability.
+//! This module delegates to `simd_ops` for adaptive SIMD dispatch, which automatically
+//! selects the optimal backend (AVX-512, AVX2, NEON, Wide) based on runtime benchmarks.
+//! Prefetch utilities remain in this module for cache optimization.
 
+use crate::distance::DistanceMetric;
 use crate::simd_avx512;
-use crate::simd_explicit;
+use crate::simd_ops;
 
 // ============================================================================
 // CPU Cache Prefetch Utilities (QW-2 Refactoring)
@@ -192,8 +194,8 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
 #[inline]
 #[must_use]
 pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors (768D+)
-    simd_avx512::cosine_similarity_auto(a, b)
+    // Use adaptive dispatch for optimal backend selection
+    simd_ops::similarity(DistanceMetric::Cosine, a, b)
 }
 
 /// Computes euclidean distance using explicit SIMD (f32x8).
@@ -208,8 +210,8 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn euclidean_distance_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors
-    simd_avx512::euclidean_auto(a, b)
+    // Use adaptive dispatch for optimal backend selection
+    simd_ops::similarity(DistanceMetric::Euclidean, a, b)
 }
 
 /// Computes squared L2 distance (avoids sqrt for comparison purposes).
@@ -224,21 +226,21 @@ pub fn squared_l2_distance(a: &[f32], b: &[f32]) -> f32 {
     simd_avx512::squared_l2_auto(a, b)
 }
 
-/// Normalizes a vector in-place using explicit SIMD.
+/// Normalizes a vector in-place using adaptive SIMD dispatch.
 ///
 /// # Panics
 ///
 /// Does not panic on zero vector (leaves unchanged).
 #[inline]
 pub fn normalize_inplace(v: &mut [f32]) {
-    simd_explicit::normalize_inplace_simd(v);
+    simd_ops::normalize_inplace(v);
 }
 
-/// Computes the L2 norm (magnitude) of a vector.
+/// Computes the L2 norm (magnitude) of a vector using adaptive SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn norm(v: &[f32]) -> f32 {
-    v.iter().map(|x| x * x).sum::<f32>().sqrt()
+    simd_ops::norm(v)
 }
 
 /// Computes dot product using explicit SIMD (f32x8).
@@ -253,8 +255,8 @@ pub fn norm(v: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn dot_product_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors (768D+)
-    simd_avx512::dot_product_auto(a, b)
+    // Use adaptive dispatch for optimal backend selection
+    simd_ops::dot_product(a, b)
 }
 
 /// Cosine similarity for pre-normalized unit vectors (fast path).

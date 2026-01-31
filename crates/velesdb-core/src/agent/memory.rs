@@ -4,61 +4,27 @@
 //! - **SemanticMemory**: Long-term knowledge facts with vector similarity search
 //! - **EpisodicMemory**: Event timeline with temporal and similarity queries
 //! - **ProceduralMemory**: Learned patterns with confidence scoring
+//!
+//! # Enhanced Features
+//!
+//! - **TTL/Eviction**: Automatic expiration and memory consolidation
+//! - **Snapshots**: Versioned state persistence and rollback
+//! - **Temporal Index**: Efficient O(log N) time-based queries
+//! - **Adaptive Reinforcement**: Extensible confidence update strategies
 
-use crate::{Database, DistanceMetric, Point};
-use serde_json::json;
-use thiserror::Error;
+use crate::Database;
+use std::sync::Arc;
+
+pub use super::episodic_memory::EpisodicMemory;
+pub use super::error::AgentMemoryError;
+pub use super::procedural_memory::{ProceduralMemory, ProcedureMatch};
+pub use super::semantic_memory::SemanticMemory;
+pub use super::snapshot::{MemoryState, SnapshotError, SnapshotManager};
+pub use super::temporal_index::TemporalIndex;
+pub use super::ttl::{EvictionConfig, ExpireResult, MemoryTtl};
 
 /// Default embedding dimension for memory collections.
 pub const DEFAULT_DIMENSION: usize = 384;
-
-/// Default retention period for episodic memory (7 days in seconds).
-#[allow(dead_code)]
-pub const DEFAULT_RETENTION_SECONDS: i64 = 7 * 24 * 60 * 60;
-
-/// A matched procedure from procedural memory recall.
-#[derive(Debug, Clone)]
-pub struct ProcedureMatch {
-    /// Procedure ID.
-    pub id: u64,
-    /// Procedure name.
-    pub name: String,
-    /// Action steps.
-    pub steps: Vec<String>,
-    /// Confidence score (0.0 - 1.0).
-    pub confidence: f32,
-    /// Similarity score from search.
-    pub score: f32,
-}
-
-/// Error type for AgentMemory operations
-#[derive(Debug, Error)]
-pub enum AgentMemoryError {
-    /// Memory initialization failed.
-    #[error("Failed to initialize memory: {0}")]
-    InitializationError(String),
-
-    /// Collection operation failed.
-    #[error("Collection error: {0}")]
-    CollectionError(String),
-
-    /// Item not found.
-    #[error("Item not found: {0}")]
-    NotFound(String),
-
-    /// Invalid embedding dimension.
-    #[error("Invalid embedding dimension: expected {expected}, got {actual}")]
-    DimensionMismatch {
-        /// Expected dimension.
-        expected: usize,
-        /// Actual dimension provided.
-        actual: usize,
-    },
-
-    /// Underlying database error.
-    #[error("Database error: {0}")]
-    DatabaseError(#[from] crate::error::Error),
-}
 
 /// Unified memory interface for AI agents.
 ///
@@ -67,11 +33,22 @@ pub enum AgentMemoryError {
 /// - `episodic`: Event timeline with temporal context
 /// - `procedural`: Learned patterns and action sequences
 ///
+/// # Enhanced Features
+///
+/// - TTL management for automatic expiration
+/// - Snapshot/restore for state persistence
+/// - Temporal indexing for efficient time-based queries
+/// - Configurable eviction policies
+///
 /// Uses lifetime `'a` to borrow the Database without cloning.
 pub struct AgentMemory<'a> {
     semantic: SemanticMemory<'a>,
     episodic: EpisodicMemory<'a>,
     procedural: ProceduralMemory<'a>,
+    ttl: Arc<MemoryTtl>,
+    temporal_index: Arc<TemporalIndex>,
+    eviction_config: EvictionConfig,
+    snapshot_manager: Option<SnapshotManager>,
 }
 
 impl<'a> AgentMemory<'a> {
@@ -79,25 +56,50 @@ impl<'a> AgentMemory<'a> {
     ///
     /// Initializes or connects to the three memory subsystem collections:
     /// - `_semantic_memory`: For knowledge facts
-    /// - `_episodic_memory`: For event sequences
-    /// - `_procedural_memory`: For learned procedures
+    /// - `_episodic_memory`: For event timeline
+    /// - `_procedural_memory`: For learned patterns
     ///
-    /// Uses default dimension (384) for embeddings. Use `with_dimension` for custom sizes.
+    /// Uses the default embedding dimension (384).
     pub fn new(db: &'a Database) -> Result<Self, AgentMemoryError> {
         Self::with_dimension(db, DEFAULT_DIMENSION)
     }
 
-    /// Creates a new AgentMemory with custom embedding dimension.
+    /// Creates a new AgentMemory with a custom embedding dimension.
     pub fn with_dimension(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        let semantic = SemanticMemory::new(db, dimension)?;
-        let episodic = EpisodicMemory::new(db, dimension)?;
-        let procedural = ProceduralMemory::new(db, dimension)?;
+        let ttl = Arc::new(MemoryTtl::new());
+        let temporal_index = Arc::new(TemporalIndex::new());
+
+        let semantic = SemanticMemory::new(db, dimension, Arc::clone(&ttl))?;
+        let episodic =
+            EpisodicMemory::new(db, dimension, Arc::clone(&ttl), Arc::clone(&temporal_index))?;
+        let procedural = ProceduralMemory::new(db, dimension, Arc::clone(&ttl))?;
 
         Ok(Self {
             semantic,
             episodic,
             procedural,
+            ttl,
+            temporal_index,
+            eviction_config: EvictionConfig::default(),
+            snapshot_manager: None,
         })
+    }
+
+    /// Configures eviction policies for automatic memory cleanup.
+    pub fn with_eviction_config(mut self, config: EvictionConfig) -> Self {
+        self.eviction_config = config;
+        self
+    }
+
+    /// Enables snapshot management with a storage directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `snapshot_dir` - Directory path for storing snapshots
+    /// * `max_snapshots` - Maximum number of snapshots to retain
+    pub fn with_snapshots(mut self, snapshot_dir: &str, max_snapshots: usize) -> Self {
+        self.snapshot_manager = Some(SnapshotManager::new(snapshot_dir, max_snapshots));
+        self
     }
 
     /// Returns a reference to the semantic memory subsystem.
@@ -118,763 +120,165 @@ impl<'a> AgentMemory<'a> {
         &self.procedural
     }
 
-    /// Automatically expires old episodic memories by consolidating them to semantic memory.
+    /// Sets TTL for a semantic memory entry.
+    pub fn set_semantic_ttl(&self, id: u64, ttl_seconds: u64) {
+        self.ttl.set_ttl(id, ttl_seconds);
+    }
+
+    /// Sets TTL for an episodic memory entry.
+    pub fn set_episodic_ttl(&self, id: u64, ttl_seconds: u64) {
+        self.ttl.set_ttl(id, ttl_seconds);
+    }
+
+    /// Sets TTL for a procedural memory entry.
+    pub fn set_procedural_ttl(&self, id: u64, ttl_seconds: u64) {
+        self.ttl.set_ttl(id, ttl_seconds);
+    }
+
+    /// Performs automatic expiration of entries that have exceeded their TTL.
     ///
-    /// This method consolidates episodic events older than `retention_seconds` into semantic
-    /// memory, then removes them from episodic memory. Uses the current system time.
-    ///
-    /// # Arguments
-    ///
-    /// * `retention_seconds` - Events older than this are consolidated (default: 7 days)
+    /// This method should be called periodically to clean up expired entries.
+    /// It also handles consolidation of old episodic memories to semantic memory
+    /// based on the configured eviction policy.
     ///
     /// # Returns
     ///
-    /// Number of events consolidated.
-    ///
-    /// # ID Collision Prevention
-    ///
-    /// When consolidating, if a semantic memory entry with the same ID already exists,
-    /// a new unique ID is generated to prevent silent data loss.
-    pub fn auto_expire(&self, retention_seconds: i64) -> Result<usize, AgentMemoryError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+    /// Statistics about the expiration operation.
+    pub fn auto_expire(&self) -> Result<ExpireResult, AgentMemoryError> {
+        let expired_ids = self.ttl.expire();
+        let mut result = ExpireResult::default();
 
-        let cutoff = now - retention_seconds;
-        self.consolidate_old_episodes(cutoff)
-    }
-
-    /// Consolidates episodic events older than the cutoff timestamp into semantic memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `cutoff_timestamp` - Events with timestamp <= this value are consolidated
-    ///
-    /// # Returns
-    ///
-    /// Number of events consolidated.
-    ///
-    /// # ID Collision Prevention
-    ///
-    /// When an episodic event is consolidated to semantic memory, this method checks
-    /// if a semantic memory entry with the same ID already exists. If so, it generates
-    /// a new unique ID for the consolidated entry to prevent silent data loss.
-    pub fn consolidate_old_episodes(
-        &self,
-        cutoff_timestamp: i64,
-    ) -> Result<usize, AgentMemoryError> {
-        let old_events = self.episodic.get_events_before(cutoff_timestamp)?;
-
-        let mut consolidated_count = 0;
-        for (id, description, _timestamp) in old_events {
-            let embedding = vec![0.0f32; self.semantic.dimension()];
-
-            // Check if semantic memory already has an entry with this ID
-            let store_id = if self.semantic.exists(id)? {
-                // Generate a new unique ID to prevent overwriting existing semantic entry
-                self.generate_unique_semantic_id()?
-            } else {
-                id
-            };
-
-            self.semantic.store(store_id, &description, &embedding)?;
-            self.episodic.delete(id)?;
-            consolidated_count += 1;
-        }
-
-        Ok(consolidated_count)
-    }
-
-    /// Generates a unique ID that doesn't exist in semantic memory.
-    fn generate_unique_semantic_id(&self) -> Result<u64, AgentMemoryError> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        // Start with timestamp-based ID
-        let base_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-
-        // Try up to 1000 times to find a unique ID
-        for offset in 0..1000 {
-            let candidate_id = base_id.wrapping_add(offset);
-            if !self.semantic.exists(candidate_id)? {
-                return Ok(candidate_id);
+        for id in &expired_ids {
+            if self.semantic.delete(*id).is_ok() {
+                result.semantic_expired += 1;
+            }
+            if self.episodic.delete(*id).is_ok() {
+                result.episodic_expired += 1;
+            }
+            if self.procedural.delete(*id).is_ok() {
+                result.procedural_expired += 1;
             }
         }
 
-        // Fallback: use random-ish ID based on current time + counter
-        let fallback_id = base_id ^ 0xDEAD_BEEF_CAFE_BABE;
-        if !self.semantic.exists(fallback_id)? {
-            return Ok(fallback_id);
+        if self.eviction_config.consolidation_age_threshold > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let cutoff = now - self.eviction_config.consolidation_age_threshold as i64;
+            result.episodic_consolidated = self.consolidate_old_episodes(cutoff)?;
         }
 
-        // If even the fallback collides, return an error
-        Err(AgentMemoryError::CollectionError(
-            "Unable to generate unique semantic ID after exhausting all candidates".to_string(),
-        ))
-    }
-}
-
-/// Semantic Memory - Long-term knowledge storage (US-002)
-///
-/// Stores facts and knowledge as vectors with similarity search.
-/// Each fact has an ID, content text, and embedding vector.
-pub struct SemanticMemory<'a> {
-    collection_name: String,
-    db: &'a Database,
-    dimension: usize,
-}
-
-impl<'a> SemanticMemory<'a> {
-    const COLLECTION_NAME: &'static str = "_semantic_memory";
-
-    /// Creates a new SemanticMemory from a Database reference.
-    ///
-    /// This is the public constructor for use in Python bindings.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        Self::new(db, dimension)
+        Ok(result)
     }
 
-    fn new(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        let collection_name = Self::COLLECTION_NAME.to_string();
-
-        // Create collection if it doesn't exist, or validate dimension matches
-        let actual_dimension = if let Some(collection) = db.get_collection(&collection_name) {
-            let existing_dim = collection.config().dimension;
-            if existing_dim != dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: existing_dim,
-                    actual: dimension,
-                });
-            }
-            existing_dim
-        } else {
-            db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
-            dimension
-        };
-
-        Ok(Self {
-            collection_name,
-            db,
-            dimension: actual_dimension,
-        })
-    }
-
-    /// Returns the name of the underlying collection.
-    #[must_use]
-    pub fn collection_name(&self) -> &str {
-        &self.collection_name
-    }
-
-    /// Returns the embedding dimension.
-    #[must_use]
-    pub fn dimension(&self) -> usize {
-        self.dimension
-    }
-
-    /// Checks if a semantic memory entry with the given ID exists.
+    /// Evicts procedures with confidence below the threshold.
     ///
     /// # Arguments
     ///
-    /// * `id` - The ID to check
-    ///
-    /// # Returns
-    ///
-    /// `true` if an entry with this ID exists, `false` otherwise.
-    pub fn exists(&self, id: u64) -> Result<bool, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let points = collection.get(&[id]);
-        Ok(points.first().is_some_and(Option::is_some))
-    }
-
-    /// Stores a knowledge fact with its embedding vector.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Unique identifier for this fact
-    /// * `content` - Text content of the knowledge
-    /// * `embedding` - Vector representation of the content
-    ///
-    /// # Errors
-    ///
-    /// Returns error if embedding dimension doesn't match or collection operation fails.
-    pub fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), AgentMemoryError> {
-        if embedding.len() != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: embedding.len(),
-            });
-        }
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let point = Point::new(id, embedding.to_vec(), Some(json!({"content": content})));
-        collection
-            .upsert(vec![point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Queries semantic memory by similarity search.
-    ///
-    /// # Arguments
-    ///
-    /// * `query_embedding` - Vector to search for
-    /// * `k` - Number of results to return
-    ///
-    /// # Returns
-    ///
-    /// Vector of (id, score, content) tuples ordered by similarity.
-    pub fn query(
-        &self,
-        query_embedding: &[f32],
-        k: usize,
-    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
-        if query_embedding.len() != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: query_embedding.len(),
-            });
-        }
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let results = collection
-            .search(query_embedding, k)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(results
-            .into_iter()
-            .map(|r| {
-                let content = r
-                    .point
-                    .payload
-                    .as_ref()
-                    .and_then(|p| p.get("content"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                (r.point.id, r.score, content)
-            })
-            .collect())
-    }
-}
-
-/// Episodic Memory - Event timeline storage (US-003)
-///
-/// Records events with timestamps and contextual information.
-/// Supports temporal queries and similarity-based retrieval.
-pub struct EpisodicMemory<'a> {
-    collection_name: String,
-    db: &'a Database,
-    dimension: usize,
-}
-
-impl<'a> EpisodicMemory<'a> {
-    const COLLECTION_NAME: &'static str = "_episodic_memory";
-
-    /// Creates a new EpisodicMemory from a Database reference.
-    ///
-    /// This is the public constructor for use in Python bindings.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        Self::new(db, dimension)
-    }
-
-    fn new(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        let collection_name = Self::COLLECTION_NAME.to_string();
-
-        // Create collection if it doesn't exist, or validate dimension matches
-        let actual_dimension = if let Some(collection) = db.get_collection(&collection_name) {
-            let existing_dim = collection.config().dimension;
-            if existing_dim != dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: existing_dim,
-                    actual: dimension,
-                });
-            }
-            existing_dim
-        } else {
-            db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
-            dimension
-        };
-
-        Ok(Self {
-            collection_name,
-            db,
-            dimension: actual_dimension,
-        })
-    }
-
-    /// Returns the name of the underlying collection.
-    #[must_use]
-    pub fn collection_name(&self) -> &str {
-        &self.collection_name
-    }
-
-    /// Records an event in episodic memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `event_id` - Unique identifier for this event
-    /// * `description` - Text description of the event
-    /// * `timestamp` - Unix timestamp of the event
-    /// * `embedding` - Optional vector representation for similarity search
-    ///
-    /// # Errors
-    ///
-    /// Returns error if embedding dimension doesn't match or collection operation fails.
-    pub fn record(
-        &self,
-        event_id: u64,
-        description: &str,
-        timestamp: i64,
-        embedding: Option<&[f32]>,
-    ) -> Result<(), AgentMemoryError> {
-        // Validate embedding dimension if provided
-        if let Some(emb) = embedding {
-            if emb.len() != self.dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: self.dimension,
-                    actual: emb.len(),
-                });
-            }
-        }
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        // Use zero vector if no embedding provided (allows temporal-only queries)
-        let vector = embedding.map_or_else(|| vec![0.0; self.dimension], <[f32]>::to_vec);
-
-        let point = Point::new(
-            event_id,
-            vector,
-            Some(json!({
-                "description": description,
-                "timestamp": timestamp
-            })),
-        );
-
-        collection
-            .upsert(vec![point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Retrieves recent events from episodic memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `limit` - Maximum number of events to return
-    /// * `since_timestamp` - Optional filter for events after this time
-    ///
-    /// # Returns
-    ///
-    /// Vector of (event_id, description, timestamp) tuples ordered by timestamp descending.
-    pub fn recent(
-        &self,
-        limit: usize,
-        since_timestamp: Option<i64>,
-    ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        // Get points by scanning reasonable ID range
-        // Note: For large datasets, this should use a proper index
-        let all_ids: Vec<u64> = (0..10000).collect();
-        let points = collection.get(&all_ids);
-
-        let mut events: Vec<(u64, String, i64)> = points
-            .into_iter()
-            .flatten() // Filter out None values
-            .filter_map(|p| {
-                let payload = p.payload.as_ref()?;
-                let desc = payload.get("description")?.as_str()?.to_string();
-                let ts = payload.get("timestamp")?.as_i64()?;
-
-                // Apply timestamp filter
-                if let Some(since) = since_timestamp {
-                    if ts <= since {
-                        return None;
-                    }
-                }
-
-                Some((p.id, desc, ts))
-            })
-            .collect();
-
-        // Sort by timestamp descending (most recent first)
-        events.sort_by(|a, b| b.2.cmp(&a.2));
-        events.truncate(limit);
-
-        Ok(events)
-    }
-
-    /// Retrieves events similar to a query embedding.
-    ///
-    /// # Arguments
-    ///
-    /// * `query_embedding` - Vector to search for similar events
-    /// * `k` - Number of results to return
-    ///
-    /// # Returns
-    ///
-    /// Vector of (event_id, description, timestamp, score) tuples.
-    pub fn recall_similar(
-        &self,
-        query_embedding: &[f32],
-        k: usize,
-    ) -> Result<Vec<(u64, String, i64, f32)>, AgentMemoryError> {
-        if query_embedding.len() != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: query_embedding.len(),
-            });
-        }
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let results = collection
-            .search(query_embedding, k)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(results
-            .into_iter()
-            .filter_map(|r| {
-                let payload = r.point.payload.as_ref()?;
-                let desc = payload.get("description")?.as_str()?.to_string();
-                let ts = payload.get("timestamp")?.as_i64()?;
-                Some((r.point.id, desc, ts, r.score))
-            })
-            .collect())
-    }
-
-    /// Retrieves events with timestamps before (or equal to) the cutoff.
-    ///
-    /// # Arguments
-    ///
-    /// * `cutoff_timestamp` - Events with timestamp <= this value are returned
-    ///
-    /// # Returns
-    ///
-    /// Vector of (event_id, description, timestamp) tuples.
-    pub fn get_events_before(
-        &self,
-        cutoff_timestamp: i64,
-    ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        // Get points by scanning reasonable ID range
-        let all_ids: Vec<u64> = (0..10000).collect();
-        let points = collection.get(&all_ids);
-
-        let events: Vec<(u64, String, i64)> = points
-            .into_iter()
-            .flatten()
-            .filter_map(|p| {
-                let payload = p.payload.as_ref()?;
-                let desc = payload.get("description")?.as_str()?.to_string();
-                let ts = payload.get("timestamp")?.as_i64()?;
-
-                // Only include events at or before the cutoff
-                if ts <= cutoff_timestamp {
-                    Some((p.id, desc, ts))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(events)
-    }
-
-    /// Deletes an event from episodic memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `event_id` - The ID of the event to delete
-    ///
-    /// # Errors
-    ///
-    /// Returns error if collection operation fails.
-    pub fn delete(&self, event_id: u64) -> Result<(), AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        collection
-            .delete(&[event_id])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(())
-    }
-}
-
-/// Procedural Memory - Learned patterns storage (US-004)
-///
-/// Stores action sequences and learned procedures with confidence scoring.
-/// Supports pattern matching by similarity and reinforcement learning.
-pub struct ProceduralMemory<'a> {
-    collection_name: String,
-    db: &'a Database,
-    dimension: usize,
-}
-
-impl<'a> ProceduralMemory<'a> {
-    const COLLECTION_NAME: &'static str = "_procedural_memory";
-
-    /// Creates a new ProceduralMemory from a Database reference.
-    ///
-    /// This is the public constructor for use in Python bindings.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        Self::new(db, dimension)
-    }
-
-    fn new(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
-        let collection_name = Self::COLLECTION_NAME.to_string();
-
-        // Create collection if it doesn't exist, or validate dimension matches
-        let actual_dimension = if let Some(collection) = db.get_collection(&collection_name) {
-            let existing_dim = collection.config().dimension;
-            if existing_dim != dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: existing_dim,
-                    actual: dimension,
-                });
-            }
-            existing_dim
-        } else {
-            db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
-            dimension
-        };
-
-        Ok(Self {
-            collection_name,
-            db,
-            dimension: actual_dimension,
-        })
-    }
-
-    /// Returns the name of the underlying collection.
-    #[must_use]
-    pub fn collection_name(&self) -> &str {
-        &self.collection_name
-    }
-
-    /// Learns a new procedure/pattern with optional embedding.
-    ///
-    /// # Arguments
-    ///
-    /// * `procedure_id` - Unique identifier for this procedure
-    /// * `name` - Human-readable name
-    /// * `steps` - Sequence of action steps (JSON array)
-    /// * `embedding` - Optional vector for similarity matching
-    /// * `confidence` - Initial confidence score (0.0 - 1.0)
-    ///
-    /// # Errors
-    ///
-    /// Returns error if embedding dimension doesn't match or collection operation fails.
-    pub fn learn(
-        &self,
-        procedure_id: u64,
-        name: &str,
-        steps: &[String],
-        embedding: Option<&[f32]>,
-        confidence: f32,
-    ) -> Result<(), AgentMemoryError> {
-        // Validate embedding dimension if provided
-        if let Some(emb) = embedding {
-            if emb.len() != self.dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: self.dimension,
-                    actual: emb.len(),
-                });
-            }
-        }
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        // Use zero vector if no embedding provided
-        let vector = embedding.map_or_else(|| vec![0.0; self.dimension], <[f32]>::to_vec);
-
-        let point = Point::new(
-            procedure_id,
-            vector,
-            Some(json!({
-                "name": name,
-                "steps": steps,
-                "confidence": confidence,
-                "usage_count": 0
-            })),
-        );
-
-        collection
-            .upsert(vec![point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Retrieves procedures by similarity search.
-    ///
-    /// # Arguments
-    ///
-    /// * `query_embedding` - Vector to search for similar procedures
-    /// * `k` - Maximum number of results
     /// * `min_confidence` - Minimum confidence threshold (0.0 - 1.0)
     ///
     /// # Returns
     ///
-    /// Vector of (procedure_id, name, steps, confidence, score) tuples.
-    pub fn recall(
+    /// Number of procedures evicted.
+    pub fn evict_low_confidence_procedures(
         &self,
-        query_embedding: &[f32],
-        k: usize,
         min_confidence: f32,
-    ) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
-        if query_embedding.len() != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: query_embedding.len(),
-            });
+    ) -> Result<usize, AgentMemoryError> {
+        let all_procedures = self.procedural.list_all()?;
+        let mut evicted = 0;
+
+        for proc in all_procedures {
+            if proc.confidence < min_confidence {
+                self.procedural.delete(proc.id)?;
+                evicted += 1;
+            }
         }
 
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let results = collection
-            .search(query_embedding, k)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(results
-            .into_iter()
-            .filter_map(|r| {
-                let payload = r.point.payload.as_ref()?;
-                let name = payload.get("name")?.as_str()?.to_string();
-                let steps: Vec<String> = payload
-                    .get("steps")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                let confidence = payload.get("confidence")?.as_f64()? as f32;
-
-                // Filter by minimum confidence
-                if confidence < min_confidence {
-                    return None;
-                }
-
-                Some(ProcedureMatch {
-                    id: r.point.id,
-                    name,
-                    steps,
-                    confidence,
-                    score: r.score,
-                })
-            })
-            .collect())
+        Ok(evicted)
     }
 
-    /// Reinforces a procedure based on success/failure feedback.
+    /// Creates a snapshot of the current memory state.
     ///
-    /// Updates confidence: +0.1 on success, -0.05 on failure (clamped to 0.0-1.0).
-    /// Also increments usage count.
-    pub fn reinforce(&self, procedure_id: u64, success: bool) -> Result<(), AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+    /// # Returns
+    ///
+    /// The version number of the created snapshot.
+    pub fn snapshot(&self) -> Result<u64, AgentMemoryError> {
+        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
+            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
+        })?;
 
-        // Get current procedure
-        let points = collection.get(&[procedure_id]);
-        let point = points
-            .into_iter()
-            .flatten()
-            .next()
-            .ok_or_else(|| AgentMemoryError::NotFound(format!("Procedure {procedure_id}")))?;
-
-        let payload = point
-            .payload
-            .as_ref()
-            .ok_or_else(|| AgentMemoryError::CollectionError("Missing payload".to_string()))?;
-
-        // Extract current values
-        let name = payload
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let steps: Vec<String> = payload
-            .get("steps")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let old_confidence = payload
-            .get("confidence")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.5) as f32;
-        let usage_count = payload
-            .get("usage_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-
-        // Update confidence
-        let new_confidence = if success {
-            (old_confidence + 0.1).min(1.0)
-        } else {
-            (old_confidence - 0.05).max(0.0)
+        let state = MemoryState {
+            semantic: self.semantic.serialize()?,
+            episodic: self.episodic.serialize()?,
+            procedural: self.procedural.serialize()?,
+            ttl: self.ttl.serialize(),
         };
 
-        // Update point with new values
-        let updated_point = Point::new(
-            procedure_id,
-            point.vector.clone(),
-            Some(json!({
-                "name": name,
-                "steps": steps,
-                "confidence": new_confidence,
-                "usage_count": usage_count + 1
-            })),
-        );
+        Ok(manager.create_versioned_snapshot(&state)?)
+    }
 
-        collection
-            .upsert(vec![updated_point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+    /// Loads the most recent snapshot.
+    ///
+    /// # Returns
+    ///
+    /// The version number of the loaded snapshot.
+    pub fn load_latest_snapshot(&self) -> Result<u64, AgentMemoryError> {
+        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
+            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
+        })?;
+
+        let (version, state) = manager.load_latest()?;
+        self.restore_state(&state)?;
+        Ok(version)
+    }
+
+    /// Loads a specific snapshot version.
+    pub fn load_snapshot_version(&self, version: u64) -> Result<(), AgentMemoryError> {
+        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
+            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
+        })?;
+
+        let state = manager.load_version(version)?;
+        self.restore_state(&state)?;
+        Ok(())
+    }
+
+    /// Lists all available snapshot versions.
+    pub fn list_snapshot_versions(&self) -> Result<Vec<u64>, AgentMemoryError> {
+        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
+            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
+        })?;
+
+        Ok(manager.list_versions()?)
+    }
+
+    fn restore_state(&self, state: &MemoryState) -> Result<(), AgentMemoryError> {
+        self.semantic.deserialize(&state.semantic)?;
+        self.episodic.deserialize(&state.episodic)?;
+        self.procedural.deserialize(&state.procedural)?;
+
+        if let Some(ttl) = MemoryTtl::deserialize(&state.ttl) {
+            self.ttl.replace_from(&ttl);
+        } else {
+            self.ttl.clear();
+        }
 
         Ok(())
+    }
+
+    fn consolidate_old_episodes(&self, cutoff_timestamp: i64) -> Result<usize, AgentMemoryError> {
+        let old_events = self.episodic.older_than(cutoff_timestamp, 1000)?;
+        let mut consolidated = 0;
+
+        for (id, _description, _timestamp) in old_events {
+            if let Some((description, _ts, embedding)) = self.episodic.get_with_embedding(id)? {
+                self.semantic.store(id, &description, &embedding)?;
+                self.episodic.delete(id)?;
+                consolidated += 1;
+            }
+        }
+
+        Ok(consolidated)
     }
 }

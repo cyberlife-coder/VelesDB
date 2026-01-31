@@ -335,4 +335,10 @@ impl Collection {
     pub fn is_empty(&self) -> bool {
         self.config.read().point_count == 0
     }
+
+    /// Returns all point IDs in the collection.
+    #[must_use]
+    pub fn all_ids(&self) -> Vec<u64> {
+        self.payload_storage.read().ids()
+    }
 }
