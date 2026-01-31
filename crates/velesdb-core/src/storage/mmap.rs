@@ -586,8 +586,10 @@ impl VectorStorage for MmapStorage {
         if let Some(offset) = offset {
             let vector_size = self.dimension * std::mem::size_of::<f32>();
             // Best-effort: ignore errors (space will be reclaimed on compact())
-            let _ =
-                super::compaction::punch_hole(&self.data_file, offset as u64, vector_size as u64);
+            // Reason: offset and vector_size are bounded by file size, always fit in u64 on 64-bit
+            let offset_u64 = u64::try_from(offset).expect("offset fits in u64");
+            let size_u64 = u64::try_from(vector_size).expect("vector_size fits in u64");
+            let _ = super::compaction::punch_hole(&self.data_file, offset_u64, size_u64);
         }
 
         Ok(())

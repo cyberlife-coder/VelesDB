@@ -427,10 +427,10 @@
           "markdownDescription": "Denies the upsert command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-upsert`\n- `allow-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-query`",
+          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-upsert`\n- `allow-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-query`"
+          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`"
         }
       ]
     }
