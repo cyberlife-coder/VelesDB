@@ -19,7 +19,7 @@ pub use super::episodic_memory::EpisodicMemory;
 pub use super::error::AgentMemoryError;
 pub use super::procedural_memory::{ProceduralMemory, ProcedureMatch};
 pub use super::semantic_memory::SemanticMemory;
-pub use super::snapshot::{MemoryState, SnapshotError, SnapshotManager};
+pub use super::snapshot::{MemoryState, SnapshotManager};
 pub use super::temporal_index::TemporalIndex;
 pub use super::ttl::{EvictionConfig, ExpireResult, MemoryTtl};
 
@@ -46,6 +46,7 @@ pub struct AgentMemory<'a> {
     episodic: EpisodicMemory<'a>,
     procedural: ProceduralMemory<'a>,
     ttl: Arc<MemoryTtl>,
+    #[allow(dead_code)] // Will be used for time-based queries in future
     temporal_index: Arc<TemporalIndex>,
     eviction_config: EvictionConfig,
     snapshot_manager: Option<SnapshotManager>,
@@ -86,6 +87,7 @@ impl<'a> AgentMemory<'a> {
     }
 
     /// Configures eviction policies for automatic memory cleanup.
+    #[must_use]
     pub fn with_eviction_config(mut self, config: EvictionConfig) -> Self {
         self.eviction_config = config;
         self
@@ -97,6 +99,7 @@ impl<'a> AgentMemory<'a> {
     ///
     /// * `snapshot_dir` - Directory path for storing snapshots
     /// * `max_snapshots` - Maximum number of snapshots to retain
+    #[must_use]
     pub fn with_snapshots(mut self, snapshot_dir: &str, max_snapshots: usize) -> Self {
         self.snapshot_manager = Some(SnapshotManager::new(snapshot_dir, max_snapshots));
         self

@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Error types for AgentMemory operations.
 
 use super::snapshot::SnapshotError;

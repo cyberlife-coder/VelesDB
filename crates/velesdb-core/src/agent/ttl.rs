@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! TTL (Time-To-Live) and eviction management for AgentMemory.
 //!
 //! Provides automatic expiration and eviction policies for memory entries:
@@ -145,7 +146,7 @@ impl MemoryTtl {
         self.entries
             .read()
             .get(&id)
-            .map_or(false, |entry| entry.expires_at <= now)
+            .is_some_and(|entry| entry.expires_at <= now)
     }
 
     /// Returns the TTL entry for an ID if it exists.

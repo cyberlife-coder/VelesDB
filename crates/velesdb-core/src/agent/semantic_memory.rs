@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Semantic Memory - Long-term knowledge storage (US-002)
 //!
 //! Stores facts and knowledge as vectors with similarity search.

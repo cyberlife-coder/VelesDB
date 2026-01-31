@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Procedural Memory - Learned patterns storage (US-004)
 //!
 //! Stores action sequences and learned procedures with confidence scoring.
@@ -80,6 +81,7 @@ impl<'a> ProceduralMemory<'a> {
         })
     }
 
+    #[must_use]
     pub fn with_reinforcement_strategy(mut self, strategy: Arc<dyn ReinforcementStrategy>) -> Self {
         self.reinforcement_strategy = strategy;
         self

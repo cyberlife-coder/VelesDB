@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Adaptive reinforcement strategies for ProceduralMemory.
 //!
 //! Provides extensible strategies for updating procedure confidence:
@@ -383,6 +384,7 @@ impl CompositeStrategy {
     /// Adds a strategy with a weight.
     ///
     /// Weights are normalized when calculating the final confidence.
+    #[must_use]
     pub fn add_strategy<S: ReinforcementStrategy + 'static>(
         mut self,
         strategy: S,

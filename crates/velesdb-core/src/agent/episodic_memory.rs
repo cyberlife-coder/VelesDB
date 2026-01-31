@@ -1,4 +1,5 @@
 //! Episodic Memory - Event timeline storage (US-003)
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //!
 //! Records events with timestamps and contextual information.
 //! Supports temporal queries and similarity-based retrieval.
@@ -12,6 +13,10 @@ use super::error::AgentMemoryError;
 use super::temporal_index::TemporalIndex;
 use super::ttl::MemoryTtl;
 
+/// Episodic memory for storing event timelines with temporal context.
+///
+/// Records events with timestamps, descriptions, and embeddings.
+/// Supports similarity-based retrieval and time-range queries.
 pub struct EpisodicMemory<'a> {
     collection_name: String,
     db: &'a Database,
@@ -49,7 +54,7 @@ impl<'a> EpisodicMemory<'a> {
                 });
             }
 
-            if temporal_index.len() == 0 {
+            if temporal_index.is_empty() {
                 Self::rebuild_temporal_index(&collection, &temporal_index);
             }
 
@@ -73,7 +78,7 @@ impl<'a> EpisodicMemory<'a> {
         let points = collection.get(&all_ids);
         for point in points.into_iter().flatten() {
             if let Some(payload) = &point.payload {
-                if let Some(ts) = payload.get("timestamp").and_then(|v| v.as_i64()) {
+                if let Some(ts) = payload.get("timestamp").and_then(serde_json::Value::as_i64) {
                     temporal_index.insert(point.id, ts);
                 }
             }
@@ -297,7 +302,7 @@ impl<'a> EpisodicMemory<'a> {
             .to_string();
         let ts = payload
             .get("timestamp")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
 
         Ok(Some((desc, ts, point.vector.clone())))
@@ -356,7 +361,7 @@ impl<'a> EpisodicMemory<'a> {
         self.temporal_index.clear();
         for point in &points {
             if let Some(payload) = &point.payload {
-                if let Some(ts) = payload.get("timestamp").and_then(|v| v.as_i64()) {
+                if let Some(ts) = payload.get("timestamp").and_then(serde_json::Value::as_i64) {
                     self.temporal_index.insert(point.id, ts);
                 }
             }

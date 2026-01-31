@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Snapshot and versioning support for AgentMemory.
 //!
 //! Provides serialization/deserialization of AgentMemory state for:
@@ -63,7 +64,7 @@ fn crc32_hash(data: &[u8]) -> u32 {
 }
 
 /// Memory state for serialization.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryState {
     /// Serialized semantic memory entries.
     pub semantic: Vec<u8>,
@@ -73,17 +74,6 @@ pub struct MemoryState {
     pub procedural: Vec<u8>,
     /// Serialized TTL state.
     pub ttl: Vec<u8>,
-}
-
-impl Default for MemoryState {
-    fn default() -> Self {
-        Self {
-            semantic: Vec::new(),
-            episodic: Vec::new(),
-            procedural: Vec::new(),
-            ttl: Vec::new(),
-        }
-    }
 }
 
 /// Snapshot metadata.
@@ -424,7 +414,7 @@ impl SnapshotManager {
             }
         }
 
-        versions.sort();
+        versions.sort_unstable();
         Ok(versions)
     }
 
