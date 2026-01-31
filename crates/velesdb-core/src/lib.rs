@@ -170,8 +170,10 @@ pub mod simd_native;
 #[cfg(test)]
 mod simd_native_tests;
 #[cfg(target_arch = "aarch64")]
-pub mod simd_neon;
 pub mod simd_neon_prefetch;
+pub mod simd_ops;
+#[cfg(test)]
+mod simd_ops_tests;
 #[cfg(test)]
 mod simd_prefetch_x86_tests;
 #[cfg(test)]
@@ -247,6 +249,22 @@ impl Database {
     pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         let data_dir = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
+
+        // Initialize SIMD dispatch table eagerly to avoid latency on first operation
+        // This runs micro-benchmarks (~5-10ms) to select optimal SIMD backends
+        // Wrapped in catch_unwind to prevent DB open failure on edge cases
+        match std::panic::catch_unwind(simd_ops::init_dispatch) {
+            Ok(simd_info) => {
+                tracing::info!(
+                    init_time_ms = format!("{:.2}", simd_info.init_time_ms),
+                    cosine_768d = %simd_info.cosine_backends[2],
+                    "SIMD adaptive dispatch initialized"
+                );
+            }
+            Err(_) => {
+                tracing::warn!("SIMD initialization failed, using lazy fallback");
+            }
+        }
 
         Ok(Self {
             data_dir,

@@ -152,6 +152,50 @@ impl DistanceEngine for NativeSimdDistance {
     }
 }
 
+/// Adaptive SIMD distance computation with runtime backend selection.
+///
+/// Uses `simd_ops` module which automatically selects the fastest SIMD backend
+/// (AVX-512, AVX2, NEON, Wide, Scalar) based on runtime micro-benchmarks.
+/// This is the recommended engine for production use.
+pub struct AdaptiveSimdDistance {
+    metric: DistanceMetric,
+}
+
+impl AdaptiveSimdDistance {
+    /// Creates a new adaptive SIMD distance engine.
+    #[must_use]
+    pub fn new(metric: DistanceMetric) -> Self {
+        Self { metric }
+    }
+}
+
+impl DistanceEngine for AdaptiveSimdDistance {
+    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        // Use simd_ops::distance which returns distance (not similarity)
+        crate::simd_ops::distance(self.metric, a, b)
+    }
+
+    fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
+        // Use prefetch optimization for batch operations
+        let prefetch_distance = crate::simd::calculate_prefetch_distance(query.len());
+        let mut results = Vec::with_capacity(candidates.len());
+
+        for (i, candidate) in candidates.iter().enumerate() {
+            // Prefetch upcoming candidate vectors into L1 cache
+            if i + prefetch_distance < candidates.len() {
+                crate::simd::prefetch_vector(candidates[i + prefetch_distance]);
+            }
+            results.push(self.distance(query, candidate));
+        }
+
+        results
+    }
+
+    fn metric(&self) -> DistanceMetric {
+        self.metric
+    }
+}
+
 // =============================================================================
 // Scalar implementations (baseline for comparison)
 // =============================================================================
