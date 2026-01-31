@@ -894,7 +894,7 @@ mod tests {
         let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
 
         let sim = similarity(DistanceMetric::Cosine, &a, &b);
-        assert!(sim >= -1.0 && sim <= 1.0, "Cosine should be in [-1, 1]");
+        assert!((-1.0..=1.0).contains(&sim), "Cosine should be in [-1, 1]");
 
         let dist = similarity(DistanceMetric::Euclidean, &a, &b);
         assert!(dist >= 0.0, "Euclidean distance should be non-negative");

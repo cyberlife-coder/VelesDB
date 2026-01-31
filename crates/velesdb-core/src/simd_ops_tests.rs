@@ -226,7 +226,7 @@ fn test_large_vectors_128d() {
 
     let sim = similarity(DistanceMetric::Cosine, &a, &b);
     assert!(
-        sim >= -1.0 && sim <= 1.0,
+        (-1.0..=1.0).contains(&sim),
         "Cosine should be in [-1, 1], got {}",
         sim
     );
@@ -241,7 +241,7 @@ fn test_large_vectors_384d() {
     let b: Vec<f32> = (0..384).map(|i| (i as f32 * 0.02).cos()).collect();
 
     let sim = similarity(DistanceMetric::Cosine, &a, &b);
-    assert!(sim >= -1.0 && sim <= 1.0);
+    assert!((-1.0..=1.0).contains(&sim));
 
     let n = norm(&a);
     assert!(n > 0.0);
@@ -253,7 +253,7 @@ fn test_large_vectors_768d() {
     let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
 
     let sim = similarity(DistanceMetric::Cosine, &a, &b);
-    assert!(sim >= -1.0 && sim <= 1.0);
+    assert!((-1.0..=1.0).contains(&sim));
 
     let dist = similarity(DistanceMetric::Euclidean, &a, &b);
     assert!(dist >= 0.0);
@@ -269,7 +269,7 @@ fn test_large_vectors_1536d() {
     let b: Vec<f32> = (0..1536).map(|i| (i as f32 * 0.02).cos()).collect();
 
     let sim = similarity(DistanceMetric::Cosine, &a, &b);
-    assert!(sim >= -1.0 && sim <= 1.0);
+    assert!((-1.0..=1.0).contains(&sim));
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn test_large_vectors_3072d() {
     let b: Vec<f32> = (0..3072).map(|i| (i as f32 * 0.02).cos()).collect();
 
     let sim = similarity(DistanceMetric::Cosine, &a, &b);
-    assert!(sim >= -1.0 && sim <= 1.0);
+    assert!((-1.0..=1.0).contains(&sim));
 }
 
 #[test]
