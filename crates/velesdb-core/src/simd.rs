@@ -14,6 +14,7 @@
 
 use crate::simd_avx512;
 use crate::simd_ops;
+use crate::distance::DistanceMetric;
 
 // ============================================================================
 // CPU Cache Prefetch Utilities (QW-2 Refactoring)
@@ -193,8 +194,8 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
 #[inline]
 #[must_use]
 pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors (768D+)
-    simd_avx512::cosine_similarity_auto(a, b)
+    // Use adaptive dispatch for optimal backend selection
+    simd_ops::similarity(DistanceMetric::Cosine, a, b)
 }
 
 /// Computes euclidean distance using explicit SIMD (f32x8).
@@ -209,8 +210,8 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn euclidean_distance_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors
-    simd_avx512::euclidean_auto(a, b)
+    // Use adaptive dispatch for optimal backend selection
+    simd_ops::similarity(DistanceMetric::Euclidean, a, b)
 }
 
 /// Computes squared L2 distance (avoids sqrt for comparison purposes).
@@ -254,8 +255,8 @@ pub fn norm(v: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn dot_product_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors (768D+)
-    simd_avx512::dot_product_auto(a, b)
+    // Use adaptive dispatch for optimal backend selection
+    simd_ops::dot_product(a, b)
 }
 
 /// Cosine similarity for pre-normalized unit vectors (fast path).

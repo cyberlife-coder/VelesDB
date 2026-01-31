@@ -154,11 +154,10 @@ impl DispatchTable {
             table.norm[i] = find_fastest_backend_unary(&backends, &a, benchmark_norm);
         }
 
-        // Hamming and Jaccard: benchmark once at 768D (typical)
-        let a_768 = generate_test_vector(768, 0.0);
-        let b_768 = generate_test_vector(768, 1.0);
-        table.hamming = find_fastest_backend(&backends, &a_768, &b_768, benchmark_hamming);
-        table.jaccard = find_fastest_backend(&backends, &a_768, &b_768, benchmark_jaccard);
+        // Hamming and Jaccard: always use Wide8 (simd_explicit) - no benchmark needed
+        // These metrics only have simd_explicit implementation, benchmarking is wasteful
+        table.hamming = SimdBackend::Wide8;
+        table.jaccard = SimdBackend::Wide8;
 
         table.init_time_ms = start.elapsed().as_secs_f64() * 1000.0;
         table
@@ -198,6 +197,7 @@ static DISPATCH_TABLE: OnceLock<DispatchTable> = OnceLock::new();
 #[inline]
 #[must_use]
 pub fn similarity(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "Vector length mismatch: {} vs {}", a.len(), b.len());
     let table = DISPATCH_TABLE.get_or_init(DispatchTable::from_benchmarks);
     let backend = table.select_backend(metric.into(), a.len());
     execute_similarity(backend, metric, a, b)
@@ -207,9 +207,14 @@ pub fn similarity(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
 ///
 /// For distance metrics (Euclidean, Hamming), returns the distance directly.
 /// For similarity metrics (Cosine, DotProduct, Jaccard), returns 1 - similarity.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
 #[inline]
 #[must_use]
 pub fn distance(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "Vector length mismatch: {} vs {}", a.len(), b.len());
     let table = DISPATCH_TABLE.get_or_init(DispatchTable::from_benchmarks);
     let backend = table.select_backend(metric.into(), a.len());
     execute_distance(backend, metric, a, b)
@@ -298,8 +303,9 @@ pub fn init_dispatch() -> DispatchInfo {
 /// - Debugging performance issues
 /// - CLI benchmark mode (`--simd-rebenchmark`)
 ///
-/// **Note**: This function is NOT thread-safe during the rebenchmark.
-/// Only call from a single thread (e.g., CLI initialization).
+/// **Note**: This function is thread-safe. It creates a new local `DispatchTable`
+/// without modifying the global cached table. Multiple threads can call this
+/// concurrently without issues.
 ///
 /// # Returns
 ///

@@ -300,15 +300,18 @@ fn test_consistency_across_backends() {
     // Get results from simd_ops (adaptive)
     let sim_adaptive = similarity(DistanceMetric::Cosine, &a, &b);
 
-    // Compare with simd_explicit (known good implementation)
-    let sim_explicit = crate::simd_explicit::cosine_similarity_simd(&a, &b);
+    // Compute expected value using scalar implementation for reference
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let sim_scalar = (dot / (norm_a * norm_b)).clamp(-1.0, 1.0);
 
     // Should be very close (within floating point tolerance)
     assert!(
-        (sim_adaptive - sim_explicit).abs() < 1e-4,
-        "Adaptive ({}) and explicit ({}) should match",
+        (sim_adaptive - sim_scalar).abs() < 1e-4,
+        "Adaptive ({}) and scalar ({}) should match",
         sim_adaptive,
-        sim_explicit
+        sim_scalar
     );
 }
 

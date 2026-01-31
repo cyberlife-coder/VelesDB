@@ -253,12 +253,19 @@ impl Database {
 
         // Initialize SIMD dispatch table eagerly to avoid latency on first operation
         // This runs micro-benchmarks (~5-10ms) to select optimal SIMD backends
-        let simd_info = simd_ops::init_dispatch();
-        tracing::info!(
-            init_time_ms = format!("{:.2}", simd_info.init_time_ms),
-            cosine_768d = %simd_info.cosine_backends[2],
-            "SIMD adaptive dispatch initialized"
-        );
+        // Wrapped in catch_unwind to prevent DB open failure on edge cases
+        match std::panic::catch_unwind(simd_ops::init_dispatch) {
+            Ok(simd_info) => {
+                tracing::info!(
+                    init_time_ms = format!("{:.2}", simd_info.init_time_ms),
+                    cosine_768d = %simd_info.cosine_backends[2],
+                    "SIMD adaptive dispatch initialized"
+                );
+            }
+            Err(_) => {
+                tracing::warn!("SIMD initialization failed, using lazy fallback");
+            }
+        }
 
         Ok(Self {
             data_dir,

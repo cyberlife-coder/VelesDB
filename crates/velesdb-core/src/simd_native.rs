@@ -489,7 +489,9 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    dot / (norm_a * norm_b)
+    // Clamp to [-1, 1] for consistency with scalar implementations
+    // Floating point errors can produce values slightly outside this range
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
 // =============================================================================
