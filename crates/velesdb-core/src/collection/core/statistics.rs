@@ -33,7 +33,8 @@ impl Collection {
         // and per-column cardinality analysis (EPIC-046 future work)
         let config = self.config.read();
         // Reason: Collection sizes are bounded by available memory, always < u64::MAX on 64-bit systems
-        collector.set_row_count(u64::try_from(config.point_count).expect("point_count fits in u64"));
+        collector
+            .set_row_count(u64::try_from(config.point_count).expect("point_count fits in u64"));
 
         // HNSW index statistics
         let hnsw_len = self.index.len();

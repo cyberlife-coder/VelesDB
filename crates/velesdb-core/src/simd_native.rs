@@ -433,6 +433,30 @@ pub fn euclidean_native(a: &[f32], b: &[f32]) -> f32 {
     squared_l2_native(a, b).sqrt()
 }
 
+/// L2 norm with automatic dispatch to best available SIMD.
+///
+/// Computes `sqrt(sum(v[i]²))` using native SIMD intrinsics.
+#[inline]
+#[must_use]
+pub fn norm_native(v: &[f32]) -> f32 {
+    // Norm is sqrt(dot(v, v))
+    dot_product_native(v, v).sqrt()
+}
+
+/// Normalizes a vector in-place using native SIMD.
+///
+/// After normalization, the vector will have L2 norm of 1.0.
+#[inline]
+pub fn normalize_inplace_native(v: &mut [f32]) {
+    let n = norm_native(v);
+    if n > 0.0 {
+        let inv_norm = 1.0 / n;
+        for x in v.iter_mut() {
+            *x *= inv_norm;
+        }
+    }
+}
+
 /// Cosine similarity for pre-normalized vectors with automatic dispatch.
 #[inline]
 #[must_use]

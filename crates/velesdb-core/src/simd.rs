@@ -8,11 +8,12 @@
 //!
 //! # Implementation Strategy
 //!
-//! This module delegates to `simd_explicit` and `simd_native` for all distance functions,
-//! using AVX-512/AVX2 native intrinsics with `wide` crate fallback for portability.
+//! This module delegates to `simd_ops` for adaptive SIMD dispatch, which automatically
+//! selects the optimal backend (AVX-512, AVX2, NEON, Wide) based on runtime benchmarks.
+//! Prefetch utilities remain in this module for cache optimization.
 
 use crate::simd_avx512;
-use crate::simd_explicit;
+use crate::simd_ops;
 
 // ============================================================================
 // CPU Cache Prefetch Utilities (QW-2 Refactoring)
@@ -224,21 +225,21 @@ pub fn squared_l2_distance(a: &[f32], b: &[f32]) -> f32 {
     simd_avx512::squared_l2_auto(a, b)
 }
 
-/// Normalizes a vector in-place using explicit SIMD.
+/// Normalizes a vector in-place using adaptive SIMD dispatch.
 ///
 /// # Panics
 ///
 /// Does not panic on zero vector (leaves unchanged).
 #[inline]
 pub fn normalize_inplace(v: &mut [f32]) {
-    simd_explicit::normalize_inplace_simd(v);
+    simd_ops::normalize_inplace(v);
 }
 
-/// Computes the L2 norm (magnitude) of a vector.
+/// Computes the L2 norm (magnitude) of a vector using adaptive SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn norm(v: &[f32]) -> f32 {
-    v.iter().map(|x| x * x).sum::<f32>().sqrt()
+    simd_ops::norm(v)
 }
 
 /// Computes dot product using explicit SIMD (f32x8).
