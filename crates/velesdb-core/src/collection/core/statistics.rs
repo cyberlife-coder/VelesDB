@@ -25,6 +25,10 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if statistics cannot be collected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `point_count` exceeds `u64::MAX` (extremely unlikely on 64-bit systems).
     pub fn analyze(&self) -> Result<CollectionStats, Error> {
         let mut collector = StatsCollector::new();
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### EPIC-078: SIMD Adaptive Dispatch Consolidation ✅
+
+- **`simd_ops` module** - Unified adaptive SIMD dispatch with runtime backend selection
+  - `simd_ops::similarity()` - Auto-selects optimal backend (AVX-512/AVX2/NEON/Wide/Scalar)
+  - `simd_ops::distance()` - Distance calculation with adaptive dispatch
+  - `simd_ops::dot_product()` - Dot product with backend selection
+  - `simd_ops::norm()` - L2 norm with optimal implementation
+  - `simd_ops::normalize_inplace()` - In-place normalization
+  - `simd_ops::init_dispatch()` - Eager initialization (~5-10ms benchmarks)
+  - `simd_ops::dispatch_info()` - Introspection for monitoring
+- **GPU Backend optimizations** - CPU fallback now uses `simd_ops` (2-4x speedup on x86_64)
+- **Quantization SQ8** - Norm calculations use `simd_ops::norm()` (2-3x speedup)
+- **Half-precision F32×F32** - All operations routed through `simd_ops`
+- **Benchmark fixes** - `portable_simd_eval` migrated to `simd_ops`
+- **WASM compatibility** - Verified with `default-features=false`
+- **296 SIMD tests** passing across all backends
+
 ## [1.4.1] - 2026-01-29
 
 ### � Highlights

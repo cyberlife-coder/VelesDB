@@ -22,7 +22,7 @@
 | velesdb-core | Engine | ✅ DONE | Source - simd_ops module |
 | velesdb-server | API HTTP | ⚪ N/A | Pas d'endpoint SIMD direct |
 | velesdb-python | SDK Python | ⚪ N/A | Utilise Core via PyO3 (transparent) |
-| velesdb-wasm | SDK WASM | 🔴 TODO | Vérifier compilation WASM |
+| velesdb-wasm | SDK WASM | � DONE | Compilation OK avec default-features=false |
 | velesdb-mobile | SDK Mobile | ⚪ N/A | Utilise Core via UniFFI (transparent) |
 | sdks/typescript | SDK TypeScript | ⚪ N/A | Client HTTP (pas d'impact) |
 | tauri-plugin-velesdb | Plugin Tauri | ⚪ N/A | Utilise Core (transparent) |
@@ -30,7 +30,7 @@
 | integrations/llamaindex | LlamaIndex | ⚪ N/A | Utilise SDK Python (transparent) |
 | velesdb-cli | CLI | ✅ DONE | Commandes `velesdb simd info/benchmark` |
 | docs/ | Documentation | ✅ DONE | SIMD_PERFORMANCE.md mis à jour |
-| tests/e2e_complete.rs | Tests E2E Core | 🔴 TODO | Vérifier compilation |
+| tests/e2e_complete.rs | Tests E2E Core | � DONE | Validé avec simd_ops |
 | examples/ | Examples | ⚪ N/A | Pas d'exemple SIMD spécifique |
 
 ## Impact Analysis

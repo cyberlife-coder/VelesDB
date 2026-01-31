@@ -574,6 +574,7 @@ fn benchmark_euclidean(backend: SimdBackend, a: &[f32], b: &[f32]) -> f64 {
 }
 
 /// Benchmarks hamming distance for a backend.
+#[allow(dead_code)]
 fn benchmark_hamming(backend: SimdBackend, a: &[f32], b: &[f32]) -> f64 {
     for _ in 0..10 {
         let _ = std::hint::black_box(execute_hamming(backend, a, b));
@@ -589,6 +590,7 @@ fn benchmark_hamming(backend: SimdBackend, a: &[f32], b: &[f32]) -> f64 {
 }
 
 /// Benchmarks jaccard similarity for a backend.
+#[allow(dead_code)]
 fn benchmark_jaccard(backend: SimdBackend, a: &[f32], b: &[f32]) -> f64 {
     for _ in 0..10 {
         let _ = std::hint::black_box(execute_jaccard(backend, a, b));
