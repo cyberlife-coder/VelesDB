@@ -79,9 +79,11 @@ impl MatchMetrics {
 
     /// Records latency in histogram.
     fn record_latency(&self, latency: Duration) {
-        let ms = latency.as_millis() as u64;
-        self.latency_sum_ns
-            .fetch_add(latency.as_nanos() as u64, Ordering::Relaxed);
+        let ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
+        self.latency_sum_ns.fetch_add(
+            u64::try_from(latency.as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
 
         // Find the right bucket
         let bucket_idx = LATENCY_BUCKETS_MS

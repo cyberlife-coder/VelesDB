@@ -292,12 +292,12 @@ impl<'a> EpisodicMemory<'a> {
 
         let desc = payload
             .get("description")
-            .and_then(|v| v.as_str())
+            .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string();
         let ts = payload
             .get("timestamp")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
 
         Ok(Some((desc, ts, point.vector.clone())))

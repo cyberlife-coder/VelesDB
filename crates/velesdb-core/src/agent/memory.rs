@@ -86,6 +86,7 @@ impl<'a> AgentMemory<'a> {
     }
 
     /// Configures eviction policies for automatic memory cleanup.
+    #[must_use]
     pub fn with_eviction_config(mut self, config: EvictionConfig) -> Self {
         self.eviction_config = config;
         self
@@ -97,6 +98,7 @@ impl<'a> AgentMemory<'a> {
     ///
     /// * `snapshot_dir` - Directory path for storing snapshots
     /// * `max_snapshots` - Maximum number of snapshots to retain
+    #[must_use]
     pub fn with_snapshots(mut self, snapshot_dir: &str, max_snapshots: usize) -> Self {
         self.snapshot_manager = Some(SnapshotManager::new(snapshot_dir, max_snapshots));
         self

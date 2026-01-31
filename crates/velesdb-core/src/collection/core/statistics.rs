@@ -32,17 +32,21 @@ impl Collection {
         // Note: deleted_count and column_stats are placeholders for future tombstone tracking
         // and per-column cardinality analysis (EPIC-046 future work)
         let config = self.config.read();
-        collector.set_row_count(config.point_count as u64);
+        // Reason: Collection sizes are bounded by available memory, always < u64::MAX on 64-bit systems
+        collector
+            .set_row_count(u64::try_from(config.point_count).expect("point_count fits in u64"));
 
         // HNSW index statistics
         let hnsw_len = self.index.len();
-        let hnsw_stats = IndexStats::new("hnsw_primary", "HNSW").with_entry_count(hnsw_len as u64);
+        let hnsw_stats = IndexStats::new("hnsw_primary", "HNSW")
+            .with_entry_count(u64::try_from(hnsw_len).expect("index length fits in u64"));
         collector.add_index_stats(hnsw_stats);
 
         // BM25 index statistics - use len() if available
         let bm25_len = self.text_index.len();
         if bm25_len > 0 {
-            let bm25_stats = IndexStats::new("bm25_text", "BM25").with_entry_count(bm25_len as u64);
+            let bm25_stats = IndexStats::new("bm25_text", "BM25")
+                .with_entry_count(u64::try_from(bm25_len).expect("text_index length fits in u64"));
             collector.add_index_stats(bm25_stats);
         }
 

@@ -172,7 +172,6 @@ mod simd_native_tests;
 #[cfg(target_arch = "aarch64")]
 pub mod simd_neon;
 pub mod simd_neon_prefetch;
-pub mod simd_portable;
 #[cfg(test)]
 mod simd_prefetch_x86_tests;
 #[cfg(test)]
