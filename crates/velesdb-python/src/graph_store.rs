@@ -221,9 +221,9 @@ impl GraphStore {
         // Convert Python config to core config
         let rel_types: Vec<String> = config.relationship_types.unwrap_or_default();
 
-        #[allow(clippy::cast_possible_truncation)]
         let core_config = CoreStreamingConfig {
-            max_depth: config.max_depth as u32,
+            max_depth: u32::try_from(config.max_depth)
+                .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
             max_visited_size: config.max_visited,
             rel_types,
             limit: Some(config.max_visited),
