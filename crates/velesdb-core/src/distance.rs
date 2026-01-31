@@ -2,13 +2,15 @@
 //!
 //! # Performance
 //!
-//! All distance calculations use explicit SIMD implementations via the `simd_explicit` module:
-//! - **Cosine**: Single-pass fused SIMD (4x faster than auto-vectorized)
-//! - **Euclidean**: Explicit f32x8 SIMD (2.8x faster)
-//! - **Dot Product**: Explicit f32x8 SIMD (3x faster)
+//! All distance calculations use adaptive SIMD dispatch via the `simd_ops` module,
+//! which automatically selects the optimal backend based on runtime benchmarks:
+//! - **Cosine**: Adaptive dispatch (AVX-512/AVX2/NEON/Wide)
+//! - **Euclidean**: Adaptive dispatch with native intrinsics for large vectors
+//! - **Dot Product**: Adaptive dispatch with FMA optimization
 //! - **Hamming (binary)**: POPCNT on packed u64 (48x faster than f32)
+//! - **Jaccard**: Set similarity with SIMD acceleration
 
-use crate::simd_explicit;
+use crate::simd_ops;
 use serde::{Deserialize, Serialize};
 
 /// Distance metric for vector similarity calculations.
@@ -62,13 +64,7 @@ impl DistanceMetric {
     #[must_use]
     #[inline]
     pub fn calculate(&self, a: &[f32], b: &[f32]) -> f32 {
-        match self {
-            Self::Cosine => simd_explicit::cosine_similarity_simd(a, b),
-            Self::Euclidean => simd_explicit::euclidean_distance_simd(a, b),
-            Self::DotProduct => simd_explicit::dot_product_simd(a, b),
-            Self::Hamming => simd_explicit::hamming_distance_simd(a, b),
-            Self::Jaccard => simd_explicit::jaccard_similarity_simd(a, b),
-        }
+        simd_ops::similarity(*self, a, b)
     }
 
     /// Returns whether higher values indicate more similarity.

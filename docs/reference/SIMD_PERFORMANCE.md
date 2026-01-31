@@ -1,15 +1,36 @@
 # SIMD Performance Guide
 
-VelesDB uses explicit SIMD optimizations for ultra-fast vector operations.
+VelesDB uses **adaptive SIMD dispatch** for ultra-fast vector operations, automatically selecting the optimal backend based on runtime micro-benchmarks.
+
+## Adaptive Dispatch Architecture
+
+The `simd_ops` module automatically selects the fastest SIMD backend for each (metric, dimension) combination on the current machine:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    simd_ops::similarity()                        │
+│                                                                  │
+│  First call: micro-benchmarks (~5-10ms) → builds DispatchTable  │
+│  Subsequent calls: O(1) lookup → direct backend call            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+  ┌───────────┐        ┌───────────┐        ┌───────────┐
+  │ NativeAVX │        │  Wide32   │        │  Wide8    │
+  │ (512/256) │        │ (4×f32x8) │        │ (f32x8)   │
+  └───────────┘        └───────────┘        └───────────┘
+```
 
 ## Architecture Support
 
-| Platform | Instructions | Performance (768D) |
-|----------|-------------|-------------------|
-| **x86_64** | AVX2 (256-bit) | ~45-80ns |
-| **x86_64** | AVX-512 (512-bit) | ~30-50ns (if available) |
-| **aarch64** | NEON (128-bit) | ~60-100ns |
-| **WASM** | SIMD128 | ~80-120ns |
+| Platform | Backend | Instructions | Performance (768D) |
+|----------|---------|-------------|-------------------|
+| **x86_64 AVX-512** | NativeAvx512 | 512-bit | ~30-50ns |
+| **x86_64 AVX2** | NativeAvx2 | 256-bit | ~45-80ns |
+| **aarch64** | NativeNeon | NEON 128-bit | ~60-100ns |
+| **WASM** | Wide8 | SIMD128 | ~80-120ns |
+| **Fallback** | Scalar | Native Rust | ~150-200ns |
 
 ## Performance Benchmarks
 
@@ -105,6 +126,49 @@ pub struct ContiguousVectors {
 - Sequential access pattern
 - Enables hardware prefetching
 
+## AVX-512 Transition Cost (Intel Skylake+)
+
+On Intel Skylake-X and later CPUs, AVX-512 instructions incur a significant **warmup cost**:
+
+| Phase | Cycles | Time @ 4GHz |
+|-------|--------|-------------|
+| License transition | ~20,000 | ~5μs |
+| Register file power-up | ~36,000 | ~9μs |
+| **Total warmup** | **~56,000** | **~14μs** |
+
+### Why This Matters
+
+1. **First AVX-512 instruction** triggers CPU frequency throttling (P-state transition)
+2. **Subsequent instructions** run at reduced frequency until warmup completes
+3. **Short bursts** of AVX-512 may be slower than AVX2 due to transition overhead
+
+### VelesDB Mitigation
+
+The adaptive dispatch system handles this automatically:
+
+```rust
+// 500 iterations per benchmark captures warmup cost
+const BENCHMARK_ITERATIONS: usize = 500;
+
+// Eager initialization at Database::open() avoids first-call latency
+let info = simd_ops::init_dispatch();
+```
+
+**Result**: The dispatch table reflects real-world performance *after* warmup, ensuring AVX-512 is only selected when it provides a genuine advantage over AVX2.
+
+### Recommendations
+
+| Workload | Recommendation |
+|----------|----------------|
+| **Sustained vector ops** (batch search) | AVX-512 beneficial |
+| **Sporadic single queries** | AVX2 may be faster |
+| **Mixed workloads** | Let adaptive dispatch decide |
+
+To check which backend was selected:
+```bash
+velesdb simd info
+```
+
 ## Best Practices
 
 ### 1. Pre-normalize at Insertion
@@ -148,12 +212,29 @@ cargo bench --bench simd_benchmark -- "768"
 cargo bench --bench simd_benchmark -- "explicit_simd|auto_vec"
 ```
 
+## Adaptive Dispatch API
+
+```rust
+use velesdb_core::simd_ops;
+use velesdb_core::DistanceMetric;
+
+// Automatic dispatch to fastest backend
+let sim = simd_ops::similarity(DistanceMetric::Cosine, &a, &b);
+let dist = simd_ops::distance(DistanceMetric::Euclidean, &a, &b);
+let n = simd_ops::norm(&v);
+simd_ops::normalize_inplace(&mut v);
+
+// Introspection
+let info = simd_ops::dispatch_info();
+println!("Init time: {}ms", info.init_time_ms);
+println!("Cosine backends: {:?}", info.cosine_backends);
+```
+
 ## Future Optimizations
 
-1. **AVX-512 native** - 80% gain on supported CPUs (Zen 4+, Skylake-X+)
-2. **ARM SVE** - Scalable vectors for ARM servers
-3. **WASM SIMD relaxed** - Additional browser performance
-4. **GPU offload** - Optional CUDA/Metal for batch operations
+1. **ARM SVE** - Scalable vectors for ARM servers
+2. **WASM SIMD relaxed** - Additional browser performance
+3. **GPU offload** - Optional CUDA/Metal for batch operations
 
 ## License
 

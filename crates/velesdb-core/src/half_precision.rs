@@ -197,10 +197,11 @@ impl From<&[f32]> for VectorData {
 /// For F16/BF16 vectors, converts to f32 on the fly without allocation.
 #[must_use]
 pub fn dot_product(a: &VectorData, b: &VectorData) -> f32 {
-    use crate::simd_avx512::dot_product_auto;
+    use crate::simd_ops;
 
     match (a, b) {
-        (VectorData::F32(va), VectorData::F32(vb)) => dot_product_auto(va, vb),
+        // Use adaptive SIMD dispatch for F32×F32 (optimal backend selection)
+        (VectorData::F32(va), VectorData::F32(vb)) => simd_ops::dot_product(va, vb),
         (VectorData::F32(va), VectorData::F16(vb)) => {
             va.iter().zip(vb.iter()).map(|(&x, y)| x * y.to_f32()).sum()
         }
@@ -223,11 +224,11 @@ pub fn dot_product(a: &VectorData, b: &VectorData) -> f32 {
             .zip(vb.iter())
             .map(|(x, y)| x.to_f32() * y.to_f32())
             .sum(),
-        // Fallback for mixed F16/BF16 (rare)
+        // Fallback for mixed F16/BF16 (rare) - use simd_ops after conversion
         _ => {
             let va = a.to_f32_vec();
             let vb = b.to_f32_vec();
-            dot_product_auto(&va, &vb)
+            simd_ops::dot_product(&va, &vb)
         }
     }
 }
@@ -235,10 +236,11 @@ pub fn dot_product(a: &VectorData, b: &VectorData) -> f32 {
 /// Computes cosine similarity between two `VectorData`.
 #[must_use]
 pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
-    use crate::simd_avx512::cosine_similarity_auto;
+    use crate::{simd_ops, DistanceMetric};
 
     if let (VectorData::F32(va), VectorData::F32(vb)) = (a, b) {
-        cosine_similarity_auto(va, vb)
+        // Use adaptive SIMD dispatch for F32×F32 (optimal backend selection)
+        simd_ops::similarity(DistanceMetric::Cosine, va, vb)
     } else {
         let dot = dot_product(a, b);
         let norm_a = norm_squared(a).sqrt();
@@ -255,10 +257,13 @@ pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
 /// Computes Euclidean distance between two `VectorData`.
 #[must_use]
 pub fn euclidean_distance(a: &VectorData, b: &VectorData) -> f32 {
-    use crate::simd_avx512::euclidean_auto;
+    use crate::{simd_ops, DistanceMetric};
 
     match (a, b) {
-        (VectorData::F32(va), VectorData::F32(vb)) => euclidean_auto(va, vb),
+        // Use adaptive SIMD dispatch for F32×F32 (optimal backend selection)
+        (VectorData::F32(va), VectorData::F32(vb)) => {
+            simd_ops::similarity(DistanceMetric::Euclidean, va, vb)
+        }
         (VectorData::F32(va), VectorData::F16(vb)) => va
             .iter()
             .zip(vb.iter())
@@ -277,19 +282,25 @@ pub fn euclidean_distance(a: &VectorData, b: &VectorData) -> f32 {
             .map(|(x, y)| (x.to_f32() - y.to_f32()).powi(2))
             .sum::<f32>()
             .sqrt(),
-        // Fallback for others
+        // Fallback for others - use simd_ops after conversion
         _ => {
             let va = a.to_f32_vec();
             let vb = b.to_f32_vec();
-            euclidean_auto(&va, &vb)
+            simd_ops::similarity(DistanceMetric::Euclidean, &va, &vb)
         }
     }
 }
 
 /// Helper to compute squared L2 norm without allocation
 fn norm_squared(v: &VectorData) -> f32 {
+    use crate::simd_ops;
+
     match v {
-        VectorData::F32(data) => data.iter().map(|&x| x * x).sum(),
+        // Use adaptive SIMD dispatch for F32 norm
+        VectorData::F32(data) => {
+            let n = simd_ops::norm(data);
+            n * n
+        }
         VectorData::F16(data) => data
             .iter()
             .map(|x| {

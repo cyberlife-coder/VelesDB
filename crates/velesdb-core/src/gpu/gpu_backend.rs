@@ -340,17 +340,15 @@ impl GpuAccelerator {
             return Vec::new();
         }
 
-        // CPU fallback for now - GPU pipeline can be added similarly to cosine
+        // CPU fallback using adaptive SIMD dispatch for optimal performance
+        use crate::{simd_ops, DistanceMetric};
+
         let mut results = Vec::with_capacity(num_vectors);
         for i in 0..num_vectors {
             let offset = i * dimension;
             let vec = &vectors[offset..offset + dimension];
-            let dist: f32 = query
-                .iter()
-                .zip(vec.iter())
-                .map(|(q, v)| (q - v).powi(2))
-                .sum::<f32>()
-                .sqrt();
+            // Use simd_ops for SIMD-accelerated Euclidean distance
+            let dist = simd_ops::distance(DistanceMetric::Euclidean, query, vec);
             results.push(dist);
         }
         results
@@ -374,12 +372,15 @@ impl GpuAccelerator {
             return Vec::new();
         }
 
-        // CPU fallback for now - GPU pipeline can be added similarly to cosine
+        // CPU fallback using adaptive SIMD dispatch for optimal performance
+        use crate::simd_ops;
+
         let mut results = Vec::with_capacity(num_vectors);
         for i in 0..num_vectors {
             let offset = i * dimension;
             let vec = &vectors[offset..offset + dimension];
-            let dot: f32 = query.iter().zip(vec.iter()).map(|(q, v)| q * v).sum();
+            // Use simd_ops for SIMD-accelerated dot product
+            let dot = simd_ops::dot_product(query, vec);
             results.push(dot);
         }
         results
