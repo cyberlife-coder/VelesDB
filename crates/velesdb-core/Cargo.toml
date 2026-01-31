@@ -254,10 +254,6 @@ harness = false
 name = "smoke_test"
 harness = false
 
-[[bench]]
-name = "portable_simd_eval"
-harness = false
-
 # ============================================================================
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================

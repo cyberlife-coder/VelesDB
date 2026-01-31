@@ -266,6 +266,21 @@ enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// SIMD performance diagnostics and benchmarking
+    Simd {
+        #[command(subcommand)]
+        action: SimdAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SimdAction {
+    /// Show current SIMD dispatch configuration
+    Info,
+
+    /// Force re-benchmark of all SIMD backends
+    Benchmark,
 }
 
 #[derive(Subcommand)]
@@ -756,6 +771,62 @@ fn main() -> anyhow::Result<()> {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "velesdb", &mut io::stdout());
+        }
+        Commands::Simd { action } => {
+            use colored::Colorize;
+            use velesdb_core::simd_ops;
+
+            match action {
+                SimdAction::Info => {
+                    let info = simd_ops::dispatch_info();
+                    println!("\n{}", "SIMD Dispatch Configuration".bold().underline());
+                    println!("  Init time: {:.2}ms", info.init_time_ms);
+                    println!(
+                        "  Available backends: {:?}",
+                        info.available_backends
+                            .iter()
+                            .map(|b| format!("{}", b))
+                            .collect::<Vec<_>>()
+                    );
+                    println!("\n{}", "Selected Backends by Dimension:".cyan());
+                    for (i, dim) in info.dimensions.iter().enumerate() {
+                        println!(
+                            "  {:>4}D: Cosine={}, Euclidean={}, DotProduct={}, Norm={}",
+                            dim,
+                            format!("{}", info.cosine_backends[i]).green(),
+                            format!("{}", info.euclidean_backends[i]).green(),
+                            format!("{}", info.dot_product_backends[i]).green(),
+                            format!("{}", info.norm_backends[i]).green(),
+                        );
+                    }
+                    println!(
+                        "\n  Hamming: {}, Jaccard: {}",
+                        format!("{}", info.hamming_backend).green(),
+                        format!("{}", info.jaccard_backend).green()
+                    );
+                    println!();
+                }
+                SimdAction::Benchmark => {
+                    println!("{}", "Running SIMD micro-benchmarks...".yellow());
+                    let info = simd_ops::force_rebenchmark();
+                    println!(
+                        "{} Re-benchmarked in {:.2}ms",
+                        "✅".green(),
+                        info.init_time_ms
+                    );
+                    println!("\n{}", "New Backend Selection:".cyan());
+                    for (i, dim) in info.dimensions.iter().enumerate() {
+                        println!(
+                            "  {:>4}D: Cosine={}, Euclidean={}, DotProduct={}",
+                            dim,
+                            format!("{}", info.cosine_backends[i]).green(),
+                            format!("{}", info.euclidean_backends[i]).green(),
+                            format!("{}", info.dot_product_backends[i]).green(),
+                        );
+                    }
+                    println!();
+                }
+            }
         }
     }
 
