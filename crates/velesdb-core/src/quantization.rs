@@ -379,7 +379,7 @@ pub fn euclidean_squared_quantized(query: &[f32], quantized: &QuantizedVector) -
 #[must_use]
 pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -> f32 {
     use crate::simd_ops;
-    
+
     let dot = dot_product_quantized(query, quantized);
 
     // Compute norms using adaptive SIMD dispatch
@@ -525,7 +525,7 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
 #[must_use]
 pub fn cosine_similarity_quantized_simd(query: &[f32], quantized: &QuantizedVector) -> f32 {
     use crate::simd_ops;
-    
+
     let dot = dot_product_quantized_simd(query, quantized);
 
     // Compute query norm using adaptive SIMD dispatch
