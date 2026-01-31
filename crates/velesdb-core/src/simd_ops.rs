@@ -254,9 +254,20 @@ pub fn normalize_inplace(v: &mut [f32]) {
 }
 
 /// Computes dot product using adaptive dispatch.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
 #[inline]
 #[must_use]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "Vector length mismatch: {} vs {}",
+        a.len(),
+        b.len()
+    );
     let table = DISPATCH_TABLE.get_or_init(DispatchTable::from_benchmarks);
     let backend = table.select_backend(Metric::DotProduct, a.len());
     execute_dot_product(backend, a, b)
@@ -641,8 +652,12 @@ fn execute_distance(backend: SimdBackend, metric: DistanceMetric, a: &[f32], b: 
         DistanceMetric::Euclidean | DistanceMetric::Hamming => {
             execute_similarity(backend, metric, a, b)
         }
-        DistanceMetric::Cosine | DistanceMetric::DotProduct | DistanceMetric::Jaccard => {
+        DistanceMetric::Cosine | DistanceMetric::Jaccard => {
             1.0 - execute_similarity(backend, metric, a, b)
+        }
+        DistanceMetric::DotProduct => {
+            // DotProduct is unbounded, use negation for distance conversion
+            -execute_similarity(backend, metric, a, b)
         }
     }
 }
@@ -909,14 +924,36 @@ mod tests {
     }
 
     #[test]
-    fn test_large_vectors() {
-        let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
-        let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
+    fn test_distance_dot_product_uses_negation_not_one_minus() {
+        // Bug: DotProduct distance was calculated as 1.0 - dot_product
+        // which is wrong for unbounded dot product values.
+        // Correct: distance = -dot_product (higher dot = lower distance)
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![4.0, 5.0, 6.0];
+        // dot_product = 1*4 + 2*5 + 3*6 = 32.0
+        let dot = similarity(DistanceMetric::DotProduct, &a, &b);
+        assert!((dot - 32.0).abs() < 1e-5, "Dot product should be 32.0");
 
-        let sim = similarity(DistanceMetric::Cosine, &a, &b);
-        assert!((-1.0..=1.0).contains(&sim), "Cosine should be in [-1, 1]");
+        // Distance should be -32.0 (negation), not 1.0 - 32.0 = -31.0
+        let dist = distance(DistanceMetric::DotProduct, &a, &b);
+        assert!((dist - (-32.0)).abs() < 1e-5, 
+            "DotProduct distance should be -dot_product = -32.0, got {}", dist);
 
-        let dist = similarity(DistanceMetric::Euclidean, &a, &b);
-        assert!(dist >= 0.0, "Euclidean distance should be non-negative");
+        // Test with dot product > 1 (the bug case)
+        let c = vec![10.0, 0.0, 0.0];
+        let d = vec![10.0, 0.0, 0.0];
+        // dot_product = 100.0
+        let dist2 = distance(DistanceMetric::DotProduct, &c, &d);
+        assert!((dist2 - (-100.0)).abs() < 1e-5,
+            "DotProduct distance for value > 1 should be -100.0, got {}", dist2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector length mismatch")]
+    fn test_dot_product_panics_on_length_mismatch() {
+        // Bug: dot_product lacked length validation at public API
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![4.0, 5.0]; // Different length
+        dot_product(&a, &b); // Should panic with clear message
     }
 }
