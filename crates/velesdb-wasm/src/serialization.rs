@@ -30,7 +30,7 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
     bytes.push(1);
 
     // Dimension
-    #[allow(clippy::cast_possible_truncation)]
+    // Reason: WASM vector dimensions are always < 100K (model constraints), safely < u32::MAX
     let dim_u32 = store.dimension as u32;
     bytes.extend_from_slice(&dim_u32.to_le_bytes());
 
@@ -39,7 +39,7 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
     bytes.push(metric_byte);
 
     // Vector count
-    #[allow(clippy::cast_possible_truncation)]
+    // Reason: WASM memory limits (4GB) prevent > u64::MAX vectors anyway
     let count_u64 = count as u64;
     bytes.extend_from_slice(&count_u64.to_le_bytes());
 
@@ -85,7 +85,7 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
     let metric = byte_to_metric(bytes[9])?;
 
     // Read count
-    #[allow(clippy::cast_possible_truncation)]
+    // Reason: WASM memory limits prevent storing > usize::MAX vectors
     let count = u64::from_le_bytes([
         bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17],
     ]) as usize;
