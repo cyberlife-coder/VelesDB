@@ -170,7 +170,6 @@ pub mod simd_native;
 #[cfg(test)]
 mod simd_native_tests;
 #[cfg(target_arch = "aarch64")]
-pub mod simd_neon;
 pub mod simd_neon_prefetch;
 pub mod simd_ops;
 #[cfg(test)]

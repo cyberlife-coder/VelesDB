@@ -219,7 +219,11 @@ impl MatchQueryPlanner {
         stats: &CollectionStats,
         threshold: f32,
     ) -> usize {
-        let limit = match_clause.return_clause.limit.unwrap_or(100) as usize;
+        let limit = match_clause
+            .return_clause
+            .limit
+            .and_then(|l| usize::try_from(l).ok())
+            .unwrap_or(100);
         let selectivity = Self::estimate_selectivity(threshold);
 
         // Over-fetch to account for graph filtering

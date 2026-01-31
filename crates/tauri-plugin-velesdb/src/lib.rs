@@ -83,11 +83,15 @@ pub use state::VelesDbState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+// Use DistanceMetric from velesdb_core
+use velesdb_core::DistanceMetric;
+
 /// Simple in-memory vector index for demo purposes.
 /// For production, use the full plugin commands with persistent storage.
 pub struct SimpleVectorIndex {
     vectors: HashMap<u64, Vec<f32>>,
     dimension: usize,
+    metric: DistanceMetric,
 }
 
 impl SimpleVectorIndex {
@@ -97,6 +101,17 @@ impl SimpleVectorIndex {
         Self {
             vectors: HashMap::new(),
             dimension,
+            metric: DistanceMetric::Cosine, // Default metric
+        }
+    }
+
+    /// Creates a new empty index with the given dimension and metric.
+    #[must_use]
+    pub fn with_metric(dimension: usize, metric: DistanceMetric) -> Self {
+        Self {
+            vectors: HashMap::new(),
+            dimension,
+            metric,
         }
     }
 
@@ -135,12 +150,13 @@ impl SimpleVectorIndex {
             .vectors
             .iter()
             .map(|(id, vec)| {
-                let score = cosine_similarity(query, vec);
+                let score = self.metric.calculate(query, vec);
                 (*id, score)
             })
             .collect();
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort by score according to metric ordering
+        self.metric.sort_results(&mut scores);
         scores.truncate(k);
         Ok(scores)
     }
@@ -166,17 +182,6 @@ impl SimpleVectorIndex {
     /// Clears all vectors from the index.
     pub fn clear(&mut self) {
         self.vectors.clear();
-    }
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a > 0.0 && norm_b > 0.0 {
-        dot / (norm_a * norm_b)
-    } else {
-        0.0
     }
 }
 
