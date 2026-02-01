@@ -53,16 +53,23 @@
 | **Euclidean** | 13.4ns | 31.7ns | 70ns | Baseline |
 | **Cosine** | 36ns | 68ns | 131ns | Baseline |
 
-### Stratégie Adaptative (EPIC-PERF-003)
+### Stratégie Adaptative (EPIC-PERF-003) - Optimisée Feb 2026
 
-Le dispatch s'adapte automatiquement au CPU détecté :
+Le dispatch s'adapte automatiquement au CPU détecté avec des seuils optimisés basés sur la recherche state-of-the-art:
 
-| CPU Détecté | Implémentation | Seuil 4-acc | Gain typique |
-|-------------|----------------|-------------|--------------|
-| **AVX-512** (Xeon, serveurs) | 512-bit 4-acc | >= 512 | 15-25% |
-| **AVX2** (Core 12th/13th/14th gen, Ryzen) | 256-bit 4-acc | >= 256 | **15-37%** |
-| **AVX2 petits vecteurs** | 256-bit 2-acc | < 256 | Baseline |
+| CPU Détecté | Implémentation | Seuils | Gain typique |
+|-------------|----------------|--------|--------------|
+| **AVX-512** (Xeon, serveurs) | 512-bit 4-acc | >= 512 éléments | 15-25% |
+| **AVX2** (Core 12th/13th/14th gen, Ryzen) | 256-bit 4-acc | >= 256 | 15-37% |
+| **AVX2** | 256-bit 2-acc | 64-255 | Baseline |
+| **AVX2 petits vecteurs** | 256-bit 1-acc | **16-63** | **Meilleur ratio overhead/perf** |
+| **AVX2 tiny** | Scalar | **< 16** | Évite overhead SIMD |
 | **ARM NEON** | 128-bit 1-acc | >= 4 | Baseline |
+
+**Optimisations implémentées:**
+- **Tail unrolling**: Remainder déroulé (4→2→1 éléments) pour éviter les boucles
+- **Warmup AVX-512**: 3 itérations avant mesure pour stabiliser la fréquence CPU
+- **Dispatch optimisé**: Scalar < 16 éléments (évite overhead SIMD setup)
 
 ### EPIC-073 SIMD Pipeline Optimizations
 
