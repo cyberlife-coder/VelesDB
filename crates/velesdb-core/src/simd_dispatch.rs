@@ -1,8 +1,8 @@
 //! Zero-overhead SIMD function dispatch.
 //!
-//! This module provides direct access to SIMD-optimized functions
-//! by delegating to `simd_native` which handles architecture-specific
-//! implementations internally.
+//! This module provides a thin wrapper around `simd_native` functions,
+//! offering a stable public API while `simd_native` handles the
+//! architecture-specific SIMD implementations internally.
 //!
 //! # EPIC-C.2: TS-SIMD-002
 

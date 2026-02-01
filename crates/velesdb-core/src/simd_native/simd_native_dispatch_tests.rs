@@ -108,6 +108,25 @@ fn test_dispatch_uses_4acc_for_very_large_vectors() {
 // ============================================================================
 
 #[test]
+fn test_dispatch_empty_vectors() {
+    // Empty vectors should return 0.0 (mathematically correct for dot product)
+    let a: Vec<f32> = vec![];
+    let b: Vec<f32> = vec![];
+    let result = dot_product_native(&a, &b);
+    assert!(
+        (result - 0.0).abs() < 1e-6,
+        "Dot product of empty vectors should be 0.0"
+    );
+
+    // Also test squared_l2
+    let l2_result = squared_l2_native(&a, &b);
+    assert!(
+        (l2_result - 0.0).abs() < 1e-6,
+        "Squared L2 of empty vectors should be 0.0"
+    );
+}
+
+#[test]
 fn test_dispatch_exact_thresholds() {
     // Test exact boundary values
     // Size 15 should be scalar, 16 should be SIMD

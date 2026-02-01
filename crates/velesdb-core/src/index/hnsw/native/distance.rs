@@ -171,8 +171,14 @@ impl AdaptiveSimdDistance {
 
 impl DistanceEngine for AdaptiveSimdDistance {
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        // Use simd_native directly for zero-overhead dispatch
-        self.metric.calculate(a, b)
+        // Convert similarity to distance for metrics where higher is better
+        match self.metric {
+            DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
+            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
+            DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
+            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
+            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
+        }
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
@@ -583,6 +589,125 @@ mod tests {
         let b = vec![1.0, 1.0, 1.0, 0.0];
         let dist = native.distance(&a, &b);
         assert!((0.0..=1.0).contains(&dist));
+    }
+
+    // =========================================================================
+    // Tests for AdaptiveSimdDistance bug fix (returns distance, not similarity)
+    // =========================================================================
+
+    #[test]
+    fn test_adaptive_simd_cosine_returns_distance() {
+        let adaptive = super::AdaptiveSimdDistance::new(DistanceMetric::Cosine);
+
+        // Identical vectors should have distance ~0 (not similarity ~1)
+        let v = vec![1.0, 2.0, 3.0, 4.0];
+        let dist = adaptive.distance(&v, &v);
+        assert!(
+            dist.abs() < 1e-4,
+            "AdaptiveSimdDistance should return distance ~0 for identical vectors, got {dist}"
+        );
+
+        // Opposite vectors should have distance ~2 (not similarity ~-1)
+        let opposite: Vec<f32> = v.iter().map(|x| -x).collect();
+        let dist_opposite = adaptive.distance(&v, &opposite);
+        assert!(
+            (dist_opposite - 2.0).abs() < 1e-4,
+            "AdaptiveSimdDistance should return distance ~2 for opposite vectors, got {dist_opposite}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_simd_dot_product_returns_distance() {
+        let adaptive = super::AdaptiveSimdDistance::new(DistanceMetric::DotProduct);
+
+        // Positive dot product should give negative distance (lower = better)
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 1.0, 1.0];
+        let dist = adaptive.distance(&a, &b);
+        // dot = 1*1 + 2*1 + 3*1 = 6, distance = -6
+        assert!(
+            dist < 0.0,
+            "AdaptiveSimdDistance DotProduct should return negative distance, got {dist}"
+        );
+        assert!(
+            (dist + 6.0).abs() < 1e-4,
+            "Expected distance ~-6, got {dist}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_simd_jaccard_returns_distance() {
+        let adaptive = super::AdaptiveSimdDistance::new(DistanceMetric::Jaccard);
+
+        // Identical vectors should have distance ~0
+        let v: Vec<f32> = (0..32)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let dist = adaptive.distance(&v, &v);
+        assert!(
+            dist.abs() < 1e-4,
+            "AdaptiveSimdDistance Jaccard should return distance ~0 for identical vectors, got {dist}"
+        );
+
+        // Jaccard distance should be in [0, 1]
+        let b: Vec<f32> = (0..32)
+            .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let dist2 = adaptive.distance(&v, &b);
+        assert!(
+            (0.0..=1.0).contains(&dist2),
+            "AdaptiveSimdDistance Jaccard distance should be in [0,1], got {dist2}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_simd_matches_native_simd() {
+        // Ensure AdaptiveSimdDistance returns same results as NativeSimdDistance
+        let adaptive = super::AdaptiveSimdDistance::new(DistanceMetric::Cosine);
+        let native = NativeSimdDistance::new(DistanceMetric::Cosine);
+
+        let a: Vec<f32> = (0..768).map(|i| (i as f32 * 0.01).sin()).collect();
+        let b: Vec<f32> = (0..768).map(|i| (i as f32 * 0.02).cos()).collect();
+
+        let adaptive_dist = adaptive.distance(&a, &b);
+        let native_dist = native.distance(&a, &b);
+
+        assert!(
+            (adaptive_dist - native_dist).abs() < 1e-3,
+            "AdaptiveSimdDistance should match NativeSimdDistance: adaptive={adaptive_dist}, native={native_dist}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_simd_euclidean_returns_distance() {
+        let adaptive = super::AdaptiveSimdDistance::new(DistanceMetric::Euclidean);
+
+        let a = vec![0.0, 0.0, 0.0, 0.0];
+        let b = vec![3.0, 4.0, 0.0, 0.0];
+        let dist = adaptive.distance(&a, &b);
+
+        assert!(
+            (dist - 5.0).abs() < 1e-4,
+            "AdaptiveSimdDistance Euclidean should return 5.0 for 3-4-5 triangle, got {dist}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_simd_hamming_returns_distance() {
+        let adaptive = super::AdaptiveSimdDistance::new(DistanceMetric::Hamming);
+
+        let a: Vec<f32> = (0..32)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f32> = (0..32)
+            .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+            .collect();
+
+        let dist = adaptive.distance(&a, &b);
+        assert!(
+            dist >= 0.0,
+            "AdaptiveSimdDistance Hamming distance should be non-negative, got {dist}"
+        );
     }
 
     #[test]

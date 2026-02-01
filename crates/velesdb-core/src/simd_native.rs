@@ -344,16 +344,6 @@ unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
     _mm512_reduce_add_ps(sum)
 }
 
-/// AVX-512 cosine similarity for pre-normalized vectors.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[inline]
-#[allow(dead_code)] // Reserved for future direct use
-unsafe fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
-    // For unit vectors: cos(θ) = a · b
-    dot_product_avx512(a, b)
-}
-
 // =============================================================================
 // AVX2 Implementation (x86_64 fallback)
 // =============================================================================

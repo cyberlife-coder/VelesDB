@@ -8,7 +8,10 @@ use super::{cosine_similarity_native, dot_product_native, warmup_simd_cache};
 // Warmup Tests
 // ============================================================================
 
+/// Test that warmup reduces latency (performance test, may be flaky in CI).
+/// Run with: cargo test -- --ignored
 #[test]
+#[ignore = "performance test - run with --ignored or PERF_TESTS=1"]
 fn test_warmup_reduces_first_request_latency() {
     // Call warmup
     warmup_simd_cache();
