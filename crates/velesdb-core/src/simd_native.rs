@@ -866,14 +866,21 @@ unsafe fn hamming_avx512(a: &[f32], b: &[f32]) -> f32 {
     let mut diff_count: u64 = 0;
     let mut i = 0;
 
+    // Threshold for binary comparison
+    let threshold = _mm512_set1_ps(0.5);
+
     // Process 16 floats at a time using AVX-512
     while i + 16 <= len {
         let va = _mm512_loadu_ps(a_ptr.add(i));
         let vb = _mm512_loadu_ps(b_ptr.add(i));
 
-        // Compare for inequality: 0xFFFFFFFF where different
-        let cmp = _mm512_cmp_ps_mask(va, vb, _CMP_NEQ_UQ);
-        diff_count += cmp.count_ones() as u64;
+        // Binary threshold: compare each value > 0.5
+        let mask_a = _mm512_cmp_ps_mask(va, threshold, _CMP_GT_OQ);
+        let mask_b = _mm512_cmp_ps_mask(vb, threshold, _CMP_GT_OQ);
+
+        // XOR to find positions where binary values differ
+        let diff_mask = mask_a ^ mask_b;
+        diff_count += diff_mask.count_ones() as u64;
 
         i += 16;
     }
@@ -894,15 +901,21 @@ unsafe fn hamming_avx2(a: &[f32], b: &[f32]) -> f32 {
     let mut diff_count: u64 = 0;
     let mut i = 0;
 
+    // Threshold for binary comparison
+    let threshold = _mm256_set1_ps(0.5);
+
     // Process 8 floats at a time using AVX2
     while i + 8 <= len {
         let va = _mm256_loadu_ps(a_ptr.add(i));
         let vb = _mm256_loadu_ps(b_ptr.add(i));
 
-        // Compare for inequality: all 1s where different
-        let cmp = _mm256_cmp_ps(va, vb, _CMP_NEQ_UQ);
-        // Convert to integer mask
-        let mask = _mm256_movemask_ps(cmp);
+        // Binary threshold: compare each value > 0.5
+        let cmp_a = _mm256_cmp_ps(va, threshold, _CMP_GT_OQ);
+        let cmp_b = _mm256_cmp_ps(vb, threshold, _CMP_GT_OQ);
+
+        // XOR to find positions where binary values differ
+        let diff = _mm256_xor_ps(cmp_a, cmp_b);
+        let mask = _mm256_movemask_ps(diff);
         diff_count += mask.count_ones() as u64;
 
         i += 8;
@@ -1014,13 +1027,16 @@ unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
 }
 
 /// Scalar Hamming distance implementation.
+///
+/// Uses binary threshold at 0.5 for consistency with SIMD versions.
+/// This is the standard interpretation for binary/categorical vectors.
 #[inline]
 fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     {
         a.iter()
             .zip(b.iter())
-            .filter(|(x, y)| x.to_bits() != y.to_bits())
+            .filter(|(&x, &y)| (x > 0.5) != (y > 0.5))
             .count() as f32
     }
 }

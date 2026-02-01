@@ -1,0 +1,238 @@
+   Compiling velesdb-core v1.4.1 (D:\Projets-dev\velesDB\velesdb-core\crates\velesdb-core)
+    Finished `bench` profile [optimized] target(s) in 1.62s
+     Running benches\i9_14900k_benchmark.rs (D:\Projets-dev\velesDB\velesdb-core\target\release\deps\i9_14900k_benchmark-dee0ec31f1bd6fdd.exe)
+Gnuplot not found, using plotters backend
+Benchmarking i9-14900k_dot_product/avx512_native/384
+Benchmarking i9-14900k_dot_product/avx512_native/384: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/384: Collecting 100 samples in estimated 5.0000 s (520M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/384: Analyzing
+i9-14900k_dot_product/avx512_native/384
+                        time:   [9.5363 ns 9.6118 ns 9.7040 ns]
+                        thrpt:  [39.571 Gelem/s 39.951 Gelem/s 40.267 Gelem/s]
+                 change:
+                        time:   [-10.446% -8.0111% -6.0846%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.4788% +8.7088% +11.665%]
+                        Performance has improved.
+Found 11 outliers among 100 measurements (11.00%)
+  6 (6.00%) high mild
+  5 (5.00%) high severe
+Benchmarking i9-14900k_dot_product/avx512_native/512
+Benchmarking i9-14900k_dot_product/avx512_native/512: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/512: Collecting 100 samples in estimated 5.0001 s (394M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/512: Analyzing
+i9-14900k_dot_product/avx512_native/512
+                        time:   [12.487 ns 12.615 ns 12.779 ns]
+                        thrpt:  [40.067 Gelem/s 40.588 Gelem/s 41.003 Gelem/s]
+                 change:
+                        time:   [-16.332% -10.288% -6.1445%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.5467% +11.468% +19.520%]
+                        Performance has improved.
+Found 12 outliers among 100 measurements (12.00%)
+  5 (5.00%) high mild
+  7 (7.00%) high severe
+Benchmarking i9-14900k_dot_product/avx512_native/768
+Benchmarking i9-14900k_dot_product/avx512_native/768: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/768: Collecting 100 samples in estimated 5.0000 s (263M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/768: Analyzing
+i9-14900k_dot_product/avx512_native/768
+                        time:   [18.995 ns 19.346 ns 19.762 ns]
+                        thrpt:  [38.861 Gelem/s 39.699 Gelem/s 40.431 Gelem/s]
+                 change:
+                        time:   [-13.182% -7.1166% -2.8712%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.9561% +7.6618% +15.183%]
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  4 (4.00%) high mild
+  6 (6.00%) high severe
+Benchmarking i9-14900k_dot_product/avx512_native/1024
+Benchmarking i9-14900k_dot_product/avx512_native/1024: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/1024: Collecting 100 samples in estimated 5.0001 s (210M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/1024: Analyzing
+i9-14900k_dot_product/avx512_native/1024
+                        time:   [26.525 ns 27.689 ns 28.938 ns]
+                        thrpt:  [35.386 Gelem/s 36.982 Gelem/s 38.605 Gelem/s]
+                 change:
+                        time:   [+0.1473% +6.2781% +12.304%] (p = 0.04 < 0.05)
+                        thrpt:  [-10.956% -5.9073% -0.1471%]
+                        Change within noise threshold.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking i9-14900k_dot_product/avx512_native/1536
+Benchmarking i9-14900k_dot_product/avx512_native/1536: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/1536: Collecting 100 samples in estimated 5.0002 s (89M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/1536: Analyzing
+i9-14900k_dot_product/avx512_native/1536
+                        time:   [51.414 ns 53.426 ns 55.660 ns]
+                        thrpt:  [27.596 Gelem/s 28.750 Gelem/s 29.875 Gelem/s]
+                 change:
+                        time:   [+10.087% +15.505% +20.790%] (p = 0.00 < 0.05)
+                        thrpt:  [-17.211% -13.424% -9.1630%]
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking i9-14900k_dot_product/avx512_native/2048
+Benchmarking i9-14900k_dot_product/avx512_native/2048: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/2048: Collecting 100 samples in estimated 5.0003 s (82M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/2048: Analyzing
+i9-14900k_dot_product/avx512_native/2048
+                        time:   [59.629 ns 62.346 ns 65.030 ns]
+                        thrpt:  [31.493 Gelem/s 32.849 Gelem/s 34.346 Gelem/s]
+                 change:
+                        time:   [+17.178% +23.390% +30.045%] (p = 0.00 < 0.05)
+                        thrpt:  [-23.103% -18.956% -14.659%]
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+Benchmarking i9-14900k_dot_product/avx512_native/3072
+Benchmarking i9-14900k_dot_product/avx512_native/3072: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/3072: Collecting 100 samples in estimated 5.0001 s (61M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/3072: Analyzing
+i9-14900k_dot_product/avx512_native/3072
+                        time:   [73.488 ns 74.743 ns 76.198 ns]
+                        thrpt:  [40.316 Gelem/s 41.101 Gelem/s 41.803 Gelem/s]
+                 change:
+                        time:   [+7.1016% +12.151% +18.273%] (p = 0.00 < 0.05)
+                        thrpt:  [-15.450% -10.835% -6.6307%]
+                        Performance has regressed.
+Found 14 outliers among 100 measurements (14.00%)
+  7 (7.00%) high mild
+  7 (7.00%) high severe
+Benchmarking i9-14900k_dot_product/avx512_native/4096
+Benchmarking i9-14900k_dot_product/avx512_native/4096: Warming up for 3.0000 s
+Benchmarking i9-14900k_dot_product/avx512_native/4096: Collecting 100 samples in estimated 5.0006 s (41M iterations)
+Benchmarking i9-14900k_dot_product/avx512_native/4096: Analyzing
+i9-14900k_dot_product/avx512_native/4096
+                        time:   [121.14 ns 123.68 ns 126.50 ns]
+                        thrpt:  [32.378 Gelem/s 33.117 Gelem/s 33.812 Gelem/s]
+                 change:
+                        time:   [-4.3536% -2.5228% -0.6071%] (p = 0.01 < 0.05)
+                        thrpt:  [+0.6108% +2.5881% +4.5518%]
+                        Change within noise threshold.
+Found 11 outliers among 100 measurements (11.00%)
+  6 (6.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking i9-14900k_squared_l2/avx512_native/384
+Benchmarking i9-14900k_squared_l2/avx512_native/384: Warming up for 3.0000 s
+Benchmarking i9-14900k_squared_l2/avx512_native/384: Collecting 100 samples in estimated 5.0000 s (337M iterations)
+Benchmarking i9-14900k_squared_l2/avx512_native/384: Analyzing
+i9-14900k_squared_l2/avx512_native/384
+                        time:   [14.612 ns 15.208 ns 15.988 ns]
+                        thrpt:  [24.019 Gelem/s 25.250 Gelem/s 26.279 Gelem/s]
+                 change:
+                        time:   [-30.607% -27.217% -23.379%] (p = 0.00 < 0.05)
+                        thrpt:  [+30.513% +37.394% +44.107%]
+                        Performance has improved.
+Found 18 outliers among 100 measurements (18.00%)
+  3 (3.00%) high mild
+  15 (15.00%) high severe
+Benchmarking i9-14900k_squared_l2/avx512_native/768
+Benchmarking i9-14900k_squared_l2/avx512_native/768: Warming up for 3.0000 s
+Benchmarking i9-14900k_squared_l2/avx512_native/768: Collecting 100 samples in estimated 5.0001 s (151M iterations)
+Benchmarking i9-14900k_squared_l2/avx512_native/768: Analyzing
+i9-14900k_squared_l2/avx512_native/768
+                        time:   [32.765 ns 33.247 ns 33.761 ns]
+                        thrpt:  [22.748 Gelem/s 23.100 Gelem/s 23.440 Gelem/s]
+                 change:
+                        time:   [-29.333% -26.173% -22.749%] (p = 0.00 < 0.05)
+                        thrpt:  [+29.447% +35.451% +41.509%]
+                        Performance has improved.
+Found 6 outliers among 100 measurements (6.00%)
+  5 (5.00%) high mild
+  1 (1.00%) high severe
+Benchmarking i9-14900k_squared_l2/avx512_native/1536
+Benchmarking i9-14900k_squared_l2/avx512_native/1536: Warming up for 3.0000 s
+Benchmarking i9-14900k_squared_l2/avx512_native/1536: Collecting 100 samples in estimated 5.0004 s (69M iterations)
+Benchmarking i9-14900k_squared_l2/avx512_native/1536: Analyzing
+i9-14900k_squared_l2/avx512_native/1536
+                        time:   [71.329 ns 73.144 ns 75.258 ns]
+                        thrpt:  [20.410 Gelem/s 21.000 Gelem/s 21.534 Gelem/s]
+                 change:
+                        time:   [-49.389% -41.213% -32.126%] (p = 0.00 < 0.05)
+                        thrpt:  [+47.331% +70.106% +97.586%]
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+Benchmarking i9-14900k_squared_l2/avx512_native/3072
+Benchmarking i9-14900k_squared_l2/avx512_native/3072: Warming up for 3.0000 s
+Benchmarking i9-14900k_squared_l2/avx512_native/3072: Collecting 100 samples in estimated 5.0003 s (33M iterations)
+Benchmarking i9-14900k_squared_l2/avx512_native/3072: Analyzing
+i9-14900k_squared_l2/avx512_native/3072
+                        time:   [151.76 ns 152.47 ns 153.31 ns]
+                        thrpt:  [20.038 Gelem/s 20.149 Gelem/s 20.242 Gelem/s]
+                 change:
+                        time:   [-27.318% -25.473% -23.573%] (p = 0.00 < 0.05)
+                        thrpt:  [+30.844% +34.179% +37.586%]
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking i9-14900k_batch_dot/batch_100x768
+Benchmarking i9-14900k_batch_dot/batch_100x768: Warming up for 3.0000 s
+Benchmarking i9-14900k_batch_dot/batch_100x768: Collecting 100 samples in estimated 5.0098 s (1.7M iterations)
+Benchmarking i9-14900k_batch_dot/batch_100x768: Analyzing
+i9-14900k_batch_dot/batch_100x768
+                        time:   [2.8848 ┬Ás 2.8948 ┬Ás 2.9087 ┬Ás]
+                        change: [-33.346% -29.426% -25.380%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking i9-14900k_throughput/mops/128D
+Benchmarking i9-14900k_throughput/mops/128D: Warming up for 3.0000 s
+Benchmarking i9-14900k_throughput/mops/128D: Collecting 100 samples in estimated 5.0000 s (1.3B iterations)
+Benchmarking i9-14900k_throughput/mops/128D: Analyzing
+i9-14900k_throughput/mops/128D
+                        time:   [3.9568 ns 3.9722 ns 3.9922 ns]
+                        thrpt:  [32.062 Gelem/s 32.224 Gelem/s 32.350 Gelem/s]
+                 change:
+                        time:   [-52.833% -48.799% -44.999%] (p = 0.00 < 0.05)
+                        thrpt:  [+81.814% +95.308% +112.01%]
+                        Performance has improved.
+Found 8 outliers among 100 measurements (8.00%)
+  4 (4.00%) high mild
+  4 (4.00%) high severe
+Benchmarking i9-14900k_throughput/mops/384D
+Benchmarking i9-14900k_throughput/mops/384D: Warming up for 3.0000 s
+Benchmarking i9-14900k_throughput/mops/384D: Collecting 100 samples in estimated 5.0000 s (535M iterations)
+Benchmarking i9-14900k_throughput/mops/384D: Analyzing
+i9-14900k_throughput/mops/384D
+                        time:   [9.3520 ns 9.4021 ns 9.4643 ns]
+                        thrpt:  [40.573 Gelem/s 40.842 Gelem/s 41.061 Gelem/s]
+                 change:
+                        time:   [-50.944% -46.598% -42.261%] (p = 0.00 < 0.05)
+                        thrpt:  [+73.194% +87.260% +103.85%]
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking i9-14900k_throughput/mops/768D
+Benchmarking i9-14900k_throughput/mops/768D: Warming up for 3.0000 s
+Benchmarking i9-14900k_throughput/mops/768D: Collecting 100 samples in estimated 5.0000 s (276M iterations)
+Benchmarking i9-14900k_throughput/mops/768D: Analyzing
+i9-14900k_throughput/mops/768D
+                        time:   [17.890 ns 17.917 ns 17.944 ns]
+                        thrpt:  [42.799 Gelem/s 42.863 Gelem/s 42.928 Gelem/s]
+                 change:
+                        time:   [-45.663% -39.873% -33.915%] (p = 0.00 < 0.05)
+                        thrpt:  [+51.321% +66.315% +84.035%]
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+Benchmarking i9-14900k_throughput/mops/1536D
+Benchmarking i9-14900k_throughput/mops/1536D: Warming up for 3.0000 s
+Benchmarking i9-14900k_throughput/mops/1536D: Collecting 100 samples in estimated 5.0000 s (160M iterations)
+Benchmarking i9-14900k_throughput/mops/1536D: Analyzing
+i9-14900k_throughput/mops/1536D
+                        time:   [31.165 ns 31.221 ns 31.281 ns]
+                        thrpt:  [49.103 Gelem/s 49.198 Gelem/s 49.286 Gelem/s]
+                 change:
+                        time:   [-51.366% -48.004% -44.443%] (p = 0.00 < 0.05)
+                        thrpt:  [+79.995% +92.322% +105.62%]
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high severe
+
