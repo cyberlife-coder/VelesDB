@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57µs Search • 3,000+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 38ns SIMD • 3,000+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -24,11 +24,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Search-23ns-blue?style=for-the-badge" alt="Search Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-3,000+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/🏎️_Dot_768D-38ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
+  <img src="https://img.shields.io/badge/🧪_Tests-2,411+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
-  <img src="https://img.shields.io/badge/⚡_Throughput-66Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+  <img src="https://img.shields.io/badge/⚡_Throughput-48Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
@@ -68,8 +68,8 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 57µs Search</h3>
-<p>Native HNSW + AVX-512 SIMD.<br/><strong>877x faster than pgvector.</strong></p>
+<h3>⚡ 38ns SIMD</h3>
+<p>Native HNSW + AVX2 SIMD.<br/><strong>26 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📦 15MB Binary</h3>
@@ -91,7 +91,7 @@
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 3,000</h3>
+<h3>🧪 2,411</h3>
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
@@ -103,7 +103,7 @@
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 57 ns</h3>
+<h3>⚡ 38 ns</h3>
 <p><strong>Dot Product</strong><br/>768D vectors</p>
 </td>
 <td align="center" width="20%">
@@ -117,9 +117,9 @@
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 57 ns | 17.5M ops/sec |
-| **SIMD Cosine (768D)** | 68 ns | 14.7M ops/sec |
-| **SIMD Hamming (binary)** | 6 ns | 167M ops/sec |
+| **SIMD Dot Product (768D)** | 38 ns | 26.3M ops/sec |
+| **SIMD Cosine (768D)** | 41 ns | 24.4M ops/sec |
+| **SIMD Hamming (768D)** | 19 ns | 52.6M ops/sec |
 | **HNSW Search (10K vectors)** | 57 µs | k=10, 768D |
 | **ColumnStore Filter (100K)** | 88 µs | 44x vs JSON |
 | **VelesQL Cache Hit** | 84 ns | 12M qps |

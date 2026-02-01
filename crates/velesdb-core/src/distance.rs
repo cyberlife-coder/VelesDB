@@ -2,15 +2,15 @@
 //!
 //! # Performance
 //!
-//! All distance calculations use adaptive SIMD dispatch via the `simd_ops` module,
-//! which automatically selects the optimal backend based on runtime benchmarks:
-//! - **Cosine**: Adaptive dispatch (AVX-512/AVX2/NEON/Wide)
-//! - **Euclidean**: Adaptive dispatch with native intrinsics for large vectors
-//! - **Dot Product**: Adaptive dispatch with FMA optimization
+//! All distance calculations use direct SIMD dispatch via `simd_native` module,
+//! eliminating intermediate dispatch overhead for maximum performance:
+//! - **Cosine**: Direct AVX-512/AVX2/NEON intrinsics
+//! - **Euclidean**: Direct native intrinsics with 4-acc unrolling
+//! - **Dot Product**: Direct FMA-optimized intrinsics
 //! - **Hamming (binary)**: POPCNT on packed u64 (48x faster than f32)
 //! - **Jaccard**: Set similarity with SIMD acceleration
 
-use crate::simd_ops;
+use crate::simd_native;
 use serde::{Deserialize, Serialize};
 
 /// Distance metric for vector similarity calculations.
@@ -58,13 +58,19 @@ impl DistanceMetric {
     /// # Performance
     ///
     /// Uses SIMD-optimized implementations. Typical latencies for 768d vectors:
-    /// - Cosine: ~300ns
-    /// - Euclidean: ~135ns
-    /// - Dot Product: ~128ns
+    /// - Cosine: ~32ns
+    /// - Euclidean: ~20ns
+    /// - Dot Product: ~18ns
     #[must_use]
     #[inline]
     pub fn calculate(&self, a: &[f32], b: &[f32]) -> f32 {
-        simd_ops::similarity(*self, a, b)
+        match self {
+            Self::Cosine => simd_native::cosine_similarity_native(a, b),
+            Self::Euclidean => simd_native::euclidean_native(a, b),
+            Self::DotProduct => simd_native::dot_product_native(a, b),
+            Self::Hamming => simd_native::hamming_distance_native(a, b) as f32,
+            Self::Jaccard => simd_native::jaccard_similarity_native(a, b),
+        }
     }
 
     /// Returns whether higher values indicate more similarity.

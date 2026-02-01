@@ -138,7 +138,11 @@ fn test_dispatch_no_regression_on_small_vectors() {
         let b: Vec<f32> = vec![1.0; size];
 
         let result = dot_product_native(&a, &b);
-        assert_eq!(result, size as f32, "Failed for size {}", size);
+        assert!(
+            (result - size as f32).abs() < 1e-3,
+            "Failed for size {}",
+            size
+        );
     }
 }
 

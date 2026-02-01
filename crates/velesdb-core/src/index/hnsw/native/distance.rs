@@ -152,10 +152,10 @@ impl DistanceEngine for NativeSimdDistance {
     }
 }
 
-/// Adaptive SIMD distance computation with runtime backend selection.
+/// Direct SIMD distance computation with zero-overhead dispatch.
 ///
-/// Uses `simd_ops` module which automatically selects the fastest SIMD backend
-/// (AVX-512, AVX2, NEON, Wide, Scalar) based on runtime micro-benchmarks.
+/// Uses `simd_native` module which directly calls SIMD intrinsics
+/// (AVX-512, AVX2, NEON) without intermediate dispatch overhead.
 /// This is the recommended engine for production use.
 pub struct AdaptiveSimdDistance {
     metric: DistanceMetric,
@@ -171,8 +171,8 @@ impl AdaptiveSimdDistance {
 
 impl DistanceEngine for AdaptiveSimdDistance {
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        // Use simd_ops::distance which returns distance (not similarity)
-        crate::simd_ops::distance(self.metric, a, b)
+        // Use simd_native directly for zero-overhead dispatch
+        self.metric.calculate(a, b)
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
