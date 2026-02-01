@@ -1602,3 +1602,6 @@ mod simd_native_dispatch_tests;
 
 #[cfg(test)]
 mod cosine_fused_tests;
+
+#[cfg(test)]
+mod harley_seal_tests;
