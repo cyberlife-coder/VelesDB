@@ -13,7 +13,6 @@
 //! Prefetch utilities remain in this module for cache optimization.
 
 use crate::distance::DistanceMetric;
-use crate::simd_avx512;
 use crate::simd_ops;
 
 // ============================================================================
@@ -222,8 +221,8 @@ pub fn euclidean_distance_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn squared_l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    // Use 32-wide optimized version for large vectors
-    simd_avx512::squared_l2_auto(a, b)
+    // Use simd_native for optimized squared L2
+    crate::simd_native::squared_l2_native(a, b)
 }
 
 /// Normalizes a vector in-place using adaptive SIMD dispatch.
@@ -276,7 +275,8 @@ pub fn dot_product_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn cosine_similarity_normalized(a: &[f32], b: &[f32]) -> f32 {
-    simd_avx512::cosine_similarity_normalized(a, b)
+    // For normalized vectors, cosine = dot product
+    crate::simd_native::dot_product_native(a, b)
 }
 
 /// Batch cosine similarities for pre-normalized vectors with prefetching.
@@ -287,7 +287,8 @@ pub fn cosine_similarity_normalized(a: &[f32], b: &[f32]) -> f32 {
 /// - ~40% faster per vector than non-normalized version
 #[must_use]
 pub fn batch_cosine_normalized(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    simd_avx512::batch_cosine_normalized(candidates, query)
+    // For normalized vectors, cosine = dot product
+    crate::simd_native::batch_dot_product_native(candidates, query)
 }
 
 /// Computes Hamming distance for binary vectors.
@@ -309,14 +310,11 @@ pub fn batch_cosine_normalized(candidates: &[&[f32]], query: &[f32]) -> Vec<f32>
 ///
 /// # Performance (PERF-1 fix v0.8.2)
 ///
-/// Delegates to `simd_explicit::hamming_distance_simd` for guaranteed SIMD
-/// vectorization. Previous scalar implementation suffered from auto-vectorization
-/// being broken by compiler heuristics.
+/// Delegates to `simd_native::hamming_distance_native` for consistent implementation.
 #[inline]
 #[must_use]
 pub fn hamming_distance_fast(a: &[f32], b: &[f32]) -> f32 {
-    // PERF-1: Delegate to explicit SIMD to avoid auto-vectorization issues
-    crate::simd_explicit::hamming_distance_simd(a, b)
+    crate::simd_native::hamming_distance_native(a, b)
 }
 
 /// Computes Jaccard similarity for set-like vectors.
@@ -339,12 +337,9 @@ pub fn hamming_distance_fast(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// # Performance (PERF-1 fix v0.8.2)
 ///
-/// Delegates to `simd_explicit::jaccard_similarity_simd` for guaranteed SIMD
-/// vectorization. Previous scalar implementation suffered from auto-vectorization
-/// being broken by compiler heuristics (+650% regression).
+/// Delegates to `simd_native::jaccard_similarity_native` for consistent implementation.
 #[inline]
 #[must_use]
 pub fn jaccard_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
-    // PERF-1: Delegate to explicit SIMD to avoid auto-vectorization issues
-    crate::simd_explicit::jaccard_similarity_simd(a, b)
+    crate::simd_native::jaccard_similarity_native(a, b)
 }

@@ -355,7 +355,7 @@ impl ContiguousVectors {
     #[must_use]
     pub fn dot_product(&self, index: usize, query: &[f32]) -> Option<f32> {
         let vector = self.get(index)?;
-        Some(crate::simd_avx512::dot_product_auto(vector, query))
+        Some(crate::simd_native::dot_product_native(vector, query))
     }
 
     /// Prefetch distance for cache warming.
@@ -405,7 +405,7 @@ impl Drop for ContiguousVectors {
 pub fn batch_dot_products_simd(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> {
     vectors
         .iter()
-        .map(|v| crate::simd_avx512::dot_product_auto(v, query))
+        .map(|v| crate::simd_native::dot_product_native(v, query))
         .collect()
 }
 
@@ -414,6 +414,6 @@ pub fn batch_dot_products_simd(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> {
 pub fn batch_cosine_similarities(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> {
     vectors
         .iter()
-        .map(|v| crate::simd_avx512::cosine_similarity_auto(v, query))
+        .map(|v| crate::simd_native::cosine_similarity_native(v, query))
         .collect()
 }

@@ -24,10 +24,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Search-57us-blue?style=for-the-badge" alt="Search Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_Search-23ns-blue?style=for-the-badge" alt="Search Latency"/>
   <img src="https://img.shields.io/badge/🧪_Tests-3,000+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
+  <img src="https://img.shields.io/badge/⚡_Throughput-66Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)

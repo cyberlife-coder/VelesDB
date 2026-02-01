@@ -155,20 +155,18 @@ pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
 pub mod simd;
-pub mod simd_avx512;
-#[cfg(test)]
-mod simd_avx512_tests;
+// simd_avx512 removed - consolidated into simd_native (EPIC-075)
 pub mod simd_dispatch;
 #[cfg(test)]
 mod simd_dispatch_tests;
 #[cfg(test)]
 mod simd_epic073_tests;
-pub mod simd_explicit;
-#[cfg(test)]
-mod simd_explicit_tests;
+// simd_explicit removed - consolidated into simd_native (EPIC-075)
 pub mod simd_native;
 #[cfg(test)]
 mod simd_native_tests;
+#[cfg(target_arch = "aarch64")]
+pub mod simd_neon;
 #[cfg(target_arch = "aarch64")]
 pub mod simd_neon_prefetch;
 pub mod simd_ops;

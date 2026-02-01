@@ -1,4 +1,4 @@
-//! Benchmark comparing auto-vectorized vs explicit SIMD implementations.
+//! Benchmark SIMD implementations.
 //!
 //! Run with: `cargo bench --bench simd_benchmark`
 
@@ -10,9 +10,8 @@ use velesdb_core::simd::{
     cosine_similarity_fast, dot_product_fast, euclidean_distance_fast, hamming_distance_fast,
     jaccard_similarity_fast,
 };
-use velesdb_core::simd_explicit::{
-    cosine_similarity_simd, dot_product_simd, euclidean_distance_simd, hamming_distance_binary,
-    hamming_distance_binary_fast, hamming_distance_simd,
+use velesdb_core::simd_native::{
+    cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
 };
 
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -31,8 +30,8 @@ fn bench_dot_product(c: &mut Criterion) {
             bencher.iter(|| dot_product_fast(black_box(&a), black_box(&b)));
         });
 
-        group.bench_with_input(BenchmarkId::new("explicit_simd", dim), dim, |bencher, _| {
-            bencher.iter(|| dot_product_simd(black_box(&a), black_box(&b)));
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
         });
     }
 
@@ -50,8 +49,8 @@ fn bench_euclidean_distance(c: &mut Criterion) {
             bencher.iter(|| euclidean_distance_fast(black_box(&a), black_box(&b)));
         });
 
-        group.bench_with_input(BenchmarkId::new("explicit_simd", dim), dim, |bencher, _| {
-            bencher.iter(|| euclidean_distance_simd(black_box(&a), black_box(&b)));
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| euclidean_native(black_box(&a), black_box(&b)));
         });
     }
 
@@ -69,8 +68,8 @@ fn bench_cosine_similarity(c: &mut Criterion) {
             bencher.iter(|| cosine_similarity_fast(black_box(&a), black_box(&b)));
         });
 
-        group.bench_with_input(BenchmarkId::new("explicit_simd", dim), dim, |bencher, _| {
-            bencher.iter(|| cosine_similarity_simd(black_box(&a), black_box(&b)));
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
         });
     }
 
@@ -83,11 +82,9 @@ fn generate_binary_vector(dim: usize, seed: usize) -> Vec<f32> {
         .collect()
 }
 
-fn generate_packed_binary(num_u64: usize, seed: u64) -> Vec<u64> {
-    (0..num_u64)
-        .map(|i| (i as u64).wrapping_mul(seed))
-        .collect()
-}
+// Binary Hamming benchmarks removed - EPIC-075 consolidation
+// The simd_native implementation focuses on f32 vectors.
+// Binary operations (u64 POPCNT) are handled separately in the distance module.
 
 fn bench_hamming_f32(c: &mut Criterion) {
     let mut group = c.benchmark_group("hamming_f32");
@@ -100,51 +97,17 @@ fn bench_hamming_f32(c: &mut Criterion) {
             bencher.iter(|| hamming_distance_fast(black_box(&a), black_box(&b)));
         });
 
-        group.bench_with_input(BenchmarkId::new("unrolled", dim), dim, |bencher, _| {
-            bencher.iter(|| hamming_distance_simd(black_box(&a), black_box(&b)));
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| hamming_distance_native(black_box(&a), black_box(&b)));
         });
     }
 
     group.finish();
 }
 
-fn bench_hamming_binary(c: &mut Criterion) {
-    let mut group = c.benchmark_group("hamming_binary_u64");
-
-    // Compare f32 Hamming vs packed binary with POPCNT
-    // 768 f32 elements = 768 bits = 12 u64s
-    for (f32_dim, u64_count) in &[(128, 2), (384, 6), (768, 12), (1536, 24), (3072, 48)] {
-        let a_f32 = generate_binary_vector(*f32_dim, 0);
-        let b_f32 = generate_binary_vector(*f32_dim, 1);
-        let a_u64 = generate_packed_binary(*u64_count, 0x1234_5678);
-        let b_u64 = generate_packed_binary(*u64_count, 0x8765_4321);
-
-        group.bench_with_input(
-            BenchmarkId::new("f32_baseline", f32_dim),
-            f32_dim,
-            |bencher, _| {
-                bencher.iter(|| hamming_distance_fast(black_box(&a_f32), black_box(&b_f32)));
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("u64_popcnt", f32_dim),
-            f32_dim,
-            |bencher, _| {
-                bencher.iter(|| hamming_distance_binary(black_box(&a_u64), black_box(&b_u64)));
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("u64_popcnt_fast", f32_dim),
-            f32_dim,
-            |bencher, _| {
-                bencher.iter(|| hamming_distance_binary_fast(black_box(&a_u64), black_box(&b_u64)));
-            },
-        );
-    }
-
-    group.finish();
+fn bench_hamming_binary(_c: &mut Criterion) {
+    // Binary Hamming benchmarks removed - EPIC-075 consolidation
+    // The simd_native implementation focuses on f32 vectors.
 }
 
 /// Generate set-like vectors for Jaccard similarity benchmarks.

@@ -76,6 +76,84 @@ unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     _mm512_reduce_add_ps(sum)
 }
 
+/// Optimized 4-accumulator version without prefetch overhead
+/// and simplified remainder handling.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX-512F (enforced by `#[target_feature]`)
+/// - `a.len() == b.len()` (enforced by public API assert)
+/// - `a.len() >= 64` for optimal performance (dispatch threshold is 512)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[inline]
+unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
+    // - `_mm512_loadu_ps` handles unaligned loads safely
+    // - Pointer arithmetic: stays within bounds, checked by end_ptr comparison
+    // - Masked loads only read elements within bounds
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 64 * 64);
+    let end_ptr = a.as_ptr().add(len);
+
+    let mut acc0 = _mm512_setzero_ps();
+    let mut acc1 = _mm512_setzero_ps();
+    let mut acc2 = _mm512_setzero_ps();
+    let mut acc3 = _mm512_setzero_ps();
+
+    // Main loop: process 64 elements at a time using pointer arithmetic
+    while a_ptr < end_main {
+        let va0 = _mm512_loadu_ps(a_ptr);
+        let vb0 = _mm512_loadu_ps(b_ptr);
+        acc0 = _mm512_fmadd_ps(va0, vb0, acc0);
+
+        let va1 = _mm512_loadu_ps(a_ptr.add(16));
+        let vb1 = _mm512_loadu_ps(b_ptr.add(16));
+        acc1 = _mm512_fmadd_ps(va1, vb1, acc1);
+
+        let va2 = _mm512_loadu_ps(a_ptr.add(32));
+        let vb2 = _mm512_loadu_ps(b_ptr.add(32));
+        acc2 = _mm512_fmadd_ps(va2, vb2, acc2);
+
+        let va3 = _mm512_loadu_ps(a_ptr.add(48));
+        let vb3 = _mm512_loadu_ps(b_ptr.add(48));
+        acc3 = _mm512_fmadd_ps(va3, vb3, acc3);
+
+        a_ptr = a_ptr.add(64);
+        b_ptr = b_ptr.add(64);
+    }
+
+    // Combine all 4 accumulators into one, then continue with single acc
+    acc0 = _mm512_add_ps(acc0, acc1);
+    acc2 = _mm512_add_ps(acc2, acc3);
+    acc0 = _mm512_add_ps(acc0, acc2);
+
+    // Process remaining 16-element chunks with same accumulator
+    while a_ptr.add(16) <= end_ptr {
+        let va = _mm512_loadu_ps(a_ptr);
+        let vb = _mm512_loadu_ps(b_ptr);
+        acc0 = _mm512_fmadd_ps(va, vb, acc0);
+        a_ptr = a_ptr.add(16);
+        b_ptr = b_ptr.add(16);
+    }
+
+    // Final masked chunk if any
+    let remaining = end_ptr.offset_from(a_ptr) as usize;
+    if remaining > 0 {
+        let mask: __mmask16 = (1_u16 << remaining) - 1;
+        let va = _mm512_maskz_loadu_ps(mask, a_ptr);
+        let vb = _mm512_maskz_loadu_ps(mask, b_ptr);
+        acc0 = _mm512_fmadd_ps(va, vb, acc0);
+    }
+
+    _mm512_reduce_add_ps(acc0)
+}
+
 /// AVX-512 squared L2 distance.
 ///
 /// # Safety
@@ -131,6 +209,77 @@ unsafe fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
 // =============================================================================
 // AVX2 Implementation (x86_64 fallback)
 // =============================================================================
+
+/// AVX2 dot product with 4 accumulators for ILP on large vectors.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
+/// - `a.len() >= 128` for optimal performance (amortizes accumulator combining cost)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
+    // - `_mm256_loadu_ps` handles unaligned loads safely
+    // - Pointer arithmetic stays within bounds: offset = i * 32 where i < simd_len = len / 32
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let simd_len = len / 32; // Process 32 per iteration (4×8)
+
+    let mut sum0 = _mm256_setzero_ps();
+    let mut sum1 = _mm256_setzero_ps();
+    let mut sum2 = _mm256_setzero_ps();
+    let mut sum3 = _mm256_setzero_ps();
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    for i in 0..simd_len {
+        let offset = i * 32;
+
+        let va0 = _mm256_loadu_ps(a_ptr.add(offset));
+        let vb0 = _mm256_loadu_ps(b_ptr.add(offset));
+        sum0 = _mm256_fmadd_ps(va0, vb0, sum0);
+
+        let va1 = _mm256_loadu_ps(a_ptr.add(offset + 8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(offset + 8));
+        sum1 = _mm256_fmadd_ps(va1, vb1, sum1);
+
+        let va2 = _mm256_loadu_ps(a_ptr.add(offset + 16));
+        let vb2 = _mm256_loadu_ps(b_ptr.add(offset + 16));
+        sum2 = _mm256_fmadd_ps(va2, vb2, sum2);
+
+        let va3 = _mm256_loadu_ps(a_ptr.add(offset + 24));
+        let vb3 = _mm256_loadu_ps(b_ptr.add(offset + 24));
+        sum3 = _mm256_fmadd_ps(va3, vb3, sum3);
+    }
+
+    // Combine 4 accumulators into 1
+    let sum01 = _mm256_add_ps(sum0, sum1);
+    let sum23 = _mm256_add_ps(sum2, sum3);
+    let combined = _mm256_add_ps(sum01, sum23);
+
+    // Horizontal sum
+    let hi = _mm256_extractf128_ps(combined, 1);
+    let lo = _mm256_castps256_ps128(combined);
+    let sum128 = _mm_add_ps(lo, hi);
+    let shuf = _mm_movehdup_ps(sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehl_ps(sums, sums);
+    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+    // Handle remainder
+    let base = simd_len * 32;
+    for i in base..len {
+        result += a[i] * b[i];
+    }
+
+    result
+}
 
 /// AVX2 dot product with 2 accumulators for ILP.
 ///
@@ -383,26 +532,60 @@ pub fn simd_level() -> SimdLevel {
 /// Dot product with automatic dispatch to best available SIMD.
 ///
 /// Runtime detection is cached after first call for zero-overhead dispatch.
-/// Selects: AVX-512 > AVX2 > NEON > Scalar
+///
+/// # Dispatch Strategy Adaptative (EPIC-PERF-003)
+///
+/// La stratégie s'adapte automatiquement au CPU détecté :
+///
+/// ## AVX-512 (Xeon, serveurs, anciens Core)
+/// - 4-acc (len >= 512): 4 accumulateurs pour masquer latence FMA (4 cycles)
+/// - 1-acc (len >= 16): Standard avec masked remainder
+///
+/// ## AVX2 (Core 12th/13th/14th gen, Ryzen)
+/// - 4-acc (len >= 256): 4 accumulateurs AVX2 (masque latence 3-4 cycles)
+/// - 2-acc (len >= 16): Standard optimisé pour petits vecteurs
+///
+/// ## NEON (Apple Silicon, ARM64)
+/// - 1-acc (len >= 4): FMA natif ARM
+///
+/// ## Scalar (fallback)
+/// - Loop simple pour tous les cas
+///
+/// Les seuils sont calibrés pour éviter les régressions sur chaque architecture.
 #[inline]
 #[must_use]
 pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
 
     match simd_level() {
+        // AVX-512: 4-acc pour très grands vecteurs, 1-acc pour le reste
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 if a.len() >= 512 => unsafe { dot_product_avx512_4acc(a, b) },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 16 => unsafe { dot_product_avx512(a, b) },
         #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) }, // < 16 elements, masked loads handle it
+        // AVX2: 4-acc pour grands vecteurs (masque latence FMA), 2-acc pour petits
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 if a.len() >= 256 => unsafe { dot_product_avx2_4acc(a, b) },
+        #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 16 => unsafe { dot_product_avx2(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => unsafe { dot_product_avx2(a, b) }, // < 16 elements, remainder loop handles it
         #[cfg(target_arch = "aarch64")]
         SimdLevel::Neon if a.len() >= 4 => dot_product_neon(a, b),
         _ => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(),
     }
 }
 
-/// Squared L2 distance with automatic dispatch.
+/// Squared L2 distance with automatic dispatch to best available SIMD.
 ///
 /// Runtime detection is cached after first call for zero-overhead dispatch.
+///
+/// # Note
+///
+/// Unlike `dot_product_native`, this function does not use the 4-accumulator
+/// optimization for large vectors. This is a potential future enhancement.
 #[inline]
 #[must_use]
 pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
@@ -412,7 +595,11 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 16 => unsafe { squared_l2_avx512(a, b) },
         #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 => unsafe { squared_l2_avx512(a, b) }, // < 16 elements, masked loads handle it
+        #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 16 => unsafe { squared_l2_avx2(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => unsafe { squared_l2_avx2(a, b) }, // < 16 elements, remainder loop handles it
         #[cfg(target_arch = "aarch64")]
         SimdLevel::Neon if a.len() >= 4 => squared_l2_neon(a, b),
         _ => a
@@ -588,6 +775,275 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
     }
 
     results
+}
+
+// =============================================================================
+// Hamming & Jaccard (migrated from simd_explicit - EPIC-075)
+// Optimized with AVX2/AVX-512 SIMD intrinsics
+// =============================================================================
+
+/// Hamming distance between two vectors using SIMD.
+///
+/// Uses AVX-512 VPTESTMD for parallel comparison on x86_64,
+/// with fallback to AVX2 or scalar for smaller vectors.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
+#[inline]
+#[must_use]
+pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "Vector length mismatch: {} vs {}",
+        a.len(),
+        b.len()
+    );
+    hamming_simd(a, b)
+}
+
+/// Jaccard similarity between two vectors using SIMD.
+///
+/// Uses AVX2/AVX-512 for parallel min/max operations.
+/// Computes intersection / union for element-wise min/max interpretation.
+///
+/// # Panics
+///
+/// Panics if vectors have different lengths.
+#[inline]
+#[must_use]
+pub fn jaccard_similarity_native(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "Vector length mismatch: {} vs {}",
+        a.len(),
+        b.len()
+    );
+    jaccard_simd(a, b)
+}
+
+/// SIMD Hamming distance with runtime dispatch.
+#[inline]
+fn hamming_simd(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") && a.len() >= 16 {
+            return unsafe { hamming_avx512(a, b) };
+        }
+        if is_x86_feature_detected!("avx2") && a.len() >= 8 {
+            return unsafe { hamming_avx2(a, b) };
+        }
+    }
+    hamming_scalar(a, b)
+}
+
+/// SIMD Jaccard similarity with runtime dispatch.
+#[inline]
+fn jaccard_simd(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") && a.len() >= 16 {
+            return unsafe { jaccard_avx512(a, b) };
+        }
+        if is_x86_feature_detected!("avx2") && a.len() >= 8 {
+            return unsafe { jaccard_avx2(a, b) };
+        }
+    }
+    jaccard_scalar(a, b)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn hamming_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    let mut diff_count: u64 = 0;
+    let mut i = 0;
+
+    // Process 16 floats at a time using AVX-512
+    while i + 16 <= len {
+        let va = _mm512_loadu_ps(a_ptr.add(i));
+        let vb = _mm512_loadu_ps(b_ptr.add(i));
+
+        // Compare for inequality: 0xFFFFFFFF where different
+        let cmp = _mm512_cmp_ps_mask(va, vb, _CMP_NEQ_UQ);
+        diff_count += cmp.count_ones() as u64;
+
+        i += 16;
+    }
+
+    // Handle remaining elements
+    diff_count as f32 + hamming_scalar(&a[i..], &b[i..])
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn hamming_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    let mut diff_count: u64 = 0;
+    let mut i = 0;
+
+    // Process 8 floats at a time using AVX2
+    while i + 8 <= len {
+        let va = _mm256_loadu_ps(a_ptr.add(i));
+        let vb = _mm256_loadu_ps(b_ptr.add(i));
+
+        // Compare for inequality: all 1s where different
+        let cmp = _mm256_cmp_ps(va, vb, _CMP_NEQ_UQ);
+        // Convert to integer mask
+        let mask = _mm256_movemask_ps(cmp);
+        diff_count += mask.count_ones() as u64;
+
+        i += 8;
+    }
+
+    // Handle remaining elements
+    diff_count as f32 + hamming_scalar(&a[i..], &b[i..])
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn jaccard_avx512(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    let mut acc_inter = _mm512_setzero_ps();
+    let mut acc_union = _mm512_setzero_ps();
+
+    let mut i = 0;
+    // Process 16 floats at a time
+    while i + 16 <= len {
+        let va = _mm512_loadu_ps(a_ptr.add(i));
+        let vb = _mm512_loadu_ps(b_ptr.add(i));
+
+        // min for intersection, max for union
+        acc_inter = _mm512_add_ps(acc_inter, _mm512_min_ps(va, vb));
+        acc_union = _mm512_add_ps(acc_union, _mm512_max_ps(va, vb));
+
+        i += 16;
+    }
+
+    // Horizontal sum
+    let inter_sum = _mm512_reduce_add_ps(acc_inter);
+    let union_sum = _mm512_reduce_add_ps(acc_union);
+
+    // Handle remaining elements
+    let (scalar_inter, scalar_union) = jaccard_scalar_accum(&a[i..], &b[i..]);
+
+    let total_inter = inter_sum + scalar_inter;
+    let total_union = union_sum + scalar_union;
+
+    if total_union == 0.0 {
+        1.0
+    } else {
+        total_inter / total_union
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    let mut acc_inter = _mm256_setzero_ps();
+    let mut acc_union = _mm256_setzero_ps();
+
+    let mut i = 0;
+    // Process 8 floats at a time
+    while i + 8 <= len {
+        let va = _mm256_loadu_ps(a_ptr.add(i));
+        let vb = _mm256_loadu_ps(b_ptr.add(i));
+
+        // min for intersection, max for union
+        acc_inter = _mm256_add_ps(acc_inter, _mm256_min_ps(va, vb));
+        acc_union = _mm256_add_ps(acc_union, _mm256_max_ps(va, vb));
+
+        i += 8;
+    }
+
+    // Horizontal sum using hadd
+    let inter_sum = hsum256_ps(acc_inter);
+    let union_sum = hsum256_ps(acc_union);
+
+    // Handle remaining elements
+    let (scalar_inter, scalar_union) = jaccard_scalar_accum(&a[i..], &b[i..]);
+
+    let total_inter = inter_sum + scalar_inter;
+    let total_union = union_sum + scalar_union;
+
+    if total_union == 0.0 {
+        1.0
+    } else {
+        total_inter / total_union
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
+    use std::arch::x86_64::*;
+    // Extract high and low 128-bit halves
+    let low = _mm256_castps256_ps128(v);
+    let high = _mm256_extractf128_ps(v, 1);
+    // Add them
+    let sum128 = _mm_add_ps(low, high);
+    // Horizontal sum of 128-bit
+    let shuf = _mm_movehdup_ps(sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehl_ps(shuf, sums);
+    let result = _mm_add_ss(sums, shuf2);
+    _mm_cvtss_f32(result)
+}
+
+/// Scalar Hamming distance implementation.
+#[inline]
+fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        a.iter()
+            .zip(b.iter())
+            .filter(|(x, y)| x.to_bits() != y.to_bits())
+            .count() as f32
+    }
+}
+
+/// Scalar Jaccard similarity implementation.
+#[inline]
+fn jaccard_scalar(a: &[f32], b: &[f32]) -> f32 {
+    let (intersection, union) = jaccard_scalar_accum(a, b);
+    if union == 0.0 {
+        1.0
+    } else {
+        intersection / union
+    }
+}
+
+/// Helper to compute Jaccard accumulator values.
+#[inline]
+fn jaccard_scalar_accum(a: &[f32], b: &[f32]) -> (f32, f32) {
+    a.iter()
+        .zip(b.iter())
+        .fold((0.0_f32, 0.0_f32), |(inter, uni), (x, y)| {
+            (inter + x.min(*y), uni + x.max(*y))
+        })
 }
 
 // Tests moved to simd_native_tests.rs per project rules (tests in separate files)

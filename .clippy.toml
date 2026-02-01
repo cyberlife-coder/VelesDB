@@ -1,0 +1,37 @@
+# VelesDB Clippy Configuration
+# EPIC-077: Quality Gates Automatiques
+#
+# Ces règles s'appliquent à tout le workspace pour garantir
+# la qualité du code Rust.
+
+# =============================================================================
+# Complexity thresholds
+# =============================================================================
+cognitive-complexity-threshold = 25
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 100
+
+# =============================================================================
+# Type complexity
+# =============================================================================
+type-complexity-threshold = 250
+
+# =============================================================================
+# Documentation
+# =============================================================================
+missing-docs-in-crate-items = true
+
+# =============================================================================
+# Allowed patterns (avec justification obligatoire dans le code)
+# =============================================================================
+# Note: Les lints suivants sont gérés via #[allow(...)] locaux avec commentaire
+# - clippy::cast_possible_truncation → // Reason: [justification]
+# - clippy::cast_sign_loss → // Reason: [justification]
+# - clippy::cast_precision_loss → // Reason: [justification]
+
+# =============================================================================
+# Seuils pour les suggestions
+# =============================================================================
+single-char-binding-names-threshold = 4
+trivial-copy-size-limit = 8
+vec-box-size-threshold = 4096

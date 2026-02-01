@@ -249,7 +249,7 @@ impl SimdFeatures {
 }
 
 // =============================================================================
-// Implementation functions - delegating to simd_avx512 and simd_explicit
+// Implementation functions - delegating to simd_native (EPIC-075 consolidation)
 // =============================================================================
 
 // --- Dot Product implementations ---
@@ -261,12 +261,12 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_explicit::dot_product_simd(a, b)
+    crate::simd_native::dot_product_native(a, b)
 }
 
 #[cfg(target_arch = "x86_64")]
 fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_avx512::dot_product_auto(a, b)
+    crate::simd_native::dot_product_native(a, b)
 }
 
 // --- Euclidean implementations ---
@@ -285,12 +285,12 @@ fn euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 fn euclidean_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_explicit::euclidean_distance_simd(a, b)
+    crate::simd_native::euclidean_native(a, b)
 }
 
 #[cfg(target_arch = "x86_64")]
 fn euclidean_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_avx512::euclidean_auto(a, b)
+    crate::simd_native::euclidean_native(a, b)
 }
 
 // --- Cosine implementations ---
@@ -317,12 +317,12 @@ fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 fn cosine_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_explicit::cosine_similarity_simd(a, b)
+    crate::simd_native::cosine_similarity_native(a, b)
 }
 
 #[cfg(target_arch = "x86_64")]
 fn cosine_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_avx512::cosine_similarity_auto(a, b)
+    crate::simd_native::cosine_similarity_native(a, b)
 }
 
 // --- Cosine Normalized implementations ---
@@ -334,12 +334,12 @@ fn cosine_normalized_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 fn cosine_normalized_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_explicit::dot_product_simd(a, b)
+    crate::simd_native::dot_product_native(a, b)
 }
 
 #[cfg(target_arch = "x86_64")]
 fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_avx512::dot_product_auto(a, b)
+    crate::simd_native::dot_product_native(a, b)
 }
 
 // --- Hamming implementations ---
@@ -360,8 +360,11 @@ fn hamming_scalar(a: &[f32], b: &[f32]) -> u32 {
 
 #[cfg(target_arch = "x86_64")]
 fn hamming_popcnt(a: &[f32], b: &[f32]) -> u32 {
-    // Use the native u32 implementation directly - no cast needed
-    crate::simd_explicit::hamming_distance_simd_u32(a, b)
+    // Use scalar implementation - POPCNT gains minimal for float comparison
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        crate::simd_native::hamming_distance_native(a, b) as u32
+    }
 }
 
 /// AVX-512 VPOPCNTDQ placeholder for Hamming distance.

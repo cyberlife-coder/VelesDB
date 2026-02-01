@@ -415,3 +415,231 @@ fn test_dot_product_small_vectors_no_simd() {
         assert!((result - expected).abs() < 1e-5, "len={} mismatch", len);
     }
 }
+
+// =========================================================================
+// AVX-512 4-Accumulator Optimization Tests (EPIC-PERF-003)
+// Tests verify dot_product_native dispatch to 4-acc for len >= 512
+// =========================================================================
+
+#[test]
+fn test_dot_product_threshold_512_boundary() {
+    // Test exact threshold boundary: 511 uses standard, 512+ uses 4-acc
+    for len in [511usize, 512, 513, 575, 576, 577] {
+        let a: Vec<f32> = (0..len).map(|i| (i as f32) * 0.001).collect();
+        let b: Vec<f32> = (0..len).map(|i| ((len - 1 - i) as f32) * 0.001).collect();
+
+        let simd_result = dot_product_native(&a, &b);
+        let scalar_result: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+
+        let rel_error = if scalar_result.abs() > 1e-6 {
+            (simd_result - scalar_result).abs() / scalar_result.abs()
+        } else {
+            (simd_result - scalar_result).abs()
+        };
+
+        assert!(
+            rel_error < 1e-4,
+            "Threshold test len={} failed: rel_error={} (simd={}, scalar={})",
+            len,
+            rel_error,
+            simd_result,
+            scalar_result
+        );
+    }
+}
+
+#[test]
+fn test_dot_product_empty_vectors() {
+    // len=0 should work without panic
+    let a: Vec<f32> = vec![];
+    let b: Vec<f32> = vec![];
+    let result = dot_product_native(&a, &b);
+    assert!(
+        result.abs() < 1e-6,
+        "Empty vectors should return ~0.0, got {}",
+        result
+    );
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_dot_product_avx512_4acc_numerical_equivalence() {
+    // Test numerical equivalence between SIMD and scalar
+    // Expert recommendation: verify < 1e-5 divergence
+    let a: Vec<f32> = (0..768).map(|i| i as f32 * 0.001).collect();
+    let b: Vec<f32> = (0..768).map(|i| (768 - i) as f32 * 0.001).collect();
+
+    let simd_result = dot_product_native(&a, &b);
+    let scalar_result: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+
+    // SIMD floating point order differs from scalar - accept 1e-4 tolerance
+    // Expert: "L'ordre des opérations flottantes change par rapport au scalaire (associativité)"
+    assert!(
+        (simd_result - scalar_result).abs() < 1e-4,
+        "Numerical divergence: simd={}, scalar={}",
+        simd_result,
+        scalar_result
+    );
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_dot_product_avx512_4acc_large_vectors() {
+    // Test with vectors >= 128 elements (4-acc threshold)
+    for len in [128, 256, 512, 768, 1024, 1536] {
+        let a: Vec<f32> = (0..len).map(|i| (i as f32) / (len as f32)).collect();
+        let b: Vec<f32> = (0..len).map(|i| 1.0 - (i as f32) / (len as f32)).collect();
+
+        let simd_result = dot_product_native(&a, &b);
+        let scalar_result: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+
+        let rel_error = if scalar_result.abs() > 1e-6 {
+            (simd_result - scalar_result).abs() / scalar_result.abs()
+        } else {
+            (simd_result - scalar_result).abs()
+        };
+
+        assert!(
+            rel_error < 1e-4,
+            "len={} rel_error={} (simd={}, scalar={})",
+            len,
+            rel_error,
+            simd_result,
+            scalar_result
+        );
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_dot_product_remainder_bounds_elimination() {
+    // Test remainder handling (len % 64 != 0) with bounds elimination
+    // These lengths specifically test the scalar tail loop
+    for len in [65, 66, 127, 129, 191, 193, 255, 257] {
+        let a: Vec<f32> = (0..len).map(|i| i as f32).collect();
+        let b: Vec<f32> = vec![1.0; len];
+
+        let result = dot_product_native(&a, &b);
+        let expected: f32 = (0..len).map(|i| i as f32).sum();
+
+        assert!(
+            (result - expected).abs() < 1e-4,
+            "len={} mismatch: got={}, expected={}",
+            len,
+            result,
+            expected
+        );
+    }
+}
+
+#[test]
+fn test_dot_product_nan_propagation() {
+    // NaN should propagate through SIMD operations
+    let a = vec![f32::NAN, 1.0, 2.0, 3.0];
+    let b = vec![1.0, 1.0, 1.0, 1.0];
+
+    let result = dot_product_native(&a, &b);
+    assert!(result.is_nan(), "NaN should propagate, got {}", result);
+}
+
+#[test]
+fn test_dot_product_inf_handling() {
+    // Infinity should be handled correctly
+    let a = vec![f32::INFINITY, 1.0, 2.0, 3.0];
+    let b = vec![0.5, 1.0, 1.0, 1.0];
+
+    let result = dot_product_native(&a, &b);
+    assert!(
+        result.is_infinite(),
+        "Infinity should propagate, got {}",
+        result
+    );
+}
+
+// =========================================================================
+// Cosine Fused AVX-512 Tests (EPIC-PERF-004)
+// TDD: These tests target the new cosine_avx512_fused function
+// =========================================================================
+
+#[test]
+fn test_cosine_fused_identical_vectors() {
+    let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let result = cosine_similarity_native(&a, &a);
+    assert!(
+        (result - 1.0).abs() < 1e-5,
+        "Identical vectors should have cosine=1.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_cosine_fused_opposite_vectors() {
+    let a = vec![1.0, 2.0, 3.0, 4.0];
+    let b = vec![-1.0, -2.0, -3.0, -4.0];
+    let result = cosine_similarity_native(&a, &b);
+    assert!(
+        (result - (-1.0)).abs() < 1e-5,
+        "Opposite vectors should have cosine=-1.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_cosine_fused_orthogonal_vectors() {
+    let a = vec![1.0, 0.0, 0.0, 0.0];
+    let b = vec![0.0, 1.0, 0.0, 0.0];
+    let result = cosine_similarity_native(&a, &b);
+    assert!(
+        result.abs() < 1e-5,
+        "Orthogonal vectors should have cosine=0.0, got {}",
+        result
+    );
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_cosine_fused_large_vectors_precision() {
+    // Test precision with large vectors (fused dot+norms)
+    let a: Vec<f32> = (0..768).map(|i| (i as f32) / 768.0).collect();
+    let b: Vec<f32> = (0..768).map(|i| 1.0 - (i as f32) / 768.0).collect();
+
+    let simd_result = cosine_similarity_native(&a, &b);
+
+    // Compute scalar reference
+    let dot: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let scalar_result = dot / (norm_a * norm_b);
+
+    assert!(
+        (simd_result - scalar_result).abs() < 0.02,
+        "Cosine precision: simd={}, scalar={}",
+        simd_result,
+        scalar_result
+    );
+}
+
+#[test]
+fn test_cosine_fused_zero_vector() {
+    let a = vec![0.0, 0.0, 0.0, 0.0];
+    let b = vec![1.0, 2.0, 3.0, 4.0];
+    let result = cosine_similarity_native(&a, &b);
+    assert!(
+        result.abs() < 1e-5,
+        "Zero vector should give cosine=0.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_cosine_result_clamped() {
+    // Ensure result is always in [-1, 1] even with floating point errors
+    let a: Vec<f32> = (0..100).map(|i| (i as f32) * 0.01).collect();
+    let b = a.clone();
+    let result = cosine_similarity_native(&a, &b);
+    assert!(
+        (-1.0..=1.0).contains(&result),
+        "Cosine should be clamped to [-1, 1], got {}",
+        result
+    );
+}
