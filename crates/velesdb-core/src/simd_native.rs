@@ -1035,6 +1035,38 @@ pub fn simd_level() -> SimdLevel {
     *SIMD_LEVEL.get_or_init(detect_simd_level)
 }
 
+/// Warms up SIMD caches to eliminate cold-start latency.
+///
+/// Call this at application startup to ensure the first SIMD operations
+/// are as fast as subsequent ones. This is particularly important for
+/// latency-sensitive applications like real-time vector search.
+///
+/// # Example
+///
+/// ```
+/// use velesdb_core::simd_native::warmup_simd_cache;
+///
+/// // Call once at startup
+/// warmup_simd_cache();
+/// ```
+#[inline]
+pub fn warmup_simd_cache() {
+    // Force SIMD level detection
+    let _ = simd_level();
+    
+    // Warm up CPU caches with dummy operations
+    // Using 768D as it's a common embedding dimension
+    let warmup_size = 768;
+    let a: Vec<f32> = vec![0.01; warmup_size];
+    let b: Vec<f32> = vec![0.01; warmup_size];
+    
+    // 3 iterations as recommended by SimSIMD research
+    for _ in 0..3 {
+        let _ = dot_product_native(&a, &b);
+        let _ = cosine_similarity_native(&a, &b);
+    }
+}
+
 // =============================================================================
 // Public API with cached dispatch
 // =============================================================================
@@ -1605,3 +1637,6 @@ mod cosine_fused_tests;
 
 #[cfg(test)]
 mod harley_seal_tests;
+
+#[cfg(test)]
+mod warmup_tests;
