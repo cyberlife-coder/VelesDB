@@ -1599,3 +1599,6 @@ fn jaccard_scalar_accum(a: &[f32], b: &[f32]) -> (f32, f32) {
 
 #[cfg(test)]
 mod simd_native_dispatch_tests;
+
+#[cfg(test)]
+mod cosine_fused_tests;
