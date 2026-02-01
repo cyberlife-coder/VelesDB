@@ -12,9 +12,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::simd::{cosine_similarity_fast, dot_product_fast, euclidean_distance_fast};
-use velesdb_core::simd_explicit::{
-    cosine_similarity_simd, dot_product_simd, euclidean_distance_simd,
-};
+use velesdb_core::simd_native::{cosine_similarity_native, dot_product_native, euclidean_native};
 
 /// Generate a deterministic f32 vector for benchmarking.
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -42,9 +40,9 @@ fn bench_cosine_overhead(c: &mut Criterion) {
     let a = generate_aligned_vector(dim, 0.0);
     let b = generate_aligned_vector(dim, 1.0);
 
-    // 1. Raw explicit SIMD kernel (baseline - fastest possible)
-    group.bench_function("1_explicit_simd_kernel", |bencher| {
-        bencher.iter(|| cosine_similarity_simd(black_box(&a), black_box(&b)));
+    // 1. Raw native SIMD kernel (baseline - fastest possible)
+    group.bench_function("1_native_simd_kernel", |bencher| {
+        bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
     });
 
     // 2. Public API (auto-vectorized with fused computation)
@@ -54,12 +52,12 @@ fn bench_cosine_overhead(c: &mut Criterion) {
 
     // 3. Measure assertion overhead by calling with pre-validated slices
     // (We can't remove assertions, but we can measure their impact indirectly)
-    group.bench_function("3_explicit_simd_prechecked", |bencher| {
+    group.bench_function("3_native_simd_prechecked", |bencher| {
         // Pre-check outside the hot loop
         assert_eq!(a.len(), b.len());
         bencher.iter(|| {
             // Call with slices we know are valid
-            cosine_similarity_simd(black_box(&a), black_box(&b))
+            cosine_similarity_native(black_box(&a), black_box(&b))
         });
     });
 
@@ -78,8 +76,8 @@ fn bench_euclidean_overhead(c: &mut Criterion) {
     let a = generate_aligned_vector(dim, 0.0);
     let b = generate_aligned_vector(dim, 1.0);
 
-    group.bench_function("1_explicit_simd_kernel", |bencher| {
-        bencher.iter(|| euclidean_distance_simd(black_box(&a), black_box(&b)));
+    group.bench_function("1_native_simd_kernel", |bencher| {
+        bencher.iter(|| euclidean_native(black_box(&a), black_box(&b)));
     });
 
     group.bench_function("2_public_api_autovec", |bencher| {
@@ -101,8 +99,8 @@ fn bench_dot_product_overhead(c: &mut Criterion) {
     let a = generate_aligned_vector(dim, 0.0);
     let b = generate_aligned_vector(dim, 1.0);
 
-    group.bench_function("1_explicit_simd_kernel", |bencher| {
-        bencher.iter(|| dot_product_simd(black_box(&a), black_box(&b)));
+    group.bench_function("1_native_simd_kernel", |bencher| {
+        bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
     });
 
     group.bench_function("2_public_api_autovec", |bencher| {
@@ -124,13 +122,9 @@ fn bench_dimension_scaling(c: &mut Criterion) {
         let a = generate_aligned_vector(*dim, 0.0);
         let b = generate_aligned_vector(*dim, 1.0);
 
-        group.bench_with_input(
-            BenchmarkId::new("cosine_explicit", dim),
-            dim,
-            |bencher, _| {
-                bencher.iter(|| cosine_similarity_simd(black_box(&a), black_box(&b)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("cosine_native", dim), dim, |bencher, _| {
+            bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
+        });
 
         group.bench_with_input(
             BenchmarkId::new("cosine_autovec", dim),
@@ -163,8 +157,9 @@ fn bench_inlining(c: &mut Criterion) {
         .collect();
 
     // Single call (baseline)
-    group.bench_function("single_call_explicit", |bencher| {
-        bencher.iter(|| cosine_similarity_simd(black_box(&vectors[0].0), black_box(&vectors[0].1)));
+    group.bench_function("single_call_native", |bencher| {
+        bencher
+            .iter(|| cosine_similarity_native(black_box(&vectors[0].0), black_box(&vectors[0].1)));
     });
 
     // Batch of 10 calls (tests if inlining amortizes overhead)
@@ -172,7 +167,7 @@ fn bench_inlining(c: &mut Criterion) {
         bencher.iter(|| {
             let mut sum = 0.0f32;
             for (a, b) in &vectors {
-                sum += cosine_similarity_simd(black_box(a), black_box(b));
+                sum += cosine_similarity_native(black_box(a), black_box(b));
             }
             sum
         });
@@ -210,7 +205,7 @@ fn bench_memory_layout(c: &mut Criterion) {
     group.bench_function("aligned_slices", |bencher| {
         let a_slice = &a_owned[..];
         let b_slice = &b_owned[..];
-        bencher.iter(|| cosine_similarity_simd(black_box(a_slice), black_box(b_slice)));
+        bencher.iter(|| cosine_similarity_native(black_box(a_slice), black_box(b_slice)));
     });
 
     // Test with offset slices (potentially misaligned)
@@ -220,7 +215,7 @@ fn bench_memory_layout(c: &mut Criterion) {
     group.bench_function("offset_slices", |bencher| {
         let a_slice = &a_padded[1..]; // Offset by 1 element (4 bytes)
         let b_slice = &b_padded[1..];
-        bencher.iter(|| cosine_similarity_simd(black_box(a_slice), black_box(b_slice)));
+        bencher.iter(|| cosine_similarity_native(black_box(a_slice), black_box(b_slice)));
     });
 
     group.finish();

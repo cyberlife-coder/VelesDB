@@ -4,6 +4,7 @@
 //! ```bash
 //! cargo bench --bench portable_simd_eval
 //! ```
+#![allow(clippy::cast_precision_loss)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use velesdb_core::{simd_ops, DistanceMetric};

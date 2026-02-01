@@ -16,8 +16,8 @@
 //! | `NativeAvx512` | `core::arch` AVX-512 | Large vectors (768D+) on Zen4+/Skylake-X+ |
 //! | `NativeAvx2` | `core::arch` AVX2 | Large vectors on Haswell+ |
 //! | `NativeNeon` | `core::arch` NEON | aarch64 (Apple Silicon, ARM servers) |
-//! | `Wide32` | `wide` crate 4×f32x8 | Medium vectors (128-768D) |
-//! | `Wide8` | `wide` crate f32x8 | Small vectors, WASM |
+//! | `Wide32` | `simd_native` 32-wide | Medium vectors (128-768D) |
+//! | `Wide8` | `simd_native` 8-wide | Small vectors, WASM |
 //! | `Scalar` | Rust native | Fallback, very small vectors |
 //!
 //! # Example
@@ -154,8 +154,8 @@ impl DispatchTable {
             table.norm[i] = find_fastest_backend_unary(&backends, &a, benchmark_norm);
         }
 
-        // Hamming and Jaccard: always use Wide8 (simd_explicit) - no benchmark needed
-        // These metrics only have simd_explicit implementation, benchmarking is wasteful
+        // Hamming and Jaccard: use Wide8 backend which now delegates to simd_native
+        // No benchmark needed - scalar implementation is sufficient for these metrics
         table.hamming = SimdBackend::Wide8;
         table.jaccard = SimdBackend::Wide8;
 
@@ -675,11 +675,10 @@ fn execute_dot_product(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
             }
             #[cfg(not(target_arch = "aarch64"))]
             {
-                crate::simd_explicit::dot_product_simd(a, b)
+                crate::simd_native::dot_product_native(a, b)
             }
         }
-        SimdBackend::Wide32 => crate::simd_avx512::dot_product_auto(a, b),
-        SimdBackend::Wide8 => crate::simd_explicit::dot_product_simd(a, b),
+        SimdBackend::Wide32 | SimdBackend::Wide8 => crate::simd_native::dot_product_native(a, b),
         SimdBackend::Scalar => dot_product_scalar(a, b),
     }
 }
@@ -687,9 +686,6 @@ fn execute_dot_product(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
 /// Executes cosine similarity using the specified backend.
 fn execute_cosine(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
     match backend {
-        SimdBackend::NativeAvx512 | SimdBackend::NativeAvx2 => {
-            crate::simd_native::cosine_similarity_native(a, b)
-        }
         SimdBackend::NativeNeon => {
             #[cfg(target_arch = "aarch64")]
             {
@@ -697,11 +693,13 @@ fn execute_cosine(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
             }
             #[cfg(not(target_arch = "aarch64"))]
             {
-                crate::simd_explicit::cosine_similarity_simd(a, b)
+                crate::simd_native::cosine_similarity_native(a, b)
             }
         }
-        SimdBackend::Wide32 => crate::simd_avx512::cosine_similarity_auto(a, b),
-        SimdBackend::Wide8 => crate::simd_explicit::cosine_similarity_simd(a, b),
+        SimdBackend::NativeAvx512
+        | SimdBackend::NativeAvx2
+        | SimdBackend::Wide32
+        | SimdBackend::Wide8 => crate::simd_native::cosine_similarity_native(a, b),
         SimdBackend::Scalar => cosine_scalar(a, b),
     }
 }
@@ -719,11 +717,10 @@ fn execute_euclidean(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
             }
             #[cfg(not(target_arch = "aarch64"))]
             {
-                crate::simd_explicit::euclidean_distance_simd(a, b)
+                crate::simd_native::euclidean_native(a, b)
             }
         }
-        SimdBackend::Wide32 => crate::simd_avx512::euclidean_auto(a, b),
-        SimdBackend::Wide8 => crate::simd_explicit::euclidean_distance_simd(a, b),
+        SimdBackend::Wide32 | SimdBackend::Wide8 => crate::simd_native::euclidean_native(a, b),
         SimdBackend::Scalar => euclidean_scalar(a, b),
     }
 }
@@ -736,7 +733,7 @@ fn execute_hamming(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
         | SimdBackend::Wide32
         | SimdBackend::NativeAvx512
         | SimdBackend::NativeAvx2
-        | SimdBackend::NativeNeon => crate::simd_explicit::hamming_distance_simd(a, b),
+        | SimdBackend::NativeNeon => crate::simd_native::hamming_distance_native(a, b),
         SimdBackend::Scalar => hamming_scalar(a, b),
     }
 }
@@ -749,7 +746,7 @@ fn execute_jaccard(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
         | SimdBackend::Wide32
         | SimdBackend::NativeAvx512
         | SimdBackend::NativeAvx2
-        | SimdBackend::NativeNeon => crate::simd_explicit::jaccard_similarity_simd(a, b),
+        | SimdBackend::NativeNeon => crate::simd_native::jaccard_similarity_native(a, b),
         SimdBackend::Scalar => jaccard_scalar(a, b),
     }
 }
@@ -757,7 +754,6 @@ fn execute_jaccard(backend: SimdBackend, a: &[f32], b: &[f32]) -> f32 {
 /// Executes norm using the specified backend.
 fn execute_norm(backend: SimdBackend, v: &[f32]) -> f32 {
     match backend {
-        SimdBackend::NativeAvx512 | SimdBackend::NativeAvx2 => crate::simd_native::norm_native(v),
         SimdBackend::NativeNeon => {
             #[cfg(target_arch = "aarch64")]
             {
@@ -766,10 +762,13 @@ fn execute_norm(backend: SimdBackend, v: &[f32]) -> f32 {
             }
             #[cfg(not(target_arch = "aarch64"))]
             {
-                crate::simd_explicit::norm_simd(v)
+                crate::simd_native::norm_native(v)
             }
         }
-        SimdBackend::Wide32 | SimdBackend::Wide8 => crate::simd_explicit::norm_simd(v),
+        SimdBackend::NativeAvx512
+        | SimdBackend::NativeAvx2
+        | SimdBackend::Wide32
+        | SimdBackend::Wide8 => crate::simd_native::norm_native(v),
         SimdBackend::Scalar => norm_scalar(v),
     }
 }

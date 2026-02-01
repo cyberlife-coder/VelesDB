@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### EPIC-074/075: SIMD Architecture Consolidation ✅
+
+- **Removed `simd_explicit.rs`** - All functions migrated to `simd_native.rs`
+- **Removed `simd_avx512.rs`** - Consolidated into `simd_native.rs`
+- **Removed `wide` crate dependency** - Eliminates 1 external dependency
+- **Added `hamming_distance_native()`** - Native Hamming distance in `simd_native`
+- **Added `jaccard_similarity_native()`** - Native Jaccard similarity in `simd_native`
+- **Unified dispatch** - All backends now delegate to `simd_native` implementations
+- **Code quality** - Merged identical match arms, fixed clippy warnings
+
 ### EPIC-078: SIMD Adaptive Dispatch Consolidation ✅
 
 - **`simd_ops` module** - Unified adaptive SIMD dispatch with runtime backend selection

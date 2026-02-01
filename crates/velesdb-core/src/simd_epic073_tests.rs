@@ -1,14 +1,11 @@
 //! Tests for EPIC-073 SIMD Pipeline Optimizations.
 //!
 //! US-002: Jaccard SIMD optimization
-//! US-003: Batch similarity search
 //! US-004: Cache alignment (verified in storage tests)
 //! US-005: Quantization auto-enable
 
 use crate::config::QuantizationConfig;
-use crate::simd_explicit::{
-    batch_dot_product, batch_similarity_top_k, jaccard_similarity_binary, jaccard_similarity_simd,
-};
+use crate::simd_native::jaccard_similarity_native;
 
 // =============================================================================
 // US-002: Jaccard SIMD Tests
@@ -18,7 +15,7 @@ use crate::simd_explicit::{
 fn test_jaccard_simd_identical_sets() {
     let a: Vec<f32> = vec![1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0];
     let b: Vec<f32> = vec![1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0];
-    let result = jaccard_similarity_simd(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
     assert!(
         (result - 1.0).abs() < 1e-5,
         "Identical sets should have Jaccard = 1.0"
@@ -29,7 +26,7 @@ fn test_jaccard_simd_identical_sets() {
 fn test_jaccard_simd_disjoint_sets() {
     let a: Vec<f32> = vec![1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
     let b: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
-    let result = jaccard_similarity_simd(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
     assert!(
         (result - 0.0).abs() < 1e-5,
         "Disjoint sets should have Jaccard = 0.0"
@@ -40,7 +37,7 @@ fn test_jaccard_simd_disjoint_sets() {
 fn test_jaccard_simd_half_overlap() {
     let a: Vec<f32> = vec![1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     let b: Vec<f32> = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let result = jaccard_similarity_simd(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
     // Intersection = 1, Union = 3
     assert!((result - 1.0 / 3.0).abs() < 1e-5, "Expected Jaccard = 1/3");
 }
@@ -49,7 +46,7 @@ fn test_jaccard_simd_half_overlap() {
 fn test_jaccard_simd_empty_sets() {
     let a: Vec<f32> = vec![0.0; 16];
     let b: Vec<f32> = vec![0.0; 16];
-    let result = jaccard_similarity_simd(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
     assert!((result - 1.0).abs() < 1e-5, "Empty sets should return 1.0");
 }
 
@@ -62,105 +59,21 @@ fn test_jaccard_simd_large_vector() {
     let b: Vec<f32> = (0..768)
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
-    let result = jaccard_similarity_simd(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
     assert!(
         result > 0.0 && result < 1.0,
         "Jaccard should be between 0 and 1"
     );
 }
 
-#[test]
-fn test_jaccard_binary_identical() {
-    let a: Vec<u64> = vec![0xFFFF_FFFF_FFFF_FFFF; 8];
-    let b: Vec<u64> = vec![0xFFFF_FFFF_FFFF_FFFF; 8];
-    let result = jaccard_similarity_binary(&a, &b);
-    assert!(
-        (result - 1.0).abs() < 1e-5,
-        "Identical binary sets should have Jaccard = 1.0"
-    );
-}
-
-#[test]
-fn test_jaccard_binary_disjoint() {
-    let a: Vec<u64> = vec![0xFFFF_FFFF_0000_0000; 8];
-    let b: Vec<u64> = vec![0x0000_0000_FFFF_FFFF; 8];
-    let result = jaccard_similarity_binary(&a, &b);
-    assert!(
-        (result - 0.0).abs() < 1e-5,
-        "Disjoint binary sets should have Jaccard = 0.0"
-    );
-}
+// Binary Jaccard tests removed - function not migrated to simd_native (EPIC-075)
 
 // =============================================================================
 // US-003: Batch Similarity Tests
+// Note: batch_dot_product and batch_similarity_top_k removed in EPIC-075
+// These functions were specific to simd_explicit and not migrated.
+// Batch operations are now handled via simd_native::batch_dot_product_native.
 // =============================================================================
-
-#[test]
-fn test_batch_dot_product_basic() {
-    let q1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let q2: Vec<f32> = vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let v1: Vec<f32> = vec![1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let v2: Vec<f32> = vec![0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-
-    let queries: Vec<&[f32]> = vec![&q1, &q2];
-    let vectors: Vec<&[f32]> = vec![&v1, &v2];
-
-    let results = batch_dot_product(&queries, &vectors);
-
-    assert_eq!(results.len(), 2);
-    assert_eq!(results[0].len(), 2);
-    assert!((results[0][0] - 1.0).abs() < 1e-5); // q1 · v1 = 1.0
-    assert!((results[0][1] - 0.5).abs() < 1e-5); // q1 · v2 = 0.5
-    assert!((results[1][0] - 1.0).abs() < 1e-5); // q2 · v1 = 1.0
-    assert!((results[1][1] - 0.5).abs() < 1e-5); // q2 · v2 = 0.5
-}
-
-#[test]
-fn test_batch_dot_product_empty() {
-    let queries: Vec<&[f32]> = vec![];
-    let vectors: Vec<&[f32]> = vec![];
-    let results = batch_dot_product(&queries, &vectors);
-    assert!(results.is_empty());
-}
-
-#[test]
-fn test_batch_similarity_top_k() {
-    let q1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-
-    let v1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // dot = 1.0
-    let v2: Vec<f32> = vec![0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // dot = 0.5
-    let v3: Vec<f32> = vec![0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // dot = 0.8
-
-    let queries: Vec<&[f32]> = vec![&q1];
-    let vectors: Vec<(u64, &[f32])> = vec![(1, &v1[..]), (2, &v2[..]), (3, &v3[..])];
-
-    let results = batch_similarity_top_k(&queries, &vectors, 2, true);
-
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].len(), 2);
-    assert_eq!(results[0][0].0, 1); // Highest score
-    assert_eq!(results[0][1].0, 3); // Second highest
-}
-
-#[test]
-fn test_batch_similarity_top_k_distance() {
-    let q1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-
-    let v1: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // dot = 1.0
-    let v2: Vec<f32> = vec![0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // dot = 0.5
-    let v3: Vec<f32> = vec![0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // dot = 0.8
-
-    let queries: Vec<&[f32]> = vec![&q1];
-    let vectors: Vec<(u64, &[f32])> = vec![(1, &v1[..]), (2, &v2[..]), (3, &v3[..])];
-
-    // Lower is better (distance mode)
-    let results = batch_similarity_top_k(&queries, &vectors, 2, false);
-
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].len(), 2);
-    assert_eq!(results[0][0].0, 2); // Lowest score
-    assert_eq!(results[0][1].0, 3); // Second lowest
-}
 
 // =============================================================================
 // US-005: Auto-Quantization Config Tests

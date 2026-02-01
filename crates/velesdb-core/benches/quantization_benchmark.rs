@@ -14,9 +14,7 @@ use velesdb_core::quantization::{
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
     QuantizedVector,
 };
-use velesdb_core::simd_explicit::{
-    cosine_similarity_simd, dot_product_simd, euclidean_distance_simd,
-};
+use velesdb_core::simd_native::{cosine_similarity_native, dot_product_native, euclidean_native};
 
 /// Generate a deterministic vector for benchmarking
 fn generate_vector(dimension: usize, seed: usize) -> Vec<f32> {
@@ -52,7 +50,7 @@ fn bench_dot_product_comparison(c: &mut Criterion) {
 
         // f32 baseline (SIMD)
         group.bench_with_input(BenchmarkId::new("f32_simd", dim), dim, |b, _| {
-            b.iter(|| dot_product_simd(black_box(&query), black_box(&vector)))
+            b.iter(|| dot_product_native(black_box(&query), black_box(&vector)))
         });
 
         // SQ8 scalar
@@ -79,7 +77,7 @@ fn bench_euclidean_comparison(c: &mut Criterion) {
 
         // f32 baseline
         group.bench_with_input(BenchmarkId::new("f32_simd", dim), dim, |b, _| {
-            b.iter(|| euclidean_distance_simd(black_box(&query), black_box(&vector)))
+            b.iter(|| euclidean_native(black_box(&query), black_box(&vector)))
         });
 
         // SQ8 scalar
@@ -106,7 +104,7 @@ fn bench_cosine_comparison(c: &mut Criterion) {
 
         // f32 baseline
         group.bench_with_input(BenchmarkId::new("f32_simd", dim), dim, |b, _| {
-            b.iter(|| cosine_similarity_simd(black_box(&query), black_box(&vector)))
+            b.iter(|| cosine_similarity_native(black_box(&query), black_box(&vector)))
         });
 
         // SQ8 scalar
