@@ -44,10 +44,14 @@ pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     // Horizontal sum of SIMD register
     let mut result = vaddvq_f32(sum);
 
-    // Handle remainder (if len not divisible by 4)
+    // Handle remainder (if len not divisible by 4) - unrolled for performance
     let base = chunks * 4;
-    for i in 0..remainder {
-        result += a[base + i] * b[base + i];
+    if remainder == 3 {
+        result += a[base] * b[base] + a[base + 1] * b[base + 1] + a[base + 2] * b[base + 2];
+    } else if remainder == 2 {
+        result += a[base] * b[base] + a[base + 1] * b[base + 1];
+    } else if remainder == 1 {
+        result += a[base] * b[base];
     }
 
     result
@@ -85,9 +89,18 @@ pub unsafe fn euclidean_squared_neon(a: &[f32], b: &[f32]) -> f32 {
     let mut result = vaddvq_f32(sum);
 
     let base = chunks * 4;
-    for i in 0..remainder {
-        let diff = a[base + i] - b[base + i];
-        result += diff * diff;
+    if remainder == 3 {
+        let d0 = a[base] - b[base];
+        let d1 = a[base + 1] - b[base + 1];
+        let d2 = a[base + 2] - b[base + 2];
+        result += d0 * d0 + d1 * d1 + d2 * d2;
+    } else if remainder == 2 {
+        let d0 = a[base] - b[base];
+        let d1 = a[base + 1] - b[base + 1];
+        result += d0 * d0 + d1 * d1;
+    } else if remainder == 1 {
+        let d = a[base] - b[base];
+        result += d * d;
     }
 
     result

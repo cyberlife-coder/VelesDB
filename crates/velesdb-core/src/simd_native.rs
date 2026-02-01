@@ -21,6 +21,83 @@
 #![allow(clippy::similar_names)]
 
 // =============================================================================
+// Remainder Handling Macro (FLAG-005: Factorisation)
+// =============================================================================
+
+/// Macro for unrolled remainder sum computation (1-7 elements).
+/// Generates optimal code for remainders 1-7 with 4→2→1 unrolling.
+#[macro_export]
+macro_rules! sum_remainder_unrolled_8 {
+    ($a:expr, $b:expr, $base:expr, $remainder:expr, $result:expr) => {
+        if $remainder >= 4 {
+            $result += $a[$base] * $b[$base]
+                + $a[$base + 1] * $b[$base + 1]
+                + $a[$base + 2] * $b[$base + 2]
+                + $a[$base + 3] * $b[$base + 3];
+            if $remainder >= 5 {
+                $result += $a[$base + 4] * $b[$base + 4];
+            }
+            if $remainder >= 6 {
+                $result += $a[$base + 5] * $b[$base + 5];
+            }
+            if $remainder == 7 {
+                $result += $a[$base + 6] * $b[$base + 6];
+            }
+        } else if $remainder >= 2 {
+            $result += $a[$base] * $b[$base] + $a[$base + 1] * $b[$base + 1];
+            if $remainder == 3 {
+                $result += $a[$base + 2] * $b[$base + 2];
+            }
+        } else if $remainder == 1 {
+            $result += $a[$base] * $b[$base];
+        }
+    };
+}
+
+/// Macro for unrolled squared L2 remainder (1-7 elements).
+#[macro_export]
+macro_rules! sum_squared_remainder_unrolled_8 {
+    ($a:expr, $b:expr, $base:expr, $remainder:expr, $result:expr) => {
+        if $remainder >= 4 {
+            let d0 = $a[$base] - $b[$base];
+            let d1 = $a[$base + 1] - $b[$base + 1];
+            let d2 = $a[$base + 2] - $b[$base + 2];
+            let d3 = $a[$base + 3] - $b[$base + 3];
+            $result += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+            if $remainder >= 5 {
+                let d4 = $a[$base + 4] - $b[$base + 4];
+                $result += d4 * d4;
+            }
+            if $remainder >= 6 {
+                let d5 = $a[$base + 5] - $b[$base + 5];
+                $result += d5 * d5;
+            }
+            if $remainder == 7 {
+                let d6 = $a[$base + 6] - $b[$base + 6];
+                $result += d6 * d6;
+            }
+        } else if $remainder >= 2 {
+            let d0 = $a[$base] - $b[$base];
+            let d1 = $a[$base + 1] - $b[$base + 1];
+            $result += d0 * d0 + d1 * d1;
+            if $remainder == 3 {
+                let d2 = $a[$base + 2] - $b[$base + 2];
+                $result += d2 * d2;
+            }
+        } else if $remainder == 1 {
+            let d = $a[$base] - $b[$base];
+            $result += d * d;
+        }
+    };
+}
+
+// Re-export macros for internal use
+#[allow(unused_imports)]
+pub(crate) use sum_remainder_unrolled_8;
+#[allow(unused_imports)]
+pub(crate) use sum_squared_remainder_unrolled_8;
+
+// =============================================================================
 // AVX-512 Implementation (x86_64)
 // =============================================================================
 
@@ -37,7 +114,7 @@
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
     // - `_mm512_loadu_ps` and `_mm512_maskz_loadu_ps` handle unaligned loads safely
     // - Pointer arithmetic stays within bounds: offset = i * 16 where i < simd_len = len / 16
@@ -88,7 +165,7 @@ unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
     // - `_mm512_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic: stays within bounds, checked by end_ptr comparison
@@ -222,7 +299,7 @@ unsafe fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
 #[allow(clippy::too_many_lines)] // Remainder unrolling adds lines for performance
-unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
     // - `_mm256_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic stays within bounds: offset = i * 32 where i < simd_len = len / 32
@@ -436,7 +513,7 @@ unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
-unsafe fn dot_product_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
     // - `_mm256_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic stays within bounds
@@ -507,7 +584,7 @@ unsafe fn dot_product_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
-unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
     // - `_mm256_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic stays within bounds: offset = i * 16 where i < simd_len = len / 16
@@ -1038,6 +1115,9 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => unsafe { squared_l2_avx512(a, b) },
         // AVX2: seuils optimisés (mêmes que dot_product)
+        // - < 16: scalar
+        // - 16-63: 1-acc
+        // - 64+: 2-acc (4-acc TODO pour 256+)
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 64 => unsafe { squared_l2_avx2(a, b) }, // 2-acc
         #[cfg(target_arch = "x86_64")]
@@ -1516,3 +1596,6 @@ fn jaccard_scalar_accum(a: &[f32], b: &[f32]) -> (f32, f32) {
 }
 
 // Tests moved to simd_native_tests.rs per project rules (tests in separate files)
+
+#[cfg(test)]
+mod simd_native_dispatch_tests;

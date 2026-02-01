@@ -16,8 +16,8 @@
 //! | `NativeAvx512` | `core::arch` AVX-512 | Large vectors (768D+) on Zen4+/Skylake-X+ |
 //! | `NativeAvx2` | `core::arch` AVX2 | Large vectors on Haswell+ |
 //! | `NativeNeon` | `core::arch` NEON | aarch64 (Apple Silicon, ARM servers) |
-//! | `Wide32` | `simd_native` 32-wide | Medium vectors (128-768D) |
-//! | `Wide8` | `simd_native` 8-wide | Small vectors, WASM |
+//! | `Wide32` | `simd_native` 32-wide | Medium vectors (128-768D) - delegates to simd_native |
+//! | `Wide8` | `simd_native` 8-wide | Small vectors, WASM - delegates to simd_native |
 //! | `Scalar` | Rust native | Fallback, very small vectors |
 //!
 //! # Example
