@@ -5,7 +5,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::distance::DistanceMetric;
+use velesdb_core::DistanceMetric;
 use crate::StorageMode;
 
 /// Parses a metric string into a DistanceMetric.

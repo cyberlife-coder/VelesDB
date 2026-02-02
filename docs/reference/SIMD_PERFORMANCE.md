@@ -1,57 +1,73 @@
 # SIMD Performance Guide
 
-VelesDB uses **adaptive SIMD dispatch** for ultra-fast vector operations, automatically selecting the optimal backend based on runtime micro-benchmarks.
+VelesDB uses **native SIMD dispatch** for ultra-fast vector operations, automatically selecting the optimal implementation based on CPU features and vector size.
 
-## Adaptive Dispatch Architecture
+## Native SIMD Architecture (EPIC-052/077)
 
-The `simd_ops` module automatically selects the fastest SIMD backend for each (metric, dimension) combination on the current machine:
+The `simd_native` module provides hand-tuned SIMD implementations using `core::arch` intrinsics:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    simd_ops::similarity()                        │
+│              simd_native::cosine_similarity_native()             │
 │                                                                  │
-│  First call: micro-benchmarks (~5-10ms) → builds DispatchTable  │
-│  Subsequent calls: O(1) lookup → direct backend call            │
+│  Runtime: feature detection → tiered dispatch → native SIMD     │
+│  - AVX-512: 4/2/1 accumulators based on size                    │
+│  - AVX2: 4-acc (>1024), 2-acc (64-1023), 1-acc (<64)            │
+│  - ARM NEON: 128-bit SIMD                                       │
+│  - Scalar: fallback for small vectors                           │
 └─────────────────────────────────────────────────────────────────┘
                               │
         ┌─────────────────────┼─────────────────────┐
         ▼                     ▼                     ▼
   ┌───────────┐        ┌───────────┐        ┌───────────┐
-  │ NativeAVX │        │  Wide32   │        │  Wide8    │
-  │ (512/256) │        │ (4×f32x8) │        │ (f32x8)   │
+  │ AVX-512   │        │ AVX2/FMA  │        │  Scalar   │
+  │ (512-bit) │        │ (256-bit) │        │ (native)  │
   └───────────┘        └───────────┘        └───────────┘
 ```
 
 ## Architecture Support
 
-| Platform | Backend | Instructions | Performance (768D) |
-|----------|---------|-------------|-------------------|
-| **x86_64 AVX-512** | NativeAvx512 | 512-bit | ~30-50ns |
-| **x86_64 AVX2** | NativeAvx2 | 256-bit | ~45-80ns |
-| **aarch64** | NativeNeon | NEON 128-bit | ~60-100ns |
-| **WASM** | Wide8 | SIMD128 | ~80-120ns |
+| Platform | Implementation | Instructions | Performance (768D) |
+|----------|----------------|-------------|-------------------|
+| **x86_64 AVX-512** | simd_native | 512-bit 4-acc | ~38-42ns |
+| **x86_64 AVX2** | simd_native | 256-bit 2/4-acc | ~40-82ns |
+| **aarch64** | simd_native | NEON 128-bit | ~60-100ns |
+| **WASM** | wide_simd | SIMD128 | ~80-120ns |
 | **Fallback** | Scalar | Native Rust | ~150-200ns |
 
-## Performance Benchmarks
+### Tiered Dispatch Strategy (EPIC-077)
+
+AVX2 implementations adapt based on vector size to minimize register pressure:
+
+| Size Range | Accumulators | Use Case |
+|------------|--------------|----------|
+| >= 1024 elements | 4-acc | Large vectors (text-embedding-3-large) |
+| 64-1023 elements | 2-acc | Medium vectors (BERT, ada-002) |
+| 8-63 elements | 4-acc | Small vectors (legacy) |
+| < 8 elements | Scalar | Tiny vectors (avoid SIMD overhead) |
+
+## Performance Benchmarks (February 2026)
 
 ### Distance Functions (768D vectors)
 
-| Function | Latency | Throughput |
-|----------|---------|------------|
-| `dot_product_fast` | **45ns** | 22M ops/s |
-| `euclidean_distance_fast` | **47ns** | 21M ops/s |
-| `cosine_similarity_fast` | **79ns** | 12M ops/s |
-| `cosine_similarity_normalized` | **45ns** | 22M ops/s |
+| Function | Latency | Throughput | vs Previous |
+|----------|---------|------------|-------------|
+| `dot_product_native` | **37.7ns** | 26.5M ops/s | Baseline |
+| `euclidean_native` | **20.9ns** | 47.8M ops/s | Improved |
+| `cosine_similarity_native` | **40.9ns** | 24.4M ops/s | Optimized (2-acc) |
+| `cosine_normalized_native` | **37.7ns** | 26.5M ops/s | Same as dot |
+| `hamming_distance_native` | **18.7ns** | 53.5M ops/s | 2x faster |
+| `jaccard_similarity_native` | **22.8ns** | 43.9M ops/s | 20% faster |
 
-### Scaling by Dimension
+### Scaling by Dimension (simd_native)
 
 | Dimension | Cosine | Dot Product | Model |
 |-----------|--------|-------------|-------|
-| 128 | 15ns | 8ns | MiniLM |
-| 384 | 35ns | 20ns | all-MiniLM-L6-v2 |
-| 768 | 79ns | 45ns | BERT, ada-002 |
-| 1536 | 152ns | 90ns | text-embedding-3-small |
-| 3072 | 304ns | 170ns | text-embedding-3-large |
+| 128 | 10.0ns | 6.3ns | MiniLM |
+| 384 | 20.9ns | 11.4ns | all-MiniLM-L6-v2 |
+| 768 | 40.9ns | 37.7ns | BERT, ada-002 |
+| 1536 | 66.4ns | 32.5ns | text-embedding-3-small |
+| 3072 | 138.7ns | 81.2ns | text-embedding-3-large |
 
 ## Optimization Techniques
 
@@ -212,23 +228,32 @@ cargo bench --bench simd_benchmark -- "768"
 cargo bench --bench simd_benchmark -- "explicit_simd|auto_vec"
 ```
 
-## Adaptive Dispatch API
+## Native SIMD API
 
 ```rust
-use velesdb_core::simd_ops;
-use velesdb_core::DistanceMetric;
+use velesdb_core::simd_native;
 
-// Automatic dispatch to fastest backend
-let sim = simd_ops::similarity(DistanceMetric::Cosine, &a, &b);
-let dist = simd_ops::distance(DistanceMetric::Euclidean, &a, &b);
-let n = simd_ops::norm(&v);
-simd_ops::normalize_inplace(&mut v);
+// Direct native SIMD calls (no dispatch overhead)
+let sim = simd_native::cosine_similarity_native(&a, &b);
+let dist = simd_native::euclidean_native(&a, &b);
+let dot = simd_native::dot_product_native(&a, &b);
+let n = simd_native::norm_native(&v);
+simd_native::normalize_inplace_native(&mut v);
 
-// Introspection
-let info = simd_ops::dispatch_info();
-println!("Init time: {}ms", info.init_time_ms);
-println!("Cosine backends: {:?}", info.cosine_backends);
+// Batch operations with prefetching
+let results = simd_native::batch_dot_product_native(&candidates, &query);
+
+// Fast approximate (Newton-Raphson rsqrt)
+let fast_sim = simd_native::cosine_similarity_fast(&a, &b);
 ```
+
+### Module Structure
+
+| Module | Purpose | Use When |
+|--------|---------|----------|
+| `simd_native` | Hand-tuned intrinsics (AVX2/AVX-512/NEON) | Maximum performance, native CPU |
+| `wide_simd` | Portable SIMD (f32x8) | WASM, cross-platform |
+| `simd` | Auto-vectorized fallback | Generic builds |
 
 ## Future Optimizations
 

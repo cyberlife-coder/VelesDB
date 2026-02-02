@@ -3,8 +3,8 @@
 //! This module contains extracted scoring and search logic to reduce lib.rs size.
 //! These are internal helpers, not exposed via `wasm_bindgen`.
 
-use crate::distance::DistanceMetric;
 use crate::StorageMode;
+use velesdb_core::DistanceMetric;
 
 /// Compute similarity scores for all vectors against a query.
 ///

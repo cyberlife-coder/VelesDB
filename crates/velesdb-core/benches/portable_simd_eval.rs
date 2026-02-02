@@ -1,4 +1,4 @@
-//! Benchmark: `simd_ops` vs scalar comparison (EPIC-078/US-005)
+//! Benchmark: `simd_native` vs scalar comparison (EPIC-078/US-005)
 //!
 //! Run with:
 //! ```bash
@@ -7,7 +7,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use velesdb_core::{simd_ops, DistanceMetric};
+use velesdb_core::simd_native;
 
 #[allow(clippy::cast_precision_loss)]
 fn random_vec(len: usize) -> Vec<f32> {
@@ -23,10 +23,8 @@ fn bench_l2_distance(c: &mut Criterion) {
         let a = random_vec(*dim);
         let b = random_vec(*dim);
 
-        group.bench_with_input(BenchmarkId::new("simd_ops", dim), dim, |bencher, _| {
-            bencher.iter(|| {
-                simd_ops::similarity(DistanceMetric::Euclidean, black_box(&a), black_box(&b))
-            });
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| simd_native::euclidean_native(black_box(&a), black_box(&b)));
         });
 
         // Scalar baseline for comparison
@@ -50,8 +48,8 @@ fn bench_dot_product(c: &mut Criterion) {
         let a = random_vec(*dim);
         let b = random_vec(*dim);
 
-        group.bench_with_input(BenchmarkId::new("simd_ops", dim), dim, |bencher, _| {
-            bencher.iter(|| simd_ops::dot_product(black_box(&a), black_box(&b)));
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| simd_native::dot_product_native(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("scalar", dim), dim, |bencher, _| {
@@ -74,10 +72,8 @@ fn bench_cosine_similarity(c: &mut Criterion) {
         let a = random_vec(*dim);
         let b = random_vec(*dim);
 
-        group.bench_with_input(BenchmarkId::new("simd_ops", dim), dim, |bencher, _| {
-            bencher.iter(|| {
-                simd_ops::similarity(DistanceMetric::Cosine, black_box(&a), black_box(&b))
-            });
+        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            bencher.iter(|| simd_native::cosine_similarity_native(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("scalar", dim), dim, |bencher, _| {

@@ -378,16 +378,16 @@ pub fn euclidean_squared_quantized(query: &[f32], quantized: &QuantizedVector) -
 /// Note: For best accuracy, the query should be normalized.
 #[must_use]
 pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -> f32 {
-    use crate::simd_ops;
+    use crate::simd_native;
 
     let dot = dot_product_quantized(query, quantized);
 
-    // Compute norms using adaptive SIMD dispatch
-    let query_norm = simd_ops::norm(query);
+    // Compute norms using direct SIMD dispatch
+    let query_norm = simd_native::norm_native(query);
 
     // Dequantize to compute quantized vector norm (could be cached)
     let reconstructed = quantized.to_f32();
-    let quantized_norm = simd_ops::norm(&reconstructed);
+    let quantized_norm = simd_native::norm_native(&reconstructed);
 
     if query_norm < f32::EPSILON || quantized_norm < f32::EPSILON {
         return 0.0;
@@ -524,12 +524,12 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
 /// Caches the quantized vector norm for repeated queries against same vector.
 #[must_use]
 pub fn cosine_similarity_quantized_simd(query: &[f32], quantized: &QuantizedVector) -> f32 {
-    use crate::simd_ops;
+    use crate::simd_native;
 
     let dot = dot_product_quantized_simd(query, quantized);
 
-    // Compute query norm using adaptive SIMD dispatch
-    let query_norm = simd_ops::norm(query);
+    // Compute query norm using direct SIMD dispatch
+    let query_norm = simd_native::norm_native(query);
     let query_norm_sq = query_norm * query_norm;
 
     // Compute quantized norm (could be cached in QuantizedVector)

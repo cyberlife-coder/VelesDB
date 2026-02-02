@@ -31,7 +31,7 @@ use std::ops::Deref;
 ///     let a_slice = a.as_slice();
 ///     let b_slice = b.as_slice();
 ///     // SIMD distance calculation on slices
-///     crate::simd::cosine_similarity_fast(a_slice, b_slice)
+///     crate::simd_native::cosine_similarity_native(a_slice, b_slice)
 /// }
 /// ```
 pub trait VectorRef {
