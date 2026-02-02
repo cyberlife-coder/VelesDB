@@ -5,6 +5,9 @@
 use std::sync::OnceLock;
 use wgpu::util::DeviceExt;
 
+// Import for CPU fallback paths
+use crate::simd_native;
+
 /// Global GPU availability check (cached).
 static GPU_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
@@ -154,6 +157,7 @@ impl GpuAccelerator {
     /// Panics if `dimension` or `num_vectors` exceeds `u32::MAX`.
     /// The GPU shader uses 32-bit parameters.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // Reason: GPU batch operations require sequential setup steps
     pub fn batch_cosine_similarity(
         &self,
         vectors: &[f32],
@@ -170,12 +174,12 @@ impl GpuAccelerator {
 
         // Validate GPU shader parameter constraints
         assert!(
-            dimension <= u32::MAX as usize,
+            u32::try_from(dimension).is_ok(),
             "GPU batch_cosine_similarity: dimension {} exceeds u32::MAX",
             dimension
         );
         assert!(
-            num_vectors <= u32::MAX as usize,
+            u32::try_from(num_vectors).is_ok(),
             "GPU batch_cosine_similarity: num_vectors {} exceeds u32::MAX",
             num_vectors
         );
@@ -367,8 +371,6 @@ impl GpuAccelerator {
         }
 
         // CPU fallback using direct SIMD dispatch for optimal performance
-        use crate::simd_native;
-
         let mut results = Vec::with_capacity(num_vectors);
         for i in 0..num_vectors {
             let offset = i * dimension;
@@ -402,8 +404,6 @@ impl GpuAccelerator {
         }
 
         // CPU fallback using direct SIMD dispatch for optimal performance
-        use crate::simd_native;
-
         let mut results = Vec::with_capacity(num_vectors);
         for i in 0..num_vectors {
             let offset = i * dimension;

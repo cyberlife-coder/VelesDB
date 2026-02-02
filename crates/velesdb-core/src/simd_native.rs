@@ -143,8 +143,12 @@ pub(crate) unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     if remainder > 0 {
         let base = simd_len * 16;
         // Create mask: first `remainder` bits set to 1
-        // SAFETY: remainder is in 1..16, so mask is valid
-        let mask: __mmask16 = (1_u16 << remainder) - 1;
+        // SAFETY: remainder is in 1..=16, mask computed without overflow
+        let mask: __mmask16 = if remainder == 16 {
+            !0
+        } else {
+            ((1u32 << remainder) - 1) as u16
+        };
         let va = _mm512_maskz_loadu_ps(mask, a_ptr.add(base));
         let vb = _mm512_maskz_loadu_ps(mask, b_ptr.add(base));
         sum = _mm512_fmadd_ps(va, vb, sum);
@@ -222,7 +226,12 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     // Final masked chunk if any
     let remaining = end_ptr.offset_from(a_ptr) as usize;
     if remaining > 0 {
-        let mask: __mmask16 = (1_u16 << remaining) - 1;
+        // SAFETY: remaining is in 1..=16, mask computed without overflow
+        let mask: __mmask16 = if remaining == 16 {
+            !0
+        } else {
+            ((1u32 << remaining) - 1) as u16
+        };
         let va = _mm512_maskz_loadu_ps(mask, a_ptr);
         let vb = _mm512_maskz_loadu_ps(mask, b_ptr);
         acc0 = _mm512_fmadd_ps(va, vb, acc0);
@@ -298,7 +307,12 @@ unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     // Final masked chunk if any
     let remaining = end_ptr.offset_from(a_ptr) as usize;
     if remaining > 0 {
-        let mask: __mmask16 = (1_u16 << remaining) - 1;
+        // SAFETY: remaining is in 1..=16, mask computed without overflow
+        let mask: __mmask16 = if remaining == 16 {
+            !0
+        } else {
+            ((1u32 << remaining) - 1) as u16
+        };
         let va = _mm512_maskz_loadu_ps(mask, a_ptr);
         let vb = _mm512_maskz_loadu_ps(mask, b_ptr);
         let diff = _mm512_sub_ps(va, vb);
@@ -334,7 +348,12 @@ unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
 
     if remainder > 0 {
         let base = simd_len * 16;
-        let mask: __mmask16 = (1_u16 << remainder) - 1;
+        // SAFETY: remainder is in 1..=16, mask computed without overflow
+        let mask: __mmask16 = if remainder == 16 {
+            !0
+        } else {
+            ((1u32 << remainder) - 1) as u16
+        };
         let va = _mm512_maskz_loadu_ps(mask, a_ptr.add(base));
         let vb = _mm512_maskz_loadu_ps(mask, b_ptr.add(base));
         let diff = _mm512_sub_ps(va, vb);
@@ -1689,7 +1708,12 @@ unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
         let base = simd_chunks * 32;
         let rem0 = remainder.min(16);
         if rem0 > 0 {
-            let mask0: __mmask16 = (1u32 << rem0) as u16 - 1;
+            // SAFETY: rem0 is in 1..=16, mask computed without overflow
+            let mask0: __mmask16 = if rem0 == 16 {
+                !0
+            } else {
+                ((1u32 << rem0) - 1) as u16
+            };
             let va = _mm512_maskz_loadu_ps(mask0, a_ptr.add(base));
             let vb = _mm512_maskz_loadu_ps(mask0, b_ptr.add(base));
             dot0 = _mm512_fmadd_ps(va, vb, dot0);
@@ -1698,7 +1722,12 @@ unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
         }
         let rem1 = remainder.saturating_sub(16);
         if rem1 > 0 {
-            let mask1: __mmask16 = (1u32 << rem1) as u16 - 1;
+            // SAFETY: rem1 is in 1..=15 (since remainder <= 31), mask computed without overflow
+            let mask1: __mmask16 = if rem1 == 16 {
+                !0
+            } else {
+                ((1u32 << rem1) - 1) as u16
+            };
             let va = _mm512_maskz_loadu_ps(mask1, a_ptr.add(base + 16));
             let vb = _mm512_maskz_loadu_ps(mask1, b_ptr.add(base + 16));
             dot1 = _mm512_fmadd_ps(va, vb, dot1);
