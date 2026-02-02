@@ -141,7 +141,7 @@ fn test_harley_seal_jaccard_disjoint() {
 }
 
 #[test]
-#[ignore = "Performance test - run locally with: cargo test -- --ignored"]
+#[ignore = "performance test - run with --ignored or PERF_TESTS=1"]
 fn test_harley_seal_jaccard_performance() {
     // Performance test for 768D
     let size = 768;
