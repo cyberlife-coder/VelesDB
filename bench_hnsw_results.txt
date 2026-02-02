@@ -1,182 +1,39 @@
-    Blocking waiting for file lock on package cache
-    Blocking waiting for file lock on package cache
-    Blocking waiting for file lock on package cache
-   Compiling velesdb-core v1.4.0 (D:\Projets-dev\velesDB\velesdb-core\crates\velesdb-core)
-    Finished `bench` profile [optimized] target(s) in 2.57s
-     Running benches\hnsw_benchmark.rs (target\release\deps\hnsw_benchmark-81adc9a41b2e051e.exe)
+   Compiling velesdb-core v1.4.1 (D:\Projets-dev\velesDB\velesdb-core\crates\velesdb-core)
+    Finished `bench` profile [optimized] target(s) in 11.88s
+     Running benches\hnsw_benchmark.rs (target\release\deps\hnsw_benchmark-f7f678f52fac5a1e.exe)
 Gnuplot not found, using plotters backend
 Benchmarking hnsw_insert/sequential/1000x768d
 Benchmarking hnsw_insert/sequential/1000x768d: Warming up for 3.0000 s
 
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 66.7s, or reduce sample count to 10.
-Benchmarking hnsw_insert/sequential/1000x768d: Collecting 100 samples in estimated 66.686 s (100 iterations)
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 62.5s, or reduce sample count to 10.
+Benchmarking hnsw_insert/sequential/1000x768d: Collecting 100 samples in estimated 62.486 s (100 iterations)
 Benchmarking hnsw_insert/sequential/1000x768d: Analyzing
 hnsw_insert/sequential/1000x768d
-                        time:   [629.99 ms 651.72 ms 678.61 ms]
-                        thrpt:  [1.4736 Kelem/s 1.5344 Kelem/s 1.5873 Kelem/s]
-Found 13 outliers among 100 measurements (13.00%)
-  6 (6.00%) high mild
+                        time:   [612.45 ms 614.37 ms 616.57 ms]
+                        thrpt:  [1.6219 Kelem/s 1.6277 Kelem/s 1.6328 Kelem/s]
+Found 12 outliers among 100 measurements (12.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
   7 (7.00%) high severe
 
 Benchmarking hnsw_insert_parallel/parallel/1000x768d
 Benchmarking hnsw_insert_parallel/parallel/1000x768d: Warming up for 3.0000 s
 
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 48.6s, or reduce sample count to 10.
-Benchmarking hnsw_insert_parallel/parallel/1000x768d: Collecting 100 samples in estimated 48.589 s (100 iterations)
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 48.8s, or reduce sample count to 10.
+Benchmarking hnsw_insert_parallel/parallel/1000x768d: Collecting 100 samples in estimated 48.824 s (100 iterations)
 Benchmarking hnsw_insert_parallel/parallel/1000x768d: Analyzing
 hnsw_insert_parallel/parallel/1000x768d
-                        time:   [452.65 ms 454.68 ms 456.71 ms]
-                        thrpt:  [2.1896 Kelem/s 2.1994 Kelem/s 2.2092 Kelem/s]
-Found 3 outliers among 100 measurements (3.00%)
-  2 (2.00%) low mild
-  1 (1.00%) high severe
+                        time:   [440.90 ms 442.77 ms 444.64 ms]
+                        thrpt:  [2.2490 Kelem/s 2.2585 Kelem/s 2.2681 Kelem/s]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
 Benchmarking hnsw_insert_parallel/parallel/10000x768d
 Benchmarking hnsw_insert_parallel/parallel/10000x768d: Warming up for 3.0000 s
 
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 599.0s, or reduce sample count to 10.
-Benchmarking hnsw_insert_parallel/parallel/10000x768d: Collecting 100 samples in estimated 599.05 s (100 iterations)
-Benchmarking hnsw_insert_parallel/parallel/10000x768d: Analyzing
-hnsw_insert_parallel/parallel/10000x768d
-                        time:   [5.7504 s 5.8045 s 5.8591 s]
-                        thrpt:  [1.7068 Kelem/s 1.7228 Kelem/s 1.7390 Kelem/s]
-Found 1 outliers among 100 measurements (1.00%)
-  1 (1.00%) high mild
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 592.0s, or reduce sample count to 10.
+Benchmarking hnsw_insert_parallel/parallel/10000x768d: Collecting 100 samples in estimated 591.95 s (100 iterations)
+error: bench failed, to rerun pass `-p velesdb-core --bench hnsw_benchmark`
 
-Benchmarking hnsw_insert_fast/standard/1000x768d
-Benchmarking hnsw_insert_fast/standard/1000x768d: Warming up for 3.0000 s
-
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 62.7s, or reduce sample count to 10.
-Benchmarking hnsw_insert_fast/standard/1000x768d: Collecting 100 samples in estimated 62.652 s (100 iterations)
-Benchmarking hnsw_insert_fast/standard/1000x768d: Analyzing
-hnsw_insert_fast/standard/1000x768d
-                        time:   [696.60 ms 741.22 ms 791.24 ms]
-                        thrpt:  [1.2638 Kelem/s 1.3491 Kelem/s 1.4355 Kelem/s]
-Found 15 outliers among 100 measurements (15.00%)
-  5 (5.00%) high mild
-  10 (10.00%) high severe
-Benchmarking hnsw_insert_fast/fast_insert/1000x768d
-Benchmarking hnsw_insert_fast/fast_insert/1000x768d: Warming up for 3.0000 s
-
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 113.2s, or reduce sample count to 10.
-Benchmarking hnsw_insert_fast/fast_insert/1000x768d: Collecting 100 samples in estimated 113.17 s (100 iterations)
-Benchmarking hnsw_insert_fast/fast_insert/1000x768d: Analyzing
-hnsw_insert_fast/fast_insert/1000x768d
-                        time:   [669.65 ms 695.93 ms 728.64 ms]
-                        thrpt:  [1.3724 Kelem/s 1.4369 Kelem/s 1.4933 Kelem/s]
-Found 7 outliers among 100 measurements (7.00%)
-  3 (3.00%) high mild
-  4 (4.00%) high severe
-Benchmarking hnsw_insert_fast/turbo/1000x768d
-Benchmarking hnsw_insert_fast/turbo/1000x768d: Warming up for 3.0000 s
-
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 82.4s, or reduce sample count to 10.
-Benchmarking hnsw_insert_fast/turbo/1000x768d: Collecting 100 samples in estimated 82.445 s (100 iterations)
-Benchmarking hnsw_insert_fast/turbo/1000x768d: Analyzing
-hnsw_insert_fast/turbo/1000x768d
-                        time:   [780.96 ms 829.57 ms 883.64 ms]
-                        thrpt:  [1.1317 Kelem/s 1.2054 Kelem/s 1.2805 Kelem/s]
-Found 16 outliers among 100 measurements (16.00%)
-  13 (13.00%) high mild
-  3 (3.00%) high severe
-
-Benchmarking hnsw_search_latency/top_k/10
-Benchmarking hnsw_search_latency/top_k/10: Warming up for 3.0000 s
-Benchmarking hnsw_search_latency/top_k/10: Collecting 100 samples in estimated 5.1367 s (91k iterations)
-Benchmarking hnsw_search_latency/top_k/10: Analyzing
-hnsw_search_latency/top_k/10
-                        time:   [55.851 ┬Ás 56.828 ┬Ás 58.228 ┬Ás]
-Found 9 outliers among 100 measurements (9.00%)
-  5 (5.00%) high mild
-  4 (4.00%) high severe
-Benchmarking hnsw_search_latency/top_k/50
-Benchmarking hnsw_search_latency/top_k/50: Warming up for 3.0000 s
-Benchmarking hnsw_search_latency/top_k/50: Collecting 100 samples in estimated 5.1941 s (61k iterations)
-Benchmarking hnsw_search_latency/top_k/50: Analyzing
-hnsw_search_latency/top_k/50
-                        time:   [86.943 ┬Ás 89.655 ┬Ás 92.611 ┬Ás]
-Found 12 outliers among 100 measurements (12.00%)
-  7 (7.00%) high mild
-  5 (5.00%) high severe
-Benchmarking hnsw_search_latency/top_k/100
-Benchmarking hnsw_search_latency/top_k/100: Warming up for 3.0000 s
-Benchmarking hnsw_search_latency/top_k/100: Collecting 100 samples in estimated 5.4131 s (30k iterations)
-Benchmarking hnsw_search_latency/top_k/100: Analyzing
-hnsw_search_latency/top_k/100
-                        time:   [170.41 ┬Ás 173.86 ┬Ás 178.06 ┬Ás]
-Found 13 outliers among 100 measurements (13.00%)
-  4 (4.00%) high mild
-  9 (9.00%) high severe
-
-Benchmarking hnsw_search_throughput/100_queries_top10
-Benchmarking hnsw_search_throughput/100_queries_top10: Warming up for 3.0000 s
-Benchmarking hnsw_search_throughput/100_queries_top10: Collecting 100 samples in estimated 6.0945 s (500 iterations)
-Benchmarking hnsw_search_throughput/100_queries_top10: Analyzing
-hnsw_search_throughput/100_queries_top10
-                        time:   [10.668 ms 10.873 ms 11.093 ms]
-                        thrpt:  [9.0151 Kelem/s 9.1967 Kelem/s 9.3737 Kelem/s]
-Found 5 outliers among 100 measurements (5.00%)
-  5 (5.00%) high mild
-
-Benchmarking collection_search/search_10k_top10
-Benchmarking collection_search/search_10k_top10: Warming up for 3.0000 s
-Benchmarking collection_search/search_10k_top10: Collecting 100 samples in estimated 5.0501 s (86k iterations)
-Benchmarking collection_search/search_10k_top10: Analyzing
-collection_search/search_10k_top10
-                        time:   [57.970 ┬Ás 59.044 ┬Ás 60.356 ┬Ás]
-Found 6 outliers among 100 measurements (6.00%)
-  6 (6.00%) high severe
-
-Benchmarking distance_metrics/search/Cosine
-Benchmarking distance_metrics/search/Cosine: Warming up for 3.0000 s
-Benchmarking distance_metrics/search/Cosine: Collecting 100 samples in estimated 5.1127 s (106k iterations)
-Benchmarking distance_metrics/search/Cosine: Analyzing
-distance_metrics/search/Cosine
-                        time:   [47.235 ┬Ás 47.562 ┬Ás 47.917 ┬Ás]
-Found 5 outliers among 100 measurements (5.00%)
-  1 (1.00%) high mild
-  4 (4.00%) high severe
-Benchmarking distance_metrics/search/Euclidean
-Benchmarking distance_metrics/search/Euclidean: Warming up for 3.0000 s
-Benchmarking distance_metrics/search/Euclidean: Collecting 100 samples in estimated 5.2279 s (111k iterations)
-Benchmarking distance_metrics/search/Euclidean: Analyzing
-distance_metrics/search/Euclidean
-                        time:   [47.095 ┬Ás 48.078 ┬Ás 49.359 ┬Ás]
-Found 10 outliers among 100 measurements (10.00%)
-  6 (6.00%) high mild
-  4 (4.00%) high severe
-
-Benchmarking recall_validation/recall/128d
-Benchmarking recall_validation/recall/128d: Warming up for 3.0000 s
-Benchmarking recall_validation/recall/128d: Collecting 10 samples in estimated 15.130 s (640 iterations)
-Benchmarking recall_validation/recall/128d: Analyzing
-recall_validation/recall/128d
-                        time:   [23.302 ms 23.653 ms 24.025 ms]
-Benchmarking recall_validation/recall/384d
-Benchmarking recall_validation/recall/384d: Warming up for 3.0000 s
-Benchmarking recall_validation/recall/384d: Collecting 10 samples in estimated 15.228 s (430 iterations)
-Benchmarking recall_validation/recall/384d: Analyzing
-recall_validation/recall/384d
-                        time:   [35.500 ms 36.072 ms 36.723 ms]
-Found 1 outliers among 10 measurements (10.00%)
-  1 (10.00%) high mild
-Benchmarking recall_validation/recall/768d
-Benchmarking recall_validation/recall/768d: Warming up for 3.0000 s
-Benchmarking recall_validation/recall/768d: Collecting 10 samples in estimated 15.148 s (230 iterations)
-Benchmarking recall_validation/recall/768d: Analyzing
-recall_validation/recall/768d
-                        time:   [64.031 ms 65.995 ms 68.498 ms]
-Found 1 outliers among 10 measurements (10.00%)
-  1 (10.00%) high mild
-Benchmarking recall_validation/recall/1536d
-Benchmarking recall_validation/recall/1536d: Warming up for 3.0000 s
-Benchmarking recall_validation/recall/1536d: Collecting 10 samples in estimated 16.134 s (80 iterations)
-Benchmarking recall_validation/recall/1536d: Analyzing
-recall_validation/recall/1536d
-                        time:   [181.30 ms 186.61 ms 191.64 ms]
-Benchmarking recall_validation/recall/3072d
-Benchmarking recall_validation/recall/3072d: Warming up for 3.0000 s
-Benchmarking recall_validation/recall/3072d: Collecting 10 samples in estimated 17.162 s (50 iterations)
-Benchmarking recall_validation/recall/3072d: Analyzing
-recall_validation/recall/3072d
-                        time:   [345.38 ms 355.20 ms 366.36 ms]
-
+Caused by:
+  process didn't exit successfully: `D:\Projets-dev\velesDB\velesdb-core\target\release\deps\hnsw_benchmark-f7f678f52fac5a1e.exe --bench` (exit code: 1)

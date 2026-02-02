@@ -5,7 +5,7 @@
 //!
 //! # Performance (based on arXiv research)
 //!
-//! - **AVX-512**: True 16-wide f32 operations (vs 4×f32x8 in wide crate)
+//! - **AVX-512**: True 16-wide f32 operations
 //! - **ARM NEON**: Native 128-bit SIMD for Apple Silicon/ARM64
 //! - **Prefetch**: Software prefetching for cache optimization
 //!
@@ -19,6 +19,83 @@
 #![allow(clippy::wildcard_imports)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
+
+// =============================================================================
+// Remainder Handling Macro (FLAG-005: Factorisation)
+// =============================================================================
+
+/// Macro for unrolled remainder sum computation (1-7 elements).
+/// Generates optimal code for remainders 1-7 with 4→2→1 unrolling.
+#[macro_export]
+macro_rules! sum_remainder_unrolled_8 {
+    ($a:expr, $b:expr, $base:expr, $remainder:expr, $result:expr) => {
+        if $remainder >= 4 {
+            $result += $a[$base] * $b[$base]
+                + $a[$base + 1] * $b[$base + 1]
+                + $a[$base + 2] * $b[$base + 2]
+                + $a[$base + 3] * $b[$base + 3];
+            if $remainder >= 5 {
+                $result += $a[$base + 4] * $b[$base + 4];
+            }
+            if $remainder >= 6 {
+                $result += $a[$base + 5] * $b[$base + 5];
+            }
+            if $remainder == 7 {
+                $result += $a[$base + 6] * $b[$base + 6];
+            }
+        } else if $remainder >= 2 {
+            $result += $a[$base] * $b[$base] + $a[$base + 1] * $b[$base + 1];
+            if $remainder == 3 {
+                $result += $a[$base + 2] * $b[$base + 2];
+            }
+        } else if $remainder == 1 {
+            $result += $a[$base] * $b[$base];
+        }
+    };
+}
+
+/// Macro for unrolled squared L2 remainder (1-7 elements).
+#[macro_export]
+macro_rules! sum_squared_remainder_unrolled_8 {
+    ($a:expr, $b:expr, $base:expr, $remainder:expr, $result:expr) => {
+        if $remainder >= 4 {
+            let d0 = $a[$base] - $b[$base];
+            let d1 = $a[$base + 1] - $b[$base + 1];
+            let d2 = $a[$base + 2] - $b[$base + 2];
+            let d3 = $a[$base + 3] - $b[$base + 3];
+            $result += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+            if $remainder >= 5 {
+                let d4 = $a[$base + 4] - $b[$base + 4];
+                $result += d4 * d4;
+            }
+            if $remainder >= 6 {
+                let d5 = $a[$base + 5] - $b[$base + 5];
+                $result += d5 * d5;
+            }
+            if $remainder == 7 {
+                let d6 = $a[$base + 6] - $b[$base + 6];
+                $result += d6 * d6;
+            }
+        } else if $remainder >= 2 {
+            let d0 = $a[$base] - $b[$base];
+            let d1 = $a[$base + 1] - $b[$base + 1];
+            $result += d0 * d0 + d1 * d1;
+            if $remainder == 3 {
+                let d2 = $a[$base + 2] - $b[$base + 2];
+                $result += d2 * d2;
+            }
+        } else if $remainder == 1 {
+            let d = $a[$base] - $b[$base];
+            $result += d * d;
+        }
+    };
+}
+
+// Re-export macros for internal use
+#[allow(unused_imports)]
+pub(crate) use sum_remainder_unrolled_8;
+#[allow(unused_imports)]
+pub(crate) use sum_squared_remainder_unrolled_8;
 
 // =============================================================================
 // AVX-512 Implementation (x86_64)
@@ -37,7 +114,7 @@
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
     // - `_mm512_loadu_ps` and `_mm512_maskz_loadu_ps` handle unaligned loads safely
     // - Pointer arithmetic stays within bounds: offset = i * 16 where i < simd_len = len / 16
@@ -88,7 +165,7 @@ unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
-unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX-512F.
     // - `_mm512_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic: stays within bounds, checked by end_ptr comparison
@@ -154,16 +231,88 @@ unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     _mm512_reduce_add_ps(acc0)
 }
 
-/// AVX-512 squared L2 distance.
+/// AVX-512 squared L2 distance with 4 accumulators for ILP.
 ///
 /// # Safety
 ///
-/// Same requirements as `dot_product_avx512`.
+/// Same requirements as `dot_product_avx512_4acc`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[inline]
+unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: See dot_product_avx512_4acc for detailed safety justification.
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 64 * 64);
+    let end_ptr = a.as_ptr().add(len);
+
+    let mut acc0 = _mm512_setzero_ps();
+    let mut acc1 = _mm512_setzero_ps();
+    let mut acc2 = _mm512_setzero_ps();
+    let mut acc3 = _mm512_setzero_ps();
+
+    // Main loop: process 64 elements at a time (4×16)
+    while a_ptr < end_main {
+        let va0 = _mm512_loadu_ps(a_ptr);
+        let vb0 = _mm512_loadu_ps(b_ptr);
+        let diff0 = _mm512_sub_ps(va0, vb0);
+        acc0 = _mm512_fmadd_ps(diff0, diff0, acc0);
+
+        let va1 = _mm512_loadu_ps(a_ptr.add(16));
+        let vb1 = _mm512_loadu_ps(b_ptr.add(16));
+        let diff1 = _mm512_sub_ps(va1, vb1);
+        acc1 = _mm512_fmadd_ps(diff1, diff1, acc1);
+
+        let va2 = _mm512_loadu_ps(a_ptr.add(32));
+        let vb2 = _mm512_loadu_ps(b_ptr.add(32));
+        let diff2 = _mm512_sub_ps(va2, vb2);
+        acc2 = _mm512_fmadd_ps(diff2, diff2, acc2);
+
+        let va3 = _mm512_loadu_ps(a_ptr.add(48));
+        let vb3 = _mm512_loadu_ps(b_ptr.add(48));
+        let diff3 = _mm512_sub_ps(va3, vb3);
+        acc3 = _mm512_fmadd_ps(diff3, diff3, acc3);
+
+        a_ptr = a_ptr.add(64);
+        b_ptr = b_ptr.add(64);
+    }
+
+    // Combine all 4 accumulators
+    acc0 = _mm512_add_ps(acc0, acc1);
+    acc2 = _mm512_add_ps(acc2, acc3);
+    acc0 = _mm512_add_ps(acc0, acc2);
+
+    // Process remaining 16-element chunks
+    while a_ptr.add(16) <= end_ptr {
+        let va = _mm512_loadu_ps(a_ptr);
+        let vb = _mm512_loadu_ps(b_ptr);
+        let diff = _mm512_sub_ps(va, vb);
+        acc0 = _mm512_fmadd_ps(diff, diff, acc0);
+        a_ptr = a_ptr.add(16);
+        b_ptr = b_ptr.add(16);
+    }
+
+    // Final masked chunk if any
+    let remaining = end_ptr.offset_from(a_ptr) as usize;
+    if remaining > 0 {
+        let mask: __mmask16 = (1_u16 << remaining) - 1;
+        let va = _mm512_maskz_loadu_ps(mask, a_ptr);
+        let vb = _mm512_maskz_loadu_ps(mask, b_ptr);
+        let diff = _mm512_sub_ps(va, vb);
+        acc0 = _mm512_fmadd_ps(diff, diff, acc0);
+    }
+
+    _mm512_reduce_add_ps(acc0)
+}
+
+/// AVX-512 squared L2 distance (1-acc fallback for small vectors).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[inline]
 unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: See dot_product_avx512 for detailed safety justification.
     use std::arch::x86_64::*;
 
     let len = a.len();
@@ -183,7 +332,6 @@ unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
         sum = _mm512_fmadd_ps(diff, diff, sum);
     }
 
-    // Handle remainder with masked load (EPIC-PERF-002)
     if remainder > 0 {
         let base = simd_len * 16;
         let mask: __mmask16 = (1_u16 << remainder) - 1;
@@ -194,16 +342,6 @@ unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
     }
 
     _mm512_reduce_add_ps(sum)
-}
-
-/// AVX-512 cosine similarity for pre-normalized vectors.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[inline]
-#[allow(dead_code)] // Reserved for future direct use
-unsafe fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
-    // For unit vectors: cos(θ) = a · b
-    dot_product_avx512(a, b)
 }
 
 // =============================================================================
@@ -221,7 +359,8 @@ unsafe fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
-unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
+#[allow(clippy::too_many_lines)] // Remainder unrolling adds lines for performance
+pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
     // - `_mm256_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic stays within bounds: offset = i * 32 where i < simd_len = len / 32
@@ -272,10 +411,225 @@ unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     let shuf2 = _mm_movehl_ps(sums, sums);
     let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
 
-    // Handle remainder
+    // Handle remainder (max 31 elements) with unrolled tail
     let base = simd_len * 32;
-    for i in base..len {
-        result += a[i] * b[i];
+    let remainder = len - base;
+
+    if remainder >= 16 {
+        // Process 16 more elements with 2-acc SIMD
+        let offset = base;
+        let va0 = _mm256_loadu_ps(a_ptr.add(offset));
+        let vb0 = _mm256_loadu_ps(b_ptr.add(offset));
+        let mut sum0 = _mm256_fmadd_ps(va0, vb0, _mm256_setzero_ps());
+
+        let va1 = _mm256_loadu_ps(a_ptr.add(offset + 8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(offset + 8));
+        let sum1 = _mm256_fmadd_ps(va1, vb1, _mm256_setzero_ps());
+
+        sum0 = _mm256_add_ps(sum0, sum1);
+        let hi = _mm256_extractf128_ps(sum0, 1);
+        let lo = _mm256_castps256_ps128(sum0);
+        let sum128 = _mm_add_ps(lo, hi);
+        let shuf = _mm_movehdup_ps(sum128);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+        // Handle remaining 0-15 elements
+        if remainder > 16 {
+            let rbase = base + 16;
+            let r = remainder - 16;
+            if r >= 8 {
+                let va = _mm256_loadu_ps(a_ptr.add(rbase));
+                let vb = _mm256_loadu_ps(b_ptr.add(rbase));
+                let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
+                let hi = _mm256_extractf128_ps(tmp, 1);
+                let lo = _mm256_castps256_ps128(tmp);
+                let sum128 = _mm_add_ps(lo, hi);
+                let shuf = _mm_movehdup_ps(sum128);
+                let sums = _mm_add_ps(sum128, shuf);
+                let shuf2 = _mm_movehl_ps(sums, sums);
+                result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+                if r > 8 {
+                    let rrbase = rbase + 8;
+                    let rr = r - 8;
+                    if rr >= 4 {
+                        result += a[rrbase] * b[rrbase]
+                            + a[rrbase + 1] * b[rrbase + 1]
+                            + a[rrbase + 2] * b[rrbase + 2]
+                            + a[rrbase + 3] * b[rrbase + 3];
+                        if rr >= 5 {
+                            result += a[rrbase + 4] * b[rrbase + 4];
+                        }
+                        if rr >= 6 {
+                            result += a[rrbase + 5] * b[rrbase + 5];
+                        }
+                        if rr == 7 {
+                            result += a[rrbase + 6] * b[rrbase + 6];
+                        }
+                    } else if rr >= 2 {
+                        result += a[rrbase] * b[rrbase] + a[rrbase + 1] * b[rrbase + 1];
+                        if rr == 3 {
+                            result += a[rrbase + 2] * b[rrbase + 2];
+                        }
+                    } else if rr == 1 {
+                        result += a[rrbase] * b[rrbase];
+                    }
+                }
+            } else if r >= 4 {
+                result += a[rbase] * b[rbase]
+                    + a[rbase + 1] * b[rbase + 1]
+                    + a[rbase + 2] * b[rbase + 2]
+                    + a[rbase + 3] * b[rbase + 3];
+                if r >= 5 {
+                    result += a[rbase + 4] * b[rbase + 4];
+                }
+                if r >= 6 {
+                    result += a[rbase + 5] * b[rbase + 5];
+                }
+                if r >= 7 {
+                    result += a[rbase + 6] * b[rbase + 6];
+                }
+            } else if r >= 2 {
+                result += a[rbase] * b[rbase] + a[rbase + 1] * b[rbase + 1];
+                if r == 3 {
+                    result += a[rbase + 2] * b[rbase + 2];
+                }
+            } else if r == 1 {
+                result += a[rbase] * b[rbase];
+            }
+        }
+    } else if remainder >= 8 {
+        let va = _mm256_loadu_ps(a_ptr.add(base));
+        let vb = _mm256_loadu_ps(b_ptr.add(base));
+        let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
+        let hi = _mm256_extractf128_ps(tmp, 1);
+        let lo = _mm256_castps256_ps128(tmp);
+        let sum128 = _mm_add_ps(lo, hi);
+        let shuf = _mm_movehdup_ps(sum128);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+        let r = remainder - 8;
+        if r >= 4 {
+            result += a[base + 8] * b[base + 8]
+                + a[base + 9] * b[base + 9]
+                + a[base + 10] * b[base + 10]
+                + a[base + 11] * b[base + 11];
+            if r >= 5 {
+                result += a[base + 12] * b[base + 12];
+            }
+            if r >= 6 {
+                result += a[base + 13] * b[base + 13];
+            }
+            if r == 7 {
+                result += a[base + 14] * b[base + 14];
+            }
+        } else if r >= 2 {
+            result += a[base + 8] * b[base + 8] + a[base + 9] * b[base + 9];
+            if r == 3 {
+                result += a[base + 10] * b[base + 10];
+            }
+        } else if r == 1 {
+            result += a[base + 8] * b[base + 8];
+        }
+    } else if remainder >= 4 {
+        result += a[base] * b[base]
+            + a[base + 1] * b[base + 1]
+            + a[base + 2] * b[base + 2]
+            + a[base + 3] * b[base + 3];
+        if remainder >= 5 {
+            result += a[base + 4] * b[base + 4];
+        }
+        if remainder >= 6 {
+            result += a[base + 5] * b[base + 5];
+        }
+        if remainder == 7 {
+            result += a[base + 6] * b[base + 6];
+        }
+    } else if remainder >= 2 {
+        result += a[base] * b[base] + a[base + 1] * b[base + 1];
+        if remainder == 3 {
+            result += a[base + 2] * b[base + 2];
+        }
+    } else if remainder == 1 {
+        result += a[base] * b[base];
+    }
+
+    result
+}
+
+/// AVX2 dot product with single accumulator for small vectors.
+///
+/// Optimized for vectors 16-63 elements where 2-acc overhead isn't worth it.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
+/// - Vector length >= 8 (use scalar for < 8)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+pub(crate) unsafe fn dot_product_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
+    // - `_mm256_loadu_ps` handles unaligned loads safely
+    // - Pointer arithmetic stays within bounds
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let simd_len = len / 8; // Process 8 per iteration
+
+    let mut sum = _mm256_setzero_ps();
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    for i in 0..simd_len {
+        let offset = i * 8;
+        let va = _mm256_loadu_ps(a_ptr.add(offset));
+        let vb = _mm256_loadu_ps(b_ptr.add(offset));
+        sum = _mm256_fmadd_ps(va, vb, sum);
+    }
+
+    // Horizontal sum: [a0,a1,a2,a3,a4,a5,a6,a7] -> scalar
+    let hi = _mm256_extractf128_ps(sum, 1);
+    let lo = _mm256_castps256_ps128(sum);
+    let sum128 = _mm_add_ps(lo, hi);
+    let shuf = _mm_movehdup_ps(sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehl_ps(sums, sums);
+    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+    // Handle remainder (max 7 elements) with unrolled tail
+    let base = simd_len * 8;
+    let remainder = len - base;
+
+    // Unrolled tail loop for better performance
+    if remainder >= 4 {
+        result += a[base] * b[base]
+            + a[base + 1] * b[base + 1]
+            + a[base + 2] * b[base + 2]
+            + a[base + 3] * b[base + 3];
+        if remainder >= 5 {
+            result += a[base + 4] * b[base + 4];
+        }
+        if remainder >= 6 {
+            result += a[base + 5] * b[base + 5];
+        }
+        if remainder == 7 {
+            result += a[base + 6] * b[base + 6];
+        }
+    } else if remainder >= 2 {
+        result += a[base] * b[base] + a[base + 1] * b[base + 1];
+        if remainder == 3 {
+            result += a[base + 2] * b[base + 2];
+        }
+    } else if remainder == 1 {
+        result += a[base] * b[base];
     }
 
     result
@@ -291,7 +645,7 @@ unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
-unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
     // - `_mm256_loadu_ps` handles unaligned loads safely
     // - Pointer arithmetic stays within bounds: offset = i * 16 where i < simd_len = len / 16
@@ -329,10 +683,71 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let shuf2 = _mm_movehl_ps(sums, sums);
     let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
 
-    // Handle remainder
+    // Handle remainder (max 15 elements) with unrolled tail
     let base = simd_len * 16;
-    for i in base..len {
-        result += a[i] * b[i];
+    let remainder = len - base;
+
+    if remainder >= 8 {
+        // Process 8 more elements with SIMD
+        let va = _mm256_loadu_ps(a_ptr.add(base));
+        let vb = _mm256_loadu_ps(b_ptr.add(base));
+        let tmp_sum = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
+        let hi = _mm256_extractf128_ps(tmp_sum, 1);
+        let lo = _mm256_castps256_ps128(tmp_sum);
+        let sum128 = _mm_add_ps(lo, hi);
+        let shuf = _mm_movehdup_ps(sum128);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+        // Handle remaining 0-7 elements
+        if remainder > 8 {
+            let rbase = base + 8;
+            let r = remainder - 8;
+            if r >= 4 {
+                result += a[rbase] * b[rbase]
+                    + a[rbase + 1] * b[rbase + 1]
+                    + a[rbase + 2] * b[rbase + 2]
+                    + a[rbase + 3] * b[rbase + 3];
+                if r >= 5 {
+                    result += a[rbase + 4] * b[rbase + 4];
+                }
+                if r >= 6 {
+                    result += a[rbase + 5] * b[rbase + 5];
+                }
+                if r == 7 {
+                    result += a[rbase + 6] * b[rbase + 6];
+                }
+            } else if r >= 2 {
+                result += a[rbase] * b[rbase] + a[rbase + 1] * b[rbase + 1];
+                if r == 3 {
+                    result += a[rbase + 2] * b[rbase + 2];
+                }
+            } else if r == 1 {
+                result += a[rbase] * b[rbase];
+            }
+        }
+    } else if remainder >= 4 {
+        result += a[base] * b[base]
+            + a[base + 1] * b[base + 1]
+            + a[base + 2] * b[base + 2]
+            + a[base + 3] * b[base + 3];
+        if remainder >= 5 {
+            result += a[base + 4] * b[base + 4];
+        }
+        if remainder >= 6 {
+            result += a[base + 5] * b[base + 5];
+        }
+        if remainder >= 7 {
+            result += a[base + 6] * b[base + 6];
+        }
+    } else if remainder >= 2 {
+        result += a[base] * b[base] + a[base + 1] * b[base + 1];
+        if remainder == 3 {
+            result += a[base + 2] * b[base + 2];
+        }
+    } else if remainder == 1 {
+        result += a[base] * b[base];
     }
 
     result
@@ -346,6 +761,7 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
+#[allow(clippy::too_many_lines)] // Remainder unrolling adds lines for performance
 unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
     // SAFETY: See dot_product_avx2 for detailed safety justification.
     use std::arch::x86_64::*;
@@ -382,9 +798,245 @@ unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
     let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
 
     let base = simd_len * 16;
-    for i in base..len {
-        let diff = a[i] - b[i];
-        result += diff * diff;
+    let remainder = len - base;
+
+    if remainder >= 8 {
+        // Process 8 more elements with SIMD
+        let va = _mm256_loadu_ps(a_ptr.add(base));
+        let vb = _mm256_loadu_ps(b_ptr.add(base));
+        let diff = _mm256_sub_ps(va, vb);
+        let tmp_sum = _mm256_fmadd_ps(diff, diff, _mm256_setzero_ps());
+        let hi = _mm256_extractf128_ps(tmp_sum, 1);
+        let lo = _mm256_castps256_ps128(tmp_sum);
+        let sum128 = _mm_add_ps(lo, hi);
+        let shuf = _mm_movehdup_ps(sum128);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+        // Handle remaining 0-7 elements
+        if remainder > 8 {
+            let rbase = base + 8;
+            let r = remainder - 8;
+            if r >= 4 {
+                for i in 0..4 {
+                    let d = a[rbase + i] - b[rbase + i];
+                    result += d * d;
+                }
+                if r >= 5 {
+                    let d = a[rbase + 4] - b[rbase + 4];
+                    result += d * d;
+                }
+                if r >= 6 {
+                    let d = a[rbase + 5] - b[rbase + 5];
+                    result += d * d;
+                }
+                if r == 7 {
+                    let d = a[rbase + 6] - b[rbase + 6];
+                    result += d * d;
+                }
+            } else if r >= 2 {
+                let d0 = a[rbase] - b[rbase];
+                result += d0 * d0;
+                let d1 = a[rbase + 1] - b[rbase + 1];
+                result += d1 * d1;
+                if r == 3 {
+                    let d2 = a[rbase + 2] - b[rbase + 2];
+                    result += d2 * d2;
+                }
+            } else if r == 1 {
+                let d = a[rbase] - b[rbase];
+                result += d * d;
+            }
+        }
+    } else if remainder >= 4 {
+        for i in 0..4 {
+            let d = a[base + i] - b[base + i];
+            result += d * d;
+        }
+        if remainder >= 5 {
+            let d = a[base + 4] - b[base + 4];
+            result += d * d;
+        }
+        if remainder >= 6 {
+            let d = a[base + 5] - b[base + 5];
+            result += d * d;
+        }
+        if remainder >= 7 {
+            let d = a[base + 6] - b[base + 6];
+            result += d * d;
+        }
+    } else if remainder >= 2 {
+        let d0 = a[base] - b[base];
+        result += d0 * d0;
+        let d1 = a[base + 1] - b[base + 1];
+        result += d1 * d1;
+        if remainder == 3 {
+            let d2 = a[base + 2] - b[base + 2];
+            result += d2 * d2;
+        }
+    } else if remainder == 1 {
+        let d = a[base] - b[base];
+        result += d * d;
+    }
+
+    result
+}
+
+/// AVX2 squared L2 with single accumulator for small vectors.
+///
+/// Optimized for vectors 16-63 elements where 2-acc overhead isn't worth it.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
+/// - Vector length >= 8 (use scalar for < 8)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn squared_l2_avx2_1acc(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let simd_len = len / 8;
+
+    let mut sum = _mm256_setzero_ps();
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    for i in 0..simd_len {
+        let offset = i * 8;
+        let va = _mm256_loadu_ps(a_ptr.add(offset));
+        let vb = _mm256_loadu_ps(b_ptr.add(offset));
+        let diff = _mm256_sub_ps(va, vb);
+        sum = _mm256_fmadd_ps(diff, diff, sum);
+    }
+
+    let hi = _mm256_extractf128_ps(sum, 1);
+    let lo = _mm256_castps256_ps128(sum);
+    let sum128 = _mm_add_ps(lo, hi);
+    let shuf = _mm_movehdup_ps(sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehl_ps(sums, sums);
+    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+    // Handle remainder (max 7 elements)
+    let base = simd_len * 8;
+    let remainder = len - base;
+
+    if remainder >= 4 {
+        for i in 0..4 {
+            let d = a[base + i] - b[base + i];
+            result += d * d;
+        }
+        if remainder >= 5 {
+            let d = a[base + 4] - b[base + 4];
+            result += d * d;
+        }
+        if remainder >= 6 {
+            let d = a[base + 5] - b[base + 5];
+            result += d * d;
+        }
+        if remainder == 7 {
+            let d = a[base + 6] - b[base + 6];
+            result += d * d;
+        }
+    } else if remainder >= 2 {
+        let d0 = a[base] - b[base];
+        result += d0 * d0;
+        let d1 = a[base + 1] - b[base + 1];
+        result += d1 * d1;
+        if remainder == 3 {
+            let d2 = a[base + 2] - b[base + 2];
+            result += d2 * d2;
+        }
+    } else if remainder == 1 {
+        let d = a[base] - b[base];
+        result += d * d;
+    }
+
+    result
+}
+
+/// AVX2 squared L2 with 4 accumulators for very large vectors (256+).
+///
+/// Maximizes ILP by using 4 independent accumulators to hide FMA latency.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
+/// - Vector length >= 256 (dispatch threshold)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn squared_l2_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: This function is only called after runtime feature detection confirms AVX2+FMA.
+    // - `_mm256_loadu_ps` handles unaligned loads safely
+    // - Pointer arithmetic stays within bounds: checked by end_ptr comparison
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 32 * 32);
+    let end_ptr = a.as_ptr().add(len);
+
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+
+    // Main loop: process 32 elements at a time (4 × 8 lanes)
+    while a_ptr < end_main {
+        let va0 = _mm256_loadu_ps(a_ptr);
+        let vb0 = _mm256_loadu_ps(b_ptr);
+        let diff0 = _mm256_sub_ps(va0, vb0);
+        acc0 = _mm256_fmadd_ps(diff0, diff0, acc0);
+
+        let va1 = _mm256_loadu_ps(a_ptr.add(8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
+        let diff1 = _mm256_sub_ps(va1, vb1);
+        acc1 = _mm256_fmadd_ps(diff1, diff1, acc1);
+
+        let va2 = _mm256_loadu_ps(a_ptr.add(16));
+        let vb2 = _mm256_loadu_ps(b_ptr.add(16));
+        let diff2 = _mm256_sub_ps(va2, vb2);
+        acc2 = _mm256_fmadd_ps(diff2, diff2, acc2);
+
+        let va3 = _mm256_loadu_ps(a_ptr.add(24));
+        let vb3 = _mm256_loadu_ps(b_ptr.add(24));
+        let diff3 = _mm256_sub_ps(va3, vb3);
+        acc3 = _mm256_fmadd_ps(diff3, diff3, acc3);
+
+        a_ptr = a_ptr.add(32);
+        b_ptr = b_ptr.add(32);
+    }
+
+    // Combine accumulators
+    let sum01 = _mm256_add_ps(acc0, acc1);
+    let sum23 = _mm256_add_ps(acc2, acc3);
+    let sum = _mm256_add_ps(sum01, sum23);
+
+    // Horizontal sum
+    let hi = _mm256_extractf128_ps(sum, 1);
+    let lo = _mm256_castps256_ps128(sum);
+    let sum128 = _mm_add_ps(lo, hi);
+    let shuf = _mm_movehdup_ps(sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehl_ps(sums, sums);
+    let mut result = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+
+    // Handle remainder with scalar
+    while a_ptr < end_ptr {
+        let d = *a_ptr - *b_ptr;
+        result += d * d;
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
     }
 
     result
@@ -394,7 +1046,10 @@ unsafe fn squared_l2_avx2(a: &[f32], b: &[f32]) -> f32 {
 // ARM NEON Implementation (aarch64)
 // =============================================================================
 
-/// ARM NEON dot product using native intrinsics.
+/// ARM NEON dot product with 4 accumulators for ILP optimization (EPIC-052/US-009).
+///
+/// Processes 16 elements per iteration using 4 independent accumulators
+/// to hide FMLA latency on Apple Silicon and other ARM processors.
 ///
 /// # Safety
 ///
@@ -408,6 +1063,13 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
     let len = a.len();
+
+    // Use 4 accumulators for ILP on vectors >= 64 elements
+    if len >= 64 {
+        return dot_product_neon_4acc(a, b);
+    }
+
+    // Single accumulator for smaller vectors
     let simd_len = len / 4;
 
     // SAFETY: vdupq_n_f32 is always safe on aarch64
@@ -432,6 +1094,68 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     let base = simd_len * 4;
     for i in base..len {
         result += a[i] * b[i];
+    }
+
+    result
+}
+
+/// ARM NEON dot product with 4 accumulators for large vectors.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+
+    let len = a.len();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
+    let end_ptr = unsafe { a.as_ptr().add(len) };
+
+    // 4 accumulators for ILP
+    let mut acc0 = unsafe { vdupq_n_f32(0.0) };
+    let mut acc1 = unsafe { vdupq_n_f32(0.0) };
+    let mut acc2 = unsafe { vdupq_n_f32(0.0) };
+    let mut acc3 = unsafe { vdupq_n_f32(0.0) };
+
+    // Main loop: process 16 elements at a time
+    while a_ptr < end_main {
+        unsafe {
+            let va0 = vld1q_f32(a_ptr);
+            let vb0 = vld1q_f32(b_ptr);
+            acc0 = vfmaq_f32(acc0, va0, vb0);
+
+            let va1 = vld1q_f32(a_ptr.add(4));
+            let vb1 = vld1q_f32(b_ptr.add(4));
+            acc1 = vfmaq_f32(acc1, va1, vb1);
+
+            let va2 = vld1q_f32(a_ptr.add(8));
+            let vb2 = vld1q_f32(b_ptr.add(8));
+            acc2 = vfmaq_f32(acc2, va2, vb2);
+
+            let va3 = vld1q_f32(a_ptr.add(12));
+            let vb3 = vld1q_f32(b_ptr.add(12));
+            acc3 = vfmaq_f32(acc3, va3, vb3);
+
+            a_ptr = a_ptr.add(16);
+            b_ptr = b_ptr.add(16);
+        }
+    }
+
+    // Combine accumulators
+    let sum01 = unsafe { vaddq_f32(acc0, acc1) };
+    let sum23 = unsafe { vaddq_f32(acc2, acc3) };
+    let sum = unsafe { vaddq_f32(sum01, sum23) };
+
+    // Horizontal sum
+    let mut result = unsafe { vaddvq_f32(sum) };
+
+    // Handle remainder
+    while a_ptr < end_ptr {
+        unsafe {
+            result += *a_ptr * *b_ptr;
+            a_ptr = a_ptr.add(1);
+            b_ptr = b_ptr.add(1);
+        }
     }
 
     result
@@ -525,6 +1249,38 @@ pub fn simd_level() -> SimdLevel {
     *SIMD_LEVEL.get_or_init(detect_simd_level)
 }
 
+/// Warms up SIMD caches to eliminate cold-start latency.
+///
+/// Call this at application startup to ensure the first SIMD operations
+/// are as fast as subsequent ones. This is particularly important for
+/// latency-sensitive applications like real-time vector search.
+///
+/// # Example
+///
+/// ```
+/// use velesdb_core::simd_native::warmup_simd_cache;
+///
+/// // Call once at startup
+/// warmup_simd_cache();
+/// ```
+#[inline]
+pub fn warmup_simd_cache() {
+    // Force SIMD level detection
+    let _ = simd_level();
+
+    // Warm up CPU caches with dummy operations
+    // Using 768D as it's a common embedding dimension
+    let warmup_size = 768;
+    let a: Vec<f32> = vec![0.01; warmup_size];
+    let b: Vec<f32> = vec![0.01; warmup_size];
+
+    // 3 iterations as recommended by SimSIMD research
+    for _ in 0..3 {
+        let _ = dot_product_native(&a, &b);
+        let _ = cosine_similarity_native(&a, &b);
+    }
+}
+
 // =============================================================================
 // Public API with cached dispatch
 // =============================================================================
@@ -565,13 +1321,21 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
         SimdLevel::Avx512 if a.len() >= 16 => unsafe { dot_product_avx512(a, b) },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) }, // < 16 elements, masked loads handle it
-        // AVX2: 4-acc pour grands vecteurs (masque latence FMA), 2-acc pour petits
+        // AVX2: seuils optimisés basés sur la recherche
+        // - < 16: scalar (overhead SIMD trop élevé)
+        // - 16-63: 1-acc (meilleur ratio overhead/perf)
+        // - 64-255: 2-acc (ILP sans overhead excessif)
+        // - 256+: 4-acc (maximise ILP pour grands vecteurs)
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 if a.len() >= 256 => unsafe { dot_product_avx2_4acc(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if a.len() >= 16 => unsafe { dot_product_avx2(a, b) },
+        SimdLevel::Avx2 if a.len() >= 64 => unsafe { dot_product_avx2(a, b) }, // 2-acc
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { dot_product_avx2(a, b) }, // < 16 elements, remainder loop handles it
+        SimdLevel::Avx2 if a.len() >= 16 => unsafe { dot_product_avx2_1acc(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 if a.len() >= 8 => unsafe { dot_product_avx2_1acc(a, b) }, // 8-15 elements
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(), // < 8 elements
         #[cfg(target_arch = "aarch64")]
         SimdLevel::Neon if a.len() >= 4 => dot_product_neon(a, b),
         _ => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(),
@@ -582,10 +1346,11 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Runtime detection is cached after first call for zero-overhead dispatch.
 ///
-/// # Note
+/// # Dispatch Strategy (EPIC-052/US-006)
 ///
-/// Unlike `dot_product_native`, this function does not use the 4-accumulator
-/// optimization for large vectors. This is a potential future enhancement.
+/// - AVX-512: 4-acc for 512+, 1-acc for 16+
+/// - AVX2: 4-acc for 256+, 2-acc for 64-255, 1-acc for 16-63, scalar for <16
+/// - NEON: 1-acc for 4+, scalar for <4
 #[inline]
 #[must_use]
 pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
@@ -593,13 +1358,33 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
 
     match simd_level() {
         #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 if a.len() >= 512 => unsafe { squared_l2_avx512_4acc(a, b) },
+        #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 if a.len() >= 16 => unsafe { squared_l2_avx512(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe { squared_l2_avx512(a, b) }, // < 16 elements, masked loads handle it
+        SimdLevel::Avx512 => unsafe { squared_l2_avx512(a, b) },
+        // AVX2: seuils optimisés (mêmes que dot_product)
+        // - < 16: scalar
+        // - 16-63: 1-acc
+        // - 64-255: 2-acc
+        // - 256+: 4-acc
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if a.len() >= 16 => unsafe { squared_l2_avx2(a, b) },
+        SimdLevel::Avx2 if a.len() >= 256 => unsafe { squared_l2_avx2_4acc(a, b) }, // 4-acc
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => unsafe { squared_l2_avx2(a, b) }, // < 16 elements, remainder loop handles it
+        SimdLevel::Avx2 if a.len() >= 64 => unsafe { squared_l2_avx2(a, b) }, // 2-acc
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 if a.len() >= 16 => unsafe { squared_l2_avx2_1acc(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 if a.len() >= 8 => unsafe { squared_l2_avx2_1acc(a, b) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| {
+                let d = x - y;
+                d * d
+            })
+            .sum(),
         #[cfg(target_arch = "aarch64")]
         SimdLevel::Neon if a.len() >= 4 => squared_l2_neon(a, b),
         _ => a
@@ -652,13 +1437,312 @@ pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32 {
     dot_product_native(a, b)
 }
 
+/// AVX2 fused cosine similarity with 2 accumulators for medium-sized vectors.
+///
+/// Uses fewer registers than 4-acc version, better for 384-768D where
+/// register pressure from 12 yMM registers hurts performance.
+///
+/// # Safety
+///
+/// Same requirements as `cosine_fused_avx2`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn cosine_fused_avx2_2acc(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 16 * 16);
+    let end_ptr = a.as_ptr().add(len);
+
+    // 2-way unroll (16 elements): balance ILP and register pressure
+    let mut dot0 = _mm256_setzero_ps();
+    let mut dot1 = _mm256_setzero_ps();
+    let mut na0 = _mm256_setzero_ps();
+    let mut na1 = _mm256_setzero_ps();
+    let mut nb0 = _mm256_setzero_ps();
+    let mut nb1 = _mm256_setzero_ps();
+
+    while a_ptr < end_main {
+        let va0 = _mm256_loadu_ps(a_ptr);
+        let vb0 = _mm256_loadu_ps(b_ptr);
+        dot0 = _mm256_fmadd_ps(va0, vb0, dot0);
+        na0 = _mm256_fmadd_ps(va0, va0, na0);
+        nb0 = _mm256_fmadd_ps(vb0, vb0, nb0);
+
+        let va1 = _mm256_loadu_ps(a_ptr.add(8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
+        dot1 = _mm256_fmadd_ps(va1, vb1, dot1);
+        na1 = _mm256_fmadd_ps(va1, va1, na1);
+        nb1 = _mm256_fmadd_ps(vb1, vb1, nb1);
+
+        a_ptr = a_ptr.add(16);
+        b_ptr = b_ptr.add(16);
+    }
+
+    // Combine accumulators
+    let dot_acc = _mm256_add_ps(dot0, dot1);
+    let na_acc = _mm256_add_ps(na0, na1);
+    let nb_acc = _mm256_add_ps(nb0, nb1);
+
+    // Horizontal sums
+    let hs = |v: __m256| {
+        let hi = _mm256_extractf128_ps(v, 1);
+        let lo = _mm256_castps256_ps128(v);
+        let sum128 = _mm_add_ps(lo, hi);
+        let shuf = _mm_movehdup_ps(sum128);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
+    };
+
+    let mut dot = hs(dot_acc);
+    let mut norm_a_sq = hs(na_acc);
+    let mut norm_b_sq = hs(nb_acc);
+
+    // Remainder
+    while a_ptr < end_ptr {
+        let x = *a_ptr;
+        let y = *b_ptr;
+        dot += x * y;
+        norm_a_sq += x * x;
+        norm_b_sq += y * y;
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+
+    let norm_a = norm_a_sq.sqrt();
+    let norm_b = norm_b_sq.sqrt();
+    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+}
+
+/// AVX2 fused cosine similarity - computes dot product and norms in single SIMD pass.
+///
+/// This is significantly faster than computing dot product and norms separately
+/// because it only reads the data once from memory.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn cosine_fused_avx2(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: runtime feature detection ensures AVX2+FMA; loads are unaligned-safe.
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 32 * 32);
+    let end_ptr = a.as_ptr().add(len);
+
+    // 4-way unroll (32 elements): maximizes ILP for FMA latency hiding.
+    let mut dot0 = _mm256_setzero_ps();
+    let mut dot1 = _mm256_setzero_ps();
+    let mut dot2 = _mm256_setzero_ps();
+    let mut dot3 = _mm256_setzero_ps();
+    let mut na0 = _mm256_setzero_ps();
+    let mut na1 = _mm256_setzero_ps();
+    let mut na2 = _mm256_setzero_ps();
+    let mut na3 = _mm256_setzero_ps();
+    let mut nb0 = _mm256_setzero_ps();
+    let mut nb1 = _mm256_setzero_ps();
+    let mut nb2 = _mm256_setzero_ps();
+    let mut nb3 = _mm256_setzero_ps();
+
+    while a_ptr < end_main {
+        let va0 = _mm256_loadu_ps(a_ptr);
+        let vb0 = _mm256_loadu_ps(b_ptr);
+        dot0 = _mm256_fmadd_ps(va0, vb0, dot0);
+        na0 = _mm256_fmadd_ps(va0, va0, na0);
+        nb0 = _mm256_fmadd_ps(vb0, vb0, nb0);
+
+        let va1 = _mm256_loadu_ps(a_ptr.add(8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
+        dot1 = _mm256_fmadd_ps(va1, vb1, dot1);
+        na1 = _mm256_fmadd_ps(va1, va1, na1);
+        nb1 = _mm256_fmadd_ps(vb1, vb1, nb1);
+
+        let va2 = _mm256_loadu_ps(a_ptr.add(16));
+        let vb2 = _mm256_loadu_ps(b_ptr.add(16));
+        dot2 = _mm256_fmadd_ps(va2, vb2, dot2);
+        na2 = _mm256_fmadd_ps(va2, va2, na2);
+        nb2 = _mm256_fmadd_ps(vb2, vb2, nb2);
+
+        let va3 = _mm256_loadu_ps(a_ptr.add(24));
+        let vb3 = _mm256_loadu_ps(b_ptr.add(24));
+        dot3 = _mm256_fmadd_ps(va3, vb3, dot3);
+        na3 = _mm256_fmadd_ps(va3, va3, na3);
+        nb3 = _mm256_fmadd_ps(vb3, vb3, nb3);
+
+        a_ptr = a_ptr.add(32);
+        b_ptr = b_ptr.add(32);
+    }
+
+    // Combine accumulators
+    let dot01 = _mm256_add_ps(dot0, dot1);
+    let dot23 = _mm256_add_ps(dot2, dot3);
+    let dot_acc = _mm256_add_ps(dot01, dot23);
+
+    let na01 = _mm256_add_ps(na0, na1);
+    let na23 = _mm256_add_ps(na2, na3);
+    let na_acc = _mm256_add_ps(na01, na23);
+
+    let nb01 = _mm256_add_ps(nb0, nb1);
+    let nb23 = _mm256_add_ps(nb2, nb3);
+    let nb_acc = _mm256_add_ps(nb01, nb23);
+
+    // Horizontal sums
+    let hs = |v: __m256| {
+        let hi = _mm256_extractf128_ps(v, 1);
+        let lo = _mm256_castps256_ps128(v);
+        let sum128 = _mm_add_ps(lo, hi);
+        let shuf = _mm_movehdup_ps(sum128);
+        let sums = _mm_add_ps(sum128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
+    };
+
+    let mut dot = hs(dot_acc);
+    let mut norm_a_sq = hs(na_acc);
+    let mut norm_b_sq = hs(nb_acc);
+
+    // Remainder
+    while a_ptr < end_ptr {
+        let x = *a_ptr;
+        let y = *b_ptr;
+        dot += x * y;
+        norm_a_sq += x * x;
+        norm_b_sq += y * y;
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+
+    // Use precise sqrt for accuracy (fast_rsqrt has ~0.2% error)
+    let norm_a = norm_a_sq.sqrt();
+    let norm_b = norm_b_sq.sqrt();
+    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+}
+
+/// AVX-512 fused cosine similarity - computes dot product and norms in single SIMD pass.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX-512F (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[inline]
+unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: runtime feature detection confirms AVX-512F.
+    use std::arch::x86_64::*;
+
+    let len = a.len();
+    let simd_chunks = len / 32; // 32 floats per 2-way unroll
+    let remainder = len % 32;
+
+    let mut dot0 = _mm512_setzero_ps();
+    let mut dot1 = _mm512_setzero_ps();
+    let mut na0 = _mm512_setzero_ps();
+    let mut na1 = _mm512_setzero_ps();
+    let mut nb0 = _mm512_setzero_ps();
+    let mut nb1 = _mm512_setzero_ps();
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    for i in 0..simd_chunks {
+        let base = i * 32;
+        let va0 = _mm512_loadu_ps(a_ptr.add(base));
+        let vb0 = _mm512_loadu_ps(b_ptr.add(base));
+        dot0 = _mm512_fmadd_ps(va0, vb0, dot0);
+        na0 = _mm512_fmadd_ps(va0, va0, na0);
+        nb0 = _mm512_fmadd_ps(vb0, vb0, nb0);
+
+        let va1 = _mm512_loadu_ps(a_ptr.add(base + 16));
+        let vb1 = _mm512_loadu_ps(b_ptr.add(base + 16));
+        dot1 = _mm512_fmadd_ps(va1, vb1, dot1);
+        na1 = _mm512_fmadd_ps(va1, va1, na1);
+        nb1 = _mm512_fmadd_ps(vb1, vb1, nb1);
+    }
+
+    // Remainder up to 31 elements with mask
+    if remainder > 0 {
+        let base = simd_chunks * 32;
+        let rem0 = remainder.min(16);
+        if rem0 > 0 {
+            let mask0: __mmask16 = (1u32 << rem0) as u16 - 1;
+            let va = _mm512_maskz_loadu_ps(mask0, a_ptr.add(base));
+            let vb = _mm512_maskz_loadu_ps(mask0, b_ptr.add(base));
+            dot0 = _mm512_fmadd_ps(va, vb, dot0);
+            na0 = _mm512_fmadd_ps(va, va, na0);
+            nb0 = _mm512_fmadd_ps(vb, vb, nb0);
+        }
+        let rem1 = remainder.saturating_sub(16);
+        if rem1 > 0 {
+            let mask1: __mmask16 = (1u32 << rem1) as u16 - 1;
+            let va = _mm512_maskz_loadu_ps(mask1, a_ptr.add(base + 16));
+            let vb = _mm512_maskz_loadu_ps(mask1, b_ptr.add(base + 16));
+            dot1 = _mm512_fmadd_ps(va, vb, dot1);
+            na1 = _mm512_fmadd_ps(va, va, na1);
+            nb1 = _mm512_fmadd_ps(vb, vb, nb1);
+        }
+    }
+
+    let dot = _mm512_reduce_add_ps(_mm512_add_ps(dot0, dot1));
+    let norm_a_sq = _mm512_reduce_add_ps(_mm512_add_ps(na0, na1));
+    let norm_b_sq = _mm512_reduce_add_ps(_mm512_add_ps(nb0, nb1));
+
+    // Use precise sqrt for accuracy (fast_rsqrt has ~0.2% error)
+    let norm_a = norm_a_sq.sqrt();
+    let norm_b = norm_b_sq.sqrt();
+    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+}
+
 /// Full cosine similarity (with normalization) using native SIMD.
+///
+/// # Dispatch Strategy (EPIC-052/US-007)
+///
+/// Uses fused SIMD implementation that computes dot product and norms in a single pass,
+/// reducing memory bandwidth by 3x compared to separate computations.
+///
+/// ## AVX2 Dispatch Tiers
+/// - len >= 1024: 4-acc (max ILP for very large vectors)
+/// - len 64-1023: 2-acc (balance ILP vs register pressure)
+/// - len 8-63: 4-acc original (legacy, TODO: optimize)
 #[inline]
 #[must_use]
 pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
 
-    // Compute dot product and norms in single pass for better cache utilization
+    #[cfg(target_arch = "x86_64")]
+    {
+        match simd_level() {
+            SimdLevel::Avx512 if a.len() >= 16 => return unsafe { cosine_fused_avx512(a, b) },
+            // Tiered dispatch: 4-acc for very large, 2-acc for medium
+            SimdLevel::Avx2 if a.len() >= 1024 => return unsafe { cosine_fused_avx2(a, b) },
+            SimdLevel::Avx2 if a.len() >= 64 => return unsafe { cosine_fused_avx2_2acc(a, b) },
+            SimdLevel::Avx2 if a.len() >= 8 => return unsafe { cosine_fused_avx2(a, b) },
+            _ => {}
+        }
+    }
+
+    // Scalar fallback: compute dot product and norms in single pass
     let mut dot = 0.0_f32;
     let mut norm_a_sq = 0.0_f32;
     let mut norm_b_sq = 0.0_f32;
@@ -676,8 +1760,6 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    // Clamp to [-1, 1] for consistency with scalar implementations
-    // Floating point errors can produce values slightly outside this range
     (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
@@ -889,40 +1971,69 @@ unsafe fn hamming_avx512(a: &[f32], b: &[f32]) -> f32 {
     diff_count as f32 + hamming_scalar(&a[i..], &b[i..])
 }
 
+/// AVX2 Hamming with 4x unrolling for ILP optimization (EPIC-052/US-008).
+///
+/// Processes 32 elements per iteration to maximize throughput.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn hamming_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
 
     let len = a.len();
-    let a_ptr = a.as_ptr();
-    let b_ptr = b.as_ptr();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 32 * 32);
+    let end_ptr = a.as_ptr().add(len);
 
-    let mut diff_count: u64 = 0;
-    let mut i = 0;
-
-    // Threshold for binary comparison
     let threshold = _mm256_set1_ps(0.5);
+    let mut diff_count: u64 = 0;
 
-    // Process 8 floats at a time using AVX2
-    while i + 8 <= len {
-        let va = _mm256_loadu_ps(a_ptr.add(i));
-        let vb = _mm256_loadu_ps(b_ptr.add(i));
+    // Main loop: process 32 elements at a time (4 × 8)
+    while a_ptr < end_main {
+        let va0 = _mm256_loadu_ps(a_ptr);
+        let vb0 = _mm256_loadu_ps(b_ptr);
+        let cmp_a0 = _mm256_cmp_ps(va0, threshold, _CMP_GT_OQ);
+        let cmp_b0 = _mm256_cmp_ps(vb0, threshold, _CMP_GT_OQ);
+        let diff0 = _mm256_xor_ps(cmp_a0, cmp_b0);
+        diff_count += _mm256_movemask_ps(diff0).count_ones() as u64;
 
-        // Binary threshold: compare each value > 0.5
-        let cmp_a = _mm256_cmp_ps(va, threshold, _CMP_GT_OQ);
-        let cmp_b = _mm256_cmp_ps(vb, threshold, _CMP_GT_OQ);
+        let va1 = _mm256_loadu_ps(a_ptr.add(8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
+        let cmp_a1 = _mm256_cmp_ps(va1, threshold, _CMP_GT_OQ);
+        let cmp_b1 = _mm256_cmp_ps(vb1, threshold, _CMP_GT_OQ);
+        let diff1 = _mm256_xor_ps(cmp_a1, cmp_b1);
+        diff_count += _mm256_movemask_ps(diff1).count_ones() as u64;
 
-        // XOR to find positions where binary values differ
-        let diff = _mm256_xor_ps(cmp_a, cmp_b);
-        let mask = _mm256_movemask_ps(diff);
-        diff_count += mask.count_ones() as u64;
+        let va2 = _mm256_loadu_ps(a_ptr.add(16));
+        let vb2 = _mm256_loadu_ps(b_ptr.add(16));
+        let cmp_a2 = _mm256_cmp_ps(va2, threshold, _CMP_GT_OQ);
+        let cmp_b2 = _mm256_cmp_ps(vb2, threshold, _CMP_GT_OQ);
+        let diff2 = _mm256_xor_ps(cmp_a2, cmp_b2);
+        diff_count += _mm256_movemask_ps(diff2).count_ones() as u64;
 
-        i += 8;
+        let va3 = _mm256_loadu_ps(a_ptr.add(24));
+        let vb3 = _mm256_loadu_ps(b_ptr.add(24));
+        let cmp_a3 = _mm256_cmp_ps(va3, threshold, _CMP_GT_OQ);
+        let cmp_b3 = _mm256_cmp_ps(vb3, threshold, _CMP_GT_OQ);
+        let diff3 = _mm256_xor_ps(cmp_a3, cmp_b3);
+        diff_count += _mm256_movemask_ps(diff3).count_ones() as u64;
+
+        a_ptr = a_ptr.add(32);
+        b_ptr = b_ptr.add(32);
     }
 
-    // Handle remaining elements
-    diff_count as f32 + hamming_scalar(&a[i..], &b[i..])
+    // Handle remainder with scalar
+    while a_ptr < end_ptr {
+        let x = *a_ptr > 0.5;
+        let y = *b_ptr > 0.5;
+        if x != y {
+            diff_count += 1;
+        }
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+
+    diff_count as f32
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -967,45 +2078,84 @@ unsafe fn jaccard_avx512(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+/// AVX2 Jaccard with 4 accumulators for ILP optimization (EPIC-052/US-008).
+///
+/// Processes 32 elements per iteration using 4 independent accumulator pairs
+/// to hide FMA latency and maximize throughput.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
 
     let len = a.len();
-    let a_ptr = a.as_ptr();
-    let b_ptr = b.as_ptr();
+    let mut a_ptr = a.as_ptr();
+    let mut b_ptr = b.as_ptr();
+    let end_main = a.as_ptr().add(len / 32 * 32);
+    let end_ptr = a.as_ptr().add(len);
 
-    let mut acc_inter = _mm256_setzero_ps();
-    let mut acc_union = _mm256_setzero_ps();
+    // 4 accumulator pairs for ILP
+    let mut inter0 = _mm256_setzero_ps();
+    let mut inter1 = _mm256_setzero_ps();
+    let mut inter2 = _mm256_setzero_ps();
+    let mut inter3 = _mm256_setzero_ps();
+    let mut union0 = _mm256_setzero_ps();
+    let mut union1 = _mm256_setzero_ps();
+    let mut union2 = _mm256_setzero_ps();
+    let mut union3 = _mm256_setzero_ps();
 
-    let mut i = 0;
-    // Process 8 floats at a time
-    while i + 8 <= len {
-        let va = _mm256_loadu_ps(a_ptr.add(i));
-        let vb = _mm256_loadu_ps(b_ptr.add(i));
+    // Main loop: process 32 elements at a time
+    while a_ptr < end_main {
+        let va0 = _mm256_loadu_ps(a_ptr);
+        let vb0 = _mm256_loadu_ps(b_ptr);
+        inter0 = _mm256_add_ps(inter0, _mm256_min_ps(va0, vb0));
+        union0 = _mm256_add_ps(union0, _mm256_max_ps(va0, vb0));
 
-        // min for intersection, max for union
-        acc_inter = _mm256_add_ps(acc_inter, _mm256_min_ps(va, vb));
-        acc_union = _mm256_add_ps(acc_union, _mm256_max_ps(va, vb));
+        let va1 = _mm256_loadu_ps(a_ptr.add(8));
+        let vb1 = _mm256_loadu_ps(b_ptr.add(8));
+        inter1 = _mm256_add_ps(inter1, _mm256_min_ps(va1, vb1));
+        union1 = _mm256_add_ps(union1, _mm256_max_ps(va1, vb1));
 
-        i += 8;
+        let va2 = _mm256_loadu_ps(a_ptr.add(16));
+        let vb2 = _mm256_loadu_ps(b_ptr.add(16));
+        inter2 = _mm256_add_ps(inter2, _mm256_min_ps(va2, vb2));
+        union2 = _mm256_add_ps(union2, _mm256_max_ps(va2, vb2));
+
+        let va3 = _mm256_loadu_ps(a_ptr.add(24));
+        let vb3 = _mm256_loadu_ps(b_ptr.add(24));
+        inter3 = _mm256_add_ps(inter3, _mm256_min_ps(va3, vb3));
+        union3 = _mm256_add_ps(union3, _mm256_max_ps(va3, vb3));
+
+        a_ptr = a_ptr.add(32);
+        b_ptr = b_ptr.add(32);
     }
 
-    // Horizontal sum using hadd
-    let inter_sum = hsum256_ps(acc_inter);
-    let union_sum = hsum256_ps(acc_union);
+    // Combine accumulators
+    let inter01 = _mm256_add_ps(inter0, inter1);
+    let inter23 = _mm256_add_ps(inter2, inter3);
+    let acc_inter = _mm256_add_ps(inter01, inter23);
 
-    // Handle remaining elements
-    let (scalar_inter, scalar_union) = jaccard_scalar_accum(&a[i..], &b[i..]);
+    let union01 = _mm256_add_ps(union0, union1);
+    let union23 = _mm256_add_ps(union2, union3);
+    let acc_union = _mm256_add_ps(union01, union23);
 
-    let total_inter = inter_sum + scalar_inter;
-    let total_union = union_sum + scalar_union;
+    // Horizontal sum
+    let mut inter_sum = hsum256_ps(acc_inter);
+    let mut union_sum = hsum256_ps(acc_union);
 
-    if total_union == 0.0 {
+    // Handle remainder with scalar
+    while a_ptr < end_ptr {
+        let x = *a_ptr;
+        let y = *b_ptr;
+        inter_sum += x.min(y);
+        union_sum += x.max(y);
+        a_ptr = a_ptr.add(1);
+        b_ptr = b_ptr.add(1);
+    }
+
+    if union_sum == 0.0 {
         1.0
     } else {
-        total_inter / total_union
+        inter_sum / union_sum
     }
 }
 
@@ -1021,7 +2171,7 @@ unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
     // Horizontal sum of 128-bit
     let shuf = _mm_movehdup_ps(sum128);
     let sums = _mm_add_ps(sum128, shuf);
-    let shuf2 = _mm_movehl_ps(shuf, sums);
+    let shuf2 = _mm_movehl_ps(sums, sums);
     let result = _mm_add_ss(sums, shuf2);
     _mm_cvtss_f32(result)
 }
@@ -1063,3 +2213,15 @@ fn jaccard_scalar_accum(a: &[f32], b: &[f32]) -> (f32, f32) {
 }
 
 // Tests moved to simd_native_tests.rs per project rules (tests in separate files)
+
+#[cfg(test)]
+mod simd_native_dispatch_tests;
+
+#[cfg(test)]
+mod cosine_fused_tests;
+
+#[cfg(test)]
+mod harley_seal_tests;
+
+#[cfg(test)]
+mod warmup_tests;

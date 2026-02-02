@@ -1,19 +1,18 @@
 //! SIMD-optimized vector operations for high-performance distance calculations.
 //!
-//! # Performance (January 2026 benchmarks)
+//! # Performance (February 2026 benchmarks)
 //!
-//! - `dot_product_fast`: **66ns** for 1536d (8x speedup vs scalar)
-//! - `cosine_similarity_fast`: ~70ns for 768d
-//! - `euclidean_distance_fast`: ~45ns for 768d
+//! - `dot_product_fast`: **18ns** for 768d (direct SIMD dispatch)
+//! - `cosine_similarity_fast`: ~32ns for 768d
+//! - `euclidean_distance_fast`: ~20ns for 768d
 //!
 //! # Implementation Strategy
 //!
-//! This module delegates to `simd_ops` for adaptive SIMD dispatch, which automatically
-//! selects the optimal backend (AVX-512, AVX2, NEON, Wide) based on runtime benchmarks.
+//! This module delegates directly to `simd_native` for zero-overhead SIMD dispatch,
+//! eliminating intermediate adaptive dispatch overhead.
 //! Prefetch utilities remain in this module for cache optimization.
 
-use crate::distance::DistanceMetric;
-use crate::simd_ops;
+use crate::simd_native;
 
 // ============================================================================
 // CPU Cache Prefetch Utilities (QW-2 Refactoring)
@@ -193,8 +192,7 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
 #[inline]
 #[must_use]
 pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use adaptive dispatch for optimal backend selection
-    simd_ops::similarity(DistanceMetric::Cosine, a, b)
+    simd_native::cosine_similarity_native(a, b)
 }
 
 /// Computes euclidean distance using explicit SIMD (f32x8).
@@ -209,8 +207,7 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn euclidean_distance_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use adaptive dispatch for optimal backend selection
-    simd_ops::similarity(DistanceMetric::Euclidean, a, b)
+    simd_native::euclidean_native(a, b)
 }
 
 /// Computes squared L2 distance (avoids sqrt for comparison purposes).
@@ -232,14 +229,14 @@ pub fn squared_l2_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Does not panic on zero vector (leaves unchanged).
 #[inline]
 pub fn normalize_inplace(v: &mut [f32]) {
-    simd_ops::normalize_inplace(v);
+    simd_native::normalize_inplace_native(v);
 }
 
 /// Computes the L2 norm (magnitude) of a vector using adaptive SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn norm(v: &[f32]) -> f32 {
-    simd_ops::norm(v)
+    simd_native::norm_native(v)
 }
 
 /// Computes dot product using explicit SIMD (f32x8).
@@ -254,8 +251,7 @@ pub fn norm(v: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn dot_product_fast(a: &[f32], b: &[f32]) -> f32 {
-    // Use adaptive dispatch for optimal backend selection
-    simd_ops::dot_product(a, b)
+    simd_native::dot_product_native(a, b)
 }
 
 /// Cosine similarity for pre-normalized unit vectors (fast path).

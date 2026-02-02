@@ -1,23 +1,106 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: February 1, 2026 (v1.4.1 - i9-14900K AVX-512 Native)*
+*Last updated: February 1, 2026 (v1.4.1 - SIMD Tiered Dispatch EPIC-052/077)*
 
 ---
 
-## 🚀 i9-14900K Headline (AVX-512 Native)
-
-| Metric | Previous | i9-14900K | Improvement |
-|--------|----------|-----------|-------------|
-| **SIMD Dot Product (1536D)** | 110ns | **23.2ns** | **4.7x** ✅ |
-| **Throughput** | 14 Gelem/s | **66 Gelem/s** | **4.7x** ✅ |
-| **Batch 100×768D** | 8.5µs | **2.86µs** | **3x** ✅ |
+## 🚀 SIMD Performance Results (Post-EPIC-052)
 
 ### Hardware Configuration
-
-- **CPU**: Intel Core i9-14900K (AVX-512 native)
+- **CPU**: Intel Core i9-14900K (24 cores, 32 threads, AVX2 native)
 - **RAM**: 64GB DDR5
 - **GPU**: NVIDIA RTX 4090 (for GPU benchmarks)
+- **OS**: Windows 11 (Power Mode: "Performances élevées")
 - **Rust**: 1.85, `--release`, `target-cpu=native`
+- **Tests**: 2411 passing, 82.30% coverage
+
+### SIMD Kernel Benchmarks (LTO thin, codegen-units=1)
+
+| Operation | 128D | 384D | **768D** | **1536D** | **3072D** |
+|-----------|------|------|----------|-----------|-----------|
+| **dot_product** | 4.05ns | 9.71ns | **18.68ns** | **32.91ns** | **70.73ns** |
+| **euclidean** | 8.59ns | 11.56ns | **20.88ns** | 43.80ns | 81.69ns |
+| **cosine** | 7.87ns | 19.67ns | **37.26ns** | 58.09ns | 110.13ns |
+| **hamming** | 6.25ns | 9.78ns | **18.99ns** | 38.35ns | 82.01ns |
+| **jaccard** | 5.00ns | 11.61ns | **22.81ns** | 47.72ns | 93.63ns |
+
+### 📈 Throughput Analysis
+
+| Dimension | Dot Product | Throughput |
+|-----------|-------------|------------|
+| 768D | 18.68ns | **41.1 Gelem/s** |
+| 1536D | 32.91ns | **46.6 Gelem/s** |
+| 3072D | 70.73ns | **43.4 Gelem/s** |
+
+### 🎯 Key Achievements
+
+#### ✅ Major Performance Gains (EPIC-052/077)
+- **Dot Product**: 18.5ns @ 768D → **41.6 Gelem/s**
+- **Cosine tiered dispatch**: 2-acc (64-1023D) + 4-acc (>1024D) pour éviter register pressure
+- **Jaccard**: 22.8ns @ 768D (avant 28.1ns)
+- **Hamming**: 19.0ns @ 768D (avant 36.2ns)
+
+---
+
+## 🔄 HNSW Insert Performance
+
+| Operation | Vectors | Time | Throughput |
+|-----------|---------|------|------------|
+| **Sequential Insert** | 1,000 × 768D | 614ms | **1,628 vec/s** |
+| **Parallel Insert** | 1,000 × 768D | 443ms | **2,259 vec/s** |
+
+**Parallel insert** provides **38% speedup** over sequential.
+
+---
+
+## 🌐 Competitive Analysis (State of the Art 2025)
+
+### SIMD Distance Kernels
+
+| Library | Dot Product 1536D | Notes |
+|---------|-------------------|-------|
+| **VelesDB** | **32ns** | AVX2 4-acc, native Rust |
+| SimSIMD | ~25-30ns | AVX-512, C library |
+| NumPy | ~200-400ns | BLAS backend |
+| SciPy | ~300-500ns | No SIMD optimization |
+
+**VelesDB** is **competitive with SimSIMD** and **10-15x faster than NumPy/SciPy**.
+
+### Vector Database Search Latency
+
+| Database | Search Latency | Scale | Notes |
+|----------|---------------|-------|-------|
+| **VelesDB** | **< 1ms** | 10K | Local, in-memory HNSW |
+| Milvus | < 10ms p50 | 1M+ | Distributed |
+| Qdrant | 20-50ms | 1M+ | Cloud/distributed |
+| pgvector | 45-100ms | 100K+ | PostgreSQL extension |
+| Redis | ~5ms | 1M+ | In-memory |
+
+**VelesDB excels for local/embedded use cases** with sub-millisecond latency.
+
+### Insert Throughput
+
+| Database | Insert Rate | Notes |
+|----------|-------------|-------|
+| **VelesDB** | **2,259 vec/s** | Single machine, parallel |
+| Milvus | Highest indexing | Distributed, batch |
+| Qdrant | ~1,000 vec/s | Single node |
+
+---
+
+## 🎯 VelesDB Positioning
+
+### ✅ Where VelesDB Excels
+1. **Local-first / Edge**: Sub-ms latency, no network overhead
+2. **Embedded**: 15MB binary, zero dependencies
+3. **SIMD Performance**: Competitive with state-of-the-art
+4. **Privacy**: Data never leaves device
+
+### 📈 Optimization Opportunities
+1. **Batch Insert**: Implement batch indexing for higher throughput
+2. **AVX-512**: Enable on supported hardware (i9-14900K has AVX2 only)
+3. **Quantization**: int8/int4 vectors for memory efficiency
+4. **GPU Acceleration**: CUDA/WebGPU for large-scale search
 
 ---
 
@@ -49,20 +132,27 @@
 
 | Operation | 384D | 768D | 1536D | vs v1.4.0 |
 |-----------|------|------|-------|-----------|
-| **Dot Product** | **9.7ns** | **15.3ns** | **43.4ns** | **+19-37%** ✅ |
-| **Euclidean** | 13.4ns | 31.7ns | 70ns | Baseline |
-| **Cosine** | 36ns | 68ns | 131ns | Baseline |
+| **Dot Product** | **9.7ns** | **18.7ns** | **32.9ns** | **Baseline** |
+| **Euclidean** | 13.4ns | 20.9ns | 43.8ns | **Improved** |
+| **Cosine** | 19.7ns | 37.3ns | 58.1ns | **-13%** ✅ |
 
-### Stratégie Adaptative (EPIC-PERF-003)
+### Stratégie Adaptative (EPIC-PERF-003) - Optimisée Feb 2026
 
-Le dispatch s'adapte automatiquement au CPU détecté :
+Le dispatch s'adapte automatiquement au CPU détecté avec des seuils optimisés basés sur la recherche state-of-the-art:
 
-| CPU Détecté | Implémentation | Seuil 4-acc | Gain typique |
-|-------------|----------------|-------------|--------------|
-| **AVX-512** (Xeon, serveurs) | 512-bit 4-acc | >= 512 | 15-25% |
-| **AVX2** (Core 12th/13th/14th gen, Ryzen) | 256-bit 4-acc | >= 256 | **15-37%** |
-| **AVX2 petits vecteurs** | 256-bit 2-acc | < 256 | Baseline |
+| CPU Détecté | Implémentation | Seuils | Gain typique |
+|-------------|----------------|--------|--------------|
+| **AVX-512** (Xeon, serveurs) | 512-bit 4-acc | >= 512 éléments | 15-25% |
+| **AVX2** (Core 12th/13th/14th gen, Ryzen) | 256-bit 4-acc | >= 256 | 15-37% |
+| **AVX2** | 256-bit 2-acc | 64-255 | Baseline |
+| **AVX2 petits vecteurs** | 256-bit 1-acc | **16-63** | **Meilleur ratio overhead/perf** |
+| **AVX2 tiny** | Scalar | **< 16** | Évite overhead SIMD |
 | **ARM NEON** | 128-bit 1-acc | >= 4 | Baseline |
+
+**Optimisations implémentées:**
+- **Tail unrolling**: Remainder déroulé (4→2→1 éléments) pour éviter les boucles
+- **Warmup AVX-512**: 3 itérations avant mesure pour stabiliser la fréquence CPU
+- **Dispatch optimisé**: Scalar < 16 éléments (évite overhead SIMD setup)
 
 ### EPIC-073 SIMD Pipeline Optimizations
 

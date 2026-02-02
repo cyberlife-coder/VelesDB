@@ -19,6 +19,13 @@ fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
     (0..dim).map(|i| (seed + i as f32 * 0.1).sin()).collect()
 }
 
+/// Warmup function to stabilize CPU frequency and caches
+fn warmup<F: Fn()>(f: F) {
+    for _ in 0..3 {
+        f();
+    }
+}
+
 fn bench_dot_product(c: &mut Criterion) {
     let mut group = c.benchmark_group("dot_product");
 
@@ -27,10 +34,16 @@ fn bench_dot_product(c: &mut Criterion) {
         let b = generate_vector(*dim, 1.0);
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = dot_product_fast(&a, &b);
+            });
             bencher.iter(|| dot_product_fast(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = dot_product_native(&a, &b);
+            });
             bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
         });
     }
@@ -46,10 +59,16 @@ fn bench_euclidean_distance(c: &mut Criterion) {
         let b = generate_vector(*dim, 1.0);
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = euclidean_distance_fast(&a, &b);
+            });
             bencher.iter(|| euclidean_distance_fast(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = euclidean_native(&a, &b);
+            });
             bencher.iter(|| euclidean_native(black_box(&a), black_box(&b)));
         });
     }
@@ -65,10 +84,16 @@ fn bench_cosine_similarity(c: &mut Criterion) {
         let b = generate_vector(*dim, 1.0);
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = cosine_similarity_fast(&a, &b);
+            });
             bencher.iter(|| cosine_similarity_fast(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = cosine_similarity_native(&a, &b);
+            });
             bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
         });
     }
@@ -94,10 +119,16 @@ fn bench_hamming_f32(c: &mut Criterion) {
         let b = generate_binary_vector(*dim, 1);
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = hamming_distance_fast(&a, &b);
+            });
             bencher.iter(|| hamming_distance_fast(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = hamming_distance_native(&a, &b);
+            });
             bencher.iter(|| hamming_distance_native(black_box(&a), black_box(&b)));
         });
     }
