@@ -5,7 +5,7 @@
 //! Compares baseline (naive) vs optimized (SIMD/fused) implementations.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use velesdb_core::simd;
+use velesdb_core::simd_native;
 
 fn generate_random_vector(dim: usize) -> Vec<f32> {
     #[allow(clippy::cast_precision_loss)]
@@ -31,7 +31,7 @@ fn bench_cosine_distance(c: &mut Criterion) {
         });
 
         group.bench_function(BenchmarkId::new("optimized", format!("{dim}d")), |b| {
-            b.iter(|| black_box(simd::cosine_similarity_fast(&vec_a, &vec_b)));
+            b.iter(|| black_box(simd_native::cosine_similarity_native(&vec_a, &vec_b)));
         });
     }
 
@@ -54,7 +54,7 @@ fn bench_euclidean_distance(c: &mut Criterion) {
         });
 
         group.bench_function(BenchmarkId::new("optimized", format!("{dim}d")), |b| {
-            b.iter(|| black_box(simd::euclidean_distance_fast(&vec_a, &vec_b)));
+            b.iter(|| black_box(simd_native::euclidean_native(&vec_a, &vec_b)));
         });
     }
 
@@ -81,7 +81,7 @@ fn bench_normalization(c: &mut Criterion) {
                 b.iter_batched(
                     || generate_random_vector(dim),
                     |mut vec| {
-                        simd::normalize_inplace(&mut vec);
+                        simd_native::normalize_inplace_native(&mut vec);
                         black_box(vec)
                     },
                     criterion::BatchSize::SmallInput,
@@ -109,7 +109,7 @@ fn bench_dot_product(c: &mut Criterion) {
         });
 
         group.bench_function(BenchmarkId::new("optimized", format!("{dim}d")), |b| {
-            b.iter(|| black_box(simd::dot_product_fast(&vec_a, &vec_b)));
+            b.iter(|| black_box(simd_native::dot_product_native(&vec_a, &vec_b)));
         });
     }
 

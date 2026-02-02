@@ -11,8 +11,10 @@
 //! # WIS-45: Performance Diagnostic
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use velesdb_core::simd::{cosine_similarity_fast, dot_product_fast, euclidean_distance_fast};
 use velesdb_core::simd_native::{cosine_similarity_native, dot_product_native, euclidean_native};
+use velesdb_core::simd_native_native::{
+    cosine_similarity_native, dot_product_native, euclidean_native,
+};
 
 /// Generate a deterministic f32 vector for benchmarking.
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -47,7 +49,7 @@ fn bench_cosine_overhead(c: &mut Criterion) {
 
     // 2. Public API (auto-vectorized with fused computation)
     group.bench_function("2_public_api_autovec", |bencher| {
-        bencher.iter(|| cosine_similarity_fast(black_box(&a), black_box(&b)));
+        bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
     });
 
     // 3. Measure assertion overhead by calling with pre-validated slices
@@ -81,7 +83,7 @@ fn bench_euclidean_overhead(c: &mut Criterion) {
     });
 
     group.bench_function("2_public_api_autovec", |bencher| {
-        bencher.iter(|| euclidean_distance_fast(black_box(&a), black_box(&b)));
+        bencher.iter(|| euclidean_native(black_box(&a), black_box(&b)));
     });
 
     group.finish();
@@ -104,7 +106,7 @@ fn bench_dot_product_overhead(c: &mut Criterion) {
     });
 
     group.bench_function("2_public_api_autovec", |bencher| {
-        bencher.iter(|| dot_product_fast(black_box(&a), black_box(&b)));
+        bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
     });
 
     group.finish();
@@ -130,7 +132,7 @@ fn bench_dimension_scaling(c: &mut Criterion) {
             BenchmarkId::new("cosine_autovec", dim),
             dim,
             |bencher, _| {
-                bencher.iter(|| cosine_similarity_fast(black_box(&a), black_box(&b)));
+                bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
             },
         );
     }
@@ -174,14 +176,15 @@ fn bench_inlining(c: &mut Criterion) {
     });
 
     group.bench_function("single_call_autovec", |bencher| {
-        bencher.iter(|| cosine_similarity_fast(black_box(&vectors[0].0), black_box(&vectors[0].1)));
+        bencher
+            .iter(|| cosine_similarity_native(black_box(&vectors[0].0), black_box(&vectors[0].1)));
     });
 
     group.bench_function("batch_10_autovec", |bencher| {
         bencher.iter(|| {
             let mut sum = 0.0f32;
             for (a, b) in &vectors {
-                sum += cosine_similarity_fast(black_box(a), black_box(b));
+                sum += cosine_similarity_native(black_box(a), black_box(b));
             }
             sum
         });

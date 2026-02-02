@@ -19,7 +19,8 @@ fn avx512_vs_avx2_i9_14900k(c: &mut Criterion) {
             BenchmarkId::new("native_dispatch", size),
             &(a.clone(), b.clone()),
             |bench, (a, b)| {
-                bench.iter(|| black_box(velesdb_core::simd_native::dot_product_native(a, b)));
+                bench
+                    .iter(|| black_box(velesdb_core::simd_native_native::dot_product_native(a, b)));
             },
         );
     }
@@ -30,9 +31,9 @@ fn avx512_vs_avx2_i9_14900k(c: &mut Criterion) {
 fn simd_level_detection(c: &mut Criterion) {
     c.bench_function("detect_simd_level_cached", |b| {
         // Warm up the cache
-        let _ = velesdb_core::simd_native::simd_level();
+        let _ = velesdb_core::simd_native_native::simd_level();
 
-        b.iter(|| black_box(velesdb_core::simd_native::simd_level()));
+        b.iter(|| black_box(velesdb_core::simd_native_native::simd_level()));
     });
 }
 

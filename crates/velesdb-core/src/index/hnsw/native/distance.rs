@@ -75,25 +75,24 @@ impl DistanceEngine for SimdDistance {
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         // Use our existing optimized SIMD functions for ALL metrics
         match self.metric {
-            DistanceMetric::Cosine => 1.0 - crate::simd::cosine_similarity_fast(a, b),
-            DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(a, b),
-            DistanceMetric::DotProduct => -crate::simd::dot_product_fast(a, b), // Negate for distance
-            // PERF-2: Use SIMD implementations for Hamming/Jaccard
-            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(a, b),
-            DistanceMetric::Jaccard => 1.0 - crate::simd::jaccard_similarity_fast(a, b),
+            DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
+            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
+            DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
+            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
+            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
         }
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
         // PERF-2: Optimized batch distance with CPU prefetch hints
         // Prefetch upcoming vectors to hide memory latency
-        let prefetch_distance = crate::simd::calculate_prefetch_distance(query.len());
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
         let mut results = Vec::with_capacity(candidates.len());
 
         for (i, candidate) in candidates.iter().enumerate() {
             // Prefetch upcoming candidate vectors into L1 cache
             if i + prefetch_distance < candidates.len() {
-                crate::simd::prefetch_vector(candidates[i + prefetch_distance]);
+                crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
             }
             results.push(self.distance(query, candidate));
         }
@@ -128,9 +127,9 @@ impl DistanceEngine for NativeSimdDistance {
             DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
             DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
             DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
-            // Fall back to existing SIMD for Hamming/Jaccard
-            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(a, b),
-            DistanceMetric::Jaccard => 1.0 - crate::simd::jaccard_similarity_fast(a, b),
+            // Use simd_native directly for Hamming/Jaccard (EPIC-081 consolidation)
+            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
+            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
         }
     }
 
@@ -183,13 +182,13 @@ impl DistanceEngine for AdaptiveSimdDistance {
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
         // Use prefetch optimization for batch operations
-        let prefetch_distance = crate::simd::calculate_prefetch_distance(query.len());
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
         let mut results = Vec::with_capacity(candidates.len());
 
         for (i, candidate) in candidates.iter().enumerate() {
             // Prefetch upcoming candidate vectors into L1 cache
             if i + prefetch_distance < candidates.len() {
-                crate::simd::prefetch_vector(candidates[i + prefetch_distance]);
+                crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
             }
             results.push(self.distance(query, candidate));
         }

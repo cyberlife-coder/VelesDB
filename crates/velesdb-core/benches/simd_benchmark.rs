@@ -6,11 +6,11 @@
 #![allow(clippy::cast_precision_loss)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use velesdb_core::simd::{
-    cosine_similarity_fast, dot_product_fast, euclidean_distance_fast, hamming_distance_fast,
-    jaccard_similarity_fast,
-};
 use velesdb_core::simd_native::{
+    cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
+    jaccard_similarity_native,
+};
+use velesdb_core::simd_native_native::{
     cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
 };
 
@@ -35,9 +35,9 @@ fn bench_dot_product(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
             warmup(|| {
-                let _ = dot_product_fast(&a, &b);
+                let _ = dot_product_native(&a, &b);
             });
-            bencher.iter(|| dot_product_fast(black_box(&a), black_box(&b)));
+            bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
@@ -60,9 +60,9 @@ fn bench_euclidean_distance(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
             warmup(|| {
-                let _ = euclidean_distance_fast(&a, &b);
+                let _ = euclidean_native(&a, &b);
             });
-            bencher.iter(|| euclidean_distance_fast(black_box(&a), black_box(&b)));
+            bencher.iter(|| euclidean_native(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
@@ -85,9 +85,9 @@ fn bench_cosine_similarity(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
             warmup(|| {
-                let _ = cosine_similarity_fast(&a, &b);
+                let _ = cosine_similarity_native(&a, &b);
             });
-            bencher.iter(|| cosine_similarity_fast(black_box(&a), black_box(&b)));
+            bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
@@ -120,9 +120,9 @@ fn bench_hamming_f32(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
             warmup(|| {
-                let _ = hamming_distance_fast(&a, &b);
+                let _ = hamming_distance_native(&a, &b);
             });
-            bencher.iter(|| hamming_distance_fast(black_box(&a), black_box(&b)));
+            bencher.iter(|| hamming_distance_native(black_box(&a), black_box(&b)));
         });
 
         group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
@@ -167,7 +167,7 @@ fn bench_jaccard_similarity(c: &mut Criterion) {
         let b = generate_set_vector(*dim, 0.3, 123);
 
         group.bench_with_input(BenchmarkId::new("fast", dim), dim, |bencher, _| {
-            bencher.iter(|| jaccard_similarity_fast(black_box(&a), black_box(&b)));
+            bencher.iter(|| jaccard_similarity_native(black_box(&a), black_box(&b)));
         });
     }
 
@@ -187,7 +187,7 @@ fn bench_jaccard_density(c: &mut Criterion) {
             BenchmarkId::new("density", format!("{:.0}%", density * 100.0)),
             density,
             |bencher, _| {
-                bencher.iter(|| jaccard_similarity_fast(black_box(&a), black_box(&b)));
+                bencher.iter(|| jaccard_similarity_native(black_box(&a), black_box(&b)));
             },
         );
     }

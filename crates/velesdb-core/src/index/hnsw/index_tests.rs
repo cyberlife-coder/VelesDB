@@ -1135,7 +1135,7 @@ fn test_recall_quality_minimum_threshold() {
         .iter()
         .enumerate()
         .map(|(idx, vec)| {
-            let sim = crate::simd::cosine_similarity_fast(&query, vec);
+            let sim = crate::simd_native::cosine_similarity_native(&query, vec);
             #[allow(clippy::cast_possible_truncation)]
             (idx as u64, sim)
         })

@@ -303,8 +303,8 @@ fn bench_recall_validation(c: &mut Criterion) {
                             .iter()
                             .enumerate()
                             .map(|(i, v)| {
-                                let dist =
-                                    1.0 - velesdb_core::simd::cosine_similarity_fast(query, v);
+                                let dist = 1.0
+                                    - velesdb_core::simd_native::cosine_similarity_native(query, v);
                                 (i as u64, dist)
                             })
                             .collect();

@@ -6,7 +6,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn diagnose_simd(c: &mut Criterion) {
     // 1. Quel SIMD est détecté?
-    let level = velesdb_core::simd_native::simd_level();
+    let level = velesdb_core::simd_native_native::simd_level();
     println!("\n=== SIMD Detection Diagnostic ===");
     println!("Detected SIMD level: {:?}", level);
 
@@ -26,7 +26,7 @@ fn diagnose_simd(c: &mut Criterion) {
     let b: Vec<f32> = (0..size).map(|i| ((size - 1 - i) as f32) * 0.001).collect();
 
     c.bench_function("actual_dot_product_1536d", |bencher| {
-        bencher.iter(|| black_box(velesdb_core::simd_native::dot_product_native(&a, &b)));
+        bencher.iter(|| black_box(velesdb_core::simd_native_native::dot_product_native(&a, &b)));
     });
 
     println!("=== End Diagnostic ===\n");
