@@ -774,56 +774,27 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Simd { action } => {
             use colored::Colorize;
-            use velesdb_core::simd_ops;
 
             match action {
                 SimdAction::Info => {
-                    let info = simd_ops::dispatch_info();
-                    println!("\n{}", "SIMD Dispatch Configuration".bold().underline());
-                    println!("  Init time: {:.2}ms", info.init_time_ms);
-                    println!(
-                        "  Available backends: {:?}",
-                        info.available_backends
-                            .iter()
-                            .map(|b| format!("{}", b))
-                            .collect::<Vec<_>>()
-                    );
-                    println!("\n{}", "Selected Backends by Dimension:".cyan());
-                    for (i, dim) in info.dimensions.iter().enumerate() {
-                        println!(
-                            "  {:>4}D: Cosine={}, Euclidean={}, DotProduct={}, Norm={}",
-                            dim,
-                            format!("{}", info.cosine_backends[i]).green(),
-                            format!("{}", info.euclidean_backends[i]).green(),
-                            format!("{}", info.dot_product_backends[i]).green(),
-                            format!("{}", info.norm_backends[i]).green(),
-                        );
-                    }
-                    println!(
-                        "\n  Hamming: {}, Jaccard: {}",
-                        format!("{}", info.hamming_backend).green(),
-                        format!("{}", info.jaccard_backend).green()
-                    );
+                    println!("\n{}", "SIMD Native Configuration".bold().underline());
+                    println!("  Using simd_native with tiered dispatch:");
+                    println!("  - AVX-512: 4/2/1 accumulators based on vector size");
+                    println!("  - AVX2: 4-acc (>1024D), 2-acc (64-1023D), 1-acc (<64D)");
+                    println!("  - ARM NEON: 128-bit SIMD");
+                    println!("  - Scalar: fallback for small vectors");
+                    println!("\n{}", "Available Functions:".cyan());
+                    println!("  - dot_product_native()");
+                    println!("  - cosine_similarity_native()");
+                    println!("  - euclidean_native()");
+                    println!("  - hamming_distance_native()");
+                    println!("  - jaccard_similarity_native()");
+                    println!("  - batch_dot_product_native() (with prefetching)");
                     println!();
                 }
                 SimdAction::Benchmark => {
-                    println!("{}", "Running SIMD micro-benchmarks...".yellow());
-                    let info = simd_ops::force_rebenchmark();
-                    println!(
-                        "{} Re-benchmarked in {:.2}ms",
-                        "✅".green(),
-                        info.init_time_ms
-                    );
-                    println!("\n{}", "New Backend Selection:".cyan());
-                    for (i, dim) in info.dimensions.iter().enumerate() {
-                        println!(
-                            "  {:>4}D: Cosine={}, Euclidean={}, DotProduct={}",
-                            dim,
-                            format!("{}", info.cosine_backends[i]).green(),
-                            format!("{}", info.euclidean_backends[i]).green(),
-                            format!("{}", info.dot_product_backends[i]).green(),
-                        );
-                    }
+                    println!("{}", "SIMD micro-benchmarks removed.".yellow());
+                    println!("Use 'cargo bench --bench simd_benchmark' for detailed benchmarks.");
                     println!();
                 }
             }

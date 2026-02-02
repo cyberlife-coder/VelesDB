@@ -242,7 +242,7 @@ fn test_dispatch_thread_safe() {
 // -------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "dimensions must match")]
+#[should_panic(expected = "Vector dimensions must match")]
 fn test_dot_product_dispatched_length_mismatch() {
     let a = vec![1.0f32, 2.0];
     let b = vec![1.0f32, 2.0, 3.0];

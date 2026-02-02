@@ -68,7 +68,8 @@ panic = "abort"
 inherits = "release"
 debug = true
 
-# Benchmark profile (fast iteration)
+# Benchmark profile - optimized but faster compilation
 [profile.bench]
-lto = false
-codegen-units = 16
+lto = "thin"
+codegen-units = 1
+opt-level = 3
