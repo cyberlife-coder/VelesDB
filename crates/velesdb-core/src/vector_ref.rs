@@ -24,14 +24,14 @@ use std::ops::Deref;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use velesdb_core::VectorRef;
+/// ```rust,no_run
+/// use velesdb_core::vector_ref::VectorRef;
 ///
 /// fn compute_distance<V: VectorRef>(a: &V, b: &V) -> f32 {
 ///     let a_slice = a.as_slice();
 ///     let b_slice = b.as_slice();
 ///     // SIMD distance calculation on slices
-///     crate::simd_native::cosine_similarity_native(a_slice, b_slice)
+///     0.0 // placeholder
 /// }
 /// ```
 pub trait VectorRef {

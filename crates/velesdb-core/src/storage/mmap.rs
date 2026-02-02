@@ -235,9 +235,17 @@ impl MmapStorage {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,no_run
+    /// # use velesdb_core::storage::MmapStorage;
+    /// # use std::io;
+    /// # fn example() -> io::Result<()> {
+    /// # let path = "/tmp/test_storage";
+    /// # let dimension = 768;
+    /// let mut storage = MmapStorage::new(path, dimension)?;
     /// // Pre-allocate for 1 million vectors before bulk import
     /// storage.reserve_capacity(1_000_000)?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
@@ -262,13 +270,17 @@ impl MmapStorage {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let storage = MmapStorage::new(path, 768)?;
+    /// ```rust,no_run
+    /// # use velesdb_core::storage::MmapStorage;
+    /// # use std::io;
+    /// # fn example() -> io::Result<()> {
+    /// # let path = "/tmp/test_storage";
+    /// # let dimension = 768;
+    /// let storage = MmapStorage::new(path, dimension)?;
     /// // ... perform operations ...
     /// let stats = storage.metrics().ensure_capacity_latency_stats();
-    /// if stats.p99_exceeds(Duration::from_millis(100)) {
-    ///     warn!("High P99 latency detected: {:?}", stats.p99());
-    /// }
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn metrics(&self) -> &StorageMetrics {
