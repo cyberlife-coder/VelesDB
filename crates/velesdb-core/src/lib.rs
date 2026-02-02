@@ -154,8 +154,6 @@ mod point_tests;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
-pub mod simd;
-// simd_avx512 removed - consolidated into simd_native (EPIC-075)
 pub mod simd_dispatch;
 #[cfg(test)]
 mod simd_dispatch_tests;

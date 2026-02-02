@@ -15,7 +15,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::metrics::{mrr, precision_at_k, recall_at_k};
-use velesdb_core::simd;
+use velesdb_core::simd_native;
 use velesdb_core::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 /// Generate a random vector using deterministic pseudo-random values
@@ -44,10 +44,10 @@ fn brute_force_knn(
         .enumerate()
         .map(|(idx, vec)| {
             let dist = match metric {
-                DistanceMetric::Euclidean => simd::euclidean_distance_fast(query, vec),
-                DistanceMetric::DotProduct => simd::dot_product_fast(query, vec),
+                DistanceMetric::Euclidean => simd_native::euclidean_native(query, vec),
+                DistanceMetric::DotProduct => simd_native::dot_product_native(query, vec),
                 DistanceMetric::Cosine | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
-                    simd::cosine_similarity_fast(query, vec)
+                    simd_native::cosine_similarity_native(query, vec)
                 }
             };
             #[allow(clippy::cast_possible_truncation)]

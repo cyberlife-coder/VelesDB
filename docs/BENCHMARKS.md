@@ -1,6 +1,6 @@
 # 📊 VelesDB Performance Benchmarks
 
-*Last updated: February 1, 2026 (v1.4.1 - SIMD Tiered Dispatch EPIC-052/077)*
+*Last updated: February 2, 2026 (v1.4.1 - SIMD Tiered Dispatch + Inline Optimization EPIC-052/077/081)*
 
 ---
 
@@ -34,11 +34,17 @@
 
 ### 🎯 Key Achievements
 
-#### ✅ Major Performance Gains (EPIC-052/077)
+#### ✅ Major Performance Gains (EPIC-052/077/081)
 - **Dot Product**: 18.5ns @ 768D → **41.6 Gelem/s**
 - **Cosine tiered dispatch**: 2-acc (64-1023D) + 4-acc (>1024D) pour éviter register pressure
 - **Jaccard**: 22.8ns @ 768D (avant 28.1ns)
 - **Hamming**: 19.0ns @ 768D (avant 36.2ns)
+
+#### ✅ Inline Optimization (EPIC-081)
+- **`#[inline(always)]`** on hot-path functions: `dot_product_native`, `cosine_similarity_native`, `squared_l2_native`
+- **Cosine 768D**: -16.6% improvement (48ns → 27ns)
+- **Cosine 1536D**: -6.2% improvement
+- **Dot 3072D**: -10% improvement
 
 ---
 

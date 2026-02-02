@@ -23,8 +23,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 // Import VelesDB SIMD functions
-use velesdb_core::simd::{
-    calculate_prefetch_distance, cosine_similarity_fast, dot_product_fast, prefetch_vector,
+use velesdb_core::simd_native::{
+    calculate_prefetch_distance, cosine_similarity_native, dot_product_native, prefetch_vector,
 };
 
 /// L2 cache line size in bytes
@@ -71,7 +71,7 @@ fn batch_dot_with_prefetch(
         if prefetch_distance > 0 && i + prefetch_distance < candidates.len() {
             prefetch_vector(candidates[i + prefetch_distance]);
         }
-        results.push(dot_product_fast(candidate, query));
+        results.push(dot_product_native(candidate, query));
     }
 
     results
@@ -90,7 +90,7 @@ fn batch_cosine_with_prefetch(
         if prefetch_distance > 0 && i + prefetch_distance < candidates.len() {
             prefetch_vector(candidates[i + prefetch_distance]);
         }
-        results.push(cosine_similarity_fast(candidate, query));
+        results.push(cosine_similarity_native(candidate, query));
     }
 
     results

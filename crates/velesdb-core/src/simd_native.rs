@@ -1308,7 +1308,8 @@ pub fn warmup_simd_cache() {
 /// - Loop simple pour tous les cas
 ///
 /// Les seuils sont calibrés pour éviter les régressions sur chaque architecture.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Hot-path function called millions of times in similarity search loops
+#[inline(always)]
 #[must_use]
 pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
@@ -1351,7 +1352,8 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 /// - AVX-512: 4-acc for 512+, 1-acc for 16+
 /// - AVX2: 4-acc for 256+, 2-acc for 64-255, 1-acc for 16-63, scalar for <16
 /// - NEON: 1-acc for 4+, scalar for <4
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Hot-path function for Euclidean distance calculations
+#[inline(always)]
 #[must_use]
 pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
@@ -1399,7 +1401,8 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Euclidean distance with automatic dispatch.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Thin wrapper over squared_l2_native, must inline
+#[inline(always)]
 #[must_use]
 pub fn euclidean_native(a: &[f32], b: &[f32]) -> f32 {
     squared_l2_native(a, b).sqrt()
@@ -1408,7 +1411,8 @@ pub fn euclidean_native(a: &[f32], b: &[f32]) -> f32 {
 /// L2 norm with automatic dispatch to best available SIMD.
 ///
 /// Computes `sqrt(sum(v[i]²))` using native SIMD intrinsics.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Thin wrapper over dot_product_native, must inline
+#[inline(always)]
 #[must_use]
 pub fn norm_native(v: &[f32]) -> f32 {
     // Norm is sqrt(dot(v, v))
@@ -1418,7 +1422,8 @@ pub fn norm_native(v: &[f32]) -> f32 {
 /// Normalizes a vector in-place using native SIMD.
 ///
 /// After normalization, the vector will have L2 norm of 1.0.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Called in tight loops during vector normalization
+#[inline(always)]
 pub fn normalize_inplace_native(v: &mut [f32]) {
     let n = norm_native(v);
     if n > 0.0 {
@@ -1430,7 +1435,8 @@ pub fn normalize_inplace_native(v: &mut [f32]) {
 }
 
 /// Cosine similarity for pre-normalized vectors with automatic dispatch.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Thin wrapper, direct delegation to dot_product_native
+#[inline(always)]
 #[must_use]
 pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32 {
     // For unit vectors: cos(θ) = a · b
@@ -1725,7 +1731,8 @@ unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
 /// - len >= 1024: 4-acc (max ILP for very large vectors)
 /// - len 64-1023: 2-acc (balance ILP vs register pressure)
 /// - len 8-63: 4-acc original (legacy, TODO: optimize)
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Primary similarity function, hot-path in all vector searches
+#[inline(always)]
 #[must_use]
 pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
@@ -1836,6 +1843,7 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Computes dot products between a query and multiple candidates,
 /// using software prefetch hints for cache optimization.
+#[inline]
 #[must_use]
 pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
     let mut results = Vec::with_capacity(candidates.len());
@@ -2212,7 +2220,126 @@ fn jaccard_scalar_accum(a: &[f32], b: &[f32]) -> (f32, f32) {
         })
 }
 
-// Tests moved to simd_native_tests.rs per project rules (tests in separate files)
+// ============================================================================
+// CPU Cache Prefetch Utilities (consolidated from simd.rs)
+// ============================================================================
+
+/// L2 cache line size in bytes (standard for modern x86_64 CPUs).
+pub const L2_CACHE_LINE_BYTES: usize = 64;
+
+/// Calculates optimal prefetch distance based on vector dimension.
+///
+/// # Algorithm
+///
+/// Prefetch distance is computed to stay within L2 cache constraints:
+/// - `distance = (vector_bytes / L2_CACHE_LINE).clamp(4, 16)`
+/// - Minimum 4: Ensure enough lookahead for out-of-order execution
+/// - Maximum 16: Prevent cache pollution from over-prefetching
+#[inline]
+#[must_use]
+pub const fn calculate_prefetch_distance(dimension: usize) -> usize {
+    let vector_bytes = dimension * std::mem::size_of::<f32>();
+    let raw_distance = vector_bytes / L2_CACHE_LINE_BYTES;
+    // Manual clamp for const fn
+    if raw_distance < 4 {
+        4
+    } else if raw_distance > 16 {
+        16
+    } else {
+        raw_distance
+    }
+}
+
+/// Prefetches a vector into L1 cache (T0 hint) for upcoming SIMD operations.
+///
+/// # Platform Support
+///
+/// - **x86_64**: Uses `_mm_prefetch` with `_MM_HINT_T0`
+/// - **aarch64**: Uses inline ASM workaround (rust-lang/rust#117217)
+/// - **Other**: No-op (graceful degradation)
+///
+/// # Safety
+///
+/// This function is safe because prefetch instructions are hints and cannot
+/// cause memory faults even with invalid addresses.
+#[inline]
+pub fn prefetch_vector(vector: &[f32]) {
+    if vector.is_empty() {
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: _mm_prefetch is a hint instruction that cannot fault
+        unsafe {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::simd_neon_prefetch::prefetch_vector_neon(vector);
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = vector;
+    }
+}
+
+/// Prefetches a vector into multiple cache levels for larger vectors.
+///
+/// Uses different cache level hints:
+/// - First cache line → L1 (T0 hint)
+/// - Second cache line → L2 (T1 hint)
+/// - Third+ cache lines → L3 (T2 hint)
+#[inline]
+pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
+    if vector.is_empty() {
+        return;
+    }
+
+    let vector_bytes = std::mem::size_of_val(vector);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0, _MM_HINT_T1, _MM_HINT_T2};
+
+        // SAFETY: _mm_prefetch is a hint instruction that cannot fault
+        unsafe {
+            _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
+
+            if vector_bytes > L2_CACHE_LINE_BYTES {
+                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES);
+                _mm_prefetch(ptr, _MM_HINT_T1);
+            }
+
+            if vector_bytes > L2_CACHE_LINE_BYTES * 2 {
+                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 2);
+                _mm_prefetch(ptr, _MM_HINT_T2);
+            }
+
+            if vector_bytes > L2_CACHE_LINE_BYTES * 4 {
+                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 4);
+                _mm_prefetch(ptr, _MM_HINT_T2);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::simd_neon_prefetch::prefetch_vector_neon(vector);
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = vector;
+        let _ = vector_bytes;
+    }
+}
+
+// Tests moved to separate files per project rules
 
 #[cfg(test)]
 mod simd_native_dispatch_tests;

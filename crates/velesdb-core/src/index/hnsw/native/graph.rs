@@ -459,7 +459,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         } else {
             vectors[0].len()
         };
-        let prefetch_distance = crate::simd::calculate_prefetch_distance(dimension);
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(dimension);
 
         for ep in entry_points {
             let dist = self.distance.distance(query, &vectors[ep]);
@@ -482,7 +482,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             if dimension >= 384 && neighbors.len() > prefetch_distance {
                 for &neighbor_id in neighbors.iter().take(prefetch_distance) {
                     if neighbor_id < vectors.len() {
-                        crate::simd::prefetch_vector(&vectors[neighbor_id]);
+                        crate::simd_native::prefetch_vector(&vectors[neighbor_id]);
                     }
                 }
             }
@@ -492,7 +492,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 if dimension >= 384 && i + prefetch_distance < neighbors.len() {
                     let prefetch_id = neighbors[i + prefetch_distance];
                     if prefetch_id < vectors.len() {
-                        crate::simd::prefetch_vector(&vectors[prefetch_id]);
+                        crate::simd_native::prefetch_vector(&vectors[prefetch_id]);
                     }
                 }
 

@@ -3,6 +3,13 @@
 //! This test validates that SIMD implementations produce correct results
 //! compared to scalar reference implementations.
 
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::bool_to_int_with_if)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::too_many_lines)]
+
 use velesdb_core::simd_dispatch::{
     cosine_dispatched, dot_product_dispatched, euclidean_dispatched, hamming_dispatched,
 };
