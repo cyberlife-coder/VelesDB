@@ -15,29 +15,33 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 //! use serde_json::json;
 //!
-//! // Create a new database
-//! let db = Database::open("./data")?;
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a new database
+//!     let db = Database::open("./data")?;
 //!
-//! // Create a collection (all 5 metrics available)
-//! db.create_collection("documents", 768, DistanceMetric::Cosine)?;
-//! // Or with quantization: DistanceMetric::Hamming + StorageMode::Binary
+//!     // Create a collection (all 5 metrics available)
+//!     db.create_collection("documents", 768, DistanceMetric::Cosine)?;
+//!     // Or with quantization: DistanceMetric::Hamming + StorageMode::Binary
 //!
-//! let collection = db.get_collection("documents").unwrap();
+//!     let collection = db.get_collection("documents").ok_or("Collection not found")?;
 //!
-//! // Insert vectors (upsert takes ownership)
-//! collection.upsert(vec![
-//!     Point::new(1, vec![0.1; 768], Some(json!({"title": "Hello World"}))),
-//! ])?;
+//!     // Insert vectors (upsert takes ownership)
+//!     collection.upsert(vec![
+//!         Point::new(1, vec![0.1; 768], Some(json!({"title": "Hello World"}))),
+//!     ])?;
 //!
-//! // Search for similar vectors
-//! let results = collection.search(&query_vector, 10)?;
+//!     // Search for similar vectors
+//!     let query_vector = vec![0.1; 768];
+//!     let results = collection.search(&query_vector, 10)?;
 //!
-//! // Hybrid search (vector + text)
-//! let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7))?;
+//!     // Hybrid search (vector + text)
+//!     let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7))?;
+//!     # Ok(())
+//! }
 //! ```
 
 #![warn(missing_docs)]

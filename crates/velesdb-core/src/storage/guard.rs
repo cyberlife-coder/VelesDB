@@ -16,10 +16,20 @@ use parking_lot::RwLockReadGuard;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let guard = storage.retrieve_ref(id)?.unwrap();
-/// let slice: &[f32] = guard.as_ref();
-/// // Use slice directly - no allocation occurred
+/// ```rust,no_run
+/// # use velesdb_core::storage::{MmapStorage, VectorSliceGuard};
+/// # use std::io;
+/// # fn example() -> io::Result<()> {
+/// # let mut storage = MmapStorage::new("/tmp/test", 128)?;
+/// # let id = 1u64;
+/// // Get zero-copy access to a vector
+/// let guard: Option<VectorSliceGuard> = storage.retrieve_ref(id)?;
+/// if let Some(guard) = guard {
+///     let slice: &[f32] = guard.as_ref();
+///     // Use slice directly - no allocation occurred
+/// }
+/// # Ok(())
+/// # }
 /// ```
 use std::sync::atomic::AtomicU64;
 

@@ -5,8 +5,8 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use crate::sync::{Arc, RwLock, Mutex};
+//! ```rust,no_run
+//! use velesdb_core::sync::{Arc, RwLock, Mutex};
 //!
 //! // Works with both std and loom
 //! let data = Arc::new(RwLock::new(42));
