@@ -107,7 +107,7 @@ fn test_fused_cosine_opposite_vectors() {
 }
 
 #[test]
-#[ignore = "Performance test - run locally with: cargo test -- --ignored"]
+#[ignore = "performance test - run with --ignored or PERF_TESTS=1"]
 fn test_fused_cosine_performance() {
     // Verify performance is acceptable for 768D
     // This is a smoke test - actual benchmarks in benches/
