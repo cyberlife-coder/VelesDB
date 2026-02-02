@@ -43,7 +43,6 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod agent;
-mod distance;
 mod filter;
 mod fusion;
 mod graph;
@@ -61,8 +60,8 @@ mod vector_ops;
 mod velesql;
 
 pub use agent::SemanticMemory;
-pub use distance::DistanceMetric;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
+pub use velesdb_core::DistanceMetric;
 
 /// Query result for multi-model queries (EPIC-031 US-009).
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,9 +1,9 @@
 //! Tests for `simd` module - SIMD-optimized distance calculations.
 
-use crate::simd::{
-    calculate_prefetch_distance, cosine_similarity_fast, dot_product_fast, euclidean_distance_fast,
-    hamming_distance_fast, jaccard_similarity_fast, norm, normalize_inplace, prefetch_vector,
-    squared_l2_distance, L2_CACHE_LINE_BYTES,
+use crate::simd_native::{
+    calculate_prefetch_distance, cosine_similarity_native, dot_product_native, euclidean_native,
+    hamming_distance_native, jaccard_similarity_native, norm_native, normalize_inplace_native,
+    prefetch_vector, squared_l2_native, L2_CACHE_LINE_BYTES,
 };
 
 // =========================================================================
@@ -23,7 +23,7 @@ fn generate_test_vector(dim: usize, seed: f32) -> Vec<f32> {
 #[test]
 fn test_cosine_similarity_identical_vectors() {
     let v = vec![1.0, 2.0, 3.0, 4.0];
-    let result = cosine_similarity_fast(&v, &v);
+    let result = cosine_similarity_native(&v, &v);
     assert!(
         (result - 1.0).abs() < EPSILON,
         "Identical vectors should have similarity 1.0"
@@ -34,7 +34,7 @@ fn test_cosine_similarity_identical_vectors() {
 fn test_cosine_similarity_orthogonal_vectors() {
     let a = vec![1.0, 0.0, 0.0, 0.0];
     let b = vec![0.0, 1.0, 0.0, 0.0];
-    let result = cosine_similarity_fast(&a, &b);
+    let result = cosine_similarity_native(&a, &b);
     assert!(
         result.abs() < EPSILON,
         "Orthogonal vectors should have similarity 0.0"
@@ -45,7 +45,7 @@ fn test_cosine_similarity_orthogonal_vectors() {
 fn test_cosine_similarity_opposite_vectors() {
     let a = vec![1.0, 2.0, 3.0, 4.0];
     let b: Vec<f32> = a.iter().map(|x| -x).collect();
-    let result = cosine_similarity_fast(&a, &b);
+    let result = cosine_similarity_native(&a, &b);
     assert!(
         (result + 1.0).abs() < EPSILON,
         "Opposite vectors should have similarity -1.0"
@@ -56,14 +56,14 @@ fn test_cosine_similarity_opposite_vectors() {
 fn test_cosine_similarity_zero_vector() {
     let a = vec![1.0, 2.0, 3.0];
     let b = vec![0.0, 0.0, 0.0];
-    let result = cosine_similarity_fast(&a, &b);
+    let result = cosine_similarity_native(&a, &b);
     assert!(result.abs() < EPSILON, "Zero vector should return 0.0");
 }
 
 #[test]
 fn test_euclidean_distance_identical_vectors() {
     let v = vec![1.0, 2.0, 3.0, 4.0];
-    let result = euclidean_distance_fast(&v, &v);
+    let result = euclidean_native(&v, &v);
     assert!(
         result.abs() < EPSILON,
         "Identical vectors should have distance 0.0"
@@ -74,7 +74,7 @@ fn test_euclidean_distance_identical_vectors() {
 fn test_euclidean_distance_known_value() {
     let a = vec![0.0, 0.0, 0.0];
     let b = vec![3.0, 4.0, 0.0];
-    let result = euclidean_distance_fast(&a, &b);
+    let result = euclidean_native(&a, &b);
     assert!(
         (result - 5.0).abs() < EPSILON,
         "Expected distance 5.0 (3-4-5 triangle)"
@@ -86,7 +86,7 @@ fn test_euclidean_distance_768d() {
     let a = generate_test_vector(768, 0.0);
     let b = generate_test_vector(768, 1.0);
 
-    let result = euclidean_distance_fast(&a, &b);
+    let result = euclidean_native(&a, &b);
 
     // Compare with naive implementation
     let expected: f32 = a
@@ -106,7 +106,7 @@ fn test_euclidean_distance_768d() {
 fn test_dot_product_fast_correctness() {
     let a = vec![1.0, 2.0, 3.0, 4.0];
     let b = vec![5.0, 6.0, 7.0, 8.0];
-    let result = dot_product_fast(&a, &b);
+    let result = dot_product_native(&a, &b);
     let expected = 1.0 * 5.0 + 2.0 * 6.0 + 3.0 * 7.0 + 4.0 * 8.0; // 70.0
     assert!((result - expected).abs() < EPSILON);
 }
@@ -116,7 +116,7 @@ fn test_dot_product_fast_768d() {
     let a = generate_test_vector(768, 0.0);
     let b = generate_test_vector(768, 1.0);
 
-    let result = dot_product_fast(&a, &b);
+    let result = dot_product_native(&a, &b);
     let expected: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
 
     // Relax epsilon for high-dimensional accumulated floating point errors
@@ -127,7 +127,7 @@ fn test_dot_product_fast_768d() {
 #[test]
 fn test_normalize_inplace_unit_vector() {
     let mut v = vec![3.0, 4.0, 0.0];
-    normalize_inplace(&mut v);
+    normalize_inplace_native(&mut v);
 
     let norm_after: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!(
@@ -141,7 +141,7 @@ fn test_normalize_inplace_unit_vector() {
 #[test]
 fn test_normalize_inplace_zero_vector() {
     let mut v = vec![0.0, 0.0, 0.0];
-    normalize_inplace(&mut v);
+    normalize_inplace_native(&mut v);
     // Should not panic, vector unchanged
     assert!(v.iter().all(|&x| x == 0.0));
 }
@@ -149,7 +149,7 @@ fn test_normalize_inplace_zero_vector() {
 #[test]
 fn test_normalize_inplace_768d() {
     let mut v = generate_test_vector(768, 0.0);
-    normalize_inplace(&mut v);
+    normalize_inplace_native(&mut v);
 
     let norm_after: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!(
@@ -172,7 +172,7 @@ fn test_cosine_consistency_with_baseline() {
     let baseline = dot / (norm_a * norm_b);
 
     // Fast (single-pass fused)
-    let fast = cosine_similarity_fast(&a, &b);
+    let fast = cosine_similarity_native(&a, &b);
 
     assert!(
         (fast - baseline).abs() < EPSILON,
@@ -188,11 +188,11 @@ fn test_odd_dimension_vectors() {
     let a = vec![1.0, 2.0, 3.0, 4.0, 5.0]; // 5 elements
     let b = vec![5.0, 4.0, 3.0, 2.0, 1.0];
 
-    let dot = dot_product_fast(&a, &b);
+    let dot = dot_product_native(&a, &b);
     let expected = 1.0 * 5.0 + 2.0 * 4.0 + 3.0 * 3.0 + 4.0 * 2.0 + 5.0 * 1.0; // 35.0
     assert!((dot - expected).abs() < EPSILON);
 
-    let dist = euclidean_distance_fast(&a, &b);
+    let dist = euclidean_native(&a, &b);
     let expected_dist: f32 = a
         .iter()
         .zip(&b)
@@ -207,56 +207,56 @@ fn test_small_vectors() {
     // Single element
     let a = vec![3.0];
     let b = vec![4.0];
-    assert!((dot_product_fast(&a, &b) - 12.0).abs() < EPSILON);
-    assert!((euclidean_distance_fast(&a, &b) - 1.0).abs() < EPSILON);
+    assert!((dot_product_native(&a, &b) - 12.0).abs() < EPSILON);
+    assert!((euclidean_native(&a, &b) - 1.0).abs() < EPSILON);
 
     // Two elements
     let a = vec![1.0, 0.0];
     let b = vec![0.0, 1.0];
-    assert!((cosine_similarity_fast(&a, &b)).abs() < EPSILON);
+    assert!((cosine_similarity_native(&a, &b)).abs() < EPSILON);
 }
 
 #[test]
-#[should_panic(expected = "Vector length mismatch")]
+#[should_panic(expected = "Vector dimensions must match")]
 fn test_dimension_mismatch_panics() {
     let a = vec![1.0, 2.0, 3.0];
     let b = vec![1.0, 2.0];
-    let _ = cosine_similarity_fast(&a, &b);
+    let _ = cosine_similarity_native(&a, &b);
 }
 
-// --- norm() tests ---
+// --- norm_native() tests ---
 
 #[test]
 fn test_norm_zero_vector() {
     let v = vec![0.0, 0.0, 0.0];
-    assert!(norm(&v).abs() < EPSILON);
+    assert!(norm_native(&v).abs() < EPSILON);
 }
 
 #[test]
 fn test_norm_unit_vector() {
     let v = vec![1.0, 0.0, 0.0];
-    assert!((norm(&v) - 1.0).abs() < EPSILON);
+    assert!((norm_native(&v) - 1.0).abs() < EPSILON);
 }
 
 #[test]
 fn test_norm_known_value() {
     let v = vec![3.0, 4.0];
-    assert!((norm(&v) - 5.0).abs() < EPSILON);
+    assert!((norm_native(&v) - 5.0).abs() < EPSILON);
 }
 
-// --- squared_l2_distance tests ---
+// --- squared_l2_native tests ---
 
 #[test]
 fn test_squared_l2_identical() {
     let v = vec![1.0, 2.0, 3.0];
-    assert!(squared_l2_distance(&v, &v).abs() < EPSILON);
+    assert!(squared_l2_native(&v, &v).abs() < EPSILON);
 }
 
 #[test]
 fn test_squared_l2_known_value() {
     let a = vec![0.0, 0.0];
     let b = vec![3.0, 4.0];
-    assert!((squared_l2_distance(&a, &b) - 25.0).abs() < EPSILON);
+    assert!((squared_l2_native(&a, &b) - 25.0).abs() < EPSILON);
 }
 
 // --- hamming_distance_fast tests ---
@@ -264,28 +264,28 @@ fn test_squared_l2_known_value() {
 #[test]
 fn test_hamming_identical() {
     let a = vec![1.0, 0.0, 1.0, 0.0];
-    assert!(hamming_distance_fast(&a, &a).abs() < EPSILON);
+    assert!(hamming_distance_native(&a, &a).abs() < EPSILON);
 }
 
 #[test]
 fn test_hamming_all_different() {
     let a = vec![1.0, 0.0, 1.0, 0.0];
     let b = vec![0.0, 1.0, 0.0, 1.0];
-    assert!((hamming_distance_fast(&a, &b) - 4.0).abs() < EPSILON);
+    assert!((hamming_distance_native(&a, &b) - 4.0).abs() < EPSILON);
 }
 
 #[test]
 fn test_hamming_partial() {
     let a = vec![1.0, 1.0, 0.0, 0.0];
     let b = vec![1.0, 0.0, 0.0, 1.0];
-    assert!((hamming_distance_fast(&a, &b) - 2.0).abs() < EPSILON);
+    assert!((hamming_distance_native(&a, &b) - 2.0).abs() < EPSILON);
 }
 
 #[test]
 fn test_hamming_odd_dimension() {
     let a = vec![1.0, 0.0, 1.0, 0.0, 1.0];
     let b = vec![0.0, 0.0, 1.0, 1.0, 1.0];
-    assert!((hamming_distance_fast(&a, &b) - 2.0).abs() < EPSILON);
+    assert!((hamming_distance_native(&a, &b) - 2.0).abs() < EPSILON);
 }
 
 // --- jaccard_similarity_fast tests ---
@@ -293,14 +293,14 @@ fn test_hamming_odd_dimension() {
 #[test]
 fn test_jaccard_identical() {
     let a = vec![1.0, 0.0, 1.0, 0.0];
-    assert!((jaccard_similarity_fast(&a, &a) - 1.0).abs() < EPSILON);
+    assert!((jaccard_similarity_native(&a, &a) - 1.0).abs() < EPSILON);
 }
 
 #[test]
 fn test_jaccard_disjoint() {
     let a = vec![1.0, 0.0, 0.0, 0.0];
     let b = vec![0.0, 1.0, 0.0, 0.0];
-    assert!(jaccard_similarity_fast(&a, &b).abs() < EPSILON);
+    assert!(jaccard_similarity_native(&a, &b).abs() < EPSILON);
 }
 
 #[test]
@@ -308,14 +308,14 @@ fn test_jaccard_half_overlap() {
     let a = vec![1.0, 1.0, 0.0, 0.0];
     let b = vec![1.0, 0.0, 1.0, 0.0];
     // Intersection: 1, Union: 3
-    assert!((jaccard_similarity_fast(&a, &b) - (1.0 / 3.0)).abs() < EPSILON);
+    assert!((jaccard_similarity_native(&a, &b) - (1.0 / 3.0)).abs() < EPSILON);
 }
 
 #[test]
 fn test_jaccard_empty_sets() {
     let a = vec![0.0, 0.0, 0.0, 0.0];
     let b = vec![0.0, 0.0, 0.0, 0.0];
-    assert!((jaccard_similarity_fast(&a, &b) - 1.0).abs() < EPSILON);
+    assert!((jaccard_similarity_native(&a, &b) - 1.0).abs() < EPSILON);
 }
 
 // -------------------------------------------------------------------------
@@ -332,7 +332,7 @@ fn test_jaccard_simd_large_vectors() {
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
 
-    let result = jaccard_similarity_fast(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
 
     // Verify result is in valid range
     assert!((0.0..=1.0).contains(&result), "Jaccard must be in [0,1]");
@@ -344,7 +344,7 @@ fn test_jaccard_simd_aligned_vectors() {
     let a: Vec<f32> = (0..64).map(|i| if i < 32 { 1.0 } else { 0.0 }).collect();
     let b: Vec<f32> = (0..64).map(|i| if i < 48 { 1.0 } else { 0.0 }).collect();
 
-    let result = jaccard_similarity_fast(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
 
     // Intersection: 32 (first 32 elements), Union: 48
     let expected = 32.0 / 48.0;
@@ -360,7 +360,7 @@ fn test_jaccard_simd_unaligned_vectors() {
     let a: Vec<f32> = (0..67).map(|i| if i < 30 { 1.0 } else { 0.0 }).collect();
     let b: Vec<f32> = (0..67).map(|i| if i < 40 { 1.0 } else { 0.0 }).collect();
 
-    let result = jaccard_similarity_fast(&a, &b);
+    let result = jaccard_similarity_native(&a, &b);
 
     // Intersection: 30, Union: 40
     let expected = 30.0 / 40.0;
@@ -381,7 +381,7 @@ fn test_jaccard_consistency_scalar_vs_reference() {
             .map(|i| if (i * 5) % 9 < 5 { 1.0 } else { 0.0 })
             .collect();
 
-        let result = jaccard_similarity_fast(&a, &b);
+        let result = jaccard_similarity_native(&a, &b);
 
         // Compute reference manually
         let mut intersection = 0u32;

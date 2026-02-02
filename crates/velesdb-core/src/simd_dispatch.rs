@@ -1,193 +1,48 @@
-//! Zero-overhead SIMD function dispatch using `OnceLock`.
+//! Zero-overhead SIMD function dispatch.
 //!
-//! This module provides compile-time-like dispatch for SIMD functions
-//! by detecting CPU features once at startup and caching function pointers.
-//!
-//! # Performance
-//!
-//! - **Zero branch overhead**: Function pointer is resolved once, called directly thereafter
-//! - **No per-call checks**: Eliminates `is_x86_feature_detected!` in hot loops
-//! - **Inlinable**: Function pointers can be inlined by LLVM in some cases
+//! This module provides a thin wrapper around `simd_native` functions,
+//! offering a stable public API while `simd_native` handles the
+//! architecture-specific SIMD implementations internally.
 //!
 //! # EPIC-C.2: TS-SIMD-002
 
-use std::sync::OnceLock;
-
-/// Type alias for distance function pointers.
-type DistanceFn = fn(&[f32], &[f32]) -> f32;
-
-/// Type alias for binary distance function pointers (returns u32).
-type BinaryDistanceFn = fn(&[f32], &[f32]) -> u32;
-
 // =============================================================================
-// Static dispatch tables - initialized once on first use
+// Public dispatch API - Direct calls to simd_native
 // =============================================================================
 
-/// Dispatched dot product function.
-static DOT_PRODUCT_FN: OnceLock<DistanceFn> = OnceLock::new();
-
-/// Dispatched euclidean distance function.
-static EUCLIDEAN_FN: OnceLock<DistanceFn> = OnceLock::new();
-
-/// Dispatched cosine similarity function.
-static COSINE_FN: OnceLock<DistanceFn> = OnceLock::new();
-
-/// Dispatched cosine similarity for normalized vectors.
-static COSINE_NORMALIZED_FN: OnceLock<DistanceFn> = OnceLock::new();
-
-/// Dispatched Hamming distance function.
-static HAMMING_FN: OnceLock<BinaryDistanceFn> = OnceLock::new();
-
-// =============================================================================
-// Feature detection and dispatch selection
-// =============================================================================
-
-/// Selects the best dot product implementation for the current CPU.
-fn select_dot_product() -> DistanceFn {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") {
-            return dot_product_avx512;
-        }
-        if is_x86_feature_detected!("avx2") {
-            return dot_product_avx2;
-        }
-        dot_product_scalar
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
-        return crate::simd_neon::dot_product_neon_safe;
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    dot_product_scalar
-}
-
-/// Selects the best euclidean distance implementation for the current CPU.
-fn select_euclidean() -> DistanceFn {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") {
-            return euclidean_avx512;
-        }
-        if is_x86_feature_detected!("avx2") {
-            return euclidean_avx2;
-        }
-        euclidean_scalar
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
-        return crate::simd_neon::euclidean_neon_safe;
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    euclidean_scalar
-}
-
-/// Selects the best cosine similarity implementation for the current CPU.
-fn select_cosine() -> DistanceFn {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") {
-            return cosine_avx512;
-        }
-        if is_x86_feature_detected!("avx2") {
-            return cosine_avx2;
-        }
-        cosine_scalar
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
-        return crate::simd_neon::cosine_neon_safe;
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    cosine_scalar
-}
-
-/// Selects the best cosine similarity (normalized) implementation.
-fn select_cosine_normalized() -> DistanceFn {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") {
-            return cosine_normalized_avx512;
-        }
-        if is_x86_feature_detected!("avx2") {
-            return cosine_normalized_avx2;
-        }
-        cosine_normalized_scalar
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // NEON is guaranteed on all aarch64 targets (EPIC-054 US-001)
-        return crate::simd_neon::cosine_normalized_neon_safe;
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    cosine_normalized_scalar
-}
-
-/// Selects the best Hamming distance implementation.
-fn select_hamming() -> BinaryDistanceFn {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512vpopcntdq") {
-            return hamming_avx512_popcnt;
-        }
-        if is_x86_feature_detected!("popcnt") {
-            return hamming_popcnt;
-        }
-    }
-    hamming_scalar
-}
-
-// =============================================================================
-// Public dispatch API
-// =============================================================================
-
-/// Computes dot product using the best available SIMD implementation.
-///
-/// The implementation is selected once on first call and cached.
-///
-/// # Panics
-///
-/// Panics if vectors have different lengths.
+/// Compute dot product with automatic SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn dot_product_dispatched(a: &[f32], b: &[f32]) -> f32 {
-    let f = DOT_PRODUCT_FN.get_or_init(select_dot_product);
-    f(a, b)
+    crate::simd_native::dot_product_native(a, b)
 }
 
-/// Computes euclidean distance using the best available SIMD implementation.
+/// Compute Euclidean distance with automatic SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn euclidean_dispatched(a: &[f32], b: &[f32]) -> f32 {
-    let f = EUCLIDEAN_FN.get_or_init(select_euclidean);
-    f(a, b)
+    crate::simd_native::euclidean_native(a, b)
 }
 
-/// Computes cosine similarity using the best available SIMD implementation.
+/// Compute cosine similarity with automatic SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn cosine_dispatched(a: &[f32], b: &[f32]) -> f32 {
-    let f = COSINE_FN.get_or_init(select_cosine);
-    f(a, b)
+    crate::simd_native::cosine_similarity_native(a, b)
 }
 
-/// Computes cosine similarity for pre-normalized vectors.
+/// Compute cosine similarity for pre-normalized vectors.
 #[inline]
 #[must_use]
 pub fn cosine_normalized_dispatched(a: &[f32], b: &[f32]) -> f32 {
-    let f = COSINE_NORMALIZED_FN.get_or_init(select_cosine_normalized);
-    f(a, b)
+    crate::simd_native::cosine_normalized_native(a, b)
 }
 
-/// Computes Hamming distance using the best available implementation.
+/// Compute Hamming distance with automatic SIMD dispatch.
 #[inline]
 #[must_use]
 pub fn hamming_dispatched(a: &[f32], b: &[f32]) -> u32 {
-    let f = HAMMING_FN.get_or_init(select_hamming);
-    f(a, b)
+    crate::simd_native::hamming_distance_native(a, b) as u32
 }
 
 /// Returns information about which SIMD features are available.
@@ -249,28 +104,17 @@ impl SimdFeatures {
 }
 
 // =============================================================================
-// Implementation functions - delegating to simd_native (EPIC-075 consolidation)
+// Prefetch constants - EPIC-C.1
 // =============================================================================
 
-// --- Dot Product implementations ---
-
+// Scalar implementations for tests
+#[cfg(test)]
 fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector length mismatch");
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
-#[cfg(target_arch = "x86_64")]
-fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::dot_product_native(a, b)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::dot_product_native(a, b)
-}
-
-// --- Euclidean implementations ---
-
+#[cfg(test)]
 fn euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector length mismatch");
     a.iter()
@@ -283,18 +127,7 @@ fn euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
         .sqrt()
 }
 
-#[cfg(target_arch = "x86_64")]
-fn euclidean_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::euclidean_native(a, b)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn euclidean_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::euclidean_native(a, b)
-}
-
-// --- Cosine implementations ---
-
+#[cfg(test)]
 fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector length mismatch");
     let mut dot = 0.0f32;
@@ -315,40 +148,9 @@ fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-fn cosine_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::cosine_similarity_native(a, b)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn cosine_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::cosine_similarity_native(a, b)
-}
-
-// --- Cosine Normalized implementations ---
-
-fn cosine_normalized_scalar(a: &[f32], b: &[f32]) -> f32 {
-    // For normalized vectors, cosine = dot product
-    dot_product_scalar(a, b)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn cosine_normalized_avx2(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::dot_product_native(a, b)
-}
-
-#[cfg(target_arch = "x86_64")]
-fn cosine_normalized_avx512(a: &[f32], b: &[f32]) -> f32 {
-    crate::simd_native::dot_product_native(a, b)
-}
-
-// --- Hamming implementations ---
-
+#[cfg(test)]
 fn hamming_scalar(a: &[f32], b: &[f32]) -> u32 {
     assert_eq!(a.len(), b.len(), "Vector length mismatch");
-    // SAFETY: Hamming distance counts differing bits, bounded by vector length.
-    // Vector dimensions are validated at collection creation to be < 65536,
-    // which fits in u32 (max 4,294,967,295).
     #[allow(clippy::cast_possible_truncation)]
     let count = a
         .iter()
@@ -358,32 +160,11 @@ fn hamming_scalar(a: &[f32], b: &[f32]) -> u32 {
     count
 }
 
-#[cfg(target_arch = "x86_64")]
-fn hamming_popcnt(a: &[f32], b: &[f32]) -> u32 {
-    // Use scalar implementation - POPCNT gains minimal for float comparison
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        crate::simd_native::hamming_distance_native(a, b) as u32
-    }
+#[cfg(test)]
+fn cosine_normalized_scalar(a: &[f32], b: &[f32]) -> f32 {
+    // For normalized vectors, cosine = dot product
+    dot_product_scalar(a, b)
 }
-
-/// AVX-512 VPOPCNTDQ placeholder for Hamming distance.
-///
-/// Note: Full AVX-512 VPOPCNTDQ implementation requires Rust 1.89+.
-/// Currently delegates to optimized POPCNT implementation.
-///
-/// Future: When MSRV is updated, this will use AVX-512 VPOPCNTDQ
-/// for ~2x speedup on Ice Lake+ and Zen 4+ CPUs.
-#[cfg(target_arch = "x86_64")]
-fn hamming_avx512_popcnt(a: &[f32], b: &[f32]) -> u32 {
-    // Delegate to optimized POPCNT implementation
-    // AVX-512 VPOPCNTDQ requires Rust 1.89+ (MSRV is 1.83)
-    hamming_popcnt(a, b)
-}
-
-// =============================================================================
-// Prefetch constants - EPIC-C.1
-// =============================================================================
 
 /// Cache line size in bytes (standard for modern x86/ARM CPUs).
 pub const CACHE_LINE_SIZE: usize = 64;

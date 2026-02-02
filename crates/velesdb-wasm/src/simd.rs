@@ -2,6 +2,8 @@
 //!
 //! Uses the `wide` crate which automatically uses WASM SIMD128 when available.
 
+#![allow(dead_code)] // Reason: Functions reserved for future WASM SIMD optimization paths
+
 use wide::f32x8;
 
 /// Computes dot product using SIMD.

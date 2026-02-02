@@ -1,6 +1,8 @@
 //! Tests for x86 prefetch optimizations (EPIC-073/US-001).
 
-use crate::simd::{calculate_prefetch_distance, prefetch_vector, prefetch_vector_multi_cache_line};
+use crate::simd_native::{
+    calculate_prefetch_distance, prefetch_vector, prefetch_vector_multi_cache_line,
+};
 
 #[test]
 fn test_prefetch_vector_compiles_x86() {

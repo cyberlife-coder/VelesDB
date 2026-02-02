@@ -1,0 +1,561 @@
+    Finished `bench` profile [optimized] target(s) in 0.57s
+     Running benches\simd_benchmark.rs (target\release\deps\simd_benchmark-05d98c2c6281cd47.exe)
+Gnuplot not found, using plotters backend
+Benchmarking dot_product/auto_vec/128
+Benchmarking dot_product/auto_vec/128: Warming up for 3.0000 s
+Benchmarking dot_product/auto_vec/128: Collecting 100 samples in estimated 5.0000 s (1.2B iterations)
+Benchmarking dot_product/auto_vec/128: Analyzing
+dot_product/auto_vec/128
+                        time:   [4.0625 ns 4.0892 ns 4.1193 ns]
+                        change: [-13.838% -11.263% -8.8292%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  3 (3.00%) high mild
+  6 (6.00%) high severe
+Benchmarking dot_product/simd_native/128
+Benchmarking dot_product/simd_native/128: Warming up for 3.0000 s
+Benchmarking dot_product/simd_native/128: Collecting 100 samples in estimated 5.0000 s (1.2B iterations)
+Benchmarking dot_product/simd_native/128: Analyzing
+dot_product/simd_native/128
+                        time:   [4.0325 ns 4.0470 ns 4.0629 ns]
+                        change: [-10.931% -7.6720% -4.8917%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+Benchmarking dot_product/auto_vec/384
+Benchmarking dot_product/auto_vec/384: Warming up for 3.0000 s
+Benchmarking dot_product/auto_vec/384: Collecting 100 samples in estimated 5.0000 s (494M iterations)
+Benchmarking dot_product/auto_vec/384: Analyzing
+dot_product/auto_vec/384
+                        time:   [10.063 ns 10.333 ns 10.638 ns]
+                        change: [-23.394% -20.666% -18.051%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 12 outliers among 100 measurements (12.00%)
+  6 (6.00%) high mild
+  6 (6.00%) high severe
+Benchmarking dot_product/simd_native/384
+Benchmarking dot_product/simd_native/384: Warming up for 3.0000 s
+Benchmarking dot_product/simd_native/384: Collecting 100 samples in estimated 5.0000 s (510M iterations)
+Benchmarking dot_product/simd_native/384: Analyzing
+dot_product/simd_native/384
+                        time:   [9.5142 ns 9.7144 ns 10.081 ns]
+                        change: [-27.805% -25.628% -23.311%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  5 (5.00%) high severe
+Benchmarking dot_product/auto_vec/768
+Benchmarking dot_product/auto_vec/768: Warming up for 3.0000 s
+Benchmarking dot_product/auto_vec/768: Collecting 100 samples in estimated 5.0001 s (272M iterations)
+Benchmarking dot_product/auto_vec/768: Analyzing
+dot_product/auto_vec/768
+                        time:   [18.339 ns 18.554 ns 18.921 ns]
+                        change: [-23.189% -21.954% -20.410%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  5 (5.00%) low mild
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+Benchmarking dot_product/simd_native/768
+Benchmarking dot_product/simd_native/768: Warming up for 3.0000 s
+Benchmarking dot_product/simd_native/768: Collecting 100 samples in estimated 5.0000 s (261M iterations)
+Benchmarking dot_product/simd_native/768: Analyzing
+dot_product/simd_native/768
+                        time:   [18.541 ns 18.677 ns 18.867 ns]
+                        change: [-20.289% -17.970% -15.501%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 14 outliers among 100 measurements (14.00%)
+  8 (8.00%) high mild
+  6 (6.00%) high severe
+Benchmarking dot_product/auto_vec/1536
+Benchmarking dot_product/auto_vec/1536: Warming up for 3.0000 s
+Benchmarking dot_product/auto_vec/1536: Collecting 100 samples in estimated 5.0001 s (148M iterations)
+Benchmarking dot_product/auto_vec/1536: Analyzing
+dot_product/auto_vec/1536
+                        time:   [32.037 ns 32.272 ns 32.575 ns]
+                        change: [-5.7617% -3.9654% -2.3350%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+Benchmarking dot_product/simd_native/1536
+Benchmarking dot_product/simd_native/1536: Warming up for 3.0000 s
+Benchmarking dot_product/simd_native/1536: Collecting 100 samples in estimated 5.0001 s (153M iterations)
+Benchmarking dot_product/simd_native/1536: Analyzing
+dot_product/simd_native/1536
+                        time:   [32.052 ns 32.906 ns 34.447 ns]
+                        change: [-15.659% -13.624% -11.479%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 8 outliers among 100 measurements (8.00%)
+  2 (2.00%) high mild
+  6 (6.00%) high severe
+Benchmarking dot_product/auto_vec/3072
+Benchmarking dot_product/auto_vec/3072: Warming up for 3.0000 s
+Benchmarking dot_product/auto_vec/3072: Collecting 100 samples in estimated 5.0001 s (73M iterations)
+Benchmarking dot_product/auto_vec/3072: Analyzing
+dot_product/auto_vec/3072
+                        time:   [69.301 ns 70.734 ns 72.601 ns]
+                        change: [-18.678% -16.019% -13.305%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+Benchmarking dot_product/simd_native/3072
+Benchmarking dot_product/simd_native/3072: Warming up for 3.0000 s
+Benchmarking dot_product/simd_native/3072: Collecting 100 samples in estimated 5.0001 s (70M iterations)
+Benchmarking dot_product/simd_native/3072: Analyzing
+dot_product/simd_native/3072
+                        time:   [69.229 ns 70.696 ns 72.541 ns]
+                        change: [-28.114% -25.617% -22.787%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 14 outliers among 100 measurements (14.00%)
+  4 (4.00%) high mild
+  10 (10.00%) high severe
+
+Benchmarking euclidean_distance/auto_vec/128
+Benchmarking euclidean_distance/auto_vec/128: Warming up for 3.0000 s
+Benchmarking euclidean_distance/auto_vec/128: Collecting 100 samples in estimated 5.0000 s (971M iterations)
+Benchmarking euclidean_distance/auto_vec/128: Analyzing
+euclidean_distance/auto_vec/128
+                        time:   [5.1216 ns 5.1675 ns 5.2218 ns]
+                        change: [-5.4466% -1.9747% +1.8699%] (p = 0.30 > 0.05)
+                        No change in performance detected.
+Found 10 outliers among 100 measurements (10.00%)
+  2 (2.00%) high mild
+  8 (8.00%) high severe
+Benchmarking euclidean_distance/simd_native/128
+Benchmarking euclidean_distance/simd_native/128: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_native/128: Collecting 100 samples in estimated 5.0000 s (963M iterations)
+Benchmarking euclidean_distance/simd_native/128: Analyzing
+euclidean_distance/simd_native/128
+                        time:   [5.1142 ns 5.2068 ns 5.3495 ns]
+                        change: [-7.8102% -3.6414% +0.0852%] (p = 0.09 > 0.05)
+                        No change in performance detected.
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking euclidean_distance/auto_vec/384
+Benchmarking euclidean_distance/auto_vec/384: Warming up for 3.0000 s
+Benchmarking euclidean_distance/auto_vec/384: Collecting 100 samples in estimated 5.0000 s (487M iterations)
+Benchmarking euclidean_distance/auto_vec/384: Analyzing
+euclidean_distance/auto_vec/384
+                        time:   [10.284 ns 10.453 ns 10.652 ns]
+                        change: [-15.416% -11.411% -7.9072%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) high mild
+  5 (5.00%) high severe
+Benchmarking euclidean_distance/simd_native/384
+Benchmarking euclidean_distance/simd_native/384: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_native/384: Collecting 100 samples in estimated 5.0000 s (479M iterations)
+Benchmarking euclidean_distance/simd_native/384: Analyzing
+euclidean_distance/simd_native/384
+                        time:   [10.283 ns 10.521 ns 10.844 ns]
+                        change: [-9.0666% -6.6286% -4.2590%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+Benchmarking euclidean_distance/auto_vec/768
+Benchmarking euclidean_distance/auto_vec/768: Warming up for 3.0000 s
+Benchmarking euclidean_distance/auto_vec/768: Collecting 100 samples in estimated 5.0001 s (235M iterations)
+Benchmarking euclidean_distance/auto_vec/768: Analyzing
+euclidean_distance/auto_vec/768
+                        time:   [20.822 ns 21.131 ns 21.517 ns]
+                        change: [-12.074% -8.1954% -4.5716%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) high severe
+Benchmarking euclidean_distance/simd_native/768
+Benchmarking euclidean_distance/simd_native/768: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_native/768: Collecting 100 samples in estimated 5.0001 s (200M iterations)
+Benchmarking euclidean_distance/simd_native/768: Analyzing
+euclidean_distance/simd_native/768
+                        time:   [21.998 ns 22.756 ns 23.700 ns]
+                        change: [-5.5272% -0.8176% +3.6326%] (p = 0.74 > 0.05)
+                        No change in performance detected.
+Found 9 outliers among 100 measurements (9.00%)
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+Benchmarking euclidean_distance/auto_vec/1536
+Benchmarking euclidean_distance/auto_vec/1536: Warming up for 3.0000 s
+Benchmarking euclidean_distance/auto_vec/1536: Collecting 100 samples in estimated 5.0001 s (101M iterations)
+Benchmarking euclidean_distance/auto_vec/1536: Analyzing
+euclidean_distance/auto_vec/1536
+                        time:   [46.464 ns 47.403 ns 48.581 ns]
+                        change: [-2.2615% +4.8069% +13.028%] (p = 0.20 > 0.05)
+                        No change in performance detected.
+Found 14 outliers among 100 measurements (14.00%)
+  4 (4.00%) high mild
+  10 (10.00%) high severe
+Benchmarking euclidean_distance/simd_native/1536
+Benchmarking euclidean_distance/simd_native/1536: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_native/1536: Collecting 100 samples in estimated 5.0000 s (113M iterations)
+Benchmarking euclidean_distance/simd_native/1536: Analyzing
+euclidean_distance/simd_native/1536
+                        time:   [44.313 ns 46.462 ns 49.338 ns]
+                        change: [-8.2990% -4.3937% -0.2049%] (p = 0.05 < 0.05)
+                        Change within noise threshold.
+Found 13 outliers among 100 measurements (13.00%)
+  2 (2.00%) high mild
+  11 (11.00%) high severe
+Benchmarking euclidean_distance/auto_vec/3072
+Benchmarking euclidean_distance/auto_vec/3072: Warming up for 3.0000 s
+Benchmarking euclidean_distance/auto_vec/3072: Collecting 100 samples in estimated 5.0001 s (57M iterations)
+Benchmarking euclidean_distance/auto_vec/3072: Analyzing
+euclidean_distance/auto_vec/3072
+                        time:   [88.491 ns 90.471 ns 92.943 ns]
+                        change: [-0.6284% +2.0798% +5.1102%] (p = 0.15 > 0.05)
+                        No change in performance detected.
+Found 12 outliers among 100 measurements (12.00%)
+  3 (3.00%) high mild
+  9 (9.00%) high severe
+Benchmarking euclidean_distance/simd_native/3072
+Benchmarking euclidean_distance/simd_native/3072: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_native/3072: Collecting 100 samples in estimated 5.0004 s (54M iterations)
+Benchmarking euclidean_distance/simd_native/3072: Analyzing
+euclidean_distance/simd_native/3072
+                        time:   [86.652 ns 87.919 ns 89.647 ns]
+                        change: [-5.1995% +0.0516% +5.5063%] (p = 0.98 > 0.05)
+                        No change in performance detected.
+Found 14 outliers among 100 measurements (14.00%)
+  3 (3.00%) high mild
+  11 (11.00%) high severe
+
+Benchmarking cosine_similarity/auto_vec/128
+Benchmarking cosine_similarity/auto_vec/128: Warming up for 3.0000 s
+Benchmarking cosine_similarity/auto_vec/128: Collecting 100 samples in estimated 5.0000 s (627M iterations)
+Benchmarking cosine_similarity/auto_vec/128: Analyzing
+cosine_similarity/auto_vec/128
+                        time:   [7.7113 ns 8.0090 ns 8.4027 ns]
+                        change: [-14.032% -10.035% -6.1398%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  3 (3.00%) high mild
+  7 (7.00%) high severe
+Benchmarking cosine_similarity/simd_native/128
+Benchmarking cosine_similarity/simd_native/128: Warming up for 3.0000 s
+Benchmarking cosine_similarity/simd_native/128: Collecting 100 samples in estimated 5.0000 s (644M iterations)
+Benchmarking cosine_similarity/simd_native/128: Analyzing
+cosine_similarity/simd_native/128
+                        time:   [7.7591 ns 7.8657 ns 7.9993 ns]
+                        change: [-14.576% -10.480% -6.7705%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 11 outliers among 100 measurements (11.00%)
+  2 (2.00%) high mild
+  9 (9.00%) high severe
+Benchmarking cosine_similarity/auto_vec/384
+Benchmarking cosine_similarity/auto_vec/384: Warming up for 3.0000 s
+Benchmarking cosine_similarity/auto_vec/384: Collecting 100 samples in estimated 5.0001 s (265M iterations)
+Benchmarking cosine_similarity/auto_vec/384: Analyzing
+cosine_similarity/auto_vec/384
+                        time:   [18.775 ns 18.966 ns 19.224 ns]
+                        change: [-28.906% -25.667% -22.309%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 8 outliers among 100 measurements (8.00%)
+  5 (5.00%) high mild
+  3 (3.00%) high severe
+Benchmarking cosine_similarity/simd_native/384
+Benchmarking cosine_similarity/simd_native/384: Warming up for 3.0000 s
+Benchmarking cosine_similarity/simd_native/384: Collecting 100 samples in estimated 5.0001 s (259M iterations)
+Benchmarking cosine_similarity/simd_native/384: Analyzing
+cosine_similarity/simd_native/384
+                        time:   [18.862 ns 19.674 ns 20.808 ns]
+                        change: [-9.5951% -6.8283% -3.7476%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 12 outliers among 100 measurements (12.00%)
+  6 (6.00%) high mild
+  6 (6.00%) high severe
+Benchmarking cosine_similarity/auto_vec/768
+Benchmarking cosine_similarity/auto_vec/768: Warming up for 3.0000 s
+Benchmarking cosine_similarity/auto_vec/768: Collecting 100 samples in estimated 5.0001 s (134M iterations)
+Benchmarking cosine_similarity/auto_vec/768: Analyzing
+cosine_similarity/auto_vec/768
+                        time:   [36.719 ns 36.854 ns 36.987 ns]
+                        change: [-16.049% -13.922% -11.835%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high severe
+Benchmarking cosine_similarity/simd_native/768
+Benchmarking cosine_similarity/simd_native/768: Warming up for 3.0000 s
+Benchmarking cosine_similarity/simd_native/768: Collecting 100 samples in estimated 5.0001 s (134M iterations)
+Benchmarking cosine_similarity/simd_native/768: Analyzing
+cosine_similarity/simd_native/768
+                        time:   [36.777 ns 37.260 ns 37.904 ns]
+                        change: [-16.403% -13.107% -10.049%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking cosine_similarity/auto_vec/1536
+Benchmarking cosine_similarity/auto_vec/1536: Warming up for 3.0000 s
+Benchmarking cosine_similarity/auto_vec/1536: Collecting 100 samples in estimated 5.0003 s (86M iterations)
+Benchmarking cosine_similarity/auto_vec/1536: Analyzing
+cosine_similarity/auto_vec/1536
+                        time:   [57.414 ns 58.073 ns 58.925 ns]
+                        change: [-8.6439% -6.2191% -3.9901%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 6 outliers among 100 measurements (6.00%)
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+Benchmarking cosine_similarity/simd_native/1536
+Benchmarking cosine_similarity/simd_native/1536: Warming up for 3.0000 s
+Benchmarking cosine_similarity/simd_native/1536: Collecting 100 samples in estimated 5.0000 s (87M iterations)
+Benchmarking cosine_similarity/simd_native/1536: Analyzing
+cosine_similarity/simd_native/1536
+                        time:   [57.136 ns 58.085 ns 59.637 ns]
+                        change: [-14.654% -11.891% -9.1130%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+Benchmarking cosine_similarity/auto_vec/3072
+Benchmarking cosine_similarity/auto_vec/3072: Warming up for 3.0000 s
+Benchmarking cosine_similarity/auto_vec/3072: Collecting 100 samples in estimated 5.0002 s (45M iterations)
+Benchmarking cosine_similarity/auto_vec/3072: Analyzing
+cosine_similarity/auto_vec/3072
+                        time:   [109.03 ns 110.05 ns 111.57 ns]
+                        change: [-15.534% -12.054% -8.8610%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+Benchmarking cosine_similarity/simd_native/3072
+Benchmarking cosine_similarity/simd_native/3072: Warming up for 3.0000 s
+Benchmarking cosine_similarity/simd_native/3072: Collecting 100 samples in estimated 5.0003 s (46M iterations)
+Benchmarking cosine_similarity/simd_native/3072: Analyzing
+cosine_similarity/simd_native/3072
+                        time:   [109.49 ns 110.13 ns 110.94 ns]
+                        change: [-20.823% -17.136% -13.301%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  2 (2.00%) high mild
+  8 (8.00%) high severe
+
+Benchmarking hamming_f32/auto_vec/128
+Benchmarking hamming_f32/auto_vec/128: Warming up for 3.0000 s
+Benchmarking hamming_f32/auto_vec/128: Collecting 100 samples in estimated 5.0000 s (713M iterations)
+Benchmarking hamming_f32/auto_vec/128: Analyzing
+hamming_f32/auto_vec/128
+                        time:   [6.6846 ns 6.7847 ns 6.9103 ns]
+                        change: [-13.406% -10.297% -7.3654%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 11 outliers among 100 measurements (11.00%)
+  6 (6.00%) high mild
+  5 (5.00%) high severe
+Benchmarking hamming_f32/simd_native/128
+Benchmarking hamming_f32/simd_native/128: Warming up for 3.0000 s
+Benchmarking hamming_f32/simd_native/128: Collecting 100 samples in estimated 5.0000 s (739M iterations)
+Benchmarking hamming_f32/simd_native/128: Analyzing
+hamming_f32/simd_native/128
+                        time:   [6.6843 ns 6.7758 ns 6.9430 ns]
+                        change: [-9.7635% -7.3887% -5.0479%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking hamming_f32/auto_vec/384
+Benchmarking hamming_f32/auto_vec/384: Warming up for 3.0000 s
+Benchmarking hamming_f32/auto_vec/384: Collecting 100 samples in estimated 5.0000 s (257M iterations)
+Benchmarking hamming_f32/auto_vec/384: Analyzing
+hamming_f32/auto_vec/384
+                        time:   [18.221 ns 18.544 ns 18.968 ns]
+                        change: [-17.109% -14.159% -11.140%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  2 (2.00%) high mild
+  7 (7.00%) high severe
+Benchmarking hamming_f32/simd_native/384
+Benchmarking hamming_f32/simd_native/384: Warming up for 3.0000 s
+Benchmarking hamming_f32/simd_native/384: Collecting 100 samples in estimated 5.0000 s (262M iterations)
+Benchmarking hamming_f32/simd_native/384: Analyzing
+hamming_f32/simd_native/384
+                        time:   [18.333 ns 18.896 ns 19.534 ns]
+                        change: [-18.594% -15.200% -11.576%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 14 outliers among 100 measurements (14.00%)
+  6 (6.00%) high mild
+  8 (8.00%) high severe
+Benchmarking hamming_f32/auto_vec/768
+Benchmarking hamming_f32/auto_vec/768: Warming up for 3.0000 s
+Benchmarking hamming_f32/auto_vec/768: Collecting 100 samples in estimated 5.0000 s (136M iterations)
+Benchmarking hamming_f32/auto_vec/768: Analyzing
+hamming_f32/auto_vec/768
+                        time:   [42.102 ns 44.185 ns 46.301 ns]
+                        change: [-15.604% -11.085% -6.0377%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  6 (6.00%) high mild
+  3 (3.00%) high severe
+Benchmarking hamming_f32/simd_native/768
+Benchmarking hamming_f32/simd_native/768: Warming up for 3.0000 s
+Benchmarking hamming_f32/simd_native/768: Collecting 100 samples in estimated 5.0000 s (112M iterations)
+Benchmarking hamming_f32/simd_native/768: Analyzing
+hamming_f32/simd_native/768
+                        time:   [39.433 ns 41.019 ns 42.907 ns]
+                        change: [-2.3593% +1.6569% +5.8134%] (p = 0.43 > 0.05)
+                        No change in performance detected.
+Found 12 outliers among 100 measurements (12.00%)
+  5 (5.00%) high mild
+  7 (7.00%) high severe
+Benchmarking hamming_f32/auto_vec/1536
+Benchmarking hamming_f32/auto_vec/1536: Warming up for 3.0000 s
+Benchmarking hamming_f32/auto_vec/1536: Collecting 100 samples in estimated 5.0001 s (67M iterations)
+Benchmarking hamming_f32/auto_vec/1536: Analyzing
+hamming_f32/auto_vec/1536
+                        time:   [77.562 ns 80.504 ns 83.919 ns]
+                        change: [-3.3080% +0.8511% +5.0491%] (p = 0.70 > 0.05)
+                        No change in performance detected.
+Found 13 outliers among 100 measurements (13.00%)
+  5 (5.00%) high mild
+  8 (8.00%) high severe
+Benchmarking hamming_f32/simd_native/1536
+Benchmarking hamming_f32/simd_native/1536: Warming up for 3.0000 s
+Benchmarking hamming_f32/simd_native/1536: Collecting 100 samples in estimated 5.0000 s (62M iterations)
+Benchmarking hamming_f32/simd_native/1536: Analyzing
+hamming_f32/simd_native/1536
+                        time:   [81.062 ns 84.202 ns 87.702 ns]
+                        change: [-0.2874% +2.9310% +6.1072%] (p = 0.07 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high mild
+Benchmarking hamming_f32/auto_vec/3072
+Benchmarking hamming_f32/auto_vec/3072: Warming up for 3.0000 s
+Benchmarking hamming_f32/auto_vec/3072: Collecting 100 samples in estimated 5.0001 s (33M iterations)
+Benchmarking hamming_f32/auto_vec/3072: Analyzing
+hamming_f32/auto_vec/3072
+                        time:   [155.30 ns 158.10 ns 161.35 ns]
+                        change: [-5.4245% -2.5229% +0.3548%] (p = 0.10 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking hamming_f32/simd_native/3072
+Benchmarking hamming_f32/simd_native/3072: Warming up for 3.0000 s
+Benchmarking hamming_f32/simd_native/3072: Collecting 100 samples in estimated 5.0008 s (32M iterations)
+Benchmarking hamming_f32/simd_native/3072: Analyzing
+hamming_f32/simd_native/3072
+                        time:   [150.56 ns 152.44 ns 154.61 ns]
+                        change: [-10.469% -6.7567% -3.2934%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 12 outliers among 100 measurements (12.00%)
+  11 (11.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking jaccard_similarity/fast/128
+Benchmarking jaccard_similarity/fast/128: Warming up for 3.0000 s
+Benchmarking jaccard_similarity/fast/128: Collecting 100 samples in estimated 5.0000 s (754M iterations)
+Benchmarking jaccard_similarity/fast/128: Analyzing
+jaccard_similarity/fast/128
+                        time:   [6.7088 ns 6.8979 ns 7.1153 ns]
+                        change: [-6.4641% -2.1093% +1.9637%] (p = 0.35 > 0.05)
+                        No change in performance detected.
+Found 14 outliers among 100 measurements (14.00%)
+  8 (8.00%) high mild
+  6 (6.00%) high severe
+Benchmarking jaccard_similarity/fast/384
+Benchmarking jaccard_similarity/fast/384: Warming up for 3.0000 s
+Benchmarking jaccard_similarity/fast/384: Collecting 100 samples in estimated 5.0001 s (288M iterations)
+Benchmarking jaccard_similarity/fast/384: Analyzing
+jaccard_similarity/fast/384
+                        time:   [19.486 ns 21.483 ns 23.633 ns]
+                        change: [+9.1016% +16.011% +23.870%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 9 outliers among 100 measurements (9.00%)
+  6 (6.00%) high mild
+  3 (3.00%) high severe
+Benchmarking jaccard_similarity/fast/768
+Benchmarking jaccard_similarity/fast/768: Warming up for 3.0000 s
+Benchmarking jaccard_similarity/fast/768: Collecting 100 samples in estimated 5.0001 s (168M iterations)
+Benchmarking jaccard_similarity/fast/768: Analyzing
+jaccard_similarity/fast/768
+                        time:   [32.382 ns 35.149 ns 38.266 ns]
+                        change: [-10.475% -2.3300% +5.8270%] (p = 0.59 > 0.05)
+                        No change in performance detected.
+Found 16 outliers among 100 measurements (16.00%)
+  3 (3.00%) high mild
+  13 (13.00%) high severe
+Benchmarking jaccard_similarity/fast/1536
+Benchmarking jaccard_similarity/fast/1536: Warming up for 3.0000 s
+Benchmarking jaccard_similarity/fast/1536: Collecting 100 samples in estimated 5.0002 s (79M iterations)
+Benchmarking jaccard_similarity/fast/1536: Analyzing
+jaccard_similarity/fast/1536
+                        time:   [58.393 ns 59.365 ns 60.590 ns]
+                        change: [+7.9036% +12.235% +17.051%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 12 outliers among 100 measurements (12.00%)
+  5 (5.00%) high mild
+  7 (7.00%) high severe
+Benchmarking jaccard_similarity/fast/3072
+Benchmarking jaccard_similarity/fast/3072: Warming up for 3.0000 s
+Benchmarking jaccard_similarity/fast/3072: Collecting 100 samples in estimated 5.0003 s (41M iterations)
+Benchmarking jaccard_similarity/fast/3072: Analyzing
+jaccard_similarity/fast/3072
+                        time:   [116.73 ns 120.29 ns 124.55 ns]
+                        change: [-2.8065% +0.9611% +4.7335%] (p = 0.62 > 0.05)
+                        No change in performance detected.
+Found 10 outliers among 100 measurements (10.00%)
+  7 (7.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking jaccard_density/density/10%
+Benchmarking jaccard_density/density/10%: Warming up for 3.0000 s
+Benchmarking jaccard_density/density/10%: Collecting 100 samples in estimated 5.0001 s (156M iterations)
+Benchmarking jaccard_density/density/10%: Analyzing
+jaccard_density/density/10%
+                        time:   [28.686 ns 30.151 ns 31.884 ns]
+                        change: [-3.9209% -0.1986% +3.5453%] (p = 0.92 > 0.05)
+                        No change in performance detected.
+Found 17 outliers among 100 measurements (17.00%)
+  6 (6.00%) high mild
+  11 (11.00%) high severe
+Benchmarking jaccard_density/density/30%
+Benchmarking jaccard_density/density/30%: Warming up for 3.0000 s
+Benchmarking jaccard_density/density/30%: Collecting 100 samples in estimated 5.0001 s (161M iterations)
+Benchmarking jaccard_density/density/30%: Analyzing
+jaccard_density/density/30%
+                        time:   [27.112 ns 27.411 ns 27.816 ns]
+                        change: [-16.589% -12.784% -8.9591%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+Benchmarking jaccard_density/density/50%
+Benchmarking jaccard_density/density/50%: Warming up for 3.0000 s
+Benchmarking jaccard_density/density/50%: Collecting 100 samples in estimated 5.0001 s (179M iterations)
+Benchmarking jaccard_density/density/50%: Analyzing
+jaccard_density/density/50%
+                        time:   [28.124 ns 28.476 ns 28.881 ns]
+                        change: [-19.816% -14.968% -10.200%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  7 (7.00%) high mild
+  3 (3.00%) high severe
+Benchmarking jaccard_density/density/70%
+Benchmarking jaccard_density/density/70%: Warming up for 3.0000 s
+Benchmarking jaccard_density/density/70%: Collecting 100 samples in estimated 5.0001 s (171M iterations)
+Benchmarking jaccard_density/density/70%: Analyzing
+jaccard_density/density/70%
+                        time:   [28.438 ns 29.260 ns 30.198 ns]
+                        change: [-25.291% -21.823% -18.317%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 11 outliers among 100 measurements (11.00%)
+  6 (6.00%) high mild
+  5 (5.00%) high severe
+Benchmarking jaccard_density/density/90%
+Benchmarking jaccard_density/density/90%: Warming up for 3.0000 s
+Benchmarking jaccard_density/density/90%: Collecting 100 samples in estimated 5.0000 s (164M iterations)
+Benchmarking jaccard_density/density/90%: Analyzing
+jaccard_density/density/90%
+                        time:   [29.497 ns 29.609 ns 29.743 ns]
+                        change: [-12.782% -8.6754% -5.0201%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+

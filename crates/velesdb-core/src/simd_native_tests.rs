@@ -4,8 +4,8 @@
 
 use crate::simd_native::{
     batch_dot_product_native, cosine_normalized_native, cosine_similarity_fast,
-    cosine_similarity_native, dot_product_native, euclidean_native, fast_rsqrt, simd_level,
-    squared_l2_native, SimdLevel,
+    cosine_similarity_native, dot_product_native, euclidean_native, fast_rsqrt,
+    hamming_distance_native, jaccard_similarity_native, simd_level, squared_l2_native, SimdLevel,
 };
 
 #[test]
@@ -642,4 +642,221 @@ fn test_cosine_result_clamped() {
         "Cosine should be clamped to [-1, 1], got {}",
         result
     );
+}
+
+// =========================================================================
+// Jaccard Similarity Tests
+// =========================================================================
+
+#[test]
+fn test_jaccard_scalar_identical_vectors() {
+    let a = vec![1.0, 2.0, 3.0, 4.0];
+    let result = jaccard_similarity_native(&a, &a);
+    assert!(
+        (result - 1.0).abs() < 1e-5,
+        "Identical vectors should have Jaccard=1.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_jaccard_scalar_disjoint_vectors() {
+    let a = vec![1.0, 0.0, 0.0, 0.0];
+    let b = vec![0.0, 1.0, 0.0, 0.0];
+    let result = jaccard_similarity_native(&a, &b);
+    // intersection = 0, union = 2, Jaccard = 0/2 = 0
+    assert!(
+        result.abs() < 1e-5,
+        "Disjoint vectors should have Jaccard=0.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_jaccard_scalar_partial_overlap() {
+    let a = vec![1.0, 2.0, 0.0, 0.0];
+    let b = vec![1.0, 0.0, 3.0, 0.0];
+    // intersection = min(1,1) + min(2,0) + min(0,3) + min(0,0) = 1 + 0 + 0 + 0 = 1
+    // union = max(1,1) + max(2,0) + max(0,3) + max(0,0) = 1 + 2 + 3 + 0 = 6
+    // Jaccard = 1/6 = 0.166...
+    let result = jaccard_similarity_native(&a, &b);
+    let expected = 1.0 / 6.0;
+    assert!(
+        (result - expected).abs() < 1e-5,
+        "Jaccard should be ~0.1667, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_jaccard_scalar_empty_union() {
+    let a = vec![0.0, 0.0, 0.0, 0.0];
+    let b = vec![0.0, 0.0, 0.0, 0.0];
+    let result = jaccard_similarity_native(&a, &b);
+    assert!(
+        (result - 1.0).abs() < 1e-5,
+        "Empty union should return Jaccard=1.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_jaccard_simd_small_vector() {
+    // Vector < 8 elements should use scalar path
+    let a = vec![1.0, 2.0, 3.0, 4.0];
+    let b = vec![2.0, 1.0, 4.0, 3.0];
+    let result = jaccard_similarity_native(&a, &b);
+    // intersection = 1+1+3+3 = 8, union = 2+2+4+4 = 12, Jaccard = 8/12 = 0.666...
+    let expected = 8.0 / 12.0;
+    assert!(
+        (result - expected).abs() < 1e-5,
+        "Jaccard should be ~0.6667, got {}",
+        result
+    );
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_jaccard_simd_matches_scalar() {
+    // Test various sizes to trigger different SIMD paths
+    for len in [4, 8, 16, 24, 32, 64, 128] {
+        let a: Vec<f32> = (0..len).map(|i| ((i % 5) as f32) + 1.0).collect();
+        let b: Vec<f32> = (0..len).map(|i| ((i % 3) as f32) + 0.5).collect();
+
+        let simd_result = jaccard_similarity_native(&a, &b);
+
+        // Compute scalar reference
+        let scalar_inter: f32 = a.iter().zip(&b).map(|(x, y)| x.min(*y)).sum();
+        let scalar_union: f32 = a.iter().zip(&b).map(|(x, y)| x.max(*y)).sum();
+        let scalar_result = if scalar_union == 0.0 {
+            1.0
+        } else {
+            scalar_inter / scalar_union
+        };
+
+        assert!(
+            (simd_result - scalar_result).abs() < 1e-4,
+            "len={}: SIMD result {} != scalar result {}",
+            len,
+            simd_result,
+            scalar_result
+        );
+    }
+}
+
+// =========================================================================
+// Hamming Distance Tests
+// =========================================================================
+
+#[test]
+fn test_hamming_scalar_identical_vectors() {
+    let a = vec![1.0, 0.0, 1.0, 0.0];
+    let result = hamming_distance_native(&a, &a);
+    assert!(
+        (result - 0.0).abs() < 1e-5,
+        "Identical vectors should have Hamming=0.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_hamming_scalar_completely_different() {
+    let a = vec![1.0, 1.0, 1.0, 1.0];
+    let b = vec![0.0, 0.0, 0.0, 0.0];
+    let result = hamming_distance_native(&a, &b);
+    // All 4 positions differ (1.0 > 0.5 vs 0.0 <= 0.5)
+    assert!(
+        (result - 4.0).abs() < 1e-5,
+        "Completely different vectors should have Hamming=4.0, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_hamming_scalar_partial_differences() {
+    let a = vec![0.8, 0.3, 0.9, 0.1]; // binary: 1, 0, 1, 0
+    let b = vec![0.6, 0.7, 0.2, 0.4]; // binary: 1, 1, 0, 0
+    let result = hamming_distance_native(&a, &b);
+    // Positions 1 and 2 differ
+    assert!(
+        (result - 2.0).abs() < 1e-5,
+        "Should have 2 differences, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_hamming_scalar_threshold_behavior() {
+    // Test values around the 0.5 threshold
+    // Position 3: 0.5001 > 0.5 is true, but 0.4999 > 0.5 is false → they differ
+    let a = vec![0.51, 0.49, 0.5, 0.5001]; // binary: 1, 0, 0, 1
+    let b = vec![0.52, 0.48, 0.5, 0.4999]; // binary: 1, 0, 0, 0
+    let result = hamming_distance_native(&a, &b);
+    // Only position 3 differs (0.5001 > 0.5 vs 0.4999 <= 0.5)
+    assert!(
+        (result - 1.0).abs() < 1e-5,
+        "Should have 1 difference at position 3, got {}",
+        result
+    );
+}
+
+#[test]
+fn test_hamming_simd_small_vector() {
+    // Vector < 8 elements should use scalar path
+    let a = vec![1.0, 0.0, 1.0, 0.0];
+    let b = vec![0.0, 1.0, 1.0, 0.0];
+    let result = hamming_distance_native(&a, &b);
+    // Positions 0 and 1 differ
+    assert!(
+        (result - 2.0).abs() < 1e-5,
+        "Should have 2 differences, got {}",
+        result
+    );
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_hamming_simd_matches_scalar() {
+    // Test various sizes to trigger different SIMD paths
+    for len in [4, 8, 16, 24, 32, 64, 128] {
+        let a: Vec<f32> = (0..len)
+            .map(|i| if i % 3 == 0 { 0.8 } else { 0.2 })
+            .collect();
+        let b: Vec<f32> = (0..len)
+            .map(|i| if i % 2 == 0 { 0.9 } else { 0.1 })
+            .collect();
+
+        let simd_result = hamming_distance_native(&a, &b);
+
+        // Compute scalar reference
+        let scalar_result: f32 = a
+            .iter()
+            .zip(&b)
+            .filter(|(&x, &y)| (x > 0.5) != (y > 0.5))
+            .count() as f32;
+
+        assert!(
+            (simd_result - scalar_result).abs() < 1e-4,
+            "len={}: SIMD result {} != scalar result {}",
+            len,
+            simd_result,
+            scalar_result
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "Vector length mismatch")]
+fn test_jaccard_length_mismatch() {
+    let a = vec![1.0, 2.0, 3.0];
+    let b = vec![1.0, 2.0];
+    let _ = jaccard_similarity_native(&a, &b);
+}
+
+#[test]
+#[should_panic(expected = "Vector length mismatch")]
+fn test_hamming_length_mismatch() {
+    let a = vec![1.0, 2.0, 3.0];
+    let b = vec![1.0, 2.0];
+    let _ = hamming_distance_native(&a, &b);
 }
