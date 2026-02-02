@@ -1,6 +1,8 @@
 //! Benchmark GPU RTX 4090 vs CPU i9-14900K
 //! Comparaison des performances CPU AVX-512 vs GPU CUDA
 
+#![allow(clippy::cast_precision_loss)] // Reason: Benchmark test data generation, precision loss acceptable
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 #[cfg(feature = "gpu")]
@@ -61,5 +63,8 @@ fn cpu_only_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "gpu")]
+criterion_group!(benches, gpu_vs_cpu_rtx4090);
+#[cfg(not(feature = "gpu"))]
 criterion_group!(benches, cpu_only_benchmark);
 criterion_main!(benches);
