@@ -129,10 +129,11 @@ fn test_fused_cosine_performance() {
     let elapsed = start.elapsed();
     let avg_ns = elapsed.as_nanos() as f64 / 1000.0;
 
-    // Should be < 300ns per call (allowing some variance in CI)
+    // Should be < 200ns per call on CI (allowing for slower CI runners)
+    // Target < 35ns with Harley-Seal when optimized
     assert!(
-        avg_ns < 350.0,
-        "Cosine similarity too slow: {:.2}ns per call (target < 280ns)",
+        avg_ns < 200.0,
+        "Cosine similarity too slow: {:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)",
         avg_ns
     );
 }
