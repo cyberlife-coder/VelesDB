@@ -5,7 +5,7 @@
 //! Compares GPU (wgpu) vs CPU SIMD for batch operations.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use velesdb_core::simd;
+use velesdb_core::simd_native;
 
 #[cfg(feature = "gpu")]
 use velesdb_core::gpu::GpuAccelerator;
@@ -45,7 +45,7 @@ fn bench_batch_cosine(c: &mut Criterion) {
                         .map(|i| {
                             let start = i * dim;
                             let end = start + dim;
-                            simd::cosine_similarity_fast(&vectors[start..end], &query)
+                            simd_native::cosine_similarity_native(&vectors[start..end], &query)
                         })
                         .collect();
                     black_box(results)
@@ -85,7 +85,7 @@ fn bench_single_cosine(c: &mut Criterion) {
 
     // CPU SIMD - should be ~83ns
     group.bench_function(BenchmarkId::new("cpu_simd", format!("{dim}d")), |b| {
-        b.iter(|| black_box(simd::cosine_similarity_fast(&vector, &query)));
+        b.iter(|| black_box(simd_native::cosine_similarity_native(&vector, &query)));
     });
 
     // GPU for single vector (to show overhead)

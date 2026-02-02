@@ -29,11 +29,11 @@ impl HnswIndex {
     #[inline]
     pub(crate) fn compute_distance(&self, query: &[f32], vector: &[f32]) -> f32 {
         match self.metric {
-            DistanceMetric::Cosine => crate::simd::cosine_similarity_fast(query, vector),
-            DistanceMetric::Euclidean => crate::simd::euclidean_distance_fast(query, vector),
-            DistanceMetric::DotProduct => crate::simd::dot_product_fast(query, vector),
-            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(query, vector),
-            DistanceMetric::Jaccard => crate::simd::jaccard_similarity_fast(query, vector),
+            DistanceMetric::Cosine => crate::simd_native::cosine_similarity_native(query, vector),
+            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(query, vector),
+            DistanceMetric::DotProduct => crate::simd_native::dot_product_native(query, vector),
+            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(query, vector),
+            DistanceMetric::Jaccard => crate::simd_native::jaccard_similarity_native(query, vector),
         }
     }
 
@@ -137,13 +137,13 @@ impl HnswIndex {
             .collect();
 
         // Perf TS-CORE-001: Adaptive prefetch distance based on vector size
-        let prefetch_distance = crate::simd::calculate_prefetch_distance(self.dimension);
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
         let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
 
         for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
             // Prefetch upcoming vectors (P1 optimization on local snapshot)
             if i + prefetch_distance < candidate_vectors.len() {
-                crate::simd::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
+                crate::simd_native::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
             }
 
             // Compute exact distance using SIMD-optimized function
@@ -194,7 +194,7 @@ impl HnswIndex {
         }
 
         // Compute distances to all vectors
-        let prefetch_distance = crate::simd::calculate_prefetch_distance(self.dimension);
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
         let vectors_snapshot: Vec<(usize, Vec<f32>)> = self.vectors.collect_for_parallel();
 
         let mut results: Vec<(u64, f32)> = Vec::with_capacity(vectors_snapshot.len());
@@ -202,7 +202,7 @@ impl HnswIndex {
         for (i, (idx, v)) in vectors_snapshot.iter().enumerate() {
             // Prefetch upcoming vectors
             if i + prefetch_distance < vectors_snapshot.len() {
-                crate::simd::prefetch_vector(&vectors_snapshot[i + prefetch_distance].1);
+                crate::simd_native::prefetch_vector(&vectors_snapshot[i + prefetch_distance].1);
             }
 
             if let Some(id) = self.mappings.get_id(*idx) {
@@ -327,13 +327,13 @@ impl HnswIndex {
             })
             .collect();
 
-        let prefetch_distance = crate::simd::calculate_prefetch_distance(self.dimension);
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
         let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
 
         for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
             // Prefetch upcoming vectors
             if i + prefetch_distance < candidate_vectors.len() {
-                crate::simd::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
+                crate::simd_native::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
             }
 
             // Compute exact distance

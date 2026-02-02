@@ -10,7 +10,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use std::time::Instant;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::metrics::recall_at_k;
-use velesdb_core::simd;
+use velesdb_core::simd_native;
 use velesdb_core::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
@@ -30,7 +30,7 @@ fn brute_force_knn(query: &[f32], dataset: &[Vec<f32>], k: usize) -> Vec<u64> {
         .iter()
         .enumerate()
         .map(|(idx, vec)| {
-            let sim = simd::cosine_similarity_fast(query, vec);
+            let sim = simd_native::cosine_similarity_native(query, vec);
             #[allow(clippy::cast_possible_truncation)]
             (idx as u64, sim)
         })
