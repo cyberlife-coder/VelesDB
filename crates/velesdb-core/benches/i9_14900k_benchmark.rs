@@ -23,7 +23,7 @@ fn benchmark_dot_product_i9_14900k(c: &mut Criterion) {
             |bench, (a, b)| {
                 bench.iter(|| {
                     // Appel via dot_product_native qui utilisera AVX-512 sur i9-14900K
-                    black_box(velesdb_core::simd_native_native::dot_product_native(a, b))
+                    black_box(velesdb_core::simd_native::dot_product_native(a, b))
                 });
             },
         );
@@ -45,7 +45,7 @@ fn benchmark_squared_l2_i9_14900k(c: &mut Criterion) {
             BenchmarkId::new("avx512_native", size),
             &(a, b),
             |bench, (a, b)| {
-                bench.iter(|| black_box(velesdb_core::simd_native_native::squared_l2_native(a, b)));
+                bench.iter(|| black_box(velesdb_core::simd_native::squared_l2_native(a, b)));
             },
         );
     }
@@ -66,7 +66,7 @@ fn benchmark_batch_dot_product(c: &mut Criterion) {
         bench.iter(|| {
             let results: Vec<f32> = vectors
                 .iter()
-                .map(|v| velesdb_core::simd_native_native::dot_product_native(&query, v))
+                .map(|v| velesdb_core::simd_native::dot_product_native(&query, v))
                 .collect();
             black_box(results)
         });
@@ -88,7 +88,7 @@ fn benchmark_throughput_millions(c: &mut Criterion) {
         group.throughput(Throughput::Elements(size as u64));
 
         group.bench_with_input(BenchmarkId::new("mops", label), &(a, b), |bench, (a, b)| {
-            bench.iter(|| black_box(velesdb_core::simd_native_native::dot_product_native(a, b)));
+            bench.iter(|| black_box(velesdb_core::simd_native::dot_product_native(a, b)));
         });
     }
 

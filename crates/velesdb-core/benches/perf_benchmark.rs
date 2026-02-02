@@ -14,7 +14,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use velesdb_core::perf_optimizations::ContiguousVectors;
-use velesdb_core::simd_native_native::dot_product_native as dot_product_auto;
+use velesdb_core::simd_native::dot_product_native as dot_product_auto;
 
 /// Generate random vectors for benchmarking.
 fn generate_vectors(count: usize, dimension: usize) -> Vec<Vec<f32>> {

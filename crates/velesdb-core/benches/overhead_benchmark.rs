@@ -12,9 +12,6 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::simd_native::{cosine_similarity_native, dot_product_native, euclidean_native};
-use velesdb_core::simd_native_native::{
-    cosine_similarity_native, dot_product_native, euclidean_native,
-};
 
 /// Generate a deterministic f32 vector for benchmarking.
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {

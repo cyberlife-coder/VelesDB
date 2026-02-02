@@ -7,7 +7,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use velesdb_core::simd_native_native;
+use velesdb_core::simd_native;
 
 #[allow(clippy::cast_precision_loss)]
 fn random_vec(len: usize) -> Vec<f32> {

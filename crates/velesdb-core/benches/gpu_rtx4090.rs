@@ -16,8 +16,7 @@ fn gpu_vs_cpu_rtx4090(c: &mut Criterion) {
             BenchmarkId::new("cpu_avx512", size),
             &(a.clone(), b.clone()),
             |bench, (a, b)| {
-                bench
-                    .iter(|| black_box(velesdb_core::simd_native_native::dot_product_native(a, b)));
+                bench.iter(|| black_box(velesdb_core::simd_native::dot_product_native(a, b)));
             },
         );
 
@@ -29,7 +28,7 @@ fn gpu_vs_cpu_rtx4090(c: &mut Criterion) {
             |bench, (a, b)| {
                 bench.iter(|| {
                     // TODO: Implement GPU dot product benchmark
-                    black_box(velesdb_core::simd_native_native::dot_product_native(a, b))
+                    black_box(velesdb_core::simd_native::dot_product_native(a, b))
                 });
             },
         );
@@ -54,8 +53,7 @@ fn cpu_only_benchmark(c: &mut Criterion) {
             BenchmarkId::new("cpu_avx512", size),
             &(a, b),
             |bench, (a, b)| {
-                bench
-                    .iter(|| black_box(velesdb_core::simd_native_native::dot_product_native(a, b)));
+                bench.iter(|| black_box(velesdb_core::simd_native::dot_product_native(a, b)));
             },
         );
     }

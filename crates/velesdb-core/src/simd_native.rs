@@ -1308,7 +1308,8 @@ pub fn warmup_simd_cache() {
 /// - Loop simple pour tous les cas
 ///
 /// Les seuils sont calibrés pour éviter les régressions sur chaque architecture.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Hot-path function called millions of times in similarity search loops
+#[inline(always)]
 #[must_use]
 pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
@@ -1351,7 +1352,8 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 /// - AVX-512: 4-acc for 512+, 1-acc for 16+
 /// - AVX2: 4-acc for 256+, 2-acc for 64-255, 1-acc for 16-63, scalar for <16
 /// - NEON: 1-acc for 4+, scalar for <4
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Hot-path function for Euclidean distance calculations
+#[inline(always)]
 #[must_use]
 pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
@@ -1399,7 +1401,8 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Euclidean distance with automatic dispatch.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Thin wrapper over squared_l2_native, must inline
+#[inline(always)]
 #[must_use]
 pub fn euclidean_native(a: &[f32], b: &[f32]) -> f32 {
     squared_l2_native(a, b).sqrt()
@@ -1408,7 +1411,8 @@ pub fn euclidean_native(a: &[f32], b: &[f32]) -> f32 {
 /// L2 norm with automatic dispatch to best available SIMD.
 ///
 /// Computes `sqrt(sum(v[i]²))` using native SIMD intrinsics.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Thin wrapper over dot_product_native, must inline
+#[inline(always)]
 #[must_use]
 pub fn norm_native(v: &[f32]) -> f32 {
     // Norm is sqrt(dot(v, v))
@@ -1418,7 +1422,8 @@ pub fn norm_native(v: &[f32]) -> f32 {
 /// Normalizes a vector in-place using native SIMD.
 ///
 /// After normalization, the vector will have L2 norm of 1.0.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Called in tight loops during vector normalization
+#[inline(always)]
 pub fn normalize_inplace_native(v: &mut [f32]) {
     let n = norm_native(v);
     if n > 0.0 {
@@ -1430,7 +1435,8 @@ pub fn normalize_inplace_native(v: &mut [f32]) {
 }
 
 /// Cosine similarity for pre-normalized vectors with automatic dispatch.
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Thin wrapper, direct delegation to dot_product_native
+#[inline(always)]
 #[must_use]
 pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32 {
     // For unit vectors: cos(θ) = a · b
@@ -1725,7 +1731,8 @@ unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
 /// - len >= 1024: 4-acc (max ILP for very large vectors)
 /// - len 64-1023: 2-acc (balance ILP vs register pressure)
 /// - len 8-63: 4-acc original (legacy, TODO: optimize)
-#[inline]
+#[allow(clippy::inline_always)] // Reason: Primary similarity function, hot-path in all vector searches
+#[inline(always)]
 #[must_use]
 pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len(), "Vector dimensions must match");
@@ -1836,6 +1843,7 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Computes dot products between a query and multiple candidates,
 /// using software prefetch hints for cache optimization.
+#[inline]
 #[must_use]
 pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
     let mut results = Vec::with_capacity(candidates.len());

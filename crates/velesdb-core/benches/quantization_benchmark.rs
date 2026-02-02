@@ -14,9 +14,7 @@ use velesdb_core::quantization::{
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
     QuantizedVector,
 };
-use velesdb_core::simd_native_native::{
-    cosine_similarity_native, dot_product_native, euclidean_native,
-};
+use velesdb_core::simd_native::{cosine_similarity_native, dot_product_native, euclidean_native};
 
 /// Generate a deterministic vector for benchmarking
 fn generate_vector(dimension: usize, seed: usize) -> Vec<f32> {
