@@ -128,9 +128,9 @@ impl DistanceEngine for NativeSimdDistance {
             DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
             DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
             DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
-            // Fall back to existing SIMD for Hamming/Jaccard
-            DistanceMetric::Hamming => crate::simd::hamming_distance_fast(a, b),
-            DistanceMetric::Jaccard => 1.0 - crate::simd::jaccard_similarity_fast(a, b),
+            // Use simd_native for Hamming/Jaccard (EPIC-075 consolidation)
+            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
+            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
         }
     }
 
