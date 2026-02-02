@@ -105,10 +105,10 @@ impl DistanceEngine for SimdDistance {
     }
 }
 
-/// Native SIMD distance computation using core::arch intrinsics.
+/// Native SIMD distance computation using simd_native dispatch.
 ///
-/// Uses AVX-512 native intrinsics on x86_64, NEON on ARM.
-/// Based on arXiv:2505.07621 "Bang for the Buck" recommendations.
+/// Delegates to simd_native module which handles AVX-512/AVX2/NEON dispatch
+/// based on CPU capabilities and vector size. Part of EPIC-081 consolidation.
 pub struct NativeSimdDistance {
     metric: DistanceMetric,
 }
@@ -170,7 +170,7 @@ impl AdaptiveSimdDistance {
 
 impl DistanceEngine for AdaptiveSimdDistance {
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        // Convert similarity to distance for metrics where higher is better
+        // Calculate distance directly using simd_native (consolidated implementation)
         match self.metric {
             DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
             DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
