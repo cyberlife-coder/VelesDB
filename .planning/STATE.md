@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core Refactoring Milestone  
-**Current Phase:** 1 — Foundation Fixes (Complete)  
+**Current Phase:** 2 — Unsafe Code & Testing Foundation (In Progress)  
 **Session Started:** 2026-02-06  
 
 ---
@@ -32,29 +32,26 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | Phase | Name | Status | Blockers |
 |-------|------|--------|----------|
 | 1 | Foundation Fixes | ✅ Complete | None |
-| 2 | Unsafe Code & Testing | ⏳ Pending | Phase 1 |
+| 2 | Unsafe Code & Testing | 🔄 In progress | None |
 | 3 | Architecture & Graph | ⏳ Pending | Phase 2 |
 | 4 | Complexity & Errors | ⏳ Pending | Phase 3 |
 | 5 | Cleanup & Performance | ⏳ Pending | Phase 4 |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 1 Complete** — All 5 success criteria met:
-1. ✅ Zero unsafe numeric conversions (try_from() or justified #[allow])
-2. ✅ Clean clippy configuration (global #[allow] removed, workspace config)
-3. ✅ Professional logging (tracing macros only)
-4. ✅ Bounds-checked arithmetic (Error::Overflow, 21 unit tests)
-5. ✅ CI gates pass (cargo clippy -- -D warnings exits 0)
+**Phase 2 execution underway**
+- 02-02 parser fragility plan completed with assertion-style regression coverage for aggregate wildcard, HAVING operator capture, and correlated-subquery extraction/dedup behavior
+- Targeted parser BUG markers removed from `select.rs` and `values.rs`
 
 ### Next Action
-Plan Phase 2: `/gsd-discuss-phase 2` or `/gsd-plan-phase 2`
+Execute `02-03-PLAN.md` (SIMD property-based testing foundation)
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 4/26 (15%)
+- **Completed:** 5/26 (19%)
 - **In Progress:** 0/26
 - **Pending:** 22/26
 
@@ -76,7 +73,7 @@ Plan Phase 2: `/gsd-discuss-phase 2` or `/gsd-plan-phase 2`
 #### Bug Fixes (BUG)
 - [x] BUG-01 — Cast overflow risks (Plan 01-01 complete)
 - [ ] BUG-02 — Incorrect comments
-- [ ] BUG-03 — Parser fragility
+- [x] BUG-03 — Parser fragility (targeted hotspot closure in Plan 02-02)
 - [ ] BUG-04 — HNSW lock ordering
 
 #### Cleanup (CLEAN)
@@ -159,6 +156,8 @@ unsafe { ... }
 | 2026-02-06 | Use workspace.lints.clippy | Centralized lint configuration across 8 crates | 1 |
 | 2026-02-06 | SAFETY-style justification for allows | Document invariants for each numeric cast suppression | 1 |
 | 2026-02-06 | Module-level allows preferred | Targeted suppression vs global blanket allows | 1 |
+| 2026-02-06 | BUG-02 scope bounded to adjacent parser hotspots | Avoid broad comment churn while closing BUG-03 targeted sites | 2 |
+| 2026-02-06 | Correlation dedup regression uses quoted dotted identifier | Current grammar path that exercises extraction/dedup assertions reliably | 2 |
 
 ---
 
@@ -180,24 +179,21 @@ None.
 ## Session Continuity
 
  ### Last Session
-2026-02-06 — Phase 1 Verification Passed (5/5 success criteria)
-- All gap closure plans complete (01-04, 01-05 deferred to Phase 2)
-- 13 additional SAFETY-justified clippy allows committed
-- Verification confirmed: zero production clippy errors, clean logging, bounds-checked arithmetic
-- Phase 1 requirements RUST-01, RUST-02, RUST-03, BUG-01 all verified complete
+2026-02-06 21:08 UTC — Completed 02-02-PLAN.md
+- Parser hotspots stabilized with direct assertion regressions
+- Verified: `cargo test -p velesdb-core pr_review_bugfix_tests`, `cargo test -p velesdb-core parser::`, `cargo clippy -p velesdb-core -- -D warnings`
+- Commits: `16f3231a` (parser invariant/comment updates), `125f2f51` (assertion regressions)
 
 ### Current Branch
 main
 
 ### Uncommitted Changes
-None (all changes committed)
+Planning docs pending commit (`02-02-SUMMARY.md`, updated `STATE.md`)
 
 ### Notes for Next Session
-1. Execute Phase 2: Unsafe Code Audit & Testing Foundation
-2. Add SAFETY comments to all unsafe blocks (RUST-04)
-3. Apply #[must_use] attributes (RUST-05)
-4. Fix VelesQL parser fragility (BUG-03)
-5. Add property-based tests for SIMD (TEST-01)
+1. Execute `02-03-PLAN.md`
+2. Build SIMD property-based equivalence harness (TEST-01)
+3. Run full quality gates after SIMD test additions
 
 ---
 
@@ -234,4 +230,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-06*  
-*Progress: 4/26 requirements (15%) — Phase 1 verified complete*
+*Progress: 5/26 requirements (19%) — Phase 2 in progress (02-02 complete)*
