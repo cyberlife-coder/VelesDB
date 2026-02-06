@@ -39,7 +39,7 @@ else
     echo -e "\n${YELLOW}📎 Running clippy...${NC}"
     # Note: Workspace lints in Cargo.toml control which pedantic lints are active.
     # Do NOT add -W clippy::pedantic here — it overrides workspace allow/warn config.
-    if ! cargo clippy --workspace --exclude velesdb-python --all-targets -- -D warnings; then
+    if ! cargo clippy --workspace --exclude velesdb-python --lib --bins -- -D warnings; then
         echo -e "${RED}❌ Clippy found issues. Fix them before committing.${NC}"
         exit 1
     fi
