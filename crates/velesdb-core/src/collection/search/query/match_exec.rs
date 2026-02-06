@@ -3,6 +3,14 @@
 //! This module implements the `execute_match()` method for executing
 //! Cypher-like MATCH queries on VelesDB collections.
 
+// SAFETY: Numeric casts in MATCH query execution are intentional:
+// - u64->usize for result limits: limits are small (< 1M) and bounded
+// - f64->f32 for embedding vectors: precision sufficient for similarity search
+// - u32->f32 for depth scoring: depth values are small (< 1000)
+// - All casts are for internal query execution, not user data validation
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::collection::graph::{bfs_stream, StreamingConfig};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};

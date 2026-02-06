@@ -6,9 +6,12 @@
 // SAFETY: Numeric casts in score fusion are intentional:
 // - All casts are for score normalization and combination (0-1 range)
 // - f64 precision loss acceptable for ranking heuristics
+// - usize->i32 for powi() indices: values bounded by path lengths (typically < 100)
+// - u64->i64 for timestamps: SystemTime::as_secs() values are within valid range
 // - Values are bounded by similarity scores which are naturally limited
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

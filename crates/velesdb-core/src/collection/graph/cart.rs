@@ -27,7 +27,7 @@
 use super::degree_router::EdgeIndex;
 
 /// Maximum entries per leaf node (horizontal compression).
-/// TODO: Use for leaf splitting when implemented.
+// Reason: MAX_LEAF_ENTRIES will be used for leaf splitting when CART implementation is complete
 #[allow(dead_code)]
 const MAX_LEAF_ENTRIES: usize = 256;
 
@@ -44,10 +44,12 @@ pub struct CompressedART {
 }
 
 /// Node variants for the Compressed Adaptive Radix Tree.
+// Reason: Node256 is larger than other variants by design for high-degree vertices
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 enum CARTNode {
     /// Smallest internal node: 4 keys, 4 children.
+    // Reason: Node4 variant currently unused but required for CART completeness
     #[allow(dead_code)]
     Node4 {
         num_children: u8,
