@@ -8,11 +8,12 @@
 // SAFETY: Numeric casts in procedural memory are intentional:
 // - u64->i64 casts for timestamps (SystemTime::elapsed returns u64, DB uses i64)
 // - i64->u64 casts for display purposes (timestamps are always positive)
-// - f64->f32 casts for confidence scores (f32 precision sufficient)
+// - f64->f32 casts for confidence scores (f32 precision sufficient, values clamped to 0.0-1.0)
 // - All timestamp values are bounded by reasonable time ranges
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
 
 use crate::{Database, DistanceMetric, Point};
 use parking_lot::RwLock;
