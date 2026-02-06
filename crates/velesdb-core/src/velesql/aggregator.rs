@@ -3,6 +3,11 @@
 //! Implements O(1) memory aggregation using single-pass streaming algorithm.
 //! Based on state-of-art practices from DuckDB and DataFusion (arXiv 2024).
 
+// SAFETY: Numeric casts in aggregation are intentional:
+// - u64->f64 for count-to-double conversion: precision loss acceptable for averages
+// - Count values are bounded by result set size
+#![allow(clippy::cast_precision_loss)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

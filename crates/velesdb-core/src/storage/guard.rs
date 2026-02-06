@@ -65,7 +65,11 @@ pub struct VectorSliceGuard<'a> {
 // * Lifetime tied to `_guard` (RwLockReadGuard) ⇒ mapping is pinned
 // * Epoch check prevents access after remap
 // The data is read-only, therefore Send + Sync are sound.
+// Reason: Raw pointer is derived from MmapMut which is Send+Sync
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for VectorSliceGuard<'_> {}
+// Reason: Raw pointer is derived from MmapMut which is Send+Sync
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Sync for VectorSliceGuard<'_> {}
 
 impl VectorSliceGuard<'_> {
