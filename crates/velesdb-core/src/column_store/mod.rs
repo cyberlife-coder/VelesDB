@@ -17,8 +17,15 @@
 //! │   ├── "category" -> StringColumn(Vec<Option<StringId>>)
 //! │   ├── "price"    -> IntColumn(Vec<Option<i64>>)
 //! │   └── "rating"   -> FloatColumn(Vec<Option<f64>>)
-//! └── string_table: StringTable (interning for strings)
 //! ```
+
+// SAFETY: Numeric casts in column store are intentional:
+// - All casts are for columnar data processing and statistics
+// - u64/usize conversions for row indices and bitmap operations
+// - Values bounded by column cardinality and row count
+// - Precision loss acceptable for column statistics
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
 
 mod batch;
 #[cfg(test)]

@@ -10,6 +10,14 @@
 //! - Implement cost model based on index cardinality
 //! - Add adaptive query execution with plan switching
 
+// SAFETY: Numeric casts in query planner are intentional:
+// - All casts are for selectivity estimation and cost calculations
+// - f64/f32 casts are for computing selectivity ratios and costs
+// - Values are bounded by practical limits (cardinality, selectivity in 0-1 range)
+// - Precision loss acceptable for query planning heuristics
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Execution strategy for hybrid queries.

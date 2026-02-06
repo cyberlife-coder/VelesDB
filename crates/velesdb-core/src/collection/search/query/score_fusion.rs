@@ -3,6 +3,13 @@
 //! This module provides score breakdown and combination strategies
 //! for combining vector similarity, graph distance, and metadata boosts.
 
+// SAFETY: Numeric casts in score fusion are intentional:
+// - All casts are for score normalization and combination (0-1 range)
+// - f64 precision loss acceptable for ranking heuristics
+// - Values are bounded by similarity scores which are naturally limited
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

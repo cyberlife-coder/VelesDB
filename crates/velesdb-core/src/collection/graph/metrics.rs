@@ -7,6 +7,14 @@
 //!
 //! Metrics use atomic operations with relaxed ordering for minimal overhead (~1-5ns per op).
 
+// SAFETY: Numeric casts in metrics are intentional:
+// - All casts are for histogram bucketing and latency calculations
+// - f64/u64 conversions for computing percentiles and averages
+// - Values bounded by practical limits (bucket counts, durations)
+// - Precision loss acceptable for metrics (approximate by design)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
