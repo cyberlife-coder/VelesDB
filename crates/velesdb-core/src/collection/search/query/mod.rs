@@ -16,6 +16,12 @@
 //! Future: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
 //! to leverage cost-based optimization for complex queries.
 
+// SAFETY: Numeric casts in query execution are intentional:
+// - f64->f32 for similarity thresholds: precision loss acceptable for filtering
+// - Thresholds are approximate bounds, exact precision not required
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+
 mod aggregation;
 mod distinct;
 mod extraction;
@@ -383,6 +389,9 @@ impl Collection {
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: threshold is a user-provided f64 similarity score in [0.0, 1.0] range,
+        // truncation to f32 is acceptable for comparison purposes
         let threshold_f32 = threshold as f32;
 
         candidates
@@ -685,6 +694,9 @@ impl Collection {
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: sim_threshold is a user-provided f64 similarity score in [0.0, 1.0] range,
+        // truncation to f32 is acceptable for comparison purposes
         let threshold_f32 = sim_threshold as f32;
         let mut results = Vec::new();
 
