@@ -265,8 +265,10 @@ impl VectorRef<'_> {
     /// Returns the vector as a slice.
     #[must_use]
     pub fn as_slice(&self) -> &[f32] {
-        // SAFETY: The guard ensures the buffer is valid for the lifetime 'a
-        // and offset/dimension were validated during construction
+        // SAFETY: `from_raw_parts` requires a valid pointer/length pair.
+        // - Condition 1: `offset` and `dimension` were bounds-checked in `get_slice`.
+        // - Condition 2: `guard` keeps buffer allocation alive for this borrow.
+        // Reason: Expose zero-copy read access without allocating `Vec<f32>`.
         unsafe {
             let ptr = self.guard.as_ptr().add(self.offset);
             std::slice::from_raw_parts(ptr, self.dimension)

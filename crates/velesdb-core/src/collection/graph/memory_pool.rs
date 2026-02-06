@@ -83,7 +83,10 @@ impl<T> MemoryPool<T> {
         let (chunk_idx, slot_idx) = self.index_to_chunk_slot(index.0);
         // If already initialized, drop the old value first
         if self.initialized.contains(&index.0) {
-            // SAFETY: Slot was previously initialized
+            // SAFETY: `drop_in_place` requires an initialized value at the pointer.
+            // - Condition 1: `initialized.contains(index)` proves `store()` previously wrote here.
+            // - Condition 2: Pointer comes from this pool's owned chunk storage.
+            // Reason: Replacing existing value must run the old destructor first.
             unsafe {
                 std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
             }
@@ -102,7 +105,10 @@ impl<T> MemoryPool<T> {
         let (chunk_idx, slot_idx) = self.index_to_chunk_slot(index.0);
         // BUG-1 FIX: Check initialized BEFORE assume_init_ref to prevent UB
         if chunk_idx < self.chunks.len() && self.initialized.contains(&index.0) {
-            // SAFETY: Slot is in initialized set, meaning store() was called
+            // SAFETY: `assume_init_ref` requires slot initialization.
+            // - Condition 1: `initialized` set confirms `store()` initialized this slot.
+            // - Condition 2: Index bounds are checked by `chunk_idx < self.chunks.len()`.
+            // Reason: Return borrowed view without copying pooled object.
             Some(unsafe { self.chunks[chunk_idx][slot_idx].assume_init_ref() })
         } else {
             None
@@ -120,7 +126,10 @@ impl<T> MemoryPool<T> {
         if chunk_idx < self.chunks.len() {
             // Only drop if the slot was initialized
             if self.initialized.remove(&index.0) {
-                // SAFETY: Slot was initialized via store()
+                // SAFETY: `drop_in_place` requires an initialized value.
+                // - Condition 1: `initialized.remove(index)` confirms previous initialization.
+                // - Condition 2: Pointer refers to this pool's owned chunk memory.
+                // Reason: Deallocation must run destructor before slot reuse.
                 unsafe {
                     std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
                 }
@@ -198,6 +207,10 @@ impl<T> MemoryPool<T> {
             let ptr = self.chunks[chunk_idx][slot_idx].as_ptr();
             // Use CPU prefetch hint
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: `_mm_prefetch` accepts any address as a cache hint.
+            // - Condition 1: `ptr` is derived from a valid in-bounds slot pointer.
+            // - Condition 2: Prefetch does not dereference or mutate memory.
+            // Reason: Cache warming reduces traversal latency.
             unsafe {
                 std::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T0);
             }
@@ -210,7 +223,10 @@ impl<T> MemoryPool<T> {
 
     fn grow(&mut self) {
         let mut chunk: Vec<MaybeUninit<T>> = Vec::with_capacity(self.chunk_size);
-        // SAFETY: MaybeUninit doesn't require initialization
+        // SAFETY: `set_len` is valid because elements are `MaybeUninit<T>`.
+        // - Condition 1: Capacity was allocated for `chunk_size` elements.
+        // - Condition 2: `MaybeUninit<T>` has no initialization requirement.
+        // Reason: Preallocate pool slots without constructing `T` values.
         unsafe {
             chunk.set_len(self.chunk_size);
         }
@@ -227,7 +243,10 @@ impl<T> MemoryPool<T> {
     /// Grows the pool and adds ALL new indices to free list (for batch allocation).
     fn grow_for_batch(&mut self) {
         let mut chunk: Vec<MaybeUninit<T>> = Vec::with_capacity(self.chunk_size);
-        // SAFETY: MaybeUninit doesn't require initialization
+        // SAFETY: `set_len` is valid because elements are `MaybeUninit<T>`.
+        // - Condition 1: Capacity was allocated for `chunk_size` elements.
+        // - Condition 2: `MaybeUninit<T>` has no initialization requirement.
+        // Reason: Batch growth reserves uninitialized slots for later writes.
         unsafe {
             chunk.set_len(self.chunk_size);
         }
@@ -261,7 +280,10 @@ impl<T> Drop for MemoryPool<T> {
         for &idx in &self.initialized {
             let (chunk_idx, slot_idx) = self.index_to_chunk_slot(idx);
             if chunk_idx < self.chunks.len() {
-                // SAFETY: Slot is in initialized set, meaning store() was called
+                // SAFETY: `drop_in_place` requires initialized memory.
+                // - Condition 1: `initialized` set only contains slots written via `store()`.
+                // - Condition 2: Index translation resolves into this pool's owned chunk.
+                // Reason: Drop must clean initialized elements and skip uninitialized slots.
                 unsafe {
                     std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
                 }
