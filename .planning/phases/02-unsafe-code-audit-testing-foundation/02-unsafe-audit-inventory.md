@@ -116,3 +116,9 @@ safety_status: fixed
 must_use_status: not_needed
 comment_audit_status: corrected
 must_use_rationale: Value-returning APIs already marked must_use in public wrapper surface.
+
+## Verification Evidence
+
+- `cargo test -p velesdb-core simd_native_tests`: pass (66 tests)
+- `cargo test -p velesdb-core storage::tests`: pass (33 tests)
+- `cargo clippy -p velesdb-core -- -D warnings`: pass
