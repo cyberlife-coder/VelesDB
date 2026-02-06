@@ -13,6 +13,12 @@
 //! - Linux: `fallocate(FALLOC_FL_PUNCH_HOLE)`
 //! - Windows: `FSCTL_SET_ZERO_DATA`
 
+// SAFETY: Numeric casts in compaction are intentional:
+// - usize->u32 for Windows API: struct sizes are small and bounded
+// - u64->usize for length calculations: lengths bounded by file size
+// - All values are validated against buffer/file bounds
+#![allow(clippy::cast_possible_truncation)]
+
 use super::sharded_index::ShardedIndex;
 use memmap2::MmapMut;
 use parking_lot::RwLock;

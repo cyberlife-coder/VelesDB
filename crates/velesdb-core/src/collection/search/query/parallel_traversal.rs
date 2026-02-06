@@ -3,6 +3,11 @@
 //! This module provides parallel BFS/DFS traversal using rayon for
 //! efficient execution on multi-core systems.
 
+// SAFETY: Numeric casts in parallel traversal are intentional:
+// - u64->usize for node ID hashing: Node IDs are generated sequentially and fit in usize
+// - Used for sharding only, actual storage uses u64 for persistence
+#![allow(clippy::cast_possible_truncation)]
+
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 use std::cmp::Ordering;

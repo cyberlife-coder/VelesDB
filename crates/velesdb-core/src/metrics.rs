@@ -18,6 +18,11 @@
 //! let rank_quality = mrr(&ground_truth, &results);         // 1/1 = 1.0 (first result is relevant)
 //! ```
 
+// SAFETY: Numeric casts in metrics are intentional:
+// - u128->u64 for millisecond durations: durations fit within u64 (thousands of years)
+// - Used for logging and monitoring, not precise calculations
+#![allow(clippy::cast_possible_truncation)]
+
 use std::collections::HashSet;
 use std::hash::Hash;
 

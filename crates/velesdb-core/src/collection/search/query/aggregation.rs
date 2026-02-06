@@ -8,10 +8,12 @@
 // SAFETY: Numeric casts in aggregation are intentional:
 // - All casts are for computing aggregate statistics (sum, avg, count)
 // - f64/u64 casts for maintaining precision in intermediate calculations
+// - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
 // - Values bounded by result set size and field cardinality
 // - Precision loss acceptable for aggregation results
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 use crate::collection::types::Collection;
 use crate::error::Result;
