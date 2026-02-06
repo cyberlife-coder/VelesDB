@@ -7,17 +7,17 @@
 
 ### Rust Best Practices (RUST)
 
-- [ ] **RUST-01**: Replace all `as` casts with `try_from()` or explicit bounds checks with justification
+- [x] **RUST-01**: Replace all `as` casts with `try_from()` or explicit bounds checks with justification
   - Priority: High
   - Files to audit: All numeric conversion points
   - Success: Zero `as` casts on user-provided data without bounds checking
 
-- [ ] **RUST-02**: Remove global `#[allow]` clippy attributes from `lib.rs`, use targeted allows with justification comments
+- [x] **RUST-02**: Remove global `#[allow]` clippy attributes from `lib.rs`, use targeted allows with justification comments
   - Priority: High
   - Files: `crates/velesdb-core/src/lib.rs:61-65`
   - Success: All clippy allows are function-level with SAFETY-style justification
 
-- [ ] **RUST-03**: Replace all `eprintln!`/`println!` in library code with proper `tracing` macros
+- [x] **RUST-03**: Replace all `eprintln!`/`println!` in library code with proper `tracing` macros
   - Priority: Medium
   - Files: `crates/velesdb-core/src/lib.rs:437` and others
   - Success: Library code uses only `tracing::info!`, `debug!`, `warn!`, `error!`
@@ -62,7 +62,7 @@
 
 ### Bug Fixes & Code Smells (BUG)
 
-- [ ] **BUG-01**: Fix numeric cast overflow/truncation risks
+- [x] **BUG-01**: Fix numeric cast overflow/truncation risks
   - Priority: High
   - Files: All `as` casts identified in RUST-01 audit
   - Success: No silent truncation; explicit bounds checks with comments
