@@ -17,6 +17,12 @@
 //! - **Node48**: 48 children with 256-byte key index
 //! - **Node256**: Direct 256-child array (densest)
 //! - **Leaf**: Compressed entries with LCP (Longest Common Prefix)
+
+// SAFETY: Numeric casts in C-ART node operations are intentional:
+// - usize->u8 for child indices: C-ART nodes have max 256 children, indices fit in u8
+// - Node types enforce size limits (Node4=4, Node16=16, Node48=48, Node256=256)
+// - All index values are validated against node capacity before casting
+#![allow(clippy::cast_possible_truncation)]
 //!
 //! ## Performance Targets
 //!

@@ -16,6 +16,11 @@
 //! - RapidStore Section 6.3: "low-degree vertices use small arrays further
 //!   grouped into a tree to optimize memory usage"
 
+// SAFETY: Numeric casts in clustered index are intentional:
+// - usize->f64 for fragmentation ratio: precision loss acceptable (0-1 ratio)
+// - Values bounded by buffer sizes, used for statistics only
+#![allow(clippy::cast_precision_loss)]
+
 use super::degree_router::EdgeIndex;
 use rustc_hash::FxHashMap;
 
