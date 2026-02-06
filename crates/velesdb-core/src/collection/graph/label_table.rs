@@ -113,6 +113,7 @@ impl LabelTable {
                 max_labels: u32::MAX,
             });
         }
+        // SAFETY: len checked against u32::MAX above, truncation impossible
         #[allow(clippy::cast_possible_truncation)]
         let id = LabelId(len as u32);
         self.strings.push(s.to_string());

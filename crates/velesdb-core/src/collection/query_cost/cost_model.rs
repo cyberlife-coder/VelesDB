@@ -6,10 +6,12 @@
 // SAFETY: Numeric casts in cost model are intentional:
 // - All casts are for cost estimation/statistics (not user data)
 // - f64->f32 precision loss acceptable for query planning heuristics
+// - f64->u64 sign loss acceptable (values are always positive costs/estimates)
 // - Values are bounded by collection stats (cardinality, vector dimensions)
 // - Cost estimates are approximate by design (order-of-magnitude accuracy)
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 use crate::collection::stats::{CollectionStats, IndexStats};
 

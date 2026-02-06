@@ -278,6 +278,7 @@ impl PropertyIndex {
 // =============================================================================
 
 /// Index type for composite indexes.
+// Reason: CompositeIndexType part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompositeIndexType {
@@ -291,17 +292,7 @@ pub enum CompositeIndexType {
 ///
 /// Provides O(1) lookups for nodes matching a label and specific property values.
 /// Useful for queries like `MATCH (n:Person {name: 'Alice', city: 'Paris'})`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let mut index = CompositeGraphIndex::new("Person", vec!["name", "city"], CompositeIndexType::Hash);
-/// index.insert(1, &[json!("Alice"), json!("Paris")]);
-/// index.insert(2, &[json!("Bob"), json!("London")]);
-///
-/// let nodes = index.lookup(&[json!("Alice"), json!("Paris")]);
-/// assert_eq!(nodes, &[1]);
-/// ```
+// Reason: CompositeGraphIndex part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CompositeGraphIndex {
@@ -315,6 +306,7 @@ pub struct CompositeGraphIndex {
     hash_index: HashMap<u64, Vec<u64>>,
 }
 
+// Reason: CompositeGraphIndex impl part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 impl CompositeGraphIndex {
     /// Creates a new composite index.
@@ -451,6 +443,7 @@ impl CompositeGraphIndex {
 }
 
 /// Manager for multiple composite indexes.
+// Reason: CompositeIndexManager part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CompositeIndexManager {
@@ -458,6 +451,7 @@ pub struct CompositeIndexManager {
     indexes: HashMap<String, CompositeGraphIndex>,
 }
 
+// Reason: CompositeIndexManager impl part of EPIC-047 composite graph index feature
 #[allow(dead_code)]
 impl CompositeIndexManager {
     /// Creates a new index manager.
@@ -555,6 +549,7 @@ impl CompositeIndexManager {
 // =============================================================================
 
 /// Wrapper for total ordering on JSON values.
+// Reason: OrderedValue part of EPIC-047 range index feature
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderedValue(Value);

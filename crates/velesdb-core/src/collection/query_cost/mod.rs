@@ -35,6 +35,7 @@
 // - Precision loss acceptable for cost estimates (approximate by design)
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 use std::fmt;
 
