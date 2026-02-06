@@ -107,6 +107,18 @@ pub(crate) use sum_remainder_unrolled_8;
 pub(crate) use sum_squared_remainder_unrolled_8;
 
 // =============================================================================
+// Unsafe Invariants Reference
+// =============================================================================
+// SAFETY: Shared invariants for SIMD unsafe blocks in this module.
+// - Condition 1: All pointer arithmetic is derived from slice pointers with loop bounds
+//   proving in-range access for each lane width.
+// - Condition 2: Target-featured functions are called only after runtime feature checks
+//   or on architectures where the feature is guaranteed.
+// - Condition 3: Unaligned loads use `*_loadu_*`/masked-load intrinsics or equivalent
+//   APIs that permit unaligned access.
+// Reason: Intrinsics and pointer math are required for hot-path SIMD performance.
+
+// =============================================================================
 // AVX-512 Implementation (x86_64)
 // =============================================================================
 
@@ -258,7 +270,8 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[target_feature(enable = "avx512f")]
 #[inline]
 unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: See dot_product_avx512_4acc for detailed safety justification.
+    // SAFETY: See module-level "Unsafe Invariants Reference" and
+    // `dot_product_avx512_4acc` for per-loop bound guarantees.
     use std::arch::x86_64::*;
 
     let len = a.len();
@@ -336,6 +349,7 @@ unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[target_feature(enable = "avx512f")]
 #[inline]
 unsafe fn squared_l2_avx512(a: &[f32], b: &[f32]) -> f32 {
+    // SAFETY: See module-level "Unsafe Invariants Reference".
     use std::arch::x86_64::*;
 
     let len = a.len();

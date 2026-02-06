@@ -53,8 +53,15 @@ pub struct ContiguousVectors {
     capacity: usize,
 }
 
-// SAFETY: ContiguousVectors owns its data and doesn't share mutable access
+// SAFETY: `ContiguousVectors` is `Send` because it owns its allocation.
+// - Condition 1: The backing buffer is uniquely owned by the struct.
+// - Condition 2: Mutation requires `&mut self` or lock-guarded interior access.
+// Reason: Moving ownership of this container between threads is sound.
 unsafe impl Send for ContiguousVectors {}
+// SAFETY: `ContiguousVectors` is `Sync` because shared access is read-only.
+// - Condition 1: All writes happen through methods requiring mutable or exclusive lock access.
+// - Condition 2: Returned shared slices borrow immutably and cannot mutate internal state.
+// Reason: Concurrent shared references cannot violate aliasing rules.
 unsafe impl Sync for ContiguousVectors {}
 
 impl fmt::Debug for ContiguousVectors {
@@ -86,7 +93,10 @@ impl ContiguousVectors {
         let capacity = capacity.max(16); // Minimum 16 vectors
         let layout = Self::layout(dimension, capacity);
 
-        // SAFETY: Layout is valid (non-zero size due to dimension > 0 and capacity >= 16)
+        // SAFETY: `alloc` requires a valid non-zero layout.
+        // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
+        // - Condition 2: `layout` is built via `Layout::from_size_align` and therefore valid.
+        // Reason: Manual allocation is required for aligned contiguous SIMD-friendly storage.
         let ptr = unsafe { alloc(layout) };
 
         // EPIC-032/US-002: Use NonNull for type-level non-null guarantee
