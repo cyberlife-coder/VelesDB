@@ -40,6 +40,7 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 
 ### Current Focus
 **Phase 2 execution underway**
+- 02-01 unsafe audit plan completed with inventory-led closure for all in-scope unsafe-bearing non-test files
 - 02-02 parser fragility plan completed with assertion-style regression coverage for aggregate wildcard, HAVING operator capture, and correlated-subquery extraction/dedup behavior
 - Targeted parser BUG markers removed from `select.rs` and `values.rs`
 
@@ -51,7 +52,7 @@ Execute `02-03-PLAN.md` (SIMD property-based testing foundation)
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 5/26 (19%)
+- **Completed:** 7/26 (27%)
 - **In Progress:** 0/26
 - **Pending:** 22/26
 
@@ -61,8 +62,8 @@ Execute `02-03-PLAN.md` (SIMD property-based testing foundation)
 - [x] RUST-01 — Numeric cast fixes (Plan 01-01 complete)
 - [x] RUST-02 — Clippy allow cleanup (Plan 01-02 complete)
 - [x] RUST-03 — Tracing migration (Plan 01-03 complete)
-- [ ] RUST-04 — SAFETY comments
-- [ ] RUST-05 — must_use attributes
+- [x] RUST-04 — SAFETY comments (Plan 02-01 in-scope closure)
+- [x] RUST-05 — must_use attributes (Plan 02-01 in-scope closure)
 
 #### Code Quality (QUAL)
 - [ ] QUAL-01 — Module extraction
@@ -158,6 +159,8 @@ unsafe { ... }
 | 2026-02-06 | Module-level allows preferred | Targeted suppression vs global blanket allows | 1 |
 | 2026-02-06 | BUG-02 scope bounded to adjacent parser hotspots | Avoid broad comment churn while closing BUG-03 targeted sites | 2 |
 | 2026-02-06 | Correlation dedup regression uses quoted dotted identifier | Current grammar path that exercises extraction/dedup assertions reliably | 2 |
+| 2026-02-06 | Inventory-first unsafe closure | Track and close every unsafe-bearing in-scope file with evidence fields | 2 |
+| 2026-02-06 | must_use audit with rationale ledger | Avoid blanket annotations while enforcing return-value discipline | 2 |
 
 ---
 
@@ -179,21 +182,22 @@ None.
 ## Session Continuity
 
  ### Last Session
-2026-02-06 21:08 UTC — Completed 02-02-PLAN.md
-- Parser hotspots stabilized with direct assertion regressions
-- Verified: `cargo test -p velesdb-core pr_review_bugfix_tests`, `cargo test -p velesdb-core parser::`, `cargo clippy -p velesdb-core -- -D warnings`
-- Commits: `16f3231a` (parser invariant/comment updates), `125f2f51` (assertion regressions)
+2026-02-06 21:08 UTC — Completed 02-01-PLAN.md
+- Unsafe and must_use closure ledger created at `.planning/phases/02-unsafe-code-audit-testing-foundation/02-unsafe-audit-inventory.md`
+- SAFETY template coverage hardened across SIMD/storage/HNSW/memory-pool in-scope files
+- Verified: `cargo test -p velesdb-core simd_native_tests`, `cargo test -p velesdb-core storage::tests`, `cargo clippy -p velesdb-core -- -D warnings`
+- Commits: `ea919404`, `4f62c7f6`, `4a5fd8d0`
 
 ### Current Branch
 main
 
 ### Uncommitted Changes
-Planning docs pending commit (`02-02-SUMMARY.md`, updated `STATE.md`)
+Planning docs pending commit (`02-01-SUMMARY.md`, updated `STATE.md`)
 
 ### Notes for Next Session
 1. Execute `02-03-PLAN.md`
 2. Build SIMD property-based equivalence harness (TEST-01)
-3. Run full quality gates after SIMD test additions
+3. Preserve 02-01 inventory boundaries when extending coverage
 
 ---
 
