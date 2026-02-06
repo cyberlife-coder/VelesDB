@@ -3,6 +3,11 @@
 //! This module provides `ConcurrentEdgeStore`, a thread-safe wrapper around
 //! `EdgeStore` that uses sharding to reduce lock contention.
 
+// SAFETY: Numeric casts in edge store sharding are intentional:
+// - u64->usize for node ID hashing: Node IDs are generated sequentially and fit in usize
+// - Used for sharding only, actual storage uses u64 for persistence
+#![allow(clippy::cast_possible_truncation)]
+
 use super::edge::{EdgeStore, GraphEdge};
 use crate::error::{Error, Result};
 use parking_lot::RwLock;
