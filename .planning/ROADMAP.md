@@ -45,6 +45,14 @@ Each phase delivers a coherent, verifiable capability that builds upon previous 
 - `crates/velesdb-core/src/lib.rs` (global allows at lines 61-65, eprintln at 437)
 - All files with numeric conversions (audit during implementation)
 
+### Plans
+
+**Plans:** 3 plans in 1 wave (all parallel)
+
+- [ ] `01-01-PLAN.md` — Numeric Cast Audit & Fixes (RUST-01, BUG-01)
+- [ ] `01-02-PLAN.md` — Clippy Configuration Cleanup (RUST-02)
+- [ ] `01-03-PLAN.md` — Tracing Migration (RUST-03)
+
 ---
 
 ## Phase 2: Unsafe Code Audit & Testing Foundation
