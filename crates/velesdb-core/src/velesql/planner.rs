@@ -59,6 +59,9 @@ impl QueryStats {
     /// Updates graph selectivity estimate.
     pub fn update_graph_selectivity(&self, matched: u64, total: u64) {
         if total > 0 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // Reason: selectivity ratio * 1_000_000 is always in [0, 1_000_000] range,
+            // which fits in u64. Both matched and total are unsigned, so ratio is non-negative.
             let selectivity = (matched as f64 / total as f64 * 1_000_000.0) as u64;
             self.graph_selectivity.store(selectivity, Ordering::Relaxed);
         }
