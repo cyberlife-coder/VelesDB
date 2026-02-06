@@ -12,6 +12,13 @@
 //! - **Temporal Index**: Efficient O(log N) time-based queries
 //! - **Adaptive Reinforcement**: Extensible confidence update strategies
 
+// SAFETY: Numeric casts in agent memory are intentional:
+// - u64 <-> i64 casts for timestamps (SystemTime uses u64, DB schema uses i64)
+// - Values are always positive (elapsed time) and bounded by reasonable ranges
+// - Casts verified by temporal index tests and snapshot functionality
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_sign_loss)]
+
 use crate::Database;
 use std::sync::Arc;
 

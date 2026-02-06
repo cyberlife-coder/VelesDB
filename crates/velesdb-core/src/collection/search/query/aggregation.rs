@@ -5,6 +5,14 @@
 //! Supports HAVING for filtering groups (US-006).
 //! Supports parallel aggregation with rayon (EPIC-018 US-001).
 
+// SAFETY: Numeric casts in aggregation are intentional:
+// - All casts are for computing aggregate statistics (sum, avg, count)
+// - f64/u64 casts for maintaining precision in intermediate calculations
+// - Values bounded by result set size and field cardinality
+// - Precision loss acceptable for aggregation results
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};

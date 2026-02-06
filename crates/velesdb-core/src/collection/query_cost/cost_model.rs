@@ -3,6 +3,14 @@
 //! Provides cost estimation for different operation types based on
 //! collection statistics, enabling cost-based query optimization.
 
+// SAFETY: Numeric casts in cost model are intentional:
+// - All casts are for cost estimation/statistics (not user data)
+// - f64->f32 precision loss acceptable for query planning heuristics
+// - Values are bounded by collection stats (cardinality, vector dimensions)
+// - Cost estimates are approximate by design (order-of-magnitude accuracy)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::collection::stats::{CollectionStats, IndexStats};
 
 /// Cost factors for different operations (configurable).

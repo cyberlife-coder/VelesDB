@@ -3,6 +3,15 @@
 //! Space-efficient probabilistic data structure for fast negative lookups.
 //! Based on arXiv:2310.11703v2 recommendations.
 
+// SAFETY: Numeric casts in bloom filter are intentional:
+// - All casts are for bit array indexing and hash calculations
+// - usize->f64 casts are for computing optimal filter parameters (m, k)
+// - f64->usize casts are for array sizing (ceil ensures sufficient space)
+// - Values are bounded by practical limits (capacity, FPR constraints)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+
 use parking_lot::RwLock;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};

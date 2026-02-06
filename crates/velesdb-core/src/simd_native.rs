@@ -19,6 +19,15 @@
 #![allow(clippy::wildcard_imports)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
+// SAFETY: Numeric casts in this file are intentional and safe:
+// - All casts are from well-bounded values (vector dimensions, loop indices)
+// - f64->f32 casts are for quantization metrics where precision loss is acceptable
+// - usize->f64 casts are for statistical calculations (mean, variance) where
+//   52-bit mantissa precision is sufficient for performance metrics
+// - All casts are validated by extensive SIMD tests (simd_native_tests.rs)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 // =============================================================================
 // Remainder Handling Macro (FLAG-005: Factorisation)
