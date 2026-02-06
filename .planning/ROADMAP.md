@@ -47,11 +47,13 @@ Each phase delivers a coherent, verifiable capability that builds upon previous 
 
 ### Plans
 
-**Plans:** 3 plans in 1 wave (all parallel)
+**Plans:** 5 plans in 1 wave (all parallel)
 
-- [ ] `01-01-PLAN.md` — Numeric Cast Audit & Fixes (RUST-01, BUG-01)
-- [ ] `01-02-PLAN.md` — Clippy Configuration Cleanup (RUST-02)
-- [ ] `01-03-PLAN.md` — Tracing Migration (RUST-03)
+- [x] `01-01-PLAN.md` — Numeric Cast Audit & Fixes (RUST-01, BUG-01)
+- [x] `01-02-PLAN.md` — Clippy Configuration Cleanup (RUST-02)
+- [x] `01-03-PLAN.md` — Tracing Migration (RUST-03)
+- [ ] `01-04-PLAN.md` — Fix Clippy Cast Errors (Gap Closure)
+- [ ] `01-05-PLAN.md` — Add SAFETY Comments & Integration Tests (Gap Closure)
 
 ---
 
