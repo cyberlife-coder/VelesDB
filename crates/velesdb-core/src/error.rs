@@ -112,6 +112,13 @@ pub enum Error {
     /// Node not found (VELES-022).
     #[error("[VELES-022] Node with ID '{0}' not found")]
     NodeNotFound(u64),
+
+    /// Numeric overflow (VELES-023).
+    ///
+    /// Indicates a numeric conversion would overflow or truncate.
+    /// Use try_from() instead of `as` casts for user-provided data.
+    #[error("[VELES-023] Numeric overflow: {0}")]
+    Overflow(String),
 }
 
 impl Error {
@@ -141,6 +148,7 @@ impl Error {
             Self::EdgeNotFound(_) => "VELES-020",
             Self::InvalidEdgeLabel(_) => "VELES-021",
             Self::NodeNotFound(_) => "VELES-022",
+            Self::Overflow(_) => "VELES-023",
         }
     }
 
