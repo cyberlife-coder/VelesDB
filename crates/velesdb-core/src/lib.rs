@@ -45,8 +45,7 @@
 //! ```
 
 #![warn(missing_docs)]
-#![warn(clippy::all)]
-#![warn(clippy::pedantic)]
+// Clippy lints configured in workspace Cargo.toml [workspace.lints.clippy]
 
 #[cfg(feature = "persistence")]
 pub mod agent;

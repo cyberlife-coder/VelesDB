@@ -82,3 +82,69 @@ strip = true
 lto = true
 codegen-units = 1
 
+# =============================================================================
+# Workspace-wide Clippy Configuration (01-02)
+# =============================================================================
+# These lints are allowed workspace-wide as they represent style preferences
+# without bug risk. Security-related lints (casts, unsafe) must use targeted
+# #[allow] with SAFETY-style justification at the function level.
+[workspace.lints.clippy]
+# Naming and style (no bug risk)
+module_name_repetitions = "allow"
+doc_markdown = "allow"
+if_not_else = "allow"
+single_match_else = "allow"
+wildcard_imports = "allow"
+used_underscore_binding = "allow"
+
+# Refactoring suggestions (no bug risk)
+option_if_let_else = "allow"
+manual_let_else = "allow"
+collapsible_if = "allow"
+match_single_binding = "allow"
+use_self = "allow"
+
+# Performance micro-optimizations (no bug risk)
+redundant_clone = "allow"
+missing_const_for_fn = "allow"
+suboptimal_flops = "allow"
+imprecise_flops = "allow"
+large_stack_arrays = "allow"
+unnecessary_cast = "allow"
+redundant_pub_crate = "allow"
+
+# API design preferences (no bug risk)
+implicit_hasher = "allow"
+derive_partial_eq_without_eq = "allow"
+
+# Async/dead code (no bug risk)
+unused_async = "allow"
+unused_self = "allow"
+unused_peekable = "allow"
+
+# Documentation preferences (no bug risk)
+missing_errors_doc = "allow"
+
+# Code style preferences (no bug risk)
+ptr_as_ptr = "allow"
+significant_drop_tightening = "allow"
+significant_drop_in_scrutinee = "allow"
+set_contains_or_insert = "allow"
+useless_let_if_seq = "allow"
+manual_assert = "allow"
+assertions_on_constants = "allow"
+uninlined_format_args = "allow"
+
+# Numeric casts - these require justification at function level, not workspace
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+cast_possible_wrap = "warn"
+cast_lossless = "allow"
+
+# Thread safety - requires SAFETY documentation
+non_send_fields_in_send_ty = "warn"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
