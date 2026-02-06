@@ -94,6 +94,15 @@ Each phase delivers a coherent, verifiable capability that builds upon previous 
 - `velesql/parser/select.rs` (BUG-XXX at 414, 685)
 - `velesql/parser/values.rs` (BUG-XXX at 377, 384)
 
+### Plans
+
+**Plans:** 3 plans in 2 waves
+
+Plans:
+- [ ] `02-01-PLAN.md` — Unsafe SIMD/guard audit with template-complete SAFETY docs and targeted `#[must_use]`
+- [ ] `02-02-PLAN.md` — VelesQL parser fragility fixes with regression tests for former BUG markers
+- [ ] `02-03-PLAN.md` — Property-based SIMD equivalence test foundation with reproducible tolerance policy
+
 ---
 
 ## Phase 3: Architecture Extraction & Graph Safety
