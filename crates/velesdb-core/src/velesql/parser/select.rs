@@ -411,7 +411,7 @@ impl Parser {
             agg_type.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate type"))?;
         let arg = arg.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate argument"))?;
 
-        // BUG-10 FIX: Only COUNT(*) is valid - SUM/AVG/MIN/MAX require a column name
+        // Wildcard aggregation is only valid for COUNT(*); others require a named column.
         if matches!(arg, AggregateArg::Wildcard) && !matches!(agg_type, AggregateType::Count) {
             return Err(ParseError::syntax(
                 0,
@@ -682,7 +682,7 @@ impl Parser {
                             conditions.push(Self::parse_having_term(term_pair)?);
                         }
                         Rule::having_logical_op => {
-                            // BUG-6 FIX: Now properly capture AND/OR from named rule
+                            // Preserve logical operators so HAVING condition order remains intact.
                             let text = term_pair.as_str().to_uppercase();
                             if text == "AND" {
                                 operators.push(crate::velesql::LogicalOp::And);
