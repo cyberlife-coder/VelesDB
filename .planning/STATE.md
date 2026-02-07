@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core Refactoring Milestone  
-**Current Phase:** 2 — Unsafe Code & Testing Foundation (In Progress)  
+**Current Phase:** 3 — Architecture & Graph (Complete)  
 **Session Started:** 2026-02-06  
 
 ---
@@ -33,31 +33,31 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 |-------|------|--------|----------|
 | 1 | Foundation Fixes | ✅ Complete | None |
 | 2 | Unsafe Code & Testing | ✅ Complete | None |
-| 3 | Architecture & Graph | 🔄 In progress | None |
+| 3 | Architecture & Graph | ✅ Complete | None |
 | 4 | Complexity & Errors | ⏳ Pending | Phase 3 |
 | 5 | Cleanup & Performance | ⏳ Pending | Phase 4 |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 3 in progress (03-01, 03-02, 03-03 complete)**
+**Phase 3 complete (all 4 plans delivered)**
 - 03-01 SIMD module extraction: simd_native.rs converted to directory module
-- 03-02 Parser select.rs extraction: 829-line monolith split into 7 clause-oriented submodules with shared validation
-- 03-03 HNSW graph extraction + lock safety: graph.rs split into submodules, lock-rank checker + counters, serde dedup
-- All 541 velesql tests pass, all 13 pr_review_bugfix_tests pass
+- 03-02 Parser select.rs extraction: 829-line monolith split into 7 clause-oriented submodules
+- 03-03 HNSW graph extraction + lock safety: graph.rs split into submodules, lock-rank checker + counters
+- 03-04 Concurrency verification: 15 new tests across both required families (insert/search/delete + resize/snapshot)
 
 ### Next Action
-Execute `03-04-PLAN.md` (Concurrency test suites)
+Phase 4: Complexity Reduction & Error Handling
 
-Progress: █████████░ 83%
+Progress: ████████████░░░░ 75%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 8/26 (31%)
+- **Completed:** 13/26 (50%)
 - **In Progress:** 0/26
-- **Pending:** 18/26
+- **Pending:** 13/26
 
 ### By Category
 
@@ -93,7 +93,7 @@ Progress: █████████░ 83%
 
 #### Testing (TEST)
 - [x] TEST-01 — SIMD property tests (Plan 02-03 complete)
-- [ ] TEST-02 — Concurrent resize tests
+- [x] TEST-02 — Concurrent resize tests (Plan 03-04 complete)
 - [ ] TEST-03 — GPU error tests
 - [ ] TEST-04 — WAL recovery tests
 
@@ -174,6 +174,8 @@ unsafe { ... }
 | 2026-02-07 | Safety counter logging gated behind debug_assertions | Tracing formatting cost non-trivial; atomic increments near-zero | 3 |
 | 2026-02-07 | Hybrid parser split: clause modules + shared validation | Matches locked CONTEXT.md decision; reduces validation drift | 3 |
 | 2026-02-07 | Merged 3 tasks into single atomic commit | Validation module integral to extraction; cleaner changeset | 3 |
+| 2026-02-07 | Soft-delete tested at NativeHnswIndex level | remove() operates on mappings only; graph retains tombstones | 3 |
+| 2026-02-07 | Loom epoch tests target semantics only | Loom doesn't support file I/O; standard tests cover full stack | 3 |
 
 ---
 
@@ -195,11 +197,11 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 14:48 UTC — Completed 03-02-PLAN.md
-- Split select.rs (829 lines) into 7 clause-oriented submodules (all under 200 lines)
-- Created shared validation.rs for aggregate wildcard and comparison operator checks
-- Stable facade in mod.rs with parse_query/parse_select_stmt entry points
-- All 541 velesql tests pass, zero clippy warnings
+2026-02-07 16:02 UTC — Completed 03-04-PLAN.md (Phase 3 complete)
+- Added 15 concurrency tests across both required families
+- Family 1: parallel insert/search/delete with deterministic invariant assertions + soft-delete exclusion
+- Family 2: resize/snapshot consistency with epoch guard validation + loom scenarios
+- All quality gates pass: fmt, clippy -D warnings, 2394 tests passing
 
 ### Current Branch
 main
@@ -208,9 +210,9 @@ main
 None
 
 ### Notes for Next Session
-1. Continue Phase 3 with `03-04-PLAN.md` (concurrency test suites)
-2. Parser hybrid decomposition strategy is now complete
-3. Validation module ready for future cross-cutting validation rules
+1. Phase 3 is fully complete — ready for Phase 4: Complexity Reduction & Error Handling
+2. Lock-order runtime checker and safety counters are exercised by concurrency tests
+3. Both HNSW and storage concurrency families are now regression-protected
 
 ---
 
@@ -247,4 +249,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-07*  
-*Progress: 8/26 requirements (31%) — Phase 2 complete (02-05 complete)*
+*Progress: 13/26 requirements (50%) — Phase 3 complete (03-04 complete)*
