@@ -236,9 +236,11 @@ impl VectorStore {
 
         if offset < buffer.len() {
             #[cfg(target_arch = "x86_64")]
-            // SAFETY (EPIC-032/US-003): _mm_prefetch is safe when:
-            // 1. Target has x86_64 architecture (cfg guard)
-            // 2. Pointer is within bounds (offset < buffer.len() check above)
+            // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
+            // - Condition 1: Target architecture is x86_64 (cfg guard above)
+            // - Condition 2: Pointer is within valid bounds (offset < buffer.len() check above)
+            // - Condition 3: Prefetch instructions are hints and never fault
+            // Reason: Software prefetching for cache optimization before vector access.
             unsafe {
                 use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
                 let ptr = buffer.as_ptr().add(offset);
