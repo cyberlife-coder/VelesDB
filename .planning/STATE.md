@@ -32,29 +32,31 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | Phase | Name | Status | Blockers |
 |-------|------|--------|----------|
 | 1 | Foundation Fixes | ✅ Complete | None |
-| 2 | Unsafe Code & Testing | 🔄 In progress | None |
-| 3 | Architecture & Graph | ⏳ Pending | Phase 2 |
+| 2 | Unsafe Code & Testing | ✅ Complete | None |
+| 3 | Architecture & Graph | 🔄 In progress | None |
 | 4 | Complexity & Errors | ⏳ Pending | Phase 3 |
 | 5 | Cleanup & Performance | ⏳ Pending | Phase 4 |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 2 execution underway**
+**Phase 2 completed**
 - 02-01 unsafe audit plan completed with inventory-led closure for all in-scope unsafe-bearing non-test files
 - 02-02 parser fragility plan completed with assertion-style regression coverage for aggregate wildcard, HAVING operator capture, and correlated-subquery extraction/dedup behavior
-- Targeted parser BUG markers removed from `select.rs` and `values.rs`
+- 02-03 SIMD property-based equivalence suite completed with reproducible proptest settings and tolerance matrix
 
 ### Next Action
-Execute `02-03-PLAN.md` (SIMD property-based testing foundation)
+Execute `03-01-PLAN.md` (SIMD module extraction and stable facade)
+
+Progress: ███████░░░ 67%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 7/26 (27%)
+- **Completed:** 8/26 (31%)
 - **In Progress:** 0/26
-- **Pending:** 22/26
+- **Pending:** 18/26
 
 ### By Category
 
@@ -89,7 +91,7 @@ Execute `02-03-PLAN.md` (SIMD property-based testing foundation)
 - [ ] DOCS-04 — Outdated docs
 
 #### Testing (TEST)
-- [ ] TEST-01 — SIMD property tests
+- [x] TEST-01 — SIMD property tests (Plan 02-03 complete)
 - [ ] TEST-02 — Concurrent resize tests
 - [ ] TEST-03 — GPU error tests
 - [ ] TEST-04 — WAL recovery tests
@@ -161,6 +163,8 @@ unsafe { ... }
 | 2026-02-06 | Correlation dedup regression uses quoted dotted identifier | Current grammar path that exercises extraction/dedup assertions reliably | 2 |
 | 2026-02-06 | Inventory-first unsafe closure | Track and close every unsafe-bearing in-scope file with evidence fields | 2 |
 | 2026-02-06 | must_use audit with rationale ledger | Avoid blanket annotations while enforcing return-value discipline | 2 |
+| 2026-02-07 | Persist proptest failures for integration tests | Ensures reproducible SIMD counterexamples without source-root lookup ambiguity | 2 |
+| 2026-02-07 | Per-metric tolerance envelopes | Keeps SIMD scalar-equivalence assertions stable across ISA/accumulation-order differences | 2 |
 
 ---
 
@@ -182,22 +186,22 @@ None.
 ## Session Continuity
 
  ### Last Session
-2026-02-06 21:08 UTC — Completed 02-01-PLAN.md
-- Unsafe and must_use closure ledger created at `.planning/phases/02-unsafe-code-audit-testing-foundation/02-unsafe-audit-inventory.md`
-- SAFETY template coverage hardened across SIMD/storage/HNSW/memory-pool in-scope files
-- Verified: `cargo test -p velesdb-core simd_native_tests`, `cargo test -p velesdb-core storage::tests`, `cargo clippy -p velesdb-core -- -D warnings`
-- Commits: `ea919404`, `4f62c7f6`, `4a5fd8d0`
+2026-02-07 09:16 UTC — Completed 02-03-PLAN.md
+- Added `crates/velesdb-core/tests/simd_property_tests.rs` with property-based SIMD vs scalar equivalence checks
+- Added reproducible proptest configuration and tolerance policy updates in `crates/velesdb-core/src/simd_native_tests.rs`
+- Verified: `cargo test -p velesdb-core --test simd_property_tests -- --nocapture`, `cargo clippy -p velesdb-core -- -D warnings`, `cargo fmt --all --check`
+- Commits: `347ed7fb`, `6415c1e1`, `19752e4a`
 
 ### Current Branch
 main
 
 ### Uncommitted Changes
-Planning docs pending commit (`02-01-SUMMARY.md`, updated `STATE.md`)
+Local user edits present in `crates/velesdb-core/src/velesql/pr_review_bugfix_tests.rs` (left untouched)
 
 ### Notes for Next Session
-1. Execute `02-03-PLAN.md`
-2. Build SIMD property-based equivalence harness (TEST-01)
-3. Preserve 02-01 inventory boundaries when extending coverage
+1. Start Phase 3 with `03-01-PLAN.md`
+2. Preserve SIMD property test coverage while extracting architecture-specific modules
+3. Keep zero-breaking-change boundary on public SIMD entrypoints
 
 ---
 
@@ -233,5 +237,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2026-02-06*  
-*Progress: 5/26 requirements (19%) — Phase 2 in progress (02-02 complete)*
+*State file last updated: 2026-02-07*  
+*Progress: 8/26 requirements (31%) — Phase 2 complete (02-03 complete)*

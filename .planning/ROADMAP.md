@@ -99,9 +99,9 @@ Each phase delivers a coherent, verifiable capability that builds upon previous 
 **Plans:** 3 plans in 2 waves
 
 Plans:
-- [ ] `02-01-PLAN.md` — Inventory-led unsafe closure across core modules with scoped BUG-02 audit and broad `#[must_use]` coverage
-- [ ] `02-02-PLAN.md` — VelesQL parser fragility fixes with assertion-style regressions at targeted BUG sites
-- [ ] `02-03-PLAN.md` — Property-based SIMD equivalence test foundation with reproducible tolerance policy
+- [x] `02-01-PLAN.md` — Inventory-led unsafe closure across core modules with scoped BUG-02 audit and broad `#[must_use]` coverage
+- [x] `02-02-PLAN.md` — VelesQL parser fragility fixes with assertion-style regressions at targeted BUG sites
+- [x] `02-03-PLAN.md` — Property-based SIMD equivalence test foundation with reproducible tolerance policy
 
 ---
 
@@ -275,13 +275,13 @@ Plans:
 | Phase | Status | Progress | Requirements | Success Criteria Met |
 |-------|--------|----------|--------------|---------------------|
 | 1 - Foundation Fixes | ✅ Complete | 100% | 4/26 | 5/5 |
-| 2 - Unsafe Code & Testing | ⏳ Pending | 0% | 5/26 | 0/5 |
+| 2 - Unsafe Code & Testing | ✅ Complete | 100% | 5/26 | 5/5 |
 | 3 - Architecture & Graph | ⏳ Pending | 0% | 4/26 | 0/7 |
 | 4 - Complexity & Errors | ⏳ Pending | 0% | 5/26 | 0/6 |
 | 5 - Cleanup & Performance | ⏳ Pending | 0% | 5/26 | 0/6 |
 | 6 - Documentation & Polish | ⏳ Pending | 0% | 4/26 | 0/6 |
 
-**Overall Progress:** 4/26 requirements (15%)
+**Overall Progress:** 8/26 requirements (31%)
 
 ---
 
@@ -322,5 +322,5 @@ After Phase 6 completion:
 ---
 
 *Roadmap created: 2026-02-06*  
-*Last updated: 2026-02-06*  
-*Next review: After Phase 2 completion*
+*Last updated: 2026-02-07*  
+*Next review: After Phase 3 midpoint*
