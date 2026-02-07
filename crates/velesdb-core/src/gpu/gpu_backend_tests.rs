@@ -29,7 +29,9 @@ fn test_gpu_accelerator_creation() {
 #[serial(gpu)]
 fn test_batch_cosine_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
-        let results = gpu.batch_cosine_similarity(&[], &[1.0, 0.0, 0.0], 3);
+        let results = gpu
+            .batch_cosine_similarity(&[], &[1.0, 0.0, 0.0], 3)
+            .unwrap();
         assert!(results.is_empty());
     }
 }
@@ -42,7 +44,7 @@ fn test_batch_cosine_identical_vectors() {
         let query = vec![1.0, 0.0, 0.0];
         let vectors = vec![1.0, 0.0, 0.0]; // One vector
 
-        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(
@@ -60,7 +62,7 @@ fn test_batch_cosine_orthogonal_vectors() {
         let query = vec![1.0, 0.0, 0.0];
         let vectors = vec![0.0, 1.0, 0.0]; // Orthogonal
 
-        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(results[0].abs() < 0.01, "Expected ~0.0, got {}", results[0]);
@@ -79,7 +81,7 @@ fn test_batch_cosine_multiple_vectors() {
             -1.0, 0.0, 0.0, // Opposite -> -1.0
         ];
 
-        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 3);
         assert!((results[0] - 1.0).abs() < 0.01, "Expected ~1.0");
