@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core Refactoring Milestone  
-**Current Phase:** 5 — Cleanup & Performance Optimization (Planned)  
+**Current Phase:** 7 — SIMD Tolerance Hardening & DistanceEngine Integration (Planned)  
 **Session Started:** 2026-02-06  
 
 ---
@@ -37,19 +37,17 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 4 | Complexity & Errors | ✅ Complete | None |
 | 5 | Cleanup & Performance | ✅ Complete | None |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
+| 7 | SIMD Tolerance & Engine | ⏳ Planned | Phase 5 |
 
 ### Current Focus
-**Phase 5 complete (3/3 plans) — cleanup & performance**
+**Phase 7 planned (0/2 plans) — SIMD tolerance & DistanceEngine integration**
 
-**Wave 1 — Cleanup (independent):**
-- 05-01: Dependency hygiene & dead code cleanup ✅ (10 deps removed, portable-simd flag removed)
-- 05-02: WAL recovery edge case tests ✅ (26 tests: partial writes, corruption, crash recovery)
-
-**Wave 2 — Performance:**
-- 05-03: SIMD dispatch optimization & benchmarks ✅ (DistanceEngine, 16 tests, benchmarked)
+**Wave 1 (sequential):**
+- 07-01: Widen SIMD property test tolerances (TEST-08) — ⏳ Ready
+- 07-02: Wire DistanceEngine into HNSW hot loop (PERF-04) — ⏳ Depends on 07-01
 
 ### Next Action
-Plan Phase 6: Documentation & Polish
+Execute Plan 07-01: Widen SIMD property test tolerances
 
 Progress: ██████████████░░ 88%
 
@@ -58,9 +56,9 @@ Progress: ██████████████░░ 88%
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 23/26 (88%)
-- **In Progress:** 0/26
-- **Pending:** 3/26
+- **Completed:** 23/28 (82%)
+- **In Progress:** 0/28
+- **Pending:** 5/28
 
 ### By Category
 
@@ -104,6 +102,10 @@ Progress: ██████████████░░ 88%
 - [x] PERF-01 — SIMD dispatch (DistanceEngine with cached fn pointers, 13% faster at 1536d cosine)
 - [ ] PERF-02 — Async I/O
 - [ ] PERF-03 — Format allocations
+- [ ] PERF-04 — Wire DistanceEngine into HNSW hot loop
+
+#### Testing (TEST) — continued
+- [ ] TEST-08 — Widen SIMD property test tolerances
 
 ---
 
@@ -200,12 +202,11 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 — Plan 05-03 executed: SIMD Dispatch Optimization & Benchmarks
-- Implemented DistanceEngine with cached fn pointers for dot_product, squared_l2, cosine
-- 16 unit tests verifying correctness vs *_native() across all common dimensions
-- Benchmarks: engine 13% faster at 1536d cosine, parity at 768d+
-- Batch simulation: 1000×768d comparison (native 55µs vs engine 59µs)
-- Verified: 2424 tests pass, 0 clippy warnings
+2026-02-07 — Phase 7 planned: SIMD Tolerance Hardening & DistanceEngine Integration
+- Created 07-01-PLAN.md: Widen SIMD property test tolerances (TEST-08)
+- Created 07-02-PLAN.md: Wire DistanceEngine into HNSW hot loop (PERF-04)
+- Root cause analysis: FMA multi-accumulator reordering + AVX2 parallel reduction rounding
+- Researched: dispatch.rs DistanceEngine, distance.rs SimdDistance, search.rs/insert.rs/neighbors.rs hot paths
 
 ### Current Branch
 feature/CORE-phase5-plan01-dependency-cleanup
@@ -214,10 +215,10 @@ feature/CORE-phase5-plan01-dependency-cleanup
 None (all committed)
 
 ### Notes for Next Session
-1. Phase 5 complete (05-01 + 05-02 + 05-03)
-2. Plan Phase 6: Documentation & Polish (DOCS-03, DOCS-04, PERF-02, PERF-03)
-3. DistanceEngine available for HNSW integration (deferred to PERF-02/PERF-03)
-4. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
+1. Execute Plan 07-01 first (tolerance fix — small, quick)
+2. Then Plan 07-02 (CachedSimdDistance — touches more files)
+3. Phase 6 (DOCS-03, DOCS-04, PERF-02, PERF-03) still pending
+4. DistanceEngine struct already exists in dispatch.rs from Phase 5
 
 ---
 
@@ -254,4 +255,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-07*  
-*Progress: 23/26 requirements (88%) — Phase 5 complete, Phase 6 pending*
+*Progress: 23/28 requirements (82%) — Phase 7 planned, ready to execute*
