@@ -39,10 +39,24 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 4 planned (3 plans ready for execution)**
-- 04-01 (Wave 1): Panic elimination + error type enrichment — convert 4 panic sites to Result, add 3 Error variants
-- 04-02 (Wave 1): Complexity reduction + naming clarity — fix 1 cognitive complexity violation, audit public API names
-- 04-03 (Wave 2): GPU error handling tests — graceful fallback, parameter validation, edge-case inputs
+**Phase 4 planned (9 plans in 4 waves) — exhaustive quality pass**
+
+**Wave 1 — Error Foundation:**
+- 04-01: Panic elimination + error type enrichment (4 panic sites → Result, 3 Error variants)
+
+**Wave 2 — Module Splitting (20 files >500 lines → 0):**
+- 04-02: Root modules — metrics.rs (1529), quantization.rs (559)
+- 04-03: collection/graph — 6 files (4226 lines total)
+- 04-04: collection/search/query — 5 files (4087 lines total)
+- 04-05: index + storage — 3 files (2038 lines, hot-path)
+- 04-06: velesql + column_store + query_cost — 4 files (2334 lines)
+
+**Wave 3 — Quality Enforcement:**
+- 04-07: Clippy pedantic remediation (476 → 0) + activate workspace lint
+- 04-08: Production hardening (20 expects, 64 bare-string errors, 1 complexity violation)
+
+**Wave 4 — Tests:**
+- 04-09: GPU error handling tests (fallback, validation, edge cases)
 
 ### Next Action
 Execute Plan 04-01: Panic Elimination & Error Type Enrichment
@@ -196,22 +210,23 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-08 — Created Phase 4 plans (3 plans in 2 waves)
-- Phase 3 gap closure completed: ISA kernel extraction (mod.rs 1818→124 lines)
-- Phase 4 planned: 04-01 (panic→Result), 04-02 (complexity+naming), 04-03 (GPU tests)
-- Codebase scan: 1 cognitive complexity violation, 4 panic sites, GPU tests missing error paths
+2026-02-08 — Deep research + expanded Phase 4 (3 → 9 plans)
+- Exhaustive scan: 20 files >500 lines, 476 pedantic warnings, 20 expects, 64 bare-string errors
+- User decision: split ALL 20 files, activate clippy::pedantic as workspace lint, zero tolerance
+- Created RESEARCH.md + CONTEXT.md + 9 plan files
 
 ### Current Branch
 main
 
 ### Uncommitted Changes
-Phase 4 plan files (uncommitted)
+Phase 4 expanded plan files (9 plans), RESEARCH.md, CONTEXT.md
 
 ### Notes for Next Session
-1. Execute 04-01 first (Wave 1) — panic elimination is highest priority
-2. 04-02 can run in parallel with 04-01 (both Wave 1, independent)
-3. 04-03 depends on 04-01 (GPU functions must return Result before writing error tests)
+1. Execute 04-01 first (Wave 1) — error foundation needed before GPU tests (04-09)
+2. Wave 2 (04-02 to 04-06) are independent — can be done in any order
+3. Wave 3 (04-07, 04-08) must wait for module splitting to be done
 4. guard.rs as_slice() → Result will ripple into storage/mmap.rs and HNSW search — trace carefully
+5. clippy --fix can auto-fix ~376 of 476 pedantic warnings (backticks, format!, semicolons)
 
 ---
 
