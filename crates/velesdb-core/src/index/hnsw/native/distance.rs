@@ -211,6 +211,58 @@ impl DistanceEngine for AdaptiveSimdDistance {
     }
 }
 
+/// SIMD distance with fully cached kernel resolution for HNSW hot loops.
+///
+/// All 5 distance metrics use pre-resolved fn pointers via `simd_native::DistanceEngine`.
+/// The only per-call branch is `match self.metric` for the distance-to-similarity
+/// transform (1-cosine, -dot), which is perfectly predicted by the branch predictor
+/// since a given HNSW index always uses the same metric.
+pub struct CachedSimdDistance {
+    metric: DistanceMetric,
+    engine: crate::simd_native::DistanceEngine,
+}
+
+impl CachedSimdDistance {
+    /// Creates a cached SIMD distance engine optimized for the given metric and dimension.
+    #[must_use]
+    pub fn new(metric: DistanceMetric, dimension: usize) -> Self {
+        Self {
+            metric,
+            engine: crate::simd_native::DistanceEngine::new(dimension),
+        }
+    }
+}
+
+impl DistanceEngine for CachedSimdDistance {
+    #[allow(clippy::inline_always)] // Reason: HNSW hot loop — single branch + fn pointer call
+    #[inline(always)]
+    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self.metric {
+            DistanceMetric::Cosine => 1.0 - self.engine.cosine_similarity(a, b),
+            DistanceMetric::Euclidean => self.engine.euclidean(a, b),
+            DistanceMetric::DotProduct => -self.engine.dot_product(a, b),
+            DistanceMetric::Hamming => self.engine.hamming(a, b),
+            DistanceMetric::Jaccard => 1.0 - self.engine.jaccard(a, b),
+        }
+    }
+
+    fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
+        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
+        let mut results = Vec::with_capacity(candidates.len());
+        for (i, candidate) in candidates.iter().enumerate() {
+            if i + prefetch_distance < candidates.len() {
+                crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
+            }
+            results.push(self.distance(query, candidate));
+        }
+        results
+    }
+
+    fn metric(&self) -> DistanceMetric {
+        self.metric
+    }
+}
+
 // =============================================================================
 // Scalar implementations (baseline for comparison)
 // =============================================================================
