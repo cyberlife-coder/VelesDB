@@ -73,33 +73,33 @@ unsafe impl Sync for VectorSliceGuard<'_> {}
 impl VectorSliceGuard<'_> {
     /// Returns the vector data as a slice.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the underlying mmap has been remapped since this guard was created.
-    /// This indicates a programming error where a guard outlived a resize operation.
+    /// Returns `Error::EpochMismatch` if the underlying mmap has been remapped
+    /// since this guard was created, meaning the pointer is stale.
     #[inline]
-    #[must_use]
-    pub fn as_slice(&self) -> &[f32] {
+    pub fn as_slice(&self) -> crate::error::Result<&[f32]> {
         // SAFETY: ptr and len were validated during construction,
         // and the guard ensures the mmap remains valid
         // Verify epoch – if the mmap was remapped the pointer is invalid
         let current = self.epoch_ptr.load(std::sync::atomic::Ordering::Acquire);
-        assert!(
-            current == self.epoch_at_creation,
-            "Mmap was remapped; VectorSliceGuard is invalid"
-        );
+        if current != self.epoch_at_creation {
+            return Err(crate::error::Error::EpochMismatch(
+                "Mmap was remapped; VectorSliceGuard is invalid".to_string(),
+            ));
+        }
         // SAFETY: `from_raw_parts` requires a valid pointer/len pair.
         // - Condition 1: `ptr` and `len` were validated when guard was created.
         // - Condition 2: Epoch equality above guarantees no remap invalidated `ptr`.
         // Reason: Zero-copy slice access avoids allocations while preserving safety invariants.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        Ok(unsafe { std::slice::from_raw_parts(self.ptr, self.len) })
     }
 }
 
 impl AsRef<[f32]> for VectorSliceGuard<'_> {
     #[inline]
     fn as_ref(&self) -> &[f32] {
-        self.as_slice()
+        self.as_slice().expect("epoch mismatch in AsRef")
     }
 }
 
@@ -108,6 +108,6 @@ impl std::ops::Deref for VectorSliceGuard<'_> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_slice()
+        self.as_slice().expect("epoch mismatch in Deref")
     }
 }
