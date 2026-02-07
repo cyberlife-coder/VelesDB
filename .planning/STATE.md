@@ -39,14 +39,15 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 3 in progress (03-01 SIMD extraction complete)**
-- 03-01 SIMD module extraction: simd_native.rs monolith converted to directory module with dispatch.rs, scalar.rs, prefetch.rs, tail_unroll.rs
-- All 66 SIMD regression tests pass with unchanged public API
+**Phase 3 in progress (03-01 and 03-03 complete)**
+- 03-01 SIMD module extraction: simd_native.rs converted to directory module
+- 03-03 HNSW graph extraction + lock safety: graph.rs split into submodules, lock-rank checker + counters, serde dedup
+- All 298 HNSW tests pass, 0 failures
 
 ### Next Action
 Execute `03-02-PLAN.md` (Parser select.rs extraction)
 
-Progress: ████████░░ 72%
+Progress: ████████░░ 75%
 
 ---
 
@@ -66,9 +67,9 @@ Progress: ████████░░ 72%
 - [x] RUST-04 — SAFETY comments (Plan 02-01 in-scope closure)
 - [x] RUST-05 — must_use attributes (Plan 02-01 in-scope closure)
 
-#### Code Quality (QUAL)
-- [ ] QUAL-01 — Module extraction
-- [ ] QUAL-02 — Deduplication
+ #### Code Quality (QUAL)
+- [x] QUAL-01 — Module extraction (partial: HNSW graph extracted in Plan 03-03)
+- [x] QUAL-02 — Deduplication (partial: HNSW serde dedup in Plan 03-03)
 - [ ] QUAL-03 — Complexity reduction
 - [ ] QUAL-04 — Naming clarity
 
@@ -76,7 +77,7 @@ Progress: ████████░░ 72%
 - [x] BUG-01 — Cast overflow risks (Plan 01-01 complete)
 - [ ] BUG-02 — Incorrect comments
 - [x] BUG-03 — Parser fragility (targeted hotspot closure in Plan 02-02)
-- [ ] BUG-04 — HNSW lock ordering
+- [x] BUG-04 — HNSW lock ordering (runtime checker + counters in Plan 03-03)
 
 #### Cleanup (CLEAN)
 - [ ] CLEAN-01 — Dead code
@@ -167,6 +168,9 @@ unsafe { ... }
 | 2026-02-07 | AGENTS-template SAFETY comments mandatory | Header + condition bullets + Reason line required for all unsafe blocks | 2 |
 | 2026-02-07 | Facade-first SIMD extraction | Convert simd_native.rs to directory module; ISA kernels transiently in mod.rs | 3 |
 | 2026-02-07 | Dispatch as separate module | SimdLevel + detection + all public dispatch in dispatch.rs | 3 |
+| 2026-02-07 | Shared serde helpers with struct wrappers | Better call-site readability than generic trait for HnswMeta/HnswMappingsData | 3 |
+| 2026-02-07 | Lock-rank checker always-on in release | Thread-local stack ~10-20ns per call, acceptable for lock paths | 3 |
+| 2026-02-07 | Safety counter logging gated behind debug_assertions | Tracing formatting cost non-trivial; atomic increments near-zero | 3 |
 
 ---
 
@@ -188,10 +192,11 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 15:40 UTC — Completed 03-01-PLAN.md
-- Extracted simd_native.rs monolith into simd_native/ module tree
-- Created dispatch.rs, scalar.rs, prefetch.rs, tail_unroll.rs
-- All 66 SIMD regression tests pass, clippy clean
+2026-02-07 14:42 UTC — Completed 03-03-PLAN.md
+- Deduplicated HNSW save/load into shared persistence.rs
+- Split graph.rs (641 lines) into graph/{mod,insert,search,neighbors}.rs
+- Added lock-rank runtime checker (locking.rs) and safety counters
+- All 298 HNSW tests pass, clippy clean
 
 ### Current Branch
 main
