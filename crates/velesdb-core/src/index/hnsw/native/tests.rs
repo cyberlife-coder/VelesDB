@@ -414,3 +414,103 @@ fn test_mixed_operations_no_deadlock() {
 
     assert!(hnsw.len() >= 30, "Index should have vectors");
 }
+
+// =============================================================================
+// BUG-04 / QUAL-01: Lock-order safety + observability counters
+// =============================================================================
+
+#[test]
+fn test_hnsw_no_deadlock_during_parallel_insert_search() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
+
+    // Pre-populate so search has data to traverse
+    for i in 0..100_u64 {
+        let v: Vec<f32> = (0..64).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+        hnsw.insert(v);
+    }
+
+    let mut handles = vec![];
+
+    // 4 insert threads
+    for t in 0..4 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_u64 {
+                let v: Vec<f32> = (0..64)
+                    .map(|j| ((t * 1000 + i) + j) as f32 * 0.001)
+                    .collect();
+                hnsw_clone.insert(v);
+            }
+        }));
+    }
+
+    // 4 search threads
+    for t in 0..4 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_u64 {
+                let query: Vec<f32> = (0..64)
+                    .map(|j| ((t * 500 + i) + j) as f32 * 0.002)
+                    .collect();
+                let results = hnsw_clone.search(&query, 10, 50);
+                assert!(
+                    results.len() <= 10,
+                    "Search should return at most k results"
+                );
+            }
+        }));
+    }
+
+    // All threads must complete (no deadlock)
+    for handle in handles {
+        handle
+            .join()
+            .expect("Thread should complete without deadlock");
+    }
+
+    // Verify consistent state
+    let final_count = hnsw.len();
+    assert!(
+        final_count >= 100,
+        "Should have at least initial 100 vectors, got {final_count}"
+    );
+
+    // Verify safety counters are accessible and no invariant violations
+    let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+    assert_eq!(
+        snapshot.invariant_violation_total, 0,
+        "No lock-order violations should occur with correct lock ordering"
+    );
+}
+
+#[test]
+fn test_safety_counters_accessible_after_operations() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    for i in 0..20_u64 {
+        let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
+        hnsw.insert(v);
+    }
+
+    let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.05).collect();
+    let _ = hnsw.search(&query, 5, 30);
+
+    // Counters should be readable without panic
+    let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+
+    // No invariant violations expected with correct lock ordering
+    assert_eq!(
+        snapshot.invariant_violation_total, 0,
+        "Correct lock ordering should produce zero violations"
+    );
+    // Corruption counter should be zero for normal operations
+    assert_eq!(
+        snapshot.corruption_detected_total, 0,
+        "Normal operations should not trigger corruption signals"
+    );
+}

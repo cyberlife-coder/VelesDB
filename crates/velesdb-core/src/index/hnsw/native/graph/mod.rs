@@ -10,7 +10,9 @@
 //! - `neighbors`: Neighbor selection (VAMANA diversification) and bidirectional connections
 
 mod insert;
+pub(crate) mod locking;
 mod neighbors;
+pub(crate) mod safety_counters;
 mod search;
 
 use super::distance::DistanceEngine;
