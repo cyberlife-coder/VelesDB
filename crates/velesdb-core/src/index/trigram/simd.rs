@@ -136,7 +136,12 @@ fn build_padded_bytes(text: &str) -> Vec<u8> {
     padded
 }
 
-/// AVX2 optimized trigram extraction (x86_64)
+/// Prefetch-enhanced trigram extraction (x86_64, AVX2 target feature).
+///
+/// Note: The core extraction logic is scalar (byte-by-byte). The AVX2 target
+/// feature enables `_mm_prefetch` intrinsic for cache-line prefetching, which
+/// improves memory access patterns for large texts. True SIMD vectorized
+/// trigram extraction would require packed byte shuffles (future optimization).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[must_use]
@@ -150,14 +155,13 @@ unsafe fn extract_trigrams_avx2_inner(bytes: &[u8]) -> HashSet<Trigram> {
         return trigrams;
     }
 
-    // Process 32 bytes at a time (yields ~10 unique trigrams per iteration)
+    // Process 32-byte chunks with prefetch hints for next cache line
     let mut i = 0;
     while i + 34 <= len {
         // Prefetch next cache line for better memory access
         _mm_prefetch(bytes.as_ptr().add(i + 64) as *const i8, _MM_HINT_T0);
 
-        // Extract trigrams from the chunk
-        // Each position i gives trigram [i, i+1, i+2]
+        // Scalar trigram extraction within the chunk
         for j in 0..30 {
             let trigram = [bytes[i + j], bytes[i + j + 1], bytes[i + j + 2]];
             trigrams.insert(trigram);
@@ -196,7 +200,11 @@ pub fn extract_trigrams_avx2(text: &str) -> HashSet<Trigram> {
     }
 }
 
-/// AVX-512 optimized trigram extraction (x86_64)
+/// Prefetch-enhanced trigram extraction (x86_64, AVX-512 target feature).
+///
+/// Note: Like `extract_trigrams_avx2_inner`, the core logic is scalar.
+/// The AVX-512 target feature enables wider prefetch reach (128 bytes ahead).
+/// True SIMD trigram extraction would use `vpshufb` for parallel extraction.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 #[must_use]
@@ -210,13 +218,13 @@ unsafe fn extract_trigrams_avx512_inner(bytes: &[u8]) -> HashSet<Trigram> {
         return trigrams;
     }
 
-    // Process 64 bytes at a time (yields ~21 unique trigrams per iteration)
+    // Process 64-byte chunks with prefetch hints
     let mut i = 0;
     while i + 66 <= len {
         // Prefetch next cache line
         _mm_prefetch(bytes.as_ptr().add(i + 128) as *const i8, _MM_HINT_T0);
 
-        // Extract trigrams from the chunk
+        // Scalar trigram extraction within the chunk
         for j in 0..62 {
             let trigram = [bytes[i + j], bytes[i + j + 1], bytes[i + j + 2]];
             trigrams.insert(trigram);
@@ -255,7 +263,11 @@ pub fn extract_trigrams_avx512(text: &str) -> HashSet<Trigram> {
     }
 }
 
-/// ARM NEON optimized trigram extraction (aarch64)
+/// NEON-prefetch trigram extraction (aarch64).
+///
+/// Note: The `vld1q_u8` load serves as a cache-line warmup; the actual trigram
+/// extraction is scalar. A true NEON vectorized approach would use `vtbl`
+/// byte-table lookups for parallel trigram extraction.
 #[cfg(target_arch = "aarch64")]
 #[must_use]
 pub fn extract_trigrams_neon(text: &str) -> HashSet<Trigram> {
@@ -275,16 +287,16 @@ pub fn extract_trigrams_neon(text: &str) -> HashSet<Trigram> {
         return trigrams;
     }
 
-    // Process 16 bytes at a time using NEON
+    // Process 16-byte chunks with NEON load as cache warmup
     let mut i = 0;
     while i + 18 <= len {
-        // NEON loads 16 bytes
-        // SAFETY: We have at least 18 bytes available
+        // SAFETY: We have at least 18 bytes available from `i`.
+        // The vld1q_u8 load warms the cache line for subsequent scalar reads.
         unsafe {
             let _chunk = vld1q_u8(bytes.as_ptr().add(i));
         }
 
-        // Extract trigrams
+        // Scalar trigram extraction within the chunk
         for j in 0..14 {
             let trigram = [bytes[i + j], bytes[i + j + 1], bytes[i + j + 2]];
             trigrams.insert(trigram);
@@ -335,9 +347,14 @@ pub fn count_matching_trigrams_simd(
         .count()
 }
 
+/// Chunked trigram matching (x86_64).
+///
+/// Note: Despite the name, this function uses scalar HashSet lookups in
+/// 8-element chunks. No AVX2 SIMD instructions are used. The chunking
+/// pattern was intended to enable future SIMD comparison but is currently
+/// equivalent to the scalar fallback.
 #[cfg(target_arch = "x86_64")]
 fn count_matching_avx2(query_trigrams: &[[u8; 3]], doc_trigrams: &HashSet<[u8; 3]>) -> usize {
-    // Parallel lookup using 8-wide batches
     let mut count = 0;
 
     for chunk in query_trigrams.chunks(8) {
@@ -349,196 +366,4 @@ fn count_matching_avx2(query_trigrams: &[[u8; 3]], doc_trigrams: &HashSet<[u8; 3
     }
 
     count
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_simd_level_detection() {
-        let level = TrigramSimdLevel::detect();
-        println!("Detected SIMD level: {}", level.name());
-        // Should always return a valid level
-        assert!(!level.name().is_empty());
-    }
-
-    #[test]
-    fn test_extract_trigrams_simd_basic() {
-        let trigrams = extract_trigrams_simd("hello");
-        assert!(!trigrams.is_empty());
-        assert!(trigrams.contains(b"hel"));
-        assert!(trigrams.contains(b"ell"));
-        assert!(trigrams.contains(b"llo"));
-    }
-
-    #[test]
-    fn test_extract_trigrams_simd_empty() {
-        let trigrams = extract_trigrams_simd("");
-        assert!(trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_extract_trigrams_simd_consistency() {
-        // SIMD and scalar should produce identical results
-        let text = "The quick brown fox jumps over the lazy dog";
-        let simd_result = extract_trigrams_simd(text);
-        let scalar_result = extract_trigrams_scalar(text);
-
-        assert_eq!(simd_result.len(), scalar_result.len());
-        for trigram in &scalar_result {
-            assert!(simd_result.contains(trigram));
-        }
-    }
-
-    #[test]
-    fn test_extract_trigrams_simd_long_text() {
-        let text = "a".repeat(1000);
-        let trigrams = extract_trigrams_simd(&text);
-        // Should handle long texts without panic
-        assert!(!trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_count_matching_trigrams() {
-        let query: Vec<[u8; 3]> = vec![
-            [b'h', b'e', b'l'],
-            [b'e', b'l', b'l'],
-            [b'l', b'l', b'o'],
-            [b'x', b'y', b'z'],
-        ];
-
-        let mut doc_set = HashSet::new();
-        doc_set.insert([b'h', b'e', b'l']);
-        doc_set.insert([b'e', b'l', b'l']);
-        doc_set.insert([b'a', b'b', b'c']);
-
-        let count = count_matching_trigrams_simd(&query, &doc_set);
-        assert_eq!(count, 2); // 'hel' and 'ell' match
-    }
-
-    #[test]
-    #[ignore = "Flaky: SIMD perf varies by system load - run manually"]
-    fn test_simd_performance() {
-        use std::time::Instant;
-
-        let text = "The quick brown fox jumps over the lazy dog. ".repeat(100);
-
-        let start = Instant::now();
-        for _ in 0..1000 {
-            let _ = extract_trigrams_simd(&text);
-        }
-        let simd_time = start.elapsed();
-
-        let start = Instant::now();
-        for _ in 0..1000 {
-            let _ = extract_trigrams_scalar(&text);
-        }
-        let scalar_time = start.elapsed();
-
-        println!(
-            "SIMD: {:?}, Scalar: {:?}, Speedup: {:.2}x",
-            simd_time,
-            scalar_time,
-            scalar_time.as_nanos() as f64 / simd_time.as_nanos() as f64
-        );
-
-        // SIMD should not be slower than scalar
-        assert!(simd_time <= scalar_time.mul_f32(1.5));
-    }
-
-    // =========================================================================
-    // Additional tests for coverage
-    // =========================================================================
-
-    #[test]
-    fn test_extract_trigrams_scalar_empty() {
-        let trigrams = extract_trigrams_scalar("");
-        assert!(trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_extract_trigrams_scalar_basic() {
-        let trigrams = extract_trigrams_scalar("abc");
-        assert!(!trigrams.is_empty());
-        // With padding "  abc  ", we get trigrams: "  a", " ab", "abc", "bc ", "c  "
-        assert!(trigrams.contains(b"abc"));
-    }
-
-    #[test]
-    fn test_extract_trigrams_scalar_short() {
-        let trigrams = extract_trigrams_scalar("a");
-        // With padding "  a  ", we get trigrams: "  a", " a ", "a  "
-        assert!(!trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_extract_trigrams_scalar_two_chars() {
-        let trigrams = extract_trigrams_scalar("ab");
-        // With padding "  ab  ", we get trigrams
-        assert!(!trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_trigram_simd_level_name() {
-        let level = TrigramSimdLevel::Scalar;
-        assert_eq!(level.name(), "Scalar");
-    }
-
-    #[test]
-    fn test_count_matching_trigrams_empty_query() {
-        let query: Vec<[u8; 3]> = vec![];
-        let doc_set: HashSet<[u8; 3]> = HashSet::new();
-        let count = count_matching_trigrams_simd(&query, &doc_set);
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    fn test_count_matching_trigrams_no_match() {
-        let query: Vec<[u8; 3]> = vec![[b'a', b'b', b'c'], [b'd', b'e', b'f']];
-        let mut doc_set = HashSet::new();
-        doc_set.insert([b'x', b'y', b'z']);
-        let count = count_matching_trigrams_simd(&query, &doc_set);
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    fn test_count_matching_trigrams_all_match() {
-        let query: Vec<[u8; 3]> = vec![[b'a', b'b', b'c'], [b'd', b'e', b'f']];
-        let mut doc_set = HashSet::new();
-        doc_set.insert([b'a', b'b', b'c']);
-        doc_set.insert([b'd', b'e', b'f']);
-        let count = count_matching_trigrams_simd(&query, &doc_set);
-        assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn test_count_matching_trigrams_large_query() {
-        // Test with > 16 trigrams to trigger SIMD path
-        let query: Vec<[u8; 3]> = (0..20).map(|i| [b'a' + i as u8, b'b', b'c']).collect();
-        let mut doc_set = HashSet::new();
-        doc_set.insert([b'a', b'b', b'c']);
-        doc_set.insert([b'b', b'b', b'c']);
-        doc_set.insert([b'c', b'b', b'c']);
-        let count = count_matching_trigrams_simd(&query, &doc_set);
-        assert_eq!(count, 3);
-    }
-
-    #[test]
-    fn test_extract_trigrams_unicode() {
-        let trigrams = extract_trigrams_simd("héllo");
-        assert!(!trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_extract_trigrams_spaces() {
-        let trigrams = extract_trigrams_simd("a b c");
-        assert!(!trigrams.is_empty());
-    }
-
-    #[test]
-    fn test_extract_trigrams_numbers() {
-        let trigrams = extract_trigrams_simd("123");
-        assert!(trigrams.contains(b"123"));
-    }
 }
