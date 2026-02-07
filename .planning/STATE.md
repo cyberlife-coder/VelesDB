@@ -35,32 +35,32 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 2 | Unsafe Code & Testing | ✅ Complete | None |
 | 3 | Architecture & Graph | ✅ Complete | None |
 | 4 | Complexity & Errors | ✅ Complete | None |
-| 5 | Cleanup & Performance | 🔄 In Progress | None |
+| 5 | Cleanup & Performance | ✅ Complete | None |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 5 in progress (3 plans in 2 waves) — cleanup & performance**
+**Phase 5 complete (3/3 plans) — cleanup & performance**
 
 **Wave 1 — Cleanup (independent):**
 - 05-01: Dependency hygiene & dead code cleanup ✅ (10 deps removed, portable-simd flag removed)
 - 05-02: WAL recovery edge case tests ✅ (26 tests: partial writes, corruption, crash recovery)
 
 **Wave 2 — Performance:**
-- 05-03: SIMD dispatch optimization & benchmarks (PERF-01)
+- 05-03: SIMD dispatch optimization & benchmarks ✅ (DistanceEngine, 16 tests, benchmarked)
 
 ### Next Action
-Execute Plan 05-03: SIMD Dispatch Optimization & Benchmarks (Wave 2)
+Plan Phase 6: Documentation & Polish
 
-Progress: █████████████░░░ 85%
+Progress: ██████████████░░ 88%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 22/26 (85%)
+- **Completed:** 23/26 (88%)
 - **In Progress:** 0/26
-- **Pending:** 4/26
+- **Pending:** 3/26
 
 ### By Category
 
@@ -101,7 +101,7 @@ Progress: █████████████░░░ 85%
 - [x] TEST-04 — WAL recovery edge cases (26 tests: partial writes, corruption, crash recovery)
 
 #### Performance (PERF)
-- [ ] PERF-01 — SIMD dispatch
+- [x] PERF-01 — SIMD dispatch (DistanceEngine with cached fn pointers, 13% faster at 1536d cosine)
 - [ ] PERF-02 — Async I/O
 - [ ] PERF-03 — Format allocations
 
@@ -200,12 +200,12 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 — Plan 05-02 executed: WAL Recovery Edge Case Tests
-- Created wal_recovery_tests.rs with 26 tests covering partial writes, corruption, crash recovery
-- 7 partial write tests (truncated header/id/len/payload, zero-length, multi-entry)
-- 10 corruption detection tests (invalid marker, flipped bits, oversized len, snapshot corruption)
-- 9 crash recovery tests (clean/unclean shutdown, stale snapshot, idempotent recovery)
-- Verified: 139 storage tests pass, 0 clippy warnings
+2026-02-07 — Plan 05-03 executed: SIMD Dispatch Optimization & Benchmarks
+- Implemented DistanceEngine with cached fn pointers for dot_product, squared_l2, cosine
+- 16 unit tests verifying correctness vs *_native() across all common dimensions
+- Benchmarks: engine 13% faster at 1536d cosine, parity at 768d+
+- Batch simulation: 1000×768d comparison (native 55µs vs engine 59µs)
+- Verified: 2424 tests pass, 0 clippy warnings
 
 ### Current Branch
 feature/CORE-phase5-plan01-dependency-cleanup
@@ -214,9 +214,10 @@ feature/CORE-phase5-plan01-dependency-cleanup
 None (all committed)
 
 ### Notes for Next Session
-1. Wave 1 complete (05-01 + 05-02)
-2. Execute Wave 2: 05-03 (SIMD dispatch optimization & benchmarks)
-3. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
+1. Phase 5 complete (05-01 + 05-02 + 05-03)
+2. Plan Phase 6: Documentation & Polish (DOCS-03, DOCS-04, PERF-02, PERF-03)
+3. DistanceEngine available for HNSW integration (deferred to PERF-02/PERF-03)
+4. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
 
 ---
 
@@ -253,4 +254,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-07*  
-*Progress: 22/26 requirements (85%) — Phase 5 in progress (05-01, 05-02 complete)*
+*Progress: 23/26 requirements (88%) — Phase 5 complete, Phase 6 pending*
