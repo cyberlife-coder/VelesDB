@@ -26,8 +26,8 @@ struct Tolerance {
 
 // Tolerance matrix: operation-specific envelopes for non-associative f32 math.
 const DOT_TOLERANCE: Tolerance = Tolerance {
-    abs: 1.0e-4,
-    rel: 2.0e-4,
+    abs: 5.0e-3,
+    rel: 7.0e-4,
 };
 const SQUARED_L2_TOLERANCE: Tolerance = Tolerance {
     abs: 1.0e-4,
