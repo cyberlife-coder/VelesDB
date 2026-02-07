@@ -95,7 +95,7 @@ impl Parser {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::aggregate_type => {
-                    agg_type = Some(validation::parse_aggregate_type(&inner_pair)?)
+                    agg_type = Some(validation::parse_aggregate_type(&inner_pair)?);
                 }
                 Rule::aggregate_arg => arg = Some(Self::parse_aggregate_arg(inner_pair)),
                 _ => {}

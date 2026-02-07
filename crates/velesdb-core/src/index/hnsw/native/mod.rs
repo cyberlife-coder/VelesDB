@@ -56,6 +56,8 @@ pub use search::SearchResult;
 #[cfg(test)]
 mod backend_adapter_tests;
 #[cfg(test)]
+mod distance_tests;
+#[cfg(test)]
 mod dual_precision_tests;
 #[cfg(test)]
 mod graph_tests;

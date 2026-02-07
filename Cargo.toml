@@ -89,6 +89,9 @@ codegen-units = 1
 # without bug risk. Security-related lints (casts, unsafe) must use targeted
 # #[allow] with SAFETY-style justification at the function level.
 [workspace.lints.clippy]
+# EPIC-077 / Plan 04-07: Enable pedantic linting for production quality
+pedantic = { level = "warn", priority = -1 }
+
 # Naming and style (no bug risk)
 module_name_repetitions = "allow"
 doc_markdown = "allow"
@@ -124,6 +127,10 @@ unused_peekable = "allow"
 
 # Documentation preferences (no bug risk)
 missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+# Struct field naming (no bug risk)
+struct_field_names = "allow"
 
 # Code style preferences (no bug risk)
 ptr_as_ptr = "allow"
