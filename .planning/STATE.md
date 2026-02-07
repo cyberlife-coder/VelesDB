@@ -39,15 +39,16 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 3 in progress (03-01 and 03-03 complete)**
+**Phase 3 in progress (03-01, 03-02, 03-03 complete)**
 - 03-01 SIMD module extraction: simd_native.rs converted to directory module
+- 03-02 Parser select.rs extraction: 829-line monolith split into 7 clause-oriented submodules with shared validation
 - 03-03 HNSW graph extraction + lock safety: graph.rs split into submodules, lock-rank checker + counters, serde dedup
-- All 298 HNSW tests pass, 0 failures
+- All 541 velesql tests pass, all 13 pr_review_bugfix_tests pass
 
 ### Next Action
-Execute `03-02-PLAN.md` (Parser select.rs extraction)
+Execute `03-04-PLAN.md` (Concurrency test suites)
 
-Progress: ████████░░ 75%
+Progress: █████████░ 83%
 
 ---
 
@@ -171,6 +172,8 @@ unsafe { ... }
 | 2026-02-07 | Shared serde helpers with struct wrappers | Better call-site readability than generic trait for HnswMeta/HnswMappingsData | 3 |
 | 2026-02-07 | Lock-rank checker always-on in release | Thread-local stack ~10-20ns per call, acceptable for lock paths | 3 |
 | 2026-02-07 | Safety counter logging gated behind debug_assertions | Tracing formatting cost non-trivial; atomic increments near-zero | 3 |
+| 2026-02-07 | Hybrid parser split: clause modules + shared validation | Matches locked CONTEXT.md decision; reduces validation drift | 3 |
+| 2026-02-07 | Merged 3 tasks into single atomic commit | Validation module integral to extraction; cleaner changeset | 3 |
 
 ---
 
@@ -192,11 +195,11 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 14:42 UTC — Completed 03-03-PLAN.md
-- Deduplicated HNSW save/load into shared persistence.rs
-- Split graph.rs (641 lines) into graph/{mod,insert,search,neighbors}.rs
-- Added lock-rank runtime checker (locking.rs) and safety counters
-- All 298 HNSW tests pass, clippy clean
+2026-02-07 14:48 UTC — Completed 03-02-PLAN.md
+- Split select.rs (829 lines) into 7 clause-oriented submodules (all under 200 lines)
+- Created shared validation.rs for aggregate wildcard and comparison operator checks
+- Stable facade in mod.rs with parse_query/parse_select_stmt entry points
+- All 541 velesql tests pass, zero clippy warnings
 
 ### Current Branch
 main
@@ -205,9 +208,9 @@ main
 None
 
 ### Notes for Next Session
-1. Continue Phase 3 with `03-02-PLAN.md` (parser extraction)
-2. Pre-existing untracked graph/ and select/ directories may need cleanup
-3. ISA kernel extraction deferred to minimize regression risk
+1. Continue Phase 3 with `03-04-PLAN.md` (concurrency test suites)
+2. Parser hybrid decomposition strategy is now complete
+3. Validation module ready for future cross-cutting validation rules
 
 ---
 
