@@ -45,7 +45,7 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 - 04-01: Panic elimination + error type enrichment ✅ Complete (4 panic sites → Result, 3 Error variants)
 
 **Wave 2 — Module Splitting (20 files >500 lines → 0):**
-- 04-02: Root modules — metrics.rs (1529), quantization.rs (559)
+- 04-02: Root modules — metrics.rs, quantization.rs ✅ Complete (2 files → 8 submodules, all <500 lines)
 - 04-03: collection/graph — 6 files (4226 lines total)
 - 04-04: collection/search/query — 5 files (4087 lines total)
 - 04-05: index + storage — 3 files (2038 lines, hot-path)
@@ -59,7 +59,7 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 - 04-09: GPU error handling tests (fallback, validation, edge cases)
 
 ### Next Action
-Execute Plan 04-02: Root Module Splitting (metrics.rs, quantization.rs)
+Execute Plan 04-03: Collection/Graph Module Splitting (6 files, 4226 lines)
 
 Progress: ████████████░░░░ 75%
 
@@ -82,7 +82,7 @@ Progress: ████████████░░░░ 75%
 - [x] RUST-05 — must_use attributes (Plan 02-01 in-scope closure)
 
  #### Code Quality (QUAL)
-- [x] QUAL-01 — Module extraction (partial: HNSW graph extracted in Plan 03-03)
+- [x] QUAL-01 — Module extraction (partial: HNSW graph in 03-03, metrics+quantization in 04-02)
 - [x] QUAL-02 — Deduplication (partial: HNSW serde dedup in Plan 03-03)
 - [ ] QUAL-03 — Complexity reduction
 - [ ] QUAL-04 — Naming clarity
@@ -210,11 +210,11 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-08 — Executed Plan 04-01: Panic Elimination & Error Type Enrichment
-- Added 3 error variants: ColumnStoreError (VELES-024), GpuError (VELES-025), EpochMismatch (VELES-026)
-- Converted 4 panic sites to Result: with_primary_key, as_slice, batch_cosine_similarity (2 asserts + 1 map-async)
-- 4 atomic commits, all quality gates pass
-- Pre-existing flaky simd_property_test (jaccard precision) noted but unrelated
+2026-02-08 — Executed Plan 04-02: Root Module Splitting
+- Split metrics.rs (1530 lines) → 5 submodules: retrieval, latency, operational, guardrails, query
+- Split quantization.rs (560 lines) → 3 submodules: binary, scalar, mod (StorageMode)
+- All files under 500 lines, zero public API changes
+- 3 atomic commits, all quality gates pass
 
 ### Current Branch
 main
@@ -263,4 +263,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Progress: 13/26 requirements (50%) — Phase 4 in progress (04-01 complete)*
+*Progress: 13/26 requirements (50%) — Phase 4 in progress (04-01, 04-02 complete)*
