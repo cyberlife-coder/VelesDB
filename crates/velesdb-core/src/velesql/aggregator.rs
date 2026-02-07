@@ -97,7 +97,8 @@ impl Aggregator {
             // Fast path: column already tracked - no allocation
             if let Some(sum) = self.sums.get_mut(column) {
                 *sum += num;
-                // SAFETY: if sums has the key, counts/mins/maxs also have it
+                // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
+                // together in the slow path below — missing key here is a logic bug.
                 *self
                     .counts
                     .get_mut(column)
@@ -157,6 +158,8 @@ impl Aggregator {
         // Fast path: column already tracked
         if let Some(sum) = self.sums.get_mut(column) {
             *sum += batch_sum;
+            // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
+            // together in the slow path below — missing key here is a logic bug.
             *self
                 .counts
                 .get_mut(column)
