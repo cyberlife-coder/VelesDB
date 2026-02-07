@@ -16,6 +16,7 @@ use velesdb_core::simd_native::{
 
 const SIMD_PROP_CASES: u32 = 256;
 const SIMD_PROP_MAX_SHRINK_ITERS: u32 = 2048;
+const SIMD_PROP_REGRESSION_SUFFIX: &str = "simd-property-regressions";
 
 #[derive(Clone, Copy)]
 struct Tolerance {
@@ -90,7 +91,7 @@ fn simd_proptest_config() -> ProptestConfig {
         // Integration tests do not have a nearby lib.rs/main.rs, so set an
         // explicit persistence root for reproducible counterexamples.
         failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
-            "simd-property-regressions",
+            SIMD_PROP_REGRESSION_SUFFIX,
         ))),
         ..ProptestConfig::default()
     }

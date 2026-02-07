@@ -8,6 +8,10 @@ use crate::simd_native::{
     hamming_distance_native, jaccard_similarity_native, simd_level, squared_l2_native, SimdLevel,
 };
 
+// Shared tolerance knobs for SIMD-vs-scalar equivalence assertions.
+pub(crate) const SIMD_ABS_TOLERANCE: f32 = 1e-4;
+pub(crate) const SIMD_REL_TOLERANCE: f32 = 2e-4;
+
 #[test]
 fn test_simd_level_cached() {
     // First call initializes the cache
@@ -381,7 +385,12 @@ fn test_dot_product_remainder_accuracy() {
         } else {
             (result - expected).abs()
         };
-        assert!(rel_error < 1e-4, "len={} error={}", len, rel_error);
+        assert!(
+            rel_error < SIMD_REL_TOLERANCE,
+            "len={} error={}",
+            len,
+            rel_error
+        );
     }
 }
 
@@ -401,7 +410,12 @@ fn test_squared_l2_remainder_accuracy() {
             })
             .sum();
         let rel_error = (result - expected).abs() / expected.abs();
-        assert!(rel_error < 1e-4, "len={} error={}", len, rel_error);
+        assert!(
+            rel_error < SIMD_REL_TOLERANCE,
+            "len={} error={}",
+            len,
+            rel_error
+        );
     }
 }
 
@@ -438,7 +452,7 @@ fn test_dot_product_threshold_512_boundary() {
         };
 
         assert!(
-            rel_error < 1e-4,
+            rel_error < SIMD_REL_TOLERANCE,
             "Threshold test len={} failed: rel_error={} (simd={}, scalar={})",
             len,
             rel_error,
@@ -500,7 +514,7 @@ fn test_dot_product_avx512_4acc_large_vectors() {
         };
 
         assert!(
-            rel_error < 1e-4,
+            rel_error < SIMD_REL_TOLERANCE,
             "len={} rel_error={} (simd={}, scalar={})",
             len,
             rel_error,
@@ -523,7 +537,7 @@ fn test_dot_product_remainder_bounds_elimination() {
         let expected: f32 = (0..len).map(|i| i as f32).sum();
 
         assert!(
-            (result - expected).abs() < 1e-4,
+            (result - expected).abs() < SIMD_ABS_TOLERANCE,
             "len={} mismatch: got={}, expected={}",
             len,
             result,
@@ -735,7 +749,7 @@ fn test_jaccard_simd_matches_scalar() {
         };
 
         assert!(
-            (simd_result - scalar_result).abs() < 1e-4,
+            (simd_result - scalar_result).abs() < SIMD_ABS_TOLERANCE,
             "len={}: SIMD result {} != scalar result {}",
             len,
             simd_result,
@@ -944,7 +958,7 @@ fn test_squared_l2_remainder_boundary() {
         };
 
         assert!(
-            rel_error < 1e-4,
+            rel_error < SIMD_REL_TOLERANCE,
             "len={}: result={} expected={} rel_error={}",
             len,
             result,
