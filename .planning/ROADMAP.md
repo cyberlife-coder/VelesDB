@@ -195,12 +195,24 @@ Plans:
 
 ### Plans
 
-**Plans:** 3 plans in 2 waves
+**Plans:** 9 plans in 4 waves
 
-Plans:
+**Wave 1 — Error Foundation:**
 - [ ] `04-01-PLAN.md` — Panic elimination + error type enrichment (DOCS-01, DOCS-02)
-- [ ] `04-02-PLAN.md` — Complexity reduction + naming clarity audit (QUAL-03, QUAL-04)
-- [ ] `04-03-PLAN.md` — GPU error handling tests (TEST-03) [depends on 04-01]
+
+**Wave 2 — Module Splitting (20 files >500 lines → 0):**
+- [ ] `04-02-PLAN.md` — Root modules: metrics.rs (1529), quantization.rs (559)
+- [ ] `04-03-PLAN.md` — collection/graph: 6 files (property_index, cart, memory_pool, degree_router, metrics, edge_concurrent)
+- [ ] `04-04-PLAN.md` — collection/search/query: 5 files (match_exec, mod, aggregation, parallel_traversal, score_fusion)
+- [ ] `04-05-PLAN.md` — index + storage: 3 files (distance, mmap, trigram/simd) [hot-path]
+- [ ] `04-06-PLAN.md` — velesql + column_store + query_cost: 4 files
+
+**Wave 3 — Quality Enforcement:**
+- [ ] `04-07-PLAN.md` — Clippy pedantic remediation (476 → 0) + activate workspace lint
+- [ ] `04-08-PLAN.md` — Production hardening (20 expects, 64 bare-string errors, 1 complexity violation)
+
+**Wave 4 — Tests:**
+- [ ] `04-09-PLAN.md` — GPU error handling tests (TEST-03) [depends on 04-01]
 
 ---
 
