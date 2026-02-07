@@ -39,17 +39,14 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 2 fully completed (02-05 final gap closure done)**
-- 02-01 unsafe audit plan completed with inventory-led closure for all in-scope unsafe-bearing non-test files
-- 02-02 parser fragility plan completed with assertion-style regression coverage for aggregate wildcard, HAVING operator capture, and correlated-subquery extraction/dedup behavior
-- 02-03 SIMD property-based equivalence suite completed with reproducible proptest settings and tolerance matrix
-- 02-04 SAFETY template gap closure completed with deterministic verifier script and template-complete documentation
-- 02-05 final gap closure: All 15 inventory files pass strict SAFETY template verification (14 sites normalized in 4 files)
+**Phase 3 in progress (03-01 SIMD extraction complete)**
+- 03-01 SIMD module extraction: simd_native.rs monolith converted to directory module with dispatch.rs, scalar.rs, prefetch.rs, tail_unroll.rs
+- All 66 SIMD regression tests pass with unchanged public API
 
 ### Next Action
-Execute `03-01-PLAN.md` (SIMD module extraction and stable facade)
+Execute `03-02-PLAN.md` (Parser select.rs extraction)
 
-Progress: ███████░░░ 67%
+Progress: ████████░░ 72%
 
 ---
 
@@ -168,6 +165,8 @@ unsafe { ... }
 | 2026-02-07 | Persist proptest failures for integration tests | Ensures reproducible SIMD counterexamples without source-root lookup ambiguity | 2 |
 | 2026-02-07 | Per-metric tolerance envelopes | Keeps SIMD scalar-equivalence assertions stable across ISA/accumulation-order differences | 2 |
 | 2026-02-07 | AGENTS-template SAFETY comments mandatory | Header + condition bullets + Reason line required for all unsafe blocks | 2 |
+| 2026-02-07 | Facade-first SIMD extraction | Convert simd_native.rs to directory module; ISA kernels transiently in mod.rs | 3 |
+| 2026-02-07 | Dispatch as separate module | SimdLevel + detection + all public dispatch in dispatch.rs | 3 |
 
 ---
 
@@ -189,11 +188,10 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 10:40 UTC — Completed 02-05-PLAN.md
-- Normalized SAFETY templates in 4 gap-closure files (14 unsafe sites)
-- All 15 inventory files now pass strict AGENTS template verification
-- Zero functional changes - documentation-only modifications
-- Verified: All quality gates pass (fmt, clippy, tests)
+2026-02-07 15:40 UTC — Completed 03-01-PLAN.md
+- Extracted simd_native.rs monolith into simd_native/ module tree
+- Created dispatch.rs, scalar.rs, prefetch.rs, tail_unroll.rs
+- All 66 SIMD regression tests pass, clippy clean
 
 ### Current Branch
 main
@@ -202,9 +200,9 @@ main
 None
 
 ### Notes for Next Session
-1. Start Phase 3 with `03-01-PLAN.md`
-2. Preserve SIMD property test coverage while extracting architecture-specific modules
-3. Keep zero-breaking-change boundary on public SIMD entrypoints
+1. Continue Phase 3 with `03-02-PLAN.md` (parser extraction)
+2. Pre-existing untracked graph/ and select/ directories may need cleanup
+3. ISA kernel extraction deferred to minimize regression risk
 
 ---
 
