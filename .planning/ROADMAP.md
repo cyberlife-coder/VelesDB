@@ -96,12 +96,13 @@ Each phase delivers a coherent, verifiable capability that builds upon previous 
 
 ### Plans
 
-**Plans:** 3 plans in 2 waves
+**Plans:** 4 plans in 2 waves
 
 Plans:
 - [x] `02-01-PLAN.md` — Inventory-led unsafe closure across core modules with scoped BUG-02 audit and broad `#[must_use]` coverage
 - [x] `02-02-PLAN.md` — VelesQL parser fragility fixes with assertion-style regressions at targeted BUG sites
 - [x] `02-03-PLAN.md` — Property-based SIMD equivalence test foundation with reproducible tolerance policy
+- [ ] `02-04-PLAN.md` — Gap closure for per-site SAFETY template completeness and objective unsafe-site re-verification
 
 ---
 

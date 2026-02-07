@@ -157,10 +157,11 @@ impl HnswIndex {
         // 6. Atomic swap (replace old with new)
         {
             let mut inner_guard = self.inner.write();
-            // SAFETY (EPIC-032/US-003): ManuallyDrop::drop is safe here because:
-            // 1. We hold exclusive write lock on inner_guard
-            // 2. This is called exactly once before replacement
-            // 3. The old value is immediately replaced with new_inner
+            // SAFETY: ManuallyDrop::drop is safe when exclusive ownership is guaranteed.
+            // - Condition 1: We hold exclusive write lock on inner_guard (no other access possible)
+            // - Condition 2: This is called exactly once before replacement (no double-drop)
+            // - Condition 3: The old value is immediately replaced with new_inner (no use-after-free)
+            // Reason: Explicit drop required before assignment to ManuallyDrop field.
             unsafe {
                 ManuallyDrop::drop(&mut *inner_guard);
             }

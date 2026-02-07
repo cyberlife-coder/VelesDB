@@ -132,17 +132,13 @@ pub struct HnswIndex {
 
 impl Drop for HnswIndex {
     fn drop(&mut self) {
-        // SAFETY: We must drop inner BEFORE io_holder because inner (Hnsw)
-        // borrows from io_holder (HnswIo). ManuallyDrop lets us control this order.
-        //
-        // For indices created with new()/with_params(), io_holder is None,
-        // so this is just a normal drop of the Hnsw.
-        //
-        // For indices loaded from disk, we drop the Hnsw first, then io_holder
-        // is automatically dropped when Self is dropped (after this fn returns).
-        //
-        // SAFETY: ManuallyDrop::drop is unsafe because calling it twice is UB.
-        // We only call it once here, and Rust won't call it again after Drop::drop.
+        // SAFETY: We must drop inner BEFORE io_holder because inner (HnswInner)
+        // borrows from io_holder. ManuallyDrop lets us control this order.
+        // - Condition 1: inner is wrapped in ManuallyDrop to prevent automatic drop.
+        // - Condition 2: We acquire a write lock before dropping to ensure exclusive access.
+        // - Condition 3: ManuallyDrop::drop is only called once in this Drop impl.
+        // - Condition 4: For loaded indices, io_holder outlives inner; for new indices, io_holder is None.
+        // Reason: Self-referential struct pattern requires manual drop order control to prevent use-after-free.
         unsafe {
             ManuallyDrop::drop(&mut *self.inner.write());
         }

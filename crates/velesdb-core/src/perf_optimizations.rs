@@ -182,6 +182,9 @@ impl ContiguousVectors {
 
         let offset = index * self.dimension;
         // SAFETY: We ensured capacity covers index, data is non-null (NonNull invariant)
+        // - Condition 1: Capacity was verified to cover the target index.
+        // - Condition 2: Both source and destination pointers are valid and properly aligned.
+        // Reason: Efficient bulk memory copy for vector insertion.
         unsafe {
             ptr::copy_nonoverlapping(
                 vector.as_ptr(),
@@ -239,7 +242,9 @@ impl ContiguousVectors {
 
         let offset = index * self.dimension;
         // SAFETY: Index is within bounds (checked against count, which is <= capacity)
-        // data is non-null (NonNull invariant)
+        // - Condition 1: index < count ensures access is within initialized range.
+        // - Condition 2: data is non-null per NonNull invariant.
+        // Reason: Zero-copy slice creation from contiguous storage.
         Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension) })
     }
 
@@ -263,6 +268,9 @@ impl ContiguousVectors {
         );
         let offset = index * self.dimension;
         // SAFETY: Caller guarantees index < count, data is non-null (NonNull invariant)
+        // - Condition 1: Caller contract ensures index < count.
+        // - Condition 2: data is non-null per NonNull invariant.
+        // Reason: Performance-critical path requiring unchecked access.
         std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
     }
 
@@ -274,11 +282,16 @@ impl ContiguousVectors {
         if index < self.count {
             let offset = index * self.dimension;
             // SAFETY: index < count implies valid offset, data is non-null (NonNull invariant)
+            // - Condition 1: Bounds check ensures offset is within allocated range.
+            // - Condition 2: NonNull guarantees pointer is valid.
+            // Reason: Prefetch hint requires pointer to target cache line.
             let ptr = unsafe { self.data.as_ptr().add(offset) };
 
             #[cfg(target_arch = "x86_64")]
             // SAFETY: _mm_prefetch is a hint instruction that cannot cause undefined behavior.
-            // The pointer is valid (derived from data.as_ptr() with bounds-checked offset).
+            // - Condition 1: The pointer is valid (derived from data.as_ptr() with bounds-checked offset).
+            // - Condition 2: Prefetch hints are architecturally safe even on invalid addresses.
+            // Reason: CPU cache warming for upcoming vector access.
             unsafe {
                 use std::arch::x86_64::_mm_prefetch;
                 // Prefetch for read, into L2 cache
@@ -341,6 +354,10 @@ impl ContiguousVectors {
         if copy_count > 0 {
             let copy_size = copy_count * self.dimension;
             // SAFETY: Both pointers are valid (NonNull), non-overlapping, and properly aligned
+            // - Condition 1: Source pointer (self.data) is valid and properly aligned.
+            // - Condition 2: Destination pointer (new_data) is valid and properly aligned.
+            // - Condition 3: Pointers are non-overlapping (old and new allocations are distinct).
+            // Reason: Migrate data to newly allocated buffer during resize.
             unsafe {
                 ptr::copy_nonoverlapping(self.data.as_ptr(), new_data.as_ptr(), copy_size);
             }
@@ -351,6 +368,9 @@ impl ContiguousVectors {
 
         // Step 4: Deallocate old buffer
         // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant)
+        // - Condition 1: old_layout matches the allocation parameters.
+        // - Condition 2: Pointer is non-null per NonNull invariant.
+        // Reason: Free old buffer after data migration to new buffer.
         unsafe {
             dealloc(self.data.as_ptr().cast::<u8>(), old_layout);
         }
@@ -398,6 +418,9 @@ impl Drop for ContiguousVectors {
         // EPIC-032/US-002: No null check needed - NonNull guarantees non-null
         let layout = Self::layout(self.dimension, self.capacity);
         // SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
+        // - Condition 1: Layout matches original allocation parameters.
+        // - Condition 2: Pointer is non-null per NonNull invariant.
+        // Reason: Release allocated memory when ContiguousVectors is dropped.
         unsafe {
             dealloc(self.data.as_ptr().cast::<u8>(), layout);
         }

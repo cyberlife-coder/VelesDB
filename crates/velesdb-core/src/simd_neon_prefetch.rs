@@ -39,8 +39,10 @@
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub fn prefetch_read_l1(ptr: *const u8) {
-    // SAFETY: Prefetch instructions are hints and cannot cause faults.
-    // Even if ptr is invalid, the CPU will simply ignore the hint.
+    // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
+    // - Condition 1: `prfm` does not dereference memory architecturally.
+    // - Condition 2: Invalid pointers are tolerated by hardware for prefetch hints.
+    // Reason: Stable Rust lacks a fully-stable aarch64 prefetch intrinsic.
     unsafe {
         core::arch::asm!(
             "prfm pldl1keep, [{ptr}]",
@@ -133,16 +135,20 @@ pub fn prefetch_vector_neon(vector: &[f32]) {
 
         if vector_bytes > cache_line_size {
             // Prefetch second cache line
-            // SAFETY: Pointer arithmetic stays within `vector` because this branch
-            // only runs when at least one full extra cache line exists.
+            // SAFETY: Pointer arithmetic stays within `vector` bounds.
+            // - Condition 1: This branch only runs when at least one full extra cache line exists (>64 bytes).
+            // - Condition 2: The offset is exactly one cache line (64 bytes) from the start.
+            // Reason: Prefetch second cache line for large vectors.
             let ptr = unsafe { (vector.as_ptr() as *const u8).add(cache_line_size) };
             prefetch_read_l2(ptr);
         }
 
         if vector_bytes > cache_line_size * 2 {
             // Prefetch third cache line into L3
-            // SAFETY: Pointer arithmetic stays within `vector` because this branch
-            // only runs when at least two full extra cache lines exist.
+            // SAFETY: Pointer arithmetic stays within `vector` bounds.
+            // - Condition 1: This branch only runs when at least two full extra cache lines exist (>128 bytes).
+            // - Condition 2: The offset is exactly two cache lines (128 bytes) from the start.
+            // Reason: Prefetch third cache line for very large vectors.
             let ptr = unsafe { (vector.as_ptr() as *const u8).add(cache_line_size * 2) };
             prefetch_read_l3(ptr);
         }

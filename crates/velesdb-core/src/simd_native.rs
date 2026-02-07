@@ -1114,7 +1114,10 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     // Single accumulator for smaller vectors
     let simd_len = len / 4;
 
-    // SAFETY: vdupq_n_f32 is always safe on aarch64
+    // SAFETY: NEON intrinsics are always safe on aarch64.
+    // - Condition 1: vdupq_n_f32 creates a zero vector, no pointer access
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: NEON SIMD operations are the primary compute mechanism on ARM64.
     let mut sum = unsafe { vdupq_n_f32(0.0) };
 
     let a_ptr = a.as_ptr();
@@ -1122,6 +1125,11 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 
     for i in 0..simd_len {
         let offset = i * 4;
+        // SAFETY: NEON intrinsics operate on valid slice pointers.
+        // - Condition 1: offset = i * 4 where i < simd_len = len / 4, so offset + 4 <= len
+        // - Condition 2: vld1q_f32 handles unaligned loads safely on ARM64
+        // - Condition 3: Both slices have equal length (enforced by caller assertion)
+        // Reason: Core NEON computation for dot product accumulation.
         unsafe {
             let va = vld1q_f32(a_ptr.add(offset));
             let vb = vld1q_f32(b_ptr.add(offset));
@@ -1130,6 +1138,10 @@ fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     }
 
     // Horizontal sum
+    // SAFETY: vaddvq_f32 is always safe on aarch64.
+    // - Condition 1: Input vector is valid NEON register from vfmaq_f32
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: Horizontal reduction to scalar result.
     let mut result = unsafe { vaddvq_f32(sum) };
 
     // Handle remainder
@@ -1150,10 +1162,22 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let mut a_ptr = a.as_ptr();
     let mut b_ptr = b.as_ptr();
+    // SAFETY: Pointer arithmetic stays within slice bounds.
+    // - Condition 1: len / 16 * 16 rounds down to multiple of 16, ensuring offset <= len
+    // - Condition 2: Both pointers derived from valid slice references
+    // Reason: Compute loop boundary for 16-element NEON chunks.
     let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
+    // SAFETY: Pointer arithmetic stays within slice bounds.
+    // - Condition 1: Adding len to slice start yields one-past-end pointer (valid in Rust)
+    // - Condition 2: Pointer is only used for comparison, never dereferenced directly
+    // Reason: Establish loop termination boundary.
     let end_ptr = unsafe { a.as_ptr().add(len) };
 
     // 4 accumulators for ILP
+    // SAFETY: vdupq_n_f32 is always safe on aarch64.
+    // - Condition 1: Creates zero vector without pointer access
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: Initialize independent accumulators for instruction-level parallelism.
     let mut acc0 = unsafe { vdupq_n_f32(0.0) };
     let mut acc1 = unsafe { vdupq_n_f32(0.0) };
     let mut acc2 = unsafe { vdupq_n_f32(0.0) };
@@ -1161,6 +1185,11 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // Main loop: process 16 elements at a time
     while a_ptr < end_main {
+        // SAFETY: NEON intrinsics operate on valid slice pointers with bounds-checked access.
+        // - Condition 1: Loop condition a_ptr < end_main ensures 16 elements available
+        // - Condition 2: vld1q_f32 handles unaligned loads safely on ARM64
+        // - Condition 3: All offsets (0, 4, 8, 12) are within the 16-element chunk
+        // Reason: Core NEON computation with 4-way ILP for FMA latency hiding.
         unsafe {
             let va0 = vld1q_f32(a_ptr);
             let vb0 = vld1q_f32(b_ptr);
@@ -1184,15 +1213,27 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     }
 
     // Combine accumulators
+    // SAFETY: vaddq_f32 is always safe on aarch64.
+    // - Condition 1: Input vectors are valid NEON registers from vfmaq_f32
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: Reduce 4 accumulators to 1 for final horizontal sum.
     let sum01 = unsafe { vaddq_f32(acc0, acc1) };
     let sum23 = unsafe { vaddq_f32(acc2, acc3) };
     let sum = unsafe { vaddq_f32(sum01, sum23) };
 
     // Horizontal sum
+    // SAFETY: vaddvq_f32 is always safe on aarch64.
+    // - Condition 1: Input vector is valid NEON register
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: Horizontal reduction to scalar result.
     let mut result = unsafe { vaddvq_f32(sum) };
 
     // Handle remainder
     while a_ptr < end_ptr {
+        // SAFETY: Pointer dereference within slice bounds.
+        // - Condition 1: Loop condition a_ptr < end_ptr ensures pointer is within slice
+        // - Condition 2: Pointers derived from valid slice references
+        // Reason: Scalar tail loop for remaining elements after NEON processing.
         unsafe {
             result += *a_ptr * *b_ptr;
             a_ptr = a_ptr.add(1);
@@ -1216,7 +1257,10 @@ fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let simd_len = len / 4;
 
-    // SAFETY: vdupq_n_f32 is always safe on aarch64
+    // SAFETY: NEON intrinsics are always safe on aarch64.
+    // - Condition 1: vdupq_n_f32 creates a zero vector, no pointer access
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: Initialize accumulator register for squared differences.
     let mut sum = unsafe { vdupq_n_f32(0.0) };
 
     let a_ptr = a.as_ptr();
@@ -1224,6 +1268,11 @@ fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
 
     for i in 0..simd_len {
         let offset = i * 4;
+        // SAFETY: NEON intrinsics operate on valid slice pointers.
+        // - Condition 1: offset = i * 4 where i < simd_len = len / 4, so offset + 4 <= len
+        // - Condition 2: vld1q_f32 handles unaligned loads safely on ARM64
+        // - Condition 3: Both slices have equal length (enforced by caller assertion)
+        // Reason: Core NEON computation for squared L2 distance accumulation.
         unsafe {
             let va = vld1q_f32(a_ptr.add(offset));
             let vb = vld1q_f32(b_ptr.add(offset));
@@ -1232,6 +1281,10 @@ fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
         }
     }
 
+    // SAFETY: vaddvq_f32 is always safe on aarch64.
+    // - Condition 1: Input vector is valid NEON register from vfmaq_f32
+    // - Condition 2: Target architecture guarantees NEON availability
+    // Reason: Horizontal reduction to scalar result.
     let mut result = unsafe { vaddvq_f32(sum) };
 
     let base = simd_len * 4;
@@ -1359,26 +1412,42 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
     match simd_level() {
         // AVX-512: 4-acc pour très grands vecteurs, 1-acc pour le reste
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX-512F support.
         SimdLevel::Avx512 if a.len() >= 512 => unsafe { dot_product_avx512_4acc(a, b) },
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX-512F support.
         SimdLevel::Avx512 if a.len() >= 16 => unsafe { dot_product_avx512(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) }, // < 16 elements, masked loads handle it
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // - Condition 1: simd_level() confirms AVX-512F support via cached runtime detection
+        // - Condition 2: Masked loads handle vectors <16 elements safely
+        // Reason: Target-feature function is safe after runtime detection confirms AVX-512F.
+        SimdLevel::Avx512 => unsafe { dot_product_avx512(a, b) },
         // AVX2: seuils optimisés basés sur la recherche
         // - < 16: scalar (overhead SIMD trop élevé)
         // - 16-63: 1-acc (meilleur ratio overhead/perf)
         // - 64-255: 2-acc (ILP sans overhead excessif)
         // - 256+: 4-acc (maximise ILP pour grands vecteurs)
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
         SimdLevel::Avx2 if a.len() >= 256 => unsafe { dot_product_avx2_4acc(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if a.len() >= 64 => unsafe { dot_product_avx2(a, b) }, // 2-acc
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
+        SimdLevel::Avx2 if a.len() >= 64 => unsafe { dot_product_avx2(a, b) },
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
         SimdLevel::Avx2 if a.len() >= 16 => unsafe { dot_product_avx2_1acc(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if a.len() >= 8 => unsafe { dot_product_avx2_1acc(a, b) }, // 8-15 elements
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
+        SimdLevel::Avx2 if a.len() >= 8 => unsafe { dot_product_avx2_1acc(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(), // < 8 elements
+        SimdLevel::Avx2 => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(),
         #[cfg(target_arch = "aarch64")]
         SimdLevel::Neon if a.len() >= 4 => dot_product_neon(a, b),
         _ => a.iter().zip(b.iter()).map(|(x, y)| x * y).sum(),
@@ -1402,10 +1471,16 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
 
     match simd_level() {
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX-512F support.
         SimdLevel::Avx512 if a.len() >= 512 => unsafe { squared_l2_avx512_4acc(a, b) },
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX-512F support.
         SimdLevel::Avx512 if a.len() >= 16 => unsafe { squared_l2_avx512(a, b) },
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX-512 dispatch after runtime feature detection (masked loads handle remainders).
+        // Reason: Target-feature function is safe after simd_level() confirms AVX-512F support.
         SimdLevel::Avx512 => unsafe { squared_l2_avx512(a, b) },
         // AVX2: seuils optimisés (mêmes que dot_product)
         // - < 16: scalar
@@ -1413,12 +1488,20 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
         // - 64-255: 2-acc
         // - 256+: 4-acc
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if a.len() >= 256 => unsafe { squared_l2_avx2_4acc(a, b) }, // 4-acc
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
+        SimdLevel::Avx2 if a.len() >= 256 => unsafe { squared_l2_avx2_4acc(a, b) },
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if a.len() >= 64 => unsafe { squared_l2_avx2(a, b) }, // 2-acc
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
+        SimdLevel::Avx2 if a.len() >= 64 => unsafe { squared_l2_avx2(a, b) },
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
         SimdLevel::Avx2 if a.len() >= 16 => unsafe { squared_l2_avx2_1acc(a, b) },
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
         SimdLevel::Avx2 if a.len() >= 8 => unsafe { squared_l2_avx2_1acc(a, b) },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 => a
@@ -1792,10 +1875,20 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
         match simd_level() {
+            // SAFETY: AVX-512 dispatch after runtime feature detection.
+            // Reason: Target-feature function is safe after simd_level() confirms AVX-512F support.
             SimdLevel::Avx512 if a.len() >= 16 => return unsafe { cosine_fused_avx512(a, b) },
             // Tiered dispatch: 4-acc for very large, 2-acc for medium
+            // SAFETY: AVX2 dispatch after runtime feature detection.
+            // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
             SimdLevel::Avx2 if a.len() >= 1024 => return unsafe { cosine_fused_avx2(a, b) },
+            // SAFETY: AVX2 dispatch after runtime feature detection.
+            // Reason: Target-feature function is safe after simd_level() confirms AVX2+FMA support.
             SimdLevel::Avx2 if a.len() >= 64 => return unsafe { cosine_fused_avx2_2acc(a, b) },
+            // SAFETY: AVX2 dispatch after runtime feature detection.
+            // - Condition 1: simd_level() confirms AVX2+FMA support via cached runtime detection
+            // - Condition 2: Vector length >= 8 ensures meaningful SIMD work
+            // Reason: Target-feature function is safe after runtime detection confirms AVX2+FMA.
             SimdLevel::Avx2 if a.len() >= 8 => return unsafe { cosine_fused_avx2(a, b) },
             _ => {}
         }
@@ -1904,6 +1997,11 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
         // Prefetch ahead for cache warming
         #[cfg(target_arch = "x86_64")]
         if i + 4 < candidates.len() {
+            // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
+            // - Condition 1: The pointer is derived from a valid slice reference
+            // - Condition 2: Prefetch instructions are hints and never fault, even with invalid addresses
+            // - Condition 3: Index i + 4 is bounds-checked by the condition above
+            // Reason: Software prefetching for cache optimization before actual data access.
             unsafe {
                 use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
                 _mm_prefetch(candidates[i + 4].as_ptr().cast::<i8>(), _MM_HINT_T0);
@@ -1971,9 +2069,17 @@ pub fn jaccard_similarity_native(a: &[f32], b: &[f32]) -> f32 {
 fn hamming_simd(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // - Condition 1: is_x86_feature_detected!("avx512f") confirms CPU support
+        // - Condition 2: Vector length >= 16 ensures meaningful SIMD work
+        // Reason: Target-feature function is safe after runtime detection confirms AVX-512F.
         if is_x86_feature_detected!("avx512f") && a.len() >= 16 {
             return unsafe { hamming_avx512(a, b) };
         }
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // - Condition 1: is_x86_feature_detected!("avx2") confirms CPU support
+        // - Condition 2: Vector length >= 8 ensures meaningful SIMD work
+        // Reason: Target-feature function is safe after runtime detection confirms AVX2.
         if is_x86_feature_detected!("avx2") && a.len() >= 8 {
             return unsafe { hamming_avx2(a, b) };
         }
@@ -1986,9 +2092,17 @@ fn hamming_simd(a: &[f32], b: &[f32]) -> f32 {
 fn jaccard_simd(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
+        // SAFETY: AVX-512 dispatch after runtime feature detection.
+        // - Condition 1: is_x86_feature_detected!("avx512f") confirms CPU support
+        // - Condition 2: Vector length >= 16 ensures meaningful SIMD work
+        // Reason: Target-feature function is safe after runtime detection confirms AVX-512F.
         if is_x86_feature_detected!("avx512f") && a.len() >= 16 {
             return unsafe { jaccard_avx512(a, b) };
         }
+        // SAFETY: AVX2 dispatch after runtime feature detection.
+        // - Condition 1: is_x86_feature_detected!("avx2") confirms CPU support
+        // - Condition 2: Vector length >= 8 ensures meaningful SIMD work
+        // Reason: Target-feature function is safe after runtime detection confirms AVX2.
         if is_x86_feature_detected!("avx2") && a.len() >= 8 {
             return unsafe { jaccard_avx2(a, b) };
         }
@@ -2322,7 +2436,11 @@ pub fn prefetch_vector(vector: &[f32]) {
 
     #[cfg(target_arch = "x86_64")]
     {
-        // SAFETY: _mm_prefetch is a hint instruction that cannot fault
+        // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
+        // - Condition 1: The pointer is derived from a valid slice reference (non-empty check above)
+        // - Condition 2: Prefetch instructions are hints and never fault, even with invalid addresses
+        // - Condition 3: x86_64 architecture guarantees _mm_prefetch availability
+        // Reason: Software prefetching for cache optimization before SIMD data access.
         unsafe {
             use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
@@ -2358,7 +2476,12 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
     {
         use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0, _MM_HINT_T1, _MM_HINT_T2};
 
-        // SAFETY: _mm_prefetch is a hint instruction that cannot fault
+        // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
+        // - Condition 1: All pointers are derived from a valid slice reference (non-empty check above)
+        // - Condition 2: Prefetch instructions are hints and never fault, even with invalid addresses
+        // - Condition 3: Pointer arithmetic stays within bounds (offsets checked against vector_bytes)
+        // - Condition 4: x86_64 architecture guarantees _mm_prefetch availability
+        // Reason: Multi-level cache prefetching for large vectors before SIMD processing.
         unsafe {
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
 
