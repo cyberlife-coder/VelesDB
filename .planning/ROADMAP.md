@@ -148,10 +148,10 @@ Plans:
 **Plans:** 4 plans in 2 waves
 
 Plans:
-- [ ] `03-01-PLAN.md` — Extract `simd_native.rs` into ISA/responsibility modules behind stable facade
-- [ ] `03-02-PLAN.md` — Decompose `parser/select.rs` using hybrid clause + shared validation structure
-- [ ] `03-03-PLAN.md` — Split HNSW graph internals, add lock-order runtime checks/counters, dedup serde paths
-- [ ] `03-04-PLAN.md` — Add required concurrency suites (insert/search/delete + resize/snapshot consistency)
+- [x] `03-01-PLAN.md` — Extract `simd_native.rs` into ISA/responsibility modules behind stable facade
+- [x] `03-02-PLAN.md` — Decompose `parser/select.rs` using hybrid clause + shared validation structure
+- [x] `03-03-PLAN.md` — Split HNSW graph internals, add lock-order runtime checks/counters, dedup serde paths
+- [x] `03-04-PLAN.md` — Add required concurrency suites (insert/search/delete + resize/snapshot consistency)
 
 ---
 
@@ -277,12 +277,12 @@ Plans:
 |-------|--------|----------|--------------|---------------------|
 | 1 - Foundation Fixes | ✅ Complete | 100% | 4/26 | 5/5 |
 | 2 - Unsafe Code & Testing | ✅ Complete | 100% | 5/26 | 5/5 |
-| 3 - Architecture & Graph | ⏳ Pending | 0% | 4/26 | 0/7 |
+| 3 - Architecture & Graph | ✅ Complete | 100% | 4/26 | 7/7 |
 | 4 - Complexity & Errors | ⏳ Pending | 0% | 5/26 | 0/6 |
 | 5 - Cleanup & Performance | ⏳ Pending | 0% | 5/26 | 0/6 |
 | 6 - Documentation & Polish | ⏳ Pending | 0% | 4/26 | 0/6 |
 
-**Overall Progress:** 8/26 requirements (31%)
+**Overall Progress:** 13/26 requirements (50%)
 
 ---
 
