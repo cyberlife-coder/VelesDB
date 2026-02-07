@@ -414,6 +414,35 @@ pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
     // Handle remainder (max 31 elements) with unrolled tail
     let base = simd_len * 32;
     let remainder = len - base;
+    result += dot_avx2_remainder(a, b, a_ptr, b_ptr, base, remainder);
+
+    result
+}
+
+/// Process AVX2 dot product remainder (0-31 elements after main 4-acc loop).
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA
+/// - `a_ptr` and `b_ptr` point to valid memory for `base + remainder` elements
+/// - `base + remainder <= a.len()` and `base + remainder <= b.len()`
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn dot_avx2_remainder(
+    a: &[f32],
+    b: &[f32],
+    a_ptr: *const f32,
+    b_ptr: *const f32,
+    base: usize,
+    remainder: usize,
+) -> f32 {
+    // SAFETY: All pointer operations stay within bounds validated by caller.
+    // Parent function guarantees base + remainder == a.len() == b.len().
+    use std::arch::x86_64::*;
+
+    let mut result = 0.0_f32;
 
     if remainder >= 16 {
         // Process 16 more elements with 2-acc SIMD
@@ -427,138 +456,88 @@ pub(crate) unsafe fn dot_product_avx2_4acc(a: &[f32], b: &[f32]) -> f32 {
         let sum1 = _mm256_fmadd_ps(va1, vb1, _mm256_setzero_ps());
 
         sum0 = _mm256_add_ps(sum0, sum1);
-        let hi = _mm256_extractf128_ps(sum0, 1);
-        let lo = _mm256_castps256_ps128(sum0);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sums = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sums, sums);
-        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+        result += hsum_avx2(sum0);
 
         // Handle remaining 0-15 elements
         if remainder > 16 {
             let rbase = base + 16;
             let r = remainder - 16;
-            if r >= 8 {
-                let va = _mm256_loadu_ps(a_ptr.add(rbase));
-                let vb = _mm256_loadu_ps(b_ptr.add(rbase));
-                let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
-                let hi = _mm256_extractf128_ps(tmp, 1);
-                let lo = _mm256_castps256_ps128(tmp);
-                let sum128 = _mm_add_ps(lo, hi);
-                let shuf = _mm_movehdup_ps(sum128);
-                let sums = _mm_add_ps(sum128, shuf);
-                let shuf2 = _mm_movehl_ps(sums, sums);
-                result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
-
-                if r > 8 {
-                    let rrbase = rbase + 8;
-                    let rr = r - 8;
-                    if rr >= 4 {
-                        result += a[rrbase] * b[rrbase]
-                            + a[rrbase + 1] * b[rrbase + 1]
-                            + a[rrbase + 2] * b[rrbase + 2]
-                            + a[rrbase + 3] * b[rrbase + 3];
-                        if rr >= 5 {
-                            result += a[rrbase + 4] * b[rrbase + 4];
-                        }
-                        if rr >= 6 {
-                            result += a[rrbase + 5] * b[rrbase + 5];
-                        }
-                        if rr == 7 {
-                            result += a[rrbase + 6] * b[rrbase + 6];
-                        }
-                    } else if rr >= 2 {
-                        result += a[rrbase] * b[rrbase] + a[rrbase + 1] * b[rrbase + 1];
-                        if rr == 3 {
-                            result += a[rrbase + 2] * b[rrbase + 2];
-                        }
-                    } else if rr == 1 {
-                        result += a[rrbase] * b[rrbase];
-                    }
-                }
-            } else if r >= 4 {
-                result += a[rbase] * b[rbase]
-                    + a[rbase + 1] * b[rbase + 1]
-                    + a[rbase + 2] * b[rbase + 2]
-                    + a[rbase + 3] * b[rbase + 3];
-                if r >= 5 {
-                    result += a[rbase + 4] * b[rbase + 4];
-                }
-                if r >= 6 {
-                    result += a[rbase + 5] * b[rbase + 5];
-                }
-                if r >= 7 {
-                    result += a[rbase + 6] * b[rbase + 6];
-                }
-            } else if r >= 2 {
-                result += a[rbase] * b[rbase] + a[rbase + 1] * b[rbase + 1];
-                if r == 3 {
-                    result += a[rbase + 2] * b[rbase + 2];
-                }
-            } else if r == 1 {
-                result += a[rbase] * b[rbase];
-            }
+            result += dot_avx2_tail_under16(a, b, a_ptr, b_ptr, rbase, r);
         }
     } else if remainder >= 8 {
         let va = _mm256_loadu_ps(a_ptr.add(base));
         let vb = _mm256_loadu_ps(b_ptr.add(base));
         let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
-        let hi = _mm256_extractf128_ps(tmp, 1);
-        let lo = _mm256_castps256_ps128(tmp);
-        let sum128 = _mm_add_ps(lo, hi);
-        let shuf = _mm_movehdup_ps(sum128);
-        let sums = _mm_add_ps(sum128, shuf);
-        let shuf2 = _mm_movehl_ps(sums, sums);
-        result += _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+        result += hsum_avx2(tmp);
 
         let r = remainder - 8;
-        if r >= 4 {
-            result += a[base + 8] * b[base + 8]
-                + a[base + 9] * b[base + 9]
-                + a[base + 10] * b[base + 10]
-                + a[base + 11] * b[base + 11];
-            if r >= 5 {
-                result += a[base + 12] * b[base + 12];
-            }
-            if r >= 6 {
-                result += a[base + 13] * b[base + 13];
-            }
-            if r == 7 {
-                result += a[base + 14] * b[base + 14];
-            }
-        } else if r >= 2 {
-            result += a[base + 8] * b[base + 8] + a[base + 9] * b[base + 9];
-            if r == 3 {
-                result += a[base + 10] * b[base + 10];
-            }
-        } else if r == 1 {
-            result += a[base + 8] * b[base + 8];
+        if r > 0 {
+            let rbase = base + 8;
+            sum_remainder_unrolled_8!(a, b, rbase, r, result);
         }
-    } else if remainder >= 4 {
-        result += a[base] * b[base]
-            + a[base + 1] * b[base + 1]
-            + a[base + 2] * b[base + 2]
-            + a[base + 3] * b[base + 3];
-        if remainder >= 5 {
-            result += a[base + 4] * b[base + 4];
-        }
-        if remainder >= 6 {
-            result += a[base + 5] * b[base + 5];
-        }
-        if remainder == 7 {
-            result += a[base + 6] * b[base + 6];
-        }
-    } else if remainder >= 2 {
-        result += a[base] * b[base] + a[base + 1] * b[base + 1];
-        if remainder == 3 {
-            result += a[base + 2] * b[base + 2];
-        }
-    } else if remainder == 1 {
-        result += a[base] * b[base];
+    } else if remainder > 0 {
+        sum_remainder_unrolled_8!(a, b, base, remainder, result);
     }
 
     result
+}
+
+/// Process tail of 0-15 elements using AVX2 8-wide + scalar remainder.
+///
+/// # Safety
+///
+/// Same as `dot_avx2_remainder`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[inline]
+unsafe fn dot_avx2_tail_under16(
+    a: &[f32],
+    b: &[f32],
+    a_ptr: *const f32,
+    b_ptr: *const f32,
+    base: usize,
+    remainder: usize,
+) -> f32 {
+    // SAFETY: Pointer operations bounded by caller validation.
+    use std::arch::x86_64::*;
+
+    let mut result = 0.0_f32;
+
+    if remainder >= 8 {
+        let va = _mm256_loadu_ps(a_ptr.add(base));
+        let vb = _mm256_loadu_ps(b_ptr.add(base));
+        let tmp = _mm256_fmadd_ps(va, vb, _mm256_setzero_ps());
+        result += hsum_avx2(tmp);
+
+        if remainder > 8 {
+            let rbase = base + 8;
+            let r = remainder - 8;
+            sum_remainder_unrolled_8!(a, b, rbase, r, result);
+        }
+    } else {
+        sum_remainder_unrolled_8!(a, b, base, remainder, result);
+    }
+
+    result
+}
+
+/// Horizontal sum of 8 packed f32 values in an AVX2 register.
+///
+/// # Safety
+///
+/// Requires AVX2 support.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn hsum_avx2(v: std::arch::x86_64::__m256) -> f32 {
+    use std::arch::x86_64::*;
+    let hi = _mm256_extractf128_ps(v, 1);
+    let lo = _mm256_castps256_ps128(v);
+    let sum128 = _mm_add_ps(lo, hi);
+    let shuf = _mm_movehdup_ps(sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehl_ps(sums, sums);
+    _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
 }
 
 /// AVX2 dot product with single accumulator for small vectors.
