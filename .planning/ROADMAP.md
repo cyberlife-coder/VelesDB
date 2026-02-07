@@ -198,21 +198,24 @@ Plans:
 **Plans:** 9 plans in 4 waves
 
 **Wave 1 — Error Foundation:**
-- [ ] `04-01-PLAN.md` — Panic elimination + error type enrichment (DOCS-01, DOCS-02)
+- [x] `04-01-PLAN.md` — Panic elimination + error type enrichment (DOCS-01, DOCS-02)
 
 **Wave 2 — Module Splitting (20 files >500 lines → 0):**
-- [ ] `04-02-PLAN.md` — Root modules: metrics.rs (1529), quantization.rs (559)
-- [ ] `04-03-PLAN.md` — collection/graph: 6 files (property_index, cart, memory_pool, degree_router, metrics, edge_concurrent)
-- [ ] `04-04-PLAN.md` — collection/search/query: 5 files (match_exec, mod, aggregation, parallel_traversal, score_fusion)
-- [ ] `04-05-PLAN.md` — index + storage: 3 files (distance, mmap, trigram/simd) [hot-path]
-- [ ] `04-06-PLAN.md` — velesql + column_store + query_cost: 4 files
+- [x] `04-02-PLAN.md` — Root modules: metrics.rs (1529), quantization.rs (559)
+- [x] `04-03-PLAN.md` — collection/graph: 6 files (property_index, cart, memory_pool, degree_router, metrics, edge_concurrent)
+- [x] `04-04-PLAN.md` — collection/search/query: 5 files (match_exec, mod, aggregation, parallel_traversal, score_fusion)
+- [x] `04-05-PLAN.md` — index + storage: 3 files (distance, mmap, trigram/simd) [hot-path]
+- [x] `04-06-PLAN.md` — velesql + column_store + query_cost: 4 files
 
 **Wave 3 — Quality Enforcement:**
-- [ ] `04-07-PLAN.md` — Clippy pedantic remediation (476 → 0) + activate workspace lint
-- [ ] `04-08-PLAN.md` — Production hardening (20 expects, 64 bare-string errors, 1 complexity violation)
+- [x] `04-07-PLAN.md` — Clippy pedantic remediation (476 → 0) + activate workspace lint
+- [x] `04-08-PLAN.md` — Production hardening (20 expects, 64 bare-string errors, 1 complexity violation)
 
 **Wave 4 — Tests:**
-- [ ] `04-09-PLAN.md` — GPU error handling tests (TEST-03) [depends on 04-01]
+- [x] `04-09-PLAN.md` — GPU error handling tests (TEST-03) [depends on 04-01]
+
+**Post-phase fix:**
+- [x] SIMD extraction gap closure — Extract ISA kernels from mod.rs into submodules (mod.rs 1604→105 lines)
 
 ---
 
@@ -251,7 +254,18 @@ Plans:
 - All source files (dead code audit)
 - `Cargo.toml` files (dependency audit)
 - `storage/mmap.rs` (WAL recovery tests)
-- `simd_native.rs:1339-1400` (dispatch optimization)
+- `simd_native/dispatch.rs` (dispatch optimization)
+
+### Plans
+
+**Plans:** 3 plans in 2 waves
+
+**Wave 1 — Cleanup (independent):**
+- [ ] `05-01-PLAN.md` — Dependency hygiene & dead code cleanup (CLEAN-01, CLEAN-02, CLEAN-03)
+- [ ] `05-02-PLAN.md` — WAL recovery edge case tests (TEST-04)
+
+**Wave 2 — Performance (depends on 05-01):**
+- [ ] `05-03-PLAN.md` — SIMD dispatch optimization & benchmarks (PERF-01)
 
 ---
 
@@ -300,11 +314,11 @@ Plans:
 | 1 - Foundation Fixes | ✅ Complete | 100% | 4/26 | 5/5 |
 | 2 - Unsafe Code & Testing | ✅ Complete | 100% | 5/26 | 5/5 |
 | 3 - Architecture & Graph | ✅ Complete | 100% | 4/26 | 7/7 |
-| 4 - Complexity & Errors | ⏳ Pending | 0% | 5/26 | 0/6 |
-| 5 - Cleanup & Performance | ⏳ Pending | 0% | 5/26 | 0/6 |
+| 4 - Complexity & Errors | ✅ Complete | 100% | 5/26 | 6/6 |
+| 5 - Cleanup & Performance | ⏳ Planned | 0% | 5/26 | 0/6 |
 | 6 - Documentation & Polish | ⏳ Pending | 0% | 4/26 | 0/6 |
 
-**Overall Progress:** 13/26 requirements (50%)
+**Overall Progress:** 18/26 requirements (69%)
 
 ---
 
@@ -345,5 +359,5 @@ After Phase 6 completion:
 ---
 
 *Roadmap created: 2026-02-06*  
-*Last updated: 2026-02-07*  
-*Next review: After Phase 3 midpoint*
+*Last updated: 2026-02-08*  
+*Next review: After Phase 5 completion*
