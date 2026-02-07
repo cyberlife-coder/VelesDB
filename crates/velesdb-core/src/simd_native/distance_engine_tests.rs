@@ -215,3 +215,45 @@ fn test_distance_engine_cross_thread() {
     let result = handle.join().expect("thread panicked");
     assert!(result.is_finite());
 }
+
+// ---------------------------------------------------------------------------
+// Correctness: DistanceEngine hamming/jaccard must match *_native()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_engine_hamming_matches_native() {
+    for dim in [8, 16, 32, 64, 128, 256, 512, 768, 1024, 1536] {
+        let engine = super::dispatch::DistanceEngine::new(dim);
+        let a: Vec<f32> = (0..dim)
+            .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f32> = (0..dim)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+            .collect();
+        let cached = engine.hamming(&a, &b);
+        let native = super::dispatch::hamming_distance_native(&a, &b);
+        assert_eq!(
+            cached, native,
+            "hamming mismatch at dim={dim}: cached={cached}, native={native}"
+        );
+    }
+}
+
+#[test]
+fn test_engine_jaccard_matches_native() {
+    for dim in [8, 16, 32, 64, 128, 256, 512, 768, 1024, 1536] {
+        let engine = super::dispatch::DistanceEngine::new(dim);
+        let a: Vec<f32> = (0..dim)
+            .map(|i| if i < dim / 2 { 1.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f32> = (0..dim)
+            .map(|i| if i < dim * 3 / 4 { 1.0 } else { 0.0 })
+            .collect();
+        let cached = engine.jaccard(&a, &b);
+        let native = super::dispatch::jaccard_similarity_native(&a, &b);
+        assert!(
+            (cached - native).abs() < 1e-6,
+            "jaccard mismatch at dim={dim}: cached={cached}, native={native}"
+        );
+    }
+}
