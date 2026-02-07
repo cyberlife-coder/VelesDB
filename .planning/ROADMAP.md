@@ -152,6 +152,7 @@ Plans:
 - [x] `03-02-PLAN.md` — Decompose `parser/select.rs` using hybrid clause + shared validation structure
 - [x] `03-03-PLAN.md` — Split HNSW graph internals, add lock-order runtime checks/counters, dedup serde paths
 - [x] `03-04-PLAN.md` — Add required concurrency suites (insert/search/delete + resize/snapshot consistency)
+- [x] `03-05 (gap closure)` — Extract ISA kernels into x86_avx512.rs, x86_avx2.rs, x86_avx2_similarity.rs, neon.rs; mod.rs 1818→124 lines
 
 ---
 
@@ -191,6 +192,15 @@ Plans:
 - `column_store/mod.rs` (panic removal)
 - `storage/guard.rs` (panic removal)
 - `gpu.rs` (error handling tests)
+
+### Plans
+
+**Plans:** 3 plans in 2 waves
+
+Plans:
+- [ ] `04-01-PLAN.md` — Panic elimination + error type enrichment (DOCS-01, DOCS-02)
+- [ ] `04-02-PLAN.md` — Complexity reduction + naming clarity audit (QUAL-03, QUAL-04)
+- [ ] `04-03-PLAN.md` — GPU error handling tests (TEST-03) [depends on 04-01]
 
 ---
 

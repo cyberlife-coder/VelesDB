@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core Refactoring Milestone  
-**Current Phase:** 3 — Architecture & Graph (Complete)  
+**Current Phase:** 4 — Complexity Reduction & Error Handling (Planned)  
 **Session Started:** 2026-02-06  
 
 ---
@@ -39,14 +39,13 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 3 complete (all 4 plans delivered)**
-- 03-01 SIMD module extraction: simd_native.rs converted to directory module
-- 03-02 Parser select.rs extraction: 829-line monolith split into 7 clause-oriented submodules
-- 03-03 HNSW graph extraction + lock safety: graph.rs split into submodules, lock-rank checker + counters
-- 03-04 Concurrency verification: 15 new tests across both required families (insert/search/delete + resize/snapshot)
+**Phase 4 planned (3 plans ready for execution)**
+- 04-01 (Wave 1): Panic elimination + error type enrichment — convert 4 panic sites to Result, add 3 Error variants
+- 04-02 (Wave 1): Complexity reduction + naming clarity — fix 1 cognitive complexity violation, audit public API names
+- 04-03 (Wave 2): GPU error handling tests — graceful fallback, parameter validation, edge-case inputs
 
 ### Next Action
-Phase 4: Complexity Reduction & Error Handling
+Execute Plan 04-01: Panic Elimination & Error Type Enrichment
 
 Progress: ████████████░░░░ 75%
 
@@ -197,22 +196,22 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 16:02 UTC — Completed 03-04-PLAN.md (Phase 3 complete)
-- Added 15 concurrency tests across both required families
-- Family 1: parallel insert/search/delete with deterministic invariant assertions + soft-delete exclusion
-- Family 2: resize/snapshot consistency with epoch guard validation + loom scenarios
-- All quality gates pass: fmt, clippy -D warnings, 2394 tests passing
+2026-02-08 — Created Phase 4 plans (3 plans in 2 waves)
+- Phase 3 gap closure completed: ISA kernel extraction (mod.rs 1818→124 lines)
+- Phase 4 planned: 04-01 (panic→Result), 04-02 (complexity+naming), 04-03 (GPU tests)
+- Codebase scan: 1 cognitive complexity violation, 4 panic sites, GPU tests missing error paths
 
 ### Current Branch
 main
 
 ### Uncommitted Changes
-None
+Phase 4 plan files (uncommitted)
 
 ### Notes for Next Session
-1. Phase 3 is fully complete — ready for Phase 4: Complexity Reduction & Error Handling
-2. Lock-order runtime checker and safety counters are exercised by concurrency tests
-3. Both HNSW and storage concurrency families are now regression-protected
+1. Execute 04-01 first (Wave 1) — panic elimination is highest priority
+2. 04-02 can run in parallel with 04-01 (both Wave 1, independent)
+3. 04-03 depends on 04-01 (GPU functions must return Result before writing error tests)
+4. guard.rs as_slice() → Result will ripple into storage/mmap.rs and HNSW search — trace carefully
 
 ---
 
