@@ -60,6 +60,7 @@ impl NativeHnswIndex {
             params.max_connections,
             params.max_elements,
             params.ef_construction,
+            dimension,
         );
 
         Self {
@@ -149,7 +150,7 @@ impl NativeHnswIndex {
         let meta = persistence::load_meta(path)?;
 
         // Load HNSW graph
-        let inner = NativeHnswInner::file_load(path, "native_hnsw", meta.metric)?;
+        let inner = NativeHnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
 
         // Load mappings
         let mappings_data = persistence::load_mappings(path)?;

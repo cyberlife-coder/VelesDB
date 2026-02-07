@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
 
-use super::native::{NativeHnsw, NativeNeighbour, SimdDistance};
+use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
@@ -16,8 +16,8 @@ use std::path::Path;
 /// This is the native equivalent of `HnswInner`, using our own HNSW implementation
 /// instead of `hnsw_rs`. It provides the same API for seamless integration.
 pub struct NativeHnswInner {
-    /// The underlying native HNSW index
-    inner: NativeHnsw<SimdDistance>,
+    /// The underlying native HNSW index (cached fn pointers for zero-dispatch)
+    inner: NativeHnsw<CachedSimdDistance>,
     /// The distance metric used
     metric: DistanceMetric,
 }
@@ -30,8 +30,9 @@ impl NativeHnswInner {
         max_connections: usize,
         max_elements: usize,
         ef_construction: usize,
+        dimension: usize,
     ) -> Self {
-        let distance = SimdDistance::new(metric);
+        let distance = CachedSimdDistance::new(metric, dimension);
         let inner = NativeHnsw::new(distance, max_connections, ef_construction, max_elements);
 
         Self { inner, metric }
@@ -78,8 +79,13 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail or data is corrupted.
-    pub fn file_load(path: &Path, basename: &str, metric: DistanceMetric) -> std::io::Result<Self> {
-        let distance = SimdDistance::new(metric);
+    pub fn file_load(
+        path: &Path,
+        basename: &str,
+        metric: DistanceMetric,
+        dimension: usize,
+    ) -> std::io::Result<Self> {
+        let distance = CachedSimdDistance::new(metric, dimension);
         let inner = NativeHnsw::file_load(path, basename, distance)?;
 
         Ok(Self { inner, metric })

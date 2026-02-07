@@ -129,6 +129,7 @@ impl HnswIndex {
             params.max_connections,
             params.max_elements,
             params.ef_construction,
+            dimension,
         );
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);
@@ -199,7 +200,7 @@ impl HnswIndex {
         let meta = persistence::load_meta(path)?;
 
         // Load HNSW graph
-        let inner = HnswInner::file_load(path, "native_hnsw", meta.metric)?;
+        let inner = HnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
 
         // Load mappings
         let mappings_data = persistence::load_mappings(path)?;

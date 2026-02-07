@@ -132,6 +132,7 @@ impl HnswIndex {
             params.max_connections,
             count.max(1000), // max_elements with reasonable minimum
             params.ef_construction,
+            self.dimension,
         );
 
         // 3. Create new mappings and vectors
