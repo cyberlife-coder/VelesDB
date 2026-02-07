@@ -37,28 +37,28 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 4 | Complexity & Errors | ✅ Complete | None |
 | 5 | Cleanup & Performance | ✅ Complete | None |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
-| 7 | SIMD Tolerance & Engine | ⏳ In Progress | None |
+| 7 | SIMD Tolerance & Engine | ✅ Complete | None |
 
 ### Current Focus
-**Phase 7 in progress (1/2 plans) — SIMD tolerance & DistanceEngine integration**
+**Phase 7 complete (2/2 plans) — SIMD tolerance & DistanceEngine integration**
 
 **Wave 1 (sequential):**
 - 07-01: Widen SIMD property test tolerances (TEST-08) — ✅ Complete (64fe7739)
-- 07-02: Wire DistanceEngine into HNSW hot loop (PERF-04) — ⏳ Ready
+- 07-02: Wire DistanceEngine into HNSW hot loop (PERF-04) — ✅ Complete (3b77cdcc)
 
 ### Next Action
-Execute Plan 07-02: Wire DistanceEngine into HNSW hot loop
+Phase 6 (Documentation & Polish): DOCS-03, DOCS-04, PERF-02, PERF-03
 
-Progress: ███████████████░ 92%
+Progress: ████████████████ 96%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 24/28 (86%)
+- **Completed:** 25/28 (89%)
 - **In Progress:** 0/28
-- **Pending:** 4/28
+- **Pending:** 3/28
 
 ### By Category
 
@@ -102,7 +102,7 @@ Progress: ███████████████░ 92%
 - [x] PERF-01 — SIMD dispatch (DistanceEngine with cached fn pointers, 13% faster at 1536d cosine)
 - [ ] PERF-02 — Async I/O
 - [ ] PERF-03 — Format allocations
-- [ ] PERF-04 — Wire DistanceEngine into HNSW hot loop
+- [x] PERF-04 — Wire DistanceEngine into HNSW hot loop (Plan 07-02 complete)
 
 #### Testing (TEST) — continued
 - [x] TEST-08 — Widen SIMD property test tolerances (Plan 07-01 complete)
@@ -202,12 +202,12 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 — Plan 07-01 executed: f64 ground truth + Higham error bound
-- Replaced f32 scalar refs with f64 ground truth (proper reference)
-- Implemented Higham's forward error bound (no arbitrary constants)
-- Added JaccardRef struct + jaccard_error_bound() for ratio propagation
-- 10/10 consecutive runs pass with 0 failures
-- Commit: 64fe7739
+2026-02-07 — Plan 07-02 executed: Zero-dispatch CachedSimdDistance for HNSW
+- Extended simd_native::DistanceEngine with hamming_fn/jaccard_fn (all 5 metrics)
+- Created CachedSimdDistance struct implementing HNSW DistanceEngine trait
+- Wired CachedSimdDistance into NativeHnswInner (replaces SimdDistance)
+- 8 new tests, 2432 total pass, 313 HNSW tests zero regressions
+- Commits: 5b9a05db → 3b77cdcc (5 atomic commits)
 
 ### Current Branch
 feature/CORE-phase5-plan01-dependency-cleanup
@@ -216,9 +216,9 @@ feature/CORE-phase5-plan01-dependency-cleanup
 None (all committed)
 
 ### Notes for Next Session
-1. Execute Plan 07-02 (Wire DistanceEngine into HNSW hot loop)
+1. Phase 7 complete — all plans executed
 2. Phase 6 (DOCS-03, DOCS-04, PERF-02, PERF-03) still pending
-3. DistanceEngine struct already exists in dispatch.rs from Phase 5
+3. CachedSimdDistance now active in production HNSW path
 
 ---
 
@@ -255,4 +255,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-07*  
-*Progress: 24/28 requirements (86%) — Phase 7 plan 07-01 complete, 07-02 ready*
+*Progress: 25/28 requirements (89%) — Phase 7 complete, Phase 6 pending*
