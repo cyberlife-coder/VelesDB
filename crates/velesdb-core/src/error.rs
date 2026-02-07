@@ -119,6 +119,25 @@ pub enum Error {
     /// Use try_from() instead of `as` casts for user-provided data.
     #[error("[VELES-023] Numeric overflow: {0}")]
     Overflow(String),
+
+    /// Column store error (VELES-024).
+    ///
+    /// Indicates a column store schema or primary key validation failure.
+    #[error("[VELES-024] Column store error: {0}")]
+    ColumnStoreError(String),
+
+    /// GPU operation error (VELES-025).
+    ///
+    /// Indicates a GPU parameter validation or operation failure.
+    #[error("[VELES-025] GPU error: {0}")]
+    GpuError(String),
+
+    /// Epoch mismatch (VELES-026).
+    ///
+    /// Indicates a stale mmap guard detected after a remap operation.
+    /// This is not recoverable — the guard must be re-acquired.
+    #[error("[VELES-026] Epoch mismatch: {0}")]
+    EpochMismatch(String),
 }
 
 impl Error {
@@ -149,6 +168,9 @@ impl Error {
             Self::InvalidEdgeLabel(_) => "VELES-021",
             Self::NodeNotFound(_) => "VELES-022",
             Self::Overflow(_) => "VELES-023",
+            Self::ColumnStoreError(_) => "VELES-024",
+            Self::GpuError(_) => "VELES-025",
+            Self::EpochMismatch(_) => "VELES-026",
         }
     }
 
@@ -157,7 +179,10 @@ impl Error {
     /// Non-recoverable errors include corruption and internal errors.
     #[must_use]
     pub const fn is_recoverable(&self) -> bool {
-        !matches!(self, Self::IndexCorrupted(_) | Self::Internal(_))
+        !matches!(
+            self,
+            Self::IndexCorrupted(_) | Self::Internal(_) | Self::EpochMismatch(_)
+        )
     }
 }
 
