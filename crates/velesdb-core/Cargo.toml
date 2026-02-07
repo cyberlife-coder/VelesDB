@@ -305,3 +305,17 @@ optional = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[lints.clippy]
+# EPIC-077 / Plan 04-07: Enable pedantic linting for production quality
+pedantic = { level = "warn", priority = -1 }
+# Reason: Standard Rust naming convention (e.g. CollectionConfig in collection module)
+module_name_repetitions = "allow"
+# Reason: VelesDB uses many Result-returning functions; missing_errors_doc is enforced manually
+missing_errors_doc = "allow"
+# Reason: Panic documentation is enforced via code review, not lint
+missing_panics_doc = "allow"
+# Reason: SIMD intrinsics require wildcard imports (hundreds of symbols)
+wildcard_imports = "allow"
+# Reason: Many public structs use bool fields that are self-documenting
+struct_field_names = "allow"
