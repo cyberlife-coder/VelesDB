@@ -167,6 +167,18 @@
   - Files: `index/trigram/simd.rs`
   - Success: Stack buffers or string interning for trigram extraction
 
+- [ ] **PERF-04**: Wire DistanceEngine into HNSW hot loop replacing per-call SimdDistance dispatch
+  - Priority: Medium (P3)
+  - Files: `index/hnsw/native/graph/mod.rs`, `search.rs`, `insert.rs`, `neighbors.rs`
+  - Success: NativeHnsw uses cached fn pointers; ~5-15% search latency improvement
+
+### Testing & Quality Assurance (TEST) — continued
+
+- [ ] **TEST-08**: Widen SIMD property test tolerances for dot product and jaccard
+  - Priority: High (P2)
+  - Files: `tests/simd_property_tests.rs`
+  - Success: Both flaky tests pass consistently across 10 consecutive runs; tolerances justified with `// Reason:` comments
+
 ## v2 Requirements
 
 ### Testing Improvements
@@ -227,13 +239,15 @@
 | PERF-01 | Phase 5 | Pending |
 | PERF-02 | Phase 6 | Pending |
 | PERF-03 | Phase 6 | Pending |
+| PERF-04 | Phase 7 | Pending |
+| TEST-08 | Phase 7 | Pending |
 
 **Coverage:**
-- v1 requirements: 26 total
-- Mapped to phases: 26
+- v1 requirements: 28 total
+- Mapped to phases: 28
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-02-06*
-*Last updated: 2026-02-06 after Phase 1 completion*
-*ROADMAP.md: All 26 v1 requirements mapped to 6 phases*
+*Last updated: 2026-02-07 after Phase 7 addition*
+*ROADMAP.md: All 28 v1 requirements mapped to 7 phases*

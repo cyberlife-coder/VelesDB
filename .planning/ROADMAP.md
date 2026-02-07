@@ -3,7 +3,7 @@
 **Version:** 1.0  
 **Created:** 2026-02-06  
 **Depth:** Comprehensive  
-**Total Phases:** 6  
+**Total Phases:** 7  
 **Total Requirements:** 26 v1 requirements  
 
 ---
@@ -315,10 +315,11 @@ Plans:
 | 2 - Unsafe Code & Testing | ✅ Complete | 100% | 5/26 | 5/5 |
 | 3 - Architecture & Graph | ✅ Complete | 100% | 4/26 | 7/7 |
 | 4 - Complexity & Errors | ✅ Complete | 100% | 5/26 | 6/6 |
-| 5 - Cleanup & Performance | ⏳ Planned | 0% | 5/26 | 0/6 |
-| 6 - Documentation & Polish | ⏳ Pending | 0% | 4/26 | 0/6 |
+| 5 - Cleanup & Performance | ⏳ Planned | 0% | 5/28 | 0/6 |
+| 6 - Documentation & Polish | ⏳ Pending | 0% | 4/28 | 0/6 |
+| 7 - SIMD Tolerance & Engine | ⏳ Pending | 0% | 2/28 | 0/5 |
 
-**Overall Progress:** 18/26 requirements (69%)
+**Overall Progress:** 18/28 requirements (64%)
 
 ---
 
@@ -347,17 +348,62 @@ All phases must pass these gates before completion:
 
 ---
 
+## Phase 7: SIMD Tolerance Hardening & DistanceEngine Integration
+
+**Goal:** Eliminate flaky SIMD property tests by widening tolerance thresholds and wire `DistanceEngine` cached function pointers into the HNSW hot loop to eliminate per-call dispatch overhead.
+
+**Estimated Complexity:** Medium (tolerance fix is small; HNSW integration touches hot-path code)  
+**Estimated Duration:** 1-2 sessions  
+
+### Dependencies
+
+- Phase 5 (PERF-01 — DistanceEngine struct already exists)
+- Phase 6 (PERF-02/PERF-03 — async I/O and allocation reduction for complete performance picture)
+
+### Requirements
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| TEST-08 | Widen SIMD property test tolerances for dot product and jaccard | P2 — High |
+| PERF-04 | Wire DistanceEngine into HNSW hot loop replacing per-call SimdDistance dispatch | P3 — Medium |
+
+### Success Criteria
+
+1. **Zero flaky tests:** `test_dot_product_native_matches_scalar` and `test_jaccard_similarity_native_matches_scalar` pass consistently across 10 consecutive `cargo test` runs
+2. **Tolerance is justified:** Each tolerance widening has a `// Reason:` comment explaining the FMA/multi-accumulator precision gap
+3. **DistanceEngine wired in:** `NativeHnsw` uses `DistanceEngine` cached fn pointers in `search_layer`, `search_layer_single`, and `insert` instead of per-call `SimdDistance` dispatch
+4. **No performance regression:** HNSW benchmarks maintain or improve latency vs. baseline (expect ~5-15% improvement on search hot path)
+5. **Clippy clean:** `cargo clippy -- -D warnings` passes with zero warnings
+
+### Key Files
+
+- `crates/velesdb-core/tests/simd_property_tests.rs` (tolerance thresholds)
+- `crates/velesdb-core/src/index/hnsw/native/graph/mod.rs` (DistanceEngine field)
+- `crates/velesdb-core/src/index/hnsw/native/graph/search.rs` (search hot loop)
+- `crates/velesdb-core/src/index/hnsw/native/graph/insert.rs` (insert path)
+- `crates/velesdb-core/src/index/hnsw/native/graph/neighbors.rs` (neighbor selection)
+
+### Plans
+
+**Plans:** 2 plans in 1 wave (sequential)
+
+- [ ] `07-01-PLAN.md` — Widen SIMD property test tolerances (TEST-08)
+- [ ] `07-02-PLAN.md` — Wire DistanceEngine into HNSW hot loop (PERF-04)
+
+---
+
 ## Post-Milestone
 
-After Phase 6 completion:
+After Phase 7 completion:
 
 1. **Tag release:** `git tag v0.x.0-refactored`
 2. **Update CHANGELOG:** Document all refactoring improvements
 3. **Run final benchmarks:** Generate performance comparison report
 4. **Schedule v2:** Review v2 requirements (TEST-05 through QUAL-05) for next milestone
+5. **Verify zero flaky tests:** Run `cargo test --workspace` 10× to confirm stability
 
 ---
 
 *Roadmap created: 2026-02-06*  
-*Last updated: 2026-02-08*  
+*Last updated: 2026-02-07*
 *Next review: After Phase 5 completion*
