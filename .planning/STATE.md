@@ -37,28 +37,28 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 4 | Complexity & Errors | ✅ Complete | None |
 | 5 | Cleanup & Performance | ✅ Complete | None |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
-| 7 | SIMD Tolerance & Engine | ⏳ Planned | Phase 5 |
+| 7 | SIMD Tolerance & Engine | ⏳ In Progress | None |
 
 ### Current Focus
-**Phase 7 planned (0/2 plans) — SIMD tolerance & DistanceEngine integration**
+**Phase 7 in progress (1/2 plans) — SIMD tolerance & DistanceEngine integration**
 
 **Wave 1 (sequential):**
-- 07-01: Widen SIMD property test tolerances (TEST-08) — ⏳ Ready
-- 07-02: Wire DistanceEngine into HNSW hot loop (PERF-04) — ⏳ Depends on 07-01
+- 07-01: Widen SIMD property test tolerances (TEST-08) — ✅ Complete (64fe7739)
+- 07-02: Wire DistanceEngine into HNSW hot loop (PERF-04) — ⏳ Ready
 
 ### Next Action
-Execute Plan 07-01: Widen SIMD property test tolerances
+Execute Plan 07-02: Wire DistanceEngine into HNSW hot loop
 
-Progress: ██████████████░░ 88%
+Progress: ███████████████░ 92%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 23/28 (82%)
+- **Completed:** 24/28 (86%)
 - **In Progress:** 0/28
-- **Pending:** 5/28
+- **Pending:** 4/28
 
 ### By Category
 
@@ -105,7 +105,7 @@ Progress: ██████████████░░ 88%
 - [ ] PERF-04 — Wire DistanceEngine into HNSW hot loop
 
 #### Testing (TEST) — continued
-- [ ] TEST-08 — Widen SIMD property test tolerances
+- [x] TEST-08 — Widen SIMD property test tolerances (Plan 07-01 complete)
 
 ---
 
@@ -202,11 +202,12 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 — Phase 7 planned: SIMD Tolerance Hardening & DistanceEngine Integration
-- Created 07-01-PLAN.md: Widen SIMD property test tolerances (TEST-08)
-- Created 07-02-PLAN.md: Wire DistanceEngine into HNSW hot loop (PERF-04)
-- Root cause analysis: FMA multi-accumulator reordering + AVX2 parallel reduction rounding
-- Researched: dispatch.rs DistanceEngine, distance.rs SimdDistance, search.rs/insert.rs/neighbors.rs hot paths
+2026-02-07 — Plan 07-01 executed: f64 ground truth + Higham error bound
+- Replaced f32 scalar refs with f64 ground truth (proper reference)
+- Implemented Higham's forward error bound (no arbitrary constants)
+- Added JaccardRef struct + jaccard_error_bound() for ratio propagation
+- 10/10 consecutive runs pass with 0 failures
+- Commit: 64fe7739
 
 ### Current Branch
 feature/CORE-phase5-plan01-dependency-cleanup
@@ -215,10 +216,9 @@ feature/CORE-phase5-plan01-dependency-cleanup
 None (all committed)
 
 ### Notes for Next Session
-1. Execute Plan 07-01 first (tolerance fix — small, quick)
-2. Then Plan 07-02 (CachedSimdDistance — touches more files)
-3. Phase 6 (DOCS-03, DOCS-04, PERF-02, PERF-03) still pending
-4. DistanceEngine struct already exists in dispatch.rs from Phase 5
+1. Execute Plan 07-02 (Wire DistanceEngine into HNSW hot loop)
+2. Phase 6 (DOCS-03, DOCS-04, PERF-02, PERF-03) still pending
+3. DistanceEngine struct already exists in dispatch.rs from Phase 5
 
 ---
 
@@ -255,4 +255,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-07*  
-*Progress: 23/28 requirements (82%) — Phase 7 planned, ready to execute*
+*Progress: 24/28 requirements (86%) — Phase 7 plan 07-01 complete, 07-02 ready*
