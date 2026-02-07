@@ -37,6 +37,8 @@ pub use index::{extract_trigrams, TrigramIndex};
 pub use simd::{extract_trigrams_simd, TrigramSimdLevel};
 
 #[cfg(test)]
+mod simd_tests;
+#[cfg(test)]
 mod thread_safety_tests;
 
 #[cfg(test)]
