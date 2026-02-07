@@ -39,41 +39,28 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
 ### Current Focus
-**Phase 5 planned (3 plans in 2 waves) — cleanup & performance**
+**Phase 5 in progress (3 plans in 2 waves) — cleanup & performance**
 
 **Wave 1 — Cleanup (independent):**
-- 05-01: Dependency hygiene & dead code cleanup (CLEAN-01, CLEAN-02, CLEAN-03)
+- 05-01: Dependency hygiene & dead code cleanup ✅ (10 deps removed, portable-simd flag removed)
 - 05-02: WAL recovery edge case tests (TEST-04)
 
 **Wave 2 — Performance:**
 - 05-03: SIMD dispatch optimization & benchmarks (PERF-01)
 
-### Phase 4 Completion Summary
-All 9 plans executed + SIMD extraction gap closure:
-- 04-01: Panic elimination ✅ (4 panic sites → Result, 3 Error variants)
-- 04-02: Root modules ✅ (metrics.rs, quantization.rs split)
-- 04-03: Collection/graph ✅ (5 files → 14 submodules)
-- 04-04: Search/query ✅ (5 files → 17 submodules)
-- 04-05: Index + storage ✅ (3 files split)
-- 04-06: VelesQL + column_store ✅ (4 files split)
-- 04-07: Clippy pedantic ✅ (476 → 0 warnings)
-- 04-08: Production hardening ✅ (expects, bare-string errors fixed)
-- 04-09: GPU error tests ✅ (fallback, validation, edge cases)
-- SIMD gap closure ✅ (mod.rs 1604→105 lines, ISA submodules extracted)
-
 ### Next Action
-Execute Plan 05-01: Dependency Hygiene & Dead Code Cleanup
+Execute Plan 05-02: WAL Recovery Edge Case Tests (Wave 1 parallel)
 
-Progress: ███████████░░░░░ 69%
+Progress: ████████████░░░░ 81%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 18/26 (69%)
+- **Completed:** 21/26 (81%)
 - **In Progress:** 0/26
-- **Pending:** 8/26
+- **Pending:** 5/26
 
 ### By Category
 
@@ -97,9 +84,9 @@ Progress: ███████████░░░░░ 69%
 - [x] BUG-04 — HNSW lock ordering (runtime checker + counters in Plan 03-03)
 
 #### Cleanup (CLEAN)
-- [ ] CLEAN-01 — Dead code
-- [ ] CLEAN-02 — Unused deps
-- [ ] CLEAN-03 — Feature flags
+- [x] CLEAN-01 — Dead code (0 dead_code warnings, 0 #[allow(dead_code)] annotations)
+- [x] CLEAN-02 — Unused deps (10 deps removed across 7 crates, cargo machete clean)
+- [x] CLEAN-03 — Feature flags (orphaned portable-simd removed, all flags documented)
 
 #### Documentation (DOCS)
 - [x] DOCS-01 — Panic to error (4 panic sites converted in 04-01, production hardening in 04-08)
@@ -213,26 +200,23 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-08 — SIMD extraction gap closure + Phase 5 planning
-- Fixed critical simd_native/mod.rs regression: ISA kernels duplicated & orphaned after merge
-- Extracted 5 fresh ISA submodules from authoritative mod.rs (1604→105 lines)
-- Verified: 2382 tests pass, 0 clippy errors, fmt clean, 0 dead code warnings
-- Created Phase 5 plans: 3 plans in 2 waves
-- Updated ROADMAP.md with Phase 4 completion and Phase 5 plan references
+2026-02-07 — Plan 05-01 executed: Dependency Hygiene & Dead Code Cleanup
+- Removed 10 unused deps across 7 crates (thiserror×3, anyhow, arc-swap, bytes, crossbeam-channel, futures, config, half)
+- Added cargo-machete ignore for 2 false positives (sqlx feature-gated, tokio uniffi runtime)
+- Removed orphaned portable-simd feature flag (0 cfg references)
+- Added comprehensive feature documentation in velesdb-core Cargo.toml
+- Verified: 2382 tests pass, 0 clippy errors, cargo machete clean
 
 ### Current Branch
-main
+feature/CORE-phase5-plan01-dependency-cleanup
 
 ### Uncommitted Changes
-- Phase 5 plan files (05-01, 05-02, 05-03)
-- ROADMAP.md and STATE.md updates
-- SIMD extraction (mod.rs rewrite, 5 new ISA submodules)
+None (all committed)
 
 ### Notes for Next Session
-1. Execute Phase 5 Wave 1: 05-01 (deps) and 05-02 (WAL tests) in parallel
+1. Execute Plan 05-02: WAL recovery edge case tests (Wave 1 parallel)
 2. Then Wave 2: 05-03 (SIMD dispatch optimization)
-3. cargo machete found unused deps in 6 crates — verify and remove
-4. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
+3. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
 
 ---
 
@@ -268,5 +252,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2026-02-08*  
-*Progress: 13/26 requirements (50%) — Phase 4 in progress (04-01, 04-02, 04-03, 04-04 complete)*
+*State file last updated: 2026-02-07*  
+*Progress: 21/26 requirements (81%) — Phase 5 in progress (05-01 complete)*
