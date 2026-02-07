@@ -8,7 +8,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::simd_native::{
     cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
-    jaccard_similarity_native,
+    jaccard_similarity_native, DistanceEngine,
 };
 
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -192,6 +192,96 @@ fn bench_jaccard_density(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// DistanceEngine vs native dispatch comparison
+// =============================================================================
+
+fn bench_engine_vs_native_dot_product(c: &mut Criterion) {
+    let mut group = c.benchmark_group("engine_vs_native/dot_product");
+
+    for dim in &[128, 384, 768, 1536] {
+        let a = generate_vector(*dim, 0.0);
+        let b = generate_vector(*dim, 1.0);
+        let engine = DistanceEngine::new(*dim);
+
+        group.bench_with_input(BenchmarkId::new("native", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = dot_product_native(&a, &b);
+            });
+            bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
+        });
+
+        group.bench_with_input(BenchmarkId::new("engine", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = engine.dot_product(&a, &b);
+            });
+            bencher.iter(|| engine.dot_product(black_box(&a), black_box(&b)));
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_engine_vs_native_cosine(c: &mut Criterion) {
+    let mut group = c.benchmark_group("engine_vs_native/cosine");
+
+    for dim in &[128, 384, 768, 1536] {
+        let a = generate_vector(*dim, 0.0);
+        let b = generate_vector(*dim, 1.0);
+        let engine = DistanceEngine::new(*dim);
+
+        group.bench_with_input(BenchmarkId::new("native", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = cosine_similarity_native(&a, &b);
+            });
+            bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
+        });
+
+        group.bench_with_input(BenchmarkId::new("engine", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = engine.cosine_similarity(&a, &b);
+            });
+            bencher.iter(|| engine.cosine_similarity(black_box(&a), black_box(&b)));
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_engine_batch_simulation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("engine_batch_simulation");
+    let dim = 768;
+    let batch_size = 1000;
+
+    let query = generate_vector(dim, 0.0);
+    let candidates: Vec<Vec<f32>> = (0..batch_size)
+        .map(|i| generate_vector(dim, i as f32 * 0.01))
+        .collect();
+    let engine = DistanceEngine::new(dim);
+
+    group.bench_function("native_1000x768", |bencher| {
+        bencher.iter(|| {
+            let mut sum = 0.0f32;
+            for c in &candidates {
+                sum += dot_product_native(black_box(c), black_box(&query));
+            }
+            sum
+        });
+    });
+
+    group.bench_function("engine_1000x768", |bencher| {
+        bencher.iter(|| {
+            let mut sum = 0.0f32;
+            for c in &candidates {
+                sum += engine.dot_product(black_box(c), black_box(&query));
+            }
+            sum
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dot_product,
@@ -200,6 +290,9 @@ criterion_group!(
     bench_hamming_f32,
     bench_hamming_binary,
     bench_jaccard_similarity,
-    bench_jaccard_density
+    bench_jaccard_density,
+    bench_engine_vs_native_dot_product,
+    bench_engine_vs_native_cosine,
+    bench_engine_batch_simulation,
 );
 criterion_main!(benches);
