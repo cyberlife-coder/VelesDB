@@ -44,7 +44,6 @@ indicatif = "0.17"
 
 # Error handling
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 
 # Time measurement
 instant = "0.1"
