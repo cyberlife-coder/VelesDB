@@ -3,6 +3,7 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
 use super::super::ordered_float::OrderedFloat;
+use super::locking::{record_lock_acquire, record_lock_release, LockRank};
 use super::NativeHnsw;
 use std::collections::BinaryHeap;
 use std::sync::atomic::Ordering;
@@ -131,6 +132,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedFloat, NodeId)> = BinaryHeap::new();
 
+        record_lock_acquire(LockRank::Vectors);
         let vectors = self.vectors.read();
 
         let dimension = if vectors.is_empty() {
@@ -187,6 +189,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 }
             }
         }
+
+        // Release vectors lock rank (guard drops at end of scope)
+        drop(vectors);
+        record_lock_release(LockRank::Vectors);
 
         let mut result_vec: Vec<(NodeId, f32)> =
             results.into_iter().map(|(d, n)| (n, d.0)).collect();

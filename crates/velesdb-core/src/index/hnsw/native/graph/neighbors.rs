@@ -2,6 +2,7 @@
 
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
+use super::locking::{record_lock_acquire, record_lock_release, LockRank};
 use super::NativeHnsw;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -71,24 +72,37 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         layer: usize,
         max_conn: usize,
     ) {
+        // Phase 1: Pre-fetch neighbor vector (vectors lock rank)
+        record_lock_acquire(LockRank::Vectors);
         let neighbor_vec = self.get_vector(neighbor);
+        record_lock_release(LockRank::Vectors);
 
+        // Phase 2: Get current neighbors (layers lock rank, released immediately)
+        record_lock_acquire(LockRank::Layers);
         let current_neighbors = self.layers.read()[layer].get_neighbors(neighbor);
+        record_lock_release(LockRank::Layers);
 
         if current_neighbors.len() < max_conn {
+            // Simple case: just add the new node
+            record_lock_acquire(LockRank::Layers);
             let layers = self.layers.read();
             let mut neighbors = layers[layer].get_neighbors(neighbor);
             neighbors.push(new_node);
             layers[layer].set_neighbors(neighbor, neighbors);
+            record_lock_release(LockRank::Layers);
         } else {
+            // Pruning case: pre-fetch ALL vectors BEFORE layers lock
             let mut all_neighbors = current_neighbors.clone();
             all_neighbors.push(new_node);
 
+            record_lock_acquire(LockRank::Vectors);
             let neighbor_vecs: Vec<(NodeId, Vec<f32>)> = all_neighbors
                 .iter()
                 .map(|&n| (n, self.get_vector(n)))
                 .collect();
+            record_lock_release(LockRank::Vectors);
 
+            // Compute distances (no locks held)
             let mut with_dist: Vec<(NodeId, f32)> = neighbor_vecs
                 .iter()
                 .map(|(n, n_vec)| (*n, self.distance.distance(&neighbor_vec, n_vec)))
@@ -101,7 +115,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 .map(|(n, _)| n)
                 .collect();
 
+            // Phase 4: Write to layers (no vectors lock needed)
+            record_lock_acquire(LockRank::Layers);
             self.layers.read()[layer].set_neighbors(neighbor, pruned);
+            record_lock_release(LockRank::Layers);
         }
     }
 }
