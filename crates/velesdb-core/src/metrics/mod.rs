@@ -19,6 +19,7 @@
 //! let rank_quality = mrr(&ground_truth, &results);         // 1/1 = 1.0 (first result is relevant)
 //! ```
 
+mod guardrails;
 mod latency;
 mod operational;
 mod query;
@@ -33,10 +34,10 @@ pub use retrieval::{
 pub use latency::{compute_latency_percentiles, LatencyStats};
 
 // Re-export operational metrics
-pub use operational::{
-    GuardRailsMetrics, LimitType, OperationalMetrics, TraversalMetrics, DEPTH_BUCKETS,
-    DURATION_BUCKETS, NODES_BUCKETS,
-};
+pub use operational::{OperationalMetrics, DEPTH_BUCKETS, DURATION_BUCKETS, NODES_BUCKETS};
+
+// Re-export guard-rails and traversal metrics
+pub use guardrails::{GuardRailsMetrics, LimitType, TraversalMetrics};
 
 // Re-export query diagnostics
 pub use query::{DurationHistogram, QueryPhase, QueryStats, SlowQueryLogger, SpanBuilder};
