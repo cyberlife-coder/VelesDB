@@ -415,6 +415,8 @@ pub struct DistanceEngine {
     dot_product_fn: fn(&[f32], &[f32]) -> f32,
     squared_l2_fn: fn(&[f32], &[f32]) -> f32,
     cosine_fn: fn(&[f32], &[f32]) -> f32,
+    hamming_fn: fn(&[f32], &[f32]) -> f32,
+    jaccard_fn: fn(&[f32], &[f32]) -> f32,
     dimension: usize,
 }
 
@@ -447,6 +449,8 @@ impl DistanceEngine {
             dot_product_fn: Self::resolve_dot_product(level, dimension),
             squared_l2_fn: Self::resolve_squared_l2(level, dimension),
             cosine_fn: Self::resolve_cosine(level, dimension),
+            hamming_fn: Self::resolve_hamming(level, dimension),
+            jaccard_fn: Self::resolve_jaccard(level, dimension),
             dimension,
         }
     }
@@ -499,6 +503,34 @@ impl DistanceEngine {
             "Vector dimension mismatch with engine"
         );
         (self.cosine_fn)(a, b)
+    }
+
+    /// Computes Hamming distance using the pre-resolved SIMD kernel.
+    #[allow(clippy::inline_always)] // Reason: Single indirect call on hot path
+    #[inline(always)]
+    #[must_use]
+    pub fn hamming(&self, a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+        debug_assert_eq!(
+            a.len(),
+            self.dimension,
+            "Vector dimension mismatch with engine"
+        );
+        (self.hamming_fn)(a, b)
+    }
+
+    /// Computes Jaccard similarity using the pre-resolved SIMD kernel.
+    #[allow(clippy::inline_always)] // Reason: Single indirect call on hot path
+    #[inline(always)]
+    #[must_use]
+    pub fn jaccard(&self, a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+        debug_assert_eq!(
+            a.len(),
+            self.dimension,
+            "Vector dimension mismatch with engine"
+        );
+        (self.jaccard_fn)(a, b)
     }
 
     /// Returns the dimension this engine was optimized for.
@@ -574,6 +606,44 @@ impl DistanceEngine {
             #[cfg(target_arch = "aarch64")]
             SimdLevel::Neon if dim >= 4 => |a, b| super::squared_l2_neon(a, b),
             _ => squared_l2_scalar,
+        }
+    }
+
+    /// Resolves the best hamming distance kernel for (level, dimension).
+    fn resolve_hamming(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
+        match level {
+            #[cfg(target_arch = "x86_64")]
+            SimdLevel::Avx512 if dim >= 16 => |a, b| {
+                // SAFETY: simd_level() confirmed AVX-512F at engine construction.
+                // Reason: Target-feature function safe after runtime detection.
+                unsafe { super::hamming_avx512(a, b) }
+            },
+            #[cfg(target_arch = "x86_64")]
+            SimdLevel::Avx2 if dim >= 8 => |a, b| {
+                // SAFETY: simd_level() confirmed AVX2+FMA at engine construction.
+                // Reason: Target-feature function safe after runtime detection.
+                unsafe { super::hamming_avx2(a, b) }
+            },
+            _ => scalar::hamming_scalar,
+        }
+    }
+
+    /// Resolves the best jaccard similarity kernel for (level, dimension).
+    fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
+        match level {
+            #[cfg(target_arch = "x86_64")]
+            SimdLevel::Avx512 if dim >= 16 => |a, b| {
+                // SAFETY: simd_level() confirmed AVX-512F at engine construction.
+                // Reason: Target-feature function safe after runtime detection.
+                unsafe { super::jaccard_avx512(a, b) }
+            },
+            #[cfg(target_arch = "x86_64")]
+            SimdLevel::Avx2 if dim >= 8 => |a, b| {
+                // SAFETY: simd_level() confirmed AVX2+FMA at engine construction.
+                // Reason: Target-feature function safe after runtime detection.
+                unsafe { super::jaccard_avx2(a, b) }
+            },
+            _ => scalar::jaccard_scalar,
         }
     }
 
