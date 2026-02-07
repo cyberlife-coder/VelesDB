@@ -65,7 +65,7 @@ impl Parser {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::aggregate_function => {
-                    aggregate = Some(Self::parse_aggregate_function_only(inner_pair)?)
+                    aggregate = Some(Self::parse_aggregate_function_only(inner_pair)?);
                 }
                 Rule::compare_op => operator = Some(validation::parse_compare_op(&inner_pair)?),
                 Rule::value => value = Some(Self::parse_value(inner_pair)?),
@@ -118,7 +118,7 @@ impl Parser {
                     is_similarity = sim;
                 }
                 Rule::sort_direction => {
-                    descending = Some(inner_pair.as_str().to_uppercase() == "DESC")
+                    descending = Some(inner_pair.as_str().to_uppercase() == "DESC");
                 }
                 _ => {}
             }

@@ -1,6 +1,6 @@
 //! Tests for memory pool and concurrent memory pool.
 
-use super::concurrent::{ConcurrentMemoryPool, ConcurrentPoolHandle};
+use super::concurrent::ConcurrentMemoryPool;
 use super::*;
 
 #[test]

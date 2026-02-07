@@ -22,10 +22,11 @@ impl Parser {
                                 for part in option.into_inner() {
                                     match part.as_rule() {
                                         Rule::identifier => {
-                                            key = extract_identifier(&part).to_lowercase()
+                                            key = extract_identifier(&part).to_lowercase();
                                         }
                                         Rule::fusion_value => {
-                                            value_str = part.as_str().trim_matches('\'').to_string()
+                                            value_str =
+                                                part.as_str().trim_matches('\'').to_string();
                                         }
                                         _ => {}
                                     }

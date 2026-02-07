@@ -132,6 +132,7 @@ impl ParallelTraverser {
     ///
     /// Results are sorted by score descending (highest first).
     /// Applies the configured limit after deduplication.
+    #[must_use]
     pub fn merge_and_deduplicate(&self, results: Vec<TraversalResult>) -> Vec<TraversalResult> {
         let mut seen = FxHashSet::default();
         let mut unique: Vec<TraversalResult> = results

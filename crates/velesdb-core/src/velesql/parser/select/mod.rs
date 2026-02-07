@@ -59,7 +59,7 @@ impl Parser {
                 Rule::offset_clause => offset = Some(Self::parse_offset_clause(inner_pair)?),
                 Rule::with_clause => with_clause = Some(Self::parse_with_clause(inner_pair)?),
                 Rule::using_fusion_clause => {
-                    fusion_clause = Some(Self::parse_using_fusion_clause(inner_pair))
+                    fusion_clause = Some(Self::parse_using_fusion_clause(inner_pair));
                 }
                 _ => {}
             }

@@ -44,6 +44,8 @@ pub mod plan_generator;
 pub mod query_executor;
 
 #[cfg(test)]
+mod plan_generator_tests;
+#[cfg(test)]
 mod tests;
 
 pub use cost_model::{CostEstimator, OperationCost, OperationCostFactors};
