@@ -43,24 +43,24 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 
 **Wave 1 — Cleanup (independent):**
 - 05-01: Dependency hygiene & dead code cleanup ✅ (10 deps removed, portable-simd flag removed)
-- 05-02: WAL recovery edge case tests (TEST-04)
+- 05-02: WAL recovery edge case tests ✅ (26 tests: partial writes, corruption, crash recovery)
 
 **Wave 2 — Performance:**
 - 05-03: SIMD dispatch optimization & benchmarks (PERF-01)
 
 ### Next Action
-Execute Plan 05-02: WAL Recovery Edge Case Tests (Wave 1 parallel)
+Execute Plan 05-03: SIMD Dispatch Optimization & Benchmarks (Wave 2)
 
-Progress: ████████████░░░░ 81%
+Progress: █████████████░░░ 85%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 21/26 (81%)
+- **Completed:** 22/26 (85%)
 - **In Progress:** 0/26
-- **Pending:** 5/26
+- **Pending:** 4/26
 
 ### By Category
 
@@ -98,7 +98,7 @@ Progress: ████████████░░░░ 81%
 - [x] TEST-01 — SIMD property tests (Plan 02-03 complete)
 - [x] TEST-02 — Concurrent resize tests (Plan 03-04 complete)
 - [x] TEST-03 — GPU error tests (Plan 04-09 complete)
-- [ ] TEST-04 — WAL recovery tests
+- [x] TEST-04 — WAL recovery edge cases (26 tests: partial writes, corruption, crash recovery)
 
 #### Performance (PERF)
 - [ ] PERF-01 — SIMD dispatch
@@ -200,12 +200,12 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 — Plan 05-01 executed: Dependency Hygiene & Dead Code Cleanup
-- Removed 10 unused deps across 7 crates (thiserror×3, anyhow, arc-swap, bytes, crossbeam-channel, futures, config, half)
-- Added cargo-machete ignore for 2 false positives (sqlx feature-gated, tokio uniffi runtime)
-- Removed orphaned portable-simd feature flag (0 cfg references)
-- Added comprehensive feature documentation in velesdb-core Cargo.toml
-- Verified: 2382 tests pass, 0 clippy errors, cargo machete clean
+2026-02-07 — Plan 05-02 executed: WAL Recovery Edge Case Tests
+- Created wal_recovery_tests.rs with 26 tests covering partial writes, corruption, crash recovery
+- 7 partial write tests (truncated header/id/len/payload, zero-length, multi-entry)
+- 10 corruption detection tests (invalid marker, flipped bits, oversized len, snapshot corruption)
+- 9 crash recovery tests (clean/unclean shutdown, stale snapshot, idempotent recovery)
+- Verified: 139 storage tests pass, 0 clippy warnings
 
 ### Current Branch
 feature/CORE-phase5-plan01-dependency-cleanup
@@ -214,8 +214,8 @@ feature/CORE-phase5-plan01-dependency-cleanup
 None (all committed)
 
 ### Notes for Next Session
-1. Execute Plan 05-02: WAL recovery edge case tests (Wave 1 parallel)
-2. Then Wave 2: 05-03 (SIMD dispatch optimization)
+1. Wave 1 complete (05-01 + 05-02)
+2. Execute Wave 2: 05-03 (SIMD dispatch optimization & benchmarks)
 3. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
 
 ---
@@ -253,4 +253,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-07*  
-*Progress: 21/26 requirements (81%) — Phase 5 in progress (05-01 complete)*
+*Progress: 22/26 requirements (85%) — Phase 5 in progress (05-01, 05-02 complete)*
