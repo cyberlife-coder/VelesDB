@@ -177,3 +177,140 @@ fn test_batch_dot_product_parallel() {
         );
     }
 }
+
+// =========================================================================
+// Plan 04-09 Task 2: Parameter validation errors
+// =========================================================================
+
+#[test]
+#[serial(gpu)]
+fn test_batch_cosine_zero_dimension() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        // dimension=0 should return empty (early exit in batch_cosine_similarity)
+        let results = gpu.batch_cosine_similarity(&[1.0, 2.0, 3.0], &[1.0], 0);
+        assert!(results.is_empty(), "Zero dimension should return empty");
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_batch_cosine_dimension_mismatch() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        // Query is 2D but vectors declared as 3D — should not panic
+        // The GPU processes whatever data is there; result may be wrong but no crash
+        let query = vec![1.0, 0.0];
+        let vectors = vec![1.0, 0.0, 0.0]; // 1 vector of dim 3
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        // Should produce 1 result (vectors.len() / dimension = 1)
+        assert_eq!(results.len(), 1);
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_batch_euclidean_empty_vectors() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let results = gpu.batch_euclidean_distance(&[], &[1.0, 2.0, 3.0], 3);
+        assert!(results.is_empty(), "Empty vectors should return empty");
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_batch_dot_product_single_element() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        // Edge case: dimension=1
+        let query = vec![3.0];
+        let vectors = vec![4.0];
+        let results = gpu.batch_dot_product(&vectors, &query, 1);
+        assert_eq!(results.len(), 1);
+        assert!(
+            (results[0] - 12.0).abs() < 0.01,
+            "Expected 3*4=12, got {}",
+            results[0]
+        );
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_batch_cosine_large_batch() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        // 1000+ vectors of dimension 8
+        let dim = 8;
+        let num_vectors = 1024;
+        let query: Vec<f32> = vec![1.0; dim];
+        let vectors: Vec<f32> = vec![1.0; dim * num_vectors];
+
+        let results = gpu.batch_cosine_similarity(&vectors, &query, dim);
+        assert_eq!(results.len(), num_vectors);
+        // All identical vectors → similarity should be ~1.0
+        for (i, &r) in results.iter().enumerate() {
+            assert!((r - 1.0).abs() < 0.05, "Vector {i}: expected ~1.0, got {r}");
+        }
+    }
+}
+
+// =========================================================================
+// Plan 04-09 Task 3: Edge-case inputs (no-panic guarantee)
+// =========================================================================
+
+#[test]
+#[serial(gpu)]
+fn test_gpu_no_panic_on_edge_inputs() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        // Each case: (vectors, query, dimension)
+        let cases: Vec<(&[f32], &[f32], usize)> = vec![
+            (&[], &[], 0),
+            (&[1.0], &[1.0], 1),
+            (&[f32::NAN], &[1.0], 1),
+            (&[f32::INFINITY], &[1.0], 1),
+            (&[f32::NEG_INFINITY], &[1.0], 1),
+            (&[0.0; 1024], &[0.0; 8], 8), // 128 zero vectors of dim 8
+        ];
+
+        for (vectors, query, dim) in cases {
+            // None of these should panic
+            let _ = gpu.batch_cosine_similarity(vectors, query, dim);
+            let _ = gpu.batch_euclidean_distance(vectors, query, dim);
+            let _ = gpu.batch_dot_product(vectors, query, dim);
+        }
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_gpu_cosine_zero_norm_vectors() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        // Zero vector has norm 0 — GPU shader guards against division by zero
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors = vec![0.0, 0.0, 0.0]; // Zero vector
+
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        assert_eq!(results.len(), 1);
+        // Should return 0.0 (shader checks denom > 0.0)
+        assert!(
+            results[0].is_finite(),
+            "Zero-norm cosine should be finite, got {}",
+            results[0]
+        );
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_gpu_euclidean_zero_dimension() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let results = gpu.batch_euclidean_distance(&[1.0], &[1.0], 0);
+        assert!(results.is_empty(), "Zero dimension should return empty");
+    }
+}
+
+#[test]
+#[serial(gpu)]
+fn test_gpu_dot_product_zero_dimension() {
+    if let Some(gpu) = GpuAccelerator::new() {
+        let results = gpu.batch_dot_product(&[1.0], &[1.0], 0);
+        assert!(results.is_empty(), "Zero dimension should return empty");
+    }
+}
