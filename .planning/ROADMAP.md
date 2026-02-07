@@ -142,6 +142,16 @@ Plans:
 - `velesql/parser/select.rs` → parser submodules
 - `storage/guard.rs` (concurrent resize tests)
 
+### Plans
+
+**Plans:** 4 plans in 2 waves
+
+Plans:
+- [ ] `03-01-PLAN.md` — Extract `simd_native.rs` into ISA/responsibility modules behind stable facade
+- [ ] `03-02-PLAN.md` — Decompose `parser/select.rs` using hybrid clause + shared validation structure
+- [ ] `03-03-PLAN.md` — Split HNSW graph internals, add lock-order runtime checks/counters, dedup serde paths
+- [ ] `03-04-PLAN.md` — Add required concurrency suites (insert/search/delete + resize/snapshot consistency)
+
 ---
 
 ## Phase 4: Complexity Reduction & Error Handling
