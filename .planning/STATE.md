@@ -34,7 +34,7 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 1 | Foundation Fixes | ✅ Complete | None |
 | 2 | Unsafe Code & Testing | ✅ Complete | None |
 | 3 | Architecture & Graph | ✅ Complete | None |
-| 4 | Complexity & Errors | ⏳ Pending | Phase 3 |
+| 4 | Complexity & Errors | 🔄 In Progress | None |
 | 5 | Cleanup & Performance | ⏳ Pending | Phase 4 |
 | 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
 
@@ -47,7 +47,7 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 **Wave 2 — Module Splitting (20 files >500 lines → 0):**
 - 04-02: Root modules — metrics.rs, quantization.rs ✅ Complete (2 files → 8 submodules, all <500 lines)
 - 04-03: collection/graph — 5 of 6 files split ✅ Complete (5 files → 14 submodules, edge_concurrent skipped at 512 lines)
-- 04-04: collection/search/query — 5 files (4087 lines total)
+- 04-04: collection/search/query — 5 files split ✅ Complete (5 files → 17 submodules, 4087 lines reorganized)
 - 04-05: index + storage — 3 files (2038 lines, hot-path)
 - 04-06: velesql + column_store + query_cost — 4 files (2334 lines)
 
@@ -59,9 +59,9 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 - 04-09: GPU error handling tests (fallback, validation, edge cases)
 
 ### Next Action
-Execute Plan 04-04: Collection/Search/Query Module Splitting (5 files, 4087 lines)
+Execute Plan 04-05: Index + Storage Module Splitting (3 files, 2038 lines, hot-path)
 
-Progress: ████████████░░░░ 75%
+Progress: █████████████░░░ 81%
 
 ---
 
@@ -84,7 +84,7 @@ Progress: ████████████░░░░ 75%
  #### Code Quality (QUAL)
 - [x] QUAL-01 — Module extraction (partial: HNSW graph in 03-03, metrics+quantization in 04-02, 5 graph files in 04-03)
 - [x] QUAL-02 — Deduplication (partial: HNSW serde dedup in Plan 03-03)
-- [ ] QUAL-03 — Complexity reduction
+- [~] QUAL-03 — Complexity reduction (partial: 04-04 split 5 query files into 17 submodules)
 - [ ] QUAL-04 — Naming clarity
 
 #### Bug Fixes (BUG)
@@ -210,13 +210,13 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-08 — Executed Plan 04-03: Collection/Graph Module Splitting
-- Split property_index.rs (1107 lines) → 4 submodules
-- Split cart.rs (919 lines) → 3 submodules
-- Split memory_pool.rs (599 lines) → 3 submodules
-- Split degree_router.rs (552 lines) → 2 submodules
-- Split metrics.rs (543 lines) → 2 submodules
-- Skipped edge_concurrent.rs (512 lines, single cohesive struct)
+2026-02-08 — Executed Plan 04-04: Collection/Search/Query Module Splitting
+- Split match_exec.rs (845 lines) → 3 submodules (mod.rs, where_eval.rs, similarity.rs)
+- Extracted from mod.rs (833 lines) → similarity_filter.rs + union_query.rs (mod.rs now ~370 lines)
+- Split aggregation.rs (815 lines) → 2 submodules (mod.rs, grouped.rs)
+- Split parallel_traversal.rs (809 lines) → 4 submodules (mod.rs, traverser.rs, frontier.rs, sharded.rs)
+- Split score_fusion.rs (790 lines) → 4 submodules (mod.rs, explanation.rs, boost.rs, path.rs)
+- Fixed cross-shard edge propagation bug in ShardedTraverser frontier distribution
 - 5 atomic commits, all quality gates pass, 2382 lib tests pass
 
 ### Current Branch
@@ -226,10 +226,10 @@ main
 None
 
 ### Notes for Next Session
-1. Wave 2 (04-02 to 04-06) are independent — can be done in any order
+1. Wave 2: 04-05 and 04-06 remain — can be done in any order
 2. Wave 3 (04-07, 04-08) must wait for module splitting to be done
 3. clippy --fix can auto-fix ~376 of 476 pedantic warnings (backticks, format!, semicolons)
-4. Pre-existing flaky test: test_jaccard_similarity_native_matches_scalar (SIMD precision)
+4. Pre-existing flaky tests: test_jaccard_similarity_native_matches_scalar, test_dot_product_native_matches_scalar (SIMD precision)
 
 ---
 
@@ -266,4 +266,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Progress: 13/26 requirements (50%) — Phase 4 in progress (04-01, 04-02, 04-03 complete)*
+*Progress: 13/26 requirements (50%) — Phase 4 in progress (04-01, 04-02, 04-03, 04-04 complete)*
