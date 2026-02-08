@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 1 ✅ complete. Phase 4 in progress — Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, 04-05 ✅)  
+**Current Milestone:** v4-verify-promise (Phase 1 ✅ complete. Phase 4 in progress — Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, 04-05 ✅, 04-06 ✅)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -41,14 +41,14 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1 ✅ complete (VP-001, VP-003, VP-006). Phase 2-3 complete. Phase 4 in progress (Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, 04-05 ✅, Wave 2 continues).
+### Status: Phase 1 ✅ complete (VP-001, VP-003, VP-006). Phase 2-3 complete. Phase 4 in progress (Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, 04-05 ✅, 04-06 ✅. Wave 3 next).
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done (2/2 plans) | 17+4 tests | VP-001 ✅, VP-003 ✅, VP-006 ✅ | 2-3h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
-| 4 - E2E Scenario Test Suite | 🔄 In Progress (5/7 plans done) | ~30 | VP-007 | 8-10h | 🛡️ Regression prevention |
+| 4 - E2E Scenario Test Suite | 🔄 In Progress (6/7 plans done) | ~36 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
 **Total:** ~36 tasks | ~40-50h
@@ -84,7 +84,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 **Phase 4 plan structure (7 plans, 3 waves):**
 - **Wave 1:** ✅ 04-01 Test Infrastructure & Hero Query (completed 2026-02-08)
-- **Wave 2:** ✅ 04-02 SELECT Domain (Scenarios 1-3, completed 2026-02-09), ✅ 04-03 Metrics & Fusion (0b/0c, completed 2026-02-09), ✅ 04-04 Simple MATCH (BS1/BS4 + ORDER BY, completed 2026-02-09), ✅ 04-05 Complex MATCH (BS2/BS3, completed 2026-02-09), 04-06 Cross-Store & VelesQL (Scenario 0 + API)
+- **Wave 2:** ✅ 04-02 SELECT Domain (Scenarios 1-3, completed 2026-02-09), ✅ 04-03 Metrics & Fusion (0b/0c, completed 2026-02-09), ✅ 04-04 Simple MATCH (BS1/BS4 + ORDER BY, completed 2026-02-09), ✅ 04-05 Complex MATCH (BS2/BS3, completed 2026-02-09), ✅ 04-06 Cross-Store & VelesQL (Scenario 0 + API, completed 2026-02-09)
 - **Wave 3:** 04-07 Quality Gates & Integration
 - Plans dir: `.planning/phases/v4-04-e2e-scenario-tests/`
 - Test files: `tests/readme_scenarios/` (7 files)
@@ -145,4 +145,4 @@ cargo build --release
 - Plans dir: `.planning/phases/v4-01-match-where-completeness/`
 
 *State file last updated: 2026-02-09*  
-*Status: Phase 4 Wave 2 — 5/7 plans done. Remaining: 04-06 (Cross-Store & VelesQL), 04-07 (Quality Gates). 30 readme_scenarios tests passing.*
+*Status: Phase 4 Wave 2 complete, Wave 3 next — 6/7 plans done. Remaining: 04-07 (Quality Gates). 36 readme_scenarios tests passing.*
