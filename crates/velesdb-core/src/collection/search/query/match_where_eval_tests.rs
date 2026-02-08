@@ -10,7 +10,8 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use crate::velesql::{
-    BetweenCondition, Condition, InCondition, IsNullCondition, LikeCondition, MatchCondition, Value,
+    BetweenCondition, Condition, InCondition, IntervalUnit, IntervalValue, IsNullCondition,
+    LikeCondition, MatchCondition, TemporalExpr, Value,
 };
 use crate::velesql::{GraphPattern, MatchClause, NodePattern, ReturnClause};
 use crate::{Database, DistanceMetric, Point};
@@ -391,6 +392,60 @@ fn test_match_where_temporal_comparison() {
     let ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
     assert!(ids.contains(&2), "Node 2 (1700100000) should match");
     assert!(ids.contains(&4), "Node 4 (1700200000) should match");
+}
+
+// ============================================================================
+// VP-003: Temporal expression resolution tests (Plan 01-02)
+// ============================================================================
+
+#[test]
+fn test_match_where_temporal_now_resolves() {
+    let (_dir, collection) = setup_match_test_collection();
+
+    // updated_at > NOW() should return 0 results (test data timestamps are in the past ~1.7B)
+    let condition = Condition::Comparison(crate::velesql::Comparison {
+        column: "updated_at".to_string(),
+        operator: crate::velesql::CompareOp::Gt,
+        value: Value::Temporal(TemporalExpr::Now),
+    });
+
+    let clause = match_clause_with_condition(condition);
+    let results = collection
+        .execute_match(&clause, &HashMap::new())
+        .expect("execute_match failed");
+
+    // All test nodes have timestamps ~1700000000 which is in the past
+    assert_eq!(results.len(), 0, "No nodes should have updated_at > NOW()");
+}
+
+#[test]
+fn test_match_where_temporal_subtract_resolves() {
+    let (_dir, collection) = setup_match_test_collection();
+
+    // updated_at > NOW() - INTERVAL '999999 days' should return all nodes
+    // (a date very far in the past)
+    let condition = Condition::Comparison(crate::velesql::Comparison {
+        column: "updated_at".to_string(),
+        operator: crate::velesql::CompareOp::Gt,
+        value: Value::Temporal(TemporalExpr::Subtract(
+            Box::new(TemporalExpr::Now),
+            Box::new(TemporalExpr::Interval(IntervalValue {
+                magnitude: 999_999,
+                unit: IntervalUnit::Days,
+            })),
+        )),
+    });
+
+    let clause = match_clause_with_condition(condition);
+    let results = collection
+        .execute_match(&clause, &HashMap::new())
+        .expect("execute_match failed");
+
+    assert_eq!(
+        results.len(),
+        4,
+        "All 4 nodes should be after a very old date"
+    );
 }
 
 // ============================================================================

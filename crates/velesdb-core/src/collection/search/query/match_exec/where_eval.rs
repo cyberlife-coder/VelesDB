@@ -232,6 +232,8 @@ impl Collection {
                     }
                 })
             }
+            // VP-003: Resolve temporal expression to epoch seconds for comparison
+            Value::Temporal(t) => Ok(Value::Integer(t.to_epoch_seconds())),
             // Non-parameter values pass through unchanged
             other => Ok(other.clone()),
         }
