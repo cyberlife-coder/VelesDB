@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Performance Regression Tests for Cache Layer (US-CORE-003-13)
 //!
 //! Tests edge cases and validates performance characteristics.

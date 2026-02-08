@@ -1,3 +1,11 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::float_cmp,
+    clippy::approx_constant
+)]
 //! Property-based equivalence tests for native SIMD distance primitives.
 //!
 //! These tests compare public SIMD entrypoints against **f64 ground-truth
