@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Zero-overhead SIMD function dispatch.
 //!
 //! This module provides a thin wrapper around `simd_native` functions,
@@ -5,6 +11,10 @@
 //! architecture-specific SIMD implementations internally.
 //!
 //! # EPIC-C.2: TS-SIMD-002
+
+// SAFETY: Numeric casts in SIMD dispatch are intentional:
+// - usize->u32 for Hamming distance: vector dimensions bounded by implementation
+// - Maximum dimension is 65536, result fits in u32
 
 // =============================================================================
 // Public dispatch API - Direct calls to simd_native
@@ -42,7 +52,12 @@ pub fn cosine_normalized_dispatched(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn hamming_dispatched(a: &[f32], b: &[f32]) -> u32 {
-    crate::simd_native::hamming_distance_native(a, b) as u32
+    #[allow(clippy::cast_sign_loss)]
+    // SAFETY: hamming_distance_native returns count of differing bits (non-negative),
+    // and vector dimensions are bounded by u32::MAX, so result always fits in u32
+    {
+        crate::simd_native::hamming_distance_native(a, b) as u32
+    }
 }
 
 /// Returns information about which SIMD features are available.

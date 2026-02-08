@@ -22,6 +22,13 @@
 //! [CRC32: 4 bytes]
 //! ```
 
+// SAFETY: Numeric casts in snapshot handling are intentional:
+// - usize to u32 in CRC32: i ranges 0-255, always fits in u32
+// - u64 to usize for lengths: Snapshot data is created/loaded on same architecture
+//   or architecture-compatible data. Lengths are validated before use.
+// All length values are bounds-checked against data.len() before array access.
+#![allow(clippy::cast_possible_truncation)]
+
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;

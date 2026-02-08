@@ -1,3 +1,11 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::float_cmp,
+    clippy::approx_constant
+)]
 //! Tests for `score_fusion` module - Multi-score fusion strategies.
 
 use super::score_fusion::*;

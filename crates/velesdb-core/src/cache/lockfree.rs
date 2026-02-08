@@ -12,6 +12,13 @@
 //! | peek() | ~30ns (L1 only) | N/A |
 //! | insert() | ~100ns (write-through) | - |
 
+// SAFETY: Numeric casts in cache metrics are intentional:
+// - All casts are for hit rate calculations and statistics
+// - f64/u64 conversions for computing cache hit ratios
+// - Values bounded by cache size and access patterns
+// - Precision loss acceptable for cache metrics
+#![allow(clippy::cast_precision_loss)]
+
 use dashmap::DashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};

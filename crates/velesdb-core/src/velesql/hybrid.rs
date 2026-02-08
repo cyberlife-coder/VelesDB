@@ -5,7 +5,14 @@
 //! - Weighted fusion for score-based merging
 //! - Parallel and sequential execution strategies
 
-#![allow(dead_code)] // Used by tests - will be integrated into main query execution
+#![allow(dead_code)]
+// Used by tests - will be integrated into main query execution
+
+// SAFETY: Numeric casts in result fusion are intentional:
+// - usize->f32 for rank calculations: ranks are small (< 1M results)
+// - u32->f32 for config values: k parameter is small (< 100)
+// - Precision loss acceptable for score fusion heuristics
+#![allow(clippy::cast_precision_loss)]
 
 use std::collections::HashMap;
 

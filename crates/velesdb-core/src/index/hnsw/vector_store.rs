@@ -236,9 +236,11 @@ impl VectorStore {
 
         if offset < buffer.len() {
             #[cfg(target_arch = "x86_64")]
-            // SAFETY (EPIC-032/US-003): _mm_prefetch is safe when:
-            // 1. Target has x86_64 architecture (cfg guard)
-            // 2. Pointer is within bounds (offset < buffer.len() check above)
+            // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
+            // - Condition 1: Target architecture is x86_64 (cfg guard above)
+            // - Condition 2: Pointer is within valid bounds (offset < buffer.len() check above)
+            // - Condition 3: Prefetch instructions are hints and never fault
+            // Reason: Software prefetching for cache optimization before vector access.
             unsafe {
                 use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
                 let ptr = buffer.as_ptr().add(offset);
@@ -265,8 +267,10 @@ impl VectorRef<'_> {
     /// Returns the vector as a slice.
     #[must_use]
     pub fn as_slice(&self) -> &[f32] {
-        // SAFETY: The guard ensures the buffer is valid for the lifetime 'a
-        // and offset/dimension were validated during construction
+        // SAFETY: `from_raw_parts` requires a valid pointer/length pair.
+        // - Condition 1: `offset` and `dimension` were bounds-checked in `get_slice`.
+        // - Condition 2: `guard` keeps buffer allocation alive for this borrow.
+        // Reason: Expose zero-copy read access without allocating `Vec<f32>`.
         unsafe {
             let ptr = self.guard.as_ptr().add(self.offset);
             std::slice::from_raw_parts(ptr, self.dimension)

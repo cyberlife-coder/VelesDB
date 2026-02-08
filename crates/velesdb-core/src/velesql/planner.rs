@@ -10,6 +10,14 @@
 //! - Implement cost model based on index cardinality
 //! - Add adaptive query execution with plan switching
 
+// SAFETY: Numeric casts in query planner are intentional:
+// - All casts are for selectivity estimation and cost calculations
+// - f64/f32 casts are for computing selectivity ratios and costs
+// - Values are bounded by practical limits (cardinality, selectivity in 0-1 range)
+// - Precision loss acceptable for query planning heuristics
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Execution strategy for hybrid queries.
@@ -51,6 +59,9 @@ impl QueryStats {
     /// Updates graph selectivity estimate.
     pub fn update_graph_selectivity(&self, matched: u64, total: u64) {
         if total > 0 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // Reason: selectivity ratio * 1_000_000 is always in [0, 1_000_000] range,
+            // which fits in u64. Both matched and total are unsigned, so ratio is non-negative.
             let selectivity = (matched as f64 / total as f64 * 1_000_000.0) as u64;
             self.graph_selectivity.store(selectivity, Ordering::Relaxed);
         }

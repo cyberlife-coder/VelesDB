@@ -154,6 +154,105 @@ mod loom_epoch_counter {
     }
 }
 
+// =========================================================================
+// Phase 3, Plan 04: Loom-backed epoch/guard invalidation scenarios
+// =========================================================================
+
+#[cfg(loom)]
+mod loom_epoch_guard_resize {
+    use loom::sync::atomic::{AtomicU64, Ordering};
+    use loom::thread;
+    use std::sync::Arc;
+
+    /// Verifies that a guard capturing epoch=0 correctly detects staleness
+    /// when a writer increments the epoch (simulating resize).
+    #[test]
+    fn test_guard_sees_epoch_bump_from_resize() {
+        loom::model(|| {
+            let epoch = Arc::new(AtomicU64::new(0));
+
+            // Reader captures epoch (simulates guard creation)
+            let guard_epoch = epoch.load(Ordering::Acquire);
+
+            let e = Arc::clone(&epoch);
+            let writer = thread::spawn(move || {
+                // Simulate mmap resize: bump epoch
+                e.fetch_add(1, Ordering::Release);
+            });
+
+            writer.join().unwrap();
+
+            // After writer completes, guard must detect staleness
+            let current = epoch.load(Ordering::Acquire);
+            assert!(
+                guard_epoch != current,
+                "Guard must detect epoch changed after resize"
+            );
+        });
+    }
+
+    /// Multiple concurrent resizes: guard from before any resize must
+    /// detect staleness regardless of how many resizes occurred.
+    #[test]
+    fn test_guard_stale_after_multiple_resizes() {
+        loom::model(|| {
+            let epoch = Arc::new(AtomicU64::new(0));
+
+            // Guard captured at epoch 0
+            let guard_epoch = epoch.load(Ordering::Acquire);
+
+            let e1 = Arc::clone(&epoch);
+            let e2 = Arc::clone(&epoch);
+
+            let w1 = thread::spawn(move || {
+                e1.fetch_add(1, Ordering::Release);
+            });
+            let w2 = thread::spawn(move || {
+                e2.fetch_add(1, Ordering::Release);
+            });
+
+            w1.join().unwrap();
+            w2.join().unwrap();
+
+            // Epoch is now 2 (both resizes happened)
+            let current = epoch.load(Ordering::Acquire);
+            assert_eq!(current, 2, "Both resizes must be reflected");
+            assert_ne!(guard_epoch, current, "Guard must be stale");
+        });
+    }
+
+    /// Reader creates guard between two resizes: guard is valid until
+    /// the next resize occurs.
+    #[test]
+    fn test_guard_valid_until_next_resize() {
+        loom::model(|| {
+            let epoch = Arc::new(AtomicU64::new(0));
+
+            // First resize
+            epoch.fetch_add(1, Ordering::Release);
+
+            // Guard captured at epoch 1
+            let guard_epoch = epoch.load(Ordering::Acquire);
+            assert_eq!(guard_epoch, 1);
+
+            // Second resize (concurrent)
+            let e = Arc::clone(&epoch);
+            let w = thread::spawn(move || {
+                e.fetch_add(1, Ordering::Release);
+            });
+
+            w.join().unwrap();
+
+            let current = epoch.load(Ordering::Acquire);
+            assert_eq!(current, 2);
+            assert_ne!(
+                guard_epoch, current,
+                "Guard from epoch 1 is stale at epoch 2"
+            );
+        });
+    }
+}
+
 #[cfg(not(loom))]
 mod standard_concurrency_tests {
     use std::sync::atomic::{AtomicU64, Ordering};

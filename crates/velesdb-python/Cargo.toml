@@ -24,3 +24,6 @@ numpy = "0.24"
 
 [build-dependencies]
 pyo3-build-config = "0.24"
+
+[lints]
+workspace = true

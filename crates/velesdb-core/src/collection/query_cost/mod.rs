@@ -28,12 +28,23 @@
 //! println!("Estimated latency: {}ms", estimate.estimated_latency_ms);
 //! ```
 
+// SAFETY: Numeric casts in query cost estimation are intentional:
+// - All casts are for cost modeling and latency estimation
+// - f64/usize conversions for computing operation costs
+// - Values bounded by dataset size and hardware limits
+// - Precision loss acceptable for cost estimates (approximate by design)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+
 use std::fmt;
 
 pub mod cost_model;
 pub mod plan_generator;
 pub mod query_executor;
 
+#[cfg(test)]
+mod plan_generator_tests;
 #[cfg(test)]
 mod tests;
 

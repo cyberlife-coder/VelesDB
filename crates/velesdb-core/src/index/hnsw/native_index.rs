@@ -60,6 +60,7 @@ impl NativeHnswIndex {
             params.max_connections,
             params.max_elements,
             params.ef_construction,
+            dimension,
         );
 
         Self {
@@ -93,6 +94,8 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if file operations fail.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
+        use super::persistence::{self, HnswMappingsData, HnswMeta};
+
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
@@ -101,27 +104,25 @@ impl NativeHnswIndex {
         inner.file_dump(path, "native_hnsw")?;
 
         // Save mappings
-        let mappings_path = path.join("native_mappings.bin");
-        let file = std::fs::File::create(mappings_path)?;
-        let writer = std::io::BufWriter::new(file);
-
         let (id_to_idx, idx_to_id, next_idx) = self.mappings.as_parts();
-        bincode::serialize_into(writer, &(id_to_idx, idx_to_id, next_idx))
-            .map_err(std::io::Error::other)?;
+        persistence::save_mappings(
+            path,
+            &HnswMappingsData {
+                id_to_idx,
+                idx_to_id,
+                next_idx,
+            },
+        )?;
 
         // Save metadata
-        let meta_path = path.join("native_meta.bin");
-        let meta_file = std::fs::File::create(meta_path)?;
-        let meta_writer = std::io::BufWriter::new(meta_file);
-        bincode::serialize_into(
-            meta_writer,
-            &(
-                self.dimension,
-                self.metric as u8,
-                self.enable_vector_storage,
-            ),
-        )
-        .map_err(std::io::Error::other)?;
+        persistence::save_meta(
+            path,
+            &HnswMeta {
+                dimension: self.dimension,
+                metric: self.metric,
+                enable_vector_storage: self.enable_vector_storage,
+            },
+        )?;
 
         Ok(())
     }
@@ -142,54 +143,31 @@ impl NativeHnswIndex {
         _dimension: usize,
         _metric: DistanceMetric,
     ) -> std::io::Result<Self> {
+        use super::persistence;
+
         let path = path.as_ref();
 
-        // Load metadata
-        let meta_path = path.join("native_meta.bin");
-        let meta_file = std::fs::File::open(meta_path)?;
-        let meta_reader = std::io::BufReader::new(meta_file);
-        let (dimension, metric_u8, enable_vector_storage): (usize, u8, bool) =
-            bincode::deserialize_from(meta_reader).map_err(std::io::Error::other)?;
-
-        // Match enum order: Cosine=0, Euclidean=1, DotProduct=2, Hamming=3, Jaccard=4
-        let metric = match metric_u8 {
-            0 => DistanceMetric::Cosine,
-            1 => DistanceMetric::Euclidean,
-            2 => DistanceMetric::DotProduct,
-            3 => DistanceMetric::Hamming,
-            4 => DistanceMetric::Jaccard,
-            _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Unknown distance metric",
-                ))
-            }
-        };
+        let meta = persistence::load_meta(path)?;
 
         // Load HNSW graph
-        let inner = NativeHnswInner::file_load(path, "native_hnsw", metric)?;
+        let inner = NativeHnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
 
         // Load mappings
-        let mappings_path = path.join("native_mappings.bin");
-        let file = std::fs::File::open(mappings_path)?;
-        let reader = std::io::BufReader::new(file);
-
-        let (id_to_idx, idx_to_id, next_idx): (
-            std::collections::HashMap<u64, usize>,
-            std::collections::HashMap<usize, u64>,
-            usize,
-        ) = bincode::deserialize_from(reader).map_err(std::io::Error::other)?;
-
-        let mappings = ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx);
+        let mappings_data = persistence::load_mappings(path)?;
+        let mappings = ShardedMappings::from_parts(
+            mappings_data.id_to_idx,
+            mappings_data.idx_to_id,
+            mappings_data.next_idx,
+        );
 
         Ok(Self {
-            dimension,
-            metric,
+            dimension: meta.dimension,
+            metric: meta.metric,
             inner: RwLock::new(inner),
             mappings,
-            vectors: ShardedVectors::new(dimension),
-            enable_vector_storage,
-            params: HnswParams::auto(dimension),
+            vectors: ShardedVectors::new(meta.dimension),
+            enable_vector_storage: meta.enable_vector_storage,
+            params: HnswParams::auto(meta.dimension),
         })
     }
 

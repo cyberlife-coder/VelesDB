@@ -25,7 +25,8 @@ fn make_column_store() -> ColumnStore {
             ("available", ColumnType::Bool),
         ],
         "product_id",
-    );
+    )
+    .unwrap();
 
     store
         .insert_row(&[

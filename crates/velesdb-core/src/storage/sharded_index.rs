@@ -8,6 +8,11 @@
 //! - **Hash-based routing**: O(1) shard selection using ID % 16
 //! - **Independent locks**: Reads to different shards don't block each other
 
+// SAFETY: Numeric casts in sharded index are intentional:
+// - u64->usize for shard routing: modulo result always < NUM_SHARDS (16)
+// - Result always fits in usize even on 32-bit systems
+#![allow(clippy::cast_possible_truncation)]
+
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 

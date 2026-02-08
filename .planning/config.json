@@ -1,0 +1,18 @@
+{
+  "mode": "yolo",
+  "depth": "comprehensive",
+  "parallelization": true,
+  "commit_docs": true,
+  "model_profile": "quality",
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true
+  },
+  "testing": {
+    "require_tests": true,
+    "test_types": ["e2e", "tdd", "unit"],
+    "coverage_requirement": "high",
+    "note": "All refactored code must include tests following Rust best practices"
+  }
+}

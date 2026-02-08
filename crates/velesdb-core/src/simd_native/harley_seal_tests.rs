@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Tests for Harley-Seal population count (EPIC-052/US-003)
 //!
 //! Tests that Harley-Seal AVX2 correctly computes population count for Hamming/Jaccard.

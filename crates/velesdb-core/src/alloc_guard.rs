@@ -59,7 +59,10 @@ impl AllocGuard {
             return None;
         }
 
-        // SAFETY: Layout is valid (non-zero size)
+        // SAFETY: `alloc` requires a valid non-zero layout.
+        // - Condition 1: `layout.size() > 0` is checked above.
+        // - Condition 2: `Layout` comes from std APIs and is therefore well-formed.
+        // Reason: Raw allocation is required to build a panic-safe RAII guard.
         let ptr = unsafe { alloc(layout) };
 
         NonNull::new(ptr).map(|ptr| Self {
@@ -111,7 +114,10 @@ impl AllocGuard {
 impl Drop for AllocGuard {
     fn drop(&mut self) {
         if self.owns_memory {
-            // SAFETY: ptr was allocated with self.layout and we own it
+            // SAFETY: `dealloc` requires the original pointer/layout pair.
+            // - Condition 1: `self.ptr` was produced by `alloc(self.layout)` in `new`.
+            // - Condition 2: `owns_memory` guarantees this path runs at most once.
+            // Reason: Manual deallocation is needed for raw-memory RAII.
             unsafe {
                 dealloc(self.ptr.as_ptr(), self.layout);
             }
@@ -119,8 +125,10 @@ impl Drop for AllocGuard {
     }
 }
 
-// AllocGuard is Send if the underlying memory can be sent between threads
-// SAFETY: Raw memory has no thread affinity
+// SAFETY: `AllocGuard` is `Send` because it owns an allocation handle only.
+// - Condition 1: No aliasing references are stored, only pointer + layout metadata.
+// - Condition 2: Mutation requires `&mut self`, preventing cross-thread races on the type.
+// Reason: Heap allocations are not thread-affine; ownership transfer across threads is sound.
 unsafe impl Send for AllocGuard {}
 
 // AllocGuard is NOT Sync - concurrent access to raw memory is unsafe

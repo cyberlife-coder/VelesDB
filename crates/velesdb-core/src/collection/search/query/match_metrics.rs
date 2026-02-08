@@ -10,7 +10,17 @@
 //! Note: These metrics are consumed by velesdb-server, not directly by core.
 
 #![allow(dead_code)] // Metrics are used by velesdb-server, not core
-#![allow(clippy::format_push_string)] // Prometheus format is clearer with push_str+format
+#![allow(clippy::format_push_string)]
+// Prometheus format is clearer with push_str+format
+
+// SAFETY: Numeric casts in metrics are intentional:
+// - All casts are for statistical aggregations (histograms, percentiles)
+// - f64->u64 casts are for converting duration to bucket indices
+// - u64->f64 casts are for computing averages and rates
+// - Precision loss acceptable for metrics (approximate by design)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};

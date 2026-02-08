@@ -61,7 +61,8 @@ fn bench_batch_cosine(c: &mut Criterion) {
                     BenchmarkId::new("gpu_wgpu", format!("{batch_size}x{dim}")),
                     |b| {
                         b.iter(|| {
-                            let results = gpu.batch_cosine_similarity(&vectors, &query, dim);
+                            let results =
+                                gpu.batch_cosine_similarity(&vectors, &query, dim).unwrap();
                             black_box(results)
                         });
                     },
@@ -94,7 +95,7 @@ fn bench_single_cosine(c: &mut Criterion) {
         if let Some(gpu) = GpuAccelerator::new() {
             group.bench_function(BenchmarkId::new("gpu_wgpu", format!("{dim}d")), |b| {
                 b.iter(|| {
-                    let results = gpu.batch_cosine_similarity(&vector, &query, dim);
+                    let results = gpu.batch_cosine_similarity(&vector, &query, dim).unwrap();
                     black_box(results)
                 });
             });

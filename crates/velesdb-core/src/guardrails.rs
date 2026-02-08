@@ -8,6 +8,11 @@
 //! - **Rate Limiting**: Queries per second per client (US-005)
 //! - **Circuit Breaker**: Auto-disable on repeated failures (US-006)
 
+// SAFETY: Numeric casts in guardrails are intentional:
+// - u128->u64 for millisecond durations: durations fit within u64 (thousands of years)
+// - Used for timeout checking and logging, not precise calculations
+#![allow(clippy::cast_possible_truncation)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

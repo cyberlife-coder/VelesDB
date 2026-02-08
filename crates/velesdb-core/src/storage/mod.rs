@@ -37,6 +37,8 @@ mod loom_tests;
 mod metrics_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wal_recovery_tests;
 
 // Re-export public types
 pub use guard::VectorSliceGuard;

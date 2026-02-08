@@ -32,3 +32,6 @@ toml = "0.8"
 
 [features]
 default = []
+
+[lints]
+workspace = true

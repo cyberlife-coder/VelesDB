@@ -19,6 +19,7 @@ use std::arch::aarch64::*;
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
+#[must_use]
 pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
@@ -35,7 +36,10 @@ pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 
     for i in 0..chunks {
         let offset = i * 4;
-        // SAFETY: offset + 4 <= chunks * 4 <= len, so we're within bounds
+        // SAFETY: NEON load and FMA require in-bounds pointers.
+        // - Condition 1: Loop invariant `offset + 4 <= chunks * 4 <= len` keeps loads in bounds.
+        // - Condition 2: `a` and `b` have equal length (debug assertion at entry).
+        // Reason: Use NEON intrinsics for vectorized multiply-accumulate.
         let va = vld1q_f32(a.as_ptr().add(offset));
         let vb = vld1q_f32(b.as_ptr().add(offset));
         sum = vfmaq_f32(sum, va, vb); // sum += va * vb
@@ -64,6 +68,7 @@ pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
+#[must_use]
 pub unsafe fn euclidean_squared_neon(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
 
@@ -79,7 +84,10 @@ pub unsafe fn euclidean_squared_neon(a: &[f32], b: &[f32]) -> f32 {
 
     for i in 0..chunks {
         let offset = i * 4;
-        // SAFETY: offset + 4 <= chunks * 4 <= len, so we're within bounds
+        // SAFETY: NEON load/sub/FMA require in-bounds pointers.
+        // - Condition 1: Loop invariant `offset + 4 <= chunks * 4 <= len` keeps loads in bounds.
+        // - Condition 2: `a` and `b` have equal length (debug assertion at entry).
+        // Reason: SIMD distance accumulation is required for NEON fast path.
         let va = vld1q_f32(a.as_ptr().add(offset));
         let vb = vld1q_f32(b.as_ptr().add(offset));
         let diff = vsubq_f32(va, vb);
@@ -113,6 +121,7 @@ pub unsafe fn euclidean_squared_neon(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
+#[must_use]
 pub unsafe fn euclidean_neon(a: &[f32], b: &[f32]) -> f32 {
     euclidean_squared_neon(a, b).sqrt()
 }
@@ -124,6 +133,7 @@ pub unsafe fn euclidean_neon(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
+#[must_use]
 pub unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
     let dot = dot_product_neon(a, b);
     let norm_a = dot_product_neon(a, a).sqrt();
@@ -144,6 +154,7 @@ pub unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
+#[must_use]
 pub unsafe fn cosine_normalized_neon(a: &[f32], b: &[f32]) -> f32 {
     // For normalized vectors, cosine = dot product
     dot_product_neon(a, b)
@@ -156,32 +167,48 @@ pub unsafe fn cosine_normalized_neon(a: &[f32], b: &[f32]) -> f32 {
 /// Safe wrapper for dot product NEON.
 #[cfg(target_arch = "aarch64")]
 #[inline]
+#[must_use]
 pub fn dot_product_neon_safe(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: NEON is guaranteed on all aarch64 targets we support
+    // SAFETY: Calling `dot_product_neon` requires NEON target support.
+    // - Condition 1: This function is compiled only for `target_arch = "aarch64"`.
+    // - Condition 2: AArch64 guarantees NEON availability.
+    // Reason: Safe wrapper delegates to NEON implementation without repeating checks.
     unsafe { dot_product_neon(a, b) }
 }
 
 /// Safe wrapper for euclidean NEON.
 #[cfg(target_arch = "aarch64")]
 #[inline]
+#[must_use]
 pub fn euclidean_neon_safe(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: NEON is guaranteed on all aarch64 targets we support
+    // SAFETY: Calling `euclidean_neon` requires NEON target support.
+    // - Condition 1: This function is compiled only for `target_arch = "aarch64"`.
+    // - Condition 2: AArch64 guarantees NEON availability.
+    // Reason: Safe wrapper delegates to NEON implementation without repeating checks.
     unsafe { euclidean_neon(a, b) }
 }
 
 /// Safe wrapper for cosine NEON.
 #[cfg(target_arch = "aarch64")]
 #[inline]
+#[must_use]
 pub fn cosine_neon_safe(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: NEON is guaranteed on all aarch64 targets we support
+    // SAFETY: Calling `cosine_neon` requires NEON target support.
+    // - Condition 1: This function is compiled only for `target_arch = "aarch64"`.
+    // - Condition 2: AArch64 guarantees NEON availability.
+    // Reason: Safe wrapper delegates to NEON implementation without repeating checks.
     unsafe { cosine_neon(a, b) }
 }
 
 /// Safe wrapper for cosine normalized NEON.
 #[cfg(target_arch = "aarch64")]
 #[inline]
+#[must_use]
 pub fn cosine_normalized_neon_safe(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY: NEON is guaranteed on all aarch64 targets we support
+    // SAFETY: Calling `cosine_normalized_neon` requires NEON target support.
+    // - Condition 1: This function is compiled only for `target_arch = "aarch64"`.
+    // - Condition 2: AArch64 guarantees NEON availability.
+    // Reason: Safe wrapper delegates to NEON implementation without repeating checks.
     unsafe { cosine_normalized_neon(a, b) }
 }
 

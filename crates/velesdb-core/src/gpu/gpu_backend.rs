@@ -152,37 +152,38 @@ impl GpuAccelerator {
     ///
     /// Vector of cosine similarities, one per input vector.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `dimension` or `num_vectors` exceeds `u32::MAX`.
-    /// The GPU shader uses 32-bit parameters.
-    #[must_use]
+    /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
+    /// or if the GPU map-async operation fails.
     #[allow(clippy::too_many_lines)] // Reason: GPU batch operations require sequential setup steps
     pub fn batch_cosine_similarity(
         &self,
         vectors: &[f32],
         query: &[f32],
         dimension: usize,
-    ) -> Vec<f32> {
+    ) -> crate::error::Result<Vec<f32>> {
         if dimension == 0 || vectors.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let num_vectors = vectors.len() / dimension;
         if num_vectors == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Validate GPU shader parameter constraints
-        assert!(
-            u32::try_from(dimension).is_ok(),
-            "GPU batch_cosine_similarity: dimension {} exceeds u32::MAX",
-            dimension
-        );
-        assert!(
-            u32::try_from(num_vectors).is_ok(),
-            "GPU batch_cosine_similarity: num_vectors {} exceeds u32::MAX",
-            num_vectors
-        );
+        if u32::try_from(dimension).is_err() {
+            return Err(crate::error::Error::GpuError(format!(
+                "dimension {} exceeds u32::MAX",
+                dimension
+            )));
+        }
+        if u32::try_from(num_vectors).is_err() {
+            return Err(crate::error::Error::GpuError(format!(
+                "num_vectors {} exceeds u32::MAX",
+                num_vectors
+            )));
+        }
 
         // Create buffers
         let query_buffer = self
@@ -288,7 +289,9 @@ impl GpuAccelerator {
         self.device.poll(wgpu::Maintain::Wait);
 
         if rx.recv().ok().and_then(Result::ok).is_none() {
-            return vec![0.0; num_vectors];
+            return Err(crate::error::Error::GpuError(
+                "GPU map-async operation failed".to_string(),
+            ));
         }
 
         let data = buffer_slice.get_mapped_range();
@@ -296,7 +299,7 @@ impl GpuAccelerator {
         drop(data);
         staging_buffer.unmap();
 
-        results
+        Ok(results)
     }
 }
 

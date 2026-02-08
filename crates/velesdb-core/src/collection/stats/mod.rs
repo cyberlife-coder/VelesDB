@@ -11,6 +11,14 @@
 //! - Index statistics (depth, entry count)
 //! - Size metrics (avg row size, total size)
 
+// SAFETY: Numeric casts in statistics are intentional:
+// - All casts are for computing collection metrics and estimates
+// - f64/usize conversions for cardinality ratios and averages
+// - Values bounded by collection size and column cardinality
+// - Precision loss acceptable for statistics (approximate by design)
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

@@ -8,7 +8,7 @@ fn create_test_store() -> ColumnStore {
         ("value", ColumnType::Float),
         ("active", ColumnType::Bool),
     ];
-    ColumnStore::with_primary_key(&fields, "id")
+    ColumnStore::with_primary_key(&fields, "id").unwrap()
 }
 
 #[test]

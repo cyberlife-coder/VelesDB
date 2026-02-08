@@ -17,7 +17,6 @@ authors.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 tracing = { workspace = true }
 bincode = { workspace = true }
 roaring = { workspace = true }
@@ -37,9 +36,6 @@ features = ["v4", "serde"]
 
 [dependencies.parking_lot]
 version = "0.12"
-
-[dependencies.crossbeam-channel]
-version = "0.5"
 
 # rayon moved to optional deps section (persistence feature)
 
@@ -95,20 +91,19 @@ version = "2.7"
 version = "2.7"
 
 [features]
-# Native HNSW is the only implementation (v1.0+)
-# hnsw_rs dependency has been removed
+## Feature flags
+##
+## - `persistence` (default): Enables mmap storage, WAL, rayon parallelism, and tokio async.
+##   Disable for WASM builds: `velesdb-core = { default-features = false }`
+## - `gpu`: Enables wgpu-based GPU acceleration for distance calculations.
+## - `update-check`: Enables HTTP client for automatic version checking.
+## - `loom`: Enables loom-based concurrency testing (nightly only).
+##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
-# Persistence feature: includes tokio, memmap2, rayon (not WASM-compatible)
-# Disable for WASM builds: velesdb-core = { default-features = false }
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
-# Update check feature: enables HTTP client for version checking
 update-check = ["dep:reqwest", "dep:tokio"]
-# Loom feature: enables concurrency testing with loom (EPIC-023)
-# Run with: cargo +nightly test --features loom --test loom_tests
 loom = ["dep:loom"]
-# Portable SIMD evaluation (EPIC-054/US-004) - requires nightly
-portable-simd = []
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -303,5 +298,5 @@ version = "0.11"
 features = ["json"]
 optional = true
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+[lints]
+workspace = true

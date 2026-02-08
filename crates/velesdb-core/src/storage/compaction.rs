@@ -13,6 +13,12 @@
 //! - Linux: `fallocate(FALLOC_FL_PUNCH_HOLE)`
 //! - Windows: `FSCTL_SET_ZERO_DATA`
 
+// SAFETY: Numeric casts in compaction are intentional:
+// - usize->u32 for Windows API: struct sizes are small and bounded
+// - u64->usize for length calculations: lengths bounded by file size
+// - All values are validated against buffer/file bounds
+#![allow(clippy::cast_possible_truncation)]
+
 use super::sharded_index::ShardedIndex;
 use memmap2::MmapMut;
 use parking_lot::RwLock;
@@ -77,7 +83,10 @@ fn punch_hole_linux(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     let fd = file.as_raw_fd();
     let mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
 
-    // SAFETY: fallocate is a valid syscall, fd is a valid file descriptor
+    // SAFETY: `libc::fallocate` requires a valid fd and offsets.
+    // - Condition 1: `fd` comes from `file.as_raw_fd()` on an open file handle.
+    // - Condition 2: `offset`/`len` are caller-provided ranges for the same file.
+    // Reason: Hole punching is only exposed through this syscall on Linux.
     let ret = unsafe { libc::fallocate(fd, mode, offset as libc::off_t, len as libc::off_t) };
 
     if ret == 0 {
@@ -119,7 +128,10 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
 
     let mut bytes_returned: u32 = 0;
 
-    // SAFETY: DeviceIoControl is a valid Win32 API call
+    // SAFETY: `DeviceIoControl` requires valid handle/argument pointers.
+    // - Condition 1: `handle` comes from `file.as_raw_handle()` for an open file.
+    // - Condition 2: `info` and `bytes_returned` pointers are valid for the call duration.
+    // Reason: Windows sparse-zero operation is only reachable via this API.
     let result = unsafe {
         DeviceIoControl(
             handle,
@@ -281,7 +293,10 @@ impl CompactionContext<'_> {
         let new_size = (active_size as u64).max(self.initial_size);
         temp_file.set_len(new_size)?;
 
-        // SAFETY: temp_file is a valid, newly created file with set_len() called
+        // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
+        // - Condition 1: `temp_file` was opened read/write and resized via `set_len`.
+        // - Condition 2: Mapping length is derived from the file's current size.
+        // Reason: Compaction copies active bytes through a mutable mmap.
         let mut temp_mmap = unsafe { MmapMut::map_mut(&temp_file)? };
 
         // 3. Copy active vectors to new file with new offsets
@@ -312,7 +327,10 @@ impl CompactionContext<'_> {
 
         // 6. Reopen the compacted file
         let new_data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
-        // SAFETY: new_data_file is the compacted file just renamed from temp
+        // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
+        // - Condition 1: `new_data_file` is opened read/write after atomic replace.
+        // - Condition 2: File contents are fully materialized by the preceding flush/rename flow.
+        // Reason: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
 
         // 7. Update internal state (EPIC-033/US-004: Clear and repopulate ShardedIndex)

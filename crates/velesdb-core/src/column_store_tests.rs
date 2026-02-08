@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Tests for `column_store` module
 
 #[cfg(test)]
@@ -462,7 +468,8 @@ mod tests {
         let store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("value", ColumnType::Float)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         // Assert
         assert_eq!(store.row_count(), 0);
@@ -476,7 +483,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("value", ColumnType::Float)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         // Act
         let result = store.insert_row(&[
@@ -496,7 +504,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("value", ColumnType::Float)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -530,7 +539,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("value", ColumnType::Float)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -560,7 +570,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("value", ColumnType::Float)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -598,7 +609,8 @@ mod tests {
                 ("name", ColumnType::String),
             ],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -627,7 +639,8 @@ mod tests {
                 ("available", ColumnType::Bool),
             ],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -658,7 +671,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         // Act - Try to update a row that doesn't exist
         let result = store.update_by_pk(999, "price", ColumnValue::Int(150));
@@ -681,7 +695,8 @@ mod tests {
                 ("quantity", ColumnType::Int),
             ],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -707,7 +722,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -737,7 +753,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         for i in 1..=100 {
             store
@@ -770,7 +787,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -822,7 +840,8 @@ mod tests {
                 ("quantity", ColumnType::Int),
             ],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -862,7 +881,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         // Act
         let result = store.batch_update(&[]);
@@ -882,7 +902,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -904,7 +925,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         // Act
         let result = store.set_ttl(999, 3600);
@@ -923,7 +945,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -950,7 +973,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -980,7 +1004,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         // Act
         let result = store.upsert(&[
@@ -1000,7 +1025,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1029,7 +1055,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("price_id", ColumnType::Int), ("price", ColumnType::Int)],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1073,7 +1100,8 @@ mod tests {
                 ("available", ColumnType::Bool),
             ],
             "price_id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1109,7 +1137,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("value", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         // Insert a row
         store
@@ -1156,7 +1185,8 @@ mod tests {
                 ("col_b", ColumnType::String), // Different type!
             ],
             "id",
-        );
+        )
+        .unwrap();
 
         let str_id = store.string_table_mut().intern("original");
         store
@@ -1196,7 +1226,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("value", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1246,7 +1277,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("category", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1292,7 +1324,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("value", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1324,7 +1357,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("value", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[
@@ -1351,7 +1385,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         // Insert multiple rows with immediate expiry (TTL = 0)
         for i in 1..=100 {
@@ -1389,7 +1424,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
@@ -1424,7 +1460,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
@@ -1456,7 +1493,8 @@ mod tests {
                 ("name", ColumnType::String),
             ],
             "id",
-        );
+        )
+        .unwrap();
 
         // Intern strings first
         let alice_id = store.string_table_mut().intern("alice");
@@ -1520,7 +1558,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
@@ -1548,7 +1587,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
@@ -1581,7 +1621,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
@@ -1608,18 +1649,28 @@ mod tests {
 
     /// Test: with_primary_key validates pk_column exists
     #[test]
-    #[should_panic(expected = "not found in fields")]
     fn test_with_primary_key_validates_column_exists() {
-        // Should panic - pk column doesn't exist
-        let _ = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "nonexistent");
+        // Should return error - pk column doesn't exist
+        let result = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "nonexistent");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found in fields"),
+            "Expected 'not found in fields' in error: {err}"
+        );
     }
 
     /// Test: with_primary_key validates pk_column is Int type
     #[test]
-    #[should_panic(expected = "must be Int type")]
     fn test_with_primary_key_validates_column_type() {
-        // Should panic - pk column is not Int
-        let _ = ColumnStore::with_primary_key(&[("id", ColumnType::String)], "id");
+        // Should return error - pk column is not Int
+        let result = ColumnStore::with_primary_key(&[("id", ColumnType::String)], "id");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("must be Int type"),
+            "Expected 'must be Int type' in error: {err}"
+        );
     }
 
     /// Regression test: Stale data is cleared when reusing deleted slot
@@ -1632,7 +1683,8 @@ mod tests {
                 ("col_b", ColumnType::Int),
             ],
             "id",
-        );
+        )
+        .unwrap();
 
         // Insert row with all columns
         store
@@ -1672,7 +1724,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         // Insert and set TTL
         store
@@ -1704,7 +1757,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         // Insert 3 rows
         store
@@ -1740,7 +1794,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         // Try to upsert with a non-existent column
         let result = store.upsert(&[
@@ -1765,7 +1820,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         store
             .insert_row(&[("id", ColumnValue::Int(1)), ("val", ColumnValue::Int(100))])
@@ -1801,7 +1857,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("val", ColumnType::Int)],
             "id",
-        );
+        )
+        .unwrap();
 
         for i in 0..100 {
             store
@@ -1838,7 +1895,8 @@ mod tests {
         let mut store = ColumnStore::with_primary_key(
             &[("id", ColumnType::Int), ("name", ColumnType::String)],
             "id",
-        );
+        )
+        .unwrap();
 
         let name_id = store.string_table_mut().intern("Alice");
         store
@@ -1890,7 +1948,7 @@ mod tests {
     #[test]
     fn test_vacuum_no_tombstones() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..10 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -1908,7 +1966,7 @@ mod tests {
     #[test]
     fn test_should_vacuum_threshold() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..100 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -1935,7 +1993,8 @@ mod tests {
                 ("flag", ColumnType::Bool),
             ],
             "id",
-        );
+        )
+        .unwrap();
 
         for i in 0..10 {
             store
@@ -1967,7 +2026,7 @@ mod tests {
     #[test]
     fn test_roaring_bitmap_sync_with_deleted_rows() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..100 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -1986,7 +2045,7 @@ mod tests {
     #[test]
     fn test_is_row_deleted_bitmap() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..50 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -2009,7 +2068,7 @@ mod tests {
     #[test]
     fn test_live_row_indices_iterator() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..10 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -2035,7 +2094,7 @@ mod tests {
     #[test]
     fn test_vacuum_clears_deletion_bitmap() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..50 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -2060,7 +2119,7 @@ mod tests {
     #[test]
     fn test_deletion_bitmap_accessor() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
 
         for i in 0..20 {
             store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
@@ -2158,7 +2217,7 @@ mod tests {
     #[test]
     fn test_auto_vacuum_integration_with_store() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id");
+        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
         let config = AutoVacuumConfig::new()
             .with_threshold(0.20)
             .with_min_dead_rows(5);

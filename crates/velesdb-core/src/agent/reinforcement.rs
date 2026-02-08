@@ -7,6 +7,12 @@
 //! - `TemporalDecay`: Older procedures lose relevance over time
 //! - `ContextualReinforcement`: Considers usage context for updates
 
+// SAFETY: Numeric casts in reinforcement are intentional:
+// - u64->f32 casts for usage counts in decay calculations (approximate)
+// - Values bounded by practical limits (usage counts, time periods)
+// - Precision loss acceptable for confidence heuristics
+#![allow(clippy::cast_precision_loss)]
+
 use std::collections::HashMap;
 
 /// Context information for reinforcement decisions.

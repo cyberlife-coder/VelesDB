@@ -25,7 +25,6 @@ velesdb-core = { path = "../velesdb-core", version = "1.4.0" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -34,7 +33,6 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 futures = "0.3"
 clap = { version = "4.4", features = ["derive", "env"] }
-config = "0.14"
 
 # OpenAPI/Swagger documentation
 utoipa = { version = "5", features = ["axum_extras"] }
@@ -50,3 +48,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 tokio-test = "0.4"
 tempfile = { workspace = true }
 tower = { workspace = true }
+
+[lints]
+workspace = true

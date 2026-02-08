@@ -20,7 +20,7 @@ use std::ops::Deref;
 /// This trait abstracts over different ways to access vector data:
 /// - `&[f32]`: Direct slice reference (zero-copy from mmap)
 /// - `Cow<[f32]>`: Copy-on-write for flexibility
-/// - `Vec<f32>`: Owned data when needed
+/// - [`Vec<f32>`]: Owned data when needed
 ///
 /// # Example
 ///

@@ -57,44 +57,49 @@ pub struct VectorSliceGuard<'a> {
     pub(super) epoch_at_creation: u64,
 }
 
-// SAFETY: VectorSliceGuard is Send+Sync because:
-// 1. The underlying data is in a memory-mapped file (shared memory)
-// 2. We hold a RwLockReadGuard which ensures exclusive read access
-// 3. The pointer is derived from the guard and valid for its lifetime
-// SAFETY: The guard enforces:
-// * Lifetime tied to `_guard` (RwLockReadGuard) ⇒ mapping is pinned
-// * Epoch check prevents access after remap
-// The data is read-only, therefore Send + Sync are sound.
+// SAFETY: `VectorSliceGuard` is `Send` because it carries read-only mapped data.
+// - Condition 1: `_guard` pins the mapping and prevents concurrent remap mutation.
+// - Condition 2: Epoch checks reject stale pointers after remap.
+// Reason: Transferring read-only guard ownership across threads preserves invariants.
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for VectorSliceGuard<'_> {}
+// SAFETY: `VectorSliceGuard` is `Sync` because shared access is immutable.
+// - Condition 1: Exposed data is `&[f32]` only; no mutable alias is produced.
+// - Condition 2: Underlying map lifetime is tied to `_guard` and epoch validation.
+// Reason: Concurrent reads of stable mapped memory are sound.
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Sync for VectorSliceGuard<'_> {}
 
 impl VectorSliceGuard<'_> {
     /// Returns the vector data as a slice.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the underlying mmap has been remapped since this guard was created.
-    /// This indicates a programming error where a guard outlived a resize operation.
+    /// Returns `Error::EpochMismatch` if the underlying mmap has been remapped
+    /// since this guard was created, meaning the pointer is stale.
     #[inline]
-    #[must_use]
-    pub fn as_slice(&self) -> &[f32] {
+    pub fn as_slice(&self) -> crate::error::Result<&[f32]> {
         // SAFETY: ptr and len were validated during construction,
         // and the guard ensures the mmap remains valid
         // Verify epoch – if the mmap was remapped the pointer is invalid
         let current = self.epoch_ptr.load(std::sync::atomic::Ordering::Acquire);
-        assert!(
-            current == self.epoch_at_creation,
-            "Mmap was remapped; VectorSliceGuard is invalid"
-        );
-        // SAFETY: epoch check guarantees the pointer still refers to the currently mapped region
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        if current != self.epoch_at_creation {
+            return Err(crate::error::Error::EpochMismatch(
+                "Mmap was remapped; VectorSliceGuard is invalid".to_string(),
+            ));
+        }
+        // SAFETY: `from_raw_parts` requires a valid pointer/len pair.
+        // - Condition 1: `ptr` and `len` were validated when guard was created.
+        // - Condition 2: Epoch equality above guarantees no remap invalidated `ptr`.
+        // Reason: Zero-copy slice access avoids allocations while preserving safety invariants.
+        Ok(unsafe { std::slice::from_raw_parts(self.ptr, self.len) })
     }
 }
 
 impl AsRef<[f32]> for VectorSliceGuard<'_> {
     #[inline]
     fn as_ref(&self) -> &[f32] {
-        self.as_slice()
+        self.as_slice().expect("epoch mismatch in AsRef")
     }
 }
 
@@ -103,6 +108,6 @@ impl std::ops::Deref for VectorSliceGuard<'_> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_slice()
+        self.as_slice().expect("epoch mismatch in Deref")
     }
 }
