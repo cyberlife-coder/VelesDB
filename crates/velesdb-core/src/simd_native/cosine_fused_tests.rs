@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Tests for fused cosine similarity (EPIC-052/US-002)
 //!
 //! Tests that fused cosine similarity computes dot + norms in a single pass.
