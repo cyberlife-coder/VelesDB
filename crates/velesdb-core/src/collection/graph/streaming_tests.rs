@@ -159,3 +159,52 @@ fn test_streaming_config_defaults() {
     assert_eq!(config.max_visited_size, 100_000);
     assert!(config.rel_types.is_empty());
 }
+
+// --- B-05 Regression Tests: BFS visited overflow must not produce duplicates ---
+
+#[test]
+fn test_bfs_no_duplicates_on_overflow() {
+    // Cyclic graph: A→B→C→A with small max_visited to trigger overflow
+    let store = create_cyclic_edge_store();
+    let config = StreamingConfig::default()
+        .with_max_depth(5)
+        .with_max_visited(2)
+        .with_limit(20);
+
+    let results: Vec<_> = BfsIterator::new(&store, 1, config).collect();
+
+    // Count occurrences of each target_id at each depth
+    let mut seen: std::collections::HashSet<(u64, u32)> = std::collections::HashSet::new();
+    for r in &results {
+        assert!(
+            seen.insert((r.target_id, r.depth)),
+            "Duplicate result: node {} at depth {} — B-05 regression",
+            r.target_id,
+            r.depth
+        );
+    }
+}
+
+#[test]
+fn test_bfs_overflow_preserves_visited() {
+    // After overflow, nodes already in visited set must still be skipped
+    let store = create_cyclic_edge_store();
+    let config = StreamingConfig::default()
+        .with_max_depth(3)
+        .with_max_visited(2)
+        .with_limit(20);
+
+    let mut iter = BfsIterator::new(&store, 1, config);
+
+    // Consume all results
+    let mut results = Vec::new();
+    while let Some(r) = iter.next() {
+        results.push(r);
+    }
+
+    // Visited set should NOT be empty after overflow
+    assert!(
+        iter.visited_size() > 0,
+        "Visited set should be preserved after overflow, not cleared"
+    );
+}

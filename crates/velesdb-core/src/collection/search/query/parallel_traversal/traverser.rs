@@ -208,7 +208,10 @@ impl ParallelTraverser {
         stack.push((start, Vec::new(), 0));
 
         while let Some((node, path, depth)) = stack.pop() {
-            if depth >= self.config.max_depth || results.len() >= self.config.limit {
+            if results.len() >= self.config.limit {
+                break; // Reason: Consistent with BFS — stop immediately when limit reached
+            }
+            if depth >= self.config.max_depth {
                 continue;
             }
 

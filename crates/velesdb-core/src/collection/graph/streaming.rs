@@ -207,7 +207,9 @@ impl Iterator for BfsIterator<'_> {
                 if !self.visited_overflow {
                     if self.visited.len() >= self.config.max_visited_size {
                         self.visited_overflow = true;
-                        self.visited.clear(); // Free memory
+                        // Reason: Don't clear — already-visited nodes must remain detectable.
+                        // We stop growing the set but keep existing entries.
+                        // max_depth still bounds traversal even without new insertions.
                     } else {
                         self.visited.insert(target);
                     }
