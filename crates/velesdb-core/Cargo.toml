@@ -39,6 +39,12 @@ version = "0.12"
 
 # rayon moved to optional deps section (persistence feature)
 
+[dependencies.arc-swap]
+version = "1.7"
+
+[dependencies.bytes]
+version = "1.11"
+
 [dependencies.rustc-hash]
 version = "2.0"
 
