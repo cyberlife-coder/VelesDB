@@ -109,10 +109,7 @@ jobs:
       - name: Run tests
         run: |
           cargo test --workspace --features persistence,gpu,update-check \
-            --exclude velesdb-python \
-            -- --test-threads=1
-        env:
-          RUST_TEST_THREADS: 1
+            --exclude velesdb-python
 
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
