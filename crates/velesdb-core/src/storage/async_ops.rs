@@ -1,3 +1,11 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::float_cmp,
+    clippy::approx_constant
+)]
 //! Async wrappers for blocking storage operations.
 //!
 //! EPIC-034/US-001: Provides `spawn_blocking` wrappers for I/O-intensive
