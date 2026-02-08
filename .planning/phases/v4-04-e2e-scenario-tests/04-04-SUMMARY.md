@@ -47,7 +47,7 @@ Both scenarios use the existing helpers infrastructure (`build_single_hop_match`
 |----------|-----------|
 | Use unqualified `trust_score` in BS1 WHERE | Single-hop WHERE evaluates on target node directly; alias-qualified form would need binding-aware path |
 | Use alias-qualified `conv.timestamp` in BS4 WHERE | Multi-hop uses `evaluate_where_with_bindings` which resolves aliases from bindings map |
-| Skip ORDER BY conv.timestamp in BS4 | VP-006 (property ORDER BY in MATCH) not yet supported; documented as limitation |
+| ~~Skip ORDER BY conv.timestamp in BS4~~ | **FIXED**: VP-006 now works. Added `test_bs4_order_by_timestamp_desc`, `test_bs4_order_by_timestamp_asc`, and `test_bs1_order_by_similarity_asc` to prove ORDER BY is real (not coincidental). Commit 9ed85416. |
 | Combine both tasks in single commit | Both modify the same file (`match_simple.rs`), atomic commit is cleaner |
 
 ## Deviations from Plan
@@ -71,24 +71,28 @@ Both scenarios use the existing helpers infrastructure (`build_single_hop_match`
 ## Verification Results
 
 ```
-running 6 tests
+running 9 tests
 test match_simple::test_bs1_ecommerce_discovery ... ok
 test match_simple::test_bs1_cross_node_projection ... ok
 test match_simple::test_bs1_similarity_threshold_filters ... ok
+test match_simple::test_bs1_order_by_similarity_asc ... ok
 test match_simple::test_bs4_agent_memory ... ok
 test match_simple::test_bs4_bindings_all_aliases_populated ... ok
 test match_simple::test_bs4_cross_node_projection ... ok
+test match_simple::test_bs4_order_by_timestamp_desc ... ok
+test match_simple::test_bs4_order_by_timestamp_asc ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out
 ```
 
 Clippy: 0 warnings from `match_simple.rs` (pre-existing issues in `select_domain.rs` unrelated).
 
 ## Next Phase Readiness
 
-- Plan 04-05 (Complex MATCH — BS2 Fraud Detection, BS3 Research Knowledge Graph) can proceed
+- Plan 04-05 (Complex MATCH — BS2 Fraud Detection, BS3 Healthcare) ✅ COMPLETED
 - Plan 04-06 (Cross-Store & VelesQL) can proceed in parallel
-- BS4 ORDER BY conv.timestamp will be testable once VP-006 is resolved
+- VP-006 ORDER BY fully verified (ASC + DESC for both properties and similarity)
 
 ---
-*Completed: 2026-02-09T20:10+01:00*
+*Originally completed: 2026-02-09T20:10+01:00*
+*Updated with ORDER BY tests: 2026-02-09T22:10+01:00*
