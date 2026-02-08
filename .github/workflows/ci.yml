@@ -135,6 +135,12 @@ jobs:
         # Tracked in QUAL-05 for migration. Safe to ignore until v3.
         run: cargo audit --ignore RUSTSEC-2024-0320
 
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run dependency policy check
+        run: cargo deny check
+
   # ===========================================================================
   # NOTE: Miri & Loom moved to quality-deep.yml (weekly + manual)
   # This saves ~10-15 min of CI time per push
