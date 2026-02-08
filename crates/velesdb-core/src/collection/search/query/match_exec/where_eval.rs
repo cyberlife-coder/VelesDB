@@ -299,6 +299,104 @@ impl Collection {
     }
 
     // ========================================================================
+    // VP-004: Binding-aware WHERE evaluation for multi-hop MATCH
+    // ========================================================================
+
+    /// Evaluates a WHERE condition using bindings from multi-hop traversal (VP-004).
+    ///
+    /// For alias-qualified columns like `c.name`:
+    /// 1. Splits on first dot → (alias, property)
+    /// 2. Looks up alias in bindings → node_id
+    /// 3. Fetches payload for that node → checks property
+    ///
+    /// For unqualified columns (no dot), falls back to checking
+    /// against the last bound node (backward compatible with single-hop).
+    pub(crate) fn evaluate_where_with_bindings(
+        &self,
+        bindings: &HashMap<String, u64>,
+        condition: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        use crate::velesql::Condition;
+
+        match condition {
+            Condition::Comparison(cmp) => {
+                // Check if column is alias-qualified (e.g., "c.name")
+                let actual_value = if let Some(dot_pos) = cmp.column.find('.') {
+                    let alias = &cmp.column[..dot_pos];
+                    let property = &cmp.column[dot_pos + 1..];
+
+                    // Resolve alias from bindings
+                    let Some(&node_id) = bindings.get(alias) else {
+                        return Ok(false);
+                    };
+
+                    let payload_storage = self.payload_storage.read();
+                    let payload = payload_storage.retrieve(node_id).ok().flatten();
+                    let Some(payload) = payload else {
+                        return Ok(false);
+                    };
+
+                    payload.get(property).cloned()
+                } else {
+                    // Unqualified column: try all bindings (last match wins for compat)
+                    let payload_storage = self.payload_storage.read();
+                    let mut found = None;
+                    for &node_id in bindings.values() {
+                        if let Some(payload) = payload_storage.retrieve(node_id).ok().flatten() {
+                            if let Some(val) = payload.get(&cmp.column) {
+                                found = Some(val.clone());
+                            }
+                        }
+                    }
+                    found
+                };
+
+                let Some(actual) = actual_value else {
+                    return Ok(false);
+                };
+
+                // Resolve subquery and parameter values
+                let pre_resolved = self.resolve_subquery_value(&cmp.value, params, None)?;
+                let resolved_value = Self::resolve_where_param(&pre_resolved, params)?;
+
+                Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
+            }
+            Condition::And(left, right) => {
+                let left_result = self.evaluate_where_with_bindings(bindings, left, params)?;
+                if !left_result {
+                    return Ok(false);
+                }
+                self.evaluate_where_with_bindings(bindings, right, params)
+            }
+            Condition::Or(left, right) => {
+                let left_result = self.evaluate_where_with_bindings(bindings, left, params)?;
+                if left_result {
+                    return Ok(true);
+                }
+                self.evaluate_where_with_bindings(bindings, right, params)
+            }
+            Condition::Not(inner) => {
+                let inner_result = self.evaluate_where_with_bindings(bindings, inner, params)?;
+                Ok(!inner_result)
+            }
+            Condition::Group(inner) => self.evaluate_where_with_bindings(bindings, inner, params),
+            // For conditions without alias support, delegate to last bound node
+            // Reason: LIKE/BETWEEN/IN/IsNull/Match/Similarity use column names
+            // directly from payload — fall back to evaluating against each bound node.
+            other => {
+                // Try each bound node until one matches
+                for &node_id in bindings.values() {
+                    if self.evaluate_where_condition(node_id, other, params)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    // ========================================================================
     // VP-001: MATCH WHERE condition evaluators for LIKE, BETWEEN, IN, IsNull, Match
     // ========================================================================
 
