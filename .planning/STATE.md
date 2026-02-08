@@ -41,14 +41,14 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1-3 complete. Phase 4 next.
+### Status: Phase 1-3 complete. Phase 4 planned (7 plans, 3 waves).
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
-| 4 - E2E Scenario Test Suite | ⬜ Ready to plan | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
+| 4 - E2E Scenario Test Suite | 📋 Planned (7 plans) | ~18 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
 **Total:** ~36 tasks | ~40-50h
@@ -81,6 +81,13 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - Binding-aware WHERE: alias-qualified columns (`b.price`) resolved from bindings map
 - RETURN aggregation uses OpenCypher implicit grouping (non-aggregated items = grouping keys)
 - Single-hop path unchanged for backward compatibility
+
+**Phase 4 plan structure (7 plans, 3 waves):**
+- **Wave 1:** 04-01 Test Infrastructure & Hero Query (creates module + helpers + stubs)
+- **Wave 2:** 04-02 SELECT Domain (Scenarios 1-3), 04-03 Metrics & Fusion (0b/0c), 04-04 Simple MATCH (BS1/BS4), 04-05 Complex MATCH (BS2/BS3), 04-06 Cross-Store & VelesQL (Scenario 0 + API)
+- **Wave 3:** 04-07 Quality Gates & Integration
+- Plans dir: `.planning/phases/v4-04-e2e-scenario-tests/`
+- Test files: `tests/readme_scenarios/` (7 files)
 
 ---
 
@@ -133,4 +140,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: Phase 3 complete (52e09bff). Phase 4 (E2E Scenario Test Suite) ready to plan.*
+*Status: Phase 4 planned (7 plans). Ready to execute with `/gsd-execute-plan`.*
