@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.7ns SIMD • 3,000+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.7ns SIMD • 3,100+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.7ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-2,411+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/🧪_Tests-3,100+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
@@ -91,7 +91,7 @@
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 2,411</h3>
+<h3>🧪 3,100+</h3>
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
@@ -1074,6 +1074,7 @@ LIMIT 10
 ### Optimizations Under the Hood
 
 - **SIMD**: AVX-512/AVX2 auto-detection with 32-wide FMA
+- **Zero-Dispatch DistanceEngine**: Cached SIMD function pointers eliminate per-call dispatch overhead in HNSW hot loops
 - **Prefetch**: CPU cache warming for HNSW traversal (+12% throughput)
 - **Contiguous Layout**: 64-byte aligned memory for cache efficiency
 - **Batch WAL**: Single disk write per batch import
@@ -1245,12 +1246,15 @@ VelesDB/
 │   │   │   ├── index/        # HNSW index
 │   │   │   ├── storage/      # Persistence layer
 │   │   │   ├── velesql/      # Query language parser
-│   │   │   └── simd/         # SIMD optimizations
+│   │   │   └── simd_native/  # SIMD optimizations (ISA-specific: AVX-512, AVX2, NEON)
 │   │   └── tests/
 │   ├── velesdb-server/   # REST API server
-│   ├── velesdb-mobile/   # iOS/Android bindings (UniFFI)
+│   ├── velesdb-cli/      # Interactive CLI with VelesQL REPL
 │   ├── velesdb-wasm/     # WebAssembly module
-│   └── velesdb-python/   # Python bindings (PyO3)
+│   ├── velesdb-python/   # Python bindings (PyO3)
+│   ├── velesdb-mobile/   # iOS/Android bindings (UniFFI)
+│   ├── velesdb-migrate/  # Migration from Qdrant, Pinecone, Supabase
+│   └── tauri-plugin-velesdb/ # Tauri v2 desktop plugin
 ├── benches/              # Benchmarks
 └── docs/                 # Documentation
 ```
