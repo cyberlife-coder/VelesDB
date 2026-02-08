@@ -541,3 +541,102 @@ fn test_hamming_scalar_all_different() {
     let dist = engine.distance(&a, &b);
     assert!((dist - 3.0).abs() < 1e-5);
 }
+
+// =========================================================================
+// Tests for CachedSimdDistance — bit-for-bit parity with SimdDistance
+// =========================================================================
+
+#[allow(clippy::cast_precision_loss)]
+fn gen_vec(dim: usize, seed: f32) -> Vec<f32> {
+    (0..dim).map(|i| (seed + i as f32 * 0.01).sin()).collect()
+}
+
+#[test]
+fn test_cached_vs_simd_cosine_768d() {
+    let dim = 768;
+    let simd = SimdDistance::new(DistanceMetric::Cosine);
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
+    let a = gen_vec(dim, 0.0);
+    let b = gen_vec(dim, 1.0);
+    let s = simd.distance(&a, &b);
+    let c = cached.distance(&a, &b);
+    assert_eq!(s, c, "cosine 768d: simd={s}, cached={c}");
+}
+
+#[test]
+fn test_cached_vs_simd_euclidean_128d() {
+    let dim = 128;
+    let simd = SimdDistance::new(DistanceMetric::Euclidean);
+    let cached = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let a = gen_vec(dim, 0.0);
+    let b = gen_vec(dim, 1.0);
+    let s = simd.distance(&a, &b);
+    let c = cached.distance(&a, &b);
+    assert_eq!(s, c, "euclidean 128d: simd={s}, cached={c}");
+}
+
+#[test]
+fn test_cached_vs_simd_dot_product_1536d() {
+    let dim = 1536;
+    let simd = SimdDistance::new(DistanceMetric::DotProduct);
+    let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, dim);
+    let a = gen_vec(dim, 0.0);
+    let b = gen_vec(dim, 1.0);
+    let s = simd.distance(&a, &b);
+    let c = cached.distance(&a, &b);
+    assert_eq!(s, c, "dot_product 1536d: simd={s}, cached={c}");
+}
+
+#[test]
+fn test_cached_vs_simd_hamming_64d() {
+    let dim = 64;
+    let simd = SimdDistance::new(DistanceMetric::Hamming);
+    let cached = CachedSimdDistance::new(DistanceMetric::Hamming, dim);
+    let a: Vec<f32> = (0..dim)
+        .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
+        .collect();
+    let b: Vec<f32> = (0..dim)
+        .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
+        .collect();
+    let s = simd.distance(&a, &b);
+    let c = cached.distance(&a, &b);
+    assert_eq!(s, c, "hamming 64d: simd={s}, cached={c}");
+}
+
+#[test]
+fn test_cached_vs_simd_jaccard_256d() {
+    let dim = 256;
+    let simd = SimdDistance::new(DistanceMetric::Jaccard);
+    let cached = CachedSimdDistance::new(DistanceMetric::Jaccard, dim);
+    let a: Vec<f32> = (0..dim)
+        .map(|i| if i < dim / 2 { 1.0 } else { 0.0 })
+        .collect();
+    let b: Vec<f32> = (0..dim)
+        .map(|i| if i < dim * 3 / 4 { 1.0 } else { 0.0 })
+        .collect();
+    let s = simd.distance(&a, &b);
+    let c = cached.distance(&a, &b);
+    assert_eq!(s, c, "jaccard 256d: simd={s}, cached={c}");
+}
+
+#[test]
+fn test_cached_batch_distance_matches_single() {
+    let dim = 128;
+    let cached = CachedSimdDistance::new(DistanceMetric::Cosine, dim);
+    let query = gen_vec(dim, 0.0);
+    let candidates: Vec<Vec<f32>> = (0..20).map(|j| gen_vec(dim, j as f32)).collect();
+    let candidate_refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
+
+    let batch = cached.batch_distance(&query, &candidate_refs);
+    let single: Vec<f32> = candidate_refs
+        .iter()
+        .map(|c| cached.distance(&query, c))
+        .collect();
+
+    for (i, (b, s)) in batch.iter().zip(single.iter()).enumerate() {
+        assert_eq!(
+            b, s,
+            "batch vs single mismatch at {i}: batch={b}, single={s}"
+        );
+    }
+}

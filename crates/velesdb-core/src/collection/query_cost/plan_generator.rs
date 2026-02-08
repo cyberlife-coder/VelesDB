@@ -7,8 +7,9 @@ use super::cost_model::{CostEstimator, OperationCost};
 use crate::collection::stats::CollectionStats;
 
 /// Physical execution plan types.
+// Reason: PhysicalPlan variant fields are self-explanatory from their names
 #[derive(Debug, Clone)]
-#[allow(missing_docs)] // Variant fields are self-explanatory
+#[allow(missing_docs)]
 pub enum PhysicalPlan {
     /// Full sequential scan of collection
     SeqScan {

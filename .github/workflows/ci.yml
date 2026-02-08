@@ -78,6 +78,11 @@ jobs:
             --exclude velesdb-python \
             -- -D warnings -D clippy::pedantic
 
+      - name: Check doctests compile
+        run: |
+          cargo test --doc --package velesdb-core --no-run
+        continue-on-error: false  # EPIC-080: Doctests fixes completed
+
   # ===========================================================================
   # Tests unitaires (parallèle avec lint et security)
   # ===========================================================================

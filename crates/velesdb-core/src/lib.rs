@@ -15,92 +15,37 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 //! use serde_json::json;
 //!
-//! // Create a new database
-//! let db = Database::open("./data")?;
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a new database
+//!     let db = Database::open("./data")?;
 //!
-//! // Create a collection (all 5 metrics available)
-//! db.create_collection("documents", 768, DistanceMetric::Cosine)?;
-//! // Or with quantization: DistanceMetric::Hamming + StorageMode::Binary
+//!     // Create a collection (all 5 metrics available)
+//!     db.create_collection("documents", 768, DistanceMetric::Cosine)?;
+//!     // Or with quantization: DistanceMetric::Hamming + StorageMode::Binary
 //!
-//! let collection = db.get_collection("documents").unwrap();
+//!     let collection = db.get_collection("documents").ok_or("Collection not found")?;
 //!
-//! // Insert vectors (upsert takes ownership)
-//! collection.upsert(vec![
-//!     Point::new(1, vec![0.1; 768], Some(json!({"title": "Hello World"}))),
-//! ])?;
+//!     // Insert vectors (upsert takes ownership)
+//!     collection.upsert(vec![
+//!         Point::new(1, vec![0.1; 768], Some(json!({"title": "Hello World"}))),
+//!     ])?;
 //!
-//! // Search for similar vectors
-//! let results = collection.search(&query_vector, 10)?;
+//!     // Search for similar vectors
+//!     let query_vector = vec![0.1; 768];
+//!     let results = collection.search(&query_vector, 10)?;
 //!
-//! // Hybrid search (vector + text)
-//! let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7))?;
+//!     // Hybrid search (vector + text)
+//!     let hybrid = collection.hybrid_search(&query_vector, "hello", 5, Some(0.7))?;
+//!     # Ok(())
+//! }
 //! ```
 
 #![warn(missing_docs)]
-#![warn(clippy::all)]
-#![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-// =============================================================================
-// NUMERIC CAST LINTS - USE WITH CAUTION
-// =============================================================================
-// These are allowed globally for SIMD/performance code but can hide real bugs.
-// RECOMMENDATION: Prefer local #[allow(...)] on specific functions instead.
-// Review PR #163 FLAG-1: These may mask truncation/overflow bugs elsewhere.
-//
-// For new code: Use try_from() or explicit bounds checks instead of `as`.
-// Example: u32::try_from(len).map_err(|_| Error::Overflow)?
-// =============================================================================
-#![allow(clippy::cast_possible_truncation)] // Can hide integer truncation bugs
-#![allow(clippy::cast_precision_loss)] // Acceptable for f32/f64 conversions
-#![allow(clippy::cast_possible_wrap)] // Can hide overflow bugs
-#![allow(clippy::cast_sign_loss)] // Can hide sign conversion bugs
-#![allow(clippy::cast_lossless)]
-// Safe - just suggests Into instead of as
-
-// =============================================================================
-// STYLISTIC LINTS - Safe to allow globally (no bug risk)
-// =============================================================================
-#![allow(clippy::option_if_let_else)]
-#![allow(clippy::significant_drop_tightening)]
-#![allow(clippy::redundant_clone)]
-#![allow(clippy::missing_const_for_fn)]
-#![allow(clippy::suboptimal_flops)]
-#![allow(clippy::derive_partial_eq_without_eq)]
-#![allow(clippy::if_not_else)]
-#![allow(clippy::redundant_pub_crate)]
-#![allow(clippy::unused_peekable)]
-#![allow(clippy::use_self)]
-#![allow(clippy::significant_drop_in_scrutinee)]
-#![allow(clippy::imprecise_flops)]
-#![allow(clippy::set_contains_or_insert)]
-#![allow(clippy::useless_let_if_seq)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::single_match_else)]
-#![allow(clippy::large_stack_arrays)]
-#![allow(clippy::manual_let_else)]
-#![allow(clippy::unused_self)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::wildcard_imports)]
-#![allow(clippy::ptr_as_ptr)]
-#![allow(clippy::implicit_hasher)]
-#![allow(clippy::unnecessary_cast)]
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::used_underscore_binding)]
-#![allow(clippy::manual_assert)]
-#![allow(clippy::assertions_on_constants)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::unused_async)]
-// =============================================================================
-// THREAD SAFETY LINT - REQUIRES CAREFUL REVIEW
-// =============================================================================
-// FLAG-1 WARNING: This lint can hide thread safety issues. Each unsafe Send/Sync
-// impl should have a // SAFETY: comment explaining why it's correct.
-// See: native_inner.rs Send/Sync impl for NativeHnswInner
-#![allow(clippy::non_send_fields_in_send_ty)]
+// Clippy lints configured in workspace Cargo.toml [workspace.lints.clippy]
 
 #[cfg(feature = "persistence")]
 pub mod agent;
@@ -430,7 +375,7 @@ impl Database {
                                 entry.insert(collection);
                             }
                             Err(err) => {
-                                eprintln!("Warning: Failed to load collection: {err}");
+                                tracing::warn!(error = %err, "Failed to load collection");
                             }
                         }
                     }

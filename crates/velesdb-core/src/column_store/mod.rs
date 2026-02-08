@@ -17,8 +17,15 @@
 //! │   ├── "category" -> StringColumn(Vec<Option<StringId>>)
 //! │   ├── "price"    -> IntColumn(Vec<Option<i64>>)
 //! │   └── "rating"   -> FloatColumn(Vec<Option<f64>>)
-//! └── string_table: StringTable (interning for strings)
 //! ```
+
+// SAFETY: Numeric casts in column store are intentional:
+// - All casts are for columnar data processing and statistics
+// - u64/usize conversions for row indices and bitmap operations
+// - Values bounded by column cardinality and row count
+// - Precision loss acceptable for column statistics
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
 
 mod batch;
 #[cfg(test)]
@@ -81,32 +88,35 @@ impl ColumnStore {
 
     /// Creates a column store with a primary key for O(1) lookups.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `pk_column` is not found in `fields` or is not of type `Int`.
-    #[must_use]
-    pub fn with_primary_key(fields: &[(&str, ColumnType)], pk_column: &str) -> Self {
+    /// Returns `Error::ColumnStoreError` if `pk_column` is not found in `fields`
+    /// or is not of type `Int`.
+    pub fn with_primary_key(
+        fields: &[(&str, ColumnType)],
+        pk_column: &str,
+    ) -> crate::error::Result<Self> {
         let pk_field = fields
             .iter()
             .find(|(name, _)| *name == pk_column)
-            .unwrap_or_else(|| {
-                panic!(
+            .ok_or_else(|| {
+                crate::error::Error::ColumnStoreError(format!(
                     "Primary key column '{}' not found in fields: {:?}",
                     pk_column,
                     fields.iter().map(|(n, _)| *n).collect::<Vec<_>>()
-                )
-            });
-        assert!(
-            matches!(pk_field.1, ColumnType::Int),
-            "Primary key column '{}' must be Int type, got {:?}",
-            pk_column,
-            pk_field.1
-        );
+                ))
+            })?;
+        if !matches!(pk_field.1, ColumnType::Int) {
+            return Err(crate::error::Error::ColumnStoreError(format!(
+                "Primary key column '{}' must be Int type, got {:?}",
+                pk_column, pk_field.1
+            )));
+        }
 
         let mut store = Self::with_schema(fields);
         store.primary_key_column = Some(pk_column.to_string());
         store.primary_index = HashMap::new();
-        store
+        Ok(store)
     }
 
     /// Returns the primary key column name if set.
