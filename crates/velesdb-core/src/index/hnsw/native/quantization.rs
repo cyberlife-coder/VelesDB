@@ -161,14 +161,14 @@ pub struct ScalarQuantizer {
 
 /// Quantized vector storage (int8 per dimension).
 #[derive(Debug, Clone)]
-pub struct QuantizedVector {
+pub struct QuantizedVectorInt8 {
     /// Quantized values [0, 255]
     pub data: Vec<u8>,
 }
 
 /// Quantized vector storage with shared quantizer reference.
 #[derive(Debug, Clone)]
-pub struct QuantizedVectorStore {
+pub struct QuantizedVectorInt8Store {
     /// Shared quantizer parameters
     quantizer: Arc<ScalarQuantizer>,
     /// Quantized vectors (flattened: node_id * dimension + dim_idx)
@@ -234,7 +234,7 @@ impl ScalarQuantizer {
 
     /// Quantizes a float32 vector to int8.
     #[must_use]
-    pub fn quantize(&self, vector: &[f32]) -> QuantizedVector {
+    pub fn quantize(&self, vector: &[f32]) -> QuantizedVectorInt8 {
         debug_assert_eq!(vector.len(), self.dimension);
 
         let data: Vec<u8> = vector
@@ -247,12 +247,12 @@ impl ScalarQuantizer {
             })
             .collect();
 
-        QuantizedVector { data }
+        QuantizedVectorInt8 { data }
     }
 
     /// Dequantizes an int8 vector back to float32.
     #[must_use]
-    pub fn dequantize(&self, quantized: &QuantizedVector) -> Vec<f32> {
+    pub fn dequantize(&self, quantized: &QuantizedVectorInt8) -> Vec<f32> {
         debug_assert_eq!(quantized.data.len(), self.dimension);
 
         quantized
@@ -272,14 +272,14 @@ impl ScalarQuantizer {
     /// This is ~4x faster than float32 due to SIMD efficiency.
     #[inline]
     #[must_use]
-    pub fn distance_l2_quantized(&self, a: &QuantizedVector, b: &QuantizedVector) -> u32 {
+    pub fn distance_l2_quantized(&self, a: &QuantizedVectorInt8, b: &QuantizedVectorInt8) -> u32 {
         debug_assert_eq!(a.data.len(), b.data.len());
         distance_l2_quantized_simd(&a.data, &b.data)
     }
 
     /// Computes approximate L2 distance using raw slices (zero-copy).
     ///
-    /// Useful for QuantizedVectorStore.get_slice() access pattern.
+    /// Useful for QuantizedVectorInt8Store.get_slice() access pattern.
     #[inline]
     #[must_use]
     pub fn distance_l2_quantized_slice(&self, a: &[u8], b: &[u8]) -> u32 {
@@ -293,7 +293,7 @@ impl ScalarQuantizer {
     /// This is the VSAG "ADT" (Asymmetric Distance Table) approach.
     #[inline]
     #[must_use]
-    pub fn distance_l2_asymmetric(&self, query: &[f32], quantized: &QuantizedVector) -> f32 {
+    pub fn distance_l2_asymmetric(&self, query: &[f32], quantized: &QuantizedVectorInt8) -> f32 {
         debug_assert_eq!(query.len(), self.dimension);
         debug_assert_eq!(quantized.data.len(), self.dimension);
 
@@ -311,7 +311,7 @@ impl ScalarQuantizer {
     }
 }
 
-impl QuantizedVectorStore {
+impl QuantizedVectorInt8Store {
     /// Creates a new quantized vector store.
     #[must_use]
     pub fn new(quantizer: Arc<ScalarQuantizer>, capacity: usize) -> Self {
@@ -332,13 +332,13 @@ impl QuantizedVectorStore {
 
     /// Gets a quantized vector by index.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<QuantizedVector> {
+    pub fn get(&self, index: usize) -> Option<QuantizedVectorInt8> {
         if index >= self.count {
             return None;
         }
         let start = index * self.quantizer.dimension;
         let end = start + self.quantizer.dimension;
-        Some(QuantizedVector {
+        Some(QuantizedVectorInt8 {
             data: self.data[start..end].to_vec(),
         })
     }
