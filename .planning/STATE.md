@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core Refactoring Milestone  
-**Current Phase:** 7 — SIMD Tolerance Hardening & DistanceEngine Integration (Planned)  
+**Current Phase:** All phases complete — Milestone finished  
 **Session Started:** 2026-02-06  
 
 ---
@@ -36,29 +36,36 @@ The codebase becomes faster, cleaner, more maintainable, and production-ready wi
 | 3 | Architecture & Graph | ✅ Complete | None |
 | 4 | Complexity & Errors | ✅ Complete | None |
 | 5 | Cleanup & Performance | ✅ Complete | None |
-| 6 | Documentation & Polish | ⏳ Pending | Phase 5 |
+| 6 | Documentation & Polish | ✅ Complete | None |
 | 7 | SIMD Tolerance & Engine | ✅ Complete | None |
 
 ### Current Focus
-**Phase 7 complete (2/2 plans) — SIMD tolerance & DistanceEngine integration**
+**All 7 phases complete — Refactoring milestone finished**
 
-**Wave 1 (sequential):**
+**Phase 6 (Documentation & Polish):**
+- 06-01: Documentation & Final Polish — ✅ Complete (476ae09b, c06a0483)
+  - PERF-02: Pre-satisfied (async_ops.rs already had spawn_blocking wrappers)
+  - PERF-03: Pre-satisfied (no format! allocations in trigram hot paths)
+  - DOCS-03: Rustdoc HTML tag warnings fixed, #![warn(missing_docs)] enforced
+  - DOCS-04: README.md updated (test counts, project structure, optimizations)
+
+**Phase 7 (SIMD Tolerance & Engine):**
 - 07-01: Widen SIMD property test tolerances (TEST-08) — ✅ Complete (64fe7739)
 - 07-02: Wire DistanceEngine into HNSW hot loop (PERF-04) — ✅ Complete (3b77cdcc)
 
 ### Next Action
-Phase 6 (Documentation & Polish): DOCS-03, DOCS-04, PERF-02, PERF-03
+`/gsd-audit-milestone` — Final milestone audit before tagging release
 
-Progress: ████████████████ 96%
+Progress: ████████████████████ 100%
 
 ---
 
 ## Requirements Progress
 
  ### Completion Summary
-- **Completed:** 25/28 (89%)
+- **Completed:** 28/28 (100%)
 - **In Progress:** 0/28
-- **Pending:** 3/28
+- **Pending:** 0/28
 
 ### By Category
 
@@ -89,8 +96,8 @@ Progress: ████████████████ 96%
 #### Documentation (DOCS)
 - [x] DOCS-01 — Panic to error (4 panic sites converted in 04-01, production hardening in 04-08)
 - [x] DOCS-02 — Error context (3 enriched error variants + 64 bare-string errors fixed in 04-08)
-- [ ] DOCS-03 — Public API docs
-- [ ] DOCS-04 — Outdated docs
+- [x] DOCS-03 — Public API docs (Plan 06-01: rustdoc clean, #![warn(missing_docs)] enforced)
+- [x] DOCS-04 — Outdated docs (Plan 06-01: README updated with current test counts, structure)
 
 #### Testing (TEST)
 - [x] TEST-01 — SIMD property tests (Plan 02-03 complete)
@@ -100,8 +107,8 @@ Progress: ████████████████ 96%
 
 #### Performance (PERF)
 - [x] PERF-01 — SIMD dispatch (DistanceEngine with cached fn pointers, 13% faster at 1536d cosine)
-- [ ] PERF-02 — Async I/O
-- [ ] PERF-03 — Format allocations
+- [x] PERF-02 — Async I/O (Pre-satisfied: storage/async_ops.rs with spawn_blocking)
+- [x] PERF-03 — Format allocations (Pre-satisfied: zero-copy trigram, no format! in hot paths)
 - [x] PERF-04 — Wire DistanceEngine into HNSW hot loop (Plan 07-02 complete)
 
 #### Testing (TEST) — continued
@@ -202,12 +209,12 @@ None.
 ## Session Continuity
 
   ### Last Session
-2026-02-07 — Plan 07-02 executed: Zero-dispatch CachedSimdDistance for HNSW
-- Extended simd_native::DistanceEngine with hamming_fn/jaccard_fn (all 5 metrics)
-- Created CachedSimdDistance struct implementing HNSW DistanceEngine trait
-- Wired CachedSimdDistance into NativeHnswInner (replaces SimdDistance)
-- 8 new tests, 2432 total pass, 313 HNSW tests zero regressions
-- Commits: 5b9a05db → 3b77cdcc (5 atomic commits)
+2026-02-08 — Phase 6 executed: Documentation & Final Polish
+- PERF-02 and PERF-03 verified as pre-satisfied (no code changes needed)
+- Fixed 2 rustdoc HTML tag warnings (Vec<u64>, Vec<f32> in module docs)
+- Updated README.md: test counts 2,411→3,100+, project structure, optimizations
+- All 28/28 v1 requirements now complete
+- Commits: 476ae09b, c06a0483
 
 ### Current Branch
 feature/CORE-phase5-plan01-dependency-cleanup
@@ -216,9 +223,10 @@ feature/CORE-phase5-plan01-dependency-cleanup
 None (all committed)
 
 ### Notes for Next Session
-1. Phase 7 complete — all plans executed
-2. Phase 6 (DOCS-03, DOCS-04, PERF-02, PERF-03) still pending
-3. CachedSimdDistance now active in production HNSW path
+1. All 7 phases complete — refactoring milestone finished
+2. Run `/gsd-audit-milestone` for final verification
+3. Tag release: `git tag v1.4.1-refactored`
+4. Consider v2 requirements (TEST-05, TEST-06, TEST-07, DOCS-05, DOCS-06, QUAL-05)
 
 ---
 
@@ -254,5 +262,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2026-02-07*  
-*Progress: 25/28 requirements (89%) — Phase 7 complete, Phase 6 pending*
+*State file last updated: 2026-02-08*  
+*Progress: 28/28 requirements (100%) — All phases complete, milestone finished*
