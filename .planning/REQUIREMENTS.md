@@ -118,14 +118,16 @@
   - Approach: Use `anyhow::Context` and `thiserror` for rich errors
   - Success: Errors provide clear context for debugging
 
-- [ ] **DOCS-03**: Document all public APIs with rustdoc examples
+- [x] **DOCS-03**: Document all public APIs with rustdoc examples
   - Priority: High
   - Focus: `lib.rs` public exports, collection APIs, search APIs
   - Success: Every public function has rustdoc with usage example
+  - Verification: `#![warn(missing_docs)]` enforced; `cargo doc --no-deps` 0 warnings; HTML tag fixes applied
 
-- [ ] **DOCS-04**: Fix misleading or outdated documentation
+- [x] **DOCS-04**: Fix misleading or outdated documentation
   - Priority: Medium
   - Success: README, AGENTS.md, and rustdocs are current and accurate
+  - Verification: README updated with test counts (3,100+), project structure (simd_native/), crate inventory, optimizations
 
 ### Testing & Quality Assurance (TEST)
 
@@ -157,15 +159,17 @@
   - Files: `simd_native.rs:1339-1400`
   - Success: Function pointer cached in DistanceEngine
 
-- [ ] **PERF-02**: Move blocking I/O to spawn_blocking for async contexts
+- [x] **PERF-02**: Move blocking I/O to spawn_blocking for async contexts
   - Priority: Low
   - Files: `storage/mmap.rs:158-195`
   - Success: `mmap.flush()` and `set_len()` don't block async runtime
+  - Verification: `storage/async_ops.rs` provides flush_async, reserve_capacity_async, compact_async, store_batch_async
 
-- [ ] **PERF-03**: Eliminate format allocations in hot paths
+- [x] **PERF-03**: Eliminate format allocations in hot paths
   - Priority: Medium
   - Files: `index/trigram/simd.rs`
   - Success: Stack buffers or string interning for trigram extraction
+  - Verification: Zero-copy scalar path; build_padded_bytes() for SIMD; no format! in hot paths
 
 - [ ] **PERF-04**: Wire DistanceEngine into HNSW hot loop replacing per-call SimdDistance dispatch
   - Priority: Medium (P3)
@@ -217,30 +221,30 @@
 | RUST-03 | Phase 1 | Complete |
 | RUST-04 | Phase 2 | Complete |
 | RUST-05 | Phase 2 | Complete |
-| QUAL-01 | Phase 3 | Pending |
-| QUAL-02 | Phase 3 | Pending |
-| QUAL-03 | Phase 4 | Pending |
-| QUAL-04 | Phase 4 | Pending |
+| QUAL-01 | Phase 3 | Complete |
+| QUAL-02 | Phase 3 | Complete |
+| QUAL-03 | Phase 4 | Complete |
+| QUAL-04 | Phase 4 | Complete |
 | BUG-01 | Phase 1 | Complete |
 | BUG-02 | Phase 2 | Complete |
 | BUG-03 | Phase 2 | Complete |
-| BUG-04 | Phase 3 | Pending |
-| CLEAN-01 | Phase 5 | Pending |
-| CLEAN-02 | Phase 5 | Pending |
-| CLEAN-03 | Phase 5 | Pending |
-| DOCS-01 | Phase 4 | Pending |
-| DOCS-02 | Phase 4 | Pending |
-| DOCS-03 | Phase 6 | Pending |
-| DOCS-04 | Phase 6 | Pending |
+| BUG-04 | Phase 3 | Complete |
+| CLEAN-01 | Phase 5 | Complete |
+| CLEAN-02 | Phase 5 | Complete |
+| CLEAN-03 | Phase 5 | Complete |
+| DOCS-01 | Phase 4 | Complete |
+| DOCS-02 | Phase 4 | Complete |
+| DOCS-03 | Phase 6 | Complete |
+| DOCS-04 | Phase 6 | Complete |
 | TEST-01 | Phase 2 | Complete |
-| TEST-02 | Phase 3 | Pending |
-| TEST-03 | Phase 4 | Pending |
-| TEST-04 | Phase 5 | Pending |
-| PERF-01 | Phase 5 | Pending |
-| PERF-02 | Phase 6 | Pending |
-| PERF-03 | Phase 6 | Pending |
-| PERF-04 | Phase 7 | Pending |
-| TEST-08 | Phase 7 | Pending |
+| TEST-02 | Phase 3 | Complete |
+| TEST-03 | Phase 4 | Complete |
+| TEST-04 | Phase 5 | Complete |
+| PERF-01 | Phase 5 | Complete |
+| PERF-02 | Phase 6 | Complete |
+| PERF-03 | Phase 6 | Complete |
+| PERF-04 | Phase 7 | Complete |
+| TEST-08 | Phase 7 | Complete |
 
 **Coverage:**
 - v1 requirements: 28 total
@@ -249,5 +253,5 @@
 
 ---
 *Requirements defined: 2026-02-06*
-*Last updated: 2026-02-07 after Phase 7 addition*
+*Last updated: 2026-02-08 — All 28 requirements complete*
 *ROADMAP.md: All 28 v1 requirements mapped to 7 phases*
