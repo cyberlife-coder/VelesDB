@@ -28,11 +28,11 @@
 //! | 100K   | 450ms         | < 20ms       | > 22x   |
 //! | 1M     | 4.5s          | < 100ms      | > 45x   |
 
-pub mod gpu;
+pub mod accelerator;
 mod index;
 pub mod simd;
 
-pub use gpu::TrigramComputeBackend;
+pub use accelerator::{TrigramAccelerator, TrigramComputeBackend};
 pub use index::{extract_trigrams, TrigramIndex};
 pub use simd::{extract_trigrams_simd, TrigramSimdLevel};
 
