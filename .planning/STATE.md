@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 0 — merge & tag)  
+**Current Milestone:** v2-core-trust (Phase 0 done, Phase 1 next)  
 **Next Milestone:** v3-ecosystem-alignment  
 **Previous Milestone:** v1-refactoring (completed 2026-02-08)  
 
@@ -23,28 +23,40 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - **Quality gates**: fmt ✅, clippy ✅, deny ✅, doc ✅, release build ✅
 - **112 unsafe blocks** — all documented with SAFETY comments
 - **47 issues found** by Devil's Advocate review (3 audit phases): 7 critical, 14 bugs, 23 design, 3 minor
+- **2 findings already fixed** (C-04 RRF, B-03 Weighted) — verified by code triage
 
 ### Constraints
 - Rust 1.83+ only
 - All quality gates must pass: fmt, clippy, deny, test
 - All unsafe code must have documented invariants
 - TDD: test BEFORE code for every fix
+- Martin Fowler: files >300 lines get split into modules
 
 ---
 
-## Milestone v2: Core Trust (25 findings — velesdb-core only)
+## Milestone v2: Core Trust (23 active findings — velesdb-core only)
 
-### Status: Phase 0 ready to execute
+### Status: Phase 0 done. Branch `v2-core-trust` to create, then Phase 1.
 
-| Phase | Status | Scope | Priority |
-|-------|--------|-------|----------|
-| 0 - Merge & Tag v1 | ⬜ Pending | Git workflow | 🔒 Prerequisite |
-| 1 - CI Safety Net | ⬜ Pending | CI-01→04 | 🛡️ Infrastructure |
-| 2 - Critical Correctness | ⬜ Pending | C-01→04, B-03, D-09 | 🚨 Wrong Results |
-| 3 - Core Engine Bugs | ⬜ Pending | B-01→06, D-08, M-03 | 🐛 Correctness |
-| 4 - Perf, Storage, Cleanup | ⬜ Pending | D-01→07, M-01→02 | ⚠️ Optimization |
+| Phase | Status | Tasks | Findings | Estimate | Priority |
+|-------|--------|-------|----------|----------|----------|
+| 0 - Merge & Tag v1 | ✅ Done (branch pending) | 1 | — | 15 min | 🔒 Prerequisite |
+| 1 - CI Safety Net | ⬜ Pending | 4 | CI-01→04 | 2h | 🛡️ Infrastructure |
+| 2 - Critical Correctness | ⬜ Pending | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
+| 3 - Core Engine Bugs | ⬜ Pending | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
+| 4 - Perf, Storage, Cleanup | ⬜ Pending | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
 
+**Total:** 28 tasks | ~25-30h  
 **Execution:** `0 → 1 → 2 → 3 → 4`
+
+### Key Decisions (v3.2)
+- C-04/B-03 removed from scope (already fixed in `fusion/strategy.rs`)
+- Old broken `score_fusion/mod.rs` FusionStrategy enum → DELETE in Phase 2
+- `GpuTrigramAccelerator` → DELETE, rename to `TrigramAccelerator`
+- BFS overflow: stop inserting, don't `clear()` visited set
+- ORDER BY property → return error, not silent no-op
+- DualPrecision default → use int8 when quantizer trained
+- Tests multi-thread in CI (remove `--test-threads=1`)
 
 ## Milestone v3: Ecosystem Alignment (22 findings — bindings/wrappers)
 
@@ -76,7 +88,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ### Important File Paths
 - `.planning/v2-correctness/PROJECT.md` — Milestone v2 definition
-- `.planning/v2-correctness/ROADMAP.md` — Milestone v2 roadmap (0+4 phases)
+- `.planning/v2-correctness/ROADMAP.md` — Milestone v2 roadmap v3.2 (0+4 phases, 28 tasks)
 - `.planning/v3-ecosystem-alignment/PROJECT.md` — Milestone v3 definition
 - `.planning/v3-ecosystem-alignment/ROADMAP.md` — Milestone v3 roadmap (5 phases)
 - `.planning/DEVIL_ADVOCATE_FINDINGS.md` — Full review findings (47 issues)
@@ -94,5 +106,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2025-02-08*  
-*Status: 2 milestones created. v2 Phase 0 (merge & tag) ready to execute.*
+*State file last updated: 2026-02-08*  
+*Status: v2-core-trust ROADMAP v3.2 finalized. Phase 0 done. Phase 1 (CI Safety Net) next.*
