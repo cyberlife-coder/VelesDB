@@ -35,6 +35,80 @@ use super::helpers;
 //     acc201 --LINKED_TO--> acc208 (Account, risk=high)     ← depth 2
 //     acc208 --LINKED_TO--> acc209 (Account, risk=medium)   ← depth 3
 
+/// 3 Transactions + 10 Accounts for fraud detection network.
+fn bs2_nodes() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
+    vec![
+        // Transaction nodes
+        (
+            100,
+            helpers::generate_embedding(100, 4),
+            serde_json::json!({"_labels": ["Transaction"], "amount": 5000, "tx_type": "wire_transfer"}),
+        ),
+        (
+            101,
+            helpers::generate_embedding(101, 4),
+            serde_json::json!({"_labels": ["Transaction"], "amount": 15000, "tx_type": "cash_withdrawal"}),
+        ),
+        (
+            102,
+            helpers::generate_embedding(102, 4),
+            serde_json::json!({"_labels": ["Transaction"], "amount": 200, "tx_type": "purchase"}),
+        ),
+        // Account nodes
+        (
+            200,
+            helpers::generate_embedding(200, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "low", "account_id": "ACC-200"}),
+        ),
+        (
+            201,
+            helpers::generate_embedding(201, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "high", "account_id": "ACC-201"}),
+        ),
+        (
+            202,
+            helpers::generate_embedding(202, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "medium", "account_id": "ACC-202"}),
+        ),
+        (
+            203,
+            helpers::generate_embedding(203, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "medium", "account_id": "ACC-203"}),
+        ),
+        (
+            204,
+            helpers::generate_embedding(204, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "high", "account_id": "ACC-204"}),
+        ),
+        (
+            205,
+            helpers::generate_embedding(205, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "low", "account_id": "ACC-205"}),
+        ),
+        (
+            206,
+            helpers::generate_embedding(206, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "low", "account_id": "ACC-206"}),
+        ),
+        (
+            207,
+            helpers::generate_embedding(207, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "low", "account_id": "ACC-207"}),
+        ),
+        // Deeper links for variable-length test
+        (
+            208,
+            helpers::generate_embedding(208, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "high", "account_id": "ACC-208"}),
+        ),
+        (
+            209,
+            helpers::generate_embedding(209, 4),
+            serde_json::json!({"_labels": ["Account"], "risk_level": "medium", "account_id": "ACC-209"}),
+        ),
+    ]
+}
+
 /// Sets up the BS2 Fraud Detection graph.
 ///
 /// Returns `(TempDir, Collection)` with the fraud detection network populated.
@@ -42,147 +116,27 @@ fn setup_bs2_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
     let (dir, db) = helpers::setup_test_db();
     let collection = helpers::setup_labeled_collection(&db, "fraud_net", 4, DistanceMetric::Cosine);
 
-    // Transaction nodes
-    let nodes = vec![
-        (
-            100,
-            helpers::generate_embedding(100, 4),
-            serde_json::json!({
-                "_labels": ["Transaction"],
-                "amount": 5000,
-                "tx_type": "wire_transfer"
-            }),
-        ),
-        (
-            101,
-            helpers::generate_embedding(101, 4),
-            serde_json::json!({
-                "_labels": ["Transaction"],
-                "amount": 15000,
-                "tx_type": "cash_withdrawal"
-            }),
-        ),
-        (
-            102,
-            helpers::generate_embedding(102, 4),
-            serde_json::json!({
-                "_labels": ["Transaction"],
-                "amount": 200,
-                "tx_type": "purchase"
-            }),
-        ),
-        // Account nodes
-        (
-            200,
-            helpers::generate_embedding(200, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "low",
-                "account_id": "ACC-200"
-            }),
-        ),
-        (
-            201,
-            helpers::generate_embedding(201, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "high",
-                "account_id": "ACC-201"
-            }),
-        ),
-        (
-            202,
-            helpers::generate_embedding(202, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "medium",
-                "account_id": "ACC-202"
-            }),
-        ),
-        (
-            203,
-            helpers::generate_embedding(203, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "medium",
-                "account_id": "ACC-203"
-            }),
-        ),
-        (
-            204,
-            helpers::generate_embedding(204, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "high",
-                "account_id": "ACC-204"
-            }),
-        ),
-        (
-            205,
-            helpers::generate_embedding(205, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "low",
-                "account_id": "ACC-205"
-            }),
-        ),
-        (
-            206,
-            helpers::generate_embedding(206, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "low",
-                "account_id": "ACC-206"
-            }),
-        ),
-        (
-            207,
-            helpers::generate_embedding(207, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "low",
-                "account_id": "ACC-207"
-            }),
-        ),
-        // Deeper links for variable-length test
-        (
-            208,
-            helpers::generate_embedding(208, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "high",
-                "account_id": "ACC-208"
-            }),
-        ),
-        (
-            209,
-            helpers::generate_embedding(209, 4),
-            serde_json::json!({
-                "_labels": ["Account"],
-                "risk_level": "medium",
-                "account_id": "ACC-209"
-            }),
-        ),
-    ];
-    helpers::insert_labeled_nodes(&collection, &nodes);
+    helpers::insert_labeled_nodes(&collection, &bs2_nodes());
 
     // Edges: FROM (tx → account), LINKED_TO (account → account)
-    let edges = vec![
-        // FROM edges
-        (1000, 100, 200, "FROM"),
-        (1001, 101, 203, "FROM"),
-        (1002, 102, 206, "FROM"),
-        // LINKED_TO edges (depth 1)
-        (2000, 200, 201, "LINKED_TO"),
-        (2001, 200, 202, "LINKED_TO"),
-        (2002, 203, 204, "LINKED_TO"),
-        (2003, 203, 205, "LINKED_TO"),
-        (2004, 206, 207, "LINKED_TO"),
-        // Deeper links (depth 2, 3)
-        (2005, 201, 208, "LINKED_TO"),
-        (2006, 208, 209, "LINKED_TO"),
-    ];
-    helpers::add_edges(&collection, &edges);
+    helpers::add_edges(
+        &collection,
+        &[
+            // FROM edges
+            (1000, 100, 200, "FROM"),
+            (1001, 101, 203, "FROM"),
+            (1002, 102, 206, "FROM"),
+            // LINKED_TO edges (depth 1)
+            (2000, 200, 201, "LINKED_TO"),
+            (2001, 200, 202, "LINKED_TO"),
+            (2002, 203, 204, "LINKED_TO"),
+            (2003, 203, 205, "LINKED_TO"),
+            (2004, 206, 207, "LINKED_TO"),
+            // Deeper links (depth 2, 3)
+            (2005, 201, 208, "LINKED_TO"),
+            (2006, 208, 209, "LINKED_TO"),
+        ],
+    );
 
     (dir, collection)
 }
@@ -239,13 +193,9 @@ fn build_bs2_pattern(linked_to_range: Option<(u32, u32)>) -> GraphPattern {
 // patient303 --HAS_CONDITION--> cond403 (icd10=J18.9, pneumonia — same code)
 //     cond403 --TREATED_WITH--> treat500 (Amoxicillin again, shared treatment)
 
-/// Sets up the BS3 Healthcare Diagnosis graph.
-fn setup_bs3_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
-    let (dir, db) = helpers::setup_test_db();
-    let collection =
-        helpers::setup_labeled_collection(&db, "healthcare", 4, DistanceMetric::Cosine);
-
-    let nodes = vec![
+/// 4 Patients + 4 Conditions + 4 Treatments for healthcare scenario.
+fn bs3_nodes() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
+    vec![
         // Patients
         (
             300,
@@ -271,93 +221,71 @@ fn setup_bs3_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
         (
             400,
             helpers::generate_embedding(400, 4),
-            serde_json::json!({
-                "_labels": ["Condition"],
-                "icd10_code": "J18.9",
-                "diagnosis": "Bacterial pneumonia"
-            }),
+            serde_json::json!({"_labels": ["Condition"], "icd10_code": "J18.9", "diagnosis": "Bacterial pneumonia"}),
         ),
         (
             401,
             helpers::generate_embedding(401, 4),
-            serde_json::json!({
-                "_labels": ["Condition"],
-                "icd10_code": "J12.89",
-                "diagnosis": "Viral pneumonia"
-            }),
+            serde_json::json!({"_labels": ["Condition"], "icd10_code": "J12.89", "diagnosis": "Viral pneumonia"}),
         ),
         (
             402,
             helpers::generate_embedding(402, 4),
-            serde_json::json!({
-                "_labels": ["Condition"],
-                "icd10_code": "K21.0",
-                "diagnosis": "GERD"
-            }),
+            serde_json::json!({"_labels": ["Condition"], "icd10_code": "K21.0", "diagnosis": "GERD"}),
         ),
         (
             403,
             helpers::generate_embedding(403, 4),
-            serde_json::json!({
-                "_labels": ["Condition"],
-                "icd10_code": "J18.9",
-                "diagnosis": "Bacterial pneumonia"
-            }),
+            serde_json::json!({"_labels": ["Condition"], "icd10_code": "J18.9", "diagnosis": "Bacterial pneumonia"}),
         ),
         // Treatments
         (
             500,
             helpers::generate_embedding(500, 4),
-            serde_json::json!({
-                "_labels": ["Treatment"],
-                "name": "Amoxicillin",
-                "success_rate": 0.85
-            }),
+            serde_json::json!({"_labels": ["Treatment"], "name": "Amoxicillin", "success_rate": 0.85}),
         ),
         (
             501,
             helpers::generate_embedding(501, 4),
-            serde_json::json!({
-                "_labels": ["Treatment"],
-                "name": "Azithromycin",
-                "success_rate": 0.90
-            }),
+            serde_json::json!({"_labels": ["Treatment"], "name": "Azithromycin", "success_rate": 0.90}),
         ),
         (
             502,
             helpers::generate_embedding(502, 4),
-            serde_json::json!({
-                "_labels": ["Treatment"],
-                "name": "Oseltamivir",
-                "success_rate": 0.75
-            }),
+            serde_json::json!({"_labels": ["Treatment"], "name": "Oseltamivir", "success_rate": 0.75}),
         ),
         (
             503,
             helpers::generate_embedding(503, 4),
-            serde_json::json!({
-                "_labels": ["Treatment"],
-                "name": "Omeprazole",
-                "success_rate": 0.95
-            }),
+            serde_json::json!({"_labels": ["Treatment"], "name": "Omeprazole", "success_rate": 0.95}),
         ),
-    ];
-    helpers::insert_labeled_nodes(&collection, &nodes);
+    ]
+}
 
-    let edges = vec![
-        // HAS_CONDITION
-        (3000, 300, 400, "HAS_CONDITION"),
-        (3001, 301, 401, "HAS_CONDITION"),
-        (3002, 302, 402, "HAS_CONDITION"),
-        (3003, 303, 403, "HAS_CONDITION"),
-        // TREATED_WITH
-        (4000, 400, 500, "TREATED_WITH"),
-        (4001, 400, 501, "TREATED_WITH"),
-        (4002, 401, 502, "TREATED_WITH"),
-        (4003, 402, 503, "TREATED_WITH"),
-        (4004, 403, 500, "TREATED_WITH"), // Diana→cond403→Amoxicillin (shared)
-    ];
-    helpers::add_edges(&collection, &edges);
+/// Sets up the BS3 Healthcare Diagnosis graph.
+fn setup_bs3_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
+    let (dir, db) = helpers::setup_test_db();
+    let collection =
+        helpers::setup_labeled_collection(&db, "healthcare", 4, DistanceMetric::Cosine);
+
+    helpers::insert_labeled_nodes(&collection, &bs3_nodes());
+
+    helpers::add_edges(
+        &collection,
+        &[
+            // HAS_CONDITION
+            (3000, 300, 400, "HAS_CONDITION"),
+            (3001, 301, 401, "HAS_CONDITION"),
+            (3002, 302, 402, "HAS_CONDITION"),
+            (3003, 303, 403, "HAS_CONDITION"),
+            // TREATED_WITH
+            (4000, 400, 500, "TREATED_WITH"),
+            (4001, 400, 501, "TREATED_WITH"),
+            (4002, 401, 502, "TREATED_WITH"),
+            (4003, 402, 503, "TREATED_WITH"),
+            (4004, 403, 500, "TREATED_WITH"), // Diana→cond403→Amoxicillin (shared)
+        ],
+    );
 
     (dir, collection)
 }
