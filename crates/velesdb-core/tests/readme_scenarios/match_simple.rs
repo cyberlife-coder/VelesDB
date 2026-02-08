@@ -481,7 +481,7 @@ fn test_bs4_agent_memory() {
             ("conv.timestamp", None),
             ("message.content", None),
         ],
-        None, // ORDER BY conv.timestamp DESC not yet supported (VP-006)
+        Some(vec![("conv.timestamp", true)]), // ORDER BY conv.timestamp DESC (VP-006 fixed)
         Some(10),
     );
 
@@ -628,4 +628,78 @@ fn test_bs4_cross_node_projection() {
             );
         }
     }
+}
+
+/// BS4 ORDER BY property test (VP-006): verifies results are sorted by conv.timestamp DESC.
+///
+/// Uses the same multi-hop pattern but focuses on verifying that ORDER BY
+/// on an intermediate node's projected property actually reorders results.
+#[test]
+fn test_bs4_order_by_timestamp() {
+    let (_dir, collection) = setup_bs4_scenario();
+
+    // No WHERE filter — return all 6 messages, but ORDER BY conv.timestamp DESC
+    let match_clause = helpers::build_match_clause(
+        vec![build_bs4_pattern()],
+        None,
+        vec![
+            ("user.name", None),
+            ("conv.timestamp", None),
+            ("message.content", None),
+        ],
+        Some(vec![("conv.timestamp", true)]), // ORDER BY conv.timestamp DESC
+        Some(20),
+    );
+
+    let results = collection
+        .execute_match(&match_clause, &HashMap::new())
+        .expect("execute_match failed");
+
+    assert_eq!(
+        results.len(),
+        6,
+        "Should return all 6 messages (no filter), got {}",
+        results.len()
+    );
+
+    // Extract conv.timestamp from projected properties for each result
+    let timestamps: Vec<Option<i64>> = results
+        .iter()
+        .map(|r| r.projected.get("conv.timestamp").and_then(|v| v.as_i64()))
+        .collect();
+
+    // All results should have a projected conv.timestamp
+    for (i, ts) in timestamps.iter().enumerate() {
+        assert!(
+            ts.is_some(),
+            "Result {} (node {}) should have conv.timestamp projected, got None. Projected: {:?}",
+            i,
+            results[i].node_id,
+            results[i].projected
+        );
+    }
+
+    // Verify DESC ordering: each timestamp >= the next
+    let ts_values: Vec<i64> = timestamps.iter().filter_map(|t| *t).collect();
+    for window in ts_values.windows(2) {
+        assert!(
+            window[0] >= window[1],
+            "Results should be ordered by conv.timestamp DESC: {} >= {}",
+            window[0],
+            window[1]
+        );
+    }
+
+    // Conv 31 (ts=1700200000) messages should appear before Conv 30 (ts=1700100000) messages
+    // Conv 30 before Conv 32 (ts=1600000000) before Conv 33 (ts=1500000000)
+    assert_eq!(
+        ts_values.first().copied(),
+        Some(1_700_200_000),
+        "First result should be from most recent conversation (1700200000)"
+    );
+    assert_eq!(
+        ts_values.last().copied(),
+        Some(1_500_000_000),
+        "Last result should be from oldest conversation (1500000000)"
+    );
 }

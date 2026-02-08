@@ -157,21 +157,42 @@ impl Collection {
             }
         }
 
-        // Sort by score - metric-aware ordering
-        // For similarity: descending (higher = more similar)
-        // For distance: ascending (lower = more similar)
-        if higher_is_better {
-            scored_results
-                .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+        // VP-006: Apply ORDER BY — explicit clause takes precedence, else default similarity sort
+        if match_clause.return_clause.order_by.is_some() {
+            Self::apply_match_order_by(&mut scored_results, &match_clause.return_clause)?;
         } else {
-            scored_results.sort_by(|a, b| {
-                a.score
-                    .unwrap_or(f32::MAX)
-                    .total_cmp(&b.score.unwrap_or(f32::MAX))
-            });
+            // Default: sort by similarity score (metric-aware)
+            if higher_is_better {
+                scored_results
+                    .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+            } else {
+                scored_results.sort_by(|a, b| {
+                    a.score
+                        .unwrap_or(f32::MAX)
+                        .total_cmp(&b.score.unwrap_or(f32::MAX))
+                });
+            }
         }
 
         Ok(scored_results)
+    }
+
+    /// Applies ORDER BY from ReturnClause to match results (VP-006).
+    ///
+    /// Iterates over `return_clause.order_by` items in reverse order so that
+    /// the last item becomes the primary sort key (standard SQL semantics with
+    /// stable sort).
+    pub(crate) fn apply_match_order_by(
+        results: &mut [MatchResult],
+        return_clause: &crate::velesql::ReturnClause,
+    ) -> Result<()> {
+        if let Some(ref order_by_items) = return_clause.order_by {
+            // Apply ORDER BY items in reverse (last = primary sort, like SQL)
+            for ob in order_by_items.iter().rev() {
+                Self::order_match_results(results, &ob.expression, ob.descending)?;
+            }
+        }
+        Ok(())
     }
 
     /// Applies ORDER BY to match results (EPIC-045 US-005).

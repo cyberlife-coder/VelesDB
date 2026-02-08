@@ -163,6 +163,8 @@ impl Collection {
             {
                 return Ok(aggregated);
             }
+            // VP-006: Apply ORDER BY if present
+            Self::apply_match_order_by(&mut results, &match_clause.return_clause)?;
             return Ok(results);
         }
 
@@ -170,7 +172,7 @@ impl Collection {
         if pattern.relationships.len() > 1 {
             // Multi-hop: execute as chain of single-hop BFS traversals
             let start_candidates: Vec<(u64, HashMap<String, u64>)> = start_nodes;
-            let results = self.execute_multi_hop_chain(
+            let mut results = self.execute_multi_hop_chain(
                 pattern,
                 start_candidates,
                 match_clause,
@@ -183,6 +185,8 @@ impl Collection {
             {
                 return Ok(aggregated);
             }
+            // VP-006: Apply ORDER BY if present
+            Self::apply_match_order_by(&mut results, &match_clause.return_clause)?;
             return Ok(results);
         }
 
@@ -249,6 +253,9 @@ impl Collection {
         {
             return Ok(aggregated);
         }
+
+        // VP-006: Apply ORDER BY if present
+        Self::apply_match_order_by(&mut results, &match_clause.return_clause)?;
 
         Ok(results)
     }
