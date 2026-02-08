@@ -129,6 +129,13 @@ impl Collection {
                 self.extract_all_similarity_conditions(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);
 
+            // VP-002: Resolve subquery values before filter conversion
+            // Reason: filter::Condition::from() is stateless and cannot execute subqueries.
+            // We must resolve all Value::Subquery to concrete values here.
+            if let Some(ref cond) = filter_condition {
+                filter_condition = Some(self.resolve_subqueries_in_condition(cond, params)?);
+            }
+
             // NEAR + similarity() is supported: NEAR finds candidates, similarity() filters by threshold
             // Multiple similarity() with AND is supported: filters applied sequentially (cascade)
         }

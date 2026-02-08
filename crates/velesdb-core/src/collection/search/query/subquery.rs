@@ -177,10 +177,83 @@ impl Collection {
             Ok(crate::velesql::Value::Null)
         }
     }
+
+    /// Resolves all subquery values in a condition tree before filter conversion (VP-002).
+    ///
+    /// Walks the condition tree recursively and replaces every `Value::Subquery`
+    /// with the concrete scalar result of executing that subquery.
+    /// This must be called BEFORE converting `velesql::Condition` to `filter::Condition`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a subquery cannot be executed.
+    pub(crate) fn resolve_subqueries_in_condition(
+        &self,
+        condition: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::Condition> {
+        use crate::velesql::Condition;
+
+        match condition {
+            Condition::Comparison(cmp) => {
+                let resolved_value = self.resolve_subquery_value(&cmp.value, params, None)?;
+                Ok(Condition::Comparison(crate::velesql::Comparison {
+                    column: cmp.column.clone(),
+                    operator: cmp.operator,
+                    value: resolved_value,
+                }))
+            }
+            Condition::In(inc) => {
+                let resolved_values = inc
+                    .values
+                    .iter()
+                    .map(|v| self.resolve_subquery_value(v, params, None))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Condition::In(crate::velesql::InCondition {
+                    column: inc.column.clone(),
+                    values: resolved_values,
+                }))
+            }
+            Condition::Between(btw) => {
+                let resolved_low = self.resolve_subquery_value(&btw.low, params, None)?;
+                let resolved_high = self.resolve_subquery_value(&btw.high, params, None)?;
+                Ok(Condition::Between(crate::velesql::BetweenCondition {
+                    column: btw.column.clone(),
+                    low: resolved_low,
+                    high: resolved_high,
+                }))
+            }
+            Condition::And(left, right) => {
+                let resolved_left = self.resolve_subqueries_in_condition(left, params)?;
+                let resolved_right = self.resolve_subqueries_in_condition(right, params)?;
+                Ok(Condition::And(
+                    Box::new(resolved_left),
+                    Box::new(resolved_right),
+                ))
+            }
+            Condition::Or(left, right) => {
+                let resolved_left = self.resolve_subqueries_in_condition(left, params)?;
+                let resolved_right = self.resolve_subqueries_in_condition(right, params)?;
+                Ok(Condition::Or(
+                    Box::new(resolved_left),
+                    Box::new(resolved_right),
+                ))
+            }
+            Condition::Not(inner) => {
+                let resolved = self.resolve_subqueries_in_condition(inner, params)?;
+                Ok(Condition::Not(Box::new(resolved)))
+            }
+            Condition::Group(inner) => {
+                let resolved = self.resolve_subqueries_in_condition(inner, params)?;
+                Ok(Condition::Group(Box::new(resolved)))
+            }
+            // All other condition types don't contain Value positions with subqueries
+            other => Ok(other.clone()),
+        }
+    }
 }
 
 /// Converts a `serde_json::Value` to a `velesql::Value` for use in comparisons.
-#[allow(dead_code)] // VP-002: Used by subquery executor, will be public via Plans 02-02/02-03
 fn json_to_velesql_value(json: &serde_json::Value) -> crate::velesql::Value {
     match json {
         serde_json::Value::Number(n) => {

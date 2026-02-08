@@ -392,3 +392,112 @@ fn test_correlated_subquery_with_outer_context() {
         other => panic!("Expected Float for correlated AVG, got {:?}", other),
     }
 }
+
+// ============================================================================
+// VP-002: SELECT WHERE with subquery integration tests
+// ============================================================================
+
+#[test]
+fn test_select_where_with_subquery() {
+    let (_dir, collection) = setup_subquery_test_collection();
+
+    // SELECT * FROM products WHERE price < (SELECT AVG(price) FROM products)
+    // Prices: 10, 20, 30, 40, 50 → AVG = 30.0
+    // Products with price < 30: Widget A (10), Widget B (20)
+    let subquery = make_aggregate_subquery(velesql::AggregateType::Avg, "price", "products", None);
+
+    let select = velesql::SelectStatement {
+        distinct: velesql::DistinctMode::None,
+        columns: velesql::SelectColumns::All,
+        from: "products".to_string(),
+        from_alias: None,
+        joins: Vec::new(),
+        where_clause: Some(Condition::Comparison(velesql::Comparison {
+            column: "price".to_string(),
+            operator: velesql::CompareOp::Lt,
+            value: Value::Subquery(Box::new(subquery)),
+        })),
+        order_by: None,
+        limit: Some(100),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let query = velesql::Query::new_select(select);
+    let params = HashMap::new();
+    let results = collection
+        .execute_query(&query, &params)
+        .expect("execute_query with subquery WHERE failed");
+
+    // AVG(price) = 30.0 → price < 30 matches: 10 and 20
+    assert_eq!(
+        results.len(),
+        2,
+        "SELECT WHERE price < (SELECT AVG(price)) should return 2 rows, got {}",
+        results.len()
+    );
+
+    let prices: Vec<i64> = results
+        .iter()
+        .filter_map(|r| r.point.payload.as_ref()?.get("price")?.as_i64())
+        .collect();
+    assert!(prices.contains(&10), "Price 10 should be in results");
+    assert!(prices.contains(&20), "Price 20 should be in results");
+}
+
+#[test]
+fn test_select_where_subquery_null_result() {
+    let (_dir, collection) = setup_subquery_test_collection();
+
+    // SELECT * FROM products WHERE price < (SELECT MAX(price) FROM products WHERE category = 'nonexistent')
+    // Subquery returns Null → comparison "price < Null" is false for all → 0 results
+    let where_clause = Condition::Comparison(velesql::Comparison {
+        column: "category".to_string(),
+        operator: velesql::CompareOp::Eq,
+        value: Value::String("nonexistent".to_string()),
+    });
+
+    let subquery = make_aggregate_subquery(
+        velesql::AggregateType::Max,
+        "price",
+        "products",
+        Some(where_clause),
+    );
+
+    let select = velesql::SelectStatement {
+        distinct: velesql::DistinctMode::None,
+        columns: velesql::SelectColumns::All,
+        from: "products".to_string(),
+        from_alias: None,
+        joins: Vec::new(),
+        where_clause: Some(Condition::Comparison(velesql::Comparison {
+            column: "price".to_string(),
+            operator: velesql::CompareOp::Lt,
+            value: Value::Subquery(Box::new(subquery)),
+        })),
+        order_by: None,
+        limit: Some(100),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let query = velesql::Query::new_select(select);
+    let params = HashMap::new();
+    let results = collection
+        .execute_query(&query, &params)
+        .expect("execute_query with null subquery failed");
+
+    // Subquery returns Null → "price < Null" is false → 0 results (not all results)
+    assert_eq!(
+        results.len(),
+        0,
+        "SELECT WHERE price < (null subquery) should return 0 rows, got {}",
+        results.len()
+    );
+}
