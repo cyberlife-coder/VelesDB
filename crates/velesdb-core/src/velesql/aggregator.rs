@@ -3,6 +3,11 @@
 //! Implements O(1) memory aggregation using single-pass streaming algorithm.
 //! Based on state-of-art practices from DuckDB and DataFusion (arXiv 2024).
 
+// SAFETY: Numeric casts in aggregation are intentional:
+// - u64->f64 for count-to-double conversion: precision loss acceptable for averages
+// - Count values are bounded by result set size
+#![allow(clippy::cast_precision_loss)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -97,7 +102,8 @@ impl Aggregator {
             // Fast path: column already tracked - no allocation
             if let Some(sum) = self.sums.get_mut(column) {
                 *sum += num;
-                // SAFETY: if sums has the key, counts/mins/maxs also have it
+                // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
+                // together in the slow path below — missing key here is a logic bug.
                 *self
                     .counts
                     .get_mut(column)
@@ -157,6 +163,8 @@ impl Aggregator {
         // Fast path: column already tracked
         if let Some(sum) = self.sums.get_mut(column) {
             *sum += batch_sum;
+            // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
+            // together in the slow path below — missing key here is a logic bug.
             *self
                 .counts
                 .get_mut(column)

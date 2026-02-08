@@ -28,6 +28,7 @@ pub mod native_index;
 mod native_index_tests;
 mod native_inner;
 mod params;
+pub(crate) mod persistence;
 mod sharded_mappings;
 mod sharded_vectors;
 mod vector_store;

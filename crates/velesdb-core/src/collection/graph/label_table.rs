@@ -3,6 +3,11 @@
 //! Provides memory-efficient storage for repetitive labels in knowledge graphs.
 //! With 10M edges having only ~20 distinct labels, this can save ~200MB of memory.
 
+// SAFETY: Numeric casts in label table are intentional:
+// - usize->u32 for LabelId: Table capacity is bounded (typically < 10K labels)
+// - LabelId is validated against table bounds on lookup
+#![allow(clippy::cast_possible_truncation)]
+
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -113,6 +118,7 @@ impl LabelTable {
                 max_labels: u32::MAX,
             });
         }
+        // SAFETY: len checked against u32::MAX above, truncation impossible
         #[allow(clippy::cast_possible_truncation)]
         let id = LabelId(len as u32);
         self.strings.push(s.to_string());

@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Tests for `native_index` module - Native HNSW index implementation.
 
 #![allow(clippy::useless_vec)]
