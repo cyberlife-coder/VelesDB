@@ -98,7 +98,9 @@ fn test_batch_cosine_multiple_vectors() {
 #[serial(gpu)]
 fn test_batch_euclidean_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
-        let results = gpu.batch_euclidean_distance(&[], &[1.0, 0.0, 0.0], 3);
+        let results = gpu
+            .batch_euclidean_distance(&[], &[1.0, 0.0, 0.0], 3)
+            .unwrap();
         assert!(results.is_empty());
     }
 }
@@ -110,7 +112,7 @@ fn test_batch_euclidean_identical_vectors() {
         let query = vec![1.0, 2.0, 3.0];
         let vectors = vec![1.0, 2.0, 3.0];
 
-        let results = gpu.batch_euclidean_distance(&vectors, &query, 3);
+        let results = gpu.batch_euclidean_distance(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(results[0].abs() < 0.01, "Expected ~0.0, got {}", results[0]);
@@ -124,7 +126,7 @@ fn test_batch_euclidean_known_distance() {
         let query = vec![0.0, 0.0, 0.0];
         let vectors = vec![3.0, 4.0, 0.0]; // Distance should be 5.0
 
-        let results = gpu.batch_euclidean_distance(&vectors, &query, 3);
+        let results = gpu.batch_euclidean_distance(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(
@@ -143,7 +145,7 @@ fn test_batch_euclidean_known_distance() {
 #[serial(gpu)]
 fn test_batch_dot_product_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
-        let results = gpu.batch_dot_product(&[], &[1.0, 0.0, 0.0], 3);
+        let results = gpu.batch_dot_product(&[], &[1.0, 0.0, 0.0], 3).unwrap();
         assert!(results.is_empty());
     }
 }
@@ -155,7 +157,7 @@ fn test_batch_dot_product_orthogonal() {
         let query = vec![1.0, 0.0, 0.0];
         let vectors = vec![0.0, 1.0, 0.0];
 
-        let results = gpu.batch_dot_product(&vectors, &query, 3);
+        let results = gpu.batch_dot_product(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(results[0].abs() < 0.01, "Expected ~0.0, got {}", results[0]);
@@ -169,7 +171,7 @@ fn test_batch_dot_product_parallel() {
         let query = vec![2.0, 3.0, 4.0];
         let vectors = vec![2.0, 3.0, 4.0]; // Dot = 4+9+16 = 29
 
-        let results = gpu.batch_dot_product(&vectors, &query, 3);
+        let results = gpu.batch_dot_product(&vectors, &query, 3).unwrap();
 
         assert_eq!(results.len(), 1);
         assert!(
@@ -189,7 +191,9 @@ fn test_batch_dot_product_parallel() {
 fn test_batch_cosine_zero_dimension() {
     if let Some(gpu) = GpuAccelerator::new() {
         // dimension=0 should return empty (early exit in batch_cosine_similarity)
-        let results = gpu.batch_cosine_similarity(&[1.0, 2.0, 3.0], &[1.0], 0);
+        let results = gpu
+            .batch_cosine_similarity(&[1.0, 2.0, 3.0], &[1.0], 0)
+            .unwrap();
         assert!(results.is_empty(), "Zero dimension should return empty");
     }
 }
@@ -202,7 +206,7 @@ fn test_batch_cosine_dimension_mismatch() {
         // The GPU processes whatever data is there; result may be wrong but no crash
         let query = vec![1.0, 0.0];
         let vectors = vec![1.0, 0.0, 0.0]; // 1 vector of dim 3
-        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3).unwrap();
         // Should produce 1 result (vectors.len() / dimension = 1)
         assert_eq!(results.len(), 1);
     }
@@ -212,7 +216,9 @@ fn test_batch_cosine_dimension_mismatch() {
 #[serial(gpu)]
 fn test_batch_euclidean_empty_vectors() {
     if let Some(gpu) = GpuAccelerator::new() {
-        let results = gpu.batch_euclidean_distance(&[], &[1.0, 2.0, 3.0], 3);
+        let results = gpu
+            .batch_euclidean_distance(&[], &[1.0, 2.0, 3.0], 3)
+            .unwrap();
         assert!(results.is_empty(), "Empty vectors should return empty");
     }
 }
@@ -224,7 +230,7 @@ fn test_batch_dot_product_single_element() {
         // Edge case: dimension=1
         let query = vec![3.0];
         let vectors = vec![4.0];
-        let results = gpu.batch_dot_product(&vectors, &query, 1);
+        let results = gpu.batch_dot_product(&vectors, &query, 1).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
             (results[0] - 12.0).abs() < 0.01,
@@ -244,7 +250,7 @@ fn test_batch_cosine_large_batch() {
         let query: Vec<f32> = vec![1.0; dim];
         let vectors: Vec<f32> = vec![1.0; dim * num_vectors];
 
-        let results = gpu.batch_cosine_similarity(&vectors, &query, dim);
+        let results = gpu.batch_cosine_similarity(&vectors, &query, dim).unwrap();
         assert_eq!(results.len(), num_vectors);
         // All identical vectors → similarity should be ~1.0
         for (i, &r) in results.iter().enumerate() {
@@ -288,7 +294,7 @@ fn test_gpu_cosine_zero_norm_vectors() {
         let query = vec![1.0, 0.0, 0.0];
         let vectors = vec![0.0, 0.0, 0.0]; // Zero vector
 
-        let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
+        let results = gpu.batch_cosine_similarity(&vectors, &query, 3).unwrap();
         assert_eq!(results.len(), 1);
         // Should return 0.0 (shader checks denom > 0.0)
         assert!(
@@ -303,7 +309,7 @@ fn test_gpu_cosine_zero_norm_vectors() {
 #[serial(gpu)]
 fn test_gpu_euclidean_zero_dimension() {
     if let Some(gpu) = GpuAccelerator::new() {
-        let results = gpu.batch_euclidean_distance(&[1.0], &[1.0], 0);
+        let results = gpu.batch_euclidean_distance(&[1.0], &[1.0], 0).unwrap();
         assert!(results.is_empty(), "Zero dimension should return empty");
     }
 }
@@ -312,7 +318,7 @@ fn test_gpu_euclidean_zero_dimension() {
 #[serial(gpu)]
 fn test_gpu_dot_product_zero_dimension() {
     if let Some(gpu) = GpuAccelerator::new() {
-        let results = gpu.batch_dot_product(&[1.0], &[1.0], 0);
+        let results = gpu.batch_dot_product(&[1.0], &[1.0], 0).unwrap();
         assert!(results.is_empty(), "Zero dimension should return empty");
     }
 }
