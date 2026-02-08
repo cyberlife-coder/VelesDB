@@ -63,7 +63,7 @@ fn test_gpu_available_consistency() {
 #[cfg(feature = "gpu")]
 #[test]
 fn test_gpu_accelerator_none_without_gpu() {
-    use super::gpu::gpu_backend::GpuAccelerator;
+    use super::gpu::GpuAccelerator;
     // GpuAccelerator::new() returns Option — must not panic regardless of hardware
     let gpu = GpuAccelerator::new();
     if gpu.is_none() {
