@@ -1,9 +1,9 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 4 in progress — 04-01, 04-02 done. 04-03 next)  
-**Next Milestone:** v3-ecosystem-alignment  
-**Previous Milestone:** v1-refactoring (completed 2026-02-08)  
+**Current Milestone:** v4-verify-promise (Phase 0 — Gap analysis complete, ready to plan)  
+**Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed)  
+**Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
 ---
 
@@ -36,7 +36,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v2: Core Trust (23 active findings — velesdb-core only)
 
-### Status: Phase 4 in progress. Plans 04-01, 04-02 done.
+### Status: Phase 4 complete. All plans done. Milestone v2 complete.
 
 | Phase | Status | Tasks | Findings | Estimate | Priority |
 |-------|--------|-------|----------|----------|----------|
@@ -44,7 +44,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 1 - CI Safety Net | ✅ Done | 4 | CI-01→04 | 15min | 🛡️ Infrastructure |
 | 2 - Critical Correctness | ✅ Done (3/3 plans) | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
 | 3 - Core Engine Bugs | ✅ Done (3/3 plans) | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
-| 4 - Perf, Storage, Cleanup | 🔄 In Progress (2/3 plans) | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
+| 4 - Perf, Storage, Cleanup | ✅ Done (3/3 plans) | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
 
 **Total:** 28 tasks | 10 plans | ~25-30h  
 **Execution:** `0 → 1 → 2 → 3 → 4`
@@ -79,9 +79,42 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - D-06: `store_batch()` with single flush for reduced I/O syscalls
 - D-07: `should_create_snapshot` uses AtomicU64 instead of write lock
 
+## Milestone v4: Verify Promise (9 requirements — promise vs reality)
+
+### Status: Gap analysis complete. Ready to plan Phase 1.
+
+| Phase | Status | Tasks | Requirements | Estimate | Priority |
+|-------|--------|-------|-------------|----------|----------|
+| 1 - MATCH WHERE Completeness | ⬜ Ready | ~8 | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
+| 2 - Subquery Decision & Execution | ⬜ Ready | ~5 | VP-002 | 10-12h | 🚨 All README scenarios broken |
+| 3 - Multi-hop MATCH & RETURN | ⬜ Blocked by P1 | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
+| 4 - E2E Scenario Test Suite | ⬜ Blocked by P1-3 | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
+| 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
+
+**Total:** ~36 tasks | ~40-50h
+**Execution:** `1 → 2 → 3 → 4 → 5`
+
+### Critical Findings
+
+| Finding | Severity | Location | Impact |
+|---------|----------|----------|--------|
+| MATCH WHERE `_ => Ok(true)` catch-all | 🚨 Critical | `where_eval.rs:69` | LIKE/BETWEEN/IN silently pass in MATCH |
+| Subquery → Value::Null | 🚨 Critical | `conversion.rs:23-27` | ALL 4 business scenarios broken |
+| Multi-hop only uses first pattern | ⚠️ Major | `match_exec/mod.rs` | Multi-relationship queries incomplete |
+| RETURN aggregation not implemented | ⚠️ Major | `match_exec/similarity.rs` | Healthcare scenario broken |
+| ORDER BY property in MATCH → error | ⚠️ Major | `match_exec/similarity.rs:210` | AI Agent Memory scenario broken |
+| Temporal in MATCH WHERE not wired | ⚠️ Major | `where_eval.rs` | Fraud detection scenario broken |
+
+### Key Decision Pending
+
+**Subquery approach:** Implement execution (complex, ~10h) vs Return clear error (simple, ~2h)?
+→ User decision needed before Phase 2.
+
+---
+
 ## Milestone v3: Ecosystem Alignment (22 findings — bindings/wrappers)
 
-### Status: Blocked by v2 completion
+### Status: Blocked by v4 — no point fixing bindings if core promises are broken
 
 | Phase | Status | Scope | Priority |
 |-------|--------|-------|----------|
@@ -127,5 +160,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2026-02-11*  
-*Status: Phase 4 in progress. Plans 04-01 (HNSW & Search Performance) and 04-02 (Storage Integrity) done. Plan 04-03 (ColumnStore & Dead Code) next.*
+*State file last updated: 2026-02-08*  
+*Status: Milestone v4-verify-promise created. Gap analysis complete. 6 critical/major findings. Ready to plan Phase 1.*

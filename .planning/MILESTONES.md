@@ -1,5 +1,60 @@
 # Milestones
 
+## v4-verify-promise — In Progress
+
+**Started:** 2026-02-08
+**Status:** Gap analysis complete. Ready to plan Phase 1.
+**Phases:** 5
+**Estimated effort:** ~40-50h
+
+### Summary
+
+Audit-and-fix milestone that validates whether VelesDB actually delivers what its README, GitHub page, and website promise. Every business scenario query, every code example, every feature claim is tested end-to-end. Where gaps exist, they are implemented or documentation is corrected.
+
+### Critical Findings
+
+| Finding | Severity | Impact |
+|---------|----------|--------|
+| MATCH WHERE `_ => Ok(true)` catch-all | 🚨 Critical | LIKE/BETWEEN/IN silently pass — wrong results |
+| Subquery → Value::Null | 🚨 Critical | ALL 4 business scenario queries broken |
+| Multi-hop only uses first pattern | ⚠️ Major | Multi-relationship MATCH incomplete |
+| RETURN aggregation not implemented | ⚠️ Major | Healthcare scenario broken |
+| ORDER BY property in MATCH → error | ⚠️ Major | AI Agent Memory scenario broken |
+| Temporal in MATCH WHERE not wired | ⚠️ Major | Fraud detection scenario broken |
+
+### Phases
+
+| Phase | Name | Requirements | Estimate |
+|-------|------|-------------|----------|
+| 1 | MATCH WHERE Completeness | VP-001, VP-003, VP-006 | 8-10h |
+| 2 | Subquery Decision & Execution | VP-002 | 10-12h |
+| 3 | Multi-hop MATCH & RETURN | VP-004, VP-005 | 10-12h |
+| 4 | E2E Scenario Test Suite | VP-007 | 8-10h |
+| 5 | README & Documentation Truth | VP-008, VP-009 | 4-6h |
+
+### Archive
+
+Full details: `.planning/milestones/v4-verify-promise/`
+
+---
+
+## v2-core-trust — Completed
+
+**Started:** 2026-02-08
+**Completed:** 2026-02-12
+**Phases:** 4 (+1 prerequisite)
+**Plans:** 10
+
+### Summary
+
+Devil's Advocate code review findings. Fixed GPU shaders, fusion unification, VelesQL bugs, graph traversal fixes, quantization, HNSW performance, storage integrity, and dead code cleanup. 28 tasks across 10 plans.
+
+### Archive
+
+Full details: `.planning/v2-correctness/`
+
+---
+
 ## v1-refactoring — 2026-02-08
 
 **Started:** 2026-02-06
