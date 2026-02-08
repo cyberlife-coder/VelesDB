@@ -52,6 +52,9 @@ pub mod score_fusion;
 #[cfg(test)]
 mod score_fusion_tests;
 mod similarity_filter;
+mod subquery;
+#[cfg(test)]
+mod subquery_tests;
 mod union_query;
 mod validation;
 
