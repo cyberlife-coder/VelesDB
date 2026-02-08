@@ -5,7 +5,7 @@
 **Goal:** Wire existing BM25/Trigram/Fusion/Planner infrastructure into the VelesQL execution pipeline and validate cross-store query capabilities claimed on velesdb.com.
 
 **Requirements:** VP-010, VP-011, VP-012
-**Estimate:** 12-16h (revised from 20-25h after research — see RESEARCH.md)
+**Estimate:** 14-19h (revised from 20-25h after research — see RESEARCH.md)
 **Priority:** 🚨 Critical — Site claims features not fully wired
 
 ---
@@ -77,8 +77,8 @@ Full details: `RESEARCH.md`
 - **06-02**: BM25 + NEAR VelesQL Integration (VP-011) — 2-3h
 
 ### Wave 2 (sequential, depends on Wave 1):
-- **06-03**: Cross-Store Query Planner Integration (VP-010) — 6-8h
-- **06-04**: Benchmarks, Validation & Quality Gates — 2-3h
+- **06-03**: Cross-Store Query Planner Integration (VP-010) — 8-10h
+- **06-04**: Benchmarks, Validation & Quality Gates — 3-4h
 
 ---
 

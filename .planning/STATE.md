@@ -50,7 +50,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | 📋 Planned (4 plans) | 12 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
-| 6 - Unified Query & Full-Text | 📋 Planned (4 plans) | ~25 | VP-010, VP-011, VP-012 | 12-16h | 🚨 Cross-store + NEAR_FUSED |
+| 6 - Unified Query & Full-Text | 📋 Planned (4 plans) | ~30 | VP-010, VP-011, VP-012 | 14-19h | 🚨 Cross-store + NEAR_FUSED |
 
 **Total:** ~50 tasks | ~50-65h
 **Execution:** `1 → 2 → 3 → 4 → 5 → 6`
