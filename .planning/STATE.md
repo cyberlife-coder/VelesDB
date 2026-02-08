@@ -41,7 +41,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phases 1-4 ✅ complete. Phase 5 ready to plan.
+### Status: Phases 1-4 ✅ complete. Phase 5 planned (4 plans, 2 waves).
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
@@ -49,7 +49,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
-| 5 - README & Documentation Truth | ⬜ Ready to plan | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
+| 5 - README & Documentation Truth | 📋 Planned (4 plans) | 12 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
 **Total:** ~36 tasks | ~40-50h
 **Execution:** `1 → 2 → 3 → 4 → 5`
@@ -144,5 +144,10 @@ cargo build --release
 - 01-02: ✅ Wire Temporal resolution into MATCH WHERE comparison (VP-003) — completed 2026-02-08
 - Plans dir: `.planning/phases/v4-01-match-where-completeness/`
 
+**Phase 5 📋 planned (4 plans, 2 waves):**
+- **Wave 1 (parallel):** 05-01 VelesQL Spec & Feature Matrix Truth, 05-02 README Metrics, Numbers & Ecosystem Truth
+- **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy, 05-04 Website Claims Audit & Final Quality Gates
+- Plans dir: `.planning/phases/v4-05-readme-documentation-truth/`
+
 *State file last updated: 2026-02-09*  
-*Status: Phase 4 ✅ complete (7/7 plans, 36 readme_scenarios tests). Phase 5 ready to plan. 3,222 workspace tests passing.*
+*Status: Phase 5 planned (4 plans). Ready to execute. 3,222 workspace tests passing.*
