@@ -514,6 +514,29 @@ fn test_bs4_agent_memory() {
         !message_ids.contains(&44) && !message_ids.contains(&45),
         "Old messages (44, 45) should be excluded by timestamp filter"
     );
+
+    // VP-006: Verify ORDER BY conv.timestamp DESC is actually applied
+    let timestamps: Vec<i64> = results
+        .iter()
+        .filter_map(|r| {
+            r.projected
+                .get("conv.timestamp")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .collect();
+    assert_eq!(
+        timestamps.len(),
+        4,
+        "All 4 results should have conv.timestamp projected"
+    );
+    for window in timestamps.windows(2) {
+        assert!(
+            window[0] >= window[1],
+            "ORDER BY conv.timestamp DESC not applied: {} >= {}",
+            window[0],
+            window[1]
+        );
+    }
 }
 
 /// BS4 binding verification: all 3 aliases present in bindings.
@@ -630,12 +653,12 @@ fn test_bs4_cross_node_projection() {
     }
 }
 
-/// BS4 ORDER BY property test (VP-006): verifies results are sorted by conv.timestamp DESC.
+/// BS4 ORDER BY DESC test (VP-006): verifies results are sorted by conv.timestamp DESC.
 ///
 /// Uses the same multi-hop pattern but focuses on verifying that ORDER BY
 /// on an intermediate node's projected property actually reorders results.
 #[test]
-fn test_bs4_order_by_timestamp() {
+fn test_bs4_order_by_timestamp_desc() {
     let (_dir, collection) = setup_bs4_scenario();
 
     // No WHERE filter — return all 6 messages, but ORDER BY conv.timestamp DESC
@@ -665,7 +688,11 @@ fn test_bs4_order_by_timestamp() {
     // Extract conv.timestamp from projected properties for each result
     let timestamps: Vec<Option<i64>> = results
         .iter()
-        .map(|r| r.projected.get("conv.timestamp").and_then(|v| v.as_i64()))
+        .map(|r| {
+            r.projected
+                .get("conv.timestamp")
+                .and_then(serde_json::Value::as_i64)
+        })
         .collect();
 
     // All results should have a projected conv.timestamp
@@ -702,4 +729,125 @@ fn test_bs4_order_by_timestamp() {
         Some(1_500_000_000),
         "Last result should be from oldest conversation (1500000000)"
     );
+}
+
+/// BS4 ORDER BY ASC test (VP-006): proves ORDER BY is real, not coincidental.
+///
+/// If ORDER BY was silently ignored, both ASC and DESC would return the same order.
+/// This test checks ASC produces the opposite order of DESC.
+#[test]
+fn test_bs4_order_by_timestamp_asc() {
+    let (_dir, collection) = setup_bs4_scenario();
+
+    // ORDER BY conv.timestamp ASC — oldest first
+    let match_clause = helpers::build_match_clause(
+        vec![build_bs4_pattern()],
+        None,
+        vec![
+            ("user.name", None),
+            ("conv.timestamp", None),
+            ("message.content", None),
+        ],
+        Some(vec![("conv.timestamp", false)]), // ORDER BY conv.timestamp ASC
+        Some(20),
+    );
+
+    let results = collection
+        .execute_match(&match_clause, &HashMap::new())
+        .expect("execute_match failed");
+
+    assert_eq!(
+        results.len(),
+        6,
+        "Should return all 6 messages, got {}",
+        results.len()
+    );
+
+    let ts_values: Vec<i64> = results
+        .iter()
+        .filter_map(|r| {
+            r.projected
+                .get("conv.timestamp")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .collect();
+    assert_eq!(ts_values.len(), 6, "All results should have conv.timestamp");
+
+    // Verify ASC ordering: each timestamp <= the next
+    for window in ts_values.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "Results should be ordered by conv.timestamp ASC: {} <= {}",
+            window[0],
+            window[1]
+        );
+    }
+
+    // First = oldest (Conv 33 ts=1500000000), Last = most recent (Conv 31 ts=1700200000)
+    assert_eq!(
+        ts_values.first().copied(),
+        Some(1_500_000_000),
+        "ASC: first result should be from oldest conversation (1500000000)"
+    );
+    assert_eq!(
+        ts_values.last().copied(),
+        Some(1_700_200_000),
+        "ASC: last result should be from most recent conversation (1700200000)"
+    );
+}
+
+/// BS1 ORDER BY similarity() ASC test: proves similarity ordering works both directions.
+///
+/// DESC was tested in `test_bs1_ecommerce_discovery`. This tests ASC to confirm
+/// ORDER BY similarity() is real and not just default insertion order.
+#[test]
+fn test_bs1_order_by_similarity_asc() {
+    let (_dir, collection) = setup_bs1_scenario();
+
+    let match_clause = helpers::build_single_hop_match(
+        "product",
+        "Product",
+        "SUPPLIED_BY",
+        "supplier",
+        "Supplier",
+        HashMap::new(),
+        None, // No WHERE — test ordering only
+        vec![("product.name", None), ("supplier.name", None)],
+        Some(vec![("similarity()", false)]), // ORDER BY similarity() ASC (least similar first)
+        Some(20),
+    );
+
+    let query_vector = helpers::generate_embedding(100, 4);
+
+    // Threshold 0.0 → all pass
+    let results = collection
+        .execute_match_with_similarity(&match_clause, &query_vector, 0.0, &HashMap::new())
+        .expect("query failed");
+
+    assert!(
+        results.len() >= 2,
+        "Should return at least 2 results for ASC ordering test"
+    );
+
+    // Verify ASC ordering: each score <= the next (least similar first)
+    let scores: Vec<f32> = results.iter().filter_map(|r| r.score).collect();
+    for window in scores.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "Results should be ordered by similarity() ASC: {:.4} <= {:.4}",
+            window[0],
+            window[1]
+        );
+    }
+
+    // The most similar product (seed 100, identical to query) should be LAST in ASC
+    // The least similar products (seeds 500, 501) should be first
+    if scores.len() >= 2 {
+        assert!(
+            scores.first().unwrap() < scores.last().unwrap(),
+            "ASC: first score ({:.4}) should be < last score ({:.4})",
+            scores.first().unwrap(),
+            scores.last().unwrap()
+        );
+    }
 }
