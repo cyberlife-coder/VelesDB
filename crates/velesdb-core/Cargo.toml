@@ -261,6 +261,10 @@ harness = false
 name = "smoke_test"
 harness = false
 
+[[bench]]
+name = "near_fused_bench"
+harness = false
+
 # ============================================================================
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================
