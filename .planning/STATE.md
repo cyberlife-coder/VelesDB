@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 1 ✅ complete. Phase 4 in progress — Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, 04-05 ✅, 04-06 ✅)  
+**Current Milestone:** v4-verify-promise (Phases 1-4 ✅ complete. Phase 5 ready to plan)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -18,8 +18,8 @@
 ### Core Value
 VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symbolique in a single local-first engine.
 
-### Codebase Status (post-refactoring, pre-correctness)
-- **3,117 tests** passing, 0 failures
+### Codebase Status (post-refactoring, post-correctness)
+- **3,222 tests** passing, 0 failures
 - **Quality gates**: fmt ✅, clippy ✅, deny ✅, doc ✅, release build ✅
 - **112 unsafe blocks** — all documented with SAFETY comments
 - **47 issues found** by Devil's Advocate review (3 audit phases): 7 critical, 14 bugs, 23 design, 3 minor
@@ -41,15 +41,15 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1 ✅ complete (VP-001, VP-003, VP-006). Phase 2-3 complete. Phase 4 in progress (Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, 04-05 ✅, 04-06 ✅. Wave 3 next).
+### Status: Phases 1-4 ✅ complete. Phase 5 ready to plan.
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done (2/2 plans) | 17+4 tests | VP-001 ✅, VP-003 ✅, VP-006 ✅ | 2-3h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
-| 4 - E2E Scenario Test Suite | 🔄 In Progress (6/7 plans done) | ~36 | VP-007 | 8-10h | 🛡️ Regression prevention |
-| 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
+| 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
+| 5 - README & Documentation Truth | ⬜ Ready to plan | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
 **Total:** ~36 tasks | ~40-50h
 **Execution:** `1 → 2 → 3 → 4 → 5`
@@ -84,8 +84,8 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 **Phase 4 plan structure (7 plans, 3 waves):**
 - **Wave 1:** ✅ 04-01 Test Infrastructure & Hero Query (completed 2026-02-08)
-- **Wave 2:** ✅ 04-02 SELECT Domain (Scenarios 1-3, completed 2026-02-09), ✅ 04-03 Metrics & Fusion (0b/0c, completed 2026-02-09), ✅ 04-04 Simple MATCH (BS1/BS4 + ORDER BY, completed 2026-02-09), ✅ 04-05 Complex MATCH (BS2/BS3, completed 2026-02-09), ✅ 04-06 Cross-Store & VelesQL (Scenario 0 + API, completed 2026-02-09)
-- **Wave 3:** 04-07 Quality Gates & Integration
+- **Wave 2:** ✅ 04-02 SELECT Domain, ✅ 04-03 Metrics & Fusion, ✅ 04-04 Simple MATCH, ✅ 04-05 Complex MATCH, ✅ 04-06 Cross-Store & VelesQL
+- **Wave 3:** ✅ 04-07 Quality Gates & Integration (completed 2026-02-09)
 - Plans dir: `.planning/phases/v4-04-e2e-scenario-tests/`
 - Test files: `tests/readme_scenarios/` (7 files)
 
@@ -145,4 +145,4 @@ cargo build --release
 - Plans dir: `.planning/phases/v4-01-match-where-completeness/`
 
 *State file last updated: 2026-02-09*  
-*Status: Phase 4 Wave 2 complete, Wave 3 next — 6/7 plans done. Remaining: 04-07 (Quality Gates). 36 readme_scenarios tests passing.*
+*Status: Phase 4 ✅ complete (7/7 plans, 36 readme_scenarios tests). Phase 5 ready to plan. 3,222 workspace tests passing.*
