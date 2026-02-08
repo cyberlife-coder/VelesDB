@@ -2,156 +2,110 @@
 
 ## Overview
 
-**Goal:** Implement and validate the unified query capabilities claimed on velesdb.com: seamless combination of vector search (NEAR), graph traversal (MATCH), and full-text search (BM25/Trigram) in single queries.
+**Goal:** Wire existing BM25/Trigram/Fusion/Planner infrastructure into the VelesQL execution pipeline and validate cross-store query capabilities claimed on velesdb.com.
 
 **Requirements:** VP-010, VP-011, VP-012
-**Estimate:** 20-25h
-**Priority:** 🚨 Critical — Site claims features not yet fully implemented
+**Estimate:** 12-16h (revised from 20-25h after research — see RESEARCH.md)
+**Priority:** 🚨 Critical — Site claims features not fully wired
 
 ---
 
-## Problem Statement
+## Research Summary (2026-02-09)
 
-The velesdb.com website showcases three advanced capabilities that require deeper implementation:
+**Key finding:** Most infrastructure already exists. The GAPS are wiring, not implementation:
 
-### 1. Cross-Store Unified Queries
-Site claim: `WHERE vector NEAR $v AND MATCH (a)-[:KNOWS]->(b)`
-- Current: Each store (Vector, Graph, Column) works independently
-- Gap: No unified query planner that coordinates execution across stores
-- Impact: User expects single query, gets coordination complexity
+| Component | Status | Gap |
+|-----------|--------|-----|
+| BM25 Index (`index/bm25.rs`) | ✅ 402 lines, production | None — fully implemented |
+| Trigram Index (`index/trigram/`) | ✅ 7 files, SIMD | None — fully implemented |
+| Hybrid Search (V+BM25) | ✅ `text.rs` 301 lines | Partial VelesQL integration |
+| Fusion Strategies | ✅ `fusion/strategy.rs` | None — 4 strategies ready |
+| Multi-Query Search | ✅ `batch.rs` 404 lines | Not wired to NEAR_FUSED |
+| Query Planner | ✅ `planner.rs` 353 lines | Not wired to execute_query() |
+| MATCH Planner | ✅ `match_planner.rs` 315 lines | Not wired to execution |
+| Hybrid Fusion (V+G) | ✅ `hybrid.rs` 301 lines | `#[allow(dead_code)]` — unused |
+| NEAR_FUSED parsing | ✅ Grammar + AST | **No execution path** |
 
-### 2. BM25 Full-Text / Trigram Index
-Site claim: "Hybrid Search combine BM25 + vector + graph" and "Trigram Index 22-128x faster"
-- Current: No BM25 implementation, no trigram indexing
-- Gap: Full-text search falls back to slow LIKE scans
-- Impact: "Fast full-text" claim is misleading
-
-### 3. NEAR_FUSED Multi-Vector Execution
-Site claim: `WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'`
-- Current: Parsing works, but full multi-vector execution not validated
-- Gap: Need to verify actual multi-query execution and fusion at runtime
-- Impact: Feature may be partially implemented
+Full details: `RESEARCH.md`
 
 ---
 
-## Research Insights
+## Problem Statement (Revised)
 
-### BM25 Implementation Approaches (2024-2025 State of Art)
+### 1. NEAR_FUSED Execution Gap (VP-012)
+- **Parsed:** ✅ Grammar, AST (`VectorFusedSearch`), validation
+- **Executed:** ❌ `execute_query()` has NO code path for `VectorFusedSearch`
+- **Fix:** Wire to existing `multi_query_search()` — all pieces exist
 
-**PostgreSQL Ecosystem:**
-- `pg_textsearch` (Tiger Data): Native BM25 in Postgres — 2025 release
-- `VectorChord-bm25`: Block-WeakAnd algorithm for ranking
-- Pattern: Store inverted index + document frequency tables
+### 2. Cross-Store Query Coordination (VP-010)
+- **Planner:** ✅ Exists (`QueryPlanner`, `MatchQueryPlanner`)
+- **Wired:** ❌ Comment: "Future: Integrate QueryPlanner into execute_query()"
+- **hybrid.rs:** ✅ Fusion functions exist but marked `dead_code`
+- **Fix:** Integrate planner, handle NEAR + Graph MATCH in same query
 
-**Implementation Strategy for VelesDB:**
-```
-TrigramIndex (new module)
-├── trigram_tokenizer.rs    — Split text into 3-char tokens
-├── inverted_index.rs       — token → Vec<doc_id, frequency>
-├── bm25_scorer.rs          — Calculate BM25 scores
-└── query_executor.rs       — AND/OR trigram intersection
-```
-
-**Performance Target:**
-- Claim: 22-128x faster than LIKE scan
-- Baseline: LIKE scan on 100K docs = ~50ms
-- Target: Trigram BM25 = <2ms (25x improvement)
-
-### Unified Query Architecture
-
-**Pattern from Research:**
-1. Query Planner analyzes cross-store predicates
-2. Executes store-specific queries in parallel (where possible)
-3. Joins results on unified ID space
-4. Applies post-filters for cross-store conditions
-
-**VelesDB Architecture:**
-```
-UnifiedQueryExecutor
-├── Parse: Extract NEAR, MATCH, BM25, WHERE clauses
-├── Plan: Determine execution order (cost-based)
-├── Execute Phase 1: Parallel vector + graph + text search
-├── Intersect: Find common IDs across results
-├── Execute Phase 2: Fetch full records from ColumnStore
-└── Sort/Rank: Apply fusion strategies
-```
+### 3. BM25 VelesQL Integration (VP-011)
+- **BM25:** ✅ Fully implemented
+- **VelesQL:** Partial — only `MATCH 'keyword'` alone works, not combined with NEAR
+- **Fix:** Ensure NEAR + MATCH 'keyword' dispatches to `hybrid_search()`
 
 ---
 
 ## Success Criteria
 
-### Cross-Store Queries (VP-010)
-- [ ] `NEAR` + `MATCH` in same WHERE clause executes correctly
-- [ ] `NEAR` + column filters in same WHERE clause works
-- [ ] `MATCH` + column filters in same WHERE clause works
-- [ ] All three combined: `NEAR` + `MATCH` + column filters
-- [ ] Query planner optimizes execution order
-- [ ] Benchmark: Cross-store query < 5ms for 10K vectors + 1K graph edges
+### VP-012: NEAR_FUSED Execution
+- [ ] `NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'` executes end-to-end
+- [ ] All 4 fusion strategies work: RRF, Average, Maximum, Weighted
+- [ ] Metadata filters applied post-fusion
+- [ ] ORDER BY + LIMIT work with fused results
 
-### BM25 Full-Text Search (VP-011)
-- [ ] Trigram tokenizer implemented (UTF-8 safe)
-- [ ] Inverted index for trigrams → document IDs
-- [ ] BM25 scoring with k1/b parameters tunable
-- [ ] `MATCH` operator for full-text search
-- [ ] Hybrid query: `MATCH text 'keyword' AND vector NEAR $v`
-- [ ] Benchmark: 25x faster than LIKE scan (2ms vs 50ms on 100K docs)
+### VP-010: Cross-Store Queries
+- [ ] `NEAR $v AND MATCH 'keyword'` → hybrid_search()
+- [ ] QueryPlanner integrated into execute_query()
+- [ ] hybrid.rs fusion functions no longer dead_code
+- [ ] E2E tests for combined query patterns
 
-### NEAR_FUSED Complete Implementation (VP-012)
-- [ ] Multi-vector query execution validated end-to-end
-- [ ] Fusion strategies tested: RRF, Average, Maximum, Weighted
-- [ ] Memory-efficient batched execution
-- [ ] Results include fusion metadata (source contributions)
-- [ ] Benchmark: Fusion overhead < 20% vs single vector
+### VP-011: BM25 Full Integration
+- [ ] VelesQL `MATCH 'keyword' AND vector NEAR $v` dispatches correctly
+- [ ] Benchmarks validate performance claims (trigram 22x+ vs LIKE scan)
 
 ---
 
-## Plans (to be detailed)
+## Plans (4 plans, 2 waves)
 
-### Wave 1: BM25 Foundation
-- **06-01**: Trigram Tokenizer & Inverted Index
-- **06-02**: BM25 Scoring Engine
-- **06-03**: Full-Text MATCH Operator
+### Wave 1 (can be parallel):
+- **06-01**: NEAR_FUSED Execution Wiring (VP-012) — 3-4h
+- **06-02**: BM25 + NEAR VelesQL Integration (VP-011) — 2-3h
 
-### Wave 2: Cross-Store Query Engine
-- **06-04**: Unified Query Planner
-- **06-05**: Cross-Store Execution Coordinator
-- **06-06**: Parallel Store Execution
-
-### Wave 3: NEAR_FUSED & Integration
-- **06-07**: NEAR_FUSED Full Execution
-- **06-08**: Fusion Strategy Optimization
-- **06-09**: E2E Tests & Benchmarks
+### Wave 2 (sequential, depends on Wave 1):
+- **06-03**: Cross-Store Query Planner Integration (VP-010) — 6-8h
+- **06-04**: Benchmarks, Validation & Quality Gates — 2-3h
 
 ---
 
-## Key Files (to create/modify)
+## Key Files
 
-**New Modules:**
-- `crates/velesdb-core/src/index/trigram/` — Full-text indexing
-- `crates/velesdb-core/src/query/unified/` — Cross-store execution
+**Modified (wiring):**
+- `collection/search/query/mod.rs` — Add NEAR_FUSED + cross-store dispatch
+- `collection/search/query/extraction.rs` — Extract NEAR_FUSED vectors
+- `velesql/hybrid.rs` — Remove dead_code, wire into execution
+- `velesql/planner.rs` — Wire into execute_query()
 
-**Modified:**
-- `crates/velesdb-core/src/velesql/execution.rs` — Add unified path
-- `crates/velesdb-core/src/collection/search/` — Coordinate across stores
+**New (tests):**
+- `tests/near_fused_e2e.rs` — NEAR_FUSED end-to-end tests
+- `tests/cross_store_query.rs` — Cross-store query tests
+- `benches/bm25_trigram.rs` — Performance benchmarks
 
 ---
 
 ## Performance Targets
 
-| Metric | Current (LIKE) | Target (BM25) | Gain |
-|--------|----------------|---------------|------|
-| Full-text search 100K docs | 50ms | 2ms | **25x** |
-| Cross-store query (V+G+C) | N/A | <5ms | New capability |
-| NEAR_FUSED 3 vectors | N/A | <10ms | New capability |
-
----
-
-## Notes
-
-- Site claims "Trigram Index 22-128x faster" — target 25x as realistic baseline
-- BM25 formula: `score = idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl/avgdl))`
-- Cross-store joins leverage VelesDB's unified ID space (node_id = vector_id = row_id)
+| Metric | Current | Target | Notes |
+|--------|---------|--------|-------|
+| Trigram vs LIKE scan (100K) | ~450ms | <20ms | 22x+ improvement |
+| NEAR_FUSED 3 vectors | N/A | <10ms | Parallel batch search |
+| Cross-store V+BM25 | N/A | <5ms | RRF fusion |
 
 ---
 *Created: 2026-02-09*
+*Updated: 2026-02-09 (post-research revision)*
 *Phase: 6 of v4-verify-promise milestone*

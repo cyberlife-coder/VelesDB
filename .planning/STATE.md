@@ -41,7 +41,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phases 1-4 ✅ complete. Phase 5 planned (4 plans, 2 waves).
+### Status: Phases 1-4 ✅ complete. Phases 5-6 planned.
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
@@ -50,9 +50,10 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | 📋 Planned (4 plans) | 12 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
+| 6 - Unified Query & Full-Text | 📋 Planned (4 plans) | ~25 | VP-010, VP-011, VP-012 | 12-16h | 🚨 Cross-store + NEAR_FUSED |
 
-**Total:** ~36 tasks | ~40-50h
-**Execution:** `1 → 2 → 3 → 4 → 5`
+**Total:** ~50 tasks | ~50-65h
+**Execution:** `1 → 2 → 3 → 4 → 5 → 6`
 
 ### Critical Findings
 
@@ -149,5 +150,12 @@ cargo build --release
 - **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy, 05-04 Website Claims Audit & Final Quality Gates
 - Plans dir: `.planning/phases/v4-05-readme-documentation-truth/`
 
+**Phase 6 📋 planned (4 plans, 2 waves) — researched 2026-02-09:**
+- **Key finding:** BM25, Trigram, Fusion, Planner all EXIST — gaps are wiring, not implementation
+- **Wave 1 (parallel):** 06-01 NEAR_FUSED Execution Wiring (VP-012), 06-02 BM25+NEAR VelesQL Integration (VP-011)
+- **Wave 2 (sequential):** 06-03 Cross-Store Query Planner Integration (VP-010), 06-04 Benchmarks & Quality Gates
+- Plans dir: `.planning/phases/v4-06-unified-query-fulltext/`
+- Research: `.planning/phases/v4-06-unified-query-fulltext/RESEARCH.md`
+
 *State file last updated: 2026-02-09*  
-*Status: Phase 5 planned (4 plans). Ready to execute. 3,222 workspace tests passing.*
+*Status: Phase 6 researched & planned (4 plans). Ready to execute. 3,222 workspace tests passing.*
