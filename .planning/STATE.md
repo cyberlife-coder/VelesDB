@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 2 complete — 02-01, 02-02, 02-03 done. Phase 3 next)  
+**Current Milestone:** v2-core-trust (Phase 3 complete — 03-01, 03-02, 03-03 done. Phase 4 next)  
 **Next Milestone:** v3-ecosystem-alignment  
 **Previous Milestone:** v1-refactoring (completed 2026-02-08)  
 
@@ -36,14 +36,14 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v2: Core Trust (23 active findings — velesdb-core only)
 
-### Status: Phase 2 complete. Phase 3 next.
+### Status: Phase 3 complete. Phase 4 next.
 
 | Phase | Status | Tasks | Findings | Estimate | Priority |
 |-------|--------|-------|----------|----------|----------|
 | 0 - Merge & Tag v1 | ✅ Done | 1 | — | 15 min | 🔒 Prerequisite |
 | 1 - CI Safety Net | ✅ Done | 4 | CI-01→04 | 15min | 🛡️ Infrastructure |
 | 2 - Critical Correctness | ✅ Done (3/3 plans) | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
-| 3 - Core Engine Bugs | ⬜ Pending | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
+| 3 - Core Engine Bugs | ✅ Done (3/3 plans) | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
 | 4 - Perf, Storage, Cleanup | ⬜ Pending | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
 
 **Total:** 28 tasks | 10 plans | ~25-30h  
@@ -123,4 +123,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-09*  
-*Status: Phase 2 complete. Plans 02-01 (GPU WGSL Shaders), 02-02 (GPU Trigram Cleanup), 02-03 (Fusion Unification) all done. Phase 3 (Core Engine Bugs) next.*
+*Status: Phase 3 complete. Plans 03-01 (Input Validation), 03-02 (Graph Traversal), 03-03 (Quantization & DualPrecision) all done. Phase 4 (Perf, Storage, Cleanup) next.*
