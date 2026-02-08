@@ -148,7 +148,6 @@ pub fn build_single_hop_match(
 }
 
 /// Builds a `MatchClause` with arbitrary patterns (for multi-hop or custom structures).
-#[allow(dead_code)] // Used by Wave 2 plans (04-04, 04-05)
 pub fn build_match_clause(
     patterns: Vec<GraphPattern>,
     where_clause: Option<velesdb_core::velesql::Condition>,
