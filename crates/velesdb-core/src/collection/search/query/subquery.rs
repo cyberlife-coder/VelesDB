@@ -9,9 +9,6 @@ use crate::error::Result;
 use crate::velesql::SelectColumns;
 use std::collections::HashMap;
 
-// VP-002: These methods are used by tests now and will be wired into
-// MATCH WHERE (Plan 02-02) and SELECT WHERE (Plan 02-03) paths.
-#[allow(dead_code)]
 impl Collection {
     /// Executes a scalar subquery and returns the result as a VelesQL Value.
     ///

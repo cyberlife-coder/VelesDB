@@ -486,3 +486,117 @@ fn test_match_where_vector_search_returns_true() {
     // VectorSearch is handled at a higher level, so it passes through as true
     assert_eq!(results.len(), 4, "VectorSearch should pass through as true");
 }
+
+// ============================================================================
+// VP-002: Subquery in MATCH WHERE comparison tests
+// ============================================================================
+
+#[test]
+fn test_match_where_comparison_with_subquery() {
+    let (_dir, collection) = setup_match_test_collection();
+
+    // MATCH (p:Product) WHERE p.price < (SELECT AVG(price) FROM products)
+    // Prices: 89, 45, 35, 15 → AVG = 46.0
+    // Products below average: node 2 (45), node 3 (35), node 4 (15)
+    let subquery = crate::velesql::Subquery {
+        select: crate::velesql::SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: crate::velesql::SelectColumns::Aggregations(vec![
+                crate::velesql::AggregateFunction {
+                    function_type: crate::velesql::AggregateType::Avg,
+                    argument: crate::velesql::AggregateArg::Column("price".to_string()),
+                    alias: None,
+                },
+            ]),
+            from: "test_match".to_string(),
+            from_alias: None,
+            joins: Vec::new(),
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        correlations: Vec::new(),
+    };
+
+    let condition = Condition::Comparison(crate::velesql::Comparison {
+        column: "price".to_string(),
+        operator: crate::velesql::CompareOp::Lt,
+        value: Value::Subquery(Box::new(subquery)),
+    });
+
+    let clause = match_clause_with_condition(condition);
+    let results = collection
+        .execute_match(&clause, &HashMap::new())
+        .expect("execute_match with subquery failed");
+
+    // AVG(price) = (89+45+35+15)/4 = 46.0
+    // Nodes with price < 46: node 2 (45), node 3 (35), node 4 (15)
+    assert_eq!(
+        results.len(),
+        3,
+        "MATCH WHERE price < (SELECT AVG(price)) should match 3 nodes, got {}",
+        results.len()
+    );
+    let ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
+    assert!(ids.contains(&2), "Node 2 (price=45) should match");
+    assert!(ids.contains(&3), "Node 3 (price=35) should match");
+    assert!(ids.contains(&4), "Node 4 (price=15) should match");
+}
+
+#[test]
+fn test_match_where_subquery_no_results() {
+    let (_dir, collection) = setup_match_test_collection();
+
+    // Subquery targeting nonexistent category returns Null → comparison is false → no match
+    let subquery = crate::velesql::Subquery {
+        select: crate::velesql::SelectStatement {
+            distinct: crate::velesql::DistinctMode::None,
+            columns: crate::velesql::SelectColumns::Aggregations(vec![
+                crate::velesql::AggregateFunction {
+                    function_type: crate::velesql::AggregateType::Max,
+                    argument: crate::velesql::AggregateArg::Column("price".to_string()),
+                    alias: None,
+                },
+            ]),
+            from: "test_match".to_string(),
+            from_alias: None,
+            joins: Vec::new(),
+            where_clause: Some(Condition::Comparison(crate::velesql::Comparison {
+                column: "category".to_string(),
+                operator: crate::velesql::CompareOp::Eq,
+                value: Value::String("nonexistent".to_string()),
+            })),
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        },
+        correlations: Vec::new(),
+    };
+
+    let condition = Condition::Comparison(crate::velesql::Comparison {
+        column: "price".to_string(),
+        operator: crate::velesql::CompareOp::Lt,
+        value: Value::Subquery(Box::new(subquery)),
+    });
+
+    let clause = match_clause_with_condition(condition);
+    let results = collection
+        .execute_match(&clause, &HashMap::new())
+        .expect("execute_match with empty subquery failed");
+
+    // Subquery returns Null → comparison "price < Null" is false for all nodes
+    assert_eq!(
+        results.len(),
+        0,
+        "Subquery returning Null should match 0 nodes"
+    );
+}

@@ -35,8 +35,9 @@ impl Collection {
                     return Ok(false);
                 };
 
-                // Resolve parameter if needed
-                let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
+                // VP-002: Resolve subquery first, then parameters
+                let pre_resolved = self.resolve_subquery_value(&cmp.value, params, None)?;
+                let resolved_value = Self::resolve_where_param(&pre_resolved, params)?;
 
                 // Compare based on operator
                 Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
