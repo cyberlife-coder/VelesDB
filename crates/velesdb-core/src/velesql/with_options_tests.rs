@@ -79,3 +79,58 @@ fn test_with_group_limit_option() {
 
     assert_eq!(group_limit.key, "group_limit");
 }
+
+// =========================================================================
+// D-04: Overfetch factor tests
+// =========================================================================
+
+#[test]
+fn test_with_overfetch_default_none() {
+    use crate::velesql::ast::WithClause;
+    let clause = WithClause::new();
+    assert_eq!(clause.get_overfetch(), None);
+}
+
+#[test]
+fn test_with_overfetch_custom_value() {
+    use crate::velesql::ast::{WithClause, WithValue};
+    let clause = WithClause::new().with_option("overfetch", WithValue::Integer(20));
+    assert_eq!(clause.get_overfetch(), Some(20));
+}
+
+#[test]
+fn test_with_overfetch_clamped_min() {
+    use crate::velesql::ast::{WithClause, WithValue};
+    let clause = WithClause::new().with_option("overfetch", WithValue::Integer(0));
+    assert_eq!(clause.get_overfetch(), Some(1));
+
+    let clause_neg = WithClause::new().with_option("overfetch", WithValue::Integer(-5));
+    assert_eq!(clause_neg.get_overfetch(), Some(1));
+}
+
+#[test]
+fn test_with_overfetch_clamped_max() {
+    use crate::velesql::ast::{WithClause, WithValue};
+    let clause = WithClause::new().with_option("overfetch", WithValue::Integer(200));
+    assert_eq!(clause.get_overfetch(), Some(100));
+}
+
+#[test]
+fn test_with_overfetch_parsing() {
+    let sql = "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (overfetch = 25)";
+    let result = Parser::parse(sql);
+    assert!(
+        result.is_ok(),
+        "Failed to parse WITH overfetch: {:?}",
+        result.err()
+    );
+
+    let query = result.unwrap();
+    let with_clause = query
+        .select
+        .with_clause
+        .as_ref()
+        .expect("WITH clause should be present");
+
+    assert_eq!(with_clause.get_overfetch(), Some(25));
+}

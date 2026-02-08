@@ -130,8 +130,12 @@ impl Collection {
 
         // 2. Resolve WITH clause options
         let mut ef_search = None;
+        let mut overfetch_base: usize = 10; // D-04: default overfetch factor
         if let Some(ref with) = stmt.with_clause {
             ef_search = with.get_ef_search();
+            if let Some(of) = with.get_overfetch() {
+                overfetch_base = of;
+            }
         }
 
         // Get first similarity condition for initial search (if any)
@@ -155,7 +159,7 @@ impl Collection {
         // EPIC-044 US-002: Union mode for similarity() OR metadata
         if is_union_query {
             if let Some(ref cond) = stmt.where_clause {
-                let mut results = self.execute_union_query(cond, params, limit)?;
+                let mut results = self.execute_union_query(cond, params, limit, overfetch_base)?;
 
                 // Apply ORDER BY if present
                 if let Some(ref order_by) = stmt.order_by {
@@ -184,8 +188,8 @@ impl Collection {
                     )));
                 }
 
-                // Increase over-fetch factor for multiple similarity conditions
-                let overfetch_factor = 10 * similarity_conditions.len().max(1);
+                // D-04: Configurable over-fetch factor (default 10, via WITH clause)
+                let overfetch_factor = overfetch_base * similarity_conditions.len().max(1);
                 let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
                 let candidates = self.search(vec, candidates_k)?;
 
@@ -247,8 +251,8 @@ impl Collection {
                     )));
                 }
 
-                // 1. NEAR finds candidates (overfetch for filtering headroom)
-                let overfetch_factor = 10 * similarity_conditions.len().max(1);
+                // 1. NEAR finds candidates (D-04: configurable overfetch)
+                let overfetch_factor = overfetch_base * similarity_conditions.len().max(1);
                 let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
                 let candidates = self.search(vector, candidates_k)?;
 

@@ -34,6 +34,7 @@ impl Collection {
         condition: &crate::velesql::Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
+        overfetch_base: usize,
     ) -> Result<Vec<SearchResult>> {
         use std::collections::HashMap;
 
@@ -55,7 +56,8 @@ impl Collection {
                     )));
                 }
 
-                let overfetch_factor = 10;
+                // D-04: Configurable over-fetch factor (default 10, via WITH clause)
+                let overfetch_factor = overfetch_base;
                 let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
                 let candidates = self.search(vec, candidates_k)?;
 

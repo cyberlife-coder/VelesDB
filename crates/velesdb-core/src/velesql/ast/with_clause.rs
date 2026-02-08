@@ -129,6 +129,21 @@ impl WithClause {
             .and_then(WithValue::as_integer)
             .map(|v| v.max(1) as usize)
     }
+
+    /// Gets the over-fetch factor if specified (D-04).
+    ///
+    /// Controls how many extra candidates are fetched before filtering.
+    /// Higher values improve recall at the cost of more computation.
+    /// Clamped to range 1-100. Default (when not specified): 10.
+    ///
+    /// Usage: `SELECT ... WITH (overfetch = 20) LIMIT 10`
+    #[must_use]
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    pub fn get_overfetch(&self) -> Option<usize> {
+        self.get("overfetch")
+            .and_then(WithValue::as_integer)
+            .map(|v| (v.max(1) as usize).min(100))
+    }
 }
 
 /// A single option in a WITH clause.
