@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 2 — Planned, 3 plans ready)  
+**Current Milestone:** v4-verify-promise (Phase 2 ✅ — Phase 3 next)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -41,12 +41,12 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1 complete. Phase 2 planned (3 plans).
+### Status: Phase 1-2 complete. Phase 3 next.
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
-| 2 - Subquery Decision & Execution | ⬜ Planned (3 plans) | ~9 | VP-002 | 10-12h | 🚨 All README scenarios broken |
+| 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ⬜ Blocked by P1 | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ⬜ Blocked by P1-3 | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
@@ -59,7 +59,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | Finding | Severity | Location | Impact |
 |---------|----------|----------|--------|
 | MATCH WHERE `_ => Ok(true)` catch-all | 🚨 Critical | `where_eval.rs:69` | LIKE/BETWEEN/IN silently pass in MATCH |
-| Subquery → Value::Null | 🚨 Critical | `conversion.rs:23-27` | ALL 4 business scenarios broken |
+| ~~Subquery → Value::Null~~ | ✅ Fixed | `subquery.rs` + `mod.rs` | Resolved by VP-002 Phase 2 |
 | Multi-hop only uses first pattern | ⚠️ Major | `match_exec/mod.rs` | Multi-relationship queries incomplete |
 | RETURN aggregation not implemented | ⚠️ Major | `match_exec/similarity.rs` | Healthcare scenario broken |
 | ORDER BY property in MATCH → error | ⚠️ Major | `match_exec/similarity.rs:210` | AI Agent Memory scenario broken |
@@ -123,4 +123,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: Phase 1 complete (dc9ac868). Phase 2 planned with 3 plans. Ready to execute.*
+*Status: Phase 2 complete (7e87d446). Subquery execution works in MATCH WHERE + SELECT WHERE. Phase 3 next.*
