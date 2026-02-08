@@ -7,7 +7,7 @@
 //!
 //! ## Design
 //!
-//! Instead of allocating separate Vec<u64> per node (48+ bytes overhead each),
+//! Instead of allocating separate `Vec<u64>` per node (48+ bytes overhead each),
 //! we store all neighbor sets in a single contiguous buffer with an index
 //! mapping node IDs to (offset, length) pairs.
 //!
