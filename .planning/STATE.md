@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 3 ✅ — Phase 4 ready to plan)  
+**Current Milestone:** v4-verify-promise (Phase 4 in progress — Plan 04-01 ✅)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -41,14 +41,14 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1-3 complete. Phase 4 planned (7 plans, 3 waves).
+### Status: Phase 1-3 complete. Phase 4 in progress (Plan 04-01 ✅, Wave 2 next).
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
-| 4 - E2E Scenario Test Suite | 📋 Planned (7 plans) | ~18 | VP-007 | 8-10h | 🛡️ Regression prevention |
+| 4 - E2E Scenario Test Suite | � In Progress (1/7 plans done) | ~18 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
 **Total:** ~36 tasks | ~40-50h
@@ -83,7 +83,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - Single-hop path unchanged for backward compatibility
 
 **Phase 4 plan structure (7 plans, 3 waves):**
-- **Wave 1:** 04-01 Test Infrastructure & Hero Query (creates module + helpers + stubs)
+- **Wave 1:** ✅ 04-01 Test Infrastructure & Hero Query (completed 2026-02-08)
 - **Wave 2:** 04-02 SELECT Domain (Scenarios 1-3), 04-03 Metrics & Fusion (0b/0c), 04-04 Simple MATCH (BS1/BS4), 04-05 Complex MATCH (BS2/BS3), 04-06 Cross-Store & VelesQL (Scenario 0 + API)
 - **Wave 3:** 04-07 Quality Gates & Integration
 - Plans dir: `.planning/phases/v4-04-e2e-scenario-tests/`
@@ -140,4 +140,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: Phase 4 planned (7 plans). Ready to execute with `/gsd-execute-plan`.*
+*Status: Phase 4 Plan 04-01 complete. Wave 2 ready (plans 04-02 through 04-06).*
