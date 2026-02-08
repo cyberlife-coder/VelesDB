@@ -5,8 +5,8 @@
 //! - Weighted fusion for score-based merging
 //! - Parallel and sequential execution strategies
 
-#![allow(dead_code)]
-// Used by tests - will be integrated into main query execution
+// VP-010: Functions now actively used via re-exports in velesql/mod.rs
+// and wired into cross-store query planner integration.
 
 // SAFETY: Numeric casts in result fusion are intentional:
 // - usize->f32 for rank calculations: ranks are small (< 1M results)
@@ -34,7 +34,10 @@ impl ScoredResult {
 }
 
 /// Fusion strategy for combining search results.
+/// Note: The primary fusion strategy enum is `crate::fusion::FusionStrategy`.
+/// This enum is kept for the hybrid.rs module's own API design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub enum FusionStrategy {
     /// Reciprocal Rank Fusion - recommended default.
     #[default]
