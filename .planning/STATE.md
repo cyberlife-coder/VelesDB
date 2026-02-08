@@ -47,7 +47,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
-| 3 - Multi-hop MATCH & RETURN | 📋 Planned (2 plans) | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
+| 3 - Multi-hop MATCH & RETURN | � Plan 1 done, Plan 2 pending | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ⬜ Blocked by P1-3 | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
@@ -60,7 +60,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 |---------|----------|----------|--------|
 | MATCH WHERE `_ => Ok(true)` catch-all | 🚨 Critical | `where_eval.rs:69` | LIKE/BETWEEN/IN silently pass in MATCH |
 | ~~Subquery → Value::Null~~ | ✅ Fixed | `subquery.rs` + `mod.rs` | Resolved by VP-002 Phase 2 |
-| Multi-hop only uses first pattern | ⚠️ Major | `match_exec/mod.rs` | Multi-relationship queries incomplete |
+| ~~Multi-hop only uses first pattern~~ | ✅ Fixed | `match_exec/mod.rs` | Resolved by VP-004 Phase 3 Plan 1 |
 | RETURN aggregation not implemented | ⚠️ Major | `match_exec/similarity.rs` | Healthcare scenario broken |
 | ORDER BY property in MATCH → error | ⚠️ Major | `match_exec/similarity.rs:210` | AI Agent Memory scenario broken |
 | Temporal in MATCH WHERE not wired | ⚠️ Major | `where_eval.rs` | Fraud detection scenario broken |
@@ -73,7 +73,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - Plan 02-03: Wire into SELECT WHERE + Quality Gates (Wave 2)
 
 **Multi-hop approach:** Hop-by-hop chain execution (planned 2026-02-08)
-- Plan 03-01: Multi-hop Chain Traversal + Binding-Aware WHERE (Wave 1)
+- Plan 03-01: ✅ Multi-hop Chain Traversal + Binding-Aware WHERE (completed 2026-02-08)
 - Plan 03-02: RETURN Aggregation for MATCH Results (Wave 2)
 
 **Key technical decisions for Phase 3:**
