@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 2 ✅ — Phase 3 planned, ready to execute)  
+**Current Milestone:** v4-verify-promise (Phase 3 ✅ — Phase 4 ready to plan)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -41,14 +41,14 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1-2 complete. Phase 3 next.
+### Status: Phase 1-3 complete. Phase 4 next.
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
-| 3 - Multi-hop MATCH & RETURN | � Plan 1 done, Plan 2 pending | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
-| 4 - E2E Scenario Test Suite | ⬜ Blocked by P1-3 | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
+| 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
+| 4 - E2E Scenario Test Suite | ⬜ Ready to plan | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
 **Total:** ~36 tasks | ~40-50h
@@ -61,7 +61,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | MATCH WHERE `_ => Ok(true)` catch-all | 🚨 Critical | `where_eval.rs:69` | LIKE/BETWEEN/IN silently pass in MATCH |
 | ~~Subquery → Value::Null~~ | ✅ Fixed | `subquery.rs` + `mod.rs` | Resolved by VP-002 Phase 2 |
 | ~~Multi-hop only uses first pattern~~ | ✅ Fixed | `match_exec/mod.rs` | Resolved by VP-004 Phase 3 Plan 1 |
-| RETURN aggregation not implemented | ⚠️ Major | `match_exec/similarity.rs` | Healthcare scenario broken |
+| ~~RETURN aggregation not implemented~~ | ✅ Fixed | `match_exec/return_agg.rs` | Resolved by VP-005 Phase 3 Plan 2 |
 | ORDER BY property in MATCH → error | ⚠️ Major | `match_exec/similarity.rs:210` | AI Agent Memory scenario broken |
 | Temporal in MATCH WHERE not wired | ⚠️ Major | `where_eval.rs` | Fraud detection scenario broken |
 
@@ -74,7 +74,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 **Multi-hop approach:** Hop-by-hop chain execution (planned 2026-02-08)
 - Plan 03-01: ✅ Multi-hop Chain Traversal + Binding-Aware WHERE (completed 2026-02-08)
-- Plan 03-02: RETURN Aggregation for MATCH Results (Wave 2)
+- Plan 03-02: ✅ RETURN Aggregation for MATCH Results (completed 2026-02-08)
 
 **Key technical decisions for Phase 3:**
 - Hop-by-hop execution replaces single merged BFS — per-hop relationship type filtering
@@ -133,4 +133,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: Phase 2 complete (7e87d446). Phase 3 planned (2 plans: 03-01 chain traversal, 03-02 RETURN aggregation). Ready to execute.*
+*Status: Phase 3 complete (52e09bff). Phase 4 (E2E Scenario Test Suite) ready to plan.*
