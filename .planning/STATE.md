@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 4 in progress — 04-01 done. 04-02, 04-03 next)  
+**Current Milestone:** v2-core-trust (Phase 4 in progress — 04-01, 04-02 done. 04-03 next)  
 **Next Milestone:** v3-ecosystem-alignment  
 **Previous Milestone:** v1-refactoring (completed 2026-02-08)  
 
@@ -36,7 +36,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v2: Core Trust (23 active findings — velesdb-core only)
 
-### Status: Phase 4 in progress. Plan 04-01 done.
+### Status: Phase 4 in progress. Plans 04-01, 04-02 done.
 
 | Phase | Status | Tasks | Findings | Estimate | Priority |
 |-------|--------|-------|----------|----------|----------|
@@ -44,7 +44,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 1 - CI Safety Net | ✅ Done | 4 | CI-01→04 | 15min | 🛡️ Infrastructure |
 | 2 - Critical Correctness | ✅ Done (3/3 plans) | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
 | 3 - Core Engine Bugs | ✅ Done (3/3 plans) | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
-| 4 - Perf, Storage, Cleanup | 🔄 In Progress (1/3 plans) | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
+| 4 - Perf, Storage, Cleanup | 🔄 In Progress (2/3 plans) | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
 
 **Total:** 28 tasks | 10 plans | ~25-30h  
 **Execution:** `0 → 1 → 2 → 3 → 4`
@@ -75,6 +75,9 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - Tests multi-thread in CI (remove `--test-threads=1`)
 - D-02: HNSW `search_layer` single lock acquisition per search (not per-candidate)
 - D-04: Over-fetch factor configurable via `WITH (overfetch = N)`, default 10, clamped 1-100
+- D-05: WAL per-entry CRC32 for corruption detection (replay + retrieve)
+- D-06: `store_batch()` with single flush for reduced I/O syscalls
+- D-07: `should_create_snapshot` uses AtomicU64 instead of write lock
 
 ## Milestone v3: Ecosystem Alignment (22 findings — bindings/wrappers)
 
@@ -124,5 +127,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2026-02-10*  
-*Status: Phase 4 in progress. Plan 04-01 (HNSW & Search Performance) done. Plans 04-02 (Storage Integrity) and 04-03 (ColumnStore & Dead Code) next.*
+*State file last updated: 2026-02-11*  
+*Status: Phase 4 in progress. Plans 04-01 (HNSW & Search Performance) and 04-02 (Storage Integrity) done. Plan 04-03 (ColumnStore & Dead Code) next.*
