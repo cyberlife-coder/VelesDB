@@ -23,6 +23,8 @@
 #![allow(clippy::cast_sign_loss)]
 
 mod aggregation;
+#[cfg(test)]
+mod bm25_integration_tests;
 mod distinct;
 mod extraction;
 #[cfg(test)]
@@ -365,12 +367,19 @@ impl Collection {
                 }
             }
             (Some(vector), None, Some(ref cond)) => {
-                // Check if condition contains MATCH for hybrid search
-                if let Some(text_query) = Self::extract_match_query(cond) {
-                    // Hybrid search: NEAR + MATCH
-                    self.hybrid_search(vector, &text_query, limit, None)?
+                // VP-011: Check if condition contains MATCH for hybrid search
+                if let Some((text_query, remaining_filter)) = Self::extract_match_and_filter(cond) {
+                    if let Some(filter_cond) = remaining_filter {
+                        // NEAR + MATCH + metadata filter → hybrid_search_with_filter
+                        let filter =
+                            crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                        self.hybrid_search_with_filter(vector, &text_query, limit, None, &filter)?
+                    } else {
+                        // NEAR + MATCH (no additional filter)
+                        self.hybrid_search(vector, &text_query, limit, None)?
+                    }
                 } else {
-                    // Vector search with metadata filter
+                    // Vector search with metadata filter (no MATCH)
                     let filter =
                         crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
                     self.search_with_filter(vector, limit, &filter)?
@@ -385,11 +394,17 @@ impl Collection {
                 }
             }
             (None, None, Some(ref cond)) => {
-                // Metadata-only filter (table scan + filter)
-                // If it's a MATCH condition, use text search
-                if let crate::velesql::Condition::Match(ref m) = cond {
-                    // Pure text search - no filter needed
-                    self.text_search(&m.query, limit)
+                // VP-011: Check for MATCH condition with optional metadata filter
+                if let Some((text_query, remaining_filter)) = Self::extract_match_and_filter(cond) {
+                    if let Some(filter_cond) = remaining_filter {
+                        // MATCH + metadata filter → text_search_with_filter
+                        let filter =
+                            crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                        self.text_search_with_filter(&text_query, limit, &filter)
+                    } else {
+                        // Pure MATCH → text_search
+                        self.text_search(&text_query, limit)
+                    }
                 } else {
                     // Generic metadata filter: perform a scan (fallback)
                     let filter =

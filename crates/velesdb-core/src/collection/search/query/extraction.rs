@@ -9,6 +9,10 @@ use crate::velesql::Condition;
 
 impl Collection {
     /// Helper to extract MATCH query from any nested condition.
+    /// Note: Production code now uses `extract_match_and_filter()` which also returns
+    /// the remaining metadata filter. This function is kept for backward compatibility
+    /// and used in extraction_tests.
+    #[allow(dead_code)]
     pub(crate) fn extract_match_query(condition: &Condition) -> Option<String> {
         match condition {
             Condition::Match(m) => Some(m.query.clone()),
@@ -245,6 +249,36 @@ impl Collection {
                     )))
                 }
             }
+        }
+    }
+
+    /// Extract MATCH condition and remaining metadata filter from a condition tree (VP-011).
+    ///
+    /// Returns `Some((text_query, remaining_filter))` if a `Condition::Match` is found.
+    /// The remaining filter excludes MATCH and vector search conditions.
+    /// Returns `None` if no MATCH condition exists.
+    pub(crate) fn extract_match_and_filter(
+        condition: &Condition,
+    ) -> Option<(String, Option<Condition>)> {
+        match condition {
+            Condition::Match(m) => Some((m.query.clone(), None)),
+            Condition::And(left, right) => {
+                // Try left side for MATCH
+                if let Some((query, _)) = Self::extract_match_and_filter(left) {
+                    // Remaining filter = right side (minus vector/similarity conditions)
+                    let remaining = Self::extract_metadata_filter(right);
+                    return Some((query, remaining));
+                }
+                // Try right side for MATCH
+                if let Some((query, _)) = Self::extract_match_and_filter(right) {
+                    // Remaining filter = left side (minus vector/similarity conditions)
+                    let remaining = Self::extract_metadata_filter(left);
+                    return Some((query, remaining));
+                }
+                None
+            }
+            Condition::Group(inner) => Self::extract_match_and_filter(inner),
+            _ => None,
         }
     }
 
