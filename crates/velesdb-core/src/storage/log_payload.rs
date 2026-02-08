@@ -3,6 +3,16 @@
 //! Stores payloads in an append-only log file with an in-memory index.
 //! Supports periodic snapshots for fast cold-start recovery.
 //!
+//! # WAL Entry Format
+//!
+//! ```text
+//! Store:  [marker=1: 1B] [id: 8B LE] [len: 4B LE] [crc32: 4B LE] [payload: len bytes]
+//! Delete: [marker=2: 1B] [id: 8B LE]
+//! ```
+//!
+//! Each store entry includes a CRC32 checksum (IEEE 802.3) for corruption
+//! detection during both replay and retrieval \[D-05\].
+//!
 //! # Snapshot System (P0 Optimization)
 //!
 //! Without snapshots, cold start requires replaying the entire WAL (O(N)).
@@ -31,6 +41,7 @@ use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Snapshot file magic bytes.
 pub(crate) const SNAPSHOT_MAGIC: &[u8; 4] = b"VSNP";
@@ -91,6 +102,8 @@ pub struct LogPayloadStorage {
     reader: RwLock<File>,
     /// WAL position at last snapshot (0 = no snapshot)
     last_snapshot_wal_pos: RwLock<u64>,
+    /// Current WAL byte position — lock-free tracking for snapshot decisions [D-07]
+    wal_position: AtomicU64,
 }
 
 impl LogPayloadStorage {
@@ -142,6 +155,7 @@ impl LogPayloadStorage {
             wal: RwLock::new(wal),
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
+            wal_position: AtomicU64::new(wal_len),
         })
     }
 
@@ -178,21 +192,37 @@ impl LogPayloadStorage {
 
             if marker[0] == 1 {
                 // Store operation
+                // WAL format: [marker: 1B] [id: 8B] [len: 4B] [crc32: 4B] [payload: len B]
                 let len_offset = pos;
 
                 // Read Len (4 bytes)
                 let mut len_bytes = [0u8; 4];
                 reader_buf.read_exact(&mut len_bytes)?;
-                let payload_len = u64::from(u32::from_le_bytes(len_bytes));
+                let payload_len = u32::from_le_bytes(len_bytes);
                 pos += 4;
 
-                index.insert(id, len_offset);
+                // Read CRC32 (4 bytes) [D-05]
+                let mut crc_bytes = [0u8; 4];
+                reader_buf.read_exact(&mut crc_bytes)?;
+                let stored_crc = u32::from_le_bytes(crc_bytes);
+                pos += 4;
 
-                // Skip payload data
-                let skip = i64::try_from(payload_len)
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
-                reader_buf.seek(SeekFrom::Current(skip))?;
-                pos += payload_len;
+                // Read payload and verify CRC32 [D-05]
+                let payload_usize = payload_len as usize;
+                let mut payload_buf = vec![0u8; payload_usize];
+                reader_buf.read_exact(&mut payload_buf)?;
+                let computed_crc = crc32_hash(&payload_buf);
+                if stored_crc != computed_crc {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "WAL CRC32 mismatch at offset {len_offset}: expected {stored_crc:#010X}, got {computed_crc:#010X}"
+                        ),
+                    ));
+                }
+                pos += u64::from(payload_len);
+
+                index.insert(id, len_offset);
             } else if marker[0] == 2 {
                 // Delete operation
                 index.remove(&id);
@@ -355,6 +385,54 @@ impl LogPayloadStorage {
         Ok(())
     }
 
+    /// Store multiple entries with a single flush [D-06].
+    ///
+    /// Reduces I/O syscalls from N to 1 for batch insertions.
+    /// Each entry is CRC32-protected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file operations fail.
+    pub fn store_batch(&mut self, items: &[(u64, &[u8])]) -> io::Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let mut wal = self.wal.write();
+        let mut index = self.index.write();
+
+        // Flush to get accurate starting position
+        wal.flush()?;
+        let mut pos = wal.get_ref().metadata()?.len();
+
+        for &(id, payload) in items {
+            let len_u32 = u32::try_from(payload.len())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
+            let crc = crc32_hash(payload);
+
+            // WAL format: [marker=1: 1B] [id: 8B] [len: 4B] [crc32: 4B] [payload: len B]
+            wal.write_all(&[1u8])?;
+            wal.write_all(&id.to_le_bytes())?;
+            wal.write_all(&len_u32.to_le_bytes())?;
+            wal.write_all(&crc.to_le_bytes())?;
+            wal.write_all(payload)?;
+
+            // Index points to Len field (Marker(1) + ID(8) = +9 bytes from entry start)
+            index.insert(id, pos + 9);
+
+            // Advance position: marker(1) + id(8) + len(4) + crc(4) + payload
+            pos += 1 + 8 + 4 + 4 + u64::from(len_u32);
+        }
+
+        // Single flush for all entries
+        wal.flush()?;
+
+        // Update atomic WAL position
+        self.wal_position.store(pos, Ordering::Release);
+
+        Ok(())
+    }
+
     /// Returns whether a new snapshot should be created.
     ///
     /// Heuristic: Returns true if WAL has grown by more than `DEFAULT_SNAPSHOT_THRESHOLD`
@@ -363,11 +441,8 @@ impl LogPayloadStorage {
     pub fn should_create_snapshot(&self) -> bool {
         let last_pos = *self.last_snapshot_wal_pos.read();
 
-        // Get current WAL size
-        let current_pos = match self.wal.write().get_ref().metadata() {
-            Ok(m) => m.len(),
-            Err(_) => return false,
-        };
+        // Lock-free read of current WAL position [D-07]
+        let current_pos = self.wal_position.load(Ordering::Acquire);
 
         current_pos.saturating_sub(last_pos) >= DEFAULT_SNAPSHOT_THRESHOLD
     }
@@ -385,19 +460,24 @@ impl PayloadStorage for LogPayloadStorage {
         wal.flush()?;
         let pos = wal.get_ref().metadata()?.len();
 
-        // Op: Store (1) | ID | Len | Data
-        // Pos points to start of record (Marker)
-        // We want index to point to Len (Marker(1) + ID(8) = +9 bytes)
+        // WAL format: [marker=1: 1B] [id: 8B] [len: 4B] [crc32: 4B] [payload: len B]
+        // Index points to Len field (Marker(1) + ID(8) = +9 bytes)
+        let len_u32 = u32::try_from(payload_bytes.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
+        let crc = crc32_hash(&payload_bytes);
 
         wal.write_all(&[1u8])?;
         wal.write_all(&id.to_le_bytes())?;
-        let len_u32 = u32::try_from(payload_bytes.len())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
         wal.write_all(&len_u32.to_le_bytes())?;
+        wal.write_all(&crc.to_le_bytes())?;
         wal.write_all(&payload_bytes)?;
 
         // Flush to ensure reader sees it
         wal.flush()?;
+
+        // entry_size = marker(1) + id(8) + len(4) + crc(4) + payload
+        let entry_size = 1 + 8 + 4 + 4 + u64::from(len_u32);
+        self.wal_position.fetch_add(entry_size, Ordering::Release);
 
         index.insert(id, pos + 9);
 
@@ -414,12 +494,30 @@ impl PayloadStorage for LogPayloadStorage {
         let mut reader = self.reader.write(); // Need write lock to seek
         reader.seek(SeekFrom::Start(offset))?;
 
+        // Read len (4B)
         let mut len_bytes = [0u8; 4];
         reader.read_exact(&mut len_bytes)?;
         let len = u32::from_le_bytes(len_bytes) as usize;
 
+        // Read stored CRC32 (4B) [D-05]
+        let mut crc_bytes = [0u8; 4];
+        reader.read_exact(&mut crc_bytes)?;
+        let stored_crc = u32::from_le_bytes(crc_bytes);
+
+        // Read payload
         let mut payload_bytes = vec![0u8; len];
         reader.read_exact(&mut payload_bytes)?;
+
+        // Verify CRC32 [D-05]
+        let computed_crc = crc32_hash(&payload_bytes);
+        if stored_crc != computed_crc {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "WAL payload CRC32 mismatch at offset {offset}: expected {stored_crc:#010X}, got {computed_crc:#010X}"
+                ),
+            ));
+        }
 
         let payload = serde_json::from_slice(&payload_bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -433,6 +531,9 @@ impl PayloadStorage for LogPayloadStorage {
 
         wal.write_all(&[2u8])?;
         wal.write_all(&id.to_le_bytes())?;
+
+        // delete_size = marker(1) + id(8)
+        self.wal_position.fetch_add(9, Ordering::Release);
 
         index.remove(&id);
 
