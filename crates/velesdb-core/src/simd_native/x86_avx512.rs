@@ -4,6 +4,7 @@
 //! cosine similarity, Hamming distance, and Jaccard similarity.
 //!
 //! All functions require runtime AVX-512F detection before calling.
+//! Dispatch is handled by `dispatch.rs` after `simd_level()` confirms support.
 
 // SAFETY: Numeric casts in this file are intentional and safe:
 // - All casts are from well-bounded values (vector dimensions, loop indices)
@@ -64,7 +65,6 @@ pub(crate) unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     // This eliminates the scalar tail loop for better performance
     if remainder > 0 {
         let base = simd_len * 16;
-        // Create mask: first `remainder` bits set to 1
         // SAFETY: remainder is in 1..=16, mask computed without overflow
         let mask: __mmask16 = if remainder == 16 {
             !0
