@@ -32,6 +32,7 @@ impl GpuAccelerator {
     ///
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // Reason: GPU init requires sequential pipeline setup for 3 metrics
     pub fn new() -> Option<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
