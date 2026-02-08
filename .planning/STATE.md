@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 1 reopened — Plan 01-01 ✅, 01-02 pending. Phase 4 in progress — Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅)  
+**Current Milestone:** v4-verify-promise (Phase 1 ✅ complete. Phase 4 in progress — Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -41,11 +41,11 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phase 1 in progress (Plan 01-01 ✅ VP-006, Plan 01-02 pending VP-003). Phase 2-3 complete. Phase 4 in progress (Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, Wave 2 continues).
+### Status: Phase 1 ✅ complete (VP-001, VP-003, VP-006). Phase 2-3 complete. Phase 4 in progress (Plans 04-01 ✅, 04-02 ✅, 04-03 ✅, 04-04 ✅, Wave 2 continues).
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
-| 1 - MATCH WHERE Completeness | 🔄 In Progress (1/2 plans done) | 15+4 tests | VP-001 ✅, VP-003 ❌, VP-006 ✅ | 2-3h | 🚨 Silent incorrect results |
+| 1 - MATCH WHERE Completeness | ✅ Done (2/2 plans) | 17+4 tests | VP-001 ✅, VP-003 ✅, VP-006 ✅ | 2-3h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | 🔄 In Progress (4/7 plans done) | ~18 | VP-007 | 8-10h | 🛡️ Regression prevention |
@@ -63,7 +63,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | ~~Multi-hop only uses first pattern~~ | ✅ Fixed | `match_exec/mod.rs` | Resolved by VP-004 Phase 3 Plan 1 |
 | ~~RETURN aggregation not implemented~~ | ✅ Fixed | `match_exec/return_agg.rs` | Resolved by VP-005 Phase 3 Plan 2 |
 | ~~ORDER BY property in MATCH → silently ignored~~ | ✅ Fixed | `match_exec/mod.rs` + `similarity.rs` | Resolved by VP-006 Plan 01-01 (2026-02-08) |
-| Temporal in MATCH WHERE → silent false | ⚠️ Major | `where_eval.rs:resolve_where_param` | Plan 01-02: `Value::Temporal` passed through unchanged, hits `_ => Ok(false)` |
+| ~~Temporal in MATCH WHERE → silent false~~ | ✅ Fixed | `where_eval.rs:resolve_where_param` | Resolved by VP-003 Plan 01-02 (2026-02-08) |
 
 ### Key Decisions Made
 
@@ -139,10 +139,10 @@ cargo build --release
 
 ---
 
-**Phase 1 in progress (2 plans, Wave 1 — parallel):**
+**Phase 1 ✅ complete (2/2 plans):**
 - 01-01: ✅ Wire ORDER BY into MATCH execution pipeline (VP-006) — completed 2026-02-08
-- 01-02: Wire Temporal resolution into MATCH WHERE comparison (VP-003)
+- 01-02: ✅ Wire Temporal resolution into MATCH WHERE comparison (VP-003) — completed 2026-02-08
 - Plans dir: `.planning/phases/v4-01-match-where-completeness/`
 
 *State file last updated: 2026-02-08*  
-*Status: Phase 1 Plan 01-01 done (VP-006). Plan 01-02 pending (VP-003). Phase 4 Wave 2 continues (plans 04-05, 04-06).*
+*Status: Phase 1 complete (VP-001, VP-003, VP-006). Phase 4 Wave 2 continues (plans 04-05, 04-06).*
