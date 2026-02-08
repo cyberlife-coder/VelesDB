@@ -833,41 +833,8 @@ fn test_count_similarity_conditions_multiple() {
     assert_eq!(QueryValidator::count_similarity_conditions(&cond), 2);
 }
 
-#[test]
-fn test_contains_similarity_true() {
-    let cond = Condition::And(
-        Box::new(make_comparison("x", 1)),
-        Box::new(make_similarity()),
-    );
-    assert!(QueryValidator::contains_similarity(&cond));
-}
-
-#[test]
-fn test_contains_similarity_false() {
-    let cond = make_comparison("x", 1);
-    assert!(!QueryValidator::contains_similarity(&cond));
-}
-
-#[test]
-fn test_has_not_similarity_true() {
-    let cond = Condition::Not(Box::new(make_similarity()));
-    assert!(QueryValidator::has_not_similarity(&cond));
-}
-
-#[test]
-fn test_has_not_similarity_nested() {
-    let cond = Condition::And(
-        Box::new(make_comparison("x", 1)),
-        Box::new(Condition::Not(Box::new(make_similarity()))),
-    );
-    assert!(QueryValidator::has_not_similarity(&cond));
-}
-
-#[test]
-fn test_has_not_similarity_false() {
-    let cond = make_similarity();
-    assert!(!QueryValidator::has_not_similarity(&cond));
-}
+// D-03/M-01: Tests for contains_similarity() and has_not_similarity() removed
+// along with the functions themselves — never called in production.
 
 #[test]
 fn test_validation_error_is_error_trait() {

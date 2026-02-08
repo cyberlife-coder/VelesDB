@@ -40,6 +40,8 @@ pub mod match_planner;
 #[cfg(test)]
 mod match_planner_tests;
 #[cfg(test)]
+mod match_return_agg_tests;
+#[cfg(test)]
 mod match_where_eval_tests;
 #[cfg(test)]
 mod multi_hop_tests;

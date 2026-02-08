@@ -11,6 +11,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
+mod return_agg;
 mod similarity;
 mod where_eval;
 
@@ -156,6 +157,12 @@ impl Collection {
                     break;
                 }
             }
+            // VP-005: Check for aggregation in RETURN clause
+            if let Some(aggregated) =
+                self.aggregate_match_results(&results, &match_clause.return_clause)
+            {
+                return Ok(aggregated);
+            }
             return Ok(results);
         }
 
@@ -163,13 +170,20 @@ impl Collection {
         if pattern.relationships.len() > 1 {
             // Multi-hop: execute as chain of single-hop BFS traversals
             let start_candidates: Vec<(u64, HashMap<String, u64>)> = start_nodes;
-            return self.execute_multi_hop_chain(
+            let results = self.execute_multi_hop_chain(
                 pattern,
                 start_candidates,
                 match_clause,
                 params,
                 limit,
-            );
+            )?;
+            // VP-005: Check for aggregation in RETURN clause
+            if let Some(aggregated) =
+                self.aggregate_match_results(&results, &match_clause.return_clause)
+            {
+                return Ok(aggregated);
+            }
+            return Ok(results);
         }
 
         // Single-hop: use existing BFS logic (no regression)
@@ -227,6 +241,13 @@ impl Collection {
 
                 results.push(match_result);
             }
+        }
+
+        // VP-005: Check for aggregation in RETURN clause
+        if let Some(aggregated) =
+            self.aggregate_match_results(&results, &match_clause.return_clause)
+        {
+            return Ok(aggregated);
         }
 
         Ok(results)

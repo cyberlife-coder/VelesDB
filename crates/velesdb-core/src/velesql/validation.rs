@@ -273,35 +273,7 @@ impl QueryValidator {
     }
 
     // EPIC-044 US-002: has_similarity_with_or removed - no longer blocking similarity() OR metadata
-
-    /// Checks if a condition tree contains any vector search condition.
-    /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
-    #[allow(dead_code)] // Keep for potential future validation rules
-    pub(crate) fn contains_similarity(condition: &Condition) -> bool {
-        match condition {
-            Condition::Similarity(_)
-            | Condition::VectorSearch(_)
-            | Condition::VectorFusedSearch(_) => true,
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::contains_similarity(left) || Self::contains_similarity(right)
-            }
-            Condition::Not(inner) | Condition::Group(inner) => Self::contains_similarity(inner),
-            _ => false,
-        }
-    }
-
-    /// Checks if the condition tree has NOT applied to similarity.
-    #[allow(dead_code)] // Keep for potential future validation rules
-    pub(crate) fn has_not_similarity(condition: &Condition) -> bool {
-        match condition {
-            Condition::Not(inner) => Self::contains_similarity(inner),
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::has_not_similarity(left) || Self::has_not_similarity(right)
-            }
-            Condition::Group(inner) => Self::has_not_similarity(inner),
-            _ => false,
-        }
-    }
+    // D-03/M-01: contains_similarity() and has_not_similarity() removed — never called in production.
 
     /// EPIC-044 US-001: Check if multiple similarity() appear under same OR.
     /// Multiple similarity in AND is allowed (cascade), but OR requires union (unsupported).

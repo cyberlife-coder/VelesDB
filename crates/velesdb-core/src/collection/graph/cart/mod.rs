@@ -12,23 +12,26 @@
 //!
 //! ## Node Types
 //!
-//! - **Node4**: 4 keys/children (smallest, for sparse regions)
 //! - **Node16**: 16 keys/children (SIMD-friendly binary search)
 //! - **Node48**: 48 children with 256-byte key index
 //! - **Node256**: Direct 256-child array (densest)
 //! - **Leaf**: Compressed entries with LCP (Longest Common Prefix)
-
-// SAFETY: Numeric casts in C-ART node operations are intentional:
-// - usize->u8 for child indices: C-ART nodes have max 256 children, indices fit in u8
-// - Node types enforce size limits (Node4=4, Node16=16, Node48=48, Node256=256)
-// - All index values are validated against node capacity before casting
-#![allow(clippy::cast_possible_truncation)]
+//!
+//! Note: Node4 was removed as unused dead code. Leaf splitting is not yet
+//! implemented, so leaves grow unbounded. If adaptive splitting is needed,
+//! re-implement Node4 with proper tests.
 //!
 //! ## Performance Targets
 //!
 //! - Scan 10K neighbors: < 100µs
 //! - Memory: < 50 bytes/edge
 //! - Search/Insert: O(log n) + binary search in leaf
+
+// SAFETY: Numeric casts in C-ART node operations are intentional:
+// - usize->u8 for child indices: C-ART nodes have max 256 children, indices fit in u8
+// - Node types enforce size limits (Node16=16, Node48=48, Node256=256)
+// - All index values are validated against node capacity before casting
+#![allow(clippy::cast_possible_truncation)]
 
 mod node;
 

@@ -61,9 +61,10 @@ pub struct ColumnStore {
     pub(crate) primary_index: HashMap<i64, usize>,
     /// Reverse index: row_idx → pk_value (O(1) reverse lookup for expire_rows)
     pub(crate) row_idx_to_pk: HashMap<usize, i64>,
-    /// Deleted row indices (tombstones) - FxHashSet for backward compatibility
-    pub(crate) deleted_rows: rustc_hash::FxHashSet<usize>,
-    /// Deleted row bitmap (EPIC-043 US-002) - RoaringBitmap for O(1) contains
+    /// Deleted row indices (tombstones) — single RoaringBitmap for O(1) contains.
+    ///
+    /// Note: Row indices are stored as u32. This limits deletion tracking to ~4B rows.
+    /// Indices > u32::MAX cannot be marked as deleted (always considered live).
     pub(crate) deletion_bitmap: RoaringBitmap,
     /// Row expiry timestamps: row_idx → expiry_timestamp (US-004 TTL)
     pub(crate) row_expiry: HashMap<usize, u64>,
@@ -145,13 +146,31 @@ impl ColumnStore {
     /// Returns the number of active (non-deleted) rows in the store.
     #[must_use]
     pub fn active_row_count(&self) -> usize {
-        self.row_count.saturating_sub(self.deleted_rows.len())
+        self.row_count
+            .saturating_sub(self.deletion_bitmap.len() as usize)
     }
 
     /// Returns the number of deleted (tombstoned) rows.
     #[must_use]
     pub fn deleted_row_count(&self) -> usize {
-        self.deleted_rows.len()
+        self.deletion_bitmap.len() as usize
+    }
+
+    /// Checks if a row is deleted (O(1) via RoaringBitmap).
+    ///
+    /// Row indices > u32::MAX cannot be tracked and are always considered live.
+    #[must_use]
+    #[inline]
+    pub fn is_deleted(&self, row_idx: usize) -> bool {
+        u32::try_from(row_idx).is_ok_and(|i| self.deletion_bitmap.contains(i))
+    }
+
+    /// Marks a row as deleted in the bitmap.
+    #[inline]
+    fn mark_deleted(&mut self, row_idx: usize) {
+        if let Ok(idx) = u32::try_from(row_idx) {
+            self.deletion_bitmap.insert(idx);
+        }
     }
 
     /// Returns the string table for string interning.
@@ -239,7 +258,7 @@ impl ColumnStore {
             .ok_or(ColumnStoreError::MissingPrimaryKey)?;
 
         if let Some(&existing_idx) = self.primary_index.get(&pk_value) {
-            if self.deleted_rows.contains(&existing_idx) {
+            if self.is_deleted(existing_idx) {
                 for (col_name, value) in values {
                     if let Some(col) = self.columns.get(*col_name) {
                         if !matches!(value, ColumnValue::Null) {
@@ -247,8 +266,8 @@ impl ColumnStore {
                         }
                     }
                 }
-                self.deleted_rows.remove(&existing_idx);
-                // BUG-9 FIX: Also update RoaringBitmap when undeleting a row
+                // Reason: direct field access instead of self.unmark_deleted() to avoid
+                // borrow conflict with pk_col borrowing self.primary_key_column.
                 if let Ok(idx) = u32::try_from(existing_idx) {
                     self.deletion_bitmap.remove(idx);
                 }
@@ -281,7 +300,7 @@ impl ColumnStore {
     #[must_use]
     pub fn get_row_idx_by_pk(&self, pk: i64) -> Option<usize> {
         let row_idx = self.primary_index.get(&pk).copied()?;
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_deleted(row_idx) {
             return None;
         }
         Some(row_idx)
@@ -290,19 +309,14 @@ impl ColumnStore {
     /// Deletes a row by primary key value.
     ///
     /// Also clears any TTL metadata to prevent false-positive expirations.
-    /// Updates both FxHashSet and RoaringBitmap (EPIC-043 US-002).
     pub fn delete_by_pk(&mut self, pk: i64) -> bool {
         let Some(&row_idx) = self.primary_index.get(&pk) else {
             return false;
         };
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_deleted(row_idx) {
             return false;
         }
-        self.deleted_rows.insert(row_idx);
-        // EPIC-043 US-002: Also update RoaringBitmap for O(1) contains
-        if let Ok(idx) = u32::try_from(row_idx) {
-            self.deletion_bitmap.insert(idx);
-        }
+        self.mark_deleted(row_idx);
         self.row_expiry.remove(&row_idx);
         true
     }
@@ -327,7 +341,7 @@ impl ColumnStore {
             .get(&pk)
             .ok_or(ColumnStoreError::RowNotFound(pk))?;
 
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_deleted(row_idx) {
             return Err(ColumnStoreError::RowNotFound(pk));
         }
 
@@ -355,7 +369,7 @@ impl ColumnStore {
             .get(&pk)
             .ok_or(ColumnStoreError::RowNotFound(pk))?;
 
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_deleted(row_idx) {
             return Err(ColumnStoreError::RowNotFound(pk));
         }
 
@@ -403,7 +417,7 @@ impl ColumnStore {
     /// Gets a value from a column at a specific row index as JSON.
     #[must_use]
     pub fn get_value_as_json(&self, column: &str, row_idx: usize) -> Option<serde_json::Value> {
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_deleted(row_idx) {
             return None;
         }
 

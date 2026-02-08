@@ -21,7 +21,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(value) && !self.deleted_rows.contains(&idx) {
+                if *v == Some(value) && !self.is_deleted(idx) {
                     Some(idx)
                 } else {
                     None
@@ -46,7 +46,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(string_id) && !self.deleted_rows.contains(&idx) {
+                if *v == Some(string_id) && !self.is_deleted(idx) {
                     Some(idx)
                 } else {
                     None
@@ -67,7 +67,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val > threshold && !self.deleted_rows.contains(&idx) => Some(idx),
+                Some(val) if *val > threshold && !self.is_deleted(idx) => Some(idx),
                 _ => None,
             })
             .collect()
@@ -85,7 +85,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val < threshold && !self.deleted_rows.contains(&idx) => Some(idx),
+                Some(val) if *val < threshold && !self.is_deleted(idx) => Some(idx),
                 _ => None,
             })
             .collect()
@@ -103,9 +103,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val > low && *val < high && !self.deleted_rows.contains(&idx) => {
-                    Some(idx)
-                }
+                Some(val) if *val > low && *val < high && !self.is_deleted(idx) => Some(idx),
                 _ => None,
             })
             .collect()
@@ -134,9 +132,7 @@ impl ColumnStore {
             col.iter()
                 .enumerate()
                 .filter_map(|(idx, v)| match v {
-                    Some(id) if id_set.contains(id) && !self.deleted_rows.contains(&idx) => {
-                        Some(idx)
-                    }
+                    Some(id) if id_set.contains(id) && !self.is_deleted(idx) => Some(idx),
                     _ => None,
                 })
                 .collect()
@@ -144,7 +140,7 @@ impl ColumnStore {
             col.iter()
                 .enumerate()
                 .filter_map(|(idx, v)| match v {
-                    Some(id) if ids.contains(id) && !self.deleted_rows.contains(&idx) => Some(idx),
+                    Some(id) if ids.contains(id) && !self.is_deleted(idx) => Some(idx),
                     _ => None,
                 })
                 .collect()
@@ -162,7 +158,7 @@ impl ColumnStore {
 
         col.iter()
             .enumerate()
-            .filter(|(idx, v)| **v == Some(value) && !self.deleted_rows.contains(idx))
+            .filter(|(idx, v)| **v == Some(value) && !self.is_deleted(*idx))
             .count()
     }
 
@@ -179,7 +175,7 @@ impl ColumnStore {
 
         col.iter()
             .enumerate()
-            .filter(|(idx, v)| **v == Some(string_id) && !self.deleted_rows.contains(idx))
+            .filter(|(idx, v)| **v == Some(string_id) && !self.is_deleted(*idx))
             .count()
     }
 
@@ -205,7 +201,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(value) && !self.deleted_rows.contains(&idx) {
+                if *v == Some(value) && !self.is_deleted(idx) {
                     u32::try_from(idx).ok()
                 } else {
                     None
@@ -230,7 +226,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| {
-                if *v == Some(string_id) && !self.deleted_rows.contains(&idx) {
+                if *v == Some(string_id) && !self.is_deleted(idx) {
                     u32::try_from(idx).ok()
                 } else {
                     None
@@ -251,7 +247,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(val) if *val > low && *val < high && !self.deleted_rows.contains(&idx) => {
+                Some(val) if *val > low && *val < high && !self.is_deleted(idx) => {
                     u32::try_from(idx).ok()
                 }
                 _ => None,
