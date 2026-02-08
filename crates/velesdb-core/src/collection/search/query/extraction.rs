@@ -248,6 +248,104 @@ impl Collection {
         }
     }
 
+    /// Extract NEAR_FUSED condition from WHERE clause (VP-012).
+    ///
+    /// Returns the resolved vectors and fusion strategy if a `VectorFusedSearch`
+    /// condition is found. Recurses into AND and Group conditions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Vector parameters are missing or invalid
+    /// - The fusion strategy is unknown
+    /// - NEAR_FUSED is combined with similarity() or NEAR (conflicting modes)
+    #[allow(clippy::self_only_used_in_recursion)]
+    pub(crate) fn extract_fused_vector_search(
+        &self,
+        condition: &Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<(Vec<Vec<f32>>, crate::fusion::FusionStrategy)>> {
+        match condition {
+            Condition::VectorFusedSearch(fused) => {
+                // Resolve all vector parameters
+                let vectors: Vec<Vec<f32>> = fused
+                    .vectors
+                    .iter()
+                    .map(|v| self.resolve_vector(v, params))
+                    .collect::<Result<Vec<Vec<f32>>>>()?;
+
+                // Map FusionConfig (String-based) to FusionStrategy (enum)
+                let strategy = Self::map_fusion_config_to_strategy(&fused.fusion)?;
+
+                Ok(Some((vectors, strategy)))
+            }
+            Condition::And(left, right) => {
+                if let Some(result) = self.extract_fused_vector_search(left, params)? {
+                    return Ok(Some(result));
+                }
+                self.extract_fused_vector_search(right, params)
+            }
+            Condition::Group(inner) => self.extract_fused_vector_search(inner, params),
+            _ => Ok(None),
+        }
+    }
+
+    /// Maps a `FusionConfig` (String-based AST type) to a `FusionStrategy` (typed enum).
+    ///
+    /// This bridges the parser's string representation to the core fusion engine.
+    /// Uses `FusionStrategy::weighted()` which returns `Result` instead of
+    /// `FusionConfig::weighted()` which panics on invalid weights (SecDev fix).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Strategy name is unknown
+    /// - Weighted strategy has invalid weights
+    pub(crate) fn map_fusion_config_to_strategy(
+        config: &crate::velesql::FusionConfig,
+    ) -> Result<crate::fusion::FusionStrategy> {
+        use crate::fusion::FusionStrategy;
+
+        match config.strategy.to_lowercase().as_str() {
+            "rrf" => {
+                let k = config.params.get("k").copied().unwrap_or(60.0);
+                #[allow(clippy::cast_possible_truncation)]
+                // Reason: k parameter is a small positive integer (typically 60),
+                // truncation from f64 to u32 is safe
+                let k_u32 = if k > 0.0 && k <= f64::from(u32::MAX) {
+                    k as u32
+                } else {
+                    60
+                };
+                Ok(FusionStrategy::RRF { k: k_u32 })
+            }
+            "average" => Ok(FusionStrategy::Average),
+            "maximum" => Ok(FusionStrategy::Maximum),
+            "weighted" => {
+                #[allow(clippy::cast_possible_truncation)]
+                // Reason: fusion weights are in [0.0, 1.0] range, f64->f32 precision loss acceptable
+                let avg_weight = config.params.get("avg_weight").copied().unwrap_or(0.34) as f32;
+                #[allow(clippy::cast_possible_truncation)]
+                let max_weight = config.params.get("max_weight").copied().unwrap_or(0.33) as f32;
+                #[allow(clippy::cast_possible_truncation)]
+                let hit_weight = config.params.get("hit_weight").copied().unwrap_or(0.33) as f32;
+
+                // Reason: Use FusionStrategy::weighted() which returns Result
+                // instead of FusionConfig::weighted() which panics (SecDev fix)
+                FusionStrategy::weighted(avg_weight, max_weight, hit_weight).map_err(|e| {
+                    Error::Config(format!(
+                        "Invalid weighted fusion config: {e}. \
+                         Weights must be non-negative and sum to 1.0"
+                    ))
+                })
+            }
+            unknown => Err(Error::Config(format!(
+                "Unknown fusion strategy '{unknown}'. \
+                 Supported: rrf, average, maximum, weighted"
+            ))),
+        }
+    }
+
     /// Compute the metric score between two vectors using the collection's configured metric.
     ///
     /// **Note:** This returns the raw metric score, not a normalized similarity.

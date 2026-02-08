@@ -45,6 +45,8 @@ mod match_return_agg_tests;
 mod match_where_eval_tests;
 #[cfg(test)]
 mod multi_hop_tests;
+#[cfg(test)]
+mod near_fused_tests;
 mod ordering;
 pub mod parallel_traversal;
 #[cfg(test)]
@@ -176,6 +178,50 @@ impl Collection {
         if is_union_query {
             if let Some(ref cond) = stmt.where_clause {
                 let mut results = self.execute_union_query(cond, params, limit, overfetch_base)?;
+
+                // Apply ORDER BY if present
+                if let Some(ref order_by) = stmt.order_by {
+                    self.apply_order_by(&mut results, order_by, params)?;
+                }
+                results.truncate(limit);
+                return Ok(results);
+            }
+        }
+
+        // VP-012: NEAR_FUSED dispatch — multi-vector fused search
+        if let Some(ref cond) = stmt.where_clause {
+            if let Some((vectors, fusion_strategy)) =
+                self.extract_fused_vector_search(cond, params)?
+            {
+                // Validate: NEAR_FUSED cannot be combined with NEAR or similarity()
+                if vector_search.is_some() {
+                    return Err(crate::error::Error::Config(
+                        "Cannot combine NEAR and NEAR_FUSED in the same query. \
+                         Use NEAR for single-vector search or NEAR_FUSED for multi-vector fusion."
+                            .to_string(),
+                    ));
+                }
+                if !similarity_conditions.is_empty() {
+                    return Err(crate::error::Error::Config(
+                        "Cannot combine NEAR_FUSED with similarity() in the same query. \
+                         NEAR_FUSED already performs multi-vector fusion with scoring."
+                            .to_string(),
+                    ));
+                }
+
+                // Build metadata filter from remaining conditions
+                let metadata_filter = Self::extract_metadata_filter(cond)
+                    .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
+
+                // Convert vectors to slices for multi_query_search
+                let vec_slices: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+
+                let mut results = self.multi_query_search(
+                    &vec_slices,
+                    limit,
+                    fusion_strategy,
+                    metadata_filter.as_ref(),
+                )?;
 
                 // Apply ORDER BY if present
                 if let Some(ref order_by) = stmt.order_by {

@@ -85,9 +85,18 @@ impl Collection {
                 // VP-001: Full-text MATCH evaluation in MATCH WHERE
                 self.evaluate_match_condition(node_id, m)
             }
-            // VectorSearch and VectorFusedSearch are handled at a higher level
-            // by execute_match_with_similarity — pass through as true.
-            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
+            // VectorSearch is handled at a higher level by execute_match_with_similarity.
+            Condition::VectorSearch(_) => Ok(true),
+            // VP-012 BUG-FIX: NEAR_FUSED in MATCH WHERE must return Error::Config.
+            // Previously silently passed as Ok(true), which is incorrect —
+            // NEAR_FUSED requires multi_query_search() which is only available
+            // through the SELECT execute_query() path, not MATCH.
+            Condition::VectorFusedSearch(_) => Err(Error::Config(
+                "NEAR_FUSED is not supported in MATCH WHERE clauses. \
+                 Use NEAR_FUSED in SELECT queries instead: \
+                 SELECT * FROM collection WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'"
+                    .to_string(),
+            )),
         }
     }
 
