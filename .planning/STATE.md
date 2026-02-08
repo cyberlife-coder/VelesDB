@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 2 ✅ — Phase 3 next)  
+**Current Milestone:** v4-verify-promise (Phase 2 ✅ — Phase 3 planned, ready to execute)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -47,7 +47,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 |-------|--------|-------|-------------|----------|----------|
 | 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
-| 3 - Multi-hop MATCH & RETURN | ⬜ Blocked by P1 | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
+| 3 - Multi-hop MATCH & RETURN | 📋 Planned (2 plans) | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ⬜ Blocked by P1-3 | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 
@@ -71,6 +71,16 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - Plan 02-01: Core Scalar Subquery Executor (Wave 1)
 - Plan 02-02: Wire into MATCH WHERE (Wave 2)
 - Plan 02-03: Wire into SELECT WHERE + Quality Gates (Wave 2)
+
+**Multi-hop approach:** Hop-by-hop chain execution (planned 2026-02-08)
+- Plan 03-01: Multi-hop Chain Traversal + Binding-Aware WHERE (Wave 1)
+- Plan 03-02: RETURN Aggregation for MATCH Results (Wave 2)
+
+**Key technical decisions for Phase 3:**
+- Hop-by-hop execution replaces single merged BFS — per-hop relationship type filtering
+- Binding-aware WHERE: alias-qualified columns (`b.price`) resolved from bindings map
+- RETURN aggregation uses OpenCypher implicit grouping (non-aggregated items = grouping keys)
+- Single-hop path unchanged for backward compatibility
 
 ---
 
@@ -123,4 +133,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: Phase 2 complete (7e87d446). Subquery execution works in MATCH WHERE + SELECT WHERE. Phase 3 next.*
+*Status: Phase 2 complete (7e87d446). Phase 3 planned (2 plans: 03-01 chain traversal, 03-02 RETURN aggregation). Ready to execute.*
