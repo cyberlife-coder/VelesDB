@@ -11,7 +11,7 @@
 ## Progress
 
 ```
-Phase 1  ██████████ 100% — MATCH WHERE Completeness ✅
+Phase 1  ███████▓▓▓  75% — MATCH WHERE Completeness (reopened: VP-003 + VP-006)
 Phase 2  ░░░░░░░░░░  0%  — Subquery Decision & Execution (3 plans ready)
 Phase 3  ░░░░░░░░░░  0%  — Multi-hop MATCH & RETURN
 Phase 4  ░░░░░░░░░░  0%  — E2E Scenario Test Suite
@@ -36,12 +36,16 @@ Phase 5  ░░░░░░░░░░  0%  — README & Documentation Truth
 - [x] IN conditions evaluated in MATCH WHERE (set membership)
 - [x] IsNull/IsNotNull conditions evaluated in MATCH WHERE
 - [x] Match (full-text) conditions evaluated in MATCH WHERE
-- [x] Temporal comparisons work in MATCH WHERE (NOW() - INTERVAL vs payload timestamp)
-- [x] ORDER BY property path (e.g., `conv.timestamp`) works in MATCH results
+- [ ] ~~Temporal comparisons work in MATCH WHERE~~ → VP-003: `resolve_where_param` passes `Value::Temporal` unchanged, `evaluate_comparison` returns `false`
+- [ ] ~~ORDER BY property path works in MATCH results~~ → VP-006: `order_match_results` exists but never called from `execute_match`/`execute_match_with_similarity`
 - [x] No `_ => Ok(true)` catch-all remains — VectorSearch/FusedSearch pass-through only
 - [x] Tests for each condition type in MATCH context (15 tests)
 
-**Completed:** 2026-02-08 — Commit `dc9ac868`
+**Partially completed:** 2026-02-08 — Commit `dc9ac868` (VP-001 done, VP-003/VP-006 gaps found 2026-02-09)
+
+**Reopened plans:**
+- 01-01: Wire ORDER BY into MATCH execution pipeline (VP-006)
+- 01-02: Wire Temporal resolution into MATCH WHERE comparison (VP-003)
 
 **Key Files:**
 - `crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs` — Main fix location
