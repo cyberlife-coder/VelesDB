@@ -51,7 +51,7 @@ fn test_score_breakdown_components() {
 fn test_fusion_strategy_average() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.7);
 
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
     assert!((breakdown.final_score - 0.8).abs() < 0.001);
 }
 
@@ -59,7 +59,7 @@ fn test_fusion_strategy_average() {
 fn test_fusion_strategy_maximum() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.7);
 
-    breakdown.compute_final(&FusionStrategy::Maximum);
+    breakdown.compute_final(&ScoreCombineStrategy::Maximum);
     assert!((breakdown.final_score - 0.9).abs() < 0.001);
 }
 
@@ -67,7 +67,7 @@ fn test_fusion_strategy_maximum() {
 fn test_fusion_strategy_minimum() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.7);
 
-    breakdown.compute_final(&FusionStrategy::Minimum);
+    breakdown.compute_final(&ScoreCombineStrategy::Minimum);
     assert!((breakdown.final_score - 0.7).abs() < 0.001);
 }
 
@@ -75,7 +75,7 @@ fn test_fusion_strategy_minimum() {
 fn test_fusion_strategy_product() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
 
-    breakdown.compute_final(&FusionStrategy::Product);
+    breakdown.compute_final(&ScoreCombineStrategy::Product);
     assert!((breakdown.final_score - 0.72).abs() < 0.001);
 }
 
@@ -85,7 +85,7 @@ fn test_fusion_with_metadata_boost() {
         .with_vector(0.8)
         .with_metadata_boost(1.5);
 
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
     assert!((breakdown.final_score - 1.2).abs() < 0.001);
 }
 
@@ -96,7 +96,7 @@ fn test_fusion_with_multiple_boosts() {
         .with_metadata_boost(1.2)
         .with_recency_boost(1.1);
 
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
     assert!((breakdown.final_score - 1.056).abs() < 0.01);
 }
 
@@ -106,7 +106,7 @@ fn test_fusion_with_custom_boost() {
         .with_vector(0.5)
         .with_custom_boost("popularity", 2.0);
 
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
     assert!((breakdown.final_score - 1.0).abs() < 0.001);
 }
 
@@ -123,7 +123,7 @@ fn test_scored_result_with_breakdown() {
     let breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
 
     let mut bd = breakdown.clone();
-    bd.compute_final(&FusionStrategy::Average);
+    bd.compute_final(&ScoreCombineStrategy::Average);
 
     let result = ScoredResult::with_breakdown(1, bd);
     assert_eq!(result.id, 1);
@@ -131,11 +131,12 @@ fn test_scored_result_with_breakdown() {
 }
 
 #[test]
-fn test_fusion_strategy_as_str() {
-    assert_eq!(FusionStrategy::Rrf.as_str(), "rrf");
-    assert_eq!(FusionStrategy::Weighted.as_str(), "weighted");
-    assert_eq!(FusionStrategy::Maximum.as_str(), "maximum");
-    assert_eq!(FusionStrategy::Average.as_str(), "average");
+fn test_score_combine_strategy_as_str() {
+    assert_eq!(ScoreCombineStrategy::Weighted.as_str(), "weighted");
+    assert_eq!(ScoreCombineStrategy::Maximum.as_str(), "maximum");
+    assert_eq!(ScoreCombineStrategy::Minimum.as_str(), "minimum");
+    assert_eq!(ScoreCombineStrategy::Product.as_str(), "product");
+    assert_eq!(ScoreCombineStrategy::Average.as_str(), "average");
 }
 
 #[test]
@@ -151,7 +152,7 @@ fn test_score_breakdown_json_serialization() {
 #[test]
 fn test_scored_result_json_serialization() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
     let result = ScoredResult::with_breakdown(42, breakdown)
         .with_payload(serde_json::json!({"title": "Test"}));
@@ -260,7 +261,7 @@ fn test_path_scorer_combined_with_breakdown() {
 
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_path(path_score);
 
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
     // Average of 0.9 and 0.64 = 0.77
     assert!((breakdown.final_score - 0.77).abs() < 0.01);
@@ -420,9 +421,9 @@ fn test_boost_function_names() {
 #[test]
 fn test_explain_vector_only() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.85);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
-    let explanation = breakdown.explain(&FusionStrategy::Average);
+    let explanation = breakdown.explain(&ScoreCombineStrategy::Average);
 
     assert!((explanation.final_score - 0.85).abs() < f32::EPSILON);
     assert_eq!(explanation.strategy, "average");
@@ -437,9 +438,9 @@ fn test_explain_hybrid_query() {
         .with_vector(0.9)
         .with_graph(0.7)
         .with_path(0.8);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
-    let explanation = breakdown.explain(&FusionStrategy::Average);
+    let explanation = breakdown.explain(&ScoreCombineStrategy::Average);
 
     // 3 weighted components + none for boosts
     assert_eq!(explanation.components.len(), 3);
@@ -458,9 +459,9 @@ fn test_explain_with_boosts() {
         .with_vector(0.9)
         .with_metadata_boost(1.2)
         .with_recency_boost(1.1);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
-    let explanation = breakdown.explain(&FusionStrategy::Average);
+    let explanation = breakdown.explain(&ScoreCombineStrategy::Average);
 
     // 1 weighted component (vector) + 2 multipliers
     assert_eq!(explanation.components.len(), 3);
@@ -477,9 +478,9 @@ fn test_explain_with_boosts() {
 #[test]
 fn test_explain_human_readable_format() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.92).with_graph(0.75);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
-    let explanation = breakdown.explain(&FusionStrategy::Average);
+    let explanation = breakdown.explain(&ScoreCombineStrategy::Average);
 
     // Should contain final score line
     assert!(explanation.human_readable.contains("Final score:"));
@@ -495,9 +496,9 @@ fn test_explain_custom_boosts() {
     let mut breakdown = ScoreBreakdown::new()
         .with_vector(0.8)
         .with_custom_boost("popularity", 1.5);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
-    let explanation = breakdown.explain(&FusionStrategy::Average);
+    let explanation = breakdown.explain(&ScoreCombineStrategy::Average);
 
     // Should include custom boost
     let custom = explanation
@@ -511,9 +512,9 @@ fn test_explain_custom_boosts() {
 #[test]
 fn test_explanation_json_serialization() {
     let mut breakdown = ScoreBreakdown::new().with_vector(0.9).with_graph(0.8);
-    breakdown.compute_final(&FusionStrategy::Average);
+    breakdown.compute_final(&ScoreCombineStrategy::Average);
 
-    let explanation = breakdown.explain(&FusionStrategy::Average);
+    let explanation = breakdown.explain(&ScoreCombineStrategy::Average);
     let json = serde_json::to_string(&explanation).unwrap();
 
     assert!(json.contains("final_score"));

@@ -137,7 +137,7 @@ The `(SELECT ... FROM ... WHERE ...)` subqueries are **parsed but evaluate to NU
 
 | Decision | Options | Rationale | Outcome |
 |----------|---------|-----------|---------|
-| Subqueries | Implement vs Error | Complex to implement correctly; better to error clearly | — Pending discussion |
+| Subqueries | Implement vs Error | User chose: Implement. Delivers on README promise. | **Implement** ✅ |
 | Business scenarios | Fix queries vs Update README | Both needed — fix what's feasible, update docs for rest | — Pending |
 | Multi-hop MATCH | Full Cypher vs Simplified | Simplified multi-hop covers 90% of use cases | — Pending |
 | RETURN aggregation | Full vs Property-only | Property projection works; aggregation deferred | — Pending |

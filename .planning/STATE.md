@@ -2,7 +2,7 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v4-verify-promise (Phase 0 — Gap analysis complete, ready to plan)  
-**Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed)  
+**Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
 ---
@@ -34,50 +34,10 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ---
 
-## Milestone v2: Core Trust (23 active findings — velesdb-core only)
+## Milestone v2: Core Trust — ✅ Completed 2026-02-08
 
-### Status: Phase 4 complete. All plans done. Milestone v2 complete.
-
-| Phase | Status | Tasks | Findings | Estimate | Priority |
-|-------|--------|-------|----------|----------|----------|
-| 0 - Merge & Tag v1 | ✅ Done | 1 | — | 15 min | 🔒 Prerequisite |
-| 1 - CI Safety Net | ✅ Done | 4 | CI-01→04 | 15min | 🛡️ Infrastructure |
-| 2 - Critical Correctness | ✅ Done (3/3 plans) | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
-| 3 - Core Engine Bugs | ✅ Done (3/3 plans) | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
-| 4 - Perf, Storage, Cleanup | ✅ Done (3/3 plans) | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
-
-**Total:** 28 tasks | 10 plans | ~25-30h  
-**Execution:** `0 → 1 → 2 → 3 → 4`
-
-### Plan Mapping
-
-| Phase | Plans | Wave | Files |
-|-------|-------|------|-------|
-| 1 | 01-01: CI Pipeline Hardening | 1 | `phases/01-ci-safety-net/01-01-PLAN.md` |
-| 2 | 02-01: GPU WGSL Shaders & Metric Dispatch | 1 | `phases/02-critical-correctness/02-01-PLAN.md` |
-| 2 | 02-02: GPU Trigram Cleanup | 1 | `phases/02-critical-correctness/02-02-PLAN.md` |
-| 2 | 02-03: Fusion Unification & ParseError | 1 | `phases/02-critical-correctness/02-03-PLAN.md` |
-| 3 | 03-01: Input Validation & VelesQL Fixes | 1 | `phases/03-core-engine-bugs/03-01-PLAN.md` |
-| 3 | 03-02: Graph Traversal Fixes | 1 | `phases/03-core-engine-bugs/03-02-PLAN.md` |
-| 3 | 03-03: Quantization & DualPrecision Fixes | 1 | `phases/03-core-engine-bugs/03-03-PLAN.md` |
-| 4 | 04-01: HNSW & Search Performance | 1 | `phases/04-perf-storage-cleanup/04-01-PLAN.md` |
-| 4 | 04-02: Storage Integrity | 1 | `phases/04-perf-storage-cleanup/04-02-PLAN.md` |
-| 4 | 04-03: ColumnStore Unification & Dead Code | 1 | `phases/04-perf-storage-cleanup/04-03-PLAN.md` |
-
-### Key Decisions (v3.2)
-- C-04/B-03 removed from scope (already fixed in `fusion/strategy.rs`)
-- Old broken `score_fusion/mod.rs` FusionStrategy enum → ✅ DELETED (02-03)
-- `ParseError::InvalidValue` (E007) added for fusion param validation (02-03)
-- `GpuTrigramAccelerator` → ✅ DONE: renamed to `TrigramAccelerator` (02-02)
-- BFS overflow: stop inserting, don't `clear()` visited set
-- ORDER BY property → return error, not silent no-op
-- DualPrecision default → use int8 when quantizer trained
-- Tests multi-thread in CI (remove `--test-threads=1`)
-- D-02: HNSW `search_layer` single lock acquisition per search (not per-candidate)
-- D-04: Over-fetch factor configurable via `WITH (overfetch = N)`, default 10, clamped 1-100
-- D-05: WAL per-entry CRC32 for corruption detection (replay + retrieve)
-- D-06: `store_batch()` with single flush for reduced I/O syscalls
-- D-07: `should_create_snapshot` uses AtomicU64 instead of write lock
+**23/23 findings resolved** | 4 phases | 10 plans | 3,165 tests | Audit passed  
+**Archive:** `.planning/milestones/v2-core-trust/` | Full details in `MILESTONES.md`
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 

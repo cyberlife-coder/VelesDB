@@ -40,18 +40,39 @@ Full details: `.planning/milestones/v4-verify-promise/`
 
 ## v2-core-trust — Completed
 
-**Started:** 2026-02-08
-**Completed:** 2026-02-12
-**Phases:** 4 (+1 prerequisite)
-**Plans:** 10
+**Started:** 2026-02-08  
+**Completed:** 2026-02-08  
+**Phases:** 4 (+1 prerequisite)  
+**Plans:** 10  
+**Audit:** ✅ Passed (23/23 findings resolved, 0 gaps)
 
 ### Summary
 
-Devil's Advocate code review findings. Fixed GPU shaders, fusion unification, VelesQL bugs, graph traversal fixes, quantization, HNSW performance, storage integrity, and dead code cleanup. 28 tasks across 10 plans.
+Implementation Truth & Correctness milestone. All findings from the Devil's Advocate Code Review (47 issues total, 23 scoped to velesdb-core). Fixed real GPU WGSL shaders, fusion disambiguation (ScoreCombineStrategy), VelesQL ParseError::InvalidValue (E007), graph traversal bugs, quantization fixes, HNSW single-lock search, WAL CRC32 integrity, and dead code cleanup.
+
+### Key Achievements
+
+- **GPU Truth**: Fake CPU loops replaced with real WGSL compute shaders (Euclidean + DotProduct)
+- **Fusion Clarity**: Old broken `FusionStrategy` renamed to `ScoreCombineStrategy`, broken RRF variant deleted
+- **Parse Safety**: `ParseError::InvalidValue` (E007) replaces silent `unwrap_or(0.0)` in fusion/MATCH parsing
+- **HNSW Perf**: Single read lock per search (was per-candidate), adaptive over-fetch factor
+- **Storage Integrity**: WAL per-entry CRC32, batch flush, AtomicU64 snapshot
+- **CI Hardened**: PR triggers restored, security audit blocking, cargo deny, multi-threaded tests
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| Phases | 4 (+1 prerequisite) |
+| Plans executed | 10 |
+| Findings resolved | 23/23 (100%) |
+| Tests passing | 3,165 |
+| Quality gates | 5/5 (fmt, clippy, deny, test, release build) |
+| Commits | ~22 |
 
 ### Archive
 
-Full details: `.planning/v2-correctness/`
+Full details: `.planning/milestones/v2-core-trust/`
 
 ---
 

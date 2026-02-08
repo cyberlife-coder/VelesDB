@@ -179,7 +179,7 @@ impl Parser {
                     }
                 }
                 Rule::fusion_clause => {
-                    fusion = Self::parse_fusion_clause(inner);
+                    fusion = Self::parse_fusion_clause(inner)?;
                 }
                 _ => {}
             }
@@ -199,7 +199,9 @@ impl Parser {
         }))
     }
 
-    pub(crate) fn parse_fusion_clause(pair: pest::iterators::Pair<Rule>) -> FusionConfig {
+    pub(crate) fn parse_fusion_clause(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<FusionConfig, ParseError> {
         let mut strategy = "rrf".to_string();
         let mut params = std::collections::HashMap::new();
 
@@ -221,7 +223,17 @@ impl Parser {
                                         (fp_inner.next(), fp_inner.next())
                                     {
                                         let key_str = key.as_str().to_string();
-                                        let val_f64 = val.as_str().parse::<f64>().unwrap_or(0.0);
+                                        let val_str = val.as_str();
+                                        let val_f64 =
+                                            val_str.parse::<f64>().map_err(|_| {
+                                                ParseError::invalid_value(
+                                                    val.as_span().start(),
+                                                    val_str,
+                                                    format!(
+                                                        "Expected numeric value for fusion parameter '{key_str}', got '{val_str}'"
+                                                    ),
+                                                )
+                                            })?;
                                         params.insert(key_str, val_f64);
                                     }
                                 }
@@ -233,7 +245,7 @@ impl Parser {
             }
         }
 
-        FusionConfig { strategy, params }
+        Ok(FusionConfig { strategy, params })
     }
 
     pub(crate) fn parse_vector_value(
