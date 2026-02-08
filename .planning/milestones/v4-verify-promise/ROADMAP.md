@@ -16,6 +16,7 @@ Phase 2  ██████████ 100% — Subquery Decision & Execution �
 Phase 3  ██████████ 100% — Multi-hop MATCH & RETURN ✅ (2026-02-08)
 Phase 4  ██████████ 100% — E2E Scenario Test Suite ✅ (2026-02-09)
 Phase 5  ░░░░░░░░░░  0%  — README & Documentation Truth (ready to plan)
+Phase 6  ░░░░░░░░░░  0%  — Unified Query & Full-Text Search (planned)
 ```
 
 ---
@@ -183,12 +184,49 @@ Execution reuses `Collection::execute_query()` for inner SELECT, extracts scalar
 
 ---
 
+### Phase 6: Unified Cross-Store Query Engine & Full-Text Search
+
+**Goal:** Implement and validate unified query capabilities claimed on velesdb.com: seamless combination of vector (NEAR), graph (MATCH), and full-text (BM25) in single queries.
+
+**Requirements:** VP-010, VP-011, VP-012  
+**Estimate:** 20-25h  
+**Priority:** 🚨 Critical — Site claims features requiring deeper implementation
+
+**Problem:**
+The velesdb.com website showcases three capabilities needing implementation:
+
+1. **Cross-Store Unified Queries** — `WHERE vector NEAR $v AND MATCH (a)-[:KNOWS]->(b)` — No unified query planner exists
+2. **BM25 Full-Text** — "Trigram Index 22-128x faster" — No BM25/trigram implementation exists
+3. **NEAR_FUSED Execution** — Multi-vector fusion at runtime — Parsing works but full execution not validated
+
+**Success Criteria:**
+- [ ] `NEAR` + `MATCH` + column filters in single WHERE clause executes correctly
+- [ ] BM25 trigram index: 25x faster than LIKE scan (2ms vs 50ms on 100K docs)
+- [ ] `MATCH` operator for full-text search with BM25 scoring
+- [ ] NEAR_FUSED multi-vector execution with all fusion strategies validated
+- [ ] Cross-store query planner optimizes execution order
+
+**Plans:**
+- Wave 1: BM25 Foundation (06-01 → 06-03)
+- Wave 2: Cross-Store Query Engine (06-04 → 06-06)
+- Wave 3: NEAR_FUSED & Integration (06-07 → 06-09)
+
+**Key Files:**
+- `crates/velesdb-core/src/index/trigram/` — New full-text indexing module
+- `crates/velesdb-core/src/query/unified/` — New cross-store execution
+- `crates/velesdb-core/src/velesql/execution.rs` — Add unified query path
+
+---
+
 ## Execution Order
 
 ```
 Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
                                   ↑
                     Phase 4 depends on 1-3 being done
+                    
+Phase 6 (Unified Query) can parallelize with Phase 5
+or execute after depending on priority.
 ```
 
 Phase 1 is independent and highest-impact (silent incorrect results).
@@ -196,6 +234,7 @@ Phase 2 needs user decision on subquery approach.
 Phase 3 builds on Phase 1 fixes.
 Phase 4 validates all previous phases.
 Phase 5 is the final documentation cleanup.
+Phase 6 implements advanced unified capabilities claimed on site.
 
 ---
 
@@ -206,7 +245,10 @@ Phase 5 is the final documentation cleanup.
 | Subquery implementation too complex | Delays Phase 2 | Option B (error) as fallback |
 | Multi-hop MATCH breaks existing queries | Regression | Extensive test suite before changes |
 | README changes anger users | Trust | "In Progress" is better than "Fake" |
+| BM25 trigram index performance below claim | Site credibility | Benchmark early, adjust claim to reality |
+| Cross-store query complexity | Delays Phase 6 | Start with 2-store queries, expand |
+| NEAR_FUSED fusion overhead too high | Performance | Profile before optimizing claims |
 | Performance regression from new WHERE eval | Slowdown | Benchmark before/after |
 
 ---
-*Last updated: 2026-02-09 — Phases 1-4 complete. Phase 5 ready to plan. 3,222 tests passing.*
+*Last updated: 2026-02-09 — Phases 1-4 complete. Phases 5-6 ready to plan. 3,222 tests passing.*
