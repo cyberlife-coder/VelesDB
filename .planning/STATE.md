@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 0 done, Phase 1 next)  
+**Current Milestone:** v2-core-trust (Phase 0 done, all phases planned, Phase 1 next)  
 **Next Milestone:** v3-ecosystem-alignment  
 **Previous Milestone:** v1-refactoring (completed 2026-02-08)  
 
@@ -36,18 +36,33 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v2: Core Trust (23 active findings — velesdb-core only)
 
-### Status: Phase 0 done. Branch `v2-core-trust` to create, then Phase 1.
+### Status: Phase 0 done. 10 plans created. Ready to execute Phase 1.
 
 | Phase | Status | Tasks | Findings | Estimate | Priority |
 |-------|--------|-------|----------|----------|----------|
-| 0 - Merge & Tag v1 | ✅ Done (branch pending) | 1 | — | 15 min | 🔒 Prerequisite |
+| 0 - Merge & Tag v1 | ✅ Done | 1 | — | 15 min | 🔒 Prerequisite |
 | 1 - CI Safety Net | ⬜ Pending | 4 | CI-01→04 | 2h | 🛡️ Infrastructure |
 | 2 - Critical Correctness | ⬜ Pending | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
 | 3 - Core Engine Bugs | ⬜ Pending | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
 | 4 - Perf, Storage, Cleanup | ⬜ Pending | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
 
-**Total:** 28 tasks | ~25-30h  
+**Total:** 28 tasks | 10 plans | ~25-30h  
 **Execution:** `0 → 1 → 2 → 3 → 4`
+
+### Plan Mapping
+
+| Phase | Plans | Wave | Files |
+|-------|-------|------|-------|
+| 1 | 01-01: CI Pipeline Hardening | 1 | `phases/01-ci-safety-net/01-01-PLAN.md` |
+| 2 | 02-01: GPU WGSL Shaders & Metric Dispatch | 1 | `phases/02-critical-correctness/02-01-PLAN.md` |
+| 2 | 02-02: GPU Trigram Cleanup | 1 | `phases/02-critical-correctness/02-02-PLAN.md` |
+| 2 | 02-03: Fusion Unification & ParseError | 1 | `phases/02-critical-correctness/02-03-PLAN.md` |
+| 3 | 03-01: Input Validation & VelesQL Fixes | 1 | `phases/03-core-engine-bugs/03-01-PLAN.md` |
+| 3 | 03-02: Graph Traversal Fixes | 1 | `phases/03-core-engine-bugs/03-02-PLAN.md` |
+| 3 | 03-03: Quantization & DualPrecision Fixes | 1 | `phases/03-core-engine-bugs/03-03-PLAN.md` |
+| 4 | 04-01: HNSW & Search Performance | 1 | `phases/04-perf-storage-cleanup/04-01-PLAN.md` |
+| 4 | 04-02: Storage Integrity | 1 | `phases/04-perf-storage-cleanup/04-02-PLAN.md` |
+| 4 | 04-03: ColumnStore Unification & Dead Code | 1 | `phases/04-perf-storage-cleanup/04-03-PLAN.md` |
 
 ### Key Decisions (v3.2)
 - C-04/B-03 removed from scope (already fixed in `fusion/strategy.rs`)
@@ -107,4 +122,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: v2-core-trust ROADMAP v3.2 finalized. Phase 0 done. Phase 1 (CI Safety Net) next.*
+*Status: 10 execution plans created across 4 phases. Phase 0 done. Phase 1 (CI Safety Net) ready to execute.*
