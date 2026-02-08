@@ -19,14 +19,13 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/ci.yml'
-  # PR désactivées pour économiser les minutes GitHub Actions
-  # Validation locale OBLIGATOIRE avant push: exécuter /local-ci
-  # pull_request:
-  #   branches: [main, develop]
-  #   paths:
-  #     - 'crates/**'
-  #     - 'Cargo.toml'
-  #     - 'Cargo.lock'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
 
 # Annuler les runs précédents pour la même branche/PR
 concurrency:
