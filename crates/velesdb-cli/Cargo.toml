@@ -44,7 +44,6 @@ indicatif = "0.17"
 
 # Error handling
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 
 # Time measurement
 instant = "0.1"
@@ -61,6 +60,9 @@ chrono = "0.4"
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+
+[lints]
+workspace = true
 
 # =============================================================================
 # Linux .deb package configuration (cargo-deb)

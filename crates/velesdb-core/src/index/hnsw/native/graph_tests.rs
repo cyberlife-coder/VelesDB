@@ -199,6 +199,74 @@ fn test_recall_with_heuristic_selection() {
 }
 
 // =========================================================================
+// Phase 3, Plan 04: Concurrent graph-level insert/search with invariants
+// =========================================================================
+
+/// Parallel insert at graph level with deterministic count + search integrity.
+#[test]
+fn test_graph_parallel_insert_search_integrity() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = CpuDistance::new(DistanceMetric::Euclidean);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
+
+    // Pre-populate
+    for i in 0..50 {
+        #[allow(clippy::cast_precision_loss)]
+        let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
+        hnsw.insert(v);
+    }
+
+    let mut handles = vec![];
+
+    // 4 inserters
+    for t in 0..4_usize {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_usize {
+                #[allow(clippy::cast_precision_loss)]
+                let v: Vec<f32> = (0..32).map(|j| ((t * 1000 + i) * 32 + j) as f32).collect();
+                hnsw_clone.insert(v);
+            }
+        }));
+    }
+
+    // 2 searchers asserting result quality
+    for _ in 0..2 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..30_usize {
+                #[allow(clippy::cast_precision_loss)]
+                let query: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
+                let results = hnsw_clone.search(&query, 5, 50);
+                // Results must always be distance-sorted
+                for window in results.windows(2) {
+                    assert!(
+                        window[0].1 <= window[1].1,
+                        "Search results must be distance-sorted"
+                    );
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("No deadlock or panic");
+    }
+
+    // Deterministic: 50 pre-pop + 200 parallel = 250
+    assert_eq!(hnsw.len(), 250, "All inserts must be reflected in count");
+
+    // Safety counters check
+    let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+    assert_eq!(
+        snapshot.invariant_violation_total, 0,
+        "No lock-order violations during parallel graph operations"
+    );
+}
+
+// =========================================================================
 // Concurrent insertion tests (Flag 6 fix - tests PRNG thread-safety indirectly)
 // =========================================================================
 

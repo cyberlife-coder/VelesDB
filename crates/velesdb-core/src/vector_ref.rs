@@ -20,18 +20,18 @@ use std::ops::Deref;
 /// This trait abstracts over different ways to access vector data:
 /// - `&[f32]`: Direct slice reference (zero-copy from mmap)
 /// - `Cow<[f32]>`: Copy-on-write for flexibility
-/// - `Vec<f32>`: Owned data when needed
+/// - [`Vec<f32>`]: Owned data when needed
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use velesdb_core::VectorRef;
+/// ```rust,no_run
+/// use velesdb_core::vector_ref::VectorRef;
 ///
 /// fn compute_distance<V: VectorRef>(a: &V, b: &V) -> f32 {
 ///     let a_slice = a.as_slice();
 ///     let b_slice = b.as_slice();
 ///     // SIMD distance calculation on slices
-///     crate::simd_native::cosine_similarity_native(a_slice, b_slice)
+///     0.0 // placeholder
 /// }
 /// ```
 pub trait VectorRef {

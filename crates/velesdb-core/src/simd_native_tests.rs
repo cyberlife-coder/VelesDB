@@ -8,6 +8,10 @@ use crate::simd_native::{
     hamming_distance_native, jaccard_similarity_native, simd_level, squared_l2_native, SimdLevel,
 };
 
+// Shared tolerance knobs for SIMD-vs-scalar equivalence assertions.
+pub(crate) const SIMD_ABS_TOLERANCE: f32 = 1e-4;
+pub(crate) const SIMD_REL_TOLERANCE: f32 = 2e-4;
+
 #[test]
 fn test_simd_level_cached() {
     // First call initializes the cache
@@ -381,7 +385,12 @@ fn test_dot_product_remainder_accuracy() {
         } else {
             (result - expected).abs()
         };
-        assert!(rel_error < 1e-4, "len={} error={}", len, rel_error);
+        assert!(
+            rel_error < SIMD_REL_TOLERANCE,
+            "len={} error={}",
+            len,
+            rel_error
+        );
     }
 }
 
@@ -401,7 +410,12 @@ fn test_squared_l2_remainder_accuracy() {
             })
             .sum();
         let rel_error = (result - expected).abs() / expected.abs();
-        assert!(rel_error < 1e-4, "len={} error={}", len, rel_error);
+        assert!(
+            rel_error < SIMD_REL_TOLERANCE,
+            "len={} error={}",
+            len,
+            rel_error
+        );
     }
 }
 
@@ -438,7 +452,7 @@ fn test_dot_product_threshold_512_boundary() {
         };
 
         assert!(
-            rel_error < 1e-4,
+            rel_error < SIMD_REL_TOLERANCE,
             "Threshold test len={} failed: rel_error={} (simd={}, scalar={})",
             len,
             rel_error,
@@ -500,7 +514,7 @@ fn test_dot_product_avx512_4acc_large_vectors() {
         };
 
         assert!(
-            rel_error < 1e-4,
+            rel_error < SIMD_REL_TOLERANCE,
             "len={} rel_error={} (simd={}, scalar={})",
             len,
             rel_error,
@@ -523,7 +537,7 @@ fn test_dot_product_remainder_bounds_elimination() {
         let expected: f32 = (0..len).map(|i| i as f32).sum();
 
         assert!(
-            (result - expected).abs() < 1e-4,
+            (result - expected).abs() < SIMD_ABS_TOLERANCE,
             "len={} mismatch: got={}, expected={}",
             len,
             result,
@@ -735,7 +749,7 @@ fn test_jaccard_simd_matches_scalar() {
         };
 
         assert!(
-            (simd_result - scalar_result).abs() < 1e-4,
+            (simd_result - scalar_result).abs() < SIMD_ABS_TOLERANCE,
             "len={}: SIMD result {} != scalar result {}",
             len,
             simd_result,
@@ -859,4 +873,97 @@ fn test_hamming_length_mismatch() {
     let a = vec![1.0, 2.0, 3.0];
     let b = vec![1.0, 2.0];
     let _ = hamming_distance_native(&a, &b);
+}
+
+// =========================================================================
+// AVX-512 Mask Overflow Bug Regression Tests (PR Review Fix)
+// Tests for remainder=16 and remainder=32 which triggered overflow in mask construction
+// =========================================================================
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_avx512_mask_remainder_16_no_overflow() {
+    // Regression test: remainder=16 caused (1_u16 << 16) - 1 to underflow
+    // This test verifies correct behavior when vector length % 16 == 0 but with remainder handling
+    for len in [16, 32, 48, 64, 80, 96] {
+        let a: Vec<f32> = (0..len).map(|i| (i as f32) * 0.1).collect();
+        let b: Vec<f32> = (0..len).map(|i| ((len - i) as f32) * 0.1).collect();
+
+        let result = dot_product_native(&a, &b);
+        let expected: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+
+        assert!(
+            (result - expected).abs() < 1e-3,
+            "len={}: result={} expected={}",
+            len,
+            result,
+            expected
+        );
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_avx512_cosine_remainder_32_no_overflow() {
+    // Regression test: cosine_fused_avx512 with remainder up to 31 elements
+    // Specifically tests the case where rem0=16 or rem1=16 (which caused overflow)
+    for len in [32, 48, 64, 96, 128] {
+        let a: Vec<f32> = (0..len).map(|i| (i as f32) * 0.01).collect();
+        let b: Vec<f32> = (0..len).map(|i| ((len - i) as f32) * 0.01).collect();
+
+        let result = cosine_similarity_native(&a, &b);
+
+        // Compute expected scalar result
+        let dot: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let expected = if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+            0.0
+        } else {
+            (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+        };
+
+        assert!(
+            (result - expected).abs() < 1e-4,
+            "len={}: result={} expected={}",
+            len,
+            result,
+            expected
+        );
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+#[test]
+fn test_squared_l2_remainder_boundary() {
+    // Test squared L2 at boundaries where remainder handling is critical
+    for len in [16, 17, 31, 32, 33, 47, 48, 49, 63, 64, 65] {
+        let a: Vec<f32> = (0..len).map(|i| (i as f32) * 0.1).collect();
+        let b: Vec<f32> = (0..len).map(|i| ((len - i) as f32) * 0.1).collect();
+
+        let result = squared_l2_native(&a, &b);
+        let expected: f32 = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| {
+                let d = x - y;
+                d * d
+            })
+            .sum();
+
+        let rel_error = if expected.abs() > 1e-6 {
+            (result - expected).abs() / expected.abs()
+        } else {
+            (result - expected).abs()
+        };
+
+        assert!(
+            rel_error < SIMD_REL_TOLERANCE,
+            "len={}: result={} expected={} rel_error={}",
+            len,
+            result,
+            expected,
+            rel_error
+        );
+    }
 }

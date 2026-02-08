@@ -374,14 +374,14 @@ impl Parser {
                 if let Some(corr) =
                     Self::extract_correlation_from_field(&comp.column, subquery_from)
                 {
-                    // BUG-5 FIX: Deduplicate correlations
+                    // Keep each outer table/column pair once in correlation metadata.
                     if !correlations.iter().any(|c| {
                         c.outer_table == corr.outer_table && c.outer_column == corr.outer_column
                     }) {
                         correlations.push(corr);
                     }
                 }
-                // BUG-5 FIX: Do NOT check Value::String for correlations.
+                // Do not infer correlations from Value::String.
                 // String literals (e.g., 'user@example.com', 'domain.name') are NOT
                 // column references and should not be interpreted as table.column.
                 // Column references on the right side would be represented as

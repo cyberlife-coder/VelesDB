@@ -24,6 +24,14 @@
 //! }
 //! ```
 
+// SAFETY: Numeric casts in auto_reindex are intentional:
+// - All casts are for computing optimal HNSW parameters
+// - f64/usize conversions for parameter scaling with dataset size
+// - Values bounded by practical limits (dataset size, dimension)
+// - Precision loss acceptable for parameter estimation
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;

@@ -17,7 +17,6 @@ authors.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 tracing = { workspace = true }
 bincode = { workspace = true }
 roaring = { workspace = true }
@@ -38,16 +37,7 @@ features = ["v4", "serde"]
 [dependencies.parking_lot]
 version = "0.12"
 
-[dependencies.crossbeam-channel]
-version = "0.5"
-
 # rayon moved to optional deps section (persistence feature)
-
-[dependencies.arc-swap]
-version = "1.7"
-
-[dependencies.bytes]
-version = "1.5"
 
 [dependencies.rustc-hash]
 version = "2.0"
@@ -95,20 +85,19 @@ version = "2.7"
 version = "2.7"
 
 [features]
-# Native HNSW is the only implementation (v1.0+)
-# hnsw_rs dependency has been removed
+## Feature flags
+##
+## - `persistence` (default): Enables mmap storage, WAL, rayon parallelism, and tokio async.
+##   Disable for WASM builds: `velesdb-core = { default-features = false }`
+## - `gpu`: Enables wgpu-based GPU acceleration for distance calculations.
+## - `update-check`: Enables HTTP client for automatic version checking.
+## - `loom`: Enables loom-based concurrency testing (nightly only).
+##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
-# Persistence feature: includes tokio, memmap2, rayon (not WASM-compatible)
-# Disable for WASM builds: velesdb-core = { default-features = false }
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
-# Update check feature: enables HTTP client for version checking
 update-check = ["dep:reqwest", "dep:tokio"]
-# Loom feature: enables concurrency testing with loom (EPIC-023)
-# Run with: cargo +nightly test --features loom --test loom_tests
 loom = ["dep:loom"]
-# Portable SIMD evaluation (EPIC-054/US-004) - requires nightly
-portable-simd = []
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -303,19 +292,5 @@ version = "0.11"
 features = ["json"]
 optional = true
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
-
-[lints.clippy]
-# EPIC-077 / Plan 04-07: Enable pedantic linting for production quality
-pedantic = { level = "warn", priority = -1 }
-# Reason: Standard Rust naming convention (e.g. CollectionConfig in collection module)
-module_name_repetitions = "allow"
-# Reason: VelesDB uses many Result-returning functions; missing_errors_doc is enforced manually
-missing_errors_doc = "allow"
-# Reason: Panic documentation is enforced via code review, not lint
-missing_panics_doc = "allow"
-# Reason: SIMD intrinsics require wildcard imports (hundreds of symbols)
-wildcard_imports = "allow"
-# Reason: Many public structs use bool fields that are self-documenting
-struct_field_names = "allow"
+[lints]
+workspace = true

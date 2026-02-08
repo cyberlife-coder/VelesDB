@@ -3,7 +3,8 @@
 //! Each bug gets a failing test FIRST, then we fix the code.
 //! Tests are named: test_bug_XX_description
 
-use crate::velesql::Parser;
+use crate::velesql::ast::Value;
+use crate::velesql::{LogicalOp, Parser};
 
 // =============================================================================
 // BUG 10: Parser/grammar allow SUM(*)/AVG(*) leading to silently null aggregates
@@ -122,6 +123,11 @@ fn test_bug_6_having_or_tokens_captured() {
         "Should have 1 operator for 2 conditions. Got: {:?}",
         having.operators
     );
+    assert!(
+        matches!(having.operators[0], LogicalOp::Or),
+        "Expected OR operator, got: {:?}",
+        having.operators[0]
+    );
 }
 
 #[test]
@@ -145,6 +151,17 @@ fn test_bug_6_having_and_tokens_captured() {
     assert!(
         !having.operators.is_empty(),
         "HAVING AND operators should be captured"
+    );
+    assert_eq!(
+        having.operators.len(),
+        1,
+        "Should have 1 operator for 2 conditions. Got: {:?}",
+        having.operators
+    );
+    assert!(
+        matches!(having.operators[0], LogicalOp::And),
+        "Expected AND operator, got: {:?}",
+        having.operators[0]
     );
 }
 
@@ -253,5 +270,50 @@ fn test_bug_8_with_max_groups_case_insensitive() {
     assert!(
         opt_upper.is_some(),
         "MAX_GROUPS option should be found in uppercase query"
+    );
+}
+
+#[test]
+fn test_bug_5_correlated_field_dedup_in_subquery() {
+    let sql = "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM discounts WHERE `products.category` = 1 AND `products.category` = 2)";
+    let result = Parser::parse(sql).expect("query should parse");
+
+    let comparison = match result.select.where_clause.as_ref() {
+        Some(crate::velesql::Condition::Comparison(comp)) => comp,
+        other => panic!("expected WHERE comparison with subquery, got: {other:?}"),
+    };
+
+    let subquery = match &comparison.value {
+        Value::Subquery(sub) => sub,
+        other => panic!("expected subquery value, got: {other:?}"),
+    };
+
+    assert_eq!(
+        subquery.correlations.len(),
+        1,
+        "duplicate outer references should be deduplicated"
+    );
+    assert_eq!(subquery.correlations[0].outer_table, "products");
+    assert_eq!(subquery.correlations[0].outer_column, "category");
+}
+
+#[test]
+fn test_bug_5_string_literals_not_treated_as_correlations() {
+    let sql = "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM discounts WHERE category = 'products.category')";
+    let result = Parser::parse(sql).expect("query should parse");
+
+    let comparison = match result.select.where_clause.as_ref() {
+        Some(crate::velesql::Condition::Comparison(comp)) => comp,
+        other => panic!("expected WHERE comparison with subquery, got: {other:?}"),
+    };
+
+    let subquery = match &comparison.value {
+        Value::Subquery(sub) => sub,
+        other => panic!("expected subquery value, got: {other:?}"),
+    };
+
+    assert!(
+        subquery.correlations.is_empty(),
+        "string literals must not create false correlations"
     );
 }

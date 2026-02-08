@@ -113,8 +113,11 @@ impl MmapStorage {
         }
 
         // SAFETY: data_file is a valid, open file with set_len() called to ensure
-        // the mapping range is fully allocated. MmapMut requires the file to be
-        // readable and writable, which is guaranteed by OpenOptions above.
+        // the mapping range is fully allocated.
+        // - Condition 1: File was opened with read+write permissions.
+        // - Condition 2: set_len() was called to ensure the file has INITIAL_SIZE bytes.
+        // - Condition 3: MmapMut requires readable and writable file, guaranteed by OpenOptions.
+        // Reason: Memory mapping requires unsafe due to potential for undefined behavior if file is truncated externally.
         let mmap = unsafe { MmapMut::map_mut(&data_file)? };
 
         // 2. Open/Create WAL
@@ -202,8 +205,11 @@ impl MmapStorage {
             self.data_file.set_len(new_len)?;
 
             // SAFETY: data_file has been resized with set_len(new_len) above,
-            // ensuring the new mapping range is fully allocated. The old mmap
-            // is dropped when we assign the new one.
+            // ensuring the new mapping range is fully allocated.
+            // - Condition 1: File was resized to new_len before remapping.
+            // - Condition 2: Old mmap is dropped when we assign the new one.
+            // - Condition 3: File remains open with read+write permissions.
+            // Reason: Memory mapping requires unsafe; resizing ensures mapping doesn't exceed file bounds.
             *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
             // Increment epoch so existing VectorSliceGuards become invalid
             self.remap_epoch.fetch_add(1, Ordering::Release);
@@ -236,9 +242,17 @@ impl MmapStorage {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,no_run
+    /// # use velesdb_core::storage::MmapStorage;
+    /// # use std::io;
+    /// # fn example() -> io::Result<()> {
+    /// # let path = "/tmp/test_storage";
+    /// # let dimension = 768;
+    /// let mut storage = MmapStorage::new(path, dimension)?;
     /// // Pre-allocate for 1 million vectors before bulk import
     /// storage.reserve_capacity(1_000_000)?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
@@ -263,13 +277,17 @@ impl MmapStorage {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let storage = MmapStorage::new(path, 768)?;
+    /// ```rust,no_run
+    /// # use velesdb_core::storage::MmapStorage;
+    /// # use std::io;
+    /// # fn example() -> io::Result<()> {
+    /// # let path = "/tmp/test_storage";
+    /// # let dimension = 768;
+    /// let storage = MmapStorage::new(path, dimension)?;
     /// // ... perform operations ...
     /// let stats = storage.metrics().ensure_capacity_latency_stats();
-    /// if stats.p99_exceeds(Duration::from_millis(100)) {
-    ///     warn!("High P99 latency detected: {:?}", stats.p99());
-    /// }
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn metrics(&self) -> &StorageMetrics {
@@ -373,11 +391,13 @@ impl MmapStorage {
         }
 
         // EPIC-032/US-001: Verify alignment before pointer cast
-        // SAFETY: We've validated that:
-        // 1. offset + vector_size <= mmap.len() (bounds check above)
-        // 2. offset is 4-byte aligned (assertion below - enforced in release too)
-        // 3. The pointer is derived from the mmap which is held by the guard
-        // 4. All writes via store() use f32-aligned offsets (dimension * 4)
+        // SAFETY: We've validated that offset + vector_size <= mmap.len(), offset is 4-byte aligned,
+        // and the pointer is derived from the mmap which is held by the guard.
+        // - Condition 1: Bounds check passed (offset + vector_size <= mmap.len()).
+        // - Condition 2: Alignment verified (offset % 4 == 0).
+        // - Condition 3: Pointer derived from valid mmap held by VectorSliceGuard.
+        // - Condition 4: All writes via store() use f32-aligned offsets.
+        // Reason: Zero-copy vector access via memory mapping requires raw pointer operations.
         // P2 Audit 2026-01-29: Converted from debug_assert to assert for memory safety
         assert!(
             offset % std::mem::align_of::<f32>() == 0,

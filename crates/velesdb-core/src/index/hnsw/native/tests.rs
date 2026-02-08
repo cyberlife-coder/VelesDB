@@ -414,3 +414,494 @@ fn test_mixed_operations_no_deadlock() {
 
     assert!(hnsw.len() >= 30, "Index should have vectors");
 }
+
+// =============================================================================
+// Phase 3, Plan 04: Concurrency Family 1 — Parallel Insert/Search/Delete
+// =============================================================================
+// Validates correctness under concurrent operations with explicit invariant
+// assertions (not just "no panic"). Exercises lock-order paths and safety
+// counters introduced in Plan 03-03.
+
+/// Stress test: concurrent inserts from many threads with deterministic
+/// post-condition on total count and graph searchability.
+#[test]
+fn test_concurrent_insert_deterministic_count() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 2000));
+
+    let num_threads = 8;
+    let vectors_per_thread = 100;
+    let mut handles = vec![];
+
+    for t in 0..num_threads {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..vectors_per_thread {
+                let idx = t * vectors_per_thread + i;
+                let v: Vec<f32> = (0..64)
+                    .map(|j| ((idx * 64 + j) as f32 * 0.001).sin())
+                    .collect();
+                hnsw_clone.insert(v);
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("Thread should complete without panic");
+    }
+
+    // Deterministic assertion: all inserts must be reflected in count
+    let final_count = hnsw.len();
+    assert_eq!(
+        final_count,
+        num_threads * vectors_per_thread,
+        "Every insert must be counted; got {final_count} expected {}",
+        num_threads * vectors_per_thread
+    );
+
+    // Verify graph is searchable and returns correct k
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.001).sin()).collect();
+    let results = hnsw.search(&query, 20, 50);
+    assert_eq!(
+        results.len(),
+        20,
+        "Search should return exactly k results from populated graph"
+    );
+    // Results must be sorted by distance
+    for window in results.windows(2) {
+        assert!(
+            window[0].1 <= window[1].1,
+            "Results must be sorted by distance: {} > {}",
+            window[0].1,
+            window[1].1
+        );
+    }
+}
+
+/// Concurrent insert + search with search correctness assertions.
+/// Verifies that search always returns valid node IDs and sorted distances
+/// even while inserts are actively modifying the graph.
+#[test]
+fn test_concurrent_insert_search_correctness() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 1000));
+
+    // Pre-populate to ensure searches have data
+    for i in 0..100_u64 {
+        let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
+        hnsw.insert(v);
+    }
+
+    let mut handles = vec![];
+
+    // 4 insert threads
+    for t in 0..4_u64 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_u64 {
+                let v: Vec<f32> = (0..32)
+                    .map(|j| ((t * 1000 + i) + j) as f32 * 0.01)
+                    .collect();
+                hnsw_clone.insert(v);
+            }
+        }));
+    }
+
+    // 4 search threads with correctness assertions
+    for t in 0..4_u64 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_u64 {
+                let query: Vec<f32> = (0..32).map(|j| ((t * 500 + i) + j) as f32 * 0.02).collect();
+                let results = hnsw_clone.search(&query, 5, 30);
+                // Must respect k limit
+                assert!(results.len() <= 5, "Search must return at most k results");
+                // All returned node IDs must be within valid range
+                let current_len = hnsw_clone.len();
+                for &(node_id, dist) in &results {
+                    assert!(
+                        node_id < current_len + 200,
+                        "Node ID {node_id} should be in valid range"
+                    );
+                    assert!(
+                        dist.is_finite(),
+                        "Distance must be finite, got {dist} for node {node_id}"
+                    );
+                }
+                // Results should be distance-sorted
+                for window in results.windows(2) {
+                    assert!(
+                        window[0].1 <= window[1].1,
+                        "Results must be sorted by distance"
+                    );
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle
+            .join()
+            .expect("Thread should complete without deadlock");
+    }
+
+    // Post-condition: index grew correctly
+    let final_count = hnsw.len();
+    assert!(
+        final_count >= 300,
+        "Should have at least 100 initial + 200 inserted, got {final_count}"
+    );
+
+    // Safety counters: no invariant violations
+    let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+    assert_eq!(
+        snapshot.invariant_violation_total, 0,
+        "Concurrent insert+search must not trigger lock-order violations"
+    );
+}
+
+/// Concurrent insert + multi-entry search interleaving.
+/// Validates that multi-entry search remains consistent under concurrent writes.
+#[test]
+fn test_concurrent_insert_multi_entry_search() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 600));
+
+    // Pre-populate
+    for i in 0..50_u64 {
+        let v: Vec<f32> = (0..32).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+        hnsw.insert(v);
+    }
+
+    let mut handles = vec![];
+
+    // Inserters
+    for t in 0..3_u64 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..30_u64 {
+                let v: Vec<f32> = (0..32)
+                    .map(|j| ((t * 100 + i) + j) as f32 * 0.005)
+                    .collect();
+                hnsw_clone.insert(v);
+            }
+        }));
+    }
+
+    // Multi-entry searchers
+    for _ in 0..3_u64 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..30_u64 {
+                let query: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.03).collect();
+                let results = hnsw_clone.search_multi_entry(&query, 5, 30, 3);
+                assert!(results.len() <= 5, "Multi-entry search must respect k");
+                // Verify distance monotonicity
+                for window in results.windows(2) {
+                    assert!(
+                        window[0].1 <= window[1].1,
+                        "Multi-entry results must be sorted by distance"
+                    );
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("Thread must complete (no deadlock)");
+    }
+
+    assert!(
+        hnsw.len() >= 50,
+        "Index must retain at least pre-populated vectors"
+    );
+}
+
+// =============================================================================
+// BUG-04 / QUAL-01: Lock-order safety + observability counters
+// =============================================================================
+
+#[test]
+fn test_hnsw_no_deadlock_during_parallel_insert_search() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let engine = SimdDistance::new(DistanceMetric::Cosine);
+    let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
+
+    // Pre-populate so search has data to traverse
+    for i in 0..100_u64 {
+        let v: Vec<f32> = (0..64).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+        hnsw.insert(v);
+    }
+
+    let mut handles = vec![];
+
+    // 4 insert threads
+    for t in 0..4 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_u64 {
+                let v: Vec<f32> = (0..64)
+                    .map(|j| ((t * 1000 + i) + j) as f32 * 0.001)
+                    .collect();
+                hnsw_clone.insert(v);
+            }
+        }));
+    }
+
+    // 4 search threads
+    for t in 0..4 {
+        let hnsw_clone = Arc::clone(&hnsw);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_u64 {
+                let query: Vec<f32> = (0..64)
+                    .map(|j| ((t * 500 + i) + j) as f32 * 0.002)
+                    .collect();
+                let results = hnsw_clone.search(&query, 10, 50);
+                assert!(
+                    results.len() <= 10,
+                    "Search should return at most k results"
+                );
+            }
+        }));
+    }
+
+    // All threads must complete (no deadlock)
+    for handle in handles {
+        handle
+            .join()
+            .expect("Thread should complete without deadlock");
+    }
+
+    // Verify consistent state
+    let final_count = hnsw.len();
+    assert!(
+        final_count >= 100,
+        "Should have at least initial 100 vectors, got {final_count}"
+    );
+
+    // Verify safety counters are accessible and no invariant violations
+    let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+    assert_eq!(
+        snapshot.invariant_violation_total, 0,
+        "No lock-order violations should occur with correct lock ordering"
+    );
+}
+
+// =============================================================================
+// Concurrency Family 1b: Delete-Aware Contention (NativeHnswIndex level)
+// =============================================================================
+// These tests exercise soft-delete paths under concurrent insert/search/delete
+// operations to verify tombstone consistency and search exclusion correctness.
+
+#[test]
+fn test_concurrent_insert_delete_search_at_index_level() {
+    use crate::distance::DistanceMetric as DM;
+    use crate::index::hnsw::native_index::NativeHnswIndex;
+    use crate::index::VectorIndex;
+    use std::sync::Arc;
+    use std::thread;
+
+    let index = Arc::new(NativeHnswIndex::new(32, DM::Euclidean));
+
+    // Pre-populate with IDs 0..99
+    for i in 0u64..100 {
+        let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
+        index.insert(i, &v);
+    }
+    assert_eq!(index.len(), 100);
+
+    let mut handles = vec![];
+
+    // 2 insert threads: IDs 1000..1099
+    for t in 0..2u64 {
+        let idx = Arc::clone(&index);
+        handles.push(thread::spawn(move || {
+            for i in 0..50u64 {
+                let id = 1000 + t * 50 + i;
+                let v: Vec<f32> = (0..32).map(|j| (id + j) as f32 * 0.01).collect();
+                idx.insert(id, &v);
+            }
+        }));
+    }
+
+    // 2 delete threads: remove IDs 0..49 (soft-delete)
+    for t in 0..2u64 {
+        let idx = Arc::clone(&index);
+        handles.push(thread::spawn(move || {
+            for i in 0..25u64 {
+                let id = t * 25 + i;
+                let _ = idx.remove(id);
+            }
+        }));
+    }
+
+    // 2 search threads: verify search works during mutations
+    for _ in 0..2 {
+        let idx = Arc::clone(&index);
+        handles.push(thread::spawn(move || {
+            for i in 0..30u64 {
+                let query: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.05).collect();
+                let results = idx.search(&query, 10);
+                // Search results must respect k
+                assert!(results.len() <= 10, "Search must respect k limit");
+                // All returned IDs must be valid (not deleted from mappings)
+                // and distances must be finite
+                for &(id, dist) in &results {
+                    assert!(dist.is_finite(), "Distance must be finite for ID {id}");
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle
+            .join()
+            .expect("Thread must complete without deadlock");
+    }
+
+    // Post-conditions:
+    // NativeHnswIndex::len() returns graph size (soft-deletes don't shrink it).
+    // Graph size = 100 initial + 100 new inserts = 200
+    let graph_len = index.len();
+    assert_eq!(
+        graph_len, 200,
+        "Graph size must reflect all inserts: got {graph_len}"
+    );
+
+    // Verify deleted IDs (0..49) are excluded from search results.
+    // This is the core soft-delete invariant.
+    let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.1).collect();
+    let results = index.search(&query, 50);
+    for &(id, _) in &results {
+        assert!(
+            !(0..50).contains(&id),
+            "Soft-deleted ID {id} must not appear in search results"
+        );
+    }
+
+    // Newly inserted IDs (1000..1099) must be findable
+    let query_new: Vec<f32> = (0..32).map(|j| (1050 + j) as f32 * 0.01).collect();
+    let results_new = index.search(&query_new, 10);
+    assert!(
+        !results_new.is_empty(),
+        "Newly inserted vectors must be searchable"
+    );
+}
+
+/// Verify that concurrent deletes + searches never return stale/deleted entries.
+#[test]
+fn test_delete_exclusion_under_concurrent_search() {
+    use crate::distance::DistanceMetric as DM;
+    use crate::index::hnsw::native_index::NativeHnswIndex;
+    use crate::index::VectorIndex;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomOrd};
+    use std::sync::Arc;
+    use std::thread;
+
+    let index = Arc::new(NativeHnswIndex::new(16, DM::Cosine));
+
+    // Pre-populate with IDs 0..199
+    for i in 0u64..200 {
+        let v: Vec<f32> = (0..16).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
+        index.insert(i, &v);
+    }
+
+    let violation_found = Arc::new(AtomicBool::new(false));
+    let mut handles = vec![];
+
+    // Delete thread: remove even IDs
+    {
+        let idx = Arc::clone(&index);
+        handles.push(thread::spawn(move || {
+            for i in (0u64..200).step_by(2) {
+                idx.remove(i);
+            }
+        }));
+    }
+
+    // Search threads: check that deleted IDs don't appear after deletion completes
+    for _ in 0..4 {
+        let idx = Arc::clone(&index);
+        let vf = Arc::clone(&violation_found);
+        handles.push(thread::spawn(move || {
+            for i in 0..50u64 {
+                let query: Vec<f32> = (0..16).map(|j| ((i + j) as f32 * 0.02).sin()).collect();
+                let results = idx.search(&query, 20);
+                // During concurrent deletion, we may or may not see some IDs.
+                // But search results must always have finite distances.
+                for &(_id, dist) in &results {
+                    if !dist.is_finite() {
+                        vf.store(true, AtomOrd::Relaxed);
+                    }
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("Thread must complete");
+    }
+
+    assert!(
+        !violation_found.load(AtomOrd::Relaxed),
+        "No non-finite distances should appear during concurrent delete+search"
+    );
+
+    // After all deletes complete, graph size remains 200 (soft-delete keeps nodes).
+    let graph_len = index.len();
+    assert_eq!(graph_len, 200, "Graph size unchanged by soft-deletes");
+
+    // All even IDs must be gone from search results (soft-delete exclusion).
+    let query: Vec<f32> = (0..16).map(|j| (j as f32 * 0.01).sin()).collect();
+    let results = index.search(&query, 200);
+    for &(id, _) in &results {
+        assert!(
+            id % 2 != 0,
+            "Soft-deleted even ID {id} must not appear in post-delete search"
+        );
+    }
+    // Verify odd IDs are still returned
+    assert!(
+        !results.is_empty(),
+        "Odd IDs should still be searchable after deleting even IDs"
+    );
+}
+
+#[test]
+fn test_safety_counters_accessible_after_operations() {
+    let engine = SimdDistance::new(DistanceMetric::Euclidean);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    for i in 0..20_u64 {
+        let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
+        hnsw.insert(v);
+    }
+
+    let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.05).collect();
+    let _ = hnsw.search(&query, 5, 30);
+
+    // Counters should be readable without panic
+    let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+
+    // No invariant violations expected with correct lock ordering
+    assert_eq!(
+        snapshot.invariant_violation_total, 0,
+        "Correct lock ordering should produce zero violations"
+    );
+    // Corruption counter should be zero for normal operations
+    assert_eq!(
+        snapshot.corruption_detected_total, 0,
+        "Normal operations should not trigger corruption signals"
+    );
+}
