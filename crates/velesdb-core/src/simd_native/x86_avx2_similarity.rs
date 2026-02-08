@@ -4,6 +4,7 @@
 //! Hamming distance, and Jaccard similarity.
 //!
 //! All functions require runtime AVX2+FMA detection before calling.
+//! Dispatch is handled by `dispatch.rs` after `simd_level()` confirms support.
 
 // SAFETY: Numeric casts in this file are intentional and safe:
 // - All casts are from well-bounded values (vector dimensions, loop indices)
@@ -332,14 +333,10 @@ pub(crate) unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-// =============================================================================
-// AVX2 Helpers
-// =============================================================================
-
-/// Horizontal sum of 8 f32 lanes in an AVX2 register.
+/// Horizontal sum helper for AVX2 256-bit vector.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
+pub(crate) unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
     use std::arch::x86_64::*;
     let low = _mm256_castps256_ps128(v);
     let high = _mm256_extractf128_ps(v, 1);

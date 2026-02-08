@@ -7,6 +7,7 @@
 
 // Allow precision-loss casts for scalar fallbacks (count -> f32 for Hamming).
 #![allow(clippy::cast_precision_loss)]
+#![allow(clippy::similar_names)]
 
 // =============================================================================
 // Newton-Raphson Fast Inverse Square Root (EPIC-PERF-001)
