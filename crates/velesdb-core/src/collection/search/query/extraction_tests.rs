@@ -170,3 +170,180 @@ fn test_extract_metadata_filter_not_similarity_returns_none() {
     let result = Collection::extract_metadata_filter(&cond);
     assert!(result.is_none());
 }
+
+// --- B-01 Regression Tests: NaN/Infinity vector rejection ---
+
+/// Helper to create a Collection for vector extraction tests.
+fn make_test_collection() -> Collection {
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    Collection::create(
+        dir.path().to_path_buf(),
+        3,
+        crate::distance::DistanceMetric::Cosine,
+    )
+    .expect("create collection")
+}
+
+#[test]
+fn test_nan_vector_components_rejected_in_vector_search() {
+    let collection = make_test_collection();
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, f64::NAN, 3.0]));
+
+    let mut cond = Condition::VectorSearch(VectorSearch {
+        vector: VectorExpr::Parameter("v".to_string()),
+    });
+
+    let result = collection.extract_vector_search(&mut cond, &params);
+    assert!(result.is_err(), "NaN component should be rejected");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("out of f32 range or not a number"),
+        "Error should mention invalid value: {err_msg}"
+    );
+}
+
+#[test]
+fn test_infinity_vector_components_rejected_in_vector_search() {
+    let collection = make_test_collection();
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "v".to_string(),
+        serde_json::json!([1.0, f64::INFINITY, 3.0]),
+    );
+
+    let mut cond = Condition::VectorSearch(VectorSearch {
+        vector: VectorExpr::Parameter("v".to_string()),
+    });
+
+    let result = collection.extract_vector_search(&mut cond, &params);
+    assert!(result.is_err(), "Infinity component should be rejected");
+}
+
+#[test]
+fn test_neg_infinity_vector_components_rejected() {
+    let collection = make_test_collection();
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "v".to_string(),
+        serde_json::json!([f64::NEG_INFINITY, 2.0, 3.0]),
+    );
+
+    let mut cond = Condition::VectorSearch(VectorSearch {
+        vector: VectorExpr::Parameter("v".to_string()),
+    });
+
+    let result = collection.extract_vector_search(&mut cond, &params);
+    assert!(result.is_err(), "NEG_INFINITY component should be rejected");
+}
+
+#[test]
+fn test_valid_vector_passes_extraction() {
+    let collection = make_test_collection();
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, 2.0, 3.0]));
+
+    let mut cond = Condition::VectorSearch(VectorSearch {
+        vector: VectorExpr::Parameter("v".to_string()),
+    });
+
+    let result = collection.extract_vector_search(&mut cond, &params);
+    assert!(result.is_ok(), "Valid vector should pass");
+    let vec = result.unwrap();
+    assert!(vec.is_some());
+    assert_eq!(vec.unwrap(), vec![1.0_f32, 2.0, 3.0]);
+}
+
+#[test]
+fn test_nan_rejected_in_similarity_condition() {
+    let collection = make_test_collection();
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, f64::NAN, 3.0]));
+
+    let cond = Condition::Similarity(SimilarityCondition {
+        field: "embedding".to_string(),
+        vector: VectorExpr::Parameter("v".to_string()),
+        operator: CompareOp::Gt,
+        threshold: 0.8,
+    });
+
+    let result = collection.extract_all_similarity_conditions(&cond, &params);
+    assert!(
+        result.is_err(),
+        "NaN should be rejected in similarity extraction"
+    );
+}
+
+#[test]
+fn test_nan_rejected_in_resolve_vector() {
+    let collection = make_test_collection();
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([f64::NAN, 2.0, 3.0]));
+
+    let vector_expr = VectorExpr::Parameter("v".to_string());
+    let result = collection.resolve_vector(&vector_expr, &params);
+    assert!(result.is_err(), "NaN should be rejected in resolve_vector");
+}
+
+// --- B-02 Regression Test: ORDER BY property path error ---
+
+#[test]
+fn test_order_by_property_path_returns_error() {
+    use crate::collection::search::query::match_exec::MatchResult;
+
+    let mut results = vec![
+        MatchResult::new(1, 0, vec![]),
+        MatchResult::new(2, 1, vec![1]),
+    ];
+
+    let result = Collection::order_match_results(&mut results, "n.name", true);
+    assert!(
+        result.is_err(),
+        "ORDER BY property path should return error"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("not yet supported"),
+        "Error should mention unsupported: {err_msg}"
+    );
+}
+
+#[test]
+fn test_order_by_similarity_succeeds() {
+    use crate::collection::search::query::match_exec::MatchResult;
+
+    let mut results = vec![
+        {
+            let mut r = MatchResult::new(1, 0, vec![]);
+            r.score = Some(0.5);
+            r
+        },
+        {
+            let mut r = MatchResult::new(2, 1, vec![1]);
+            r.score = Some(0.9);
+            r
+        },
+    ];
+
+    let result = Collection::order_match_results(&mut results, "similarity()", true);
+    assert!(result.is_ok(), "ORDER BY similarity() should succeed");
+    // DESC: highest score first
+    assert_eq!(results[0].node_id, 2);
+    assert_eq!(results[1].node_id, 1);
+}
+
+#[test]
+fn test_order_by_depth_succeeds() {
+    use crate::collection::search::query::match_exec::MatchResult;
+
+    let mut results = vec![
+        MatchResult::new(1, 3, vec![]),
+        MatchResult::new(2, 1, vec![1]),
+    ];
+
+    let result = Collection::order_match_results(&mut results, "depth", false);
+    assert!(result.is_ok(), "ORDER BY depth should succeed");
+    // ASC: lowest depth first
+    assert_eq!(results[0].node_id, 2);
+    assert_eq!(results[1].node_id, 1);
+}

@@ -49,11 +49,9 @@ impl Collection {
                                             {
                                                 #[allow(clippy::cast_possible_truncation)]
                                                 Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
                                             } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
+                                                // Reason: NaN/Infinity vectors corrupt similarity calculations
+                                                None
                                             }
                                         })
                                         .ok_or_else(|| {
@@ -114,11 +112,9 @@ impl Collection {
                                             {
                                                 #[allow(clippy::cast_possible_truncation)]
                                                 Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
                                             } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
+                                                // Reason: NaN/Infinity vectors corrupt similarity calculations
+                                                None
                                             }
                                         })
                                         .ok_or_else(|| {
@@ -231,11 +227,9 @@ impl Collection {
                                     {
                                         #[allow(clippy::cast_possible_truncation)]
                                         Some(f as f32)
-                                    } else if f.is_finite() {
-                                        None
                                     } else {
-                                        #[allow(clippy::cast_possible_truncation)]
-                                        Some(f as f32)
+                                        // Reason: NaN/Infinity vectors corrupt similarity calculations
+                                        None
                                     }
                                 })
                                 .ok_or_else(|| {

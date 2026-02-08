@@ -179,7 +179,11 @@ impl Collection {
     /// - `similarity()` - Vector similarity score
     /// - Property path (e.g., `n.name`)
     /// - Depth
-    pub fn order_match_results(results: &mut [MatchResult], order_by: &str, descending: bool) {
+    pub fn order_match_results(
+        results: &mut [MatchResult],
+        order_by: &str,
+        descending: bool,
+    ) -> Result<()> {
         match order_by {
             "similarity()" | "similarity" => {
                 results.sort_by(|a, b| {
@@ -190,6 +194,7 @@ impl Collection {
                         cmp
                     }
                 });
+                Ok(())
             }
             "depth" => {
                 results.sort_by(|a, b| {
@@ -200,11 +205,11 @@ impl Collection {
                         cmp
                     }
                 });
+                Ok(())
             }
-            _ => {
-                // For property paths, we need payload access
-                // This is a TODO for future enhancement
-            }
+            other => Err(crate::error::Error::UnsupportedFeature(format!(
+                "ORDER BY '{other}' is not yet supported in MATCH queries"
+            ))),
         }
     }
 

@@ -138,6 +138,12 @@ pub enum Error {
     /// This is not recoverable — the guard must be re-acquired.
     #[error("[VELES-026] Epoch mismatch: {0}")]
     EpochMismatch(String),
+
+    /// Unsupported feature (VELES-027).
+    ///
+    /// Indicates a query uses a feature that is parsed but not yet implemented.
+    #[error("[VELES-027] Unsupported feature: {0}")]
+    UnsupportedFeature(String),
 }
 
 impl Error {
@@ -171,6 +177,7 @@ impl Error {
             Self::ColumnStoreError(_) => "VELES-024",
             Self::GpuError(_) => "VELES-025",
             Self::EpochMismatch(_) => "VELES-026",
+            Self::UnsupportedFeature(_) => "VELES-027",
         }
     }
 
