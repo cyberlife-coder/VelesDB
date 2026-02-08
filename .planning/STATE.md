@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 2 in progress — 02-01, 02-02 done, 02-03 next)  
+**Current Milestone:** v2-core-trust (Phase 2 complete — 02-01, 02-02, 02-03 done. Phase 3 next)  
 **Next Milestone:** v3-ecosystem-alignment  
 **Previous Milestone:** v1-refactoring (completed 2026-02-08)  
 
@@ -36,13 +36,13 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v2: Core Trust (23 active findings — velesdb-core only)
 
-### Status: Phase 2 in progress. Plans 02-01, 02-02 done, 02-03 next.
+### Status: Phase 2 complete. Phase 3 next.
 
 | Phase | Status | Tasks | Findings | Estimate | Priority |
 |-------|--------|-------|----------|----------|----------|
 | 0 - Merge & Tag v1 | ✅ Done | 1 | — | 15 min | 🔒 Prerequisite |
 | 1 - CI Safety Net | ✅ Done | 4 | CI-01→04 | 15min | 🛡️ Infrastructure |
-| 2 - Critical Correctness | 🔄 In Progress (2/3 plans) | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
+| 2 - Critical Correctness | ✅ Done (3/3 plans) | 7 | C-01→03, D-09 | 8-10h | 🚨 Wrong Results |
 | 3 - Core Engine Bugs | ⬜ Pending | 7 | B-01,02,04→06, D-08, M-03 | 6-8h | 🐛 Correctness |
 | 4 - Perf, Storage, Cleanup | ⬜ Pending | 9 | D-01→07, M-01→02 | 8-10h | ⚠️ Optimization |
 
@@ -66,7 +66,8 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ### Key Decisions (v3.2)
 - C-04/B-03 removed from scope (already fixed in `fusion/strategy.rs`)
-- Old broken `score_fusion/mod.rs` FusionStrategy enum → DELETE in Phase 2
+- Old broken `score_fusion/mod.rs` FusionStrategy enum → ✅ DELETED (02-03)
+- `ParseError::InvalidValue` (E007) added for fusion param validation (02-03)
 - `GpuTrigramAccelerator` → ✅ DONE: renamed to `TrigramAccelerator` (02-02)
 - BFS overflow: stop inserting, don't `clear()` visited set
 - ORDER BY property → return error, not silent no-op
@@ -121,5 +122,5 @@ cargo build --release
 
 ---
 
-*State file last updated: 2026-02-08*  
-*Status: Phase 2 in progress. Plans 02-01 (GPU WGSL Shaders), 02-02 (GPU Trigram Cleanup) complete. Plan 02-03 (Fusion Unification) next.*
+*State file last updated: 2026-02-09*  
+*Status: Phase 2 complete. Plans 02-01 (GPU WGSL Shaders), 02-02 (GPU Trigram Cleanup), 02-03 (Fusion Unification) all done. Phase 3 (Core Engine Bugs) next.*
