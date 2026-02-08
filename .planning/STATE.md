@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phases 1-4 ✅ complete. Phase 5 ready to plan)  
+**Current Milestone:** v4-verify-promise (Phases 1-4 ✅, Phase 6 ✅ complete. Phase 5 ready to plan)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -19,7 +19,7 @@
 VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symbolique in a single local-first engine.
 
 ### Codebase Status (post-refactoring, post-correctness)
-- **3,222 tests** passing, 0 failures
+- **~3,234 tests** passing, 0 failures (workspace)
 - **Quality gates**: fmt ✅, clippy ✅, deny ✅, doc ✅, release build ✅
 - **112 unsafe blocks** — all documented with SAFETY comments
 - **47 issues found** by Devil's Advocate review (3 audit phases): 7 critical, 14 bugs, 23 design, 3 minor
@@ -41,7 +41,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phases 1-4 ✅ complete. Phases 5-6 planned.
+### Status: Phases 1-4 ✅, Phase 6 ✅ complete. Phase 5 planned.
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
@@ -50,7 +50,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | 📋 Planned (4 plans) | 12 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
-| 6 - Unified Query & Full-Text | 📋 Planned (4 plans) | ~30 | VP-010, VP-011, VP-012 | 14-19h | 🚨 Cross-store + NEAR_FUSED |
+| 6 - Unified Query & Full-Text | ✅ Done (4 plans) | 47 new tests | VP-010 ✅, VP-011 ✅, VP-012 ✅ | 14-19h | 🚨 Cross-store + NEAR_FUSED |
 
 **Total:** ~50 tasks | ~50-65h
 **Execution:** `1 → 2 → 3 → 4 → 5 → 6`
@@ -150,12 +150,14 @@ cargo build --release
 - **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy, 05-04 Website Claims Audit & Final Quality Gates
 - Plans dir: `.planning/phases/v4-05-readme-documentation-truth/`
 
-**Phase 6 📋 planned (4 plans, 2 waves) — researched 2026-02-09:**
-- **Key finding:** BM25, Trigram, Fusion, Planner all EXIST — gaps are wiring, not implementation
-- **Wave 1 (parallel):** 06-01 NEAR_FUSED Execution Wiring (VP-012), 06-02 BM25+NEAR VelesQL Integration (VP-011)
-- **Wave 2 (sequential):** 06-03 Cross-Store Query Planner Integration (VP-010), 06-04 Benchmarks & Quality Gates
+**Phase 6 ✅ complete (4 plans, 2 waves) — executed 2026-02-10:**
+- **Key finding confirmed:** BM25, Trigram, Fusion, Planner all EXISTED — gaps were wiring, not implementation
+- **Wave 1:** ✅ 06-01 NEAR_FUSED Execution Wiring (VP-012, 13 tests), ✅ 06-02 BM25+NEAR VelesQL Integration (VP-011, 7 tests)
+- **Wave 2:** ✅ 06-03 Cross-Store Planner & Dispatch (VP-010, 18 tests + dispatch extraction), ✅ 06-04 Benchmarks & Quality Gates (9 E2E tests + near_fused_bench)
+- **Deferred:** Cross-store VectorFirst/Parallel execution strategies, EXPLAIN support for new query paths
 - Plans dir: `.planning/phases/v4-06-unified-query-fulltext/`
-- Research: `.planning/phases/v4-06-unified-query-fulltext/RESEARCH.md`
+- New files: `dispatch.rs`, `bm25_integration_tests.rs`, `cross_store_tests.rs`, `near_fused_bench.rs`, `phase6_integration.rs`
+- mod.rs reduced from 451 → 212 lines; hybrid.rs dead_code removed
 
-*State file last updated: 2026-02-09*  
-*Status: Phase 6 researched & planned (4 plans). Ready to execute. 3,222 workspace tests passing.*
+*State file last updated: 2026-02-10*  
+*Status: Phase 6 complete (4 plans). ~3,234 workspace tests passing. Quality gates all green.*
