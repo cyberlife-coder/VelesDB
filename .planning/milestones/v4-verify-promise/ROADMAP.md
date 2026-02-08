@@ -11,8 +11,8 @@
 ## Progress
 
 ```
-Phase 1  ░░░░░░░░░░  0%  — MATCH WHERE Completeness
-Phase 2  ░░░░░░░░░░  0%  — Subquery Decision & Execution
+Phase 1  ██████████ 100% — MATCH WHERE Completeness ✅
+Phase 2  ░░░░░░░░░░  0%  — Subquery Decision & Execution (3 plans ready)
 Phase 3  ░░░░░░░░░░  0%  — Multi-hop MATCH & RETURN
 Phase 4  ░░░░░░░░░░  0%  — E2E Scenario Test Suite
 Phase 5  ░░░░░░░░░░  0%  — README & Documentation Truth
@@ -31,15 +31,17 @@ Phase 5  ░░░░░░░░░░  0%  — README & Documentation Truth
 **Problem:** `where_eval.rs` has a `_ => Ok(true)` catch-all that silently accepts LIKE, BETWEEN, IN, IsNull, Match (full-text), and temporal conditions without evaluating them. This means MATCH queries with these conditions return **all nodes** instead of filtered results.
 
 **Success Criteria:**
-- [ ] LIKE/ILIKE conditions evaluated in MATCH WHERE (pattern matching against payload)
-- [ ] BETWEEN conditions evaluated in MATCH WHERE (range comparison)
-- [ ] IN conditions evaluated in MATCH WHERE (set membership)
-- [ ] IsNull/IsNotNull conditions evaluated in MATCH WHERE
-- [ ] Match (full-text) conditions evaluated in MATCH WHERE
-- [ ] Temporal comparisons work in MATCH WHERE (NOW() - INTERVAL vs payload timestamp)
-- [ ] ORDER BY property path (e.g., `conv.timestamp`) works in MATCH results
-- [ ] No `_ => Ok(true)` catch-all remains — all unhandled types return UnsupportedFeature error
-- [ ] Tests for each condition type in MATCH context
+- [x] LIKE/ILIKE conditions evaluated in MATCH WHERE (pattern matching against payload)
+- [x] BETWEEN conditions evaluated in MATCH WHERE (range comparison)
+- [x] IN conditions evaluated in MATCH WHERE (set membership)
+- [x] IsNull/IsNotNull conditions evaluated in MATCH WHERE
+- [x] Match (full-text) conditions evaluated in MATCH WHERE
+- [x] Temporal comparisons work in MATCH WHERE (NOW() - INTERVAL vs payload timestamp)
+- [x] ORDER BY property path (e.g., `conv.timestamp`) works in MATCH results
+- [x] No `_ => Ok(true)` catch-all remains — VectorSearch/FusedSearch pass-through only
+- [x] Tests for each condition type in MATCH context (15 tests)
+
+**Completed:** 2026-02-08 — Commit `dc9ac868`
 
 **Key Files:**
 - `crates/velesdb-core/src/collection/search/query/match_exec/where_eval.rs` — Main fix location
@@ -59,17 +61,21 @@ Phase 5  ░░░░░░░░░░  0%  — README & Documentation Truth
 - No executor exists for subqueries
 - ALL 4 business scenarios in the README rely on subqueries
 
-**Decision point (user input needed):**
-1. **Option A: Implement basic scalar subqueries** — Execute inner SELECT against ColumnStore, use result as value. Complex but delivers on promise. (~10h)
-2. **Option B: Return UnsupportedFeature error** — Clear error message instead of silent Null. Fast but breaks README examples. (~2h)
-3. **Option C: Hybrid** — Error for correlated subqueries, implement simple uncorrelated ones. (~6h)
+**Decision: Option A — Implement scalar subqueries** (user confirmed 2026-02-08)
+
+Execution reuses `Collection::execute_query()` for inner SELECT, extracts scalar from first result.
+
+**Plans:**
+- 02-01: Core Scalar Subquery Executor (Wave 1)
+- 02-02: Wire Subquery into MATCH WHERE Path (Wave 2)
+- 02-03: Wire Subquery into SELECT WHERE Path + Quality Gates (Wave 2)
 
 **Success Criteria:**
 - [ ] `Value::Subquery` no longer silently converts to Null
-- [ ] Either: subqueries execute and return correct scalar values
-- [ ] Or: clear error message "Subqueries are not yet supported in VelesQL. Use separate queries." with documentation
-- [ ] README scenarios updated to match chosen approach
-- [ ] Tests covering subquery handling (execution or error path)
+- [ ] Subqueries execute and return correct scalar values
+- [ ] Correlated subqueries resolve outer row references
+- [ ] Both MATCH WHERE and SELECT WHERE paths support subqueries
+- [ ] Tests covering subquery execution for both paths
 
 **Key Files:**
 - `crates/velesdb-core/src/filter/conversion.rs` — Remove Null conversion
@@ -191,4 +197,4 @@ Phase 5 is the final documentation cleanup.
 | Performance regression from new WHERE eval | Slowdown | Benchmark before/after |
 
 ---
-*Last updated: 2026-02-08*
+*Last updated: 2026-02-08 — Phase 1 complete, Phase 2 planned (3 plans)*

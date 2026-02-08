@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phase 0 — Gap analysis complete, ready to plan)  
+**Current Milestone:** v4-verify-promise (Phase 2 — Planned, 3 plans ready)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -41,12 +41,12 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Gap analysis complete. Ready to plan Phase 1.
+### Status: Phase 1 complete. Phase 2 planned (3 plans).
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
-| 1 - MATCH WHERE Completeness | ⬜ Ready | ~8 | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
-| 2 - Subquery Decision & Execution | ⬜ Ready | ~5 | VP-002 | 10-12h | 🚨 All README scenarios broken |
+| 1 - MATCH WHERE Completeness | ✅ Done | 15 tests | VP-001, VP-003, VP-006 | 8-10h | 🚨 Silent incorrect results |
+| 2 - Subquery Decision & Execution | ⬜ Planned (3 plans) | ~9 | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ⬜ Blocked by P1 | ~6 | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ⬜ Blocked by P1-3 | ~12 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | ⬜ Blocked by P4 | ~5 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
@@ -65,10 +65,12 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | ORDER BY property in MATCH → error | ⚠️ Major | `match_exec/similarity.rs:210` | AI Agent Memory scenario broken |
 | Temporal in MATCH WHERE not wired | ⚠️ Major | `where_eval.rs` | Fraud detection scenario broken |
 
-### Key Decision Pending
+### Key Decisions Made
 
-**Subquery approach:** Implement execution (complex, ~10h) vs Return clear error (simple, ~2h)?
-→ User decision needed before Phase 2.
+**Subquery approach:** ✅ **Implement execution** (user confirmed 2026-02-08)
+- Plan 02-01: Core Scalar Subquery Executor (Wave 1)
+- Plan 02-02: Wire into MATCH WHERE (Wave 2)
+- Plan 02-03: Wire into SELECT WHERE + Quality Gates (Wave 2)
 
 ---
 
@@ -121,4 +123,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-08*  
-*Status: Milestone v4-verify-promise created. Gap analysis complete. 6 critical/major findings. Ready to plan Phase 1.*
+*Status: Phase 1 complete (dc9ac868). Phase 2 planned with 3 plans. Ready to execute.*
