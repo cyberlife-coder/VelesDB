@@ -39,6 +39,8 @@ mod match_metrics_tests;
 pub mod match_planner;
 #[cfg(test)]
 mod match_planner_tests;
+#[cfg(test)]
+mod match_where_eval_tests;
 mod ordering;
 pub mod parallel_traversal;
 #[cfg(test)]

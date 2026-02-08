@@ -10,6 +10,7 @@
 
 use super::parse_property_path;
 use super::MatchResult;
+use crate::collection::search::query::ordering::compare_json_values;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
@@ -207,9 +208,21 @@ impl Collection {
                 });
                 Ok(())
             }
-            other => Err(crate::error::Error::UnsupportedFeature(format!(
-                "ORDER BY '{other}' is not yet supported in MATCH queries"
-            ))),
+            other => {
+                // VP-006: ORDER BY property path (e.g., "conv.timestamp", "n.name")
+                // Look up the property in projected results
+                results.sort_by(|a, b| {
+                    let val_a = a.projected.get(other);
+                    let val_b = b.projected.get(other);
+                    let cmp = compare_json_values(val_a, val_b);
+                    if descending {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                });
+                Ok(())
+            }
         }
     }
 

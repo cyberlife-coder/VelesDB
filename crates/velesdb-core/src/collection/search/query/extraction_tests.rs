@@ -285,26 +285,38 @@ fn test_nan_rejected_in_resolve_vector() {
     assert!(result.is_err(), "NaN should be rejected in resolve_vector");
 }
 
-// --- B-02 Regression Test: ORDER BY property path error ---
+// --- B-02 Regression Test: ORDER BY property path now works (VP-006) ---
 
 #[test]
-fn test_order_by_property_path_returns_error() {
+fn test_order_by_property_path_succeeds() {
     use crate::collection::search::query::match_exec::MatchResult;
 
-    let mut results = vec![
-        MatchResult::new(1, 0, vec![]),
-        MatchResult::new(2, 1, vec![1]),
-    ];
+    let mut result1 = MatchResult::new(1, 0, vec![]);
+    result1
+        .projected
+        .insert("n.name".to_string(), serde_json::json!("Zebra"));
 
-    let result = Collection::order_match_results(&mut results, "n.name", true);
+    let mut result2 = MatchResult::new(2, 1, vec![1]);
+    result2
+        .projected
+        .insert("n.name".to_string(), serde_json::json!("Apple"));
+
+    let mut results = vec![result1, result2];
+
+    // VP-006: ORDER BY property path should now succeed
+    let result = Collection::order_match_results(&mut results, "n.name", false);
     assert!(
-        result.is_err(),
-        "ORDER BY property path should return error"
+        result.is_ok(),
+        "ORDER BY property path should succeed (VP-006)"
     );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("not yet supported"),
-        "Error should mention unsupported: {err_msg}"
+    // ASC: "Apple" < "Zebra"
+    assert_eq!(
+        results[0].node_id, 2,
+        "Apple should come first in ASC order"
+    );
+    assert_eq!(
+        results[1].node_id, 1,
+        "Zebra should come second in ASC order"
     );
 }
 
