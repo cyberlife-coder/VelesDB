@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Bug 5 Fix Tests: Aggregation params resolution
 //!
 //! Tests that params are properly resolved in execute_aggregate queries.

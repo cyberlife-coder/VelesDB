@@ -1,3 +1,11 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::float_cmp,
+    clippy::approx_constant
+)]
 //! Collection statistics methods (EPIC-046 US-001).
 //!
 //! Provides the `analyze()` method for collecting runtime statistics

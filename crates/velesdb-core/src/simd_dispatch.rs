@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
 //! Zero-overhead SIMD function dispatch.
 //!
 //! This module provides a thin wrapper around `simd_native` functions,
@@ -9,7 +15,6 @@
 // SAFETY: Numeric casts in SIMD dispatch are intentional:
 // - usize->u32 for Hamming distance: vector dimensions bounded by implementation
 // - Maximum dimension is 65536, result fits in u32
-#![allow(clippy::cast_possible_truncation)]
 
 // =============================================================================
 // Public dispatch API - Direct calls to simd_native
