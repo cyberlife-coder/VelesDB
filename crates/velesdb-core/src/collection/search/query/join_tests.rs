@@ -118,7 +118,7 @@ fn test_execute_join_basic() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
 
     assert_eq!(joined.len(), 3);
     assert!(joined[0].column_data.contains_key("price"));
@@ -141,7 +141,7 @@ fn test_execute_join_inner_skips_missing() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
     assert_eq!(joined.len(), 2);
 }
 
@@ -151,7 +151,7 @@ fn test_joined_to_search_results() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
     let search_results = joined_to_search_results(joined);
 
     assert_eq!(search_results.len(), 1);
@@ -275,7 +275,7 @@ fn test_execute_join_validates_pk_column() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &wrong_join, &column_store);
+    let joined = execute_join(&results, &wrong_join, &column_store).expect("execute_join failed");
     assert!(
         joined.is_empty(),
         "JOIN on non-PK column should not return results silently"
@@ -304,7 +304,7 @@ fn test_execute_join_correct_pk_column_works() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &correct_join, &column_store);
+    let joined = execute_join(&results, &correct_join, &column_store).expect("execute_join failed");
     assert_eq!(joined.len(), 1);
 }
 
@@ -340,7 +340,7 @@ fn test_left_join_keeps_all_left_rows() {
     let column_store = make_column_store();
     let join = make_left_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
 
     // LEFT JOIN: all 3 rows should be returned
     assert_eq!(
@@ -361,7 +361,7 @@ fn test_left_join_merges_matching_rows() {
     let column_store = make_column_store();
     let join = make_left_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
 
     // Matching rows should have price data
     assert!(
@@ -391,7 +391,7 @@ fn test_left_join_converted_to_search_results() {
     let column_store = make_column_store();
     let join = make_left_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
     let search_results = joined_to_search_results(joined);
 
     assert_eq!(search_results.len(), 2);
@@ -416,12 +416,78 @@ fn test_inner_join_still_filters_non_matching() {
     let column_store = make_column_store();
     let join = make_join_clause(); // INNER JOIN
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).expect("execute_join failed");
 
     // INNER JOIN: only 2 matching rows
     assert_eq!(
         joined.len(),
         2,
         "INNER JOIN should only return matching rows"
+    );
+}
+
+// ========== RIGHT/FULL JOIN ERROR TESTS (Phase 08-02 completion) ==========
+
+#[test]
+fn test_right_join_returns_error() {
+    let results = vec![make_search_result(1, 1)];
+    let column_store = make_column_store();
+
+    let right_join = JoinClause {
+        join_type: JoinType::Right,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let result = execute_join(&results, &right_join, &column_store);
+    assert!(result.is_err(), "RIGHT JOIN should return error");
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("RIGHT JOIN"),
+        "Error should mention RIGHT JOIN: {}",
+        err
+    );
+}
+
+#[test]
+fn test_full_join_returns_error() {
+    let results = vec![make_search_result(1, 1)];
+    let column_store = make_column_store();
+
+    let full_join = JoinClause {
+        join_type: JoinType::Full,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let result = execute_join(&results, &full_join, &column_store);
+    assert!(result.is_err(), "FULL JOIN should return error");
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("FULL JOIN"),
+        "Error should mention FULL JOIN: {}",
+        err
     );
 }

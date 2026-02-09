@@ -63,6 +63,8 @@ pub mod compression;
 pub mod config;
 #[cfg(test)]
 mod config_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod database_query_tests;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
@@ -395,7 +397,7 @@ impl Database {
                     &results,
                     join_clause,
                     &column_store,
-                );
+                )?;
 
                 results = collection::search::query::join::joined_to_search_results(joined);
             }

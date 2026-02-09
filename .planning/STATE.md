@@ -168,5 +168,11 @@ cargo build --release
 - New files: `dispatch.rs`, `bm25_integration_tests.rs`, `cross_store_tests.rs`, `near_fused_bench.rs`, `phase6_integration.rs`
 - mod.rs reduced from 451 → 212 lines; hybrid.rs dead_code removed
 
-*State file last updated: 2026-02-10*  
-*Status: Phase 6 complete (4 plans). ~3,234 workspace tests passing. Quality gates all green.*
+**Phase 8 — VelesQL Execution Completeness (in progress):**
+- ✅ **08-01:** Database-Level Query Executor + ColumnStore Bridge — `Database::execute_query()`, compound queries (UNION/INTERSECT/EXCEPT)
+- ✅ **08-02:** JOIN Execution Integration — LEFT JOIN support, RIGHT/FULL → `UnsupportedFeature` error, 9 new tests (7 Database-level + 2 error tests), `execute_join()` returns `Result`
+- Plans dir: `.planning/phases/v4-08-velesql-execution-completeness/`
+- New files: `database_query_tests.rs`
+
+*State file last updated: 2026-02-09*  
+*Status: Phase 8 Plan 08-02 complete. 2584+ workspace tests passing. Quality gates all green.*

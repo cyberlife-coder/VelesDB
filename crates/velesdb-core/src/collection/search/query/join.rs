@@ -7,6 +7,7 @@
 //! Supports INNER JOIN and LEFT JOIN types.
 
 use crate::column_store::ColumnStore;
+use crate::error::{Error, Result};
 use crate::point::SearchResult;
 use crate::velesql::{JoinClause, JoinCondition, JoinType};
 use std::collections::HashMap;
@@ -122,17 +123,15 @@ pub fn execute_join(
     results: &[SearchResult],
     join: &JoinClause,
     column_store: &ColumnStore,
-) -> Vec<JoinedResult> {
+) -> Result<Vec<JoinedResult>> {
     // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
     let condition = match &join.condition {
         Some(cond) => cond,
         None => {
-            // BUG-003 FIX: Log instead of silent return
-            tracing::warn!(
+            return Err(Error::UnsupportedFeature(format!(
                 "JOIN with USING clause not yet supported for execution on table '{}'",
                 join.table
-            );
-            return Vec::new();
+            )));
         }
     };
 
@@ -141,34 +140,34 @@ pub fn execute_join(
     let join_column = &condition.left.column;
     if let Some(pk_column) = column_store.primary_key_column() {
         if join_column != pk_column {
-            // BUG-003 FIX: Log non-PK join attempt
             tracing::warn!(
                 "Cannot join on non-primary-key column '{}' (PK is '{}'). Use PK column for JOIN.",
                 join_column,
                 pk_column
             );
-            return Vec::new();
+            return Ok(Vec::new());
         }
     } else {
-        // BUG-003 FIX: Log missing PK configuration
         tracing::warn!(
             "ColumnStore '{}' has no primary key configured - cannot perform PK-based join",
             join.table
         );
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    // 1b. Check join type support
+    // 1b. Check join type support — unsupported types return clear error
     let is_left_join = match join.join_type {
         JoinType::Inner => false,
         JoinType::Left => true,
-        JoinType::Right | JoinType::Full => {
-            tracing::warn!(
-                "{:?} JOIN not yet supported, falling back to INNER JOIN on table '{}'",
-                join.join_type,
-                join.table
-            );
-            false
+        JoinType::Right => {
+            return Err(Error::UnsupportedFeature(
+                "RIGHT JOIN is not yet supported. Use LEFT JOIN or INNER JOIN.".to_string(),
+            ));
+        }
+        JoinType::Full => {
+            return Err(Error::UnsupportedFeature(
+                "FULL JOIN is not yet supported. Use LEFT JOIN or INNER JOIN.".to_string(),
+            ));
         }
     };
 
@@ -178,12 +177,12 @@ pub fn execute_join(
     if join_keys.is_empty() {
         // LEFT JOIN: return all original results with empty column data
         if is_left_join {
-            return results
+            return Ok(results
                 .iter()
                 .map(|r| JoinedResult::new(r.clone(), HashMap::new()))
-                .collect();
+                .collect());
         }
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // 3. Determine adaptive batch size
@@ -227,7 +226,7 @@ pub fn execute_join(
         }
     }
 
-    joined_results
+    Ok(joined_results)
 }
 
 /// Batch get rows from ColumnStore by primary keys.
