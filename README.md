@@ -8,11 +8,11 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.7ns SIMD • 3,100+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.4ns SIMD • 3,100+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
-  <strong>� v1.4.0 Released</strong> — VelesQL v2.0, MATCH queries, Multi-Score Fusion, 100% Ecosystem Complete<br/>
+  <strong>🚀 v1.4.0 Released</strong> — VelesQL v2.1, MATCH queries, Multi-Score Fusion, Full Ecosystem<br/>
   <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.0">Download Now</a> • <a href="#-quick-start">Quick Start</a>
 </p>
 
@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.7ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.4ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
   <img src="https://img.shields.io/badge/🧪_Tests-3,100+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
@@ -68,7 +68,7 @@
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 18.7ns SIMD</h3>
+<h3>⚡ 18.4ns SIMD</h3>
 <p>Native HNSW + AVX2 SIMD.<br/><strong>41 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
@@ -103,8 +103,8 @@
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 18.7 ns</h3>
-<p><strong>Dot Product</strong><br/>768D vectors</p>
+<h3>⚡ 18.4 ns</h3>
+<p><strong>Dot Product</strong><br/>768D AVX2</p>
 </td>
 <td align="center" width="20%">
 <h3>🎯 100%</h3>
@@ -117,9 +117,9 @@
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 18.7 ns | 41.1 Gelem/s |
-| **SIMD Cosine (768D)** | 27 ns | 28.4 Gelem/s |
-| **SIMD Hamming (768D)** | 19 ns | 52.6M ops/sec |
+| **SIMD Dot Product (768D)** | 18.4 ns | AVX2, simd_native |
+| **SIMD Cosine (768D)** | 31.8 ns | AVX2, simd_native |
+| **SIMD Euclidean (768D)** | 20.5 ns | AVX2, simd_native |
 | **HNSW Search (10K vectors)** | 57 µs | k=10, 768D |
 | **ColumnStore Filter (100K)** | 88 µs | 44x vs JSON |
 | **VelesQL Cache Hit** | 84 ns | 12M qps |
@@ -447,9 +447,13 @@ curl -X POST http://localhost:8080/query \
 |----------|--------|-------------|
 | `/collections/{name}/search` | `POST` | Vector similarity search |
 | `/collections/{name}/search/batch` | `POST` | Batch search (multiple queries) |
-| `/collections/{name}/search/multi` | `POST` | Multi-query search |
+| `/collections/{name}/search/multi` | `POST` | Multi-query search (NEAR_FUSED) |
+| `/collections/{name}/search/text` | `POST` | Full-text search (BM25) |
+| `/collections/{name}/search/hybrid` | `POST` | Combined vector + text search |
 
 ### Graph
+
+> ⚠️ **Preview** — Graph REST endpoints use an in-memory GraphService. Data is NOT persisted across server restarts. Use the embedded Rust/Python SDK for persistent graph storage via EdgeStore.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -466,19 +470,28 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/indexes` | `POST` | Create index on property |
 | `/collections/{name}/indexes/{label}/{property}` | `DELETE` | Delete index |
 
-### VelesQL v2.0 (Unified Query)
+### VelesQL v2.1 (Unified Query)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/query` | `POST` | Execute VelesQL (Vector + Graph + ColumnStore queries) |
+| `/query/explain` | `POST` | Explain VelesQL query plan without executing |
+| `/collections/{name}/match` | `POST` | Execute MATCH graph pattern queries |
 
-**VelesQL v2.0 Features:**
+**VelesQL Features:**
+- `SELECT DISTINCT` deduplication
 - `GROUP BY` / `HAVING` with AND/OR operators
-- `ORDER BY` multi-column + `similarity()` function
-- `JOIN` with aliases across collections
-- `UNION` / `INTERSECT` / `EXCEPT` set operations
+- `ORDER BY` multi-column + `similarity()` + aggregates
+- `LIKE` / `ILIKE` (case-insensitive) pattern matching
+- `IN`, `BETWEEN`, `IS NULL` / `IS NOT NULL`
 - `USING FUSION(strategy='rrf')` hybrid search
-- `WITH (max_groups=100)` query-time config
+- `NEAR_FUSED` multi-vector fusion search
+- `NOW()` / `INTERVAL` temporal expressions
+- Scalar subqueries in WHERE clause
+- `WITH (ef_search=256)` query-time config
+- `MATCH (a:Label)-[:REL]->(b)` graph traversal
+- `JOIN` (INNER, LEFT) across collections
+- `UNION` / `INTERSECT` / `EXCEPT` set operations
 
 ```sql
 -- Example: Analytics with aggregation
@@ -486,10 +499,15 @@ SELECT category, COUNT(*), AVG(price) FROM products
 GROUP BY category HAVING COUNT(*) > 5
 
 -- Example: Hybrid search with fusion
-SELECT * FROM docs USING FUSION(strategy='rrf', k=60) LIMIT 20
+SELECT * FROM docs
+WHERE vector NEAR $v AND content MATCH 'AI'
+USING FUSION(strategy='rrf', k=60) LIMIT 20
 
--- Example: Set operations
-SELECT * FROM active UNION SELECT * FROM archived
+-- Example: Graph pattern matching
+MATCH (a:Person)-[:KNOWS]->(b:Person)
+WHERE similarity(a.embedding, $query) > 0.8
+RETURN a.name, b.name
+ORDER BY similarity() DESC LIMIT 10
 ```
 
 > **Note:** ColumnStore operations (INSERT, UPDATE, SELECT on structured data) are performed via the `/query` endpoint using VelesQL syntax.
@@ -622,6 +640,8 @@ curl -X POST http://localhost:8080/query \
 ## 🧪 Real-World Business Scenarios
 
 > **Each scenario shows a business problem that traditionally requires 2-3 databases. VelesDB solves it with ONE query.**
+>
+> ⚠️ **Note:** These scenarios showcase VelesDB's vision. Individual features (MATCH, similarity(), subqueries, temporal expressions) are implemented and tested. However, some combinations — especially **cross-collection subqueries** referencing separate tables (e.g., `SELECT price FROM inventory`) — require both collections to share the same VelesDB instance and may have limitations. See [VelesQL Spec](docs/VELESQL_SPEC.md) for exact feature status.
 
 ---
 
@@ -922,15 +942,15 @@ LIMIT 20
 
 ---
 
-**Performance by Metric (768D vectors):**
+**Performance by Metric (768D vectors, SIMD native):**
 
-| Metric | Latency | Throughput | SIMD Optimized |
-|--------|---------|------------|----------------|
-| **Cosine** | 78 ns | 13M ops/sec | ✅ AVX-512 |
-| **Euclidean** | 44 ns | 23M ops/sec | ✅ AVX-512 |
-| **DotProduct** | 66 ns | 15M ops/sec | ✅ AVX-512 |
-| **Hamming** | **6 ns** | **164M ops/sec** | ✅ POPCNT |
-| **Jaccard** | 89 ns | 11M ops/sec | ✅ AVX2 |
+| Metric | Latency | SIMD Optimized |
+|--------|---------|----------------|
+| **Cosine** | 31.8 ns | ✅ AVX2 |
+| **Euclidean** | 20.5 ns | ✅ AVX2 |
+| **DotProduct** | 18.4 ns | ✅ AVX2 |
+| **Hamming (f32)** | 36.2 ns | ✅ AVX2 |
+| **Jaccard** | 28.1 ns | ✅ AVX2 |
 
 > **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
 
@@ -1041,15 +1061,17 @@ LIMIT 10
 ## ⚡ Performance
 
 
-### 🔥 Core Vector Operations (768D - BERT/OpenAI dimensions)
+### 🔥 Core Vector Operations (768D — SIMD Native)
 
-| Operation | Latency | Throughput | vs. Naive |
-|-----------|---------|------------|----------|
-| **Dot Product (768D)** | **46 ns** | **21.7M ops/sec** | 🚀 **8x faster** |
-| **Euclidean (768D)** | **56 ns** | **17.9M ops/sec** | 🚀 **6x faster** |
-| **Cosine (768D)** | **105 ns** | **9.5M ops/sec** | 🚀 **4x faster** |
-| **Hamming (Binary)**| **8 ns** | **125M ops/sec** | 🚀 **10x faster** |
-| **Jaccard (768D)** | **175 ns** | **5.7M ops/sec** | 🚀 **3x faster** |
+> Benchmarked with `cargo bench` on Windows x86_64 with AVX2. See `bench_simd_results.txt` for full data.
+
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **Dot Product (768D)** | **18.4 ns** | **41.1 Gelem/s** |
+| **Euclidean (768D)** | **20.5 ns** | **37.5 Gelem/s** |
+| **Cosine (768D)** | **31.8 ns** | **24.2 Gelem/s** |
+| **Hamming f32 (768D)**| **36.2 ns** | **21.2 Gelem/s** |
+| **Jaccard (768D)** | **28.1 ns** | **27.3 Gelem/s** |
 
 ### 📊 System Performance (10K Vectors, 768D)
 
@@ -1312,7 +1334,7 @@ gantt
 | EPIC-009 | ✅ Graph Property Index | 10x faster MATCH |
 | EPIC-019 | ✅ Scalability 10M entries | Enterprise datasets |
 | EPIC-020 | ✅ ColumnStore CRUD | Real-time updates |
-| EPIC-021 | ✅ VelesQL JOIN Cross-Store | Graph ↔ Table queries |
+| EPIC-021 | ✅ VelesQL JOIN Cross-Store | INNER/LEFT JOIN + UNION/INTERSECT/EXCEPT executed |
 | EPIC-028 | ✅ ORDER BY Multi-Columns | Complex sorting |
 | EPIC-029 | ✅ Python SDK Core Delegation | DRY bindings |
 | EPIC-031 | ✅ Multimodel Query Engine | Unified execution |
@@ -1322,7 +1344,7 @@ gantt
 **Highlights:**
 - 🧠 **Knowledge Graph** - Full MATCH clause with BFS traversal
 - 🔮 **Vector-Graph Fusion** - `WHERE similarity() > 0.8` in graph queries
-- 📊 **ColumnStore** - Real-time CRUD with JOIN support
+- 📊 **ColumnStore** - Real-time CRUD with cross-store queries
 - 📦 **Published** - crates.io, PyPI, npm
 
 ---
@@ -1335,20 +1357,20 @@ gantt
 | EPIC | Feature | Impact |
 |------|---------|--------|
 | EPIC-045 | ✅ VelesQL MATCH Queries | Graph pattern matching |
-| EPIC-046 | ✅ EXPLAIN Query Plans | Query optimization |
+| EPIC-046 | ✅ EXPLAIN Query Plans | `/query/explain` routed and operational |
 | EPIC-049 | ✅ Multi-Score Fusion | RRF, Average, Weighted |
 | EPIC-051 | ✅ Parallel Graph Traversal | 2-4x speedup |
-| EPIC-052 | ✅ VelesQL Enhancements | DISTINCT, Self-JOIN |
+| EPIC-052 | ✅ VelesQL Enhancements | DISTINCT, table aliases |
 | EPIC-056 | ✅ VelesQL SDK Propagation | Python/WASM support |
 | EPIC-057 | ✅ LangChain/LlamaIndex | All metrics & modes |
-| EPIC-058 | ✅ Server API Completeness | EXPLAIN, SSE Stream |
+| EPIC-058 | ✅ Server API Completeness | Full REST API, Swagger UI |
 | EPIC-059 | ✅ CLI & Examples | Multi-search, fusion |
 | EPIC-060 | ✅ E2E Test Coverage | 2,765 tests |
 
 </details>
 
 **Highlights:**
-- 🆕 **VelesQL v2.0** - MATCH queries, EXPLAIN plans, DISTINCT
+- 🆕 **VelesQL v2.1** - MATCH queries, DISTINCT, subqueries, NEAR_FUSED
 - 🔀 **Multi-Score Fusion** - RRF, Average, Maximum, Weighted strategies
 - ⚡ **Parallel Graph** - 2-4x speedup on BFS/DFS
 - 🌐 **100% Ecosystem** - VelesQL in all SDKs
