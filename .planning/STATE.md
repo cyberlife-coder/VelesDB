@@ -41,7 +41,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ## Milestone v4: Verify Promise (9 requirements — promise vs reality)
 
-### Status: Phases 1-4 ✅, Phase 6 ✅ complete. Phase 5, 7 planned.
+### Status: Phases 1-4 ✅, Phase 6-7 ✅ complete. Phase 5 planned.
 
 | Phase | Status | Tasks | Requirements | Estimate | Priority |
 |-------|--------|-------|-------------|----------|----------|
@@ -51,7 +51,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
 | 5 - README & Documentation Truth | 📋 Planned (4 plans) | 12 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
 | 6 - Unified Query & Full-Text | ✅ Done (4 plans) | 47 new tests | VP-010 ✅, VP-011 ✅, VP-012 ✅ | 14-19h | 🚨 Cross-store + NEAR_FUSED |
-| 7 - Cross-Store Exec & EXPLAIN | 📋 Planned (3 plans) | ~15 | VP-010 (remaining), VP-013 | 8-12h | 🚨 VectorFirst/Parallel + EXPLAIN |
+| 7 - Cross-Store Exec & EXPLAIN | ✅ Done (3 plans) | 23 new tests | VP-010 ✅, VP-013 ✅ | 8-12h | 🚨 VectorFirst/Parallel + EXPLAIN |
 
 **Total:** ~50 tasks | ~50-65h
 **Execution:** `1 → 2 → 3 → 4 → 5 → 6`
@@ -151,12 +151,12 @@ cargo build --release
 - **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy, 05-04 Website Claims Audit & Final Quality Gates
 - Plans dir: `.planning/phases/v4-05-readme-documentation-truth/`
 
-**Phase 7 📋 planned (3 plans, 1 wave) — researched 2026-02-10:**
+**Phase 7 ✅ complete (3 plans, 1 wave) — executed 2026-02-10:**
 - **Deferred from Phase 6:** VectorFirst/Parallel cross-store execution + EXPLAIN nodes for NEAR_FUSED and cross-store
-- **Key finding:** `QueryPlanner::choose_hybrid_strategy()` exists but is never called; EXPLAIN lacks FusedSearch/CrossStoreSearch PlanNodes
-- **Plan 07-01:** Cross-Store VectorFirst & Parallel Execution (TDD + `cross_store_exec.rs` + wire QueryPlanner)
-- **Plan 07-02:** EXPLAIN Nodes for NEAR_FUSED & Cross-Store (PlanNode variants + rendering + tests)
-- **Plan 07-03:** Integration & Quality Gates (E2E tests + full validation)
+- ✅ **07-01:** Cross-Store VectorFirst & Parallel Execution (8 tests) — `cross_store_exec.rs`, `QueryPlanner` wired into `execute_query()`
+- ✅ **07-02:** EXPLAIN Nodes for NEAR_FUSED & Cross-Store (8 tests) — `FusedSearch` + `CrossStoreSearch` PlanNodes, rendering, JSON
+- ✅ **07-03:** Integration & Quality Gates (7 E2E tests) — all gates pass (fmt, clippy, deny, test, release build)
+- New files: `cross_store_exec.rs`, `cross_store_exec_tests.rs`, `phase7_integration.rs`
 - Plans dir: `.planning/phases/v4-07-cross-store-exec-explain/`
 
 **Phase 6 ✅ complete (4 plans, 2 waves) — executed 2026-02-10:**
