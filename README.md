@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.4ns SIMD • 3,100+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.4ns SIMD • 3,300+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.4ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-3,100+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/🧪_Tests-3,300+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
@@ -53,7 +53,7 @@
 |--------|---------------------|-----------------|---------|
 | **Infrastructure** | 3 databases + sync | 1 binary | **70% less code** |
 | **Cloud costs** | $500-5000/mo | $0 (local) | **100% savings** |
-| **Latency** | 100-300ms | < 1ms | **100x faster** |
+| **Latency** | 100-300ms (network + search) | < 1ms (local HNSW) | **100x+ faster** |
 | **Compliance** | Complex (data leaves premises) | Simple (local-first) | **HIPAA/GDPR ready** |
 | **Dev time** | 3 integrations to maintain | 1 API | **3x faster shipping** |
 
@@ -91,7 +91,7 @@
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 3,100+</h3>
+<h3>🧪 3,300+</h3>
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
@@ -139,7 +139,7 @@
 ```
 ✅ cargo check --workspace
 ✅ cargo clippy -- -D warnings  
-✅ cargo test --workspace (3,000 passing)
+✅ cargo test --workspace (3,300+ passing)
 ✅ cargo deny check (0 advisories)
 ✅ cargo fmt --check
 ✅ Code coverage > 75% (82.30%)
@@ -156,7 +156,7 @@
 | **Pinecone** | No API keys, no cloud costs, **100x faster locally**, + Graph + Columns |
 | **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile, **unified Vector+Graph** |
 | **Milvus** | Zero config vs complex cluster setup, **embedded mode** |
-| **pgvector** | Purpose-built for vectors, **700x faster search**, native graph support |
+| **pgvector** | Purpose-built for vectors, **significantly faster search** (57µs vs typical ms-range), native graph support |
 | **ChromaDB** | Production-grade Rust vs Python prototype, **enterprise-ready** |
 | **Neo4j + Pinecone** | **One database instead of two**, unified query language |
 
@@ -181,16 +181,18 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | Domain      | Component                          | Description                              | Install                     |
 |-------------|------------------------------------|------------------------------------------|----------------------------|
 | **🦀 Core** | [velesdb-core](crates/velesdb-core) | Core engine (HNSW, SIMD, VelesQL)        | `cargo add velesdb-core`   |
-| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (11 endpoints, OpenAPI)         | `cargo install velesdb-server` |
+| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (25+ endpoints, OpenAPI)        | `cargo install velesdb-server` |
 | **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
 | **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
-| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb`   |
+| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb-sdk` |
 | **🌍 WASM** | [velesdb-wasm](crates/velesdb-wasm) | Browser-side vector search               | `npm i @wiscale/velesdb-wasm` |
 | **📱 Mobile** | [velesdb-mobile](crates/velesdb-mobile) | iOS (Swift) & Android (Kotlin)           | [Build instructions](#-mobile-build) |
 | **🖥️ Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) | Tauri v2 AI-powered apps               | `cargo add tauri-plugin-velesdb` |
 | **🦜 LangChain** | [langchain-velesdb](integrations/langchain) | Official VectorStore                   | `pip install langchain-velesdb` |
 | **🦙 LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) | Document indexing                     | `pip install llama-index-vector-stores-velesdb` |
 | **🔄 Migration** | [velesdb-migrate](crates/velesdb-migrate) | From Qdrant, Pinecone, Supabase        | `cargo install velesdb-migrate` |
+
+> **Note:** Cargo/pip/npm install commands assume packages are published to their respective registries. If not yet published, install from source — see [Build Instructions](#-build-from-source).
 
 ---
 
@@ -432,6 +434,8 @@ curl -X POST http://localhost:8080/query \
 | `/collections` | `POST` | Create a collection |
 | `/collections/{name}` | `GET` | Get collection info |
 | `/collections/{name}` | `DELETE` | Delete a collection |
+| `/collections/{name}/empty` | `GET` | Check if collection is empty |
+| `/collections/{name}/flush` | `POST` | Flush collection to disk |
 
 ### Points
 
@@ -1082,7 +1086,7 @@ LIMIT 10
 | **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
 | **VelesQL Parsing**| **84 ns** | Cache hit (12M qps) |
 | **Recall@10** | **100%** | Accurate mode |
-| **Code Coverage** | **82.30%** | 3,000+ tests |
+| **Code Coverage** | **82.30%** | 3,300+ tests |
 
 ### Search Quality (Recall)
 
@@ -1176,7 +1180,7 @@ pie title Deployment Locations
 ### 💼 Unified API Simplifies Development
 One consistent API across all platforms:
 ```rust
-// Same API everywhere
+// Pseudocode — see velesdb-core API docs for exact syntax
 let results = db.search(query_vector, filters, graph_traversal);
 ```
 
@@ -1203,6 +1207,8 @@ let results = db.search(query_vector, filters, graph_traversal);
 
 ## 🏆 Real-World Impact Stories
 
+> 💡 **Illustrative scenarios** — These stories show what’s architecturally possible with VelesDB’s local-first design. Specific latency and business figures are estimates based on benchmarked operations (57µs HNSW, 18.4ns SIMD). Actual results depend on hardware, data size, and workload.
+
 ### 🏥 Healthcare Diagnostics Assistant
 **Before VelesDB:**
 - 300ms latency per query
@@ -1228,7 +1234,7 @@ pie title Performance Improvement
 
 **With VelesDB:**
 ```sql
-MATCH (part)-[HAS_DEFECT]->(defect)
+MATCH (part)-[:HAS_DEFECT]->(defect)
 WHERE defect.vector NEAR $image_vec
 AND part.material = 'titanium'
 ```

@@ -49,6 +49,7 @@ Legend:
 | `JOIN ... USING (col)` | 🟡 **Parse-only** | `grammar.pest:103`, USING not supported in executor |
 | `UNION / UNION ALL` | ✅ Works | `grammar.pest:57`, `compound.rs`, `Database::execute_query()` Phase 8 |
 | `INTERSECT / EXCEPT` | ✅ Works | `grammar.pest:57`, `compound.rs`, `Database::execute_query()` Phase 8 |
+| `Database::execute_query()` cross-collection | ✅ Works | `lib.rs`, JOIN + compound across collections, Phase 8 |
 
 ---
 

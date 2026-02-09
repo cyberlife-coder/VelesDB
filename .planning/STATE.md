@@ -1,7 +1,7 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v4-verify-promise (Phases 1-4 ✅, Phase 6 ✅ complete. Phase 5 planned, Phase 7 planned)  
+**Current Milestone:** v4-verify-promise (Phases 1-8 ✅ complete)  
 **Previous Milestones:** v1-refactoring (completed 2026-02-08), v2-core-trust (completed 2026-02-08)  
 **Blocked Milestone:** v3-ecosystem-alignment (blocked by v4 — no point fixing bindings if core promises are broken)  
 
@@ -19,7 +19,7 @@
 VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symbolique in a single local-first engine.
 
 ### Codebase Status (post-refactoring, post-correctness)
-- **~3,234 tests** passing, 0 failures (workspace)
+- **~3,339 tests** passing, 0 failures (workspace)
 - **Quality gates**: fmt ✅, clippy ✅, deny ✅, doc ✅, release build ✅
 - **112 unsafe blocks** — all documented with SAFETY comments
 - **47 issues found** by Devil's Advocate review (3 audit phases): 7 critical, 14 bugs, 23 design, 3 minor
@@ -49,7 +49,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 2 - Subquery Decision & Execution | ✅ Done | 12 tests | VP-002 | 10-12h | 🚨 All README scenarios broken |
 | 3 - Multi-hop MATCH & RETURN | ✅ Done | 10 tests | VP-004, VP-005 | 10-12h | ⚠️ Business scenarios |
 | 4 - E2E Scenario Test Suite | ✅ Done (7/7 plans, 36 tests) | 36 | VP-007 | 8-10h | 🛡️ Regression prevention |
-| 5 - README & Documentation Truth | 📋 Planned (4 plans) | 12 | VP-008, VP-009 | 4-6h | 📝 Trust & credibility |
+| 5 - README & Documentation Truth | ✅ Done (4/4 plans) | 6 GAPs resolved | VP-008 ✅, VP-009 ✅ | 4-6h | 📝 Trust & credibility |
 | 6 - Unified Query & Full-Text | ✅ Done (4 plans) | 47 new tests | VP-010 ✅, VP-011 ✅, VP-012 ✅ | 14-19h | 🚨 Cross-store + NEAR_FUSED |
 | 7 - Cross-Store Exec & EXPLAIN | ✅ Done (3 plans) | 23 new tests | VP-010 ✅, VP-013 ✅ | 8-12h | 🚨 VectorFirst/Parallel + EXPLAIN |
 
@@ -146,11 +146,11 @@ cargo build --release
 - 01-02: ✅ Wire Temporal resolution into MATCH WHERE comparison (VP-003) — completed 2026-02-08
 - Plans dir: `.planning/phases/v4-01-match-where-completeness/`
 
-**Phase 5 📋 planned (4 plans, 2 waves) — revised post-Phase 8 (2026-02-09):**
-- **Wave 1 (parallel):** 05-01 VelesQL Spec & Feature Matrix Truth (now includes JOIN/compound EBNF + `Database::execute_query()` docs), 05-02 README Metrics, Numbers & Ecosystem Truth (test count now ~3,200+)
-- **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy (GAP-4/7 added, EXPLAIN resolved, Phase 8 E2E tests as cross-ref), 05-04 Website Claims Audit & Final Quality Gates (FEATURE_TRUTH.md consistency added)
-- Phase 8 already resolved: GAP-1 (JOIN), GAP-2 (UNION/INTERSECT/EXCEPT), GAP-3 (/query/explain)
-- Remaining GAPs: 4 (GraphService in-memory), 5 (perf conflicts), 6 (business scenario limits), 7 (API table incomplete), 8 (ecosystem claims), 9 (test counts)
+**Phase 5 ✅ complete (4/4 plans, 2 waves) — executed 2026-02-09:**
+- **Wave 1:** ✅ 05-01 VelesQL Spec & Feature Matrix Truth (RIGHT/FULL JOIN fix, JOIN USING added, Database::execute_query() docs), ✅ 05-02 README Metrics (test count 3,100+ → 3,300+, TS SDK name fix, server 25+ endpoints)
+- **Wave 2:** ✅ 05-03 README Query & Scenario Accuracy (MATCH syntax fix, API table +2 endpoints, pseudocode label), ✅ 05-04 Website Claims Audit (pgvector claim qualified, illustrative disclaimer, ROI context)
+- **All 9 GAPs resolved:** GAP-1/2/3 by Phase 8, GAP-4/5/6/7/8/9 by Phase 5
+- Cross-document consistency verified: README ↔ VELESQL_SPEC ↔ FEATURE_TRUTH
 - Plans dir: `.planning/phases/v4-05-readme-documentation-truth/`
 
 **Phase 7 ✅ complete (3 plans, 1 wave) — executed 2026-02-10:**
@@ -180,4 +180,4 @@ cargo build --release
 - New files: `database_query_tests.rs`, `tests/e2e_join.rs`, `tests/e2e_compound.rs`
 
 *State file last updated: 2026-02-09*  
-*Status: Phase 8 complete (5/5 plans). ~3,200+ workspace tests passing. Quality gates all green. Phase 5 plans revised post-Phase 8.*
+*Status: All phases complete (1-8). 3,339 workspace tests passing. Quality gates all green. Phase 5 executed — all 9 GAPs resolved, README is an honest mirror of codebase.*

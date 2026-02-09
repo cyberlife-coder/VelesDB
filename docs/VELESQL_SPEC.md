@@ -33,7 +33,9 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | RETURN aggregation in MATCH | ✅ Stable | 2.1 |
 | ORDER BY property in MATCH | ✅ Stable | 2.1 |
 | JOIN (INNER, LEFT) | ✅ Stable | 2.2 |
-| JOIN (RIGHT, FULL) | 🧪 Parser only (falls back to INNER) | 2.0 |
+| JOIN (RIGHT, FULL) | ⚠️ Parsed, returns `UnsupportedFeature` error | 2.0 |
+| JOIN ... USING (col) | 🧪 Parser only, returns `UnsupportedFeature` error | 2.0 |
+| `Database::execute_query()` cross-collection | ✅ Stable | 2.2 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.2 |
 | EXPLAIN query plan | ✅ Stable | 2.2 |
 
@@ -386,7 +388,7 @@ HAVING AVG(price) > 50
 
 ## JOIN Clause (v2.0+)
 
-> ✅ **Executed** — INNER JOIN and LEFT JOIN are fully supported via `Database::execute_query()`. RIGHT and FULL JOIN are parsed but fall back to INNER JOIN with a warning. JOINs resolve the target table as a Collection, build a ColumnStore for O(1) PK lookups, and merge column data into the result payload.
+> ✅ **Executed** — INNER JOIN and LEFT JOIN are fully supported via `Database::execute_query()`. RIGHT and FULL JOIN are parsed but return an `UnsupportedFeature` error at execution. JOIN ... USING is parsed but not yet executed. JOINs resolve the target table as a Collection, build a ColumnStore for O(1) PK lookups, and merge column data into the result payload.
 
 Combine data from multiple collections.
 
@@ -403,8 +405,8 @@ SELECT * FROM table1
 |------|-------------|
 | `JOIN` / `INNER JOIN` | Only matching rows |
 | `LEFT JOIN` | All from left + matching right |
-| `RIGHT JOIN` | All from right + matching left |
-| `FULL JOIN` | All from both tables |
+| `RIGHT JOIN` | ⚠️ Parsed, returns `UnsupportedFeature` error |
+| `FULL JOIN` | ⚠️ Parsed, returns `UnsupportedFeature` error |
 
 ### Examples
 
@@ -815,7 +817,7 @@ SELECT id AS `select` FROM docs
 | `NEAR`, `NEAR_FUSED`, `SIMILARITY` | Vector operations |
 | `ILIKE` | Case-insensitive matching |
 | `DISTINCT` | Deduplication |
-| `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `ON` | Joins (INNER/LEFT executed, RIGHT/FULL parser only) |
+| `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `ON` | Joins (INNER/LEFT executed, RIGHT/FULL returns error) |
 | `UNION`, `INTERSECT`, `EXCEPT` | Set operations (fully executed) |
 | `USING`, `FUSION` | Hybrid search |
 | `RETURN` | Graph query results |
@@ -883,7 +885,7 @@ aggregate_func  = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
 (* Table reference *)
 table_ref       = identifier ["AS" identifier] ;
 
-(* JOIN clause — INNER/LEFT executed, RIGHT/FULL parsed only *)
+(* JOIN clause — INNER/LEFT executed, RIGHT/FULL returns UnsupportedFeature error *)
 join_clause     = [join_type] "JOIN" table_ref ("ON" condition | "USING" "(" identifier ")") ;
 join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTER"] ;
 
