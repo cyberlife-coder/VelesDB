@@ -25,6 +25,9 @@
 mod aggregation;
 #[cfg(test)]
 mod bm25_integration_tests;
+mod cross_store_exec;
+#[cfg(test)]
+mod cross_store_exec_tests;
 #[cfg(test)]
 mod cross_store_tests;
 mod dispatch;
@@ -95,6 +98,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed (e.g., missing parameters).
+    #[allow(clippy::too_many_lines)]
     pub fn execute_query(
         &self,
         query: &crate::velesql::Query,
@@ -181,6 +185,40 @@ impl Collection {
                 limit,
                 stmt.order_by.as_deref(),
             )? {
+                return Ok(results);
+            }
+        }
+
+        // VP-010: Cross-store dispatch (NEAR + graph MATCH)
+        if let Some(ref match_clause) = query.match_clause {
+            if let Some(ref vector) = vector_search {
+                let planner = crate::velesql::QueryPlanner::new();
+                let has_order_by_sim = stmt.order_by.as_ref().is_some_and(|obs| {
+                    obs.iter()
+                        .any(|o| matches!(o.expr, crate::velesql::OrderByExpr::Similarity(_)))
+                });
+                let has_filter = filter_condition
+                    .as_ref()
+                    .is_some_and(|c| Self::extract_metadata_filter(c).is_some());
+                let plan =
+                    planner.choose_hybrid_strategy(has_order_by_sim, has_filter, stmt.limit, None);
+                let mut results = match plan.strategy {
+                    crate::velesql::ExecutionStrategy::VectorFirst => {
+                        self.execute_vector_first_cross_store(vector, match_clause, params, limit)?
+                    }
+                    crate::velesql::ExecutionStrategy::Parallel => {
+                        self.execute_parallel_cross_store(vector, match_clause, params, limit)?
+                    }
+                    crate::velesql::ExecutionStrategy::GraphFirst => {
+                        let match_results =
+                            self.execute_match_with_similarity(match_clause, vector, 0.0, params)?;
+                        self.match_results_to_search_results(match_results)?
+                    }
+                };
+                if let Some(ref order_by) = stmt.order_by {
+                    self.apply_order_by(&mut results, order_by, params)?;
+                }
+                results.truncate(limit);
                 return Ok(results);
             }
         }
