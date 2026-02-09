@@ -116,7 +116,11 @@ impl TraversalProgress {
         if self.estimated_total == 0 {
             return 0.0;
         }
-        (self.visited_count as f64 / self.estimated_total as f64 * 100.0).min(100.0)
+        // Reason: usize counts are always small enough for f64 precision (graph node counts)
+        #[allow(clippy::cast_precision_loss)]
+        {
+            (self.visited_count as f64 / self.estimated_total as f64 * 100.0).min(100.0)
+        }
     }
 
     /// Converts to JSON for postMessage.
@@ -214,6 +218,8 @@ pub fn estimate_traversal_size(node_count: usize, edge_count: usize, max_depth: 
     }
 
     // Average degree
+    // Reason: graph counts are always small enough for f64 precision
+    #[allow(clippy::cast_precision_loss)]
     let avg_degree = edge_count as f64 / node_count as f64;
 
     // Estimate: each level has avg_degree more nodes (with diminishing returns)
@@ -225,7 +231,11 @@ pub fn estimate_traversal_size(node_count: usize, edge_count: usize, max_depth: 
         estimated += level_size;
     }
 
-    (estimated as usize).min(node_count)
+    // Reason: estimated is always positive and clamped to node_count
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (estimated as usize).min(node_count)
+    }
 }
 
 #[cfg(test)]
