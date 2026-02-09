@@ -25,6 +25,8 @@ mod aggregation;
 #[cfg(test)]
 mod bm25_integration_tests;
 pub mod compound;
+#[cfg(test)]
+mod compound_tests;
 mod cross_store_exec;
 #[cfg(test)]
 mod cross_store_exec_tests;
