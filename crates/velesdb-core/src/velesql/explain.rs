@@ -54,6 +54,10 @@ pub enum PlanNode {
     Sequence(Vec<PlanNode>),
     /// MATCH graph traversal (EPIC-046 US-004).
     MatchTraversal(MatchTraversalPlan),
+    /// NEAR_FUSED multi-vector fused search (VP-012, Phase 7).
+    FusedSearch(FusedSearchPlan),
+    /// Cross-store combined Vector + Graph MATCH (VP-010, Phase 7).
+    CrossStoreSearch(CrossStoreSearchPlan),
 }
 
 /// Vector search plan details.
@@ -125,6 +129,34 @@ pub struct MatchTraversalPlan {
     pub similarity_threshold: Option<f32>,
 }
 
+/// NEAR_FUSED multi-vector fused search plan (VP-012, Phase 7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FusedSearchPlan {
+    /// Collection name.
+    pub collection: String,
+    /// Number of query vectors.
+    pub vector_count: usize,
+    /// Fusion strategy name (e.g., "RRF", "Average", "Weighted").
+    pub fusion_strategy: String,
+    /// Number of candidates to retrieve per vector.
+    pub candidates: u32,
+}
+
+/// Cross-store combined V+G search plan (VP-010, Phase 7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrossStoreSearchPlan {
+    /// Collection name.
+    pub collection: String,
+    /// Execution strategy chosen by QueryPlanner.
+    pub strategy: String,
+    /// Over-fetch factor for filtered queries.
+    pub over_fetch_factor: f64,
+    /// Estimated cost in milliseconds.
+    pub estimated_cost_ms: f64,
+    /// Whether metadata filter is applied.
+    pub has_metadata_filter: bool,
+}
+
 /// EXPLAIN output with optional ANALYZE stats (EPIC-046 US-004).
 #[allow(dead_code)] // Used by API consumers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,9 +212,12 @@ pub enum FilterStrategy {
 impl QueryPlan {
     /// Creates a new query plan from a SELECT statement.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn from_select(stmt: &SelectStatement) -> Self {
         let mut nodes = Vec::new();
         let mut has_vector_search = false;
+        let mut has_fused_search = false;
+        let mut fused_info: Option<(usize, String)> = None;
         let mut filter_conditions = Vec::new();
         let mut filter_strategy = FilterStrategy::None;
         let mut index_used = None;
@@ -190,10 +225,26 @@ impl QueryPlan {
         // Analyze WHERE clause
         if let Some(ref condition) = stmt.where_clause {
             Self::analyze_condition(condition, &mut has_vector_search, &mut filter_conditions);
+            // VP-012: detect NEAR_FUSED specifically
+            if let Some(info) = Self::extract_fused_info(condition) {
+                has_fused_search = true;
+                fused_info = Some(info);
+            }
         }
 
         // Build plan nodes
-        if has_vector_search {
+        if has_fused_search {
+            // VP-012: NEAR_FUSED generates FusedSearch node
+            index_used = Some(IndexType::Hnsw);
+            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+            let (vector_count, fusion_strategy) = fused_info.unwrap_or((2, "RRF".to_string()));
+            nodes.push(PlanNode::FusedSearch(FusedSearchPlan {
+                collection: stmt.from.clone(),
+                vector_count,
+                fusion_strategy,
+                candidates,
+            }));
+        } else if has_vector_search {
             index_used = Some(IndexType::Hnsw);
             let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
             nodes.push(PlanNode::VectorSearch(VectorSearchPlan {
@@ -327,6 +378,80 @@ impl QueryPlan {
                 let similarity_factor = if mt.has_similarity { 0.05 } else { 0.0 };
                 base + depth_factor + similarity_factor
             }
+            PlanNode::FusedSearch(fs) => {
+                // Cost scales with number of vectors
+                // SAFETY: vector_count is small (typically 2-10), no precision loss
+                #[allow(clippy::cast_precision_loss)]
+                let cost = 0.05 * fs.vector_count as f64;
+                cost
+            }
+            PlanNode::CrossStoreSearch(_) => {
+                // Cross-store queries are more expensive
+                0.2
+            }
+        }
+    }
+
+    /// Extracts NEAR_FUSED info: (vector_count, fusion_strategy_name).
+    fn extract_fused_info(condition: &Condition) -> Option<(usize, String)> {
+        match condition {
+            Condition::VectorFusedSearch(vfs) => {
+                let strategy_name = vfs.fusion.strategy.to_uppercase();
+                let strategy_name = if strategy_name == "RRF" {
+                    "RRF".to_string()
+                } else {
+                    // Capitalize first letter
+                    let mut s = vfs.fusion.strategy.clone();
+                    if let Some(c) = s.get_mut(0..1) {
+                        c.make_ascii_uppercase();
+                    }
+                    s
+                };
+                Some((vfs.vectors.len(), strategy_name))
+            }
+            Condition::And(left, right) | Condition::Or(left, right) => {
+                Self::extract_fused_info(left).or_else(|| Self::extract_fused_info(right))
+            }
+            Condition::Not(inner) | Condition::Group(inner) => Self::extract_fused_info(inner),
+            _ => None,
+        }
+    }
+
+    /// Creates a `QueryPlan` for a combined SELECT + MATCH query (VP-010).
+    #[must_use]
+    pub fn from_combined(
+        stmt: &SelectStatement,
+        _match_clause: &MatchClause,
+        has_order_by_similarity: bool,
+        has_metadata_filter: bool,
+    ) -> Self {
+        let strategy = if has_order_by_similarity {
+            "VectorFirst"
+        } else {
+            "Parallel"
+        };
+
+        let over_fetch_factor = if has_metadata_filter { 3.0 } else { 2.0 };
+
+        let root = PlanNode::CrossStoreSearch(CrossStoreSearchPlan {
+            collection: stmt.from.clone(),
+            strategy: strategy.to_string(),
+            over_fetch_factor,
+            estimated_cost_ms: 0.2,
+            has_metadata_filter,
+        });
+
+        let estimated_cost_ms = Self::node_cost(&root);
+
+        Self {
+            root,
+            estimated_cost_ms,
+            index_used: Some(IndexType::Hnsw),
+            filter_strategy: if has_metadata_filter {
+                FilterStrategy::PostFilter
+            } else {
+                FilterStrategy::None
+            },
         }
     }
 

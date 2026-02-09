@@ -1,8 +1,8 @@
 //! Tests for `explain` module
 
 use super::ast::{
-    CompareOp, Comparison, Condition, SelectColumns, SelectStatement, Value, VectorExpr,
-    VectorSearch as VsCondition,
+    CompareOp, Comparison, Condition, FusionConfig, SelectColumns, SelectStatement, Value,
+    VectorExpr, VectorFusedSearch, VectorSearch as VsCondition,
 };
 use super::explain::*;
 
@@ -530,4 +530,242 @@ fn test_estimate_selectivity() {
 
     assert!(s0 > s1);
     assert!(s1 > s2);
+}
+
+// =========================================================================
+// VP-012 Phase 7: FusedSearch EXPLAIN tests
+// =========================================================================
+
+#[test]
+fn test_explain_near_fused_generates_fused_search_node() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "embeddings".to_string(),
+        from_alias: None,
+        joins: vec![],
+        where_clause: Some(Condition::VectorFusedSearch(VectorFusedSearch {
+            vectors: vec![
+                VectorExpr::Parameter("v1".to_string()),
+                VectorExpr::Parameter("v2".to_string()),
+                VectorExpr::Parameter("v3".to_string()),
+            ],
+            fusion: FusionConfig {
+                strategy: "rrf".to_string(),
+                params: std::collections::HashMap::new(),
+            },
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+
+    // Should generate FusedSearch, not VectorSearch
+    assert!(
+        matches!(plan.root, PlanNode::Sequence(ref nodes) if nodes.iter().any(|n| matches!(n, PlanNode::FusedSearch(_))))
+            || matches!(plan.root, PlanNode::FusedSearch(_)),
+        "NEAR_FUSED should generate FusedSearch node, got: {:?}",
+        plan.root
+    );
+    assert_eq!(plan.index_used, Some(IndexType::Hnsw));
+}
+
+#[test]
+fn test_explain_fused_search_shows_strategy_and_count() {
+    let plan = QueryPlan {
+        root: PlanNode::FusedSearch(FusedSearchPlan {
+            collection: "docs".to_string(),
+            vector_count: 3,
+            fusion_strategy: "RRF".to_string(),
+            candidates: 10,
+        }),
+        estimated_cost_ms: 0.15,
+        index_used: Some(IndexType::Hnsw),
+        filter_strategy: FilterStrategy::None,
+    };
+
+    let tree = plan.to_tree();
+    assert!(tree.contains("FusedSearch"), "Should show FusedSearch");
+    assert!(tree.contains("Vectors: 3"), "Should show vector count");
+    assert!(tree.contains("Fusion: RRF"), "Should show fusion strategy");
+    assert!(tree.contains("Candidates: 10"), "Should show candidates");
+    assert!(tree.contains("docs"), "Should show collection");
+}
+
+#[test]
+fn test_explain_fused_search_json() {
+    let plan = QueryPlan {
+        root: PlanNode::FusedSearch(FusedSearchPlan {
+            collection: "embeddings".to_string(),
+            vector_count: 2,
+            fusion_strategy: "Average".to_string(),
+            candidates: 50,
+        }),
+        estimated_cost_ms: 0.1,
+        index_used: Some(IndexType::Hnsw),
+        filter_strategy: FilterStrategy::None,
+    };
+
+    let json = plan.to_json().expect("JSON serialization failed");
+    assert!(json.contains("FusedSearch"));
+    assert!(json.contains("\"vector_count\": 2"));
+    assert!(json.contains("\"fusion_strategy\": \"Average\""));
+    assert!(json.contains("\"candidates\": 50"));
+}
+
+#[test]
+fn test_explain_fused_search_cost_scales_with_vectors() {
+    let two_vec = FusedSearchPlan {
+        collection: "test".to_string(),
+        vector_count: 2,
+        fusion_strategy: "RRF".to_string(),
+        candidates: 10,
+    };
+    let five_vec = FusedSearchPlan {
+        collection: "test".to_string(),
+        vector_count: 5,
+        fusion_strategy: "RRF".to_string(),
+        candidates: 10,
+    };
+
+    let cost_2 = QueryPlan::node_cost(&PlanNode::FusedSearch(two_vec));
+    let cost_5 = QueryPlan::node_cost(&PlanNode::FusedSearch(five_vec));
+
+    assert!(cost_5 > cost_2, "More vectors = higher cost");
+}
+
+// =========================================================================
+// VP-010 Phase 7: CrossStoreSearch EXPLAIN tests
+// =========================================================================
+
+#[test]
+fn test_explain_cross_store_search_render_tree() {
+    let plan = QueryPlan {
+        root: PlanNode::CrossStoreSearch(CrossStoreSearchPlan {
+            collection: "articles".to_string(),
+            strategy: "VectorFirst".to_string(),
+            over_fetch_factor: 3.0,
+            estimated_cost_ms: 0.2,
+            has_metadata_filter: true,
+        }),
+        estimated_cost_ms: 0.2,
+        index_used: Some(IndexType::Hnsw),
+        filter_strategy: FilterStrategy::PostFilter,
+    };
+
+    let tree = plan.to_tree();
+    assert!(
+        tree.contains("CrossStoreSearch"),
+        "Should show CrossStoreSearch"
+    );
+    assert!(
+        tree.contains("Strategy: VectorFirst"),
+        "Should show strategy"
+    );
+    assert!(tree.contains("Over-fetch: 3.0x"), "Should show over-fetch");
+    assert!(tree.contains("Est. Cost: 0.20ms"), "Should show cost");
+    assert!(tree.contains("Has Filter: yes"), "Should show filter flag");
+}
+
+#[test]
+fn test_explain_cross_store_search_json() {
+    let plan = QueryPlan {
+        root: PlanNode::CrossStoreSearch(CrossStoreSearchPlan {
+            collection: "docs".to_string(),
+            strategy: "Parallel".to_string(),
+            over_fetch_factor: 2.0,
+            estimated_cost_ms: 0.2,
+            has_metadata_filter: false,
+        }),
+        estimated_cost_ms: 0.2,
+        index_used: Some(IndexType::Hnsw),
+        filter_strategy: FilterStrategy::None,
+    };
+
+    let json = plan.to_json().expect("JSON serialization failed");
+    assert!(json.contains("CrossStoreSearch"));
+    assert!(json.contains("\"strategy\": \"Parallel\""));
+    assert!(json.contains("\"over_fetch_factor\": 2.0"));
+    assert!(json.contains("\"has_metadata_filter\": false"));
+}
+
+#[test]
+fn test_explain_cross_store_from_combined() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "articles".to_string(),
+        from_alias: None,
+        joins: vec![],
+        where_clause: Some(Condition::VectorSearch(VsCondition {
+            vector: VectorExpr::Parameter("v".to_string()),
+        })),
+        order_by: None,
+        limit: Some(10),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let match_clause = crate::velesql::MatchClause {
+        patterns: vec![],
+        where_clause: None,
+        return_clause: crate::velesql::ReturnClause {
+            items: vec![],
+            order_by: None,
+            limit: None,
+        },
+    };
+
+    // Without ORDER BY similarity → Parallel
+    let plan = QueryPlan::from_combined(&stmt, &match_clause, false, false);
+    match &plan.root {
+        PlanNode::CrossStoreSearch(cs) => {
+            assert_eq!(cs.strategy, "Parallel");
+            assert!(!cs.has_metadata_filter);
+        }
+        _ => panic!("Expected CrossStoreSearch node"),
+    }
+
+    // With ORDER BY similarity → VectorFirst
+    let plan = QueryPlan::from_combined(&stmt, &match_clause, true, true);
+    match &plan.root {
+        PlanNode::CrossStoreSearch(cs) => {
+            assert_eq!(cs.strategy, "VectorFirst");
+            assert!(cs.has_metadata_filter);
+            assert!((cs.over_fetch_factor - 3.0).abs() < 1e-5);
+        }
+        _ => panic!("Expected CrossStoreSearch node"),
+    }
+}
+
+#[test]
+fn test_explain_cross_store_cost() {
+    let cost = QueryPlan::node_cost(&PlanNode::CrossStoreSearch(CrossStoreSearchPlan {
+        collection: "test".to_string(),
+        strategy: "VectorFirst".to_string(),
+        over_fetch_factor: 2.0,
+        estimated_cost_ms: 0.2,
+        has_metadata_filter: false,
+    }));
+
+    // Cross-store should be more expensive than simple vector search
+    let vector_cost = QueryPlan::node_cost(&PlanNode::VectorSearch(VectorSearchPlan {
+        collection: "test".to_string(),
+        ef_search: 100,
+        candidates: 10,
+    }));
+
+    assert!(
+        cost > vector_cost,
+        "Cross-store should cost more than single vector search"
+    );
 }
