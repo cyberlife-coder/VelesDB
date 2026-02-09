@@ -2,7 +2,7 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** 1 of 5  
+**Phase:** 1 of 7  
 **Plan:** Not started  
 **Status:** Ready to plan  
 **Completed Milestones:**  
@@ -39,30 +39,34 @@
 
 ## Milestone v3: Ecosystem Alignment
 
-**Goal:** Align entire VelesDB ecosystem with velesdb-core. Every external component becomes a proper binding/wrapper with zero reimplemented logic.  
-**Source:** 22 findings from Devil's Advocate Code Review  
-**Project:** `.planning/v3-ecosystem-alignment/PROJECT.md`  
-**Roadmap:** `.planning/v3-ecosystem-alignment/ROADMAP.md`
+**Goal:** Align entire VelesDB ecosystem with velesdb-core. Every external component becomes a proper binding/wrapper with zero reimplemented logic. All demos and examples updated to reflect v4 changes.  
+**Source:** 30 findings (22 Devil's Advocate + 8 ecosystem audit)  
+**Project:** `.planning/milestones/v3-ecosystem-alignment/PROJECT.md`  
+**Roadmap:** `.planning/milestones/v3-ecosystem-alignment/ROADMAP.md`
 
 ### Progress
 
 ```
-Phase 1  ░░░░░░░░░░  0%   WASM Rebinding
-Phase 2  ░░░░░░░░░░  0%   Server Binding & Security
-Phase 3  ░░░░░░░░░░  0%   TypeScript SDK Fixes
-Phase 4  ░░░░░░░░░░  0%   Python Integrations
-Phase 5  ░░░░░░░░░░  0%   GPU + Ecosystem CI
+Phase 1  ░░░░░░░░░░  0%   WASM Rebinding          🚨
+Phase 2  ░░░░░░░░░░  0%   Server Binding & Security 🚨
+Phase 3  ░░░░░░░░░░  0%   Python Common + Integr.  🐛
+Phase 4  ░░░░░░░░░░  0%   TypeScript SDK Fixes     🐛
+Phase 5  ░░░░░░░░░░  0%   Demos & Examples Update  📝
+Phase 6  ░░░░░░░░░░  0%   Tauri Plugin Audit       🐛
+Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
 ```
 
 ### Phases
 
-| Phase | Name | Findings | Priority | Status |
-|-------|------|----------|----------|--------|
-| 1 | WASM Rebinding | BEG-01,05,06, W-01→03 | 🚨 Architecture | ⬜ Pending |
-| 2 | Server Binding & Security | S-01→04, BEG-05 | 🚨 Security | ⬜ Pending |
-| 3 | TypeScript SDK Fixes | T-01→03, BEG-07 | 🐛 Contracts | ⬜ Pending |
-| 4 | Python Integrations | I-01→03, BEG-02→04 | 🐛 Contracts | ⬜ Pending |
-| 5 | GPU + Ecosystem CI | I-04, CI-04 | ⚠️ Polish | ⬜ Pending |
+| Phase | Name | Requirements | Priority | Status |
+|-------|------|-------------|----------|--------|
+| 1 | WASM Rebinding | ECO-01,02,06,07,16,17 | 🚨 Architecture | ⬜ Pending |
+| 2 | Server Binding & Security | ECO-03,04,05,14 | 🚨 Security | ⬜ Pending |
+| 3 | Python Common + Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ⬜ Pending |
+| 4 | TypeScript SDK Fixes | ECO-08,09,10,15 | 🐛 Contracts | ⬜ Pending |
+| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ⬜ Pending |
+| 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness | ⬜ Pending |
+| 7 | GPU + Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
 
 **Execution:** `1 → 2 → 3 → 4 → 5`
 
@@ -94,8 +98,8 @@ Phase 5  ░░░░░░░░░░  0%   GPU + Ecosystem CI
 ## Quick Reference
 
 ### Key File Paths
-- `.planning/v3-ecosystem-alignment/PROJECT.md` — Milestone definition (22 findings)
-- `.planning/v3-ecosystem-alignment/ROADMAP.md` — Roadmap (5 phases)
+- `.planning/milestones/v3-ecosystem-alignment/PROJECT.md` — Milestone definition (30 findings)
+- `.planning/milestones/v3-ecosystem-alignment/ROADMAP.md` — Roadmap (7 phases)
 - `.planning/MILESTONES.md` — All milestones summary
 - `.planning/milestones/` — Archived milestones (v1, v2, v4)
 - `.planning/DEVIL_ADVOCATE_FINDINGS.md` — Full review findings (47 issues)
@@ -118,4 +122,4 @@ pytest                                 # Python integrations (Phase 4)
 ```
 
 *State file last updated: 2026-02-09*  
-*Status: v3-ecosystem-alignment milestone created. Ready to plan Phase 1.*
+*Status: v3-ecosystem-alignment milestone expanded (7 phases, 30 findings). Ready to plan Phase 1.*
