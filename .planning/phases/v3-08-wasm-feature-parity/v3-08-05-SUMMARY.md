@@ -36,7 +36,7 @@ Ran all 5 quality gates: fmt, clippy, workspace tests (3,300+), cargo deny (netw
 |----------|-----------|
 | Test core API directly (not WASM bindings) | `wasm_bindgen` functions can't run on native targets; WASM layer is thin JSON↔ColumnValue translation |
 | Use make_pair() helper with dual stores | Proves two independent stores with same operations produce identical state |
-| Skip cargo deny (network error) | RustSec advisory DB fetch fails due to network; not a code issue |
+| cargo deny initially failed (network) | Transient RustSec DB fetch error, resolved on retry |
 | Skip velesdb-python release build | Pre-existing PyO3 linker error unrelated to v3-08 changes |
 
 ## Deviations from Plan
@@ -63,7 +63,7 @@ Ran all 5 quality gates: fmt, clippy, workspace tests (3,300+), cargo deny (netw
 cargo fmt --all --check           ✅ Exit 0
 cargo clippy --workspace          ✅ 0 warnings (only config duplicate note)
 cargo test --workspace            ✅ 3,300+ passed, 0 failed
-cargo deny check                  ⚠️ Network error (RustSec DB fetch)
+cargo deny check                  ✅ advisories ok, bans ok, licenses ok, sources ok
 cargo build --release (4 crates)  ✅ core, wasm, server, cli all pass
 Deleted files check               ✅ simd.rs, quantization.rs, filter.rs, fusion.rs absent
 WASM exports check                ✅ All 10 new functions confirmed
@@ -74,7 +74,7 @@ WASM exports check                ✅ All 10 new functions confirmed
 - [x] 8+ ColumnStore equivalence tests passing (8 ✅)
 - [x] 3+ Metrics/HalfPrecision equivalence tests passing (3 ✅)
 - [x] All workspace tests pass (3,300+ ✅)
-- [x] 4/5 quality gates pass (cargo deny = network issue)
+- [x] 5/5 quality gates pass
 - [x] WASM exports: VectorStore, GraphStore, ColumnStoreWasm, SemanticMemory
 - [x] WASM exports: recall_at_k, precision_at_k, ndcg_at_k, mrr, hit_rate_single
 - [x] WASM exports: f32_to_f16, f16_to_f32, f32_to_bf16, bf16_to_f32

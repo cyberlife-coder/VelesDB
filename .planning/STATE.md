@@ -96,8 +96,7 @@ Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
 
 ## Blockers & Concerns
 
-- `cargo deny check` fails due to network error (RustSec DB fetch) — not a code issue
-- `velesdb-python` release build has pre-existing PyO3 linker errors
+- `velesdb-python` release build has pre-existing PyO3 linker errors on Windows
 
 ---
 
