@@ -2,9 +2,9 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** 1 of 7 (WASM Rebinding) + v3-08 (WASM Feature Parity)  
-**Plan:** 5 of 5 (v3-08 complete)  
-**Status:** v3-08 complete — Phase 1 ready to execute  
+**Phase:** 2 of 7 (Server Binding & Security)  
+**Plan:** 0 of 5 (planning complete)  
+**Status:** Phase 2 planned — 5 plans across 2 waves. Ready to execute Plan 01 (Graph Unification)  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -48,7 +48,7 @@
 
 ```
 Phase 1  ░░░░░░░░░░  0%   WASM Rebinding (5 plans) 🚨
-Phase 2  ░░░░░░░░░░  0%   Server Binding & Security 🚨
+Phase 2  ░░░░░░░░░░  0%   Server Binding & Security (5 plans) 🚨
 Phase 3  ░░░░░░░░░░  0%   Python Common + Integr.  🐛
 Phase 4  ░░░░░░░░░░  0%   TypeScript SDK Fixes     🐛
 Phase 5  ░░░░░░░░░░  0%   Demos & Examples Update  📝
@@ -61,7 +61,7 @@ Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
 | Phase | Name | Requirements | Priority | Status |
 |-------|------|-------------|----------|--------|
 | 1 | WASM Rebinding | ECO-01,02,06,07,16,17 | 🚨 Architecture | ⬜ Pending |
-| 2 | Server Binding & Security | ECO-03,04,05,14 | 🚨 Security | ⬜ Pending |
+| 2 | Server Binding & Security | ECO-03,04,05,14 | 🚨 Security | 📋 Planned (5 plans) |
 | 3 | Python Common + Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ⬜ Pending |
 | 4 | TypeScript SDK Fixes | ECO-08,09,10,15 | 🐛 Contracts | ⬜ Pending |
 | 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ⬜ Pending |
@@ -82,8 +82,8 @@ Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
 
 ## Session Continuity
 
-**Last session:** 2026-02-09  
-**Stopped at:** Phase v3-08 (WASM Feature Parity) complete — 5 plans, 11 equivalence tests, Playwright browser validation
+**Last session:** 2026-02-10  
+**Stopped at:** Phase v3-02 (Server Binding & Security) planned — 5 plans, 2 waves, full audit in CONTEXT.md
 
 ## Decisions
 
@@ -93,6 +93,10 @@ Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
 | IndexedDB persistence via snapshot (schema+rows JSON) | Avoids exposing internal types (RoaringBitmap, StringTable) | 2026-02-09 |
 | Playwright MCP for WASM browser testing | Native targets can't run wasm_bindgen; Playwright validates in real Chromium | 2026-02-09 |
 | serde_wasm_bindgen Map→toObj() helper | serde_json::Map serializes as JS Map, not plain object | 2026-02-09 |
+| Graph handlers bind to core Collection API | Delete server's GraphService, use Collection::traverse_bfs/dfs | 2026-02-10 |
+| Auth: constant-time comparison for API keys | Prevent timing attacks on bearer token validation | 2026-02-10 |
+| spawn_blocking: all CPU handlers wrapped | Only health_check stays pure async | 2026-02-10 |
+| tower-governor for per-IP rate limiting | Global rate limit is insufficient; need per-IP granularity | 2026-02-10 |
 
 ## Blockers & Concerns
 
@@ -126,5 +130,5 @@ npm test                               # TypeScript SDK (Phase 3)
 pytest                                 # Python integrations (Phase 4)
 ```
 
-*State file last updated: 2026-02-09*  
-*Status: v3-08 (WASM Feature Parity) complete. Phase 1 planned — 5 plans across 5 sequential waves. Ready to execute Plan 01 (Audit).*
+*State file last updated: 2026-02-10*  
+*Status: Phase 2 (Server Binding & Security) planned — 5 plans across 2 waves. Ready to execute Plan 01 (Graph Unification).*
