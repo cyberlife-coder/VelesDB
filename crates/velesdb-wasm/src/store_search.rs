@@ -2,7 +2,8 @@
 //!
 //! Provides search functionality extracted from the main store.
 
-use crate::{fusion, text_search, vector_ops, DistanceMetric, StorageMode};
+use crate::{text_search, vector_ops, DistanceMetric, StorageMode};
+use velesdb_core::fusion::FusionStrategy;
 use wasm_bindgen::JsValue;
 
 /// Validates query dimension matches store dimension.
@@ -196,7 +197,14 @@ pub fn multi_query_search_impl(
         all_results.push(results);
     }
 
-    let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
+    let fusion_strategy = match strategy {
+        "average" | "avg" => FusionStrategy::Average,
+        "maximum" | "max" => FusionStrategy::Maximum,
+        _ => FusionStrategy::RRF {
+            k: rrf_k.unwrap_or(60),
+        },
+    };
+    let fused = fusion_strategy.fuse(all_results).unwrap_or_default();
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
     serde_wasm_bindgen::to_value(&fused).map_err(|e| JsValue::from_str(&e.to_string()))
