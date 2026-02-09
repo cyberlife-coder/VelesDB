@@ -3,7 +3,7 @@
 ## v3-ecosystem-alignment — In Progress
 
 **Started:** 2026-02-09  
-**Phases:** 7  
+**Phases:** 8  
 **Findings covered:** 30 (22 Devil's Advocate + 8 ecosystem audit)  
 **Components:** 10 (WASM, server, Python SDK, TS SDK, LangChain, LlamaIndex, Tauri plugin, 2 demos, examples)
 
@@ -22,11 +22,12 @@ Align the entire VelesDB ecosystem with velesdb-core. Every external component b
 | 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience |
 | 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness |
 | 7 | GPU Extras + Ecosystem CI | ECO-21,22 | ⚠️ Polish |
+| 8 | WASM Feature Parity (ColumnStore + Metrics + f16) | Vision-driven | 🚨 Product Completeness |
 
 ### Archive
 
 Details: `.planning/milestones/v3-ecosystem-alignment/`  
-Phase dirs: `.planning/phases/v3-01-*` through `v3-07-*`
+Phase dirs: `.planning/phases/v3-01-*` through `v3-08-*`
 
 ---
 
