@@ -41,6 +41,8 @@ mod column_store;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
+mod half_precision;
+mod metrics;
 mod persistence;
 mod serialization;
 mod store_get;
