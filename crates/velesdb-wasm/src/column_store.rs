@@ -494,6 +494,38 @@ impl ColumnStoreWasm {
             .filter_map(|i| u32::try_from(i).ok())
             .collect()
     }
+
+    // =========================================================================
+    // Internal accessors for persistence module
+    // =========================================================================
+
+    /// Returns a reference to the inner `ColumnStore`.
+    pub(crate) fn inner_ref(&self) -> &ColumnStore {
+        &self.store
+    }
+
+    /// Returns a mutable reference to the inner `ColumnStore`.
+    pub(crate) fn inner_mut(&mut self) -> &mut ColumnStore {
+        &mut self.store
+    }
+
+    /// Returns a reference to the cached schema.
+    pub(crate) fn schema_ref(&self) -> &[(String, ColumnType)] {
+        &self.schema
+    }
+
+    /// Creates a `ColumnStoreWasm` from raw parts.
+    pub(crate) fn from_raw(store: ColumnStore, schema: Vec<(String, ColumnType)>) -> Self {
+        Self { store, schema }
+    }
+
+    /// Converts a JSON map to column values (same as `json_row_to_values` but pub(crate)).
+    pub(crate) fn json_map_to_values(
+        &mut self,
+        row: &serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<(String, ColumnValue)> {
+        self.json_row_to_values(row)
+    }
 }
 
 #[cfg(test)]

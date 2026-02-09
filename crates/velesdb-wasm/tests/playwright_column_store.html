@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VelesDB WASM - ColumnStore Persistence Test</title>
+</head>
+<body>
+<h1>VelesDB ColumnStore Persistence Test</h1>
+<pre id="output">Loading WASM...</pre>
+<script type="module">
+    import init, {
+        ColumnStoreWasm,
+        ColumnStorePersistence,
+        recall_at_k,
+        precision_at_k,
+        mrr,
+        f32_to_f16,
+        f16_to_f32,
+        vector_memory_size,
+    } from '../pkg/velesdb_wasm.js';
+
+    const out = document.getElementById('output');
+    function log(msg) {
+        out.textContent += '\n' + msg;
+        console.log(msg);
+    }
+
+    // Reason: serde_wasm_bindgen serializes serde_json::Map as JS Map, not plain object
+    function toObj(val) {
+        if (val instanceof Map) {
+            const o = {};
+            for (const [k, v] of val) o[k] = (typeof v === 'bigint') ? Number(v) : v;
+            return o;
+        }
+        return val;
+    }
+
+    async function runTests() {
+        try {
+            await init();
+            log('✅ WASM initialized');
+
+            // =============================================
+            // TEST 1: ColumnStore CRUD
+            // =============================================
+            const schema = [
+                { name: 'id', type: 'int' },
+                { name: 'name', type: 'string' },
+                { name: 'age', type: 'int' },
+                { name: 'active', type: 'bool' },
+            ];
+            const store = ColumnStoreWasm.with_primary_key(schema, 'id');
+            log('✅ T1: ColumnStore created with PK');
+
+            store.insert_row({ id: 1, name: 'Alice', age: 30, active: true });
+            store.insert_row({ id: 2, name: 'Bob', age: 25, active: false });
+            store.insert_row({ id: 3, name: 'Charlie', age: 35, active: true });
+            log(`✅ T1: Inserted 3 rows, active_row_count=${store.active_row_count}`);
+
+            const row1 = toObj(store.get_row(1n));
+            if (row1.name !== 'Alice' || row1.age !== 30) throw new Error(`T1: get_row failed: ${JSON.stringify(row1)}`);
+            log('✅ T1: get_row(1) = Alice/30');
+
+            store.delete_row(2n);
+            if (store.active_row_count !== 2) throw new Error('T1: delete failed');
+            log('✅ T1: delete_row(2), active_row_count=2');
+
+            // =============================================
+            // TEST 2: ColumnStore Persistence (IndexedDB)
+            // =============================================
+            const persistence = new ColumnStorePersistence();
+            await persistence.init();
+            log('✅ T2: ColumnStorePersistence initialized');
+
+            await persistence.save('test_users', store);
+            log('✅ T2: Saved store as "test_users"');
+
+            const storeNames = await persistence.list_stores();
+            if (!storeNames.includes('test_users')) throw new Error('T2: list_stores missing');
+            log(`✅ T2: list_stores = [${storeNames}]`);
+
+            const metadata = await persistence.get_metadata('test_users');
+            if (metadata.row_count !== 2) throw new Error(`T2: row_count=${metadata.row_count}, expected 2`);
+            if (metadata.primary_key !== 'id') throw new Error('T2: primary_key mismatch');
+            log(`✅ T2: metadata: rows=${metadata.row_count}, pk=${metadata.primary_key}`);
+
+            const loaded = await persistence.load('test_users');
+            log(`✅ T2: Loaded store, active_row_count=${loaded.active_row_count}`);
+
+            if (loaded.active_row_count !== 2) throw new Error(`T2: loaded count=${loaded.active_row_count}`);
+            const loadedRow = toObj(loaded.get_row(1n));
+            if (loadedRow.name !== 'Alice') throw new Error(`T2: loaded name=${loadedRow.name}`);
+            if (loadedRow.age !== 30) throw new Error(`T2: loaded age=${loadedRow.age}`);
+            log('✅ T2: Loaded row 1 = Alice/30 (data integrity OK)');
+
+            const loadedRow3 = toObj(loaded.get_row(3n));
+            if (loadedRow3.name !== 'Charlie') throw new Error(`T2: loaded row3=${loadedRow3.name}`);
+            log('✅ T2: Loaded row 3 = Charlie (multi-row OK)');
+
+            // Verify deleted row stays deleted
+            const loadedRow2 = loaded.get_row(2n);
+            if (loadedRow2 !== null && loadedRow2 !== undefined && !(loadedRow2 instanceof Map && loadedRow2.size === 0)) throw new Error('T2: deleted row 2 reappeared');
+            log('✅ T2: Deleted row 2 not in loaded store');
+
+            // Delete from IndexedDB
+            await persistence.delete_store('test_users');
+            const afterDelete = await persistence.list_stores();
+            if (afterDelete.includes('test_users')) throw new Error('T2: delete_store failed');
+            log('✅ T2: delete_store OK');
+
+            // =============================================
+            // TEST 3: Metrics
+            // =============================================
+            const truth = new BigUint64Array([1n, 2n, 3n, 4n, 5n]);
+            const results = new BigUint64Array([1n, 3n, 6n, 2n, 7n]);
+            const r = recall_at_k(truth, results);
+            if (Math.abs(r - 0.6) > 0.001) throw new Error(`T3: recall=${r}`);
+            log(`✅ T3: recall_at_k = ${r}`);
+
+            const p = precision_at_k(truth, results);
+            if (Math.abs(p - 0.6) > 0.001) throw new Error(`T3: precision=${p}`);
+            log(`✅ T3: precision_at_k = ${p}`);
+
+            const m = mrr(truth, results);
+            if (Math.abs(m - 1.0) > 0.001) throw new Error(`T3: mrr=${m}`);
+            log(`✅ T3: mrr = ${m}`);
+
+            // =============================================
+            // TEST 4: Half Precision
+            // =============================================
+            const vec = new Float32Array([1.0, 2.0, 3.0, -1.5, 0.0]);
+            const f16bytes = f32_to_f16(vec);
+            if (f16bytes.length !== 10) throw new Error(`T4: f16 bytes=${f16bytes.length}`);
+            log(`✅ T4: f32_to_f16 = ${f16bytes.length} bytes (50% of ${vec.length * 4})`);
+
+            const recovered = f16_to_f32(f16bytes);
+            for (let i = 0; i < vec.length; i++) {
+                if (Math.abs(vec[i] - recovered[i]) > 0.01) {
+                    throw new Error(`T4: roundtrip[${i}]: ${vec[i]} vs ${recovered[i]}`);
+                }
+            }
+            log('✅ T4: f16 roundtrip OK');
+
+            const memF32 = vector_memory_size(768, 'f32');
+            const memF16 = vector_memory_size(768, 'f16');
+            if (memF32 !== 3072 || memF16 !== 1536) throw new Error(`T4: mem=${memF32}/${memF16}`);
+            log(`✅ T4: vector_memory_size(768) = f32:${memF32}, f16:${memF16}`);
+
+            // =============================================
+            // FINAL
+            // =============================================
+            log('');
+            log('🎉 ALL TESTS PASSED');
+            window.__TEST_RESULT__ = 'PASS';
+
+        } catch (e) {
+            log(`❌ FAILED: ${e.message}`);
+            window.__TEST_RESULT__ = `FAIL: ${e.message}`;
+            console.error(e);
+        }
+    }
+
+    runTests();
+</script>
+</body>
+</html>

@@ -38,6 +38,7 @@ use wasm_bindgen::prelude::*;
 
 mod agent;
 mod column_store;
+mod column_store_persistence;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
