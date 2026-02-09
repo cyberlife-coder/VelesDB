@@ -1,36 +1,53 @@
 # Milestones
 
-## v4-verify-promise — In Progress
+## v4-verify-promise — Completed
 
-**Started:** 2026-02-08
-**Status:** Gap analysis complete. Ready to plan Phase 1.
-**Phases:** 5
-**Estimated effort:** ~40-50h
+**Started:** 2026-02-08  
+**Completed:** 2026-02-09  
+**Phases:** 8  
+**Plans:** 30  
+**Requirements:** 13/13 satisfied (100%)
 
 ### Summary
 
-Audit-and-fix milestone that validates whether VelesDB actually delivers what its README, GitHub page, and website promise. Every business scenario query, every code example, every feature claim is tested end-to-end. Where gaps exist, they are implemented or documentation is corrected.
+Audit-and-fix milestone that validated whether VelesDB actually delivers what its README, GitHub page, and documentation promise. Every business scenario query, every code example, every feature claim was tested end-to-end. Where gaps existed, they were implemented or documentation was corrected. Scope expanded from 5 → 8 phases as deeper execution gaps were discovered (cross-store queries, NEAR_FUSED, JOIN/compound execution).
 
-### Critical Findings
+### Key Achievements
 
-| Finding | Severity | Impact |
-|---------|----------|--------|
-| MATCH WHERE `_ => Ok(true)` catch-all | 🚨 Critical | LIKE/BETWEEN/IN silently pass — wrong results |
-| Subquery → Value::Null | 🚨 Critical | ALL 4 business scenario queries broken |
-| Multi-hop only uses first pattern | ⚠️ Major | Multi-relationship MATCH incomplete |
-| RETURN aggregation not implemented | ⚠️ Major | Healthcare scenario broken |
-| ORDER BY property in MATCH → error | ⚠️ Major | AI Agent Memory scenario broken |
-| Temporal in MATCH WHERE not wired | ⚠️ Major | Fraud detection scenario broken |
+- **MATCH WHERE**: Fixed silent `_ => Ok(true)` catch-all — LIKE/BETWEEN/IN now execute correctly
+- **Subquery Execution**: Full scalar subquery executor — all 4 README business scenarios work
+- **Multi-hop MATCH**: Hop-by-hop chain traversal with binding-aware WHERE
+- **RETURN Aggregation**: OpenCypher implicit grouping for MATCH results
+- **NEAR_FUSED Wiring**: Multi-vector fusion search fully executable via VelesQL
+- **Cross-Store Planner**: VectorFirst & Parallel execution strategies via QueryPlanner
+- **Database::execute_query()**: Cross-collection JOIN + UNION/INTERSECT/EXCEPT
+- **EXPLAIN**: PlanNodes for FusedSearch and CrossStoreSearch
+- **Documentation Truth**: 9 GAPs resolved — README is an honest mirror of codebase
 
 ### Phases
 
-| Phase | Name | Requirements | Estimate |
-|-------|------|-------------|----------|
-| 1 | MATCH WHERE Completeness | VP-001, VP-003, VP-006 | 8-10h |
-| 2 | Subquery Decision & Execution | VP-002 | 10-12h |
-| 3 | Multi-hop MATCH & RETURN | VP-004, VP-005 | 10-12h |
-| 4 | E2E Scenario Test Suite | VP-007 | 8-10h |
-| 5 | README & Documentation Truth | VP-008, VP-009 | 4-6h |
+| Phase | Name | Plans | Tests Added |
+|-------|------|-------|-------------|
+| 1 | MATCH WHERE Completeness | 2 | 21 |
+| 2 | Subquery Decision & Execution | 3 | 12 |
+| 3 | Multi-hop MATCH & RETURN | 2 | 10 |
+| 4 | E2E Scenario Test Suite | 7 | 36 |
+| 5 | README & Documentation Truth | 4 | — |
+| 6 | Unified Query & Full-Text | 4 | 47 |
+| 7 | Cross-Store Exec & EXPLAIN | 3 | 23 |
+| 8 | VelesQL Execution Completeness | 5 | 27 |
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| Phases | 8 |
+| Plans executed | 30 |
+| Requirements satisfied | 13/13 (100%) |
+| New tests added | ~176 |
+| Tests at completion | 3,339 |
+| Quality gates | 5/5 (fmt, clippy, deny, test, release build) |
+| Milestone commits | ~92 |
 
 ### Archive
 
