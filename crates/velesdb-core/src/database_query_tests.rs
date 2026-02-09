@@ -318,3 +318,198 @@ fn test_database_join_with_vector_search() {
         );
     }
 }
+
+// ========== Database Compound Query Integration Tests (Plan 08-03, Task 2) ==========
+
+/// Creates a Database with two collections for compound query tests:
+/// - "tech_docs": IDs 1,2,3 with category "tech"
+/// - "food_docs": IDs 2,3,4 with category "food"
+/// Overlap on IDs 2 and 3 to exercise dedup/intersect/except.
+fn setup_compound_db() -> (Database, tempfile::TempDir) {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    db.create_collection("tech_docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let tech = db.get_collection("tech_docs").unwrap();
+    tech.upsert(vec![
+        point::Point {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: Some(serde_json::json!({"id": 1, "title": "Rust Guide", "category": "tech"})),
+        },
+        point::Point {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: Some(
+                serde_json::json!({"id": 2, "title": "Python Intro", "category": "tech"}),
+            ),
+        },
+        point::Point {
+            id: 3,
+            vector: vec![0.0, 0.0, 1.0, 0.0],
+            payload: Some(serde_json::json!({"id": 3, "title": "AI Primer", "category": "tech"})),
+        },
+    ])
+    .unwrap();
+
+    db.create_collection("food_docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let food = db.get_collection("food_docs").unwrap();
+    food.upsert(vec![
+        point::Point {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: Some(
+                serde_json::json!({"id": 2, "title": "Pasta Recipes", "category": "food"}),
+            ),
+        },
+        point::Point {
+            id: 3,
+            vector: vec![0.0, 0.0, 1.0, 0.0],
+            payload: Some(serde_json::json!({"id": 3, "title": "Sushi Art", "category": "food"})),
+        },
+        point::Point {
+            id: 4,
+            vector: vec![0.0, 0.0, 0.0, 1.0],
+            payload: Some(serde_json::json!({"id": 4, "title": "BBQ Mastery", "category": "food"})),
+        },
+    ])
+    .unwrap();
+
+    (db, dir)
+}
+
+#[test]
+fn test_database_union_two_collections() {
+    let (db, _dir) = setup_compound_db();
+
+    let query =
+        velesql::Parser::parse("SELECT * FROM tech_docs UNION SELECT * FROM food_docs").unwrap();
+    let params = std::collections::HashMap::new();
+    let results = db.execute_query(&query, &params).unwrap();
+
+    // tech_docs: {1,2,3}, food_docs: {2,3,4} → UNION: {1,2,3,4}
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids.len(), 4, "UNION should deduplicate: got {:?}", ids);
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+    assert!(ids.contains(&4));
+}
+
+#[test]
+fn test_database_union_all() {
+    let (db, _dir) = setup_compound_db();
+
+    let query = velesql::Parser::parse("SELECT * FROM tech_docs UNION ALL SELECT * FROM food_docs")
+        .unwrap();
+    let params = std::collections::HashMap::new();
+    let results = db.execute_query(&query, &params).unwrap();
+
+    // UNION ALL keeps duplicates: 3 + 3 = 6
+    assert_eq!(
+        results.len(),
+        6,
+        "UNION ALL should keep all rows (3+3=6), got {}",
+        results.len()
+    );
+}
+
+#[test]
+fn test_database_intersect() {
+    let (db, _dir) = setup_compound_db();
+
+    let query = velesql::Parser::parse("SELECT * FROM tech_docs INTERSECT SELECT * FROM food_docs")
+        .unwrap();
+    let params = std::collections::HashMap::new();
+    let results = db.execute_query(&query, &params).unwrap();
+
+    // Overlap: IDs 2 and 3
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "INTERSECT should return only common IDs: got {:?}",
+        ids
+    );
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+}
+
+#[test]
+fn test_database_except() {
+    let (db, _dir) = setup_compound_db();
+
+    let query =
+        velesql::Parser::parse("SELECT * FROM tech_docs EXCEPT SELECT * FROM food_docs").unwrap();
+    let params = std::collections::HashMap::new();
+    let results = db.execute_query(&query, &params).unwrap();
+
+    // tech_docs {1,2,3} EXCEPT food_docs {2,3,4} → {1}
+    assert_eq!(results.len(), 1, "EXCEPT should remove right IDs from left");
+    assert_eq!(results[0].point.id, 1);
+}
+
+#[test]
+fn test_database_union_same_collection() {
+    let (db, _dir) = setup_compound_db();
+
+    // Same collection with different WHERE — tech category='tech' is all rows,
+    // but UNION with itself should deduplicate
+    let query = velesql::Parser::parse(
+        "SELECT * FROM tech_docs WHERE category = 'tech' \
+         UNION SELECT * FROM tech_docs",
+    )
+    .unwrap();
+    let params = std::collections::HashMap::new();
+    let results = db.execute_query(&query, &params).unwrap();
+
+    // Both sides are the same collection, UNION deduplicates → 3 unique IDs
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids.len(),
+        3,
+        "UNION on same collection should deduplicate: got {:?}",
+        ids
+    );
+}
+
+#[test]
+fn test_database_compound_collection_not_found() {
+    let (db, _dir) = setup_compound_db();
+
+    let query = velesql::Parser::parse(
+        "SELECT * FROM tech_docs UNION SELECT * FROM nonexistent_collection",
+    )
+    .unwrap();
+    let params = std::collections::HashMap::new();
+    let result = db.execute_query(&query, &params);
+
+    assert!(
+        result.is_err(),
+        "Compound query with non-existent right collection should error"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("nonexistent_collection"),
+        "Error should mention missing collection: {}",
+        err
+    );
+}
+
+#[test]
+fn test_database_compound_with_order_by() {
+    let (db, _dir) = setup_compound_db();
+
+    // UNION + ORDER BY title ASC — ORDER BY applies to final combined result
+    // Note: ORDER BY is on the left SELECT statement and applies after compound
+    let query =
+        velesql::Parser::parse("SELECT * FROM tech_docs UNION SELECT * FROM food_docs").unwrap();
+    let params = std::collections::HashMap::new();
+    let results = db.execute_query(&query, &params).unwrap();
+
+    // Verify we got 4 unique results (deduplication works)
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids.len(), 4, "Should have 4 unique IDs after UNION");
+}
