@@ -2,9 +2,9 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** 1 of 7 (WASM Rebinding)  
-**Plan:** 0 of 5 (Not started)  
-**Status:** Ready to execute  
+**Phase:** 1 of 7 (WASM Rebinding) + v3-08 (WASM Feature Parity)  
+**Plan:** 5 of 5 (v3-08 complete)  
+**Status:** v3-08 complete — Phase 1 ready to execute  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -20,7 +20,7 @@
 
 ## Codebase Status
 
-- **3,339 tests** passing, 0 failures (workspace)
+- **3,350+ tests** passing, 0 failures (workspace)
 - **Quality gates**: fmt ✅, clippy ✅, deny ✅, test ✅, release build ✅
 - **112 unsafe blocks** — all documented with SAFETY comments
 - **README**: Honest mirror of codebase (verified by v4 Phase 5)
@@ -83,15 +83,21 @@ Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
 ## Session Continuity
 
 **Last session:** 2026-02-09  
-**Stopped at:** Phase 1 planned (5 plans, 5 waves)
+**Stopped at:** Phase v3-08 (WASM Feature Parity) complete — 5 plans, 11 equivalence tests, Playwright browser validation
 
 ## Decisions
 
-*No decisions yet for v3.*
+| Decision | Context | Date |
+|----------|---------|------|
+| ColumnStore extracted from persistence gate | Only `from_collection.rs` depends on persistence; rest is pure logic | 2026-02-09 |
+| IndexedDB persistence via snapshot (schema+rows JSON) | Avoids exposing internal types (RoaringBitmap, StringTable) | 2026-02-09 |
+| Playwright MCP for WASM browser testing | Native targets can't run wasm_bindgen; Playwright validates in real Chromium | 2026-02-09 |
+| serde_wasm_bindgen Map→toObj() helper | serde_json::Map serializes as JS Map, not plain object | 2026-02-09 |
 
 ## Blockers & Concerns
 
-*None yet.*
+- `cargo deny check` fails due to network error (RustSec DB fetch) — not a code issue
+- `velesdb-python` release build has pre-existing PyO3 linker errors
 
 ---
 
@@ -122,4 +128,4 @@ pytest                                 # Python integrations (Phase 4)
 ```
 
 *State file last updated: 2026-02-09*  
-*Status: Phase 1 planned — 5 plans across 5 sequential waves. Ready to execute Plan 01 (Audit).*
+*Status: v3-08 (WASM Feature Parity) complete. Phase 1 planned — 5 plans across 5 sequential waves. Ready to execute Plan 01 (Audit).*
