@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 08: VelesQL Execution Completeness ✅
+
+- **Database::execute_query()** - Cross-collection query executor wrapping Collection::execute_query()
+  - Resolves FROM collection, delegates base query, applies JOIN + compound post-processing
+  - Enables unified VelesQL execution across multiple collections
+- **Collection-to-ColumnStore builder** - Bridges point-oriented storage to column-oriented for JOINs
+  - Infers schema from JSON payloads, uses point ID as primary key for O(1) lookups
+  - Configurable max_rows limit (default 100K) to prevent OOM on large collections
+- **JOIN execution (INNER + LEFT)** - Cross-collection JOIN via ColumnStore with adaptive batching
+  - LEFT JOIN keeps non-matching rows with empty column data
+  - RIGHT/FULL parsed but gracefully fall back to INNER with warning
+  - Removed dead_code allow — JOINs now fully wired into query pipeline
+- **Compound queries (UNION/INTERSECT/EXCEPT)** - Set operations on SearchResult vectors
+  - UNION deduplicates by point ID, UNION ALL keeps all rows
+  - INTERSECT keeps only common IDs, EXCEPT removes second set from first
+- **`/query/explain` route** - Wired existing explain handler to server routing (was implemented but not routed)
+- **25+ new tests** covering ColumnStore builder, Database executor, LEFT JOIN, compound queries
+
 ### EPIC-074/075: SIMD Architecture Consolidation ✅
 
 - **Removed `simd_explicit.rs`** - All functions migrated to `simd_native.rs`

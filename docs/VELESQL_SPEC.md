@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 2.0.0 | **Last Updated**: 2026-01-26
+**Version**: 2.1.0 | **Last Updated**: 2026-02-09
 
 ## Overview
 
@@ -17,14 +17,25 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | similarity() function | ✅ Stable | 1.3 |
 | LIMIT, OFFSET | ✅ Stable | 1.0 |
 | WITH clause | ✅ Stable | 1.0 |
-| ORDER BY | ✅ Stable | 2.0 |
+| LIKE / ILIKE (case-insensitive) | ✅ Stable | 1.3 |
+| IN, BETWEEN, IS NULL | ✅ Stable | 1.3 |
+| Quoted identifiers (\`col\`, "col") | ✅ Stable | 1.3 |
+| ORDER BY (columns, similarity, aggregates) | ✅ Stable | 2.0 |
 | GROUP BY, HAVING | ✅ Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL) | ✅ Stable | 2.0 |
-| Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
-| USING FUSION | ✅ Stable | 2.0 |
+| DISTINCT | ✅ Stable | 2.0 |
+| USING FUSION (rrf, weighted, maximum) | ✅ Stable | 2.0 |
+| Table aliases (FROM t AS alias) | ✅ Stable | 2.0 |
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
+| Subqueries (scalar) | ✅ Stable | 2.1 |
+| NEAR_FUSED multi-vector fusion | ✅ Stable | 2.1 |
 | MATCH graph traversal | ✅ Stable | 2.1 |
-| Table aliases | 🔜 Planned | - |
+| Multi-hop MATCH patterns | ✅ Stable | 2.1 |
+| RETURN aggregation in MATCH | ✅ Stable | 2.1 |
+| ORDER BY property in MATCH | ✅ Stable | 2.1 |
+| JOIN (INNER, LEFT) | ✅ Stable | 2.2 |
+| JOIN (RIGHT, FULL) | 🧪 Parser only (falls back to INNER) | 2.0 |
+| Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.2 |
+| EXPLAIN query plan | ✅ Stable | 2.2 |
 
 ## Basic Syntax
 
@@ -96,13 +107,26 @@ SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3, 0.4]
 ### String Matching
 
 ```sql
--- LIKE with wildcards
+-- LIKE with wildcards (case-sensitive)
 SELECT * FROM docs WHERE title LIKE '%database%'
 SELECT * FROM docs WHERE name LIKE 'vec%'
 
--- MATCH for full-text (if supported)
+-- ILIKE for case-insensitive matching (v1.3+)
+SELECT * FROM docs WHERE title ILIKE '%Database%'
+SELECT * FROM docs WHERE author ILIKE 'john%'
+
+-- MATCH for full-text search (BM25 scoring)
 SELECT * FROM docs WHERE content MATCH 'vector database'
 ```
+
+#### LIKE vs ILIKE
+
+| Operator | Case | Example |
+|----------|------|---------|
+| `LIKE` | Sensitive | `title LIKE '%DB%'` matches "VelesDB" but not "velesdb" |
+| `ILIKE` | Insensitive | `title ILIKE '%db%'` matches both "VelesDB" and "velesdb" |
+
+Wildcards: `%` matches zero or more characters, `_` matches exactly one character.
 
 ### NULL Checks
 
@@ -362,6 +386,8 @@ HAVING AVG(price) > 50
 
 ## JOIN Clause (v2.0+)
 
+> ✅ **Executed** — INNER JOIN and LEFT JOIN are fully supported via `Database::execute_query()`. RIGHT and FULL JOIN are parsed but fall back to INNER JOIN with a warning. JOINs resolve the target table as a Collection, build a ColumnStore for O(1) PK lookups, and merge column data into the result payload.
+
 Combine data from multiple collections.
 
 ### Syntax
@@ -406,6 +432,8 @@ JOIN products p ON o.product_id = p.id
 ```
 
 ## Set Operations (v2.0+)
+
+> ✅ **Executed** — Set operations are fully supported via `Database::execute_query()`. UNION deduplicates by point ID, UNION ALL keeps all rows, INTERSECT keeps only common IDs, and EXCEPT removes the second set's IDs from the first.
 
 Combine results from multiple queries.
 
@@ -498,6 +526,102 @@ WHERE similarity(embedding, $q1) > 0.5
 USING FUSION(maximum)
 LIMIT 10
 ```
+
+## Scalar Subqueries (v2.1+)
+
+Use scalar subqueries in WHERE clauses to compare values against aggregated results from the same or another collection.
+
+### Syntax
+
+```sql
+WHERE column <operator> (SELECT aggregate(col) FROM collection [WHERE ...])
+```
+
+### Examples
+
+```sql
+-- Find products priced above average
+SELECT * FROM products
+WHERE price > (SELECT AVG(price) FROM products)
+LIMIT 20
+
+-- Find items more expensive than category max
+SELECT * FROM products
+WHERE price > (SELECT MAX(price) FROM products WHERE category = 'budget')
+
+-- Combine with vector search
+SELECT * FROM products
+WHERE similarity(embedding, $query) > 0.7
+  AND price < (SELECT AVG(price) FROM products WHERE category = $cat)
+LIMIT 10
+```
+
+### Supported Aggregations in Subqueries
+
+| Function | Returns |
+|----------|---------|
+| `MAX(col)` | Maximum value |
+| `MIN(col)` | Minimum value |
+| `AVG(col)` | Average value |
+| `SUM(col)` | Sum of values |
+| `COUNT(*)` | Row count |
+
+### Limitations
+
+- Only **scalar** subqueries (returning a single value) are supported
+- Subqueries execute against the **same collection** as the outer query
+- Correlated subqueries with `$parameter` references are supported
+- Nested subqueries (subquery inside subquery) are not supported
+
+## NEAR_FUSED Multi-Vector Search (v2.1+)
+
+Search with multiple query vectors simultaneously and fuse results using configurable strategies.
+
+### Syntax
+
+```sql
+SELECT * FROM collection
+WHERE vector NEAR_FUSED [$v1, $v2, ...] [USING FUSION 'strategy' [(params)]]
+LIMIT n
+```
+
+### Fusion Strategies
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| `rrf` | Reciprocal Rank Fusion | Balanced ranking (default) |
+| `average` | Average scores across vectors | Equal weight queries |
+| `maximum` | Take highest score per result | Best match wins |
+| `weighted` | Weighted combination | Custom importance per vector |
+
+### Examples
+
+```sql
+-- Multi-modal search: text + image embeddings
+SELECT * FROM products
+WHERE vector NEAR_FUSED [$text_embedding, $image_embedding]
+  USING FUSION 'rrf'
+LIMIT 10
+
+-- Weighted: 70% text, 30% image
+SELECT * FROM products
+WHERE vector NEAR_FUSED [$text_vec, $image_vec]
+  USING FUSION 'weighted' (weight_0 = 0.7, weight_1 = 0.3)
+LIMIT 20
+
+-- Average fusion with metadata filter
+SELECT * FROM docs
+WHERE vector NEAR_FUSED [$query1, $query2]
+  USING FUSION 'average'
+  AND category = 'research'
+LIMIT 15
+```
+
+### Constraints
+
+- Cannot combine `NEAR_FUSED` with `NEAR` in the same query
+- Cannot combine `NEAR_FUSED` with `similarity()` in the same query
+- All vectors must have the same dimensionality as the collection
 
 ## LIMIT and OFFSET
 
@@ -626,9 +750,10 @@ Parameters are resolved at runtime from the query context.
 The following keywords are reserved and cannot be used as identifiers without escaping:
 
 ```
-SELECT, FROM, WHERE, AND, OR, NOT, IN, BETWEEN, LIKE, MATCH,
-IS, NULL, TRUE, FALSE, LIMIT, OFFSET, WITH, NEAR, ASC, DESC,
-ORDER, BY, AS, SIMILARITY
+SELECT, FROM, WHERE, AND, OR, NOT, IN, BETWEEN, LIKE, ILIKE, MATCH,
+IS, NULL, TRUE, FALSE, LIMIT, OFFSET, WITH, NEAR, NEAR_FUSED, ASC, DESC,
+ORDER, BY, AS, SIMILARITY, DISTINCT, GROUP, HAVING, JOIN, INNER, LEFT, RIGHT,
+FULL, OUTER, ON, USING, FUSION, UNION, INTERSECT, EXCEPT, RETURN, NOW, INTERVAL
 ```
 
 ### Identifier Quoting (v1.3+)
@@ -687,17 +812,54 @@ SELECT id AS `select` FROM docs
 | `ORDER`, `BY`, `ASC`, `DESC` | Sorting |
 | `GROUP`, `HAVING` | Aggregation |
 | `WITH`, `AS` | Options and aliases |
-| `NEAR`, `SIMILARITY` | Vector operations |
+| `NEAR`, `NEAR_FUSED`, `SIMILARITY` | Vector operations |
+| `ILIKE` | Case-insensitive matching |
+| `DISTINCT` | Deduplication |
+| `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `ON` | Joins (INNER/LEFT executed, RIGHT/FULL parser only) |
+| `UNION`, `INTERSECT`, `EXCEPT` | Set operations (fully executed) |
+| `USING`, `FUSION` | Hybrid search |
+| `RETURN` | Graph query results |
+| `NOW`, `INTERVAL` | Temporal expressions |
 
-## Grammar (EBNF) - v2.0
+## Grammar (EBNF) - v2.1
 
 ```ebnf
-(* Top-level query with optional set operations *)
-query           = select_stmt { set_operator select_stmt } ;
+(* Top-level query: MATCH or SELECT with optional set operations *)
+query           = match_stmt | select_stmt { set_operator select_stmt } ;
 set_operator    = "UNION" ["ALL"] | "INTERSECT" | "EXCEPT" ;
 
-(* SELECT statement with all clauses *)
-select_stmt     = "SELECT" select_list 
+(* ============ MATCH query (graph pattern matching) ============ *)
+match_stmt      = "MATCH" graph_pattern
+                  [where_clause]
+                  return_clause
+                  [order_by_clause]
+                  [limit_clause] ;
+
+graph_pattern   = node_pattern { relationship_pattern node_pattern } ;
+node_pattern    = "(" [node_alias] [node_labels] [node_props] ")" ;
+node_alias      = identifier ;
+node_labels     = ":" label_name { ":" label_name } ;
+node_props      = "{" property_list "}" ;
+property_list   = property { "," property } ;
+property        = identifier ":" value ;
+
+relationship_pattern = rel_outgoing | rel_incoming | rel_undirected ;
+rel_outgoing    = "-" [rel_spec] "->" ;
+rel_incoming    = "<-" [rel_spec] "-" ;
+rel_undirected  = "-" [rel_spec] "-" ;
+rel_spec        = "[" [rel_alias] [rel_types] [rel_range] [node_props] "]" ;
+rel_alias       = identifier ;
+rel_types       = ":" rel_type { "|" rel_type } ;
+rel_range       = "*" [range_spec] ;
+range_spec      = integer ".." [integer] | ".." integer | integer ;
+
+return_clause   = "RETURN" return_item { "," return_item } ;
+return_item     = return_expr ["AS" identifier] ;
+return_expr     = "similarity" "(" ")" | property_access | identifier | "*" ;
+property_access = identifier "." identifier ;
+
+(* ============ SELECT statement ============ *)
+select_stmt     = "SELECT" ["DISTINCT"] select_list 
                   "FROM" table_ref
                   { join_clause }
                   [where_clause] 
@@ -719,10 +881,9 @@ aggregate_func  = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
                   "(" ("*" | column) ")" ;
 
 (* Table reference *)
-table_ref       = identifier [alias] ;
-alias           = ["AS"] identifier ;
+table_ref       = identifier ["AS" identifier] ;
 
-(* JOIN clause *)
+(* JOIN clause — INNER/LEFT executed, RIGHT/FULL parsed only *)
 join_clause     = [join_type] "JOIN" table_ref ("ON" condition | "USING" "(" identifier ")") ;
 join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTER"] ;
 
@@ -730,13 +891,19 @@ join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTE
 where_clause    = "WHERE" or_expr ;
 or_expr         = and_expr { "OR" and_expr } ;
 and_expr        = condition { "AND" condition } ;
-condition       = comparison | vector_search | similarity_cond | in_cond 
-                | between_cond | like_cond | is_null_cond | "(" or_expr ")" ;
+condition       = comparison | vector_search | fused_search | similarity_cond 
+                | in_cond | between_cond | like_cond | is_null_cond 
+                | match_cond | "(" or_expr ")" ;
 
 (* Vector operations *)
-vector_search   = identifier "NEAR" vector_expr ;
+vector_search   = "vector" "NEAR" vector_expr ;
+fused_search    = "vector" "NEAR_FUSED" "[" vector_expr { "," vector_expr } "]"
+                  ["USING" "FUSION" string ["(" fusion_params ")"]] ;
 similarity_cond = "similarity" "(" identifier "," vector_expr ")" compare_op number ;
 vector_expr     = "$" identifier | "[" number { "," number } "]" ;
+
+(* Full-text search *)
+match_cond      = identifier "MATCH" string ;
 
 (* Comparisons *)
 comparison      = column compare_op value ;
@@ -756,7 +923,7 @@ having_cond     = aggregate_func compare_op value ;
 
 (* ORDER BY *)
 order_by_clause = "ORDER" "BY" order_item { "," order_item } ;
-order_item      = (column | similarity_expr) ["ASC" | "DESC"] ;
+order_item      = (column | aggregate_func | similarity_expr) ["ASC" | "DESC"] ;
 similarity_expr = "similarity" "(" identifier "," vector_expr ")" ;
 
 (* Pagination *)
@@ -768,15 +935,23 @@ with_clause     = "WITH" "(" with_option { "," with_option } ")" ;
 with_option     = identifier "=" value ;
 
 (* USING FUSION for hybrid search *)
-using_fusion_clause = "USING" "FUSION" "(" fusion_strategy ["," fusion_params] ")" ;
-fusion_strategy = "rrf" | "weighted" | "maximum" ;
+using_fusion_clause = "USING" "FUSION" ["(" fusion_strategy ["," fusion_params] ")"] ;
+fusion_strategy = identifier ;
 fusion_params   = fusion_param { "," fusion_param } ;
 fusion_param    = identifier "=" value ;
 
-(* Values *)
-value           = string | number | boolean | "NULL" | vector_literal ;
+(* Values — includes temporal and subquery *)
+value           = subquery_expr | temporal_expr | string | number | boolean 
+                | "NULL" | "$" identifier | vector_literal ;
+subquery_expr   = "(" "SELECT" select_list "FROM" identifier [where_clause] 
+                  [group_by_clause] [having_clause] [limit_clause] ")" ;
+temporal_expr   = temporal_arith | now_func | interval_expr ;
+temporal_arith  = (now_func | interval_expr) ("+" | "-") (now_func | interval_expr) ;
+now_func        = "NOW" "(" ")" ;
+interval_expr   = "INTERVAL" string ;
+
 vector_literal  = "[" number { "," number } "]" ;
-string          = "'" { char } "'" | '"' { char } '"' ;
+string          = "'" { char } "'" ;
 number          = ["-"] digit { digit } ["." digit { digit }] ;
 boolean         = "true" | "false" ;
 integer         = digit { digit } ;
