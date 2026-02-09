@@ -53,19 +53,6 @@ pub async fn query(
 
     let select = &parsed.select;
 
-    let collection = match state.db.get_collection(&select.from) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", select.from),
-                }),
-            )
-                .into_response()
-        }
-    };
-
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
     let is_aggregation = matches!(
         &select.columns,
@@ -73,7 +60,20 @@ pub async fn query(
     ) || select.group_by.is_some();
 
     if is_aggregation {
-        // Route to aggregation execution
+        // Aggregation still uses collection-level executor
+        let collection = match state.db.get_collection(&select.from) {
+            Some(c) => c,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Collection '{}' not found", select.from),
+                    }),
+                )
+                    .into_response()
+            }
+        };
+
         let result = match collection.execute_aggregate(&parsed, &req.params) {
             Ok(r) => r,
             Err(e) => {
@@ -92,17 +92,22 @@ pub async fn query(
         return Json(AggregationResponse { result, timing_ms }).into_response();
     }
 
-    // Standard query execution
-    let results = match collection.execute_query(&parsed, &req.params) {
+    // Standard query: use Database::execute_query() for cross-collection JOIN + compound support
+    let results = match state.db.execute_query(&parsed, &req.params) {
         Ok(r) => r,
         Err(e) => {
+            let status = if e.to_string().contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
             return (
-                StatusCode::BAD_REQUEST,
+                status,
                 Json(ErrorResponse {
                     error: e.to_string(),
                 }),
             )
-                .into_response()
+                .into_response();
         }
     };
 
