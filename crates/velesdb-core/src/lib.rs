@@ -55,9 +55,8 @@ mod alloc_guard_tests;
 pub mod cache;
 #[cfg(feature = "persistence")]
 pub mod collection;
-#[cfg(feature = "persistence")]
 pub mod column_store;
-#[cfg(all(test, feature = "persistence"))]
+#[cfg(test)]
 mod column_store_tests;
 pub mod compression;
 pub mod config;
@@ -153,7 +152,6 @@ pub use quantization::{
     BinaryQuantizedVector, QuantizedVector, StorageMode,
 };
 
-#[cfg(feature = "persistence")]
 pub use column_store::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStore, ColumnStoreError, ColumnType,
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,

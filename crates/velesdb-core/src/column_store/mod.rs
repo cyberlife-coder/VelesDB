@@ -31,8 +31,9 @@ mod batch;
 #[cfg(test)]
 mod batch_tests;
 mod filter;
+#[cfg(feature = "persistence")]
 pub mod from_collection;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod from_collection_tests;
 mod string_table;
 mod types;
