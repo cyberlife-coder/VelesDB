@@ -17,6 +17,8 @@ Phase 3  ██████████ 100% — Multi-hop MATCH & RETURN ✅ (2
 Phase 4  ██████████ 100% — E2E Scenario Test Suite ✅ (2026-02-09)
 Phase 5  ░░░░░░░░░░  0%  — README & Documentation Truth (ready to plan)
 Phase 6  ░░░░░░░░░░  0%  — Unified Query & Full-Text Search (planned)
+Phase 7  ██████████ 100% — Cross-Store Exec & EXPLAIN ✅ (2026-02-09)
+Phase 8  ██████████ 100% — VelesQL Execution Completeness ✅ (2026-02-09)
 ```
 
 ---
@@ -251,4 +253,4 @@ Phase 6 implements advanced unified capabilities claimed on site.
 | Performance regression from new WHERE eval | Slowdown | Benchmark before/after |
 
 ---
-*Last updated: 2026-02-09 — Phases 1-4 complete. Phases 5-6 ready to plan. 3,222 tests passing.*
+*Last updated: 2026-02-09 — Phases 1-4, 6-8 complete. Phase 5 ready to plan. 2,600+ workspace tests passing.*
