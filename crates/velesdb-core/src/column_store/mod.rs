@@ -31,6 +31,9 @@ mod batch;
 #[cfg(test)]
 mod batch_tests;
 mod filter;
+pub mod from_collection;
+#[cfg(test)]
+mod from_collection_tests;
 mod string_table;
 mod types;
 mod vacuum;
