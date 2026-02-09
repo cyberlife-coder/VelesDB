@@ -1,12 +1,14 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** None (ready for next milestone)  
+**Current Milestone:** v3-ecosystem-alignment  
+**Phase:** 1 of 5  
+**Plan:** Not started  
+**Status:** Ready to plan  
 **Completed Milestones:**  
-- v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans, 3,117 tests  
-- v2-core-trust (2026-02-08) — 4 phases, 10 plans, 23/23 findings resolved  
-- v4-verify-promise (2026-02-08 → 2026-02-09) — 8 phases, 30 plans, 13/13 requirements, ~176 new tests  
-**Blocked Milestone:** v3-ecosystem-alignment (was blocked by v4 — **now unblocked**)  
+- v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
+- v2-core-trust (2026-02-08) — 4 phases, 10 plans  
+- v4-verify-promise (2026-02-08 → 2026-02-09) — 8 phases, 30 plans  
 
 ---
 
@@ -30,22 +32,37 @@
 - All unsafe code must have documented invariants
 - TDD: test BEFORE code for every fix
 - Martin Fowler: files >300 lines get split into modules
+- **v3-specific:** Zero reimplementation — if WASM needs a feature, add it to core first
+- **v3-specific:** Backward compatible SDK API — same function signatures, correct behavior
 
 ---
 
-## Next Milestone Candidates
+## Milestone v3: Ecosystem Alignment
 
-### v3-ecosystem-alignment — Now Unblocked
+**Goal:** Align entire VelesDB ecosystem with velesdb-core. Every external component becomes a proper binding/wrapper with zero reimplemented logic.  
+**Source:** 22 findings from Devil's Advocate Code Review  
+**Project:** `.planning/v3-ecosystem-alignment/PROJECT.md`  
+**Roadmap:** `.planning/v3-ecosystem-alignment/ROADMAP.md`
 
-22 findings from Devil's Advocate review — bindings/wrappers need alignment with core.
+### Progress
 
-| Phase | Scope | Priority |
-|-------|-------|----------|
-| 1 - WASM Rebinding | BEG-01,05,06, W-01→03 | 🚨 Architecture |
-| 2 - Server Binding | S-01→04, BEG-05 | 🚨 Security |
-| 3 - SDK Fixes | T-01→03, BEG-07 | 🐛 Contracts |
-| 4 - Python Integrations | I-01→03, BEG-02→04 | 🐛 Contracts |
-| 5 - GPU + Ecosystem CI | I-04, CI-04 | ⚠️ Polish |
+```
+Phase 1  ░░░░░░░░░░  0%   WASM Rebinding
+Phase 2  ░░░░░░░░░░  0%   Server Binding & Security
+Phase 3  ░░░░░░░░░░  0%   TypeScript SDK Fixes
+Phase 4  ░░░░░░░░░░  0%   Python Integrations
+Phase 5  ░░░░░░░░░░  0%   GPU + Ecosystem CI
+```
+
+### Phases
+
+| Phase | Name | Findings | Priority | Status |
+|-------|------|----------|----------|--------|
+| 1 | WASM Rebinding | BEG-01,05,06, W-01→03 | 🚨 Architecture | ⬜ Pending |
+| 2 | Server Binding & Security | S-01→04, BEG-05 | 🚨 Security | ⬜ Pending |
+| 3 | TypeScript SDK Fixes | T-01→03, BEG-07 | 🐛 Contracts | ⬜ Pending |
+| 4 | Python Integrations | I-01→03, BEG-02→04 | 🐛 Contracts | ⬜ Pending |
+| 5 | GPU + Ecosystem CI | I-04, CI-04 | ⚠️ Polish | ⬜ Pending |
 
 **Execution:** `1 → 2 → 3 → 4 → 5`
 
@@ -59,24 +76,46 @@
 
 ---
 
+## Session Continuity
+
+**Last session:** 2026-02-09  
+**Stopped at:** Milestone creation
+
+## Decisions
+
+*No decisions yet for v3.*
+
+## Blockers & Concerns
+
+*None yet.*
+
+---
+
 ## Quick Reference
 
 ### Key File Paths
+- `.planning/v3-ecosystem-alignment/PROJECT.md` — Milestone definition (22 findings)
+- `.planning/v3-ecosystem-alignment/ROADMAP.md` — Roadmap (5 phases)
 - `.planning/MILESTONES.md` — All milestones summary
 - `.planning/milestones/` — Archived milestones (v1, v2, v4)
 - `.planning/DEVIL_ADVOCATE_FINDINGS.md` — Full review findings (47 issues)
-- `.planning/v3-ecosystem-alignment/` — Next milestone candidate
 - `AGENTS.md` — Coding standards and templates
 
 ### Key Commands
 ```powershell
+# Core quality gates
 cargo fmt --all
 cargo clippy -- -D warnings
 cargo deny check
 cargo test --workspace
 cargo build --release
 .\scripts\local-ci.ps1
+
+# Ecosystem-specific
+wasm-pack test --headless --chrome    # WASM (Phase 1)
+npm test                               # TypeScript SDK (Phase 3)
+pytest                                 # Python integrations (Phase 4)
 ```
 
 *State file last updated: 2026-02-09*  
-*Status: v4-verify-promise completed. Ready for next milestone. v3-ecosystem-alignment now unblocked.*
+*Status: v3-ecosystem-alignment milestone created. Ready to plan Phase 1.*

@@ -1,5 +1,32 @@
 # Milestones
 
+## v3-ecosystem-alignment — In Progress
+
+**Started:** 2026-02-09  
+**Phases:** 5  
+**Findings covered:** 22/47 (ecosystem)
+
+### Summary
+
+Align the entire VelesDB ecosystem with velesdb-core. Every external component becomes a proper binding/wrapper with zero reimplemented logic. Covers WASM rebinding, server security, SDK fixes, Python integrations, and GPU+CI.
+
+### Phases
+
+| Phase | Name | Findings | Priority |
+|-------|------|----------|----------|
+| 1 | WASM Rebinding | BEG-01,05,06, W-01→03 | 🚨 Architecture |
+| 2 | Server Binding & Security | S-01→04, BEG-05 | 🚨 Security |
+| 3 | TypeScript SDK Fixes | T-01→03, BEG-07 | 🐛 Contracts |
+| 4 | Python Integrations | I-01→03, BEG-02→04 | 🐛 Contracts |
+| 5 | GPU + Ecosystem CI | I-04, CI-04 | ⚠️ Polish |
+
+### Archive
+
+Details: `.planning/v3-ecosystem-alignment/`  
+Phase dirs: `.planning/phases/v3-01-*` through `v3-05-*`
+
+---
+
 ## v4-verify-promise — Completed
 
 **Started:** 2026-02-08  

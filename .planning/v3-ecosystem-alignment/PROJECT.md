@@ -13,7 +13,10 @@ A milestone to **align the entire VelesDB ecosystem** with velesdb-core. Every e
 
 ## Prerequisite
 
-**Milestone v2-core-trust must be complete.** The core must be trustworthy before we build bindings on top of it.
+- ✅ **v2-core-trust** — completed 2026-02-08 (23/23 findings resolved)
+- ✅ **v4-verify-promise** — completed 2026-02-09 (13/13 requirements, README honest mirror)
+
+Core is trustworthy and documented. Ready to build bindings.
 
 ## Core Value
 
@@ -72,11 +75,11 @@ A milestone to **align the entire VelesDB ecosystem** with velesdb-core. Every e
 
 ## Constraints
 
-- **Core must be v2-complete** before starting
+- ~~**Core must be v2-complete** before starting~~ ✅ v2 + v4 complete
 - **TDD:** Test BEFORE code
 - **Zero reimplementation:** If WASM needs a feature, add it to core first
 - **Quality gates:** All `local-ci.ps1` checks + ecosystem-specific tests
 - **Backward compatible SDK API:** Same function signatures, correct behavior
 
 ---
-*Milestone v3 — Ecosystem Alignment. Depends on v2-core-trust completion.*
+*Milestone v3 — Ecosystem Alignment. Prerequisites met: v2-core-trust ✅, v4-verify-promise ✅.*
