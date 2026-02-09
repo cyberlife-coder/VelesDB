@@ -5,16 +5,15 @@
 //! - Condition extraction (`extraction.rs`)
 //! - ORDER BY processing (`ordering.rs`)
 //!
-//! # Future Enhancement: HybridExecutionPlan Integration
+//! # Cross-Store Execution (VP-010, Phase 7)
 //!
-//! The `HybridExecutionPlan` and `choose_hybrid_strategy()` in `planner.rs`
-//! are ready for integration to optimize query execution based on:
+//! Combined NEAR + graph MATCH queries are dispatched via `QueryPlanner::choose_hybrid_strategy()`
+//! which selects VectorFirst, Parallel, or GraphFirst execution based on:
 //! - Query pattern (ORDER BY similarity, filters, etc.)
 //! - Runtime statistics (latency, selectivity)
 //! - Over-fetch factor for filtered queries
 //!
-//! Future: Integrate `QueryPlanner::choose_hybrid_strategy()` into `execute_query()`
-//! to leverage cost-based optimization for complex queries.
+//! See `cross_store_exec.rs` for VectorFirst and Parallel implementations.
 
 // SAFETY: Numeric casts in query execution are intentional:
 // - f64->f32 for similarity thresholds: precision loss acceptable for filtering

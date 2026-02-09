@@ -33,21 +33,6 @@ impl ScoredResult {
     }
 }
 
-/// Fusion strategy for combining search results.
-/// Note: The primary fusion strategy enum is `crate::fusion::FusionStrategy`.
-/// This enum is kept for the hybrid.rs module's own API design.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub enum FusionStrategy {
-    /// Reciprocal Rank Fusion - recommended default.
-    #[default]
-    Rrf,
-    /// Weighted sum of normalized scores.
-    WeightedSum,
-    /// Take maximum score from either source.
-    Maximum,
-}
-
 /// Configuration for RRF fusion.
 #[derive(Debug, Clone)]
 pub struct RrfConfig {
