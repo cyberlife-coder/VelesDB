@@ -146,9 +146,11 @@ cargo build --release
 - 01-02: ✅ Wire Temporal resolution into MATCH WHERE comparison (VP-003) — completed 2026-02-08
 - Plans dir: `.planning/phases/v4-01-match-where-completeness/`
 
-**Phase 5 📋 planned (4 plans, 2 waves):**
-- **Wave 1 (parallel):** 05-01 VelesQL Spec & Feature Matrix Truth, 05-02 README Metrics, Numbers & Ecosystem Truth
-- **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy, 05-04 Website Claims Audit & Final Quality Gates
+**Phase 5 📋 planned (4 plans, 2 waves) — revised post-Phase 8 (2026-02-09):**
+- **Wave 1 (parallel):** 05-01 VelesQL Spec & Feature Matrix Truth (now includes JOIN/compound EBNF + `Database::execute_query()` docs), 05-02 README Metrics, Numbers & Ecosystem Truth (test count now ~3,200+)
+- **Wave 2 (sequential):** 05-03 README Query & Scenario Accuracy (GAP-4/7 added, EXPLAIN resolved, Phase 8 E2E tests as cross-ref), 05-04 Website Claims Audit & Final Quality Gates (FEATURE_TRUTH.md consistency added)
+- Phase 8 already resolved: GAP-1 (JOIN), GAP-2 (UNION/INTERSECT/EXCEPT), GAP-3 (/query/explain)
+- Remaining GAPs: 4 (GraphService in-memory), 5 (perf conflicts), 6 (business scenario limits), 7 (API table incomplete), 8 (ecosystem claims), 9 (test counts)
 - Plans dir: `.planning/phases/v4-05-readme-documentation-truth/`
 
 **Phase 7 ✅ complete (3 plans, 1 wave) — executed 2026-02-10:**
@@ -178,4 +180,4 @@ cargo build --release
 - New files: `database_query_tests.rs`, `tests/e2e_join.rs`, `tests/e2e_compound.rs`
 
 *State file last updated: 2026-02-09*  
-*Status: Phase 8 complete (5/5 plans). 2600+ workspace tests passing. Quality gates all green.*
+*Status: Phase 8 complete (5/5 plans). ~3,200+ workspace tests passing. Quality gates all green. Phase 5 plans revised post-Phase 8.*
