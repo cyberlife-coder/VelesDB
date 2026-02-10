@@ -2,7 +2,7 @@
   "$schema": "https://docs.windsurf.com/schemas/hooks.json",
   "hooks": {
     "post_write_code": {
-      "command": "powershell.exe -NoProfile -Command \"$f = if ($env:WINDSURF_FILE_PATH) { $env:WINDSURF_FILE_PATH } else { $null }; if ($f -and ($f -match '\.rs$') -and (Test-Path $f)) { cargo fmt --quiet -- $f 2>$null; $lines = (Get-Content $f | Measure-Object -Line).Lines; if ($lines -gt 500) { Write-Host ('[!] ' + (Split-Path $f -Leaf) + ' = ' + $lines + ' lignes (> 500)') -ForegroundColor Yellow } else { Write-Host ('[ok] Formatted: ' + (Split-Path $f -Leaf)) -ForegroundColor Green } }\""
+      "command": "powershell.exe -NoProfile -Command \"$f = $env:WINDSURF_FILE_PATH; if ($f -and $f.EndsWith('.rs') -and (Test-Path $f)) { cargo fmt --quiet \"$f\" 2>$null; if ($LASTEXITCODE -eq 0) { $lines = (Get-Content $f | Measure-Object -Line).Lines; if ($lines -gt 500) { Write-Host \"[!] $(Split-Path $f -Leaf) = $lines lignes (>500)\" -ForegroundColor Yellow } else { Write-Host \"[ok] Formatted: $(Split-Path $f -Leaf)\" -ForegroundColor Green } } }\""
     }
   }
 }

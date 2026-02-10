@@ -42,6 +42,9 @@ pub use handlers::{
 // Auth middleware
 pub use handlers::auth::auth_middleware;
 
+// Rate limiting config
+pub use handlers::rate_limit::RateLimitConfig;
+
 // Graph handlers — all delegate to Collection methods from velesdb-core
 pub use handlers::graph::{
     add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,

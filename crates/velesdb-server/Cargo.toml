@@ -33,6 +33,7 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 futures = "0.3"
 clap = { version = "4.4", features = ["derive", "env"] }
+tower_governor = "0.6"
 
 # OpenAPI/Swagger documentation
 utoipa = { version = "5", features = ["axum_extras"] }
