@@ -347,5 +347,57 @@ describe('VelesDB Client', () => {
         expect(edges.length).toBe(1);
       });
     });
+
+    describe('explain', () => {
+      it('should throw ValidationError for empty query string', async () => {
+        mockBackend.explain = vi.fn();
+        await expect(db.explain('')).rejects.toThrow(ValidationError);
+      });
+
+      it('should throw ValidationError for non-string query', async () => {
+        mockBackend.explain = vi.fn();
+        await expect(db.explain(null as any)).rejects.toThrow(ValidationError);
+      });
+
+      it('should delegate to backend explain()', async () => {
+        const mockResult = {
+          query: 'SELECT * FROM docs',
+          queryType: 'SELECT',
+          collection: 'docs',
+          plan: [],
+          estimatedCost: { usesIndex: false, selectivity: 1, complexity: 'O(n)' },
+          features: {
+            hasVectorSearch: false, hasFilter: false, hasOrderBy: false,
+            hasGroupBy: false, hasAggregation: false, hasJoin: false, hasFusion: false,
+          },
+        };
+        mockBackend.explain = vi.fn().mockResolvedValue(mockResult);
+
+        const result = await db.explain('SELECT * FROM docs', { v: [0.1] });
+
+        expect(mockBackend.explain).toHaveBeenCalledWith('SELECT * FROM docs', { v: [0.1] });
+        expect(result.queryType).toBe('SELECT');
+      });
+
+      it('should throw when called before init', async () => {
+        const uninitDb = new VelesDB({ backend: 'wasm' });
+        await expect(uninitDb.explain('SELECT * FROM docs'))
+          .rejects.toThrow('Client not initialized');
+      });
+    });
+
+    describe('matchQuery validation', () => {
+      it('should throw ValidationError for empty collection', async () => {
+        mockBackend.matchQuery = vi.fn();
+        await expect(db.matchQuery('', 'MATCH (a) RETURN a'))
+          .rejects.toThrow(ValidationError);
+      });
+
+      it('should throw ValidationError for empty query string', async () => {
+        mockBackend.matchQuery = vi.fn();
+        await expect(db.matchQuery('docs', ''))
+          .rejects.toThrow(ValidationError);
+      });
+    });
   });
 });

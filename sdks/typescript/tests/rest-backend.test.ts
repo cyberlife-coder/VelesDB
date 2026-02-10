@@ -744,6 +744,95 @@ describe('RestBackend', () => {
     });
   });
 
+  describe('edge cases', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should return [] for search with empty results', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      const results = await backend.search('docs', [0.1, 0.2]);
+      expect(results).toEqual([]);
+    });
+
+    it('should return [] for listCollections with empty response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ collections: [] }),
+      });
+
+      const cols = await backend.listCollections();
+      expect(cols).toEqual([]);
+    });
+
+    it('should return null for getPoint with non-existent ID', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Point not found' }),
+      });
+
+      const result = await backend.get('docs', 'nonexistent');
+      expect(result).toBeNull();
+    });
+
+    it('should return false for delete on non-existent point (NOT_FOUND)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Not found' }),
+      });
+
+      const deleted = await backend.delete('docs', 'nonexistent');
+      expect(deleted).toBe(false);
+    });
+
+    it('should return empty traverseGraph results', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [],
+          next_cursor: null,
+          has_more: false,
+          stats: { visited: 0, depth_reached: 0 },
+        }),
+      });
+
+      const result = await backend.traverseGraph('social', { source: 1 });
+      expect(result.results).toEqual([]);
+      expect(result.hasMore).toBe(false);
+      expect(result.stats.visited).toBe(0);
+      expect(result.stats.depthReached).toBe(0);
+    });
+
+    it('should throw NotFoundError for query on non-existent collection', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Collection not found' }),
+      });
+
+      await expect(backend.query('nonexistent', 'SELECT * FROM nonexistent'))
+        .rejects.toThrow(NotFoundError);
+    });
+
+    it('should throw NotFoundError for matchQuery on non-existent collection', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Collection not found' }),
+      });
+
+      await expect(backend.matchQuery('nonexistent', 'MATCH (a) RETURN a'))
+        .rejects.toThrow(NotFoundError);
+    });
+  });
+
   describe('error handling', () => {
     beforeEach(async () => {
       mockFetch.mockResolvedValueOnce({

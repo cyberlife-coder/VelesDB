@@ -184,6 +184,36 @@ describe('WasmBackend', () => {
       await expect(backend.getEdges('social'))
         .rejects.toThrow('Knowledge Graph operations are not supported in WASM backend');
     });
+
+    it('should throw NOT_SUPPORTED error for traverseGraph', async () => {
+      await expect(backend.traverseGraph('social', { source: 1 }))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should throw NOT_SUPPORTED error for getNodeDegree', async () => {
+      await expect(backend.getNodeDegree('social', 1))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should throw NOT_SUPPORTED error for matchQuery', async () => {
+      await expect(backend.matchQuery('docs', 'MATCH (a)-[:LIKES]->(b) RETURN a'))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should include helpful error message for matchQuery', async () => {
+      await expect(backend.matchQuery('docs', 'MATCH (a) RETURN a'))
+        .rejects.toThrow('MATCH queries are not supported in WASM backend');
+    });
+
+    it('should throw NOT_SUPPORTED error for explain', async () => {
+      await expect(backend.explain('SELECT * FROM docs'))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should include helpful error message for explain', async () => {
+      await expect(backend.explain('SELECT * FROM docs'))
+        .rejects.toThrow('EXPLAIN is not supported in WASM backend');
+    });
   });
 
   describe('error handling', () => {
