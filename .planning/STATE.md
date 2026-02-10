@@ -30,6 +30,11 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 - All unsafe code must have documented invariants
 - TDD: test BEFORE code for every fix
 
+### Accumulated Context
+
+#### Roadmap Evolution
+- Phase 5 added: Performance optimization with Arxiv research
+
 ---
 
 ## Milestone v2: Core Trust (25 findings — velesdb-core only)
@@ -43,8 +48,9 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | 2 - Critical Correctness | ⬜ Pending | C-01→04, B-03, D-09 | 🚨 Wrong Results |
 | 3 - Core Engine Bugs | ⬜ Pending | B-01→06, D-08, M-03 | 🐛 Correctness |
 | 4 - Perf, Storage, Cleanup | ⬜ Pending | D-01→07, M-01→02 | ⚠️ Optimization |
+| 5 - Performance Arxiv | ⬜ Pending | Research-based optimizations | 🚀 Performance |
 
-**Execution:** `0 → 1 → 2 → 3 → 4`
+**Execution:** `0 → 1 → 2 → 3 → 4 → 5`
 
 ## Milestone v3: Ecosystem Alignment (22 findings — bindings/wrappers)
 
@@ -53,7 +59,9 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 | Phase | Status | Scope | Priority |
 |-------|--------|-------|----------|
 | 1 - WASM Rebinding | ✅ Complete (01-05 cherry-picked to develop) | BEG-01,05,06, W-01→03 | 🚨 Architecture |
-| 2 - Server Binding | 📋 Planned only (5 PLANs, no code executed) | S-01→04, BEG-05 | 🚨 Security |
+| 2 - Server Binding | ✅ Complete (5 PLANs executed, 108 tests) | S-01→04, BEG-05 | 🚨 Security |
+| 2.1 - Server Docs | ✅ Complete (README, OpenAPI, CHANGELOG) | Documentation gaps | 📚 Documentation |
+| 2.2 - Server Hardening | ✅ Complete (validation, consistency, error hygiene) | Code review findings | 🛡️ Quality |
 | 3 - SDK Fixes | ✅ Complete (01-07 all done, 25/25 endpoints) | T-01→03, BEG-07 + full parity | 🐛 Contracts |
 | 4 - Python Integrations | ⬜ Blocked | I-01→03, BEG-02→04 | 🐛 Contracts |
 | 5 - GPU + Ecosystem CI | ⬜ Blocked | I-04, CI-04 | ⚠️ Polish |
@@ -95,4 +103,5 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-10*  
-*Status: v3 Phase 1 COMPLETE (cherry-picked to develop), Phase 2 PLANNED ONLY, Phase 3 COMPLETE. ~3069 Rust tests + 233 TS tests. Next: v3-02 execution or v2.*
+*Status: v3 Phases 1, 2, 2.1, 2.2, 3 COMPLETE. Phase 4/5 blocked by v2. 115 server tests, ~3069 core tests, 233 TS tests. Next: v3-04 or v2.*
+*Phase 5 added: Performance optimization with Arxiv research

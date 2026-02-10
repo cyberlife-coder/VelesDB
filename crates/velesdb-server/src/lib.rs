@@ -1,16 +1,8 @@
-// Server - pedantic/nursery lints relaxed
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
+// Reason: doc_markdown fires on "VelesDB", "OpenAPI" etc. in doc comments — acceptable
 #![allow(clippy::doc_markdown)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::manual_let_else)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::ref_option)]
+// Reason: match_same_arms used intentionally in metric/storage_mode parsing for clarity
 #![allow(clippy::match_same_arms)]
-#![allow(clippy::trivially_copy_pass_by_ref)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::enum_glob_use)]
-#![allow(clippy::unused_async)]
+// Reason: needless_for_each triggered by utoipa's OpenApi derive macro — not our code
 #![allow(clippy::needless_for_each)]
 //! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
@@ -39,11 +31,17 @@ pub use handlers::{
     upsert_points,
 };
 
-// FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
+// Auth middleware
+pub use handlers::auth::auth_middleware;
+
+// Rate limiting config
+pub use handlers::rate_limit::RateLimitConfig;
+
+// Graph handlers — all delegate to Collection methods from velesdb-core
 pub use handlers::graph::{
     add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
-    GraphService, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams,
-    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams, TraversalResultItem,
+    TraversalStats, TraverseRequest, TraverseResponse,
 };
 
 // FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)
@@ -59,9 +57,10 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 #[openapi(
     info(
         title = "VelesDB API",
-        version = "0.1.1",
-        description = "High-performance vector database for AI applications. \
-            Supports semantic search, HNSW indexing, and multiple distance metrics.",
+        version = "1.4.1",
+        description = "High-performance vector + graph database for AI agents. \
+            Supports semantic search, HNSW indexing, knowledge graphs, multiple distance metrics, \
+            and per-IP rate limiting.",
         license(name = "ELv2", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
         contact(name = "VelesDB Team", url = "https://github.com/cyberlife-coder/VelesDB")
     ),
@@ -74,7 +73,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         (name = "points", description = "Vector point operations"),
         (name = "search", description = "Vector similarity search"),
         (name = "query", description = "VelesQL query execution"),
-        (name = "indexes", description = "Property index management (EPIC-009)")
+        (name = "indexes", description = "Property index management"),
+        (name = "graph", description = "Knowledge graph operations (edges, traversal, SSE streaming)")
     ),
     paths(
         handlers::health::health_check,
@@ -93,7 +93,11 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::query::explain,
         handlers::indexes::create_index,
         handlers::indexes::list_indexes,
-        handlers::indexes::delete_index
+        handlers::indexes::delete_index,
+        handlers::graph::handlers::get_edges,
+        handlers::graph::handlers::add_edge,
+        handlers::graph::handlers::traverse_graph,
+        handlers::graph::handlers::get_node_degree
     ),
     components(
         schemas(
@@ -120,7 +124,15 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             ExplainFeatures,
             CreateIndexRequest,
             IndexResponse,
-            ListIndexesResponse
+            ListIndexesResponse,
+            handlers::graph::types::TraverseRequest,
+            handlers::graph::types::TraverseResponse,
+            handlers::graph::types::TraversalResultItem,
+            handlers::graph::types::TraversalStats,
+            handlers::graph::types::DegreeResponse,
+            handlers::graph::types::AddEdgeRequest,
+            handlers::graph::types::EdgesResponse,
+            handlers::graph::types::EdgeResponse
         )
     )
 )]
@@ -134,6 +146,8 @@ pub struct ApiDoc;
 pub struct AppState {
     /// The `VelesDB` database instance.
     pub db: Database,
+    /// Optional API key for authentication. `None` = dev mode (no auth).
+    pub api_key: Option<String>,
 }
 
 // ============================================================================
@@ -151,7 +165,7 @@ mod tests {
         let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
         assert!(!json.is_empty(), "OpenAPI spec should not be empty");
         assert!(json.contains("VelesDB API"), "Should contain API title");
-        assert!(json.contains("0.1.1"), "Should contain version");
+        assert!(json.contains("1.4.1"), "Should contain version");
     }
 
     #[test]

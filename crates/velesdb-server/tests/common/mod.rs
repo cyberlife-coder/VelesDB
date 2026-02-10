@@ -11,14 +11,13 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, delete_collection, delete_point, get_collection,
     get_edges, get_node_degree, get_point, health_check, hybrid_search, list_collections, query,
-    search, text_search, traverse_graph, upsert_points, AppState, GraphService,
+    search, text_search, traverse_graph, upsert_points, AppState,
 };
 
-/// Helper to create test app with all routes
+/// Helper to create test app with all routes (graph routes share AppState)
 pub fn create_test_app(temp_dir: &TempDir) -> Router {
     let db = Database::open(temp_dir.path()).expect("Failed to open database");
-    let state = Arc::new(AppState { db });
-    let graph_service = GraphService::new();
+    let state = Arc::new(AppState { db, api_key: None });
 
     Router::new()
         .route("/health", get(health_check))
@@ -40,7 +39,7 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/query", post(query))
-        .with_state(state)
+        // Graph routes — all use AppState, delegate to Collection methods
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
@@ -50,5 +49,5 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
         )
-        .with_state(graph_service)
+        .with_state(state)
 }

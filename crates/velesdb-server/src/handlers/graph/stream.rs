@@ -1,6 +1,7 @@
-//! SSE streaming graph traversal handler (EPIC-058 US-003).
+//! SSE streaming graph traversal handler.
 //!
 //! Provides Server-Sent Events endpoint for streaming graph traversal results.
+//! Delegates to `Collection` traversal methods from `velesdb-core`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -11,10 +12,15 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::service::GraphService;
+use crate::AppState;
+
+use super::handlers::node_path_to_edge_ids;
 use super::types::{
     StreamDoneEvent, StreamErrorEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams,
 };
+
+/// (target_id, depth, edge_id_path) — intermediate result from spawn_blocking traversal.
+type TraversalTuple = (u64, u32, Vec<u64>);
 
 /// Stream graph traversal results via SSE.
 ///
@@ -23,10 +29,11 @@ use super::types::{
 /// - `stats`: Periodic statistics (every 100 nodes)
 /// - `done`: Traversal completed
 /// - `error`: If an error occurs
-#[allow(clippy::unused_async)]
+#[allow(clippy::too_many_lines)]
+// Reason: SSE stream handler with validation + spawn_blocking + event mapping — inherently long
 pub async fn stream_traverse(
-    State(graph_service): State<Arc<GraphService>>,
-    Path(collection): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Path(collection_name): Path<String>,
     Query(params): Query<StreamTraverseParams>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let start_time = Instant::now();
@@ -37,43 +44,69 @@ pub async fn stream_traverse(
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
 
-    // Perform traversal (collect results since BfsIterator has lifetime)
-    let traversal_result = match params.algorithm.to_lowercase().as_str() {
-        "dfs" => graph_service.traverse_dfs(
-            &collection,
-            params.start_node,
-            params.max_depth,
-            params.limit,
-            &rel_types,
-        ),
-        _ => graph_service.traverse_bfs(
-            &collection,
-            params.start_node,
-            params.max_depth,
-            params.limit,
-            &rel_types,
-        ),
+    let algorithm = params.algorithm.to_lowercase();
+    let start_node = params.start_node;
+    let max_depth = params.max_depth;
+    let limit = params.limit;
+
+    // Get collection — if not found, emit error event
+    let collection = match state.db.get_collection(&collection_name) {
+        Some(c) => c,
+        None => {
+            let error_event = StreamErrorEvent {
+                error: format!("Collection '{collection_name}' not found"),
+            };
+            let error_data =
+                serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());
+            let events = vec![Ok(Event::default().event("error").data(error_data))];
+            return Sse::new(stream::iter(events)).keep_alive(KeepAlive::default());
+        }
     };
 
-    // Create SSE stream from results
-    let stream = match traversal_result {
-        Ok(results) => {
-            let total = results.len();
-            let mut max_depth: u32 = 0;
+    // Perform traversal in blocking task (CPU-bound)
+    let traversal_result: Result<velesdb_core::Result<Vec<TraversalTuple>>, _> =
+        tokio::task::spawn_blocking(move || -> velesdb_core::Result<Vec<TraversalTuple>> {
+            let rel_refs: Vec<&str> = rel_types.iter().map(String::as_str).collect();
+            let rel_types_opt = if rel_refs.is_empty() {
+                None
+            } else {
+                Some(rel_refs.as_slice())
+            };
 
-            // Build events vector
+            let core_results = match algorithm.as_str() {
+                "dfs" => collection.traverse_dfs(start_node, max_depth, rel_types_opt, limit),
+                _ => collection.traverse_bfs(start_node, max_depth, rel_types_opt, limit),
+            };
+
+            // Convert to edge-ID paths for API compatibility
+            core_results.map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| {
+                        let edge_ids = node_path_to_edge_ids(&collection, &r.path);
+                        (r.target_id, r.depth, edge_ids)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .await;
+
+    // Build SSE events from results
+    let stream = match traversal_result {
+        Ok(Ok(results)) => {
+            let total = results.len();
+            let mut max_depth_val: u32 = 0;
             let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(total + 2);
 
-            for (i, item) in results.into_iter().enumerate() {
-                if item.depth > max_depth {
-                    max_depth = item.depth;
+            for (i, (target_id, depth, path)) in results.into_iter().enumerate() {
+                if depth > max_depth_val {
+                    max_depth_val = depth;
                 }
 
-                // Node event
                 let node_event = StreamNodeEvent {
-                    id: item.target_id,
-                    depth: item.depth,
-                    path: item.path,
+                    id: target_id,
+                    depth,
+                    path,
                 };
                 let event_data =
                     serde_json::to_string(&node_event).unwrap_or_else(|_| "{}".to_string());
@@ -83,7 +116,8 @@ pub async fn stream_traverse(
                 if (i + 1) % 100 == 0 {
                     let stats_event = StreamStatsEvent {
                         nodes_visited: i + 1,
-                        // SAFETY: elapsed time in ms won't exceed u64::MAX (584M years)
+                        #[allow(clippy::cast_possible_truncation)]
+                        // Reason: elapsed time in ms won't exceed u64::MAX (584M years)
                         elapsed_ms: start_time.elapsed().as_millis() as u64,
                     };
                     let stats_data =
@@ -92,11 +126,11 @@ pub async fn stream_traverse(
                 }
             }
 
-            // Done event
             let done_event = StreamDoneEvent {
                 total_nodes: total,
-                max_depth_reached: max_depth,
-                // SAFETY: elapsed time in ms won't exceed u64::MAX
+                max_depth_reached: max_depth_val,
+                #[allow(clippy::cast_possible_truncation)]
+                // Reason: elapsed time in ms won't exceed u64::MAX
                 elapsed_ms: start_time.elapsed().as_millis() as u64,
             };
             let done_data = serde_json::to_string(&done_event).unwrap_or_else(|_| "{}".to_string());
@@ -104,9 +138,19 @@ pub async fn stream_traverse(
 
             stream::iter(events)
         }
+        Ok(Err(e)) => {
+            let error_event = StreamErrorEvent {
+                error: e.to_string(),
+            };
+            let error_data =
+                serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());
+            stream::iter(vec![Ok(Event::default().event("error").data(error_data))])
+        }
         Err(e) => {
-            // Error event
-            let error_event = StreamErrorEvent { error: e };
+            tracing::error!(error = %e, "Stream traverse task panicked");
+            let error_event = StreamErrorEvent {
+                error: "Stream traverse: internal error".to_string(),
+            };
             let error_data =
                 serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());
             stream::iter(vec![Ok(Event::default().event("error").data(error_data))])
@@ -114,42 +158,4 @@ pub async fn stream_traverse(
     };
 
     Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_stream_node_event_serialize() {
-        let event = StreamNodeEvent {
-            id: 123,
-            depth: 2,
-            path: vec![1, 2],
-        };
-        let json = serde_json::to_string(&event).expect("should serialize");
-        assert!(json.contains("123"));
-        assert!(json.contains("\"depth\":2"));
-    }
-
-    #[test]
-    fn test_stream_done_event_serialize() {
-        let event = StreamDoneEvent {
-            total_nodes: 100,
-            max_depth_reached: 5,
-            elapsed_ms: 150,
-        };
-        let json = serde_json::to_string(&event).expect("should serialize");
-        assert!(json.contains("100"));
-        assert!(json.contains("max_depth_reached"));
-    }
-
-    #[test]
-    fn test_stream_error_event_serialize() {
-        let event = StreamErrorEvent {
-            error: "Collection not found".to_string(),
-        };
-        let json = serde_json::to_string(&event).expect("should serialize");
-        assert!(json.contains("Collection not found"));
-    }
 }

@@ -1403,12 +1403,40 @@ async fn test_velesql_collection_not_found() {
 
 // =============================================================================
 // Graph E2E Tests (EPIC-011/US-001)
+// Graph handlers now delegate to Collection — collection must exist first.
 // =============================================================================
+
+/// Helper: create a collection via HTTP (needed before graph operations).
+async fn create_graph_collection(app: &axum::Router, name: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": name,
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
 
 #[tokio::test]
 async fn test_graph_add_edge() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+
+    // Collection must exist before adding edges
+    create_graph_collection(&app, "test").await;
 
     // Add edge
     let response = app
@@ -1439,6 +1467,8 @@ async fn test_graph_add_edge() {
 async fn test_graph_get_edges_by_label() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+
+    create_graph_collection(&app, "test").await;
 
     // Add edges
     let response = app
@@ -1533,6 +1563,8 @@ async fn test_graph_traverse_bfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
 
+    create_graph_collection(&app, "graph_test").await;
+
     // Build a graph: 1 -> 2 -> 3 -> 4
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3), (3, 3, 4)] {
         let response = app
@@ -1600,6 +1632,8 @@ async fn test_graph_traverse_dfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
 
+    create_graph_collection(&app, "dfs_test").await;
+
     // Build graph
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3)] {
         let response = app
@@ -1661,6 +1695,8 @@ async fn test_graph_traverse_dfs() {
 async fn test_graph_traverse_with_rel_type_filter() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+
+    create_graph_collection(&app, "filter_test").await;
 
     // Build graph with mixed edge types: 1 -KNOWS-> 2 -WROTE-> 3
     let edges = [(1, 1, 2, "KNOWS"), (2, 2, 3, "WROTE")];
@@ -1754,6 +1790,8 @@ async fn test_graph_traverse_invalid_strategy() {
 async fn test_graph_node_degree() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
+
+    create_graph_collection(&app, "degree_test").await;
 
     // Build graph: 1 -> 2, 3 -> 2, 2 -> 4
     // Node 2 has in_degree=2, out_degree=1

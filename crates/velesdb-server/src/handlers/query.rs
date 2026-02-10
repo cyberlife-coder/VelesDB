@@ -11,6 +11,8 @@ use crate::types::{
 use crate::AppState;
 use velesdb_core::velesql::{self, Condition, Query, SelectColumns};
 
+use super::helpers::{get_collection_or_404, internal_error};
+
 /// Execute a VelesQL query.
 ///
 /// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
@@ -26,13 +28,13 @@ use velesdb_core::velesql::{self, Condition, Query, SelectColumns};
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
+    // Parse in async context (fast)
     let parsed = match velesql::Parser::parse(&req.query) {
         Ok(q) => q,
         Err(e) => {
@@ -51,83 +53,78 @@ pub async fn query(
         }
     };
 
-    let select = &parsed.select;
-
-    let collection = match state.db.get_collection(&select.from) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", select.from),
-                }),
-            )
-                .into_response()
-        }
+    let collection_name = parsed.select.from.clone();
+    let collection = match get_collection_or_404(&state, &collection_name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
     let is_aggregation = matches!(
-        &select.columns,
+        &parsed.select.columns,
         SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
-    ) || select.group_by.is_some();
+    ) || parsed.select.group_by.is_some();
 
-    if is_aggregation {
-        // Route to aggregation execution
-        let result = match collection.execute_aggregate(&parsed, &req.params) {
-            Ok(r) => r,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-                    .into_response()
-            }
-        };
+    let params = req.params;
 
-        let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-
-        return Json(AggregationResponse { result, timing_ms }).into_response();
-    }
-
-    // Standard query execution
-    let results = match collection.execute_query(&parsed, &req.params) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-                .into_response()
+    // Execute in blocking thread (CPU-bound)
+    let result = tokio::task::spawn_blocking(move || {
+        if is_aggregation {
+            collection
+                .execute_aggregate(&parsed, &params)
+                .map(QueryResult::Aggregation)
+        } else {
+            collection
+                .execute_query(&parsed, &params)
+                .map(QueryResult::Rows)
         }
-    };
+    })
+    .await;
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let rows_returned = results.len();
 
-    Json(QueryResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
+    match result {
+        Ok(Ok(QueryResult::Aggregation(agg))) => Json(AggregationResponse {
+            result: agg,
+            timing_ms,
+        })
+        .into_response(),
+        Ok(Ok(QueryResult::Rows(results))) => {
+            let rows_returned = results.len();
+            Json(QueryResponse {
+                results: results
+                    .into_iter()
+                    .map(|r| SearchResultResponse {
+                        id: r.point.id,
+                        score: r.score,
+                        payload: r.point.payload,
+                    })
+                    .collect(),
+                timing_ms,
+                rows_returned,
             })
-            .collect(),
-        timing_ms,
-        rows_returned,
-    })
-    .into_response()
+            .into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => internal_error("Query", &e).into_response(),
+    }
+}
+
+/// Internal enum to unify query result types from spawn_blocking.
+enum QueryResult {
+    Aggregation(serde_json::Value),
+    Rows(Vec<velesdb_core::SearchResult>),
 }
 
 /// Explain a VelesQL query without executing it (EPIC-058 US-002).
 ///
 /// Returns the query plan, estimated costs, and detected features.
-#[allow(clippy::too_many_lines)]
 #[utoipa::path(
     post,
     path = "/query/explain",
@@ -139,7 +136,8 @@ pub async fn query(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::too_many_lines)]
+// Reason: explain builds a multi-step query plan — inherently long sequential logic
 pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,
@@ -181,8 +179,7 @@ pub async fn explain(
     let has_vector_search = select
         .where_clause
         .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
+        .is_some_and(condition_has_vector_search);
 
     let has_filter = select.where_clause.is_some() && !has_vector_search;
 
@@ -213,6 +210,8 @@ pub async fn explain(
             step: step_num,
             operation: "VectorSearch".to_string(),
             description: "ANN search using HNSW index with NEAR clause".to_string(),
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: LIMIT values from SQL are small; truncation on 32-bit is acceptable
             estimated_rows: select.limit.map(|l| l as usize),
         });
     } else {
@@ -292,6 +291,8 @@ pub async fn explain(
                 select.limit.unwrap_or(0),
                 select.offset.unwrap_or(0)
             ),
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: LIMIT values from SQL are small; truncation on 32-bit is acceptable
             estimated_rows: select.limit.map(|l| l as usize),
         });
     }
@@ -375,8 +376,7 @@ pub fn detect_query_type(query: &Query) -> QueryType {
     let has_vector = select
         .where_clause
         .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
+        .is_some_and(condition_has_vector_search);
 
     if has_vector {
         return QueryType::Search;
