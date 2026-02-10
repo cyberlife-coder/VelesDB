@@ -57,9 +57,10 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 #[openapi(
     info(
         title = "VelesDB API",
-        version = "0.1.1",
-        description = "High-performance vector database for AI applications. \
-            Supports semantic search, HNSW indexing, and multiple distance metrics.",
+        version = "1.4.1",
+        description = "High-performance vector + graph database for AI agents. \
+            Supports semantic search, HNSW indexing, knowledge graphs, multiple distance metrics, \
+            and per-IP rate limiting.",
         license(name = "ELv2", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
         contact(name = "VelesDB Team", url = "https://github.com/cyberlife-coder/VelesDB")
     ),
@@ -72,7 +73,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         (name = "points", description = "Vector point operations"),
         (name = "search", description = "Vector similarity search"),
         (name = "query", description = "VelesQL query execution"),
-        (name = "indexes", description = "Property index management (EPIC-009)")
+        (name = "indexes", description = "Property index management"),
+        (name = "graph", description = "Knowledge graph operations (edges, traversal, SSE streaming)")
     ),
     paths(
         handlers::health::health_check,
@@ -91,7 +93,11 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::query::explain,
         handlers::indexes::create_index,
         handlers::indexes::list_indexes,
-        handlers::indexes::delete_index
+        handlers::indexes::delete_index,
+        handlers::graph::handlers::get_edges,
+        handlers::graph::handlers::add_edge,
+        handlers::graph::handlers::traverse_graph,
+        handlers::graph::handlers::get_node_degree
     ),
     components(
         schemas(
@@ -118,7 +124,15 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             ExplainFeatures,
             CreateIndexRequest,
             IndexResponse,
-            ListIndexesResponse
+            ListIndexesResponse,
+            handlers::graph::types::TraverseRequest,
+            handlers::graph::types::TraverseResponse,
+            handlers::graph::types::TraversalResultItem,
+            handlers::graph::types::TraversalStats,
+            handlers::graph::types::DegreeResponse,
+            handlers::graph::types::AddEdgeRequest,
+            handlers::graph::types::EdgesResponse,
+            handlers::graph::types::EdgeResponse
         )
     )
 )]
@@ -151,7 +165,7 @@ mod tests {
         let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
         assert!(!json.is_empty(), "OpenAPI spec should not be empty");
         assert!(json.contains("VelesDB API"), "Should contain API title");
-        assert!(json.contains("0.1.1"), "Should contain version");
+        assert!(json.contains("1.4.1"), "Should contain version");
     }
 
     #[test]

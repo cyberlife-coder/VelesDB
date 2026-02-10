@@ -66,6 +66,29 @@
 
 ---
 
+## Phase 2.1: Server Documentation Update
+
+**Goal:** Bring server crate README and lib.rs docs up to date with all 26 API routes, auth, rate limiting, CORS, graph, indexes.
+
+**Inserted:** 2025-02-10 — Documentation audit after v3-02 revealed significant gaps
+
+### Tasks
+
+1. **README.md** — Add missing sections (Auth, Rate Limiting, Graph, Indexes, Match, Flush/Empty, Explain), fix incorrect Points examples, update Configuration table
+2. **lib.rs** — Update OpenAPI version, enrich crate-level doc comment
+3. **CHANGELOG.md** — Reflect v3-02 changes
+
+### Success Criteria
+
+- [ ] All 26 API routes documented with curl examples
+- [ ] All env vars documented (VELESDB_API_KEY, VELESDB_RATE_LIMIT, VELESDB_RATE_BURST, VELESDB_CORS_ORIGIN)
+- [ ] Incorrect Points API examples fixed
+- [ ] Authentication section present
+- [ ] Graph API section present
+- [ ] lib.rs OpenAPI version matches crate version
+
+---
+
 ## Phase 3: TypeScript SDK Fixes
 
 **Goal:** SDK correctly maps server responses and handles concurrent init.
@@ -139,7 +162,8 @@
 | Phase | Status | Scope | Priority |
 |-------|--------|-------|----------|
 | 1 - WASM Rebinding | ⬜ Pending | BEG-01,05,06, W-01→03 | 🚨 Architecture |
-| 2 - Server Binding | ⬜ Pending | S-01→04, BEG-05 | 🚨 Security |
+| 2 - Server Binding | ✅ Complete | S-01→04, BEG-05 | 🚨 Security |
+| 2.1 - Server Docs | 🔄 In Progress | Documentation gaps | 📚 Documentation |
 | 3 - SDK Fixes | ⬜ Pending | T-01→03, BEG-07 | 🐛 Contracts |
 | 4 - Python Integrations | ⬜ Pending | I-01→03, BEG-02→04 | 🐛 Contracts |
 | 5 - GPU + Ecosystem CI | ⬜ Pending | I-04, CI-04 | ⚠️ Polish |

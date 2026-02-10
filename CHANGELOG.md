@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Server Binding & Security (v3-02) ✅
+
+- **API Key Authentication** — `Authorization: Bearer <key>` middleware with constant-time comparison
+  - `VELESDB_API_KEY` env var; unset = dev mode (no auth)
+  - `/health` and `/swagger-ui` exempt from auth
+- **Per-IP Rate Limiting** — `tower-governor` middleware (default 100 req/s, burst 50)
+  - `VELESDB_RATE_LIMIT` and `VELESDB_RATE_BURST` env vars
+  - `SmartIpKeyExtractor`: supports `X-Forwarded-For`, `X-Real-IP`, peer address
+  - `/health` excluded from rate limiting
+  - Returns HTTP 429 when exceeded
+- **CORS Hardening** — Configurable via `VELESDB_CORS_ORIGIN` env var
+  - Comma-separated origins for production; permissive mode with warning when unset
+- **Graph Handler Unification** — Deleted `GraphService`, all graph handlers delegate to `Collection`
+  - Zero reimplemented graph/traversal logic in server
+- **spawn_blocking** — All 17 CPU-intensive handlers wrapped in `tokio::task::spawn_blocking`
+  - Prevents blocking the Tokio async runtime during search, query, traversal, etc.
+- **Clean Code Sweep** — Removed 13 blanket clippy allows from `lib.rs`
+  - Only 3 targeted `#[allow]` remain, each with `// Reason:` comment
+- **OpenAPI** — Updated to v1.4.1; added graph endpoints and schemas to Swagger docs
+- **Documentation** — README rewritten with all 26 API routes, auth, rate limiting, CORS, graph, indexes
+
 ### EPIC-074/075: SIMD Architecture Consolidation ✅
 
 - **Removed `simd_explicit.rs`** - All functions migrated to `simd_native.rs`

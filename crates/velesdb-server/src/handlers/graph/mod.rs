@@ -3,9 +3,9 @@
 //! All graph operations delegate to `Collection` methods from `velesdb-core`.
 //! Graph data lives in the Collection's EdgeStore (in-memory; disk persistence planned).
 
-mod handlers;
+pub(crate) mod handlers;
 mod stream;
-mod types;
+pub(crate) mod types;
 
 // Re-export public API
 pub use handlers::{add_edge, get_edges, get_node_degree, traverse_graph};
