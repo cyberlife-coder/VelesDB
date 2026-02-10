@@ -56,6 +56,19 @@ describe('RestBackend', () => {
       });
       await expect(backend.init()).rejects.toThrow(ConnectionError);
     });
+
+    it('should share health check across concurrent init() calls (BEG-07)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+
+      // Call init() concurrently — only ONE health check should fire
+      await Promise.all([backend.init(), backend.init(), backend.init()]);
+
+      expect(backend.isInitialized()).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('collection operations', () => {
@@ -125,17 +138,27 @@ describe('RestBackend', () => {
       );
     });
 
-    it('should list collections', async () => {
+    it('should list collections and unwrap { collections: [...] } with field mapping', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve([
-          { name: 'col1', dimension: 128 },
-          { name: 'col2', dimension: 256 },
-        ]),
+        json: () => Promise.resolve({
+          collections: [
+            { name: 'col1', dimension: 128, metric: 'cosine', point_count: 50, storage_mode: 'full' },
+            { name: 'col2', dimension: 256, metric: 'euclidean', point_count: 100, storage_mode: 'sq8' },
+          ],
+        }),
       });
 
       const list = await backend.listCollections();
       expect(list.length).toBe(2);
+      expect(list[0].name).toBe('col1');
+      expect(list[0].count).toBe(50);
+      expect(list[0].metric).toBe('cosine');
+      expect(list[0].storageMode).toBe('full');
+      expect(list[1].name).toBe('col2');
+      expect(list[1].count).toBe(100);
+      expect(list[1].metric).toBe('euclidean');
+      expect(list[1].storageMode).toBe('sq8');
     });
   });
 
@@ -193,13 +216,15 @@ describe('RestBackend', () => {
       );
     });
 
-    it('should search vectors', async () => {
+    it('should search vectors and unwrap { results: [...] } envelope', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve([
-          { id: '1', score: 0.95 },
-          { id: '2', score: 0.85 },
-        ]),
+        json: () => Promise.resolve({
+          results: [
+            { id: '1', score: 0.95 },
+            { id: '2', score: 0.85 },
+          ],
+        }),
       });
 
       const results = await backend.search('test', [1.0, 0.0], { k: 5 });
@@ -211,6 +236,16 @@ describe('RestBackend', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ deleted: true }),
+      });
+
+      const deleted = await backend.delete('test', '1');
+      expect(deleted).toBe(true);
+    });
+
+    it('should default delete to true on HTTP success without body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
       });
 
       const deleted = await backend.delete('test', '1');
@@ -363,6 +398,177 @@ describe('RestBackend', () => {
         expect.objectContaining({ method: 'GET' })
       );
       expect(edges.length).toBe(1);
+    });
+  });
+
+  describe('query() smart routing + aggregation', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should route MATCH queries to matchQuery() endpoint', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [{ bindings: { a: 1 }, score: 0.9, depth: 1, projected: {} }],
+          took_ms: 5,
+          count: 1,
+        }),
+      });
+
+      const result = await backend.query(
+        'docs',
+        'MATCH (a:Person)-[:KNOWS]->(b) RETURN a',
+      );
+
+      // Should hit /collections/docs/match, NOT /query
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/docs/match',
+        expect.objectContaining({ method: 'POST' })
+      );
+
+      expect(result.results.length).toBe(1);
+      expect(result.stats.strategy).toBe('match');
+    });
+
+    it('should handle aggregation responses (singular result)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          result: { avg_price: 42.5, count: 100 },
+          timing_ms: 3,
+        }),
+      });
+
+      const result = await backend.query(
+        'products',
+        'SELECT AVG(price) as avg_price, COUNT(*) as count FROM products',
+      );
+
+      expect(result.results.length).toBe(1);
+      expect(result.results[0].bindings).toEqual({ avg_price: 42.5, count: 100 });
+      expect(result.stats.strategy).toBe('aggregation');
+      expect(result.stats.executionTimeMs).toBe(3);
+    });
+
+    it('should handle scalar aggregation result', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          result: 42,
+          timing_ms: 1,
+        }),
+      });
+
+      const result = await backend.query(
+        'products',
+        'SELECT COUNT(*) FROM products',
+      );
+
+      expect(result.results.length).toBe(1);
+      expect(result.results[0].bindings).toEqual({ value: 42 });
+    });
+
+    it('should handle standard SELECT responses with proper mapping', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [
+            { id: 1, score: 0.95, payload: { title: 'Test' } },
+            { id: 2, score: 0.85, payload: { title: 'Other' } },
+          ],
+          timing_ms: 10,
+          rows_returned: 2,
+        }),
+      });
+
+      const result = await backend.query(
+        'docs',
+        'SELECT * FROM docs WHERE vector NEAR $v LIMIT 10',
+      );
+
+      expect(result.results.length).toBe(2);
+      expect(result.results[0].nodeId).toBe(1);
+      expect(result.results[0].vectorScore).toBe(0.95);
+      expect(result.results[0].bindings).toEqual({ title: 'Test' });
+      expect(result.stats.strategy).toBe('select');
+      expect(result.stats.executionTimeMs).toBe(10);
+    });
+  });
+
+  describe('matchQuery()', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should call POST /collections/{name}/match', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [
+            { bindings: { a: 123, b: 456 }, score: 0.95, depth: 1, projected: { 'a.name': 'Alice' } },
+          ],
+          took_ms: 15,
+          count: 1,
+        }),
+      });
+
+      const result = await backend.matchQuery(
+        'docs',
+        'MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name',
+        { v: [0.1, 0.2, 0.3] },
+        { vector: [0.1, 0.2, 0.3], threshold: 0.8 }
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/docs/match',
+        expect.objectContaining({ method: 'POST' })
+      );
+
+      expect(result.results.length).toBe(1);
+      expect(result.results[0].bindings).toEqual({ a: 123, b: 456 });
+      expect(result.results[0].score).toBe(0.95);
+      expect(result.results[0].depth).toBe(1);
+      expect(result.results[0].projected).toEqual({ 'a.name': 'Alice' });
+      expect(result.tookMs).toBe(15);
+      expect(result.count).toBe(1);
+    });
+
+    it('should handle collection not found', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ code: 'NOT_FOUND', message: 'Collection not found' }),
+      });
+
+      await expect(backend.matchQuery('nonexistent', 'MATCH (a) RETURN a'))
+        .rejects.toThrow(NotFoundError);
+    });
+
+    it('should send vector and threshold when provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [], took_ms: 0, count: 0 }),
+      });
+
+      await backend.matchQuery('docs', 'MATCH (a) RETURN a', {}, {
+        vector: [0.1, 0.2],
+        threshold: 0.85,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.vector).toEqual([0.1, 0.2]);
+      expect(callBody.threshold).toBe(0.85);
     });
   });
 

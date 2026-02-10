@@ -8,6 +8,8 @@ import type {
   IVelesDBBackend,
   CollectionConfig,
   Collection,
+  DistanceMetric,
+  StorageMode,
   VectorDocument,
   SearchOptions,
   SearchResult,
@@ -39,6 +41,69 @@ interface BatchSearchResponse {
   results: Array<{ results: SearchResult[] }>;
 }
 
+// ========================================================================
+// MATCH Query Types
+// ========================================================================
+
+/** Options for MATCH graph traversal queries */
+export interface MatchQueryOptions {
+  /** Optional vector for similarity matching within MATCH */
+  vector?: number[] | Float32Array;
+  /** Similarity threshold for vector matching */
+  threshold?: number;
+}
+
+/** A single result item from a MATCH query */
+export interface MatchQueryResultItem {
+  /** Variable bindings from MATCH pattern (e.g., { a: 123, b: 456 }) */
+  bindings: Record<string, unknown>;
+  /** Similarity score (if vector matching was used) */
+  score: number | null;
+  /** Traversal depth */
+  depth: number;
+  /** Projected fields from RETURN clause */
+  projected: Record<string, unknown>;
+}
+
+/** Full response from a MATCH query */
+export interface MatchQueryResponse {
+  /** MATCH query results */
+  results: MatchQueryResultItem[];
+  /** Execution time in milliseconds */
+  tookMs: number;
+  /** Total result count */
+  count: number;
+}
+
+/** Server-side MATCH response (snake_case contract) */
+interface ServerMatchQueryResponse {
+  results: Array<{
+    bindings: Record<string, unknown>;
+    score?: number | null;
+    depth: number;
+    projected?: Record<string, unknown>;
+  }>;
+  took_ms: number;
+  count: number;
+}
+
+/** Server SELECT /query response */
+interface ServerSelectQueryResponse {
+  results: Array<{
+    id: number;
+    score: number;
+    payload: Record<string, unknown> | null;
+  }>;
+  timing_ms: number;
+  rows_returned: number;
+}
+
+/** Server aggregation /query response */
+interface ServerAggregationResponse {
+  result: unknown;
+  timing_ms: number;
+}
+
 /**
  * REST Backend
  * 
@@ -49,6 +114,7 @@ export class RestBackend implements IVelesDBBackend {
   private readonly apiKey?: string;
   private readonly timeout: number;
   private _initialized = false;
+  private _initPromise: Promise<void> | null = null;
 
   constructor(url: string, apiKey?: string, timeout = 30000) {
     this.baseUrl = url.replace(/\/$/, ''); // Remove trailing slash
@@ -57,10 +123,18 @@ export class RestBackend implements IVelesDBBackend {
   }
 
   async init(): Promise<void> {
-    if (this._initialized) {
-      return;
-    }
+    if (this._initialized) return;
+    if (this._initPromise) return this._initPromise;
 
+    this._initPromise = this._performInit();
+    try {
+      await this._initPromise;
+    } finally {
+      this._initPromise = null;
+    }
+  }
+
+  private async _performInit(): Promise<void> {
     try {
       // Health check
       const response = await this.request<{ status: string }>('GET', '/health');
@@ -262,13 +336,27 @@ export class RestBackend implements IVelesDBBackend {
   async listCollections(): Promise<Collection[]> {
     this.ensureInitialized();
 
-    const response = await this.request<Collection[]>('GET', '/collections');
+    interface ServerCollectionResponse {
+      name: string;
+      dimension: number;
+      metric: string;
+      point_count: number;
+      storage_mode: string;
+    }
+
+    const response = await this.request<{ collections: ServerCollectionResponse[] }>('GET', '/collections');
 
     if (response.error) {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    return response.data ?? [];
+    return (response.data?.collections ?? []).map(c => ({
+      name: c.name,
+      dimension: c.dimension,
+      metric: c.metric as DistanceMetric,
+      count: c.point_count,
+      storageMode: c.storage_mode as StorageMode,
+    }));
   }
 
   async insert(collection: string, doc: VectorDocument): Promise<void> {
@@ -330,7 +418,7 @@ export class RestBackend implements IVelesDBBackend {
 
     const queryVector = query instanceof Float32Array ? Array.from(query) : query;
 
-    const response = await this.request<SearchResult[]>(
+    const response = await this.request<{ results: SearchResult[] }>(
       'POST',
       `/collections/${encodeURIComponent(collection)}/search`,
       {
@@ -348,7 +436,7 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    return response.data ?? [];
+    return response.data?.results ?? [];
   }
 
   async searchBatch(
@@ -398,7 +486,7 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    return response.data?.deleted ?? false;
+    return response.data?.deleted ?? true;
   }
 
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
@@ -478,25 +566,55 @@ export class RestBackend implements IVelesDBBackend {
     return response.data?.results ?? [];
   }
 
+  /**
+   * Execute a VelesQL SELECT query.
+   * 
+   * For MATCH queries, use `matchQuery()` or pass a MATCH query here
+   * for automatic routing to the correct endpoint.
+   * 
+   * @param collection - Collection name. For SELECT: error context only
+   *   (server reads FROM clause). For MATCH: used in the endpoint URL.
+   * @param queryString - VelesQL query string
+   * @param params - Query parameters
+   * @param options - Query options (supports vector/threshold for MATCH pass-through)
+   */
   async query(
     collection: string,
     queryString: string,
     params?: Record<string, unknown>,
-    _options?: QueryOptions
+    options?: QueryOptions
   ): Promise<QueryResponse> {
     this.ensureInitialized();
 
-    // Note: Server uses POST /query (not /collections/{name}/query)
-    // The collection name is extracted from the VelesQL query string (FROM clause)
-    // The `collection` param here is kept for API compatibility but not used in URL
-    // Server QueryRequest only accepts { query, params }
-    const response = await this.request<QueryResponse>(
-      'POST',
-      '/query',
-      {
-        query: queryString,
-        params: params ?? {},
-      }
+    // Smart routing: detect MATCH queries and delegate to matchQuery()
+    const trimmed = queryString.trim();
+    if (trimmed.toUpperCase().startsWith('MATCH')) {
+      const matchResult = await this.matchQuery(collection, queryString, params, {
+        vector: options?.vector,
+        threshold: options?.threshold,
+      });
+      // Adapt MatchQueryResponse → QueryResponse for unified interface
+      return {
+        results: matchResult.results.map(r => ({
+          nodeId: Object.values(r.bindings)[0] as bigint | number ?? 0,
+          vectorScore: r.score,
+          graphScore: null,
+          fusedScore: r.score ?? 0,
+          bindings: { ...r.bindings, ...r.projected },
+          columnData: null,
+        })),
+        stats: {
+          executionTimeMs: matchResult.tookMs,
+          strategy: 'match',
+          scannedNodes: matchResult.count,
+        },
+      };
+    }
+
+    // SELECT query → POST /query
+    const response = await this.request<ServerSelectQueryResponse | ServerAggregationResponse>(
+      'POST', '/query',
+      { query: queryString, params: params ?? {} }
     );
 
     if (response.error) {
@@ -506,29 +624,45 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    // Map server response to SDK QueryResponse
-    // Server returns: { results: [{id, score, payload}], timing_ms, rows_returned }
-    // SDK expects: { results: [{nodeId, vectorScore, ...}], stats: {...} }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rawData = response.data as any;
+    const rawData = response.data;
+
+    // Detect aggregation response: has `result` (singular) instead of `results` (plural)
+    if (rawData && 'result' in rawData && !('results' in rawData)) {
+      const aggData = rawData as ServerAggregationResponse;
+      return {
+        results: [{
+          nodeId: 0,
+          vectorScore: null,
+          graphScore: null,
+          fusedScore: 0,
+          bindings: typeof aggData.result === 'object' && aggData.result !== null
+            ? aggData.result as Record<string, unknown>
+            : { value: aggData.result },
+          columnData: null,
+        }],
+        stats: {
+          executionTimeMs: aggData.timing_ms ?? 0,
+          strategy: 'aggregation',
+          scannedNodes: 0,
+        },
+      };
+    }
+
+    // Standard SELECT response
+    const selectData = rawData as ServerSelectQueryResponse;
     return {
-      results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
-        // Server returns `id` (u64), map to nodeId with precision handling
-        nodeId: this.parseNodeId(r.id ?? r.node_id ?? r.nodeId),
-        // Server returns `score`, map to vectorScore (primary score for SELECT queries)
-        vectorScore: (r.score ?? r.vector_score ?? r.vectorScore) as number | null,
-        // graph_score not returned by SELECT queries, only by future MATCH queries
-        graphScore: (r.graph_score ?? r.graphScore) as number | null,
-        // Use score as fusedScore for compatibility
-        fusedScore: (r.score ?? r.fused_score ?? r.fusedScore ?? 0) as number,
-        // payload maps to bindings for compatibility
-        bindings: (r.payload ?? r.bindings) as Record<string, unknown> ?? {},
-        columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
+      results: (selectData?.results ?? []).map((r) => ({
+        nodeId: this.parseNodeId(r.id),
+        vectorScore: r.score ?? null,
+        graphScore: null,
+        fusedScore: r.score ?? 0,
+        bindings: r.payload ?? {},
+        columnData: null,
       })),
       stats: {
-        executionTimeMs: rawData?.timing_ms ?? 0,
+        executionTimeMs: selectData?.timing_ms ?? 0,
         strategy: 'select',
-        scannedNodes: rawData?.rows_returned ?? 0,
+        scannedNodes: selectData?.rows_returned ?? 0,
       },
     };
   }
@@ -564,6 +698,64 @@ export class RestBackend implements IVelesDBBackend {
     }
 
     return response.data?.results ?? [];
+  }
+
+  /**
+   * Execute a MATCH graph traversal query.
+   * 
+   * Calls `POST /collections/{name}/match` on the server.
+   * 
+   * @param collection - Collection name (used in endpoint URL)
+   * @param queryString - VelesQL MATCH query string
+   * @param params - Query parameters (e.g., vector bindings)
+   * @param options - Optional vector and threshold for similarity matching
+   */
+  async matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<MatchQueryResponse> {
+    this.ensureInitialized();
+
+    const body: Record<string, unknown> = {
+      query: queryString,
+      params: params ?? {},
+    };
+
+    if (options?.vector) {
+      body.vector = options.vector instanceof Float32Array
+        ? Array.from(options.vector)
+        : options.vector;
+    }
+    if (options?.threshold !== undefined) {
+      body.threshold = options.threshold;
+    }
+
+    const response = await this.request<ServerMatchQueryResponse>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/match`,
+      body
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data;
+    return {
+      results: (data?.results ?? []).map(r => ({
+        bindings: r.bindings,
+        score: r.score ?? null,
+        depth: r.depth,
+        projected: r.projected ?? {},
+      })),
+      tookMs: data?.took_ms ?? 0,
+      count: data?.count ?? 0,
+    };
   }
 
   async isEmpty(collection: string): Promise<boolean> {
@@ -763,18 +955,18 @@ export class RestBackend implements IVelesDBBackend {
       throw new VelesDBError(response.error.message, response.error.code);
     }
 
-    const data = response.data!;
+    const data = response.data;
     return {
-      results: data.results.map(r => ({
+      results: (data?.results ?? []).map(r => ({
         targetId: r.target_id,
         depth: r.depth,
         path: r.path,
       })),
-      nextCursor: data.next_cursor ?? undefined,
-      hasMore: data.has_more,
+      nextCursor: data?.next_cursor ?? undefined,
+      hasMore: data?.has_more ?? false,
       stats: {
-        visited: data.stats.visited,
-        depthReached: data.stats.depth_reached,
+        visited: data?.stats?.visited ?? 0,
+        depthReached: data?.stats?.depth_reached ?? 0,
       },
     };
   }

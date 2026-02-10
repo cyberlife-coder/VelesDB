@@ -227,6 +227,10 @@ export interface QueryOptions {
   timeoutMs?: number;
   /** Enable streaming response */
   stream?: boolean;
+  /** Optional vector for MATCH queries with similarity matching (pass-through to matchQuery) */
+  vector?: number[] | Float32Array;
+  /** Similarity threshold for MATCH queries (pass-through to matchQuery) */
+  threshold?: number;
 }
 
 /** Query result from multi-model VelesQL query */
