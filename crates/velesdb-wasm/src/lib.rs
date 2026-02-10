@@ -1,19 +1,13 @@
-// WASM bindings have different conventions - relax pedantic/nursery lints for FFI boundary
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::missing_panics_doc)]
-#![allow(clippy::must_use_candidate)]
+// Reason: wasm_bindgen requires owned values at FFI boundary (JsValue, String, etc.)
 #![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::similar_names)]
+// Reason: WASM module naming follows JS conventions, not Rust module_name_repetitions
 #![allow(clippy::module_name_repetitions)]
-#![allow(clippy::unused_self)]
-#![allow(clippy::redundant_closure_for_method_calls)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::manual_let_else)]
+// Reason: #[must_use] is meaningless at the JS FFI boundary — JS ignores Rust attributes
+#![allow(clippy::must_use_candidate)]
+// Reason: #[wasm_bindgen] errors are returned as JsValue, not documented via Rust doc conventions
+#![allow(clippy::missing_errors_doc)]
+// Reason: #[wasm_bindgen] panics are caught by wasm_bindgen glue, not documented per-fn
+#![allow(clippy::missing_panics_doc)]
 
 //! `VelesDB` WASM - Vector search in the browser
 //!

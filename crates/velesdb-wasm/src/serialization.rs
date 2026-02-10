@@ -31,6 +31,7 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
 
     // Dimension
     // Reason: WASM vector dimensions are always < 100K (model constraints), safely < u32::MAX
+    #[allow(clippy::cast_possible_truncation)]
     let dim_u32 = store.dimension as u32;
     bytes.extend_from_slice(&dim_u32.to_le_bytes());
 
@@ -86,6 +87,7 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
 
     // Read count
     // Reason: WASM memory limits prevent storing > usize::MAX vectors
+    #[allow(clippy::cast_possible_truncation)]
     let count = u64::from_le_bytes([
         bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17],
     ]) as usize;
