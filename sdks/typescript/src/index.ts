@@ -27,4 +27,4 @@ export { VelesDB } from './client';
 export { WasmBackend } from './backends/wasm';
 export { RestBackend } from './backends/rest';
 export { VelesQLBuilder, velesql } from './query-builder';
-export type { RelDirection, RelOptions, NearVectorOptions, FusionOptions } from './query-builder';
+export type { RelDirection, RelOptions, NearVectorOptions, SimilarityOptions, FusionOptions } from './query-builder';
