@@ -59,7 +59,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database
     let db = Database::open(&args.data_dir)?;
-    let state = Arc::new(AppState { db });
+
+    // Read optional API key for authentication
+    let api_key = std::env::var("VELESDB_API_KEY").ok();
+    if api_key.is_some() {
+        tracing::info!("Authentication: enabled (VELESDB_API_KEY is set)");
+    } else {
+        tracing::warn!("Authentication: DISABLED (dev mode). Set VELESDB_API_KEY to enable.");
+    }
+
+    let state = Arc::new(AppState { db, api_key });
 
     tracing::info!(
         "Graph EdgeStore is in-memory (shared with Collection). \
@@ -116,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
     // FLAG-3 FIX: Add metrics endpoint conditionally (EPIC-016/US-034,035)
     #[cfg(feature = "prometheus")]
@@ -128,9 +137,13 @@ async fn main() -> anyhow::Result<()> {
     // Swagger UI (stateless router)
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
 
-    // Build main app with Swagger UI
+    // Build main app with Swagger UI + auth middleware
     let app = api_router
         .merge(Router::<()>::new().merge(swagger_ui))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            velesdb_server::auth_middleware,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 

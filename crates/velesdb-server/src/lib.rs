@@ -39,6 +39,9 @@ pub use handlers::{
     upsert_points,
 };
 
+// Auth middleware
+pub use handlers::auth::auth_middleware;
+
 // Graph handlers — all delegate to Collection methods from velesdb-core
 pub use handlers::graph::{
     add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
@@ -134,6 +137,8 @@ pub struct ApiDoc;
 pub struct AppState {
     /// The `VelesDB` database instance.
     pub db: Database,
+    /// Optional API key for authentication. `None` = dev mode (no auth).
+    pub api_key: Option<String>,
 }
 
 // ============================================================================

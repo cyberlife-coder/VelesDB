@@ -17,7 +17,7 @@ use velesdb_server::{
 /// Helper to create test app with all routes (graph routes share AppState)
 pub fn create_test_app(temp_dir: &TempDir) -> Router {
     let db = Database::open(temp_dir.path()).expect("Failed to open database");
-    let state = Arc::new(AppState { db });
+    let state = Arc::new(AppState { db, api_key: None });
 
     Router::new()
         .route("/health", get(health_check))

@@ -34,6 +34,8 @@ pub use match_query::match_query;
 pub use query::{explain, query};
 pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
 
+pub mod auth;
+
 // Graph handlers: re-exported via lib.rs directly from handlers::graph
 
 // Metrics handlers - conditional on prometheus feature
