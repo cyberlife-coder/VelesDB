@@ -15,7 +15,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::helpers::{get_collection_or_404, internal_error};
+use super::helpers::{
+    get_collection_or_404, internal_error, validate_query_non_empty, validate_top_k,
+};
 
 /// Search for similar vectors.
 #[utoipa::path(
@@ -41,6 +43,10 @@ pub async fn search(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(e) = validate_top_k(req.top_k) {
+        return e.into_response();
+    }
 
     let effective_ef = req
         .ef_search
@@ -126,6 +132,13 @@ pub async fn batch_search(
         Err(e) => return e.into_response(),
     };
 
+    // Validate top_k from first search in batch
+    if let Some(first) = req.searches.first() {
+        if let Err(e) = validate_top_k(first.top_k) {
+            return e.into_response();
+        }
+    }
+
     // Parse filters before spawn_blocking
     let filters: Vec<Option<velesdb_core::Filter>> = req
         .searches
@@ -192,6 +205,10 @@ pub async fn multi_query_search(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(e) = validate_top_k(req.top_k) {
+        return e.into_response();
+    }
 
     // Parse strategy before spawn_blocking (validation only)
     let strategy = match req.strategy.to_lowercase().as_str() {
@@ -274,6 +291,13 @@ pub async fn text_search(
         Err(e) => return e.into_response(),
     };
 
+    if let Err(e) = validate_top_k(req.top_k) {
+        return e.into_response();
+    }
+    if let Err(e) = validate_query_non_empty(&req.query) {
+        return e.into_response();
+    }
+
     // Parse filter before spawn_blocking
     let filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = req.filter {
         match serde_json::from_value(filter_json.clone()) {
@@ -342,6 +366,13 @@ pub async fn hybrid_search(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(e) = validate_top_k(req.top_k) {
+        return e.into_response();
+    }
+    if let Err(e) = validate_query_non_empty(&req.query) {
+        return e.into_response();
+    }
 
     // Parse filter before spawn_blocking
     let filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = req.filter {

@@ -49,6 +49,46 @@ pub fn internal_error(
     )
 }
 
+/// Maximum allowed value for `top_k` to prevent excessive memory allocation.
+const MAX_TOP_K: usize = 10_000;
+
+/// Build a 400 Bad Request response with the given message.
+pub fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse { error: msg.into() }),
+    )
+}
+
+/// Validate `top_k` is within bounds (1..=10000).
+///
+/// # Errors
+///
+/// Returns `(400, ErrorResponse)` if `top_k` is 0 or exceeds `MAX_TOP_K`.
+pub fn validate_top_k(top_k: usize) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if top_k == 0 {
+        return Err(bad_request("top_k must be at least 1"));
+    }
+    if top_k > MAX_TOP_K {
+        return Err(bad_request(format!(
+            "top_k must be at most {MAX_TOP_K}, got {top_k}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that a query string is not empty or whitespace-only.
+///
+/// # Errors
+///
+/// Returns `(400, ErrorResponse)` if the query is blank.
+pub fn validate_query_non_empty(query: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if query.trim().is_empty() {
+        return Err(bad_request("query must not be empty"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +108,50 @@ mod tests {
             Ok(_) => panic!("Expected 404 error for nonexistent collection"),
         }
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn test_validate_top_k_zero_rejected() {
+        let result = validate_top_k(0);
+        match result {
+            Err((status, Json(body))) => {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert!(body.error.contains("at least 1"));
+            }
+            Ok(()) => panic!("Expected error for top_k=0"),
+        }
+    }
+
+    #[test]
+    fn test_validate_top_k_exceeds_max() {
+        let result = validate_top_k(10_001);
+        match result {
+            Err((status, Json(body))) => {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert!(body.error.contains("10000"));
+            }
+            Ok(()) => panic!("Expected error for top_k > 10000"),
+        }
+    }
+
+    #[test]
+    fn test_validate_top_k_valid() {
+        assert!(validate_top_k(1).is_ok());
+        assert!(validate_top_k(100).is_ok());
+        assert!(validate_top_k(10_000).is_ok());
+    }
+
+    #[test]
+    fn test_validate_query_empty_rejected() {
+        assert!(validate_query_non_empty("").is_err());
+        assert!(validate_query_non_empty("   ").is_err());
+        assert!(validate_query_non_empty("\t\n").is_err());
+    }
+
+    #[test]
+    fn test_validate_query_non_empty_valid() {
+        assert!(validate_query_non_empty("hello").is_ok());
+        assert!(validate_query_non_empty(" a ").is_ok());
     }
 
     #[test]
