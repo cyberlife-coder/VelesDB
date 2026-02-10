@@ -54,7 +54,7 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 |-------|--------|-------|----------|
 | 1 - WASM Rebinding | ⬜ Blocked | BEG-01,05,06, W-01→03 | 🚨 Architecture |
 | 2 - Server Binding | ⬜ Blocked | S-01→04, BEG-05 | 🚨 Security |
-| 3 - SDK Fixes | ✅ Complete (01-06 all done) | T-01→03, BEG-07 + full parity | 🐛 Contracts |
+| 3 - SDK Fixes | ✅ Complete (01-07 all done, 25/25 endpoints) | T-01→03, BEG-07 + full parity | 🐛 Contracts |
 | 4 - Python Integrations | ⬜ Blocked | I-01→03, BEG-02→04 | 🐛 Contracts |
 | 5 - GPU + Ecosystem CI | ⬜ Blocked | I-04, CI-04 | ⚠️ Polish |
 
@@ -95,4 +95,4 @@ cargo build --release
 ---
 
 *State file last updated: 2026-02-10*  
-*Status: v3 Phase 3 COMPLETE (Plans 01-06 all done). 223 tests, 7 files. Next: Phase 4 (Python) or v2. v2 deferred.*
+*Status: v3 Phase 3 COMPLETE (Plans 01-07 all done). 233 TS tests + 42 server tests. 25/25 endpoint parity. Next: Phase 4 (Python) or v2.*
