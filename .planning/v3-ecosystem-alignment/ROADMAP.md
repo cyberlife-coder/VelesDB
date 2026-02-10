@@ -163,7 +163,7 @@
 |-------|--------|-------|----------|
 | 1 - WASM Rebinding | ⬜ Pending | BEG-01,05,06, W-01→03 | 🚨 Architecture |
 | 2 - Server Binding | ✅ Complete | S-01→04, BEG-05 | 🚨 Security |
-| 2.1 - Server Docs | 🔄 In Progress | Documentation gaps | 📚 Documentation |
+| 2.1 - Server Docs | ✅ Complete | Documentation gaps | 📚 Documentation |
 | 3 - SDK Fixes | ⬜ Pending | T-01→03, BEG-07 | 🐛 Contracts |
 | 4 - Python Integrations | ⬜ Pending | I-01→03, BEG-02→04 | 🐛 Contracts |
 | 5 - GPU + Ecosystem CI | ⬜ Pending | I-04, CI-04 | ⚠️ Polish |
