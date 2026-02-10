@@ -13,7 +13,7 @@ use velesdb_core::{Database, Point};
 /// Creates a Database with two collections for compound query scenarios:
 /// - "active_docs": IDs {1,2,3} — currently active documents
 /// - "archived_docs": IDs {2,3,4,5} — archived documents
-/// Overlap on IDs 2 and 3 exercises dedup/intersect/except.
+///   Overlap on IDs 2 and 3 exercises dedup/intersect/except.
 fn setup_compound_db() -> (Database, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");

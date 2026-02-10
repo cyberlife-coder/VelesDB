@@ -39,7 +39,7 @@ fn setup_match_test_collection() -> (TempDir, crate::Collection) {
                 "price": 89,
                 "in_stock": true,
                 "description": "Premium wireless noise-cancelling headphones",
-                "updated_at": 1700000000_i64
+                "updated_at": 1_700_000_000_i64
             })),
         ),
         Point::new(
@@ -52,7 +52,7 @@ fn setup_match_test_collection() -> (TempDir, crate::Collection) {
                 "price": 45,
                 "in_stock": true,
                 "description": "Portable bluetooth speaker with bass boost",
-                "updated_at": 1700100000_i64
+                "updated_at": 1_700_100_000_i64
             })),
         ),
         Point::new(
@@ -65,7 +65,7 @@ fn setup_match_test_collection() -> (TempDir, crate::Collection) {
                 "price": 35,
                 "in_stock": false,
                 "description": null,
-                "updated_at": 1699900000_i64
+                "updated_at": 1_699_900_000_i64
             })),
         ),
         Point::new(
@@ -77,7 +77,7 @@ fn setup_match_test_collection() -> (TempDir, crate::Collection) {
                 "category": "electronics",
                 "price": 15,
                 "in_stock": true,
-                "updated_at": 1700200000_i64
+                "updated_at": 1_700_200_000_i64
             })),
         ),
     ];

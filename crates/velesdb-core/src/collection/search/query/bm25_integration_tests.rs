@@ -135,11 +135,11 @@ fn make_filter(column: &str, value: &str) -> Condition {
     })
 }
 
-fn make_vector_params(name: &str, vec: &[f32]) -> HashMap<String, serde_json::Value> {
+fn make_vector_params(name: &str, values: &[f32]) -> HashMap<String, serde_json::Value> {
     let mut params = HashMap::new();
     params.insert(
         name.to_string(),
-        serde_json::Value::Array(vec.iter().map(|&v| json!(v)).collect()),
+        serde_json::Value::Array(values.iter().map(|&v| json!(v)).collect()),
     );
     params
 }
@@ -178,7 +178,7 @@ fn test_velesql_near_and_match() {
     let cond = Condition::And(Box::new(near), Box::new(text));
 
     let query = make_query(Some(cond), Some(10));
-    let params = make_vector_params("v", vec![1.0, 0.0, 0.0, 0.0]);
+    let params = make_vector_params("v", &[1.0, 0.0, 0.0, 0.0]);
 
     let results = collection
         .execute_query(&query, &params)
@@ -234,11 +234,11 @@ fn test_velesql_near_match_filter() {
     let cond = Condition::And(Box::new(near_and_text), Box::new(filter));
 
     let query = make_query(Some(cond), Some(10));
-    let params = make_vector_params("v", vec![1.0, 0.0, 0.0, 0.0]);
+    let params = make_vector_params("v", &[1.0, 0.0, 0.0, 0.0]);
 
     let results = collection
         .execute_query(&query, &params)
-        .expect("NEAR + MATCH + filter should work");
+        .expect("BM25+NEAR+filter query should succeed");
 
     // All results should be category=tech
     for r in &results {

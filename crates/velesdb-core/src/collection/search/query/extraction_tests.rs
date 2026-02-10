@@ -301,23 +301,17 @@ fn test_order_by_property_path_succeeds() {
         .projected
         .insert("n.name".to_string(), serde_json::json!("Apple"));
 
-    let mut results = vec![result1, result2];
+    let mut items = vec![result1, result2];
 
     // VP-006: ORDER BY property path should now succeed
-    let result = Collection::order_match_results(&mut results, "n.name", false);
+    let result = Collection::order_match_results(&mut items, "n.name", false);
     assert!(
         result.is_ok(),
         "ORDER BY property path should succeed (VP-006)"
     );
     // ASC: "Apple" < "Zebra"
-    assert_eq!(
-        results[0].node_id, 2,
-        "Apple should come first in ASC order"
-    );
-    assert_eq!(
-        results[1].node_id, 1,
-        "Zebra should come second in ASC order"
-    );
+    assert_eq!(items[0].node_id, 2, "Apple should come first in ASC order");
+    assert_eq!(items[1].node_id, 1, "Zebra should come second in ASC order");
 }
 
 #[test]

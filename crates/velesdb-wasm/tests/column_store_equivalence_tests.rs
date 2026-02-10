@@ -64,8 +64,8 @@ fn test_schema_equivalence() {
 
     let mut names_a: Vec<&str> = a.column_names().collect();
     let mut names_b: Vec<&str> = b.column_names().collect();
-    names_a.sort();
-    names_b.sort();
+    names_a.sort_unstable();
+    names_b.sort_unstable();
     assert_eq!(names_a, names_b);
 }
 
@@ -362,7 +362,7 @@ fn test_recall_equivalence() {
 
     // Verify symmetry: same inputs always produce same outputs
     let recall2 = metrics::recall_at_k(&ground_truth, &results);
-    assert_eq!(recall, recall2);
+    assert!((recall - recall2).abs() < f64::EPSILON);
 }
 
 /// 10. nDCG equivalence — WASM nDCG == core nDCG for same data.
@@ -388,7 +388,7 @@ fn test_ndcg_equivalence() {
 
     // Verify determinism
     let ndcg2 = metrics::ndcg_at_k(&relevance_scores, 6);
-    assert_eq!(ndcg, ndcg2);
+    assert!((ndcg - ndcg2).abs() < f64::EPSILON);
 }
 
 /// 11. f16 roundtrip equivalence — WASM f16 roundtrip == core f16 roundtrip.
@@ -396,7 +396,7 @@ fn test_ndcg_equivalence() {
 fn test_f16_roundtrip_equivalence() {
     use velesdb_core::half_precision::{VectorData, VectorPrecision};
 
-    let original: Vec<f32> = vec![1.0, -0.5, 0.0, 3.14, -2.71, 100.0, 0.001];
+    let original: Vec<f32> = vec![1.0, -0.5, 0.0, 3.141, -2.71, 100.0, 0.001];
 
     // f16 roundtrip
     let f16_data = VectorData::from_f32_slice(&original, VectorPrecision::F16);
