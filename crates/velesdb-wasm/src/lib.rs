@@ -37,9 +37,13 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod agent;
+mod column_store;
+mod column_store_persistence;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
+mod half_precision;
+mod metrics;
 mod persistence;
 mod serialization;
 mod store_get;
@@ -51,6 +55,7 @@ mod vector_ops;
 mod velesql;
 
 pub use agent::SemanticMemory;
+pub use column_store::ColumnStoreWasm;
 pub use graph::{GraphEdge, GraphNode, GraphStore};
 pub use velesdb_core::DistanceMetric;
 

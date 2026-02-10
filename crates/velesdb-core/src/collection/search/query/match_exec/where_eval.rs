@@ -35,8 +35,9 @@ impl Collection {
                     return Ok(false);
                 };
 
-                // Resolve parameter if needed
-                let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
+                // VP-002: Resolve subquery first, then parameters
+                let pre_resolved = self.resolve_subquery_value(&cmp.value, params, None)?;
+                let resolved_value = Self::resolve_where_param(&pre_resolved, params)?;
 
                 // Compare based on operator
                 Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
@@ -64,9 +65,38 @@ impl Collection {
                 // EPIC-052 US-007: Evaluate similarity condition in WHERE clause
                 self.evaluate_similarity_condition(node_id, sim, params)
             }
-            // For other condition types (VectorSearch, VectorFusedSearch, etc.),
-            // default to true as they are handled separately in execute_match_with_similarity
-            _ => Ok(true),
+            Condition::Like(ref lk) => {
+                // VP-001: LIKE/ILIKE evaluation in MATCH WHERE
+                self.evaluate_like_condition(node_id, lk)
+            }
+            Condition::Between(ref btw) => {
+                // VP-001: BETWEEN evaluation in MATCH WHERE
+                self.evaluate_between_condition(node_id, btw)
+            }
+            Condition::In(ref inc) => {
+                // VP-001: IN evaluation in MATCH WHERE
+                self.evaluate_in_condition(node_id, inc)
+            }
+            Condition::IsNull(ref isn) => {
+                // VP-001: IS NULL / IS NOT NULL evaluation in MATCH WHERE
+                self.evaluate_is_null_condition(node_id, isn)
+            }
+            Condition::Match(ref m) => {
+                // VP-001: Full-text MATCH evaluation in MATCH WHERE
+                self.evaluate_match_condition(node_id, m)
+            }
+            // VectorSearch is handled at a higher level by execute_match_with_similarity.
+            Condition::VectorSearch(_) => Ok(true),
+            // VP-012 BUG-FIX: NEAR_FUSED in MATCH WHERE must return Error::Config.
+            // Previously silently passed as Ok(true), which is incorrect —
+            // NEAR_FUSED requires multi_query_search() which is only available
+            // through the SELECT execute_query() path, not MATCH.
+            Condition::VectorFusedSearch(_) => Err(Error::Config(
+                "NEAR_FUSED is not supported in MATCH WHERE clauses. \
+                 Use NEAR_FUSED in SELECT queries instead: \
+                 SELECT * FROM collection WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'"
+                    .to_string(),
+            )),
         }
     }
 
@@ -211,6 +241,8 @@ impl Collection {
                     }
                 })
             }
+            // VP-003: Resolve temporal expression to epoch seconds for comparison
+            Value::Temporal(t) => Ok(Value::Integer(t.to_epoch_seconds())),
             // Non-parameter values pass through unchanged
             other => Ok(other.clone()),
         }
@@ -276,4 +308,299 @@ impl Collection {
             _ => Ok(false),
         }
     }
+
+    // ========================================================================
+    // VP-004: Binding-aware WHERE evaluation for multi-hop MATCH
+    // ========================================================================
+
+    /// Evaluates a WHERE condition using bindings from multi-hop traversal (VP-004).
+    ///
+    /// For alias-qualified columns like `c.name`:
+    /// 1. Splits on first dot → (alias, property)
+    /// 2. Looks up alias in bindings → node_id
+    /// 3. Fetches payload for that node → checks property
+    ///
+    /// For unqualified columns (no dot), falls back to checking
+    /// against the last bound node (backward compatible with single-hop).
+    pub(crate) fn evaluate_where_with_bindings(
+        &self,
+        bindings: &HashMap<String, u64>,
+        condition: &crate::velesql::Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        use crate::velesql::Condition;
+
+        match condition {
+            Condition::Comparison(cmp) => {
+                // Check if column is alias-qualified (e.g., "c.name")
+                let actual_value = if let Some(dot_pos) = cmp.column.find('.') {
+                    let alias = &cmp.column[..dot_pos];
+                    let property = &cmp.column[dot_pos + 1..];
+
+                    // Resolve alias from bindings
+                    let Some(&node_id) = bindings.get(alias) else {
+                        return Ok(false);
+                    };
+
+                    let payload_storage = self.payload_storage.read();
+                    let payload = payload_storage.retrieve(node_id).ok().flatten();
+                    let Some(payload) = payload else {
+                        return Ok(false);
+                    };
+
+                    payload.get(property).cloned()
+                } else {
+                    // Unqualified column: try all bindings (last match wins for compat)
+                    let payload_storage = self.payload_storage.read();
+                    let mut found = None;
+                    for &node_id in bindings.values() {
+                        if let Some(payload) = payload_storage.retrieve(node_id).ok().flatten() {
+                            if let Some(val) = payload.get(&cmp.column) {
+                                found = Some(val.clone());
+                            }
+                        }
+                    }
+                    found
+                };
+
+                let Some(actual) = actual_value else {
+                    return Ok(false);
+                };
+
+                // Resolve subquery and parameter values
+                let pre_resolved = self.resolve_subquery_value(&cmp.value, params, None)?;
+                let resolved_value = Self::resolve_where_param(&pre_resolved, params)?;
+
+                Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
+            }
+            Condition::And(left, right) => {
+                let left_result = self.evaluate_where_with_bindings(bindings, left, params)?;
+                if !left_result {
+                    return Ok(false);
+                }
+                self.evaluate_where_with_bindings(bindings, right, params)
+            }
+            Condition::Or(left, right) => {
+                let left_result = self.evaluate_where_with_bindings(bindings, left, params)?;
+                if left_result {
+                    return Ok(true);
+                }
+                self.evaluate_where_with_bindings(bindings, right, params)
+            }
+            Condition::Not(inner) => {
+                let inner_result = self.evaluate_where_with_bindings(bindings, inner, params)?;
+                Ok(!inner_result)
+            }
+            Condition::Group(inner) => self.evaluate_where_with_bindings(bindings, inner, params),
+            // For conditions without alias support, delegate to last bound node
+            // Reason: LIKE/BETWEEN/IN/IsNull/Match/Similarity use column names
+            // directly from payload — fall back to evaluating against each bound node.
+            other => {
+                // Try each bound node until one matches
+                for &node_id in bindings.values() {
+                    if self.evaluate_where_condition(node_id, other, params)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    // ========================================================================
+    // VP-001: MATCH WHERE condition evaluators for LIKE, BETWEEN, IN, IsNull, Match
+    // ========================================================================
+
+    /// Evaluates a LIKE/ILIKE condition against a node's payload (VP-001).
+    #[allow(clippy::unnecessary_wraps)]
+    fn evaluate_like_condition(
+        &self,
+        node_id: u64,
+        lk: &crate::velesql::LikeCondition,
+    ) -> Result<bool> {
+        let payload_storage = self.payload_storage.read();
+        let payload = payload_storage.retrieve(node_id).ok().flatten();
+
+        let Some(payload) = payload else {
+            return Ok(false);
+        };
+
+        let Some(actual) = payload.get(&lk.column) else {
+            return Ok(false);
+        };
+
+        let Some(text) = actual.as_str() else {
+            return Ok(false);
+        };
+
+        Ok(like_match(text, &lk.pattern, lk.case_insensitive))
+    }
+
+    /// Evaluates a BETWEEN condition against a node's payload (VP-001).
+    #[allow(clippy::unnecessary_wraps)]
+    fn evaluate_between_condition(
+        &self,
+        node_id: u64,
+        btw: &crate::velesql::BetweenCondition,
+    ) -> Result<bool> {
+        let payload_storage = self.payload_storage.read();
+        let payload = payload_storage.retrieve(node_id).ok().flatten();
+
+        let Some(payload) = payload else {
+            return Ok(false);
+        };
+
+        let Some(actual) = payload.get(&btw.column) else {
+            return Ok(false);
+        };
+
+        // Reason: BETWEEN is inclusive on both ends (SQL standard)
+        let gte_low = Self::evaluate_comparison(crate::velesql::CompareOp::Gte, actual, &btw.low)?;
+        let lte_high =
+            Self::evaluate_comparison(crate::velesql::CompareOp::Lte, actual, &btw.high)?;
+
+        Ok(gte_low && lte_high)
+    }
+
+    /// Evaluates an IN condition against a node's payload (VP-001).
+    #[allow(clippy::unnecessary_wraps)]
+    fn evaluate_in_condition(
+        &self,
+        node_id: u64,
+        inc: &crate::velesql::InCondition,
+    ) -> Result<bool> {
+        let payload_storage = self.payload_storage.read();
+        let payload = payload_storage.retrieve(node_id).ok().flatten();
+
+        let Some(payload) = payload else {
+            return Ok(false);
+        };
+
+        let Some(actual) = payload.get(&inc.column) else {
+            return Ok(false);
+        };
+
+        // Check if actual value matches any value in the IN list
+        for value in &inc.values {
+            if Self::evaluate_comparison(crate::velesql::CompareOp::Eq, actual, value)? {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Evaluates an IS NULL / IS NOT NULL condition against a node's payload (VP-001).
+    #[allow(clippy::unnecessary_wraps)]
+    fn evaluate_is_null_condition(
+        &self,
+        node_id: u64,
+        isn: &crate::velesql::IsNullCondition,
+    ) -> Result<bool> {
+        let payload_storage = self.payload_storage.read();
+        let payload = payload_storage.retrieve(node_id).ok().flatten();
+
+        let Some(payload) = payload else {
+            // No payload at all: all fields are effectively NULL
+            return Ok(isn.is_null);
+        };
+
+        let field_value = payload.get(&isn.column);
+
+        let is_null = match field_value {
+            // Missing field or explicit null = NULL
+            None | Some(serde_json::Value::Null) => true,
+            Some(_) => false,
+        };
+
+        Ok(if isn.is_null { is_null } else { !is_null })
+    }
+
+    /// Evaluates a full-text MATCH condition against a node's payload (VP-001).
+    ///
+    /// Uses substring containment check (case-sensitive).
+    #[allow(clippy::unnecessary_wraps)]
+    fn evaluate_match_condition(
+        &self,
+        node_id: u64,
+        m: &crate::velesql::MatchCondition,
+    ) -> Result<bool> {
+        let payload_storage = self.payload_storage.read();
+        let payload = payload_storage.retrieve(node_id).ok().flatten();
+
+        let Some(payload) = payload else {
+            return Ok(false);
+        };
+
+        let Some(actual) = payload.get(&m.column) else {
+            return Ok(false);
+        };
+
+        let Some(text) = actual.as_str() else {
+            return Ok(false);
+        };
+
+        // Reason: Simple substring containment for MATCH — consistent with
+        // the filter::Condition::Contains behavior used in SELECT path.
+        Ok(text.contains(&m.query))
+    }
+}
+
+// =============================================================================
+// SQL LIKE pattern matching (VP-001)
+// =============================================================================
+
+/// SQL LIKE pattern matching implementation for MATCH WHERE evaluation.
+///
+/// Supports:
+/// - `%` matches zero or more characters
+/// - `_` matches exactly one character
+fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
+    let (text, pattern) = if case_insensitive {
+        (text.to_lowercase(), pattern.to_lowercase())
+    } else {
+        (text.to_string(), pattern.to_string())
+    };
+
+    like_match_impl(text.as_bytes(), pattern.as_bytes())
+}
+
+/// Recursive LIKE matching using dynamic programming approach.
+fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
+    let m = text.len();
+    let n = pattern.len();
+
+    // dp[i][j] = true if text[0..i] matches pattern[0..j]
+    let mut dp = vec![vec![false; n + 1]; m + 1];
+    dp[0][0] = true;
+
+    // Handle leading % in pattern
+    for j in 1..=n {
+        if pattern[j - 1] == b'%' {
+            dp[0][j] = dp[0][j - 1];
+        } else {
+            break;
+        }
+    }
+
+    for i in 1..=m {
+        for j in 1..=n {
+            match pattern[j - 1] {
+                b'%' => {
+                    // % matches zero chars (dp[i][j-1]) or one+ chars (dp[i-1][j])
+                    dp[i][j] = dp[i][j - 1] || dp[i - 1][j];
+                }
+                b'_' => {
+                    // _ matches exactly one character
+                    dp[i][j] = dp[i - 1][j - 1];
+                }
+                c => {
+                    // Exact character match
+                    dp[i][j] = dp[i - 1][j - 1] && text[i - 1] == c;
+                }
+            }
+        }
+    }
+
+    dp[m][n]
 }

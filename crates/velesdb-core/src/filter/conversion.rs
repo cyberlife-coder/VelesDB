@@ -21,8 +21,11 @@ impl From<crate::velesql::Condition> for Condition {
                         Value::Number(t.to_epoch_seconds().into())
                     }
                     crate::velesql::Value::Subquery(_) => {
-                        // Subqueries need runtime evaluation - return Null as placeholder
-                        // Actual execution happens in the query executor (EPIC-039)
+                        // VP-002: Subqueries should be resolved before reaching filter conversion.
+                        // If we get here, resolve_subqueries_in_condition was not called.
+                        tracing::warn!(
+                            "Subquery reached filter conversion without resolution — this is a bug"
+                        );
                         Value::Null
                     }
                 };
@@ -63,7 +66,8 @@ impl From<crate::velesql::Condition> for Condition {
                             Value::Number(t.to_epoch_seconds().into())
                         }
                         crate::velesql::Value::Subquery(_) => {
-                            // Subqueries in IN clause need runtime evaluation
+                            // VP-002: Subqueries should be resolved before reaching filter conversion.
+                            tracing::warn!("Subquery in IN clause reached filter conversion without resolution");
                             Value::Null
                         }
                     })

@@ -5,8 +5,8 @@
 //! - Weighted fusion for score-based merging
 //! - Parallel and sequential execution strategies
 
-#![allow(dead_code)]
-// Used by tests - will be integrated into main query execution
+// VP-010: Functions now actively used via re-exports in velesql/mod.rs
+// and wired into cross-store query planner integration.
 
 // SAFETY: Numeric casts in result fusion are intentional:
 // - usize->f32 for rank calculations: ranks are small (< 1M results)
@@ -31,18 +31,6 @@ impl ScoredResult {
     pub fn new(id: u64, score: f32) -> Self {
         Self { id, score }
     }
-}
-
-/// Fusion strategy for combining search results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FusionStrategy {
-    /// Reciprocal Rank Fusion - recommended default.
-    #[default]
-    Rrf,
-    /// Weighted sum of normalized scores.
-    WeightedSum,
-    /// Take maximum score from either source.
-    Maximum,
 }
 
 /// Configuration for RRF fusion.

@@ -76,6 +76,16 @@ impl ParseError {
             format!("Missing parameter '${p}'"),
         )
     }
+
+    /// Creates an invalid value error (e.g. unparseable numeric literal).
+    #[must_use]
+    pub fn invalid_value(
+        position: usize,
+        fragment: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::new(ParseErrorKind::InvalidValue, position, fragment, reason)
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -109,6 +119,8 @@ pub enum ParseErrorKind {
     MissingParameter,
     /// Type mismatch (E006).
     TypeMismatch,
+    /// Invalid value — unparseable numeric or out-of-range literal (E007).
+    InvalidValue,
 }
 
 impl ParseErrorKind {
@@ -122,6 +134,7 @@ impl ParseErrorKind {
             Self::DimensionMismatch => "E004",
             Self::MissingParameter => "E005",
             Self::TypeMismatch => "E006",
+            Self::InvalidValue => "E007",
         }
     }
 }
@@ -185,6 +198,18 @@ mod tests {
         assert_eq!(ParseErrorKind::DimensionMismatch.code(), "E004");
         assert_eq!(ParseErrorKind::MissingParameter.code(), "E005");
         assert_eq!(ParseErrorKind::TypeMismatch.code(), "E006");
+        assert_eq!(ParseErrorKind::InvalidValue.code(), "E007");
+    }
+
+    #[test]
+    fn test_parse_error_invalid_value() {
+        let err = ParseError::invalid_value(15, "abc", "Expected numeric value, got 'abc'");
+        assert_eq!(err.kind, ParseErrorKind::InvalidValue);
+        assert_eq!(err.position, 15);
+        assert_eq!(err.fragment, "abc");
+        assert!(err.message.contains("Expected numeric value"));
+        let display = format!("{err}");
+        assert!(display.contains("E007"));
     }
 
     #[test]

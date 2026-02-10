@@ -6953,6 +6953,7 @@ dependencies = [
 name = "velesdb-wasm"
 version = "1.4.1"
 dependencies = [
+ "half",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",

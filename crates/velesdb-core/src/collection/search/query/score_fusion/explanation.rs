@@ -2,7 +2,7 @@
 //!
 //! Provides detailed human-readable explanations of score computations.
 
-use super::{FusionStrategy, ScoreBreakdown};
+use super::{ScoreBreakdown, ScoreCombineStrategy};
 use serde::{Deserialize, Serialize};
 
 /// Detailed explanation of a score's components.
@@ -37,7 +37,7 @@ pub struct ComponentExplanation {
 impl ScoreBreakdown {
     /// Generates a detailed explanation of the score breakdown.
     #[must_use]
-    pub fn explain(&self, strategy: &FusionStrategy) -> ScoreExplanation {
+    pub fn explain(&self, strategy: &ScoreCombineStrategy) -> ScoreExplanation {
         let mut components = Vec::new();
         let total_components = self.count_components();
         let default_weight = if total_components > 0 {

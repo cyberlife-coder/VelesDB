@@ -53,43 +53,55 @@ pub async fn query(
         }
     };
 
-    let collection_name = parsed.select.from.clone();
-    let collection = match get_collection_or_404(&state, &collection_name) {
-        Ok(c) => c,
-        Err(e) => return e.into_response(),
-    };
-
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
     let is_aggregation = matches!(
         &parsed.select.columns,
         SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
     ) || parsed.select.group_by.is_some();
 
-    let params = req.params;
+    if is_aggregation {
+        // Aggregation still uses collection-level executor
+        let collection = match get_collection_or_404(&state, &parsed.select.from) {
+            Ok(c) => c,
+            Err(e) => return e.into_response(),
+        };
 
-    // Execute in blocking thread (CPU-bound)
+        let params = req.params;
+        let result = tokio::task::spawn_blocking(move || {
+            collection.execute_aggregate(&parsed, &params)
+        })
+        .await;
+
+        let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+        return match result {
+            Ok(Ok(r)) => Json(AggregationResponse {
+                result: r,
+                timing_ms,
+            })
+            .into_response(),
+            Ok(Err(e)) => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response(),
+            Err(e) => internal_error("Query aggregation", &e).into_response(),
+        };
+    }
+
+    // Standard query: use Database::execute_query() for cross-collection JOIN + compound support
+    let params = req.params;
     let result = tokio::task::spawn_blocking(move || {
-        if is_aggregation {
-            collection
-                .execute_aggregate(&parsed, &params)
-                .map(QueryResult::Aggregation)
-        } else {
-            collection
-                .execute_query(&parsed, &params)
-                .map(QueryResult::Rows)
-        }
+        state.db.execute_query(&parsed, &params)
     })
     .await;
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     match result {
-        Ok(Ok(QueryResult::Aggregation(agg))) => Json(AggregationResponse {
-            result: agg,
-            timing_ms,
-        })
-        .into_response(),
-        Ok(Ok(QueryResult::Rows(results))) => {
+        Ok(Ok(results)) => {
             let rows_returned = results.len();
             Json(QueryResponse {
                 results: results
@@ -105,21 +117,22 @@ pub async fn query(
             })
             .into_response()
         }
-        Ok(Err(e)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Ok(Err(e)) => {
+            let status = if e.to_string().contains("not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (
+                status,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
         Err(e) => internal_error("Query", &e).into_response(),
     }
-}
-
-/// Internal enum to unify query result types from spawn_blocking.
-enum QueryResult {
-    Aggregation(serde_json::Value),
-    Rows(Vec<velesdb_core::SearchResult>),
 }
 
 /// Explain a VelesQL query without executing it (EPIC-058 US-002).

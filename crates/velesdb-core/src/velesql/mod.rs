@@ -104,7 +104,13 @@ pub use explain::{
     FilterPlan, FilterStrategy, IndexLookupPlan, IndexType, LimitPlan, OffsetPlan, PlanNode,
     QueryPlan, TableScanPlan, VectorSearchPlan,
 };
+#[cfg(test)]
+pub(crate) use hybrid::normalize_scores;
+pub use hybrid::{
+    fuse_maximum, fuse_rrf, fuse_weighted, intersect_results, RrfConfig, ScoredResult,
+    WeightedConfig,
+};
 pub use parser::match_clause;
 pub use parser::Parser;
-pub use planner::{ExecutionStrategy, QueryPlanner, QueryStats};
+pub use planner::{ExecutionStrategy, HybridExecutionPlan, QueryPlanner, QueryStats};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};

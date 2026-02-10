@@ -194,15 +194,38 @@ pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -
     // Compute norms using direct SIMD dispatch
     let query_norm = simd_native::norm_native(query);
 
-    // Dequantize to compute quantized vector norm (could be cached)
-    let reconstructed = quantized.to_f32();
-    let quantized_norm = simd_native::norm_native(&reconstructed);
+    // Reason: B-06 fix — compute quantized norm directly on int8 data (zero allocation).
+    // norm² = scale²·Σq² + 2·scale·offset·Σq + n·offset²
+    let range = quantized.max - quantized.min;
+    // Reason: cast_precision_loss is acceptable here — quantization is inherently
+    // approximate, and these sums (max ~255²×dim) fit comfortably in f32 mantissa
+    // for any practical vector dimension.
+    #[allow(clippy::cast_precision_loss)]
+    let quantized_norm = if range < f32::EPSILON {
+        // All values equal: norm = |min| * sqrt(n)
+        quantized.min.abs() * (quantized.data.len() as f32).sqrt()
+    } else {
+        let scale = range / 255.0;
+        let offset = quantized.min;
+        let n = quantized.data.len() as f32;
+        let sum_q_sq: u64 = quantized
+            .data
+            .iter()
+            .map(|&q| u64::from(q) * u64::from(q))
+            .sum();
+        let sum_q: u64 = quantized.data.iter().map(|&q| u64::from(q)).sum();
+        let norm_sq = scale * scale * sum_q_sq as f32
+            + 2.0 * scale * offset * sum_q as f32
+            + n * offset * offset;
+        // Clamp for numerical stability before sqrt
+        norm_sq.max(0.0).sqrt()
+    };
 
     if query_norm < f32::EPSILON || quantized_norm < f32::EPSILON {
         return 0.0;
     }
 
-    dot / (query_norm * quantized_norm)
+    (dot / (query_norm * quantized_norm)).clamp(-1.0, 1.0)
 }
 
 // =========================================================================
@@ -341,28 +364,35 @@ pub fn cosine_similarity_quantized_simd(query: &[f32], quantized: &QuantizedVect
     let query_norm = simd_native::norm_native(query);
     let query_norm_sq = query_norm * query_norm;
 
-    // Compute quantized norm (could be cached in QuantizedVector)
+    // Reason: B-06 fix — compute quantized norm² directly on int8 data (zero allocation).
+    // norm² = scale²·Σq² + 2·scale·offset·Σq + n·offset²
     let range = quantized.max - quantized.min;
-    let scale = if range < f32::EPSILON {
-        0.0
+    // Reason: cast_precision_loss is acceptable — quantization is approximate,
+    // and sums fit in f32 mantissa for practical dimensions.
+    #[allow(clippy::cast_precision_loss)]
+    let quantized_norm_sq = if range < f32::EPSILON {
+        let n = quantized.data.len() as f32;
+        quantized.min * quantized.min * n
     } else {
-        range / 255.0
+        let scale = range / 255.0;
+        let offset = quantized.min;
+        let n = quantized.data.len() as f32;
+        let sum_q_sq: u64 = quantized
+            .data
+            .iter()
+            .map(|&q| u64::from(q) * u64::from(q))
+            .sum();
+        let sum_q: u64 = quantized.data.iter().map(|&q| u64::from(q)).sum();
+        let norm_sq = scale * scale * sum_q_sq as f32
+            + 2.0 * scale * offset * sum_q as f32
+            + n * offset * offset;
+        norm_sq.max(0.0)
     };
-    let offset = quantized.min;
-
-    let quantized_norm_sq: f32 = quantized
-        .data
-        .iter()
-        .map(|&v| {
-            let dequant = f32::from(v) * scale + offset;
-            dequant * dequant
-        })
-        .sum();
 
     let denom = (query_norm_sq * quantized_norm_sq).sqrt();
     if denom < f32::EPSILON {
         return 0.0;
     }
 
-    dot / denom
+    (dot / denom).clamp(-1.0, 1.0)
 }

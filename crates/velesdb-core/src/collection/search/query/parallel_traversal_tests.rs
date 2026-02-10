@@ -458,3 +458,36 @@ fn test_sharded_traverser_num_shards() {
     let traverser = ShardedTraverser::new(8);
     assert_eq!(traverser.num_shards(), 8);
 }
+
+// --- M-03 Regression Test: DFS stops immediately at limit ---
+
+#[test]
+fn test_dfs_stops_at_limit() {
+    // Deep linear graph: 1→2→3→4→5→6→7→8→9→10
+    let mut graph: HashMap<u64, Vec<(u64, u64)>> = HashMap::new();
+    for i in 1..=9 {
+        graph.insert(i, vec![(i + 1, i * 10)]);
+    }
+    graph.insert(10, vec![]);
+
+    let traverser = ParallelTraverser::with_config(
+        ParallelConfig::new()
+            .with_max_depth(20)
+            .with_parallel_threshold(1000) // force sequential
+            .with_limit(4),
+    );
+
+    let get_neighbors =
+        |node: u64| -> Vec<(u64, u64)> { graph.get(&node).cloned().unwrap_or_default() };
+
+    let (results, _) = traverser.dfs_parallel(&[1], get_neighbors);
+
+    // DFS should stop at exactly 4 results (start node + 3 neighbors)
+    assert_eq!(
+        results.len(),
+        4,
+        "DFS should produce exactly 4 results with limit=4, got {}. \
+         M-03 regression: break instead of continue when limit reached.",
+        results.len()
+    );
+}

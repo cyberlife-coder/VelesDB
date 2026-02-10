@@ -477,6 +477,215 @@ fn test_snapshot_random_garbage() {
     assert!(result.is_ok(), "Should handle garbage data gracefully");
 }
 
+// -------------------------------------------------------------------------
+// TDD: WAL per-entry CRC32 tests [D-05]
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_wal_crc32_store_and_retrieve_intact() {
+    // CRC32 should be transparent — store and retrieve works normally
+    let (mut storage, _temp) = create_test_storage();
+    let payload = json!({"name": "crc_test", "value": 123});
+
+    storage.store(1, &payload).expect("Store failed");
+    let retrieved = storage.retrieve(1).expect("Retrieve failed");
+
+    assert_eq!(retrieved, Some(payload));
+}
+
+#[test]
+fn test_wal_crc32_detects_payload_corruption_on_retrieve() {
+    // Store an entry, corrupt the payload bytes on disk, verify error on retrieve
+    let (mut storage, temp) = create_test_storage();
+    let payload = json!({"important": "data", "value": 42});
+    storage.store(1, &payload).expect("Store failed");
+
+    // Get the WAL file and corrupt payload bytes
+    let wal_path = temp.path().join("payloads.log");
+    let mut wal_data = std::fs::read(&wal_path).expect("Read WAL failed");
+
+    // WAL format: [marker=1: 1B] [id: 8B] [len: 4B] [crc32: 4B] [payload: N bytes]
+    // Payload starts at offset 17 (1 + 8 + 4 + 4)
+    // Flip bits in the payload area
+    if wal_data.len() > 20 {
+        wal_data[20] ^= 0xFF;
+        wal_data[21] ^= 0xFF;
+    }
+    std::fs::write(&wal_path, &wal_data).expect("Write WAL failed");
+
+    // Reopen storage (replay should detect corruption)
+    let result = LogPayloadStorage::new(temp.path());
+    match result {
+        Ok(storage) => {
+            // If replay didn't verify (seek-only mode), retrieve should detect
+            let retrieve_result = storage.retrieve(1);
+            assert!(
+                retrieve_result.is_err(),
+                "Corrupted payload should be detected via CRC32"
+            );
+        }
+        Err(e) => {
+            // Replay detected corruption — also acceptable
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        }
+    }
+}
+
+#[test]
+fn test_wal_crc32_multiple_entries_all_protected() {
+    // All entries should have CRC32 protection
+    let (mut storage, _temp) = create_test_storage();
+    for i in 1..=10 {
+        storage
+            .store(i, &json!({"id": i, "data": format!("entry_{i}")}))
+            .expect("Store failed");
+    }
+
+    // All entries should be retrievable
+    for i in 1..=10 {
+        let result = storage.retrieve(i).expect("Retrieve failed");
+        assert!(result.is_some(), "Entry {i} should exist");
+        assert_eq!(result.unwrap()["id"], i);
+    }
+}
+
+#[test]
+fn test_wal_crc32_survives_reopen() {
+    // CRC32 entries should survive close/reopen (WAL replay)
+    let temp = tempfile::TempDir::new().expect("temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("Create failed");
+        for i in 1..=5 {
+            storage.store(i, &json!({"id": i})).expect("Store failed");
+        }
+        storage.flush().expect("Flush failed");
+    }
+
+    // Reopen — replay should verify CRC32 and succeed
+    let storage = LogPayloadStorage::new(temp.path()).expect("Reopen failed");
+    assert_eq!(storage.ids().len(), 5);
+    for i in 1..=5 {
+        let val = storage
+            .retrieve(i)
+            .expect("Retrieve failed")
+            .expect("exists");
+        assert_eq!(val["id"], i);
+    }
+}
+
+#[test]
+fn test_wal_crc32_delete_entries_unaffected() {
+    // Delete entries have no payload → no CRC32 needed
+    let (mut storage, _temp) = create_test_storage();
+    storage.store(1, &json!({"key": "val"})).expect("Store");
+    storage.store(2, &json!({"key": "val2"})).expect("Store");
+    storage.delete(1).expect("Delete");
+
+    assert!(storage.retrieve(1).expect("Retrieve").is_none());
+    assert!(storage.retrieve(2).expect("Retrieve").is_some());
+}
+
+#[test]
+fn test_wal_crc32_empty_payload() {
+    // Empty JSON object should have valid CRC32
+    let (mut storage, _temp) = create_test_storage();
+    let payload = json!({});
+    storage.store(1, &payload).expect("Store failed");
+    let retrieved = storage.retrieve(1).expect("Retrieve failed");
+    assert_eq!(retrieved, Some(payload));
+}
+
+// -------------------------------------------------------------------------
+// TDD: Batch flush tests [D-06]
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_store_batch_basic() {
+    // store_batch should write multiple entries with a single flush
+    let (mut storage, _temp) = create_test_storage();
+
+    let p1 = serde_json::to_vec(&json!({"id": 1})).expect("serialize");
+    let p2 = serde_json::to_vec(&json!({"id": 2})).expect("serialize");
+    let p3 = serde_json::to_vec(&json!({"id": 3})).expect("serialize");
+
+    let items: Vec<(u64, &[u8])> = vec![(1, &p1), (2, &p2), (3, &p3)];
+    storage.store_batch(&items).expect("Batch store failed");
+
+    // All entries should be retrievable
+    for i in 1..=3 {
+        let val = storage.retrieve(i).expect("Retrieve failed");
+        assert!(val.is_some(), "Entry {i} should exist");
+        assert_eq!(val.unwrap()["id"], i);
+    }
+}
+
+#[test]
+fn test_store_batch_crc_protected() {
+    // Batch entries should also have CRC32 protection
+    let temp = tempfile::TempDir::new().expect("temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("Create");
+        let p1 = serde_json::to_vec(&json!({"batch": true, "id": 1})).expect("serialize");
+        let p2 = serde_json::to_vec(&json!({"batch": true, "id": 2})).expect("serialize");
+        let items: Vec<(u64, &[u8])> = vec![(1, &p1), (2, &p2)];
+        storage.store_batch(&items).expect("Batch store");
+        storage.flush().expect("Flush");
+    }
+
+    // Reopen — CRC32 should verify during replay
+    let storage = LogPayloadStorage::new(temp.path()).expect("Reopen");
+    assert_eq!(storage.ids().len(), 2);
+}
+
+#[test]
+fn test_store_batch_empty() {
+    // Empty batch should be a no-op
+    let (mut storage, _temp) = create_test_storage();
+    storage
+        .store_batch(&[])
+        .expect("Empty batch should succeed");
+    assert_eq!(storage.ids().len(), 0);
+}
+
+#[test]
+fn test_store_batch_mixed_with_single_store() {
+    // Batch and single stores should coexist
+    let (mut storage, _temp) = create_test_storage();
+
+    storage.store(1, &json!({"single": true})).expect("Store");
+
+    let p2 = serde_json::to_vec(&json!({"batch": true, "id": 2})).expect("serialize");
+    let p3 = serde_json::to_vec(&json!({"batch": true, "id": 3})).expect("serialize");
+    let items: Vec<(u64, &[u8])> = vec![(2, &p2), (3, &p3)];
+    storage.store_batch(&items).expect("Batch store");
+
+    assert_eq!(storage.ids().len(), 3);
+    assert_eq!(storage.retrieve(1).unwrap().unwrap()["single"], true);
+    assert_eq!(storage.retrieve(2).unwrap().unwrap()["batch"], true);
+}
+
+#[test]
+fn test_store_batch_survives_reopen() {
+    // Batch entries should survive close/reopen
+    let temp = tempfile::TempDir::new().expect("temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("Create");
+        let p1 = serde_json::to_vec(&json!({"id": 10})).expect("serialize");
+        let p2 = serde_json::to_vec(&json!({"id": 20})).expect("serialize");
+        let items: Vec<(u64, &[u8])> = vec![(10, &p1), (20, &p2)];
+        storage.store_batch(&items).expect("Batch store");
+        storage.flush().expect("Flush");
+    }
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("Reopen");
+    assert_eq!(storage.ids().len(), 2);
+    assert_eq!(storage.retrieve(10).unwrap().unwrap()["id"], 10);
+    assert_eq!(storage.retrieve(20).unwrap().unwrap()["id"], 20);
+}
+
 #[test]
 fn test_snapshot_entry_count_overflow() {
     // Arrange - Create snapshot where entry_count * 16 would overflow usize

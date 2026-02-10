@@ -1,16 +1,15 @@
-//! JOIN execution for cross-store queries (EPIC-031 US-005).
+//! JOIN execution for cross-store queries (EPIC-031 US-005, Phase 08-02).
 //!
-//! This module implements JOIN execution between graph traversal results
+//! This module implements JOIN execution between search results
 //! and ColumnStore data with adaptive batch sizing.
 //!
-//! Note: Functions in this module are tested but not yet integrated into
-//! execute_query. Integration is planned for future work.
-
-#![allow(dead_code)]
+//! Integrated into `Database::execute_query()` for cross-collection JOINs.
+//! Supports INNER JOIN and LEFT JOIN types.
 
 use crate::column_store::ColumnStore;
+use crate::error::{Error, Result};
 use crate::point::SearchResult;
-use crate::velesql::{JoinClause, JoinCondition};
+use crate::velesql::{JoinClause, JoinCondition, JoinType};
 use std::collections::HashMap;
 
 /// Result of a JOIN operation, combining graph result with column data.
@@ -124,17 +123,15 @@ pub fn execute_join(
     results: &[SearchResult],
     join: &JoinClause,
     column_store: &ColumnStore,
-) -> Vec<JoinedResult> {
+) -> Result<Vec<JoinedResult>> {
     // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
     let condition = match &join.condition {
         Some(cond) => cond,
         None => {
-            // BUG-003 FIX: Log instead of silent return
-            tracing::warn!(
+            return Err(Error::UnsupportedFeature(format!(
                 "JOIN with USING clause not yet supported for execution on table '{}'",
                 join.table
-            );
-            return Vec::new();
+            )));
         }
     };
 
@@ -143,58 +140,93 @@ pub fn execute_join(
     let join_column = &condition.left.column;
     if let Some(pk_column) = column_store.primary_key_column() {
         if join_column != pk_column {
-            // BUG-003 FIX: Log non-PK join attempt
             tracing::warn!(
                 "Cannot join on non-primary-key column '{}' (PK is '{}'). Use PK column for JOIN.",
                 join_column,
                 pk_column
             );
-            return Vec::new();
+            return Ok(Vec::new());
         }
     } else {
-        // BUG-003 FIX: Log missing PK configuration
         tracing::warn!(
             "ColumnStore '{}' has no primary key configured - cannot perform PK-based join",
             join.table
         );
-        return Vec::new();
+        return Ok(Vec::new());
     }
+
+    // 1b. Check join type support — unsupported types return clear error
+    let is_left_join = match join.join_type {
+        JoinType::Inner => false,
+        JoinType::Left => true,
+        JoinType::Right => {
+            return Err(Error::UnsupportedFeature(
+                "RIGHT JOIN is not yet supported. Use LEFT JOIN or INNER JOIN.".to_string(),
+            ));
+        }
+        JoinType::Full => {
+            return Err(Error::UnsupportedFeature(
+                "FULL JOIN is not yet supported. Use LEFT JOIN or INNER JOIN.".to_string(),
+            ));
+        }
+    };
 
     // 2. Extract join keys from search results
     let join_keys = extract_join_keys(results, condition);
 
     if join_keys.is_empty() {
-        return Vec::new();
+        // LEFT JOIN: return all original results with empty column data
+        if is_left_join {
+            return Ok(results
+                .iter()
+                .map(|r| JoinedResult::new(r.clone(), HashMap::new()))
+                .collect());
+        }
+        return Ok(Vec::new());
     }
 
     // 3. Determine adaptive batch size
     let batch_size = adaptive_batch_size(join_keys.len());
 
-    // 4. Build result map: pk -> (result_idx, row_data)
-    let mut joined_results = Vec::with_capacity(join_keys.len());
+    // 4. Build set of result indices that have join keys
+    let keyed_indices: std::collections::HashSet<usize> =
+        join_keys.iter().map(|(idx, _)| *idx).collect();
 
-    // Process in batches
+    // 5. Build result map: pk -> (result_idx, row_data)
+    let mut joined_results = Vec::with_capacity(results.len());
+
+    // Process keyed results in batches
     for chunk in join_keys.chunks(batch_size) {
         // Extract just the keys for this batch
         let pks: Vec<i64> = chunk.iter().map(|(_, pk)| *pk).collect();
 
         // Batch lookup in ColumnStore
-        let rows = batch_get_rows(column_store, &pks);
-
-        // Build map of pk -> column data for this batch
-        let row_map = rows;
+        let row_map = batch_get_rows(column_store, &pks);
 
         // Merge with search results
         for (result_idx, pk) in chunk {
             if let Some(column_data) = row_map.get(pk) {
                 let search_result = results[*result_idx].clone();
                 joined_results.push(JoinedResult::new(search_result, column_data.clone()));
+            } else if is_left_join {
+                // LEFT JOIN: keep non-matching rows with empty column data
+                let search_result = results[*result_idx].clone();
+                joined_results.push(JoinedResult::new(search_result, HashMap::new()));
             }
-            // Inner JOIN: skip results without matching column data
+            // INNER JOIN: skip results without matching column data
         }
     }
 
-    joined_results
+    // LEFT JOIN: include results that had no join key at all
+    if is_left_join {
+        for (idx, result) in results.iter().enumerate() {
+            if !keyed_indices.contains(&idx) {
+                joined_results.push(JoinedResult::new(result.clone(), HashMap::new()));
+            }
+        }
+    }
+
+    Ok(joined_results)
 }
 
 /// Batch get rows from ColumnStore by primary keys.

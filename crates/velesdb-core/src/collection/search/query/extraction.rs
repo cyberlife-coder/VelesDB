@@ -9,6 +9,10 @@ use crate::velesql::Condition;
 
 impl Collection {
     /// Helper to extract MATCH query from any nested condition.
+    /// Note: Production code now uses `extract_match_and_filter()` which also returns
+    /// the remaining metadata filter. This function is kept for backward compatibility
+    /// and used in extraction_tests.
+    #[allow(dead_code)]
     pub(crate) fn extract_match_query(condition: &Condition) -> Option<String> {
         match condition {
             Condition::Match(m) => Some(m.query.clone()),
@@ -49,11 +53,9 @@ impl Collection {
                                             {
                                                 #[allow(clippy::cast_possible_truncation)]
                                                 Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
                                             } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
+                                                // Reason: NaN/Infinity vectors corrupt similarity calculations
+                                                None
                                             }
                                         })
                                         .ok_or_else(|| {
@@ -114,11 +116,9 @@ impl Collection {
                                             {
                                                 #[allow(clippy::cast_possible_truncation)]
                                                 Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
                                             } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
+                                                // Reason: NaN/Infinity vectors corrupt similarity calculations
+                                                None
                                             }
                                         })
                                         .ok_or_else(|| {
@@ -231,11 +231,9 @@ impl Collection {
                                     {
                                         #[allow(clippy::cast_possible_truncation)]
                                         Some(f as f32)
-                                    } else if f.is_finite() {
-                                        None
                                     } else {
-                                        #[allow(clippy::cast_possible_truncation)]
-                                        Some(f as f32)
+                                        // Reason: NaN/Infinity vectors corrupt similarity calculations
+                                        None
                                     }
                                 })
                                 .ok_or_else(|| {
@@ -251,6 +249,134 @@ impl Collection {
                     )))
                 }
             }
+        }
+    }
+
+    /// Extract MATCH condition and remaining metadata filter from a condition tree (VP-011).
+    ///
+    /// Returns `Some((text_query, remaining_filter))` if a `Condition::Match` is found.
+    /// The remaining filter excludes MATCH and vector search conditions.
+    /// Returns `None` if no MATCH condition exists.
+    pub(crate) fn extract_match_and_filter(
+        condition: &Condition,
+    ) -> Option<(String, Option<Condition>)> {
+        match condition {
+            Condition::Match(m) => Some((m.query.clone(), None)),
+            Condition::And(left, right) => {
+                // Try left side for MATCH
+                if let Some((query, _)) = Self::extract_match_and_filter(left) {
+                    // Remaining filter = right side (minus vector/similarity conditions)
+                    let remaining = Self::extract_metadata_filter(right);
+                    return Some((query, remaining));
+                }
+                // Try right side for MATCH
+                if let Some((query, _)) = Self::extract_match_and_filter(right) {
+                    // Remaining filter = left side (minus vector/similarity conditions)
+                    let remaining = Self::extract_metadata_filter(left);
+                    return Some((query, remaining));
+                }
+                None
+            }
+            Condition::Group(inner) => Self::extract_match_and_filter(inner),
+            _ => None,
+        }
+    }
+
+    /// Extract NEAR_FUSED condition from WHERE clause (VP-012).
+    ///
+    /// Returns the resolved vectors and fusion strategy if a `VectorFusedSearch`
+    /// condition is found. Recurses into AND and Group conditions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Vector parameters are missing or invalid
+    /// - The fusion strategy is unknown
+    /// - NEAR_FUSED is combined with similarity() or NEAR (conflicting modes)
+    #[allow(clippy::self_only_used_in_recursion)]
+    pub(crate) fn extract_fused_vector_search(
+        &self,
+        condition: &Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<(Vec<Vec<f32>>, crate::fusion::FusionStrategy)>> {
+        match condition {
+            Condition::VectorFusedSearch(fused) => {
+                // Resolve all vector parameters
+                let vectors: Vec<Vec<f32>> = fused
+                    .vectors
+                    .iter()
+                    .map(|v| self.resolve_vector(v, params))
+                    .collect::<Result<Vec<Vec<f32>>>>()?;
+
+                // Map FusionConfig (String-based) to FusionStrategy (enum)
+                let strategy = Self::map_fusion_config_to_strategy(&fused.fusion)?;
+
+                Ok(Some((vectors, strategy)))
+            }
+            Condition::And(left, right) => {
+                if let Some(result) = self.extract_fused_vector_search(left, params)? {
+                    return Ok(Some(result));
+                }
+                self.extract_fused_vector_search(right, params)
+            }
+            Condition::Group(inner) => self.extract_fused_vector_search(inner, params),
+            _ => Ok(None),
+        }
+    }
+
+    /// Maps a `FusionConfig` (String-based AST type) to a `FusionStrategy` (typed enum).
+    ///
+    /// This bridges the parser's string representation to the core fusion engine.
+    /// Uses `FusionStrategy::weighted()` which returns `Result` instead of
+    /// `FusionConfig::weighted()` which panics on invalid weights (SecDev fix).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Strategy name is unknown
+    /// - Weighted strategy has invalid weights
+    pub(crate) fn map_fusion_config_to_strategy(
+        config: &crate::velesql::FusionConfig,
+    ) -> Result<crate::fusion::FusionStrategy> {
+        use crate::fusion::FusionStrategy;
+
+        match config.strategy.to_lowercase().as_str() {
+            "rrf" => {
+                let k = config.params.get("k").copied().unwrap_or(60.0);
+                #[allow(clippy::cast_possible_truncation)]
+                // Reason: k parameter is a small positive integer (typically 60),
+                // truncation from f64 to u32 is safe
+                let k_u32 = if k > 0.0 && k <= f64::from(u32::MAX) {
+                    k as u32
+                } else {
+                    60
+                };
+                Ok(FusionStrategy::RRF { k: k_u32 })
+            }
+            "average" => Ok(FusionStrategy::Average),
+            "maximum" => Ok(FusionStrategy::Maximum),
+            "weighted" => {
+                #[allow(clippy::cast_possible_truncation)]
+                // Reason: fusion weights are in [0.0, 1.0] range, f64->f32 precision loss acceptable
+                let avg_weight = config.params.get("avg_weight").copied().unwrap_or(0.34) as f32;
+                #[allow(clippy::cast_possible_truncation)]
+                let max_weight = config.params.get("max_weight").copied().unwrap_or(0.33) as f32;
+                #[allow(clippy::cast_possible_truncation)]
+                let hit_weight = config.params.get("hit_weight").copied().unwrap_or(0.33) as f32;
+
+                // Reason: Use FusionStrategy::weighted() which returns Result
+                // instead of FusionConfig::weighted() which panics (SecDev fix)
+                FusionStrategy::weighted(avg_weight, max_weight, hit_weight).map_err(|e| {
+                    Error::Config(format!(
+                        "Invalid weighted fusion config: {e}. \
+                         Weights must be non-negative and sum to 1.0"
+                    ))
+                })
+            }
+            unknown => Err(Error::Config(format!(
+                "Unknown fusion strategy '{unknown}'. \
+                 Supported: rrf, average, maximum, weighted"
+            ))),
         }
     }
 

@@ -29,7 +29,7 @@ impl ColumnStore {
             }
 
             if let Some(&row_idx) = self.primary_index.get(&update.pk) {
-                if self.deleted_rows.contains(&row_idx) {
+                if self.is_deleted(row_idx) {
                     result
                         .failed
                         .push((update.pk, ColumnStoreError::RowNotFound(update.pk)));
@@ -108,7 +108,7 @@ impl ColumnStore {
             .get(&pk)
             .ok_or(ColumnStoreError::RowNotFound(pk))?;
 
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_deleted(row_idx) {
             return Err(ColumnStoreError::RowNotFound(pk));
         }
 
@@ -131,11 +131,7 @@ impl ColumnStore {
 
         for row_idx in expired_rows {
             if let Some(&pk) = self.row_idx_to_pk.get(&row_idx) {
-                self.deleted_rows.insert(row_idx);
-                // BUG-2 FIX: Also update RoaringBitmap to keep both in sync
-                if let Ok(idx) = u32::try_from(row_idx) {
-                    self.deletion_bitmap.insert(idx);
-                }
+                self.mark_deleted(row_idx);
                 self.row_expiry.remove(&row_idx);
                 result.pks.push(pk);
                 result.expired_count += 1;
@@ -173,7 +169,7 @@ impl ColumnStore {
         }
 
         if let Some(&row_idx) = self.primary_index.get(&pk_value) {
-            if self.deleted_rows.contains(&row_idx) {
+            if self.is_deleted(row_idx) {
                 for (col_name, value) in values {
                     if *col_name != pk_col.as_str() {
                         if let Some(col) = self.columns.get(*col_name) {
@@ -183,7 +179,11 @@ impl ColumnStore {
                         }
                     }
                 }
-                self.deleted_rows.remove(&row_idx);
+                // Reason: direct field access instead of self.unmark_deleted() to avoid
+                // borrow conflict with pk_col borrowing self.primary_key_column.
+                if let Ok(idx) = u32::try_from(row_idx) {
+                    self.deletion_bitmap.remove(idx);
+                }
                 self.row_expiry.remove(&row_idx);
                 let value_map: std::collections::HashMap<&str, &ColumnValue> =
                     values.iter().map(|(k, v)| (*k, v)).collect();

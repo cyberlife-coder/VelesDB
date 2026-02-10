@@ -31,6 +31,7 @@ impl QueryPlan {
         output
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn render_node(node: &PlanNode, output: &mut String, prefix: &str, is_last: bool) {
         let connector = if is_last { "└─ " } else { "├─ " };
         let child_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
@@ -102,6 +103,33 @@ impl QueryPlan {
                         if mt.has_similarity { "yes" } else { "no" }
                     );
                 }
+            }
+            PlanNode::FusedSearch(fs) => {
+                let _ = writeln!(output, "{prefix}{connector}FusedSearch");
+                let _ = writeln!(output, "{child_prefix}├─ Collection: {}", fs.collection);
+                let _ = writeln!(output, "{child_prefix}├─ Vectors: {}", fs.vector_count);
+                let _ = writeln!(output, "{child_prefix}├─ Fusion: {}", fs.fusion_strategy);
+                let _ = writeln!(output, "{child_prefix}└─ Candidates: {}", fs.candidates);
+            }
+            PlanNode::CrossStoreSearch(cs) => {
+                let _ = writeln!(output, "{prefix}{connector}CrossStoreSearch");
+                let _ = writeln!(output, "{child_prefix}├─ Collection: {}", cs.collection);
+                let _ = writeln!(output, "{child_prefix}├─ Strategy: {}", cs.strategy);
+                let _ = writeln!(
+                    output,
+                    "{child_prefix}├─ Over-fetch: {:.1}x",
+                    cs.over_fetch_factor
+                );
+                let _ = writeln!(
+                    output,
+                    "{child_prefix}├─ Est. Cost: {:.2}ms",
+                    cs.estimated_cost_ms
+                );
+                let _ = writeln!(
+                    output,
+                    "{child_prefix}└─ Has Filter: {}",
+                    if cs.has_metadata_filter { "yes" } else { "no" }
+                );
             }
         }
     }

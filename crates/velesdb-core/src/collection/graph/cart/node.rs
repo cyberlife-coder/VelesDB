@@ -10,19 +10,18 @@
 #![allow(clippy::cast_possible_truncation)]
 
 /// Node variants for the Compressed Adaptive Radix Tree.
+///
+/// Note: Node4 was removed as unused dead code. Leaf splitting is a known
+/// limitation — leaves grow unbounded for high-cardinality prefixes.
+/// If adaptive splitting is needed, re-implement Node4 with proper tests.
 // Reason: Node256 is larger than other variants by design for high-degree vertices
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum CARTNode {
-    /// Smallest internal node: 4 keys, 4 children.
-    // Reason: Node4 variant currently unused but required for CART completeness
-    #[allow(dead_code)]
-    Node4 {
-        num_children: u8,
-        keys: [u8; 4],
-        children: [Option<Box<CARTNode>>; 4],
-    },
     /// Medium internal node: 16 keys, 16 children (SIMD-friendly).
+    // Reason: Node16 is not yet constructed (requires leaf splitting), but kept
+    // as the first internal node tier for when adaptive splitting is implemented.
+    #[allow(dead_code)]
     Node16 {
         num_children: u8,
         keys: [u8; 16],
@@ -62,9 +61,9 @@ impl CARTNode {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             Self::Leaf { entries, .. } => entries.is_empty(),
-            Self::Node4 { num_children, .. }
-            | Self::Node16 { num_children, .. }
-            | Self::Node48 { num_children, .. } => *num_children == 0,
+            Self::Node16 { num_children, .. } | Self::Node48 { num_children, .. } => {
+                *num_children == 0
+            }
             Self::Node256 { num_children, .. } => *num_children == 0,
         }
     }
@@ -73,24 +72,6 @@ impl CARTNode {
     pub(crate) fn search(&self, key: &[u8], value: u64) -> bool {
         match self {
             Self::Leaf { entries, .. } => entries.binary_search(&value).is_ok(),
-            Self::Node4 {
-                num_children,
-                keys,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
-                for i in 0..*num_children as usize {
-                    if keys[i] == byte {
-                        if let Some(child) = &children[i] {
-                            return child.search(&key[1..], value);
-                        }
-                    }
-                }
-                false
-            }
             Self::Node16 {
                 num_children,
                 keys,
@@ -149,38 +130,6 @@ impl CARTNode {
                         entries.insert(pos, value);
                         true
                     }
-                }
-            }
-            Self::Node4 {
-                num_children,
-                keys,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
-
-                // Check if key exists
-                for i in 0..*num_children as usize {
-                    if keys[i] == byte {
-                        if let Some(child) = &mut children[i] {
-                            return child.insert(&key[1..], value);
-                        }
-                    }
-                }
-
-                // Key doesn't exist, add new child
-                if (*num_children as usize) < 4 {
-                    let idx = *num_children as usize;
-                    keys[idx] = byte;
-                    children[idx] = Some(Box::new(Self::new_leaf(value)));
-                    *num_children += 1;
-                    true
-                } else {
-                    // Node is full, need to grow to Node16
-                    *self = self.grow_to_node16();
-                    self.insert(key, value)
                 }
             }
             Self::Node16 {
@@ -286,34 +235,6 @@ impl CARTNode {
                     false
                 }
             }
-            Self::Node4 {
-                num_children,
-                keys,
-                children,
-            } => {
-                if key.is_empty() {
-                    return false;
-                }
-                let byte = key[0];
-                for i in 0..*num_children as usize {
-                    if keys[i] == byte {
-                        if let Some(child) = &mut children[i] {
-                            let removed = child.remove(&key[1..], value);
-                            if removed && child.is_empty() {
-                                // Remove empty child
-                                let n = *num_children as usize;
-                                for j in i..(n - 1) {
-                                    keys[j] = keys[j + 1];
-                                    children[j] = children[j + 1].take();
-                                }
-                                *num_children -= 1;
-                            }
-                            return removed;
-                        }
-                    }
-                }
-                false
-            }
             Self::Node16 {
                 num_children,
                 keys,
@@ -390,15 +311,6 @@ impl CARTNode {
             Self::Leaf { entries, .. } => {
                 result.extend(entries.iter().copied());
             }
-            Self::Node4 {
-                num_children,
-                children,
-                ..
-            } => {
-                for child in children.iter().take(*num_children as usize).flatten() {
-                    child.collect_all(result);
-                }
-            }
             Self::Node16 {
                 num_children,
                 children,
@@ -418,37 +330,6 @@ impl CARTNode {
                     child.collect_all(result);
                 }
             }
-        }
-    }
-
-    /// Grows Node4 to Node16.
-    fn grow_to_node16(&self) -> Self {
-        match self {
-            Self::Node4 {
-                num_children,
-                keys,
-                children,
-            } => {
-                let mut new_keys = [0u8; 16];
-                let mut new_children: [Option<Box<CARTNode>>; 16] = Default::default();
-
-                // Copy and sort
-                let n = *num_children as usize;
-                let mut indices: Vec<usize> = (0..n).collect();
-                indices.sort_by_key(|&i| keys[i]);
-
-                for (new_idx, &old_idx) in indices.iter().enumerate() {
-                    new_keys[new_idx] = keys[old_idx];
-                    new_children[new_idx].clone_from(&children[old_idx]);
-                }
-
-                Self::Node16 {
-                    num_children: *num_children,
-                    keys: new_keys,
-                    children: new_children,
-                }
-            }
-            _ => self.clone(),
         }
     }
 

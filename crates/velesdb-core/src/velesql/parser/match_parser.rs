@@ -193,14 +193,26 @@ impl Parser {
                     return Ok(crate::velesql::Value::String(s[1..s.len() - 1].to_string()));
                 }
                 Rule::integer => {
-                    return Ok(crate::velesql::Value::Integer(
-                        inner_pair.as_str().parse().unwrap_or(0),
-                    ));
+                    let text = inner_pair.as_str();
+                    let val = text.parse::<i64>().map_err(|_| {
+                        ParseError::invalid_value(
+                            inner_pair.as_span().start(),
+                            text,
+                            format!("Expected integer value, got '{text}'"),
+                        )
+                    })?;
+                    return Ok(crate::velesql::Value::Integer(val));
                 }
                 Rule::float => {
-                    return Ok(crate::velesql::Value::Float(
-                        inner_pair.as_str().parse().unwrap_or(0.0),
-                    ));
+                    let text = inner_pair.as_str();
+                    let val = text.parse::<f64>().map_err(|_| {
+                        ParseError::invalid_value(
+                            inner_pair.as_span().start(),
+                            text,
+                            format!("Expected float value, got '{text}'"),
+                        )
+                    })?;
+                    return Ok(crate::velesql::Value::Float(val));
                 }
                 Rule::boolean => {
                     let val = inner_pair.as_str().to_uppercase() == "TRUE";

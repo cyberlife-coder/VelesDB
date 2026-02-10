@@ -6,7 +6,7 @@
 //! # WAL Binary Format (LogPayloadStorage)
 //!
 //! ```text
-//! Store:  [marker=1: 1B] [id: 8B LE] [len: 4B LE] [payload: len bytes]
+//! Store:  [marker=1: 1B] [id: 8B LE] [len: 4B LE] [crc32: 4B LE] [payload: len bytes]
 //! Delete: [marker=2: 1B] [id: 8B LE]
 //! ```
 //!
@@ -38,15 +38,47 @@ use tempfile::TempDir;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Simple CRC32 (IEEE 802.3) — mirrors the implementation in log_payload.rs
+#[allow(clippy::cast_possible_truncation)]
+fn test_crc32_hash(data: &[u8]) -> u32 {
+    const CRC32_TABLE: [u32; 256] = {
+        let mut table = [0u32; 256];
+        let mut i = 0;
+        while i < 256 {
+            let mut crc = i as u32;
+            let mut j = 0;
+            while j < 8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ 0xEDB8_8320;
+                } else {
+                    crc >>= 1;
+                }
+                j += 1;
+            }
+            table[i] = crc;
+            i += 1;
+        }
+        table
+    };
+    let mut crc = 0xFFFF_FFFF_u32;
+    for &byte in data {
+        let idx = ((crc ^ u32::from(byte)) & 0xFF) as usize;
+        crc = (crc >> 8) ^ CRC32_TABLE[idx];
+    }
+    !crc
+}
+
 /// Writes a valid Store WAL entry to a buffer.
-/// Format: [marker=1: 1B] [id: 8B LE] [len: 4B LE] [payload: len bytes]
+/// Format: [marker=1: 1B] [id: 8B LE] [len: 4B LE] [crc32: 4B LE] [payload: len bytes]
 fn write_store_entry(buf: &mut Vec<u8>, id: u64, payload: &serde_json::Value) {
     let payload_bytes = serde_json::to_vec(payload).expect("serialize");
-    buf.push(1u8); // marker
-    buf.extend_from_slice(&id.to_le_bytes());
     #[allow(clippy::cast_possible_truncation)]
     let len = payload_bytes.len() as u32;
+    let crc = test_crc32_hash(&payload_bytes);
+    buf.push(1u8); // marker
+    buf.extend_from_slice(&id.to_le_bytes());
     buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(&crc.to_le_bytes());
     buf.extend_from_slice(&payload_bytes);
 }
 
@@ -147,10 +179,14 @@ fn test_wal_recovery_truncated_payload_data() {
 #[test]
 fn test_wal_recovery_zero_length_payload() {
     // Store entry with len=0 — valid structure, empty payload
+    // WAL format: [marker=1: 1B] [id: 8B] [len: 4B] [crc32: 4B] [payload: 0B]
+    let empty_payload: &[u8] = &[];
+    let crc = test_crc32_hash(empty_payload);
     let mut wal = Vec::new();
     wal.push(1u8);
     wal.extend_from_slice(&1u64.to_le_bytes());
     wal.extend_from_slice(&0u32.to_le_bytes()); // len = 0
+    wal.extend_from_slice(&crc.to_le_bytes()); // CRC32 of empty payload
 
     let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
     // Entry should be indexed (len=0 is valid)
@@ -256,34 +292,36 @@ fn test_wal_recovery_flipped_marker_in_second_entry() {
 
 #[test]
 fn test_wal_recovery_flipped_bits_in_payload() {
-    // Valid WAL structure, but payload bytes are corrupted.
-    // Recovery should still index the entry (payload corruption is detected at read time, not replay).
-    let mut wal = Vec::new();
+    // Valid WAL structure, but payload bytes are corrupted AFTER CRC was computed.
+    // With CRC32, replay now detects corruption at replay time [D-05].
     let payload = json!({"key": "value"});
-    let mut payload_bytes = serde_json::to_vec(&payload).expect("serialize");
+    let payload_bytes = serde_json::to_vec(&payload).expect("serialize");
+    let crc = test_crc32_hash(&payload_bytes);
 
-    // Flip some bits in the payload
-    for byte in &mut payload_bytes {
+    // Build WAL entry with correct CRC, then corrupt payload
+    let mut corrupted_payload = payload_bytes.clone();
+    for byte in &mut corrupted_payload {
         *byte ^= 0xFF;
     }
 
+    let mut wal = Vec::new();
     wal.push(1u8);
     wal.extend_from_slice(&1u64.to_le_bytes());
     #[allow(clippy::cast_possible_truncation)]
-    let len = payload_bytes.len() as u32;
+    let len = corrupted_payload.len() as u32;
     wal.extend_from_slice(&len.to_le_bytes());
-    wal.extend_from_slice(&payload_bytes);
+    wal.extend_from_slice(&crc.to_le_bytes()); // CRC of ORIGINAL payload
+    wal.extend_from_slice(&corrupted_payload); // CORRUPTED payload
 
-    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open — structure is valid");
-    // Entry is indexed (replay only reads structure, not payload content)
-    assert_eq!(storage.ids().len(), 1);
-
-    // But reading the payload should fail (corrupted JSON)
-    let result = storage.retrieve(1);
+    // Replay should detect CRC mismatch and return error
+    let result = open_storage_with_wal(&wal);
     assert!(
-        result.is_err() || result.unwrap().is_none(),
-        "Corrupted payload should fail to deserialize"
+        result.is_err(),
+        "CRC32 mismatch should be detected during WAL replay"
     );
+    if let Err(e) = result {
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    }
 }
 
 #[test]
@@ -340,36 +378,6 @@ fn test_wal_recovery_valid_entries_then_garbage() {
 // Task 3b: Snapshot Corruption Detection Tests
 // ===========================================================================
 
-/// Simple CRC32 (IEEE 802.3) — mirrors the implementation in log_payload.rs
-#[allow(clippy::cast_possible_truncation)]
-fn crc32_hash(data: &[u8]) -> u32 {
-    const CRC32_TABLE: [u32; 256] = {
-        let mut table = [0u32; 256];
-        let mut i = 0;
-        while i < 256 {
-            let mut crc = i as u32;
-            let mut j = 0;
-            while j < 8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ 0xEDB8_8320;
-                } else {
-                    crc >>= 1;
-                }
-                j += 1;
-            }
-            table[i] = crc;
-            i += 1;
-        }
-        table
-    };
-    let mut crc = 0xFFFF_FFFF_u32;
-    for &byte in data {
-        let idx = ((crc ^ u32::from(byte)) & 0xFF) as usize;
-        crc = (crc >> 8) ^ CRC32_TABLE[idx];
-    }
-    !crc
-}
-
 /// Builds a valid snapshot binary blob with the given entries and WAL position.
 fn build_snapshot(entries: &[(u64, u64)], wal_pos: u64) -> Vec<u8> {
     let entry_count = entries.len() as u64;
@@ -382,7 +390,7 @@ fn build_snapshot(entries: &[(u64, u64)], wal_pos: u64) -> Vec<u8> {
         buf.extend_from_slice(&id.to_le_bytes());
         buf.extend_from_slice(&offset.to_le_bytes());
     }
-    let crc = crc32_hash(&buf);
+    let crc = test_crc32_hash(&buf);
     buf.extend_from_slice(&crc.to_le_bytes());
     buf
 }

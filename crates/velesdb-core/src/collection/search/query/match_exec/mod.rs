@@ -11,6 +11,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
+mod return_agg;
 mod similarity;
 mod where_eval;
 
@@ -156,16 +157,43 @@ impl Collection {
                     break;
                 }
             }
+            // VP-005: Check for aggregation in RETURN clause
+            if let Some(aggregated) =
+                self.aggregate_match_results(&results, &match_clause.return_clause)
+            {
+                return Ok(aggregated);
+            }
+            // VP-006: Apply ORDER BY if present
+            Self::apply_match_order_by(&mut results, &match_clause.return_clause)?;
             return Ok(results);
         }
 
-        // Compute max depth from pattern
-        let max_depth = self.compute_max_depth(pattern);
+        // VP-004: Detect multi-hop patterns and route accordingly
+        if pattern.relationships.len() > 1 {
+            // Multi-hop: execute as chain of single-hop BFS traversals
+            let start_candidates: Vec<(u64, HashMap<String, u64>)> = start_nodes;
+            let mut results = self.execute_multi_hop_chain(
+                pattern,
+                start_candidates,
+                match_clause,
+                params,
+                limit,
+            )?;
+            // VP-005: Check for aggregation in RETURN clause
+            if let Some(aggregated) =
+                self.aggregate_match_results(&results, &match_clause.return_clause)
+            {
+                return Ok(aggregated);
+            }
+            // VP-006: Apply ORDER BY if present
+            Self::apply_match_order_by(&mut results, &match_clause.return_clause)?;
+            return Ok(results);
+        }
 
-        // Get relationship type filter
+        // Single-hop: use existing BFS logic (no regression)
+        let max_depth = self.compute_max_depth(pattern);
         let rel_types = self.extract_rel_types(pattern);
 
-        // Execute traversal from each start node
         let edge_store = self.edge_store.read();
         let mut results = Vec::new();
 
@@ -174,13 +202,11 @@ impl Collection {
                 break;
             }
 
-            // Configure BFS traversal
             let config = StreamingConfig::default()
                 .with_limit(limit.saturating_sub(results.len()))
                 .with_max_depth(max_depth)
                 .with_rel_types(rel_types.clone());
 
-            // Execute BFS from this start node
             for traversal_result in bfs_stream(&edge_store, start_id, config) {
                 if results.len() >= limit {
                     break;
@@ -192,10 +218,8 @@ impl Collection {
                     traversal_result.path.clone(),
                 );
 
-                // Copy start bindings
                 match_result.bindings.clone_from(&start_bindings);
 
-                // Add target node binding if pattern has alias
                 if let Some(target_pattern) = pattern.nodes.get(traversal_result.depth as usize) {
                     if let Some(ref alias) = target_pattern.alias {
                         let alias_str: String = alias.clone();
@@ -216,13 +240,22 @@ impl Collection {
                     }
                 }
 
-                // Project properties from RETURN clause (EPIC-058 US-007)
                 match_result.projected =
                     self.project_properties(&match_result.bindings, &match_clause.return_clause);
 
                 results.push(match_result);
             }
         }
+
+        // VP-005: Check for aggregation in RETURN clause
+        if let Some(aggregated) =
+            self.aggregate_match_results(&results, &match_clause.return_clause)
+        {
+            return Ok(aggregated);
+        }
+
+        // VP-006: Apply ORDER BY if present
+        Self::apply_match_order_by(&mut results, &match_clause.return_clause)?;
 
         Ok(results)
     }
@@ -294,6 +327,97 @@ impl Collection {
                 }
                 results.push((id, bindings));
             }
+        }
+
+        Ok(results)
+    }
+
+    /// Executes a multi-hop MATCH pattern as a chain of single-hop BFS traversals (VP-004).
+    ///
+    /// For `(a)-[:R1]->(b)-[:R2]->(c)`, this executes:
+    /// 1. BFS from each start node with R1 only → yields intermediate nodes (b)
+    /// 2. BFS from each intermediate node with R2 only → yields final nodes (c)
+    ///
+    /// Each hop binds the target node to its alias and accumulates bindings.
+    /// WHERE filtering is applied after all hops complete (with full bindings).
+    fn execute_multi_hop_chain(
+        &self,
+        pattern: &GraphPattern,
+        start_candidates: Vec<(u64, HashMap<String, u64>)>,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        limit: usize,
+    ) -> Result<Vec<MatchResult>> {
+        let edge_store = self.edge_store.read();
+
+        // Each candidate is (current_node_id, accumulated_bindings, accumulated_path)
+        let mut candidates: Vec<(u64, HashMap<String, u64>, Vec<u64>)> = start_candidates
+            .into_iter()
+            .map(|(id, bindings)| (id, bindings, Vec::new()))
+            .collect();
+
+        // Execute each hop in sequence
+        for (hop_index, rel) in pattern.relationships.iter().enumerate() {
+            let mut next_candidates: Vec<(u64, HashMap<String, u64>, Vec<u64>)> = Vec::new();
+
+            // Determine BFS depth for this hop
+            let hop_depth = rel.range.map_or(1, |(_, end)| end);
+
+            for (current_id, bindings, path) in &candidates {
+                // Configure BFS for this specific hop
+                let config = StreamingConfig::default()
+                    .with_max_depth(hop_depth)
+                    .with_rel_types(rel.types.clone());
+
+                for traversal_result in bfs_stream(&edge_store, *current_id, config) {
+                    let mut new_bindings = bindings.clone();
+                    let mut new_path = path.clone();
+                    new_path.extend_from_slice(&traversal_result.path);
+
+                    // Bind the target node to the next node pattern's alias
+                    // pattern.nodes[hop_index + 1] corresponds to this hop's target
+                    if let Some(target_node_pattern) = pattern.nodes.get(hop_index + 1) {
+                        if let Some(ref alias) = target_node_pattern.alias {
+                            new_bindings.insert(alias.clone(), traversal_result.target_id);
+                        }
+                    }
+
+                    next_candidates.push((traversal_result.target_id, new_bindings, new_path));
+                }
+            }
+
+            // Short-circuit: no candidates means no results possible
+            if next_candidates.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            candidates = next_candidates;
+        }
+
+        // Build final results from the last hop's candidates
+        let mut results = Vec::new();
+        let total_depth = u32::try_from(pattern.relationships.len()).unwrap_or(10);
+
+        for (node_id, bindings, path) in candidates {
+            if results.len() >= limit {
+                break;
+            }
+
+            // VP-004: Apply WHERE filter with binding-aware evaluation
+            if let Some(ref where_clause) = match_clause.where_clause {
+                if !self.evaluate_where_with_bindings(&bindings, where_clause, params)? {
+                    continue;
+                }
+            }
+
+            let mut match_result = MatchResult::new(node_id, total_depth, path);
+            match_result.bindings = bindings;
+
+            // Project properties from RETURN clause (EPIC-058 US-007)
+            match_result.projected =
+                self.project_properties(&match_result.bindings, &match_clause.return_clause);
+
+            results.push(match_result);
         }
 
         Ok(results)

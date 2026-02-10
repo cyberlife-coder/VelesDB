@@ -11,6 +11,10 @@ WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vec
 - **SIMD optimized** - Uses WASM SIMD128 for fast distance calculations
 - **Multiple metrics** - Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **Memory optimization** - SQ8 (4x) and Binary (32x) quantization
+- **Column Store** - Typed columnar storage with CRUD, filters, TTL, vacuum
+- **Knowledge Graph** - Nodes, edges, traversal with IndexedDB persistence
+- **Half-precision** - f16/bf16 vector conversion for 50% memory savings
+- **IR Metrics** - recall@k, precision@k, MRR, nDCG for search quality evaluation
 - **Lightweight** - Minimal bundle size
 
 ## Installation
@@ -238,6 +242,128 @@ Ultra-fast serialization thanks to contiguous memory layout:
 | Export | ~7 ms | **4479 MB/s** |
 | Import | ~10 ms | **2943 MB/s** |
 
+## Column Store
+
+Typed columnar storage for structured metadata with high-performance filtering:
+
+```javascript
+import init, { ColumnStoreWasm, ColumnStorePersistence } from '@wiscale/velesdb-wasm';
+
+async function main() {
+  await init();
+
+  // Create a column store with primary key
+  const schema = [
+    { name: 'id', type: 'int' },
+    { name: 'name', type: 'string' },
+    { name: 'age', type: 'int' },
+    { name: 'active', type: 'bool' },
+  ];
+  const store = ColumnStoreWasm.with_primary_key(schema, 'id');
+
+  // Insert rows
+  store.insert_row({ id: 1, name: 'Alice', age: 30, active: true });
+  store.insert_row({ id: 2, name: 'Bob', age: 25, active: false });
+
+  // Filter (returns row indices)
+  const adults = store.filter_gt('age', 26);  // [0]
+
+  // Upsert (insert or update by PK)
+  store.upsert_row({ id: 2, name: 'Bob', age: 26, active: true });
+
+  // TTL & Vacuum
+  store.set_row_ttl(1n, BigInt(Date.now()) + 60000n);
+  store.vacuum();
+
+  // Persist to IndexedDB
+  const persistence = new ColumnStorePersistence();
+  await persistence.init();
+  await persistence.save('my-store', store);
+
+  // Load later
+  const restored = await persistence.load('my-store');
+  console.log(restored.active_row_count);
+}
+```
+
+### ColumnStore API
+
+```typescript
+class ColumnStoreWasm {
+  constructor();
+  static with_schema(schema: Array<{name: string, type: string}>): ColumnStoreWasm;
+  static with_primary_key(schema: Array<{name: string, type: string}>, pk: string): ColumnStoreWasm;
+
+  // CRUD
+  insert_row(row: object): number;
+  upsert_row(row: object): string;        // "inserted" | "updated"
+  batch_upsert(rows: object[]): object;
+  get_row(pk: bigint): Map | null;
+  delete_row(pk: bigint): boolean;
+  update_row(pk: bigint, column: string, value: any): void;
+
+  // Filters (return row indices as Uint32Array)
+  filter_eq_int(column: string, value: bigint): Uint32Array;
+  filter_eq_string(column: string, value: string): Uint32Array;
+  filter_gt(column: string, value: number): Uint32Array;
+  filter_lt(column: string, value: number): Uint32Array;
+  filter_range(column: string, min: number, max: number): Uint32Array;
+  filter_in_string(column: string, values: string[]): Uint32Array;
+
+  // TTL & Vacuum
+  set_row_ttl(pk: bigint, expiry_ts: bigint): void;
+  expire_rows(now_ts: bigint): number;
+  vacuum(): object;
+  should_vacuum: boolean;
+
+  // Stats
+  readonly row_count: number;
+  readonly active_row_count: number;
+  readonly deleted_row_count: number;
+  readonly memory_usage: number;
+}
+
+class ColumnStorePersistence {
+  constructor();
+  init(): Promise<void>;
+  save(name: string, store: ColumnStoreWasm): Promise<void>;
+  load(name: string): Promise<ColumnStoreWasm>;
+  list_stores(): Promise<string[]>;
+  get_metadata(name: string): Promise<object>;
+  delete_store(name: string): Promise<void>;
+}
+```
+
+## Half-Precision Vectors
+
+Convert vectors to f16/bf16 for 50% memory savings:
+
+```javascript
+import { f32_to_f16, f16_to_f32, vector_memory_size } from '@wiscale/velesdb-wasm';
+
+const vec = new Float32Array([1.0, 2.0, 3.0]);
+const f16bytes = f32_to_f16(vec);         // Uint8Array (6 bytes vs 12)
+const restored = f16_to_f32(f16bytes);    // Float32Array
+
+console.log(vector_memory_size(768, 'f32'));  // 3072
+console.log(vector_memory_size(768, 'f16'));  // 1536
+```
+
+## IR Metrics
+
+Evaluate search quality directly in the browser:
+
+```javascript
+import { recall_at_k, precision_at_k, mrr, ndcg_at_k } from '@wiscale/velesdb-wasm';
+
+const truth   = new BigUint64Array([1n, 2n, 3n, 4n, 5n]);
+const results = new BigUint64Array([1n, 3n, 6n, 2n, 7n]);
+
+console.log(recall_at_k(truth, results));     // 0.6
+console.log(precision_at_k(truth, results));  // 0.6
+console.log(mrr(truth, results));             // 1.0
+```
+
 ## Use Cases
 
 - **Browser-based RAG** - 100% client-side semantic search
@@ -256,9 +382,12 @@ The WASM build is optimized for client-side use cases but has some limitations c
 |---------|------|-------------|
 | Vector search (NEAR) | ✅ | ✅ |
 | Metadata filtering | ✅ | ✅ |
+| Column Store (CRUD, filters, TTL) | ✅ | ✅ |
+| Knowledge Graph (nodes, edges, traversal) | ✅ | ✅ |
+| Half-precision vectors (f16/bf16) | ✅ | ✅ |
+| IR Metrics (recall, precision, MRR, nDCG) | ✅ | ✅ |
 | Full VelesQL queries | ❌ | ✅ |
 | Hybrid search (vector + BM25) | ❌ | ✅ |
-| Knowledge Graph operations | ❌ | ✅ |
 | MATCH clause (full-text) | ❌ | ✅ |
 | NEAR_FUSED (multi-query fusion) | ❌ | ✅ |
 | JOIN operations | ❌ | ✅ |

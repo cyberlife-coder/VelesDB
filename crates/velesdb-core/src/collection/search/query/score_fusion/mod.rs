@@ -128,7 +128,7 @@ impl ScoreBreakdown {
     }
 
     /// Compute final score using the specified strategy.
-    pub fn compute_final(&mut self, strategy: &FusionStrategy) {
+    pub fn compute_final(&mut self, strategy: &ScoreCombineStrategy) {
         self.final_score = strategy.combine(self);
     }
 
@@ -157,14 +157,15 @@ impl ScoreBreakdown {
     }
 }
 
-/// Strategy for combining multiple scores (EPIC-049 US-004).
+/// Strategy for combining multiple score signals of a single result (EPIC-049 US-004).
+///
+/// This is distinct from [`crate::fusion::FusionStrategy`] which combines ranked lists
+/// from multiple vector queries. `ScoreCombineStrategy` combines different signal types
+/// (vector similarity, graph distance, path score) for ONE document.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum FusionStrategy {
-    /// Reciprocal Rank Fusion (RRF) - good for combining ranked lists.
-    #[default]
-    Rrf,
-
+pub enum ScoreCombineStrategy {
     /// Weighted average of scores.
+    #[default]
     Weighted,
 
     /// Take the maximum score.
@@ -180,7 +181,7 @@ pub enum FusionStrategy {
     Average,
 }
 
-impl FusionStrategy {
+impl ScoreCombineStrategy {
     /// Combine scores from a breakdown using this strategy.
     #[must_use]
     pub fn combine(&self, breakdown: &ScoreBreakdown) -> f32 {
@@ -206,12 +207,6 @@ impl FusionStrategy {
                 .fold(1.0, |acc, &b| acc * b.max(0.0));
 
         let base_score = match self {
-            Self::Rrf => {
-                // RRF: sum of 1/(k + rank) - here we use score as proxy
-                // Higher scores get lower "ranks"
-                let k = 60.0_f32;
-                scores.iter().map(|&s| 1.0 / (k + (1.0 - s) * 100.0)).sum()
-            }
             Self::Weighted => {
                 // Equal weights for now - could be configurable
                 // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
@@ -234,7 +229,6 @@ impl FusionStrategy {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Rrf => "rrf",
             Self::Weighted => "weighted",
             Self::Maximum => "maximum",
             Self::Minimum => "minimum",

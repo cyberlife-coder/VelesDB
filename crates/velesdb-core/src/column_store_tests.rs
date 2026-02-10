@@ -2037,9 +2037,9 @@ mod tests {
             store.delete_by_pk(i);
         }
 
-        // Assert: Both FxHashSet and RoaringBitmap should be in sync
+        // Assert: Single RoaringBitmap tracks all deletions
         assert_eq!(store.deleted_row_count(), 30);
-        assert_eq!(store.deleted_count_bitmap(), 30);
+        assert_eq!(store.deleted_count_bitmap(), 30); // Same source, different return type
     }
 
     #[test]

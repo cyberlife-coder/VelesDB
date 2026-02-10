@@ -258,12 +258,26 @@ impl HnswIndex {
                 return Some(Vec::new());
             }
 
-            // GPU batch cosine similarity
-            let similarities =
-                match gpu.batch_cosine_similarity(&flat_vectors, query, self.dimension) {
-                    Ok(s) => s,
-                    Err(_) => return None,
-                };
+            // GPU batch distance computation — dispatch on configured metric
+            let similarities = match self.metric {
+                crate::distance::DistanceMetric::Cosine => {
+                    gpu.batch_cosine_similarity(&flat_vectors, query, self.dimension)
+                }
+                crate::distance::DistanceMetric::Euclidean => {
+                    gpu.batch_euclidean_distance(&flat_vectors, query, self.dimension)
+                }
+                crate::distance::DistanceMetric::DotProduct => {
+                    gpu.batch_dot_product(&flat_vectors, query, self.dimension)
+                }
+                other => {
+                    tracing::warn!("GPU not implemented for {:?}, falling back to CPU", other);
+                    return None;
+                }
+            };
+            let similarities = match similarities {
+                Ok(s) => s,
+                Err(_) => return None,
+            };
 
             // Combine IDs with similarities
             let mut results: Vec<(u64, f32)> = id_map.into_iter().zip(similarities).collect();

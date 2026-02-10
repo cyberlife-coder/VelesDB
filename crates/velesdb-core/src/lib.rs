@@ -55,14 +55,15 @@ mod alloc_guard_tests;
 pub mod cache;
 #[cfg(feature = "persistence")]
 pub mod collection;
-#[cfg(feature = "persistence")]
 pub mod column_store;
-#[cfg(all(test, feature = "persistence"))]
+#[cfg(test)]
 mod column_store_tests;
 pub mod compression;
 pub mod config;
 #[cfg(test)]
 mod config_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod database_query_tests;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
@@ -151,7 +152,6 @@ pub use quantization::{
     BinaryQuantizedVector, QuantizedVector, StorageMode,
 };
 
-#[cfg(feature = "persistence")]
 pub use column_store::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStore, ColumnStoreError, ColumnType,
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,
@@ -345,6 +345,85 @@ impl Database {
         Ok(())
     }
 
+    /// Executes a VelesQL query with cross-collection support.
+    ///
+    /// This method extends `Collection::execute_query()` with:
+    /// - JOIN execution (resolves JOIN tables as collections → ColumnStore)
+    /// - Compound query execution (UNION/INTERSECT/EXCEPT across collections)
+    ///
+    /// # Flow
+    ///
+    /// 1. Resolve FROM collection
+    /// 2. Delegate to `collection.execute_query()` or `collection.execute_aggregate()`
+    /// 3. Apply JOIN post-processing (if `stmt.joins` is non-empty)
+    /// 4. Apply compound query (if `query.compound` is Some)
+    ///
+    /// # Errors
+    ///
+    /// Returns error if FROM collection not found, JOIN table not found,
+    /// or underlying query execution fails.
+    pub fn execute_query(
+        &self,
+        query: &velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<point::SearchResult>> {
+        let stmt = &query.select;
+
+        // 1. Resolve FROM collection
+        let collection = self
+            .get_collection(&stmt.from)
+            .ok_or_else(|| Error::CollectionNotFound(stmt.from.clone()))?;
+
+        // 2. Execute base query on collection
+        let mut results = collection.execute_query(query, params)?;
+
+        // 3. Apply JOIN post-processing (Plan 08-02 will implement)
+        if !stmt.joins.is_empty() {
+            for join_clause in &stmt.joins {
+                let join_collection = self.get_collection(&join_clause.table).ok_or_else(|| {
+                    Error::CollectionNotFound(format!(
+                        "JOIN table '{}' not found",
+                        join_clause.table
+                    ))
+                })?;
+
+                let column_store = column_store::from_collection::column_store_from_collection(
+                    &join_collection,
+                    0,
+                )?;
+
+                let joined = collection::search::query::join::execute_join(
+                    &results,
+                    join_clause,
+                    &column_store,
+                )?;
+
+                results = collection::search::query::join::joined_to_search_results(joined);
+            }
+        }
+
+        // 4. Apply compound query (Plan 08-03 will implement)
+        if let Some(ref compound) = query.compound {
+            let right_collection = self.get_collection(&compound.right.from).ok_or_else(|| {
+                Error::CollectionNotFound(format!(
+                    "Compound query collection '{}' not found",
+                    compound.right.from
+                ))
+            })?;
+
+            let right_query = velesql::Query::new_select((*compound.right).clone());
+            let right_results = right_collection.execute_query(&right_query, params)?;
+
+            results = collection::search::query::compound::apply_set_operation(
+                results,
+                right_results,
+                compound.operator,
+            );
+        }
+
+        Ok(results)
+    }
+
     /// Loads existing collections from disk.
     ///
     /// Call this after opening a database to load previously created collections.
@@ -484,5 +563,152 @@ mod tests {
         assert!(collections.contains(&"coll1".to_string()));
         assert!(collections.contains(&"coll2".to_string()));
         assert!(collections.contains(&"coll3".to_string()));
+    }
+
+    #[test]
+    fn test_database_execute_query_basic_select() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("docs", 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        // Insert a point with payload
+        let collection = db.get_collection("docs").unwrap();
+        collection
+            .upsert(vec![point::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"title": "Test Doc", "category": "tech"})),
+            }])
+            .unwrap();
+
+        // Execute a basic SELECT query via Database
+        let query =
+            velesql::Parser::parse("SELECT * FROM docs WHERE category = 'tech' LIMIT 10").unwrap();
+        let params = std::collections::HashMap::new();
+        let results = db.execute_query(&query, &params).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].point.id, 1);
+    }
+
+    #[test]
+    fn test_database_execute_query_collection_not_found() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+
+        let query =
+            velesql::Parser::parse("SELECT * FROM nonexistent WHERE x = 1 LIMIT 10").unwrap();
+        let params = std::collections::HashMap::new();
+        let result = db.execute_query(&query, &params);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent"),
+            "Error should mention collection name: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_database_execute_query_with_params() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("docs", 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let collection = db.get_collection("docs").unwrap();
+        collection
+            .upsert(vec![
+                point::Point {
+                    id: 1,
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"tag": "a"})),
+                },
+                point::Point {
+                    id: 2,
+                    vector: vec![0.0, 1.0, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"tag": "b"})),
+                },
+            ])
+            .unwrap();
+
+        // Query with metadata filter
+        let query = velesql::Parser::parse("SELECT * FROM docs WHERE tag = 'a' LIMIT 10").unwrap();
+        let params = std::collections::HashMap::new();
+        let results = db.execute_query(&query, &params).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].point.id, 1);
+    }
+
+    #[test]
+    fn test_database_execute_query_union_two_collections() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("col_a", 4, DistanceMetric::Cosine)
+            .unwrap();
+        db.create_collection("col_b", 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col_a = db.get_collection("col_a").unwrap();
+        col_a
+            .upsert(vec![point::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"src": "a"})),
+            }])
+            .unwrap();
+
+        let col_b = db.get_collection("col_b").unwrap();
+        col_b
+            .upsert(vec![point::Point {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"src": "b"})),
+            }])
+            .unwrap();
+
+        // UNION query across two collections
+        let query =
+            velesql::Parser::parse("SELECT * FROM col_a UNION SELECT * FROM col_b").unwrap();
+        let params = std::collections::HashMap::new();
+        let results = db.execute_query(&query, &params).unwrap();
+
+        // Should have results from both collections
+        assert_eq!(results.len(), 2);
+        let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn test_database_execute_query_compound_collection_not_found() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("col_a", 4, DistanceMetric::Cosine)
+            .unwrap();
+
+        let col_a = db.get_collection("col_a").unwrap();
+        col_a
+            .upsert(vec![point::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"x": 1})),
+            }])
+            .unwrap();
+
+        // UNION with non-existent collection
+        let query =
+            velesql::Parser::parse("SELECT * FROM col_a UNION SELECT * FROM nonexistent").unwrap();
+        let params = std::collections::HashMap::new();
+        let result = db.execute_query(&query, &params);
+
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("nonexistent"),
+            "Error should mention missing collection"
+        );
     }
 }

@@ -1,5 +1,129 @@
 # Milestones
 
+## v3-ecosystem-alignment — In Progress
+
+**Started:** 2026-02-09  
+**Phases:** 8  
+**Findings covered:** 30 (22 Devil's Advocate + 8 ecosystem audit)  
+**Components:** 10 (WASM, server, Python SDK, TS SDK, LangChain, LlamaIndex, Tauri plugin, 2 demos, examples)
+
+### Summary
+
+Align the entire VelesDB ecosystem with velesdb-core. Every external component becomes a proper binding/wrapper with zero reimplemented logic. Expanded from original 5-phase scope to include demos, examples, Tauri plugin audit, and version alignment across all components.
+
+### Phases
+
+| Phase | Name | Requirements | Priority |
+|-------|------|-------------|----------|
+| 1 | WASM Rebinding | ECO-01,02,06,07,16,17 | 🚨 Architecture |
+| 2 | Server Binding & Security | ECO-03,04,05,14 | 🚨 Security |
+| 3 | Python Common + Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality |
+| 4 | TypeScript SDK Fixes | ECO-08,09,10,15 | 🐛 Contracts |
+| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience |
+| 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness |
+| 7 | GPU Extras + Ecosystem CI | ECO-21,22 | ⚠️ Polish |
+| 8 | WASM Feature Parity (ColumnStore + Metrics + f16) | Vision-driven | 🚨 Product Completeness |
+
+### Archive
+
+Details: `.planning/milestones/v3-ecosystem-alignment/`  
+Phase dirs: `.planning/phases/v3-01-*` through `v3-08-*`
+
+---
+
+## v4-verify-promise — Completed
+
+**Started:** 2026-02-08  
+**Completed:** 2026-02-09  
+**Phases:** 8  
+**Plans:** 30  
+**Requirements:** 13/13 satisfied (100%)
+
+### Summary
+
+Audit-and-fix milestone that validated whether VelesDB actually delivers what its README, GitHub page, and documentation promise. Every business scenario query, every code example, every feature claim was tested end-to-end. Where gaps existed, they were implemented or documentation was corrected. Scope expanded from 5 → 8 phases as deeper execution gaps were discovered (cross-store queries, NEAR_FUSED, JOIN/compound execution).
+
+### Key Achievements
+
+- **MATCH WHERE**: Fixed silent `_ => Ok(true)` catch-all — LIKE/BETWEEN/IN now execute correctly
+- **Subquery Execution**: Full scalar subquery executor — all 4 README business scenarios work
+- **Multi-hop MATCH**: Hop-by-hop chain traversal with binding-aware WHERE
+- **RETURN Aggregation**: OpenCypher implicit grouping for MATCH results
+- **NEAR_FUSED Wiring**: Multi-vector fusion search fully executable via VelesQL
+- **Cross-Store Planner**: VectorFirst & Parallel execution strategies via QueryPlanner
+- **Database::execute_query()**: Cross-collection JOIN + UNION/INTERSECT/EXCEPT
+- **EXPLAIN**: PlanNodes for FusedSearch and CrossStoreSearch
+- **Documentation Truth**: 9 GAPs resolved — README is an honest mirror of codebase
+
+### Phases
+
+| Phase | Name | Plans | Tests Added |
+|-------|------|-------|-------------|
+| 1 | MATCH WHERE Completeness | 2 | 21 |
+| 2 | Subquery Decision & Execution | 3 | 12 |
+| 3 | Multi-hop MATCH & RETURN | 2 | 10 |
+| 4 | E2E Scenario Test Suite | 7 | 36 |
+| 5 | README & Documentation Truth | 4 | — |
+| 6 | Unified Query & Full-Text | 4 | 47 |
+| 7 | Cross-Store Exec & EXPLAIN | 3 | 23 |
+| 8 | VelesQL Execution Completeness | 5 | 27 |
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| Phases | 8 |
+| Plans executed | 30 |
+| Requirements satisfied | 13/13 (100%) |
+| New tests added | ~176 |
+| Tests at completion | 3,339 |
+| Quality gates | 5/5 (fmt, clippy, deny, test, release build) |
+| Milestone commits | ~92 |
+
+### Archive
+
+Full details: `.planning/milestones/v4-verify-promise/`
+
+---
+
+## v2-core-trust — Completed
+
+**Started:** 2026-02-08  
+**Completed:** 2026-02-08  
+**Phases:** 4 (+1 prerequisite)  
+**Plans:** 10  
+**Audit:** ✅ Passed (23/23 findings resolved, 0 gaps)
+
+### Summary
+
+Implementation Truth & Correctness milestone. All findings from the Devil's Advocate Code Review (47 issues total, 23 scoped to velesdb-core). Fixed real GPU WGSL shaders, fusion disambiguation (ScoreCombineStrategy), VelesQL ParseError::InvalidValue (E007), graph traversal bugs, quantization fixes, HNSW single-lock search, WAL CRC32 integrity, and dead code cleanup.
+
+### Key Achievements
+
+- **GPU Truth**: Fake CPU loops replaced with real WGSL compute shaders (Euclidean + DotProduct)
+- **Fusion Clarity**: Old broken `FusionStrategy` renamed to `ScoreCombineStrategy`, broken RRF variant deleted
+- **Parse Safety**: `ParseError::InvalidValue` (E007) replaces silent `unwrap_or(0.0)` in fusion/MATCH parsing
+- **HNSW Perf**: Single read lock per search (was per-candidate), adaptive over-fetch factor
+- **Storage Integrity**: WAL per-entry CRC32, batch flush, AtomicU64 snapshot
+- **CI Hardened**: PR triggers restored, security audit blocking, cargo deny, multi-threaded tests
+
+### Metrics
+
+| Metric | Value |
+|--------|-------|
+| Phases | 4 (+1 prerequisite) |
+| Plans executed | 10 |
+| Findings resolved | 23/23 (100%) |
+| Tests passing | 3,165 |
+| Quality gates | 5/5 (fmt, clippy, deny, test, release build) |
+| Commits | ~22 |
+
+### Archive
+
+Full details: `.planning/milestones/v2-core-trust/`
+
+---
+
 ## v1-refactoring — 2026-02-08
 
 **Started:** 2026-02-06

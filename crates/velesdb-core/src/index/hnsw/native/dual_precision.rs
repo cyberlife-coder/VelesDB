@@ -24,7 +24,7 @@
 use super::distance::DistanceEngine;
 use super::graph::NativeHnsw;
 use super::layer::NodeId;
-use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
+use super::quantization::{QuantizedVectorInt8Store, ScalarQuantizer};
 use std::sync::Arc;
 
 /// Configuration for dual-precision search (EPIC-055/US-003).
@@ -65,7 +65,7 @@ pub struct DualPrecisionHnsw<D: DistanceEngine> {
     /// Scalar quantizer (trained lazily or on first batch)
     quantizer: Option<Arc<ScalarQuantizer>>,
     /// Quantized vector storage (contiguous int8 array)
-    quantized_store: Option<QuantizedVectorStore>,
+    quantized_store: Option<QuantizedVectorInt8Store>,
     /// Dimension of vectors
     dimension: usize,
     /// Training sample size for quantizer
@@ -157,7 +157,8 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         let quantizer = Arc::new(ScalarQuantizer::train(&refs));
 
         // Create quantized store and quantize all existing vectors
-        let mut store = QuantizedVectorStore::new(Arc::clone(&quantizer), self.inner.len() + 1000);
+        let mut store =
+            QuantizedVectorInt8Store::new(Arc::clone(&quantizer), self.inner.len() + 1000);
 
         // Quantize training buffer (already in order)
         for vec in &self.training_buffer {
@@ -183,63 +184,16 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     /// Searches for k nearest neighbors using dual-precision.
     ///
     /// If quantizer is trained:
-    /// 1. Graph traversal uses int8 distances (fast)
+    /// 1. Graph traversal uses int8 distances (fast, 4x bandwidth reduction)
     /// 2. Re-ranks top candidates with float32 distances (accurate)
     ///
     /// If quantizer is not trained, falls back to standard float32 search.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
-        // If no quantizer, use standard search
-        if self.quantizer.is_none() {
-            return self.inner.search(query, k, ef_search);
-        }
-
-        // Dual-precision search: use quantized distances for traversal,
-        // then re-rank with exact distances
-        self.search_dual_precision(query, k, ef_search)
-    }
-
-    /// Dual-precision search implementation.
-    ///
-    /// Currently uses float32 for graph traversal (fast with SIMD) and
-    /// re-ranks with exact float32 distances from stored vectors.
-    ///
-    /// Future optimization: use quantized int8 for traversal to reduce
-    /// memory bandwidth during graph exploration.
-    fn search_dual_precision(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef_search: usize,
-    ) -> Vec<(NodeId, f32)> {
-        // Step 1: Get more candidates than needed using graph traversal
-        // Future optimization: use quantized distances for traversal (EPIC-055)
-        let rerank_k = (ef_search * 2).max(k * 4);
-        let candidates = self.inner.search(query, rerank_k, ef_search);
-
-        if candidates.is_empty() {
-            return candidates;
-        }
-
-        // Step 2: Re-rank using EXACT float32 distances
-        // This is the key to dual-precision: approximate traversal + exact rerank
-        let vectors = self.inner.vectors.read();
-        let mut reranked: Vec<(NodeId, f32)> = candidates
-            .iter()
-            .filter_map(|&(node_id, _approx_dist)| {
-                // Get exact distance from original float32 vectors
-                let vec = vectors.get(node_id)?;
-                let exact_dist = self.inner.compute_distance(query, vec);
-                Some((node_id, exact_dist))
-            })
-            .collect();
-
-        // Sort by exact distance
-        reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        // Return top k
-        reranked.truncate(k);
-        reranked
+        // Reason: Delegate to search_with_config so default search() uses int8
+        // traversal when quantizer is trained (B-04 fix).
+        let config = DualPrecisionConfig::default();
+        self.search_with_config(query, k, ef_search, &config)
     }
 
     /// Returns the quantizer if trained.
@@ -330,7 +284,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         query_int8: &[u8],
         k: usize,
         ef_search: usize,
-        store: &QuantizedVectorStore,
+        store: &QuantizedVectorInt8Store,
     ) -> Vec<(NodeId, u32)> {
         use rustc_hash::FxHashSet;
         use std::cmp::Reverse;
@@ -410,7 +364,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         query_int8: &[u8],
         entry: NodeId,
         layer: usize,
-        store: &QuantizedVectorStore,
+        store: &QuantizedVectorInt8Store,
     ) -> NodeId {
         let quantizer = store.quantizer();
         let mut current = entry;

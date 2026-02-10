@@ -1,9 +1,14 @@
 # VelesDB Core — Project State
 
 **Project:** VelesDB Core  
-**Current Milestone:** v2-core-trust (Phase 0 — merge & tag)  
-**Next Milestone:** v3-ecosystem-alignment  
-**Previous Milestone:** v1-refactoring (completed 2026-02-08)  
+**Current Milestone:** v3-ecosystem-alignment  
+**Phase:** 2 of 7 (Server Binding & Security)  
+**Plan:** 0 of 5 (planning complete)  
+**Status:** Phase 2 planned — 5 plans across 2 waves. Ready to execute Plan 01 (Graph Unification)  
+**Completed Milestones:**  
+- v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
+- v2-core-trust (2026-02-08) — 4 phases, 10 plans  
+- v4-verify-promise (2026-02-08 → 2026-02-09) — 8 phases, 30 plans  
 
 ---
 
@@ -13,64 +18,59 @@
 > All external components (server, WASM, SDK, integrations) are bindings/wrappers.  
 > Zero reimplemented logic. Zero duplicated code.
 
-## Project Reference
+## Codebase Status
 
-### Core Value
-VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symbolique in a single local-first engine.
-
-### Codebase Status (post-refactoring, pre-correctness)
-- **3,117 tests** passing, 0 failures
-- **Quality gates**: fmt ✅, clippy ✅, deny ✅, doc ✅, release build ✅
+- **3,350+ tests** passing, 0 failures (workspace)
+- **Quality gates**: fmt ✅, clippy ✅, deny ✅, test ✅, release build ✅
 - **112 unsafe blocks** — all documented with SAFETY comments
-- **47 issues found** by Devil's Advocate review (3 audit phases): 7 critical, 14 bugs, 23 design, 3 minor
+- **README**: Honest mirror of codebase (verified by v4 Phase 5)
+- **VelesQL**: Full execution for SELECT, MATCH, JOIN (INNER/LEFT), UNION/INTERSECT/EXCEPT, subqueries, NEAR_FUSED, BM25
 
 ### Constraints
 - Rust 1.83+ only
 - All quality gates must pass: fmt, clippy, deny, test
 - All unsafe code must have documented invariants
 - TDD: test BEFORE code for every fix
-
-### Accumulated Context
-
-#### Roadmap Evolution
-- Phase 5 added: Performance optimization with Arxiv research
+- Martin Fowler: files >300 lines get split into modules
+- **v3-specific:** Zero reimplementation — if WASM needs a feature, add it to core first
+- **v3-specific:** Backward compatible SDK API — same function signatures, correct behavior
 
 ---
 
-## Milestone v2: Core Trust (25 findings — velesdb-core only)
+## Milestone v3: Ecosystem Alignment
 
-### Status: Phase 0 ready to execute
+**Goal:** Align entire VelesDB ecosystem with velesdb-core. Every external component becomes a proper binding/wrapper with zero reimplemented logic. All demos and examples updated to reflect v4 changes.  
+**Source:** 30 findings (22 Devil's Advocate + 8 ecosystem audit)  
+**Project:** `.planning/milestones/v3-ecosystem-alignment/PROJECT.md`  
+**Roadmap:** `.planning/milestones/v3-ecosystem-alignment/ROADMAP.md`
 
-| Phase | Status | Scope | Priority |
-|-------|--------|-------|----------|
-| 0 - Merge & Tag v1 | ⬜ Pending | Git workflow | 🔒 Prerequisite |
-| 1 - CI Safety Net | ⬜ Pending | CI-01→04 | 🛡️ Infrastructure |
-| 2 - Critical Correctness | ⬜ Pending | C-01→04, B-03, D-09 | 🚨 Wrong Results |
-| 3 - Core Engine Bugs | ⬜ Pending | B-01→06, D-08, M-03 | 🐛 Correctness |
-| 4 - Perf, Storage, Cleanup | ⬜ Pending | D-01→07, M-01→02 | ⚠️ Optimization |
-| 5 - Performance Arxiv | ⬜ Pending | Research-based optimizations | 🚀 Performance |
+### Progress
 
-**Execution:** `0 → 1 → 2 → 3 → 4 → 5`
+```
+Phase 1  ░░░░░░░░░░  0%   WASM Rebinding (5 plans) 🚨
+Phase 2  ░░░░░░░░░░  0%   Server Binding & Security (5 plans) 🚨
+Phase 3  ░░░░░░░░░░  0%   Python Common + Integr.  🐛
+Phase 4  ░░░░░░░░░░  0%   TypeScript SDK Fixes     🐛
+Phase 5  ░░░░░░░░░░  0%   Demos & Examples Update  📝
+Phase 6  ░░░░░░░░░░  0%   Tauri Plugin Audit       🐛
+Phase 7  ░░░░░░░░░░  0%   GPU + Ecosystem CI       ⚠️
+```
 
-## Milestone v3: Ecosystem Alignment (22 findings — bindings/wrappers)
+### Phases
 
-### Status: Blocked by v2 completion
+| Phase | Name | Requirements | Priority | Status |
+|-------|------|-------------|----------|--------|
+| 1 | WASM Rebinding | ECO-01,02,06,07,16,17 | 🚨 Architecture | ⬜ Pending |
+| 2 | Server Binding & Security | ECO-03,04,05,14 | 🚨 Security | 📋 Planned (5 plans) |
+| 3 | Python Common + Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ⬜ Pending |
+| 4 | TypeScript SDK Fixes | ECO-08,09,10,15 | 🐛 Contracts | ⬜ Pending |
+| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ⬜ Pending |
+| 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness | ⬜ Pending |
+| 7 | GPU + Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
 
-| Phase | Status | Scope | Priority |
-|-------|--------|-------|----------|
-| 1 - WASM Rebinding | ✅ Complete (01-05 cherry-picked to develop) | BEG-01,05,06, W-01→03 | 🚨 Architecture |
-| 2 - Server Binding | ✅ Complete (5 PLANs executed, 108 tests) | S-01→04, BEG-05 | 🚨 Security |
-| 2.1 - Server Docs | ✅ Complete (README, OpenAPI, CHANGELOG) | Documentation gaps | 📚 Documentation |
-| 2.2 - Server Hardening | ✅ Complete (validation, consistency, error hygiene) | Code review findings | 🛡️ Quality |
-| 3 - SDK Fixes | ✅ Complete (01-07 all done, 25/25 endpoints) | T-01→03, BEG-07 + full parity | 🐛 Contracts |
-| 4 - Python Integrations | ⬜ Blocked | I-01→03, BEG-02→04 | 🐛 Contracts |
-| 5 - GPU + Ecosystem CI | ⬜ Blocked | I-04, CI-04 | ⚠️ Polish |
+**Execution:** `1 → 2 → 3 → 4 → 5`
 
-**Execution:** `1 → 2 → 3 → 4 → 5` (after v2 complete)
-
----
-
-### Pending v2+ Requirements (deferred from v1)
+### Deferred Requirements (from v1/v2)
 - **TEST-05**: Fuzz testing expansion
 - **TEST-06**: Loom concurrency testing expansion
 - **TEST-07**: Benchmark regression testing in CI
@@ -80,28 +80,55 @@ VelesDB is a cognitive memory engine for AI agents — Vector + Graph + Symboliq
 
 ---
 
+## Session Continuity
+
+**Last session:** 2026-02-10  
+**Stopped at:** Phase v3-02 (Server Binding & Security) planned — 5 plans, 2 waves, full audit in CONTEXT.md
+
+## Decisions
+
+| Decision | Context | Date |
+|----------|---------|------|
+| ColumnStore extracted from persistence gate | Only `from_collection.rs` depends on persistence; rest is pure logic | 2026-02-09 |
+| IndexedDB persistence via snapshot (schema+rows JSON) | Avoids exposing internal types (RoaringBitmap, StringTable) | 2026-02-09 |
+| Playwright MCP for WASM browser testing | Native targets can't run wasm_bindgen; Playwright validates in real Chromium | 2026-02-09 |
+| serde_wasm_bindgen Map→toObj() helper | serde_json::Map serializes as JS Map, not plain object | 2026-02-09 |
+| Graph handlers bind to core Collection API | Delete server's GraphService, use Collection::traverse_bfs/dfs | 2026-02-10 |
+| Auth: constant-time comparison for API keys | Prevent timing attacks on bearer token validation | 2026-02-10 |
+| spawn_blocking: all CPU handlers wrapped | Only health_check stays pure async | 2026-02-10 |
+| tower-governor for per-IP rate limiting | Global rate limit is insufficient; need per-IP granularity | 2026-02-10 |
+
+## Blockers & Concerns
+
+- `velesdb-python` release build has pre-existing PyO3 linker errors on Windows
+
+---
+
 ## Quick Reference
 
-### Important File Paths
-- `.planning/v2-correctness/PROJECT.md` — Milestone v2 definition
-- `.planning/v2-correctness/ROADMAP.md` — Milestone v2 roadmap (0+4 phases)
-- `.planning/v3-ecosystem-alignment/PROJECT.md` — Milestone v3 definition
-- `.planning/v3-ecosystem-alignment/ROADMAP.md` — Milestone v3 roadmap (5 phases)
+### Key File Paths
+- `.planning/milestones/v3-ecosystem-alignment/PROJECT.md` — Milestone definition (30 findings)
+- `.planning/milestones/v3-ecosystem-alignment/ROADMAP.md` — Roadmap (7 phases)
+- `.planning/MILESTONES.md` — All milestones summary
+- `.planning/milestones/` — Archived milestones (v1, v2, v4)
 - `.planning/DEVIL_ADVOCATE_FINDINGS.md` — Full review findings (47 issues)
 - `AGENTS.md` — Coding standards and templates
 
 ### Key Commands
 ```powershell
+# Core quality gates
 cargo fmt --all
 cargo clippy -- -D warnings
 cargo deny check
 cargo test --workspace
 cargo build --release
 .\scripts\local-ci.ps1
+
+# Ecosystem-specific
+wasm-pack test --headless --chrome    # WASM (Phase 1)
+npm test                               # TypeScript SDK (Phase 3)
+pytest                                 # Python integrations (Phase 4)
 ```
 
----
-
 *State file last updated: 2026-02-10*  
-*Status: v3 Phases 1, 2, 2.1, 2.2, 3 COMPLETE. Phase 4/5 blocked by v2. 115 server tests, ~3069 core tests, 233 TS tests. Next: v3-04 or v2.*
-*Phase 5 added: Performance optimization with Arxiv research
+*Status: Phase 2 (Server Binding & Security) planned — 5 plans across 2 waves. Ready to execute Plan 01 (Graph Unification).*
