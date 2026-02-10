@@ -26,6 +26,21 @@ fn test_error_codes_are_unique() {
         Error::Io(std::io::Error::other("test")),
         Error::Serialization("test".into()),
         Error::Internal("test".into()),
+        Error::VectorNotAllowed("test".into()),
+        Error::SearchNotSupported("test".into()),
+        Error::VectorRequired("test".into()),
+        Error::SchemaValidation("test".into()),
+        Error::GraphNotSupported("test".into()),
+        Error::EdgeExists(1),
+        Error::EdgeNotFound(1),
+        Error::InvalidEdgeLabel("test".into()),
+        Error::NodeNotFound(1),
+        Error::Overflow("test".into()),
+        Error::ColumnStoreError("test".into()),
+        Error::GpuError("test".into()),
+        Error::EpochMismatch("test".into()),
+        Error::UnsupportedFeature("test".into()),
+        Error::NodeExists(1),
     ];
 
     // Act - collect all codes
