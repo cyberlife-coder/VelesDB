@@ -1,21 +1,70 @@
 //! Graph HTTP handlers for VelesDB REST API.
 //!
-//! Provides endpoints for graph operations including edge queries, traversal, and degree.
+//! All graph operations delegate to `Collection` methods from `velesdb-core`.
+//! The server is a thin HTTP layer — zero reimplemented graph logic.
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+use std::sync::Arc;
 use velesdb_core::collection::graph::GraphEdge;
+use velesdb_core::Collection;
 
 use crate::types::ErrorResponse;
+use crate::AppState;
 
-use super::service::GraphService;
 use super::types::{
-    AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse, TraversalStats,
-    TraverseRequest, TraverseResponse,
+    AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse,
+    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
 };
+
+/// Helper: get a collection or return 404.
+fn get_collection_or_404(
+    state: &AppState,
+    name: &str,
+) -> Result<Collection, (StatusCode, Json<ErrorResponse>)> {
+    state.db.get_collection(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{name}' not found"),
+            }),
+        )
+    })
+}
+
+/// Adapter: convert core's node-ID paths to edge-ID paths.
+///
+/// Core's `TraversalResult.path` contains node IDs (including source).
+/// The REST API contract returns edge IDs in paths.
+/// For each consecutive pair of nodes, we look up the connecting edge.
+pub(super) fn node_path_to_edge_ids(collection: &Collection, node_path: &[u64]) -> Vec<u64> {
+    if node_path.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut edge_ids = Vec::with_capacity(node_path.len() - 1);
+    for window in node_path.windows(2) {
+        let source = window[0];
+        let target = window[1];
+
+        // Find the edge connecting source → target
+        let outgoing = collection.get_outgoing_edges(source);
+        if let Some(edge) = outgoing.iter().find(|e| e.target() == target) {
+            edge_ids.push(edge.id());
+        } else {
+            // Reason: data race between traversal and edge removal; log and skip
+            tracing::warn!(
+                source,
+                target,
+                "Edge not found between consecutive traversal nodes — possible data race"
+            );
+        }
+    }
+    edge_ids
+}
 
 /// Get edges from a collection's graph filtered by label.
 ///
@@ -40,9 +89,9 @@ use super::types::{
     tag = "graph"
 )]
 pub async fn get_edges(
+    State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Query(params): Query<EdgeQueryParams>,
-    State(graph_service): State<GraphService>,
 ) -> Result<Json<EdgesResponse>, (StatusCode, Json<ErrorResponse>)> {
     let label = params.label.ok_or_else(|| {
         (
@@ -53,25 +102,30 @@ pub async fn get_edges(
         )
     })?;
 
-    let edges: Vec<EdgeResponse> = graph_service
-        .get_edges_by_label(&name, &label)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to get edges: {e}"),
-                }),
-            )
-        })?
-        .into_iter()
-        .map(|e| EdgeResponse {
-            id: e.id(),
-            source: e.source(),
-            target: e.target(),
-            label: e.label().to_string(),
-            properties: serde_json::to_value(e.properties()).unwrap_or_default(),
-        })
-        .collect();
+    let collection = get_collection_or_404(&state, &name)?;
+
+    let edges: Vec<EdgeResponse> = tokio::task::spawn_blocking(move || -> Vec<EdgeResponse> {
+        collection
+            .get_edges_by_label(&label)
+            .into_iter()
+            .map(|e| EdgeResponse {
+                id: e.id(),
+                source: e.source(),
+                target: e.target(),
+                label: e.label().to_string(),
+                properties: serde_json::to_value(e.properties()).unwrap_or_default(),
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
+        )
+    })?;
 
     let count = edges.len();
     Ok(Json(EdgesResponse { edges, count }))
@@ -91,13 +145,14 @@ pub async fn get_edges(
     responses(
         (status = 201, description = "Edge added successfully"),
         (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
 )]
 pub async fn add_edge(
+    State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-    State(graph_service): State<GraphService>,
     Json(request): Json<AddEdgeRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     // Convert properties from Value to HashMap<String, Value>
@@ -126,14 +181,26 @@ pub async fn add_edge(
         })?
         .with_properties(properties);
 
-    graph_service.add_edge(&name, edge).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to add edge: {e}"),
-            }),
-        )
-    })?;
+    let collection = get_collection_or_404(&state, &name)?;
+
+    tokio::task::spawn_blocking(move || -> velesdb_core::Result<()> { collection.add_edge(edge) })
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Task panicked: {e}"),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to add edge: {e}"),
+                }),
+            )
+        })?;
 
     Ok(StatusCode::CREATED)
 }
@@ -150,50 +217,82 @@ pub async fn add_edge(
     responses(
         (status = 200, description = "Traversal completed successfully", body = TraverseResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
 )]
 pub async fn traverse_graph(
+    State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-    State(graph_service): State<GraphService>,
     Json(request): Json<TraverseRequest>,
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let results = match request.strategy.to_lowercase().as_str() {
-        "bfs" => graph_service.traverse_bfs(
-            &name,
-            request.source,
-            request.max_depth,
-            request.limit,
-            &request.rel_types,
-        ),
-        "dfs" => graph_service.traverse_dfs(
-            &name,
-            request.source,
-            request.max_depth,
-            request.limit,
-            &request.rel_types,
-        ),
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Invalid strategy '{}'. Use 'bfs' or 'dfs'.",
-                        request.strategy
-                    ),
-                }),
-            ));
-        }
-    }
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
+    // Validate strategy before spawning blocking task
+    let strategy = request.strategy.to_lowercase();
+    if strategy != "bfs" && strategy != "dfs" {
+        return Err((
+            StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: format!("Traversal failed: {e}"),
+                error: format!("Invalid strategy '{strategy}'. Use 'bfs' or 'dfs'."),
             }),
-        )
-    })?;
+        ));
+    }
+
+    let collection = get_collection_or_404(&state, &name)?;
+
+    let rel_type_strs: Vec<String> = request.rel_types.clone();
+    let source = request.source;
+    let max_depth = request.max_depth;
+    let limit = request.limit;
+
+    let results =
+        tokio::task::spawn_blocking(move || -> velesdb_core::Result<Vec<TraversalResultItem>> {
+            let rel_refs: Vec<&str> = rel_type_strs.iter().map(String::as_str).collect();
+            let rel_types = if rel_refs.is_empty() {
+                None
+            } else {
+                Some(rel_refs.as_slice())
+            };
+
+            let core_results = match strategy.as_str() {
+                "bfs" => collection.traverse_bfs(source, max_depth, rel_types, limit),
+                "dfs" => collection.traverse_dfs(source, max_depth, rel_types, limit),
+                // Reason: validated above, unreachable
+                _ => unreachable!(),
+            };
+
+            // Convert core TraversalResult → server TraversalResultItem with edge-ID paths
+            core_results.map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| {
+                        let edge_ids = node_path_to_edge_ids(&collection, &r.path);
+                        TraversalResultItem {
+                            target_id: r.target_id,
+                            depth: r.depth,
+                            path: edge_ids,
+                        }
+                    })
+                    .collect()
+            })
+        })
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Task panicked: {e}"),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Traversal failed: {e}"),
+                }),
+            )
+        })?;
 
     let depth_reached = results.iter().map(|r| r.depth).max().unwrap_or(0);
     let visited = results.len();
@@ -201,7 +300,7 @@ pub async fn traverse_graph(
 
     Ok(Json(TraverseResponse {
         results,
-        next_cursor: None, // Cursor pagination not implemented yet
+        next_cursor: None,
         has_more,
         stats: TraversalStats {
             visited,
@@ -224,19 +323,26 @@ pub async fn traverse_graph(
     ),
     responses(
         (status = 200, description = "Degree retrieved successfully", body = DegreeResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
 )]
 pub async fn get_node_degree(
+    State(state): State<Arc<AppState>>,
     Path((name, node_id)): Path<(String, u64)>,
-    State(graph_service): State<GraphService>,
 ) -> Result<Json<DegreeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let (in_degree, out_degree) = graph_service.get_node_degree(&name, node_id).map_err(|e| {
+    let collection = get_collection_or_404(&state, &name)?;
+
+    let (in_degree, out_degree) = tokio::task::spawn_blocking(move || -> (usize, usize) {
+        collection.get_node_degree(node_id)
+    })
+    .await
+    .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to get node degree: {e}"),
+                error: format!("Task panicked: {e}"),
             }),
         )
     })?;

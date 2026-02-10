@@ -39,11 +39,11 @@ pub use handlers::{
     upsert_points,
 };
 
-// FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
+// Graph handlers — all delegate to Collection methods from velesdb-core
 pub use handlers::graph::{
     add_edge, get_edges, get_node_degree, stream_traverse, traverse_graph, DegreeResponse,
-    GraphService, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams,
-    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    StreamDoneEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams, TraversalResultItem,
+    TraversalStats, TraverseRequest, TraverseResponse,
 };
 
 // FLAG-3 FIX: Re-export metrics handlers conditionally (EPIC-016/US-034,035)

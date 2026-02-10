@@ -19,8 +19,8 @@ use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
     delete_point, explain, flush_collection, get_collection, get_edges, get_node_degree, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, search, text_search, traverse_graph, upsert_points, ApiDoc,
-    AppState, GraphService,
+    multi_query_search, query, search, stream_traverse, text_search, traverse_graph, upsert_points,
+    ApiDoc, AppState,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -61,31 +61,12 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::open(&args.data_dir)?;
     let state = Arc::new(AppState { db });
 
-    // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
-    // WARNING: GraphService is in-memory only and NOT persisted to disk.
-    // Graph data will be lost on server restart. This is a preview feature.
-    // Full persistence will be implemented in EPIC-004.
-    let graph_service = GraphService::new();
-    tracing::warn!(
-        "GraphService initialized (PREVIEW): Graph data is in-memory only and will NOT persist across restarts. \
-         Use the Python/Rust SDK for persistent graph storage."
+    tracing::info!(
+        "Graph EdgeStore is in-memory (shared with Collection). \
+         Edge data will NOT persist across restarts. Disk persistence planned for future release."
     );
 
-    // Graph routes with GraphService state (separate router)
-    // EPIC-016/US-050: Added traverse and degree endpoints
-    let graph_router = Router::new()
-        .route(
-            "/collections/{name}/graph/edges",
-            get(get_edges).post(add_edge),
-        )
-        .route("/collections/{name}/graph/traverse", post(traverse_graph))
-        .route(
-            "/collections/{name}/graph/nodes/{node_id}/degree",
-            get(get_node_degree),
-        )
-        .with_state(graph_service);
-
-    // Build API router with AppState
+    // Build API router — all routes share AppState (graph included)
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route(
@@ -121,9 +102,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/query", post(query))
         .route("/query/explain", post(explain))
         .route("/collections/{name}/match", post(match_query))
-        .with_state(state)
-        // FLAG-2 FIX: Merge graph router with its own state
-        .merge(graph_router);
+        // Graph routes — delegate to Collection methods from velesdb-core
+        .route(
+            "/collections/{name}/graph/edges",
+            get(get_edges).post(add_edge),
+        )
+        .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/traverse/stream",
+            get(stream_traverse),
+        )
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/degree",
+            get(get_node_degree),
+        )
+        .with_state(state);
 
     // FLAG-3 FIX: Add metrics endpoint conditionally (EPIC-016/US-034,035)
     #[cfg(feature = "prometheus")]

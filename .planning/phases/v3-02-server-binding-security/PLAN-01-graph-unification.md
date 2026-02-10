@@ -12,7 +12,7 @@ parallel_safe: false
 
 ## Objective
 
-Delete the server's independent `GraphService` (in-memory EdgeStore) and rewrite all graph handlers to delegate to `Collection` methods from `velesdb-core`. This eliminates 100% of reimplemented BFS/DFS logic and ensures graph data is persisted through core's storage layer.
+Delete the server's independent `GraphService` (in-memory EdgeStore) and rewrite all graph handlers to delegate to `Collection` methods from `velesdb-core`. This eliminates 100% of reimplemented BFS/DFS logic and unifies graph data with the Collection's EdgeStore (still in-memory, but now shared with VelesQL MATCH queries).
 
 ## Context
 
@@ -41,18 +41,22 @@ Delete the server's independent `GraphService` (in-memory EdgeStore) and rewrite
    - `get_node_degree` → call `collection.get_node_degree(node_id)`.
    - Wrap all handlers in `spawn_blocking` since graph operations are CPU-bound.
    - Return 404 if collection not found (consistent with other handlers).
-3. Update `stream.rs`:
-   - Remove `GraphService` dependency.
-   - Use `AppState` and `Collection` traversal methods.
+3. Rewrite `stream.rs`:
+   - Replace `State<Arc<GraphService>>` with `State<Arc<AppState>>`.
+   - Delegate to `Collection::traverse_bfs()` / `traverse_dfs()` instead of `GraphService`.
    - Wrap traversal in `spawn_blocking`.
+   - Apply same edge-ID path adapter as regular traverse handler (see point 5).
+   - Wire SSE route in `main.rs`: `.route("/collections/{name}/graph/traverse/stream", get(stream_traverse))`
 4. Update `mod.rs`:
    - Remove `mod service;` and `pub use service::GraphService;`.
    - Remove `#![allow(dead_code)]`.
    - Update re-exports.
    - Update tests to use `Collection` directly instead of `GraphService`.
 5. Map `TraversalResult` (core) → `TraversalResultItem` (server types) in handler.
-   - Core's `TraversalResult.path` contains node IDs; server's `TraversalResultItem.path` contains edge IDs.
-   - Decide: adapt to core's semantics (node IDs) or add edge-ID path to core. Prefer adapting server types to match core.
+   - Core's `TraversalResult.path` contains **node IDs** (includes source); server's `TraversalResultItem.path` contains **edge IDs**.
+   - **Decision: Keep edge-ID paths** to avoid REST API breaking change.
+   - Build adapter: for each consecutive pair of nodes in core's path, look up the edge connecting them via `collection.get_outgoing_edges()` and collect edge IDs.
+   - If edge lookup fails (data race), fall back to empty path with `tracing::warn!`.
 
 **Verify:**
 ```powershell
@@ -133,7 +137,8 @@ grep -rn "GraphService" crates/velesdb-server/src/
 - [ ] `GraphService` struct and `service.rs` fully deleted
 - [ ] Zero reimplemented BFS/DFS in server
 - [ ] All graph handlers delegate to `Collection` methods
-- [ ] Graph data persists through core's EdgeStore (no more in-memory-only warning)
+- [ ] Graph data accessible to VelesQL MATCH queries via shared Collection EdgeStore
+- In-memory warning updated (edge persistence is still in-memory, same as core — future EPIC for disk persistence)
 - [ ] All server tests pass
 - [ ] Clippy clean
 
@@ -148,3 +153,4 @@ grep -rn "GraphService" crates/velesdb-server/src/
 - **Deleted:** `handlers/graph/service.rs`
 - **Modified:** `handlers/graph/handlers.rs`, `handlers/graph/mod.rs`, `handlers/graph/stream.rs`, `handlers/graph/types.rs`, `handlers/mod.rs`, `main.rs`, `lib.rs`
 - **Modified:** `tests/api_integration.rs`
+- **Added:** SSE streaming route for graph traversal in `main.rs`
