@@ -30,7 +30,6 @@ use crate::AppState;
         (status = 400, description = "Invalid request", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -53,9 +52,10 @@ pub async fn search(
         .ef_search
         .or_else(|| req.mode.as_ref().and_then(|m| mode_to_ef_search(m)));
 
-    let search_result = if let Some(ref filter_json) = req.filter {
-        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
-            Ok(f) => f,
+    // Parse filter before spawn_blocking (serde is fast)
+    let filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = req.filter {
+        match serde_json::from_value(filter_json.clone()) {
+            Ok(f) => Some(f),
             Err(e) => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -65,32 +65,46 @@ pub async fn search(
                 )
                     .into_response()
             }
-        };
-        collection.search_with_filter(&req.vector, req.top_k, &filter)
-    } else if let Some(ef) = effective_ef {
-        collection.search_with_ef(&req.vector, req.top_k, ef)
+        }
     } else {
-        collection.search(&req.vector, req.top_k)
+        None
     };
 
-    match search_result {
-        Ok(results) => {
-            let response = SearchResponse {
-                results: results
-                    .into_iter()
-                    .map(|r| SearchResultResponse {
-                        id: r.point.id,
-                        score: r.score,
-                        payload: r.point.payload,
-                    })
-                    .collect(),
-            };
-            Json(response).into_response()
-        }
-        Err(e) => (
+    let result = tokio::task::spawn_blocking(move || {
+        let search_result = if let Some(ref f) = filter {
+            collection.search_with_filter(&req.vector, req.top_k, f)
+        } else if let Some(ef) = effective_ef {
+            collection.search_with_ef(&req.vector, req.top_k, ef)
+        } else {
+            collection.search(&req.vector, req.top_k)
+        };
+
+        search_result.map(|results| SearchResponse {
+            results: results
+                .into_iter()
+                .map(|r| SearchResultResponse {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect(),
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -112,7 +126,6 @@ pub async fn search(
         (status = 400, description = "Invalid request", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn batch_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -133,8 +146,7 @@ pub async fn batch_search(
         }
     };
 
-    let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
-
+    // Parse filters before spawn_blocking
     let filters: Vec<Option<velesdb_core::Filter>> = req
         .searches
         .iter()
@@ -147,42 +159,54 @@ pub async fn batch_search(
 
     let top_k = req.searches.first().map_or(10, |s| s.top_k);
 
-    let all_results = match collection.search_batch_with_filters(&queries, top_k, &filters) {
-        Ok(batch_results) => batch_results
-            .into_iter()
-            .map(|results| SearchResponse {
-                results: results
+    let result = tokio::task::spawn_blocking(move || {
+        let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
+        collection
+            .search_batch_with_filters(&queries, top_k, &filters)
+            .map(|batch_results| {
+                batch_results
                     .into_iter()
-                    .map(|r| SearchResultResponse {
-                        id: r.point.id,
-                        score: r.score,
-                        payload: r.point.payload,
+                    .map(|results| SearchResponse {
+                        results: results
+                            .into_iter()
+                            .map(|r| SearchResultResponse {
+                                id: r.point.id,
+                                score: r.score,
+                                payload: r.point.payload,
+                            })
+                            .collect(),
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
             })
-            .collect(),
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-                .into_response()
-        }
-    };
+    })
+    .await;
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    Json(BatchSearchResponse {
-        results: all_results,
-        timing_ms,
-    })
-    .into_response()
+    match result {
+        Ok(Ok(all_results)) => Json(BatchSearchResponse {
+            results: all_results,
+            timing_ms,
+        })
+        .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Multi-query search with fusion strategies.
-#[allow(clippy::unused_async)]
 pub async fn multi_query_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -203,6 +227,7 @@ pub async fn multi_query_search(
         }
     };
 
+    // Parse strategy before spawn_blocking (validation only)
     let strategy = match req.strategy.to_lowercase().as_str() {
         "average" | "avg" => FusionStrategy::Average,
         "maximum" | "max" => FusionStrategy::Maximum,
@@ -226,33 +251,43 @@ pub async fn multi_query_search(
         }
     };
 
-    let query_refs: Vec<&[f32]> = req.vectors.iter().map(Vec::as_slice).collect();
+    let top_k = req.top_k;
+    let vectors = req.vectors;
 
-    let results = match collection.multi_query_search(&query_refs, req.top_k, strategy, None) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    let response = SearchResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
+    let result = tokio::task::spawn_blocking(move || {
+        let query_refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        collection
+            .multi_query_search(&query_refs, top_k, strategy, None)
+            .map(|results| SearchResponse {
+                results: results
+                    .into_iter()
+                    .map(|r| SearchResultResponse {
+                        id: r.point.id,
+                        score: r.score,
+                        payload: r.point.payload,
+                    })
+                    .collect(),
             })
-            .collect(),
-    };
+    })
+    .await;
 
-    Json(response).into_response()
+    match result {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Search using BM25 full-text search.
@@ -269,7 +304,6 @@ pub async fn multi_query_search(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn text_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -288,9 +322,10 @@ pub async fn text_search(
         }
     };
 
-    let results = if let Some(ref filter_json) = req.filter {
-        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
-            Ok(f) => f,
+    // Parse filter before spawn_blocking
+    let filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = req.filter {
+        match serde_json::from_value(filter_json.clone()) {
+            Ok(f) => Some(f),
             Err(e) => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -300,24 +335,41 @@ pub async fn text_search(
                 )
                     .into_response()
             }
-        };
-        collection.text_search_with_filter(&req.query, req.top_k, &filter)
+        }
     } else {
-        collection.text_search(&req.query, req.top_k)
+        None
     };
 
-    let response = SearchResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
-            })
-            .collect(),
-    };
+    let result = tokio::task::spawn_blocking(move || {
+        let results = if let Some(ref f) = filter {
+            collection.text_search_with_filter(&req.query, req.top_k, f)
+        } else {
+            collection.text_search(&req.query, req.top_k)
+        };
 
-    Json(response).into_response()
+        SearchResponse {
+            results: results
+                .into_iter()
+                .map(|r| SearchResultResponse {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect(),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Hybrid search combining vector similarity and BM25 text search.
@@ -335,7 +387,6 @@ pub async fn text_search(
         (status = 400, description = "Invalid request", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn hybrid_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -354,9 +405,10 @@ pub async fn hybrid_search(
         }
     };
 
-    let search_result = if let Some(ref filter_json) = req.filter {
-        let filter: velesdb_core::Filter = match serde_json::from_value(filter_json.clone()) {
-            Ok(f) => f,
+    // Parse filter before spawn_blocking
+    let filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = req.filter {
+        match serde_json::from_value(filter_json.clone()) {
+            Ok(f) => Some(f),
             Err(e) => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -366,36 +418,50 @@ pub async fn hybrid_search(
                 )
                     .into_response()
             }
-        };
-        collection.hybrid_search_with_filter(
-            &req.vector,
-            &req.query,
-            req.top_k,
-            Some(req.vector_weight),
-            &filter,
-        )
+        }
     } else {
-        collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight))
+        None
     };
 
-    match search_result {
-        Ok(results) => {
-            let response = SearchResponse {
-                results: results
-                    .into_iter()
-                    .map(|r| SearchResultResponse {
-                        id: r.point.id,
-                        score: r.score,
-                        payload: r.point.payload,
-                    })
-                    .collect(),
-            };
-            Json(response).into_response()
-        }
-        Err(e) => (
+    let result = tokio::task::spawn_blocking(move || {
+        let search_result = if let Some(ref f) = filter {
+            collection.hybrid_search_with_filter(
+                &req.vector,
+                &req.query,
+                req.top_k,
+                Some(req.vector_weight),
+                f,
+            )
+        } else {
+            collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight))
+        };
+
+        search_result.map(|results| SearchResponse {
+            results: results
+                .into_iter()
+                .map(|r| SearchResultResponse {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect(),
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),

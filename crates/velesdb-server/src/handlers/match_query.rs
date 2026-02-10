@@ -145,32 +145,40 @@ pub async fn match_query(
         }
     }
 
-    // Execute MATCH query - use similarity variant if vector provided (EPIC-058 US-007)
-    let results = if let Some(ref vector) = request.vector {
-        let threshold = request.threshold.unwrap_or(0.0);
-        collection
-            .execute_match_with_similarity(&match_clause, vector, threshold, &request.params)
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(MatchQueryError {
-                        error: format!("Execution error: {}", e),
-                        code: "EXECUTION_ERROR".to_string(),
-                    }),
-                )
-            })?
-    } else {
-        collection
-            .execute_match(&match_clause, &request.params)
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(MatchQueryError {
-                        error: format!("Execution error: {}", e),
-                        code: "EXECUTION_ERROR".to_string(),
-                    }),
-                )
-            })?
+    // Execute MATCH query in blocking thread (CPU-bound)
+    let params = request.params;
+    let vector = request.vector;
+    let threshold = request.threshold.unwrap_or(0.0);
+
+    let exec_result = tokio::task::spawn_blocking(move || {
+        if let Some(ref vec) = vector {
+            collection.execute_match_with_similarity(&match_clause, vec, threshold, &params)
+        } else {
+            collection.execute_match(&match_clause, &params)
+        }
+    })
+    .await;
+
+    let results = match exec_result {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(MatchQueryError {
+                    error: format!("Execution error: {}", e),
+                    code: "EXECUTION_ERROR".to_string(),
+                }),
+            ))
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(MatchQueryError {
+                    error: format!("Task panicked: {e}"),
+                    code: "INTERNAL_ERROR".to_string(),
+                }),
+            ))
+        }
     };
 
     // Convert results - include projected properties (EPIC-058 US-007)
@@ -185,6 +193,8 @@ pub async fn match_query(
         .collect();
 
     let count = result_items.len();
+    #[allow(clippy::cast_possible_truncation)]
+    // Reason: elapsed ms won't exceed u64::MAX
     let took_ms = start.elapsed().as_millis() as u64;
 
     Ok(Json(MatchQueryResponse {

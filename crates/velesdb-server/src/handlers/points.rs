@@ -109,19 +109,28 @@ pub async fn get_point(
         }
     };
 
-    let points = collection.get(&[id]);
+    let result =
+        tokio::task::spawn_blocking(move || collection.get(&[id]).into_iter().next().flatten())
+            .await;
 
-    match points.into_iter().next().flatten() {
-        Some(point) => Json(serde_json::json!({
+    match result {
+        Ok(Some(point)) => Json(serde_json::json!({
             "id": point.id,
             "vector": point.vector,
             "payload": point.payload
         }))
         .into_response(),
-        None => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Point {} not found", id),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -142,7 +151,6 @@ pub async fn get_point(
         (status = 404, description = "Point or collection not found", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn delete_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
@@ -160,16 +168,25 @@ pub async fn delete_point(
         }
     };
 
-    match collection.delete(&[id]) {
-        Ok(()) => Json(serde_json::json!({
+    let result = tokio::task::spawn_blocking(move || collection.delete(&[id])).await;
+
+    match result {
+        Ok(Ok(())) => Json(serde_json::json!({
             "message": "Point deleted",
             "id": id
         }))
         .into_response(),
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),

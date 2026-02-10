@@ -44,36 +44,56 @@ pub async fn create_index(
         }
     };
 
-    let result = match req.index_type.to_lowercase().as_str() {
-        "hash" => collection.create_property_index(&req.label, &req.property),
-        "range" => collection.create_range_index(&req.label, &req.property),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid index_type: {}. Valid: hash, range", req.index_type),
-                }),
-            )
-                .into_response()
+    // Validate index_type before spawn_blocking
+    let index_type_lower = req.index_type.to_lowercase();
+    if !matches!(index_type_lower.as_str(), "hash" | "range") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid index_type: {}. Valid: hash, range", req.index_type),
+            }),
+        )
+            .into_response();
+    }
+
+    let label = req.label;
+    let property = req.property;
+    let itype = req.index_type;
+    let l = label.clone();
+    let p = property.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        if index_type_lower == "hash" {
+            collection.create_property_index(&l, &p)
+        } else {
+            collection.create_range_index(&l, &p)
         }
-    };
+    })
+    .await;
 
     match result {
-        Ok(()) => (
+        Ok(Ok(())) => (
             StatusCode::CREATED,
             Json(IndexResponse {
-                label: req.label,
-                property: req.property,
-                index_type: req.index_type,
+                label,
+                property,
+                index_type: itype,
                 cardinality: 0,
                 memory_bytes: 0,
             }),
         )
             .into_response(),
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -110,20 +130,34 @@ pub async fn list_indexes(
         }
     };
 
-    let core_indexes = collection.list_indexes();
-    let indexes: Vec<IndexResponse> = core_indexes
-        .into_iter()
-        .map(|i| IndexResponse {
-            label: i.label,
-            property: i.property,
-            index_type: i.index_type,
-            cardinality: i.cardinality,
-            memory_bytes: i.memory_bytes,
-        })
-        .collect();
-    let total = indexes.len();
+    let result = tokio::task::spawn_blocking(move || {
+        let core_indexes = collection.list_indexes();
+        core_indexes
+            .into_iter()
+            .map(|i| IndexResponse {
+                label: i.label,
+                property: i.property,
+                index_type: i.index_type,
+                cardinality: i.cardinality,
+                memory_bytes: i.memory_bytes,
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
 
-    Json(ListIndexesResponse { indexes, total }).into_response()
+    match result {
+        Ok(indexes) => {
+            let total = indexes.len();
+            Json(ListIndexesResponse { indexes, total }).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Delete a property index.
@@ -158,29 +192,35 @@ pub async fn delete_index(
         }
     };
 
-    match collection.drop_index(&label, &property) {
-        Ok(dropped) => {
-            if dropped {
-                Json(serde_json::json!({
-                    "message": "Index deleted",
-                    "label": label,
-                    "property": property
-                }))
-                .into_response()
-            } else {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("Index on {}.{} not found", label, property),
-                    }),
-                )
-                    .into_response()
-            }
-        }
-        Err(e) => (
+    let l = label.clone();
+    let p = property.clone();
+    let result = tokio::task::spawn_blocking(move || collection.drop_index(&l, &p)).await;
+
+    match result {
+        Ok(Ok(true)) => Json(serde_json::json!({
+            "message": "Index deleted",
+            "label": label,
+            "property": property
+        }))
+        .into_response(),
+        Ok(Ok(false)) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Index on {}.{} not found", label, property),
+            }),
+        )
+            .into_response(),
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),

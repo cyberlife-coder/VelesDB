@@ -22,8 +22,17 @@ use velesdb_core::{DistanceMetric, StorageMode};
     )
 )]
 pub async fn list_collections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let collections = state.db.list_collections();
-    Json(serde_json::json!({ "collections": collections }))
+    let result = tokio::task::spawn_blocking(move || state.db.list_collections()).await;
+    match result {
+        Ok(collections) => Json(serde_json::json!({ "collections": collections })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Create a new collection.
@@ -79,37 +88,20 @@ pub async fn create_collection(
         }
     };
 
-    let result = match req.collection_type.to_lowercase().as_str() {
-        "metadata_only" | "metadata-only" => {
-            use velesdb_core::CollectionType;
-            state
-                .db
-                .create_collection_typed(&req.name, &CollectionType::MetadataOnly)
-        }
-        "vector" | "" => {
-            let dimension = match req.dimension {
-                Some(d) => d,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: "dimension is required for vector collections".to_string(),
-                        }),
-                    )
-                        .into_response()
-                }
-            };
-            state
-                .db
-                .create_collection_with_options(&req.name, dimension, metric, storage_mode)
-        }
+    let collection_type_str = req.collection_type.to_lowercase();
+    let dimension = req.dimension;
+    let name = req.name;
+    let ctype = req.collection_type;
+
+    match collection_type_str.as_str() {
+        "metadata_only" | "metadata-only" | "vector" | "" => {}
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!(
                         "Invalid collection_type: {}. Valid: vector, metadata_only",
-                        req.collection_type
+                        ctype
                     ),
                 }),
             )
@@ -117,20 +109,57 @@ pub async fn create_collection(
         }
     };
 
+    if matches!(collection_type_str.as_str(), "vector" | "") && dimension.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "dimension is required for vector collections".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let name_for_task = name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if matches!(
+            collection_type_str.as_str(),
+            "metadata_only" | "metadata-only"
+        ) {
+            use velesdb_core::CollectionType;
+            state
+                .db
+                .create_collection_typed(&name_for_task, &CollectionType::MetadataOnly)
+        } else {
+            // Reason: dimension validated as Some above for vector type
+            let dim = dimension.expect("validated above");
+            state
+                .db
+                .create_collection_with_options(&name_for_task, dim, metric, storage_mode)
+        }
+    })
+    .await;
+
     match result {
-        Ok(()) => (
+        Ok(Ok(())) => (
             StatusCode::CREATED,
             Json(serde_json::json!({
                 "message": "Collection created",
-                "name": req.name,
-                "type": req.collection_type
+                "name": name,
+                "type": ctype
             })),
         )
             .into_response(),
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -154,22 +183,34 @@ pub async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => {
+    let result = tokio::task::spawn_blocking(move || {
+        state.db.get_collection(&name).map(|collection| {
             let config = collection.config();
-            Json(CollectionResponse {
-                name: config.name,
-                dimension: config.dimension,
-                metric: format!("{:?}", config.metric).to_lowercase(),
-                point_count: config.point_count,
-                storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
-            })
-            .into_response()
-        }
-        None => (
+            (name, config)
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Some((_, config))) => Json(CollectionResponse {
+            name: config.name,
+            dimension: config.dimension,
+            metric: format!("{:?}", config.metric).to_lowercase(),
+            point_count: config.point_count,
+            storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
+        })
+        .into_response(),
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
+                error: "Collection not found".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -193,16 +234,26 @@ pub async fn delete_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.delete_collection(&name) {
-        Ok(()) => Json(serde_json::json!({
+    let n = name.clone();
+    let result = tokio::task::spawn_blocking(move || state.db.delete_collection(&n)).await;
+
+    match result {
+        Ok(Ok(())) => Json(serde_json::json!({
             "message": "Collection deleted",
             "name": name
         }))
         .into_response(),
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -226,15 +277,28 @@ pub async fn is_empty(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => Json(serde_json::json!({
-            "is_empty": collection.is_empty()
-        }))
-        .into_response(),
-        None => (
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .db
+            .get_collection(&name)
+            .map(|c| c.is_empty())
+            .ok_or(name)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(empty)) => Json(serde_json::json!({ "is_empty": empty })).into_response(),
+        Ok(Err(name)) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Collection '{}' not found", name),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
@@ -259,25 +323,44 @@ pub async fn flush_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => match collection.flush() {
-            Ok(()) => Json(serde_json::json!({
-                "message": "Flushed successfully",
-                "collection": name
-            }))
-            .into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Flush failed: {}", e),
-                }),
-            )
-                .into_response(),
-        },
-        None => (
-            StatusCode::NOT_FOUND,
+    let n = name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let collection = state.db.get_collection(&n).ok_or(n)?;
+        collection.flush().map_err(|e| e.to_string())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => Json(serde_json::json!({
+            "message": "Flushed successfully",
+            "collection": name
+        }))
+        .into_response(),
+        Ok(Err(err_or_name)) => {
+            // Reason: if get_collection fails, err_or_name is the collection name
+            if err_or_name.contains(" ") {
+                // It's a flush error message
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Flush failed: {}", err_or_name),
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Collection '{}' not found", err_or_name),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
+                error: format!("Task panicked: {e}"),
             }),
         )
             .into_response(),
