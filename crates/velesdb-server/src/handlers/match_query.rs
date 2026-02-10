@@ -171,13 +171,14 @@ pub async fn match_query(
             ))
         }
         Err(e) => {
+            tracing::error!(error = %e, "Match query task panicked");
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(MatchQueryError {
-                    error: format!("Task panicked: {e}"),
+                    error: "Match query: internal error".to_string(),
                     code: "INTERNAL_ERROR".to_string(),
                 }),
-            ))
+            ));
         }
     };
 

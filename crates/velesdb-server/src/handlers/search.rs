@@ -15,6 +15,8 @@ use crate::types::{
 };
 use crate::AppState;
 
+use super::helpers::{get_collection_or_404, internal_error};
+
 /// Search for similar vectors.
 #[utoipa::path(
     post,
@@ -35,17 +37,9 @@ pub async fn search(
     Path(name): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     let effective_ef = req
@@ -101,13 +95,7 @@ pub async fn search(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Search", &e).into_response(),
     }
 }
 
@@ -133,17 +121,9 @@ pub async fn batch_search(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // Parse filters before spawn_blocking
@@ -196,13 +176,7 @@ pub async fn batch_search(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Batch search", &e).into_response(),
     }
 }
 
@@ -214,17 +188,9 @@ pub async fn multi_query_search(
 ) -> impl IntoResponse {
     use velesdb_core::FusionStrategy;
 
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // Parse strategy before spawn_blocking (validation only)
@@ -280,13 +246,7 @@ pub async fn multi_query_search(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Multi-query search", &e).into_response(),
     }
 }
 
@@ -309,17 +269,9 @@ pub async fn text_search(
     Path(name): Path<String>,
     Json(req): Json<TextSearchRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // Parse filter before spawn_blocking
@@ -362,13 +314,7 @@ pub async fn text_search(
 
     match result {
         Ok(response) => Json(response).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Text search", &e).into_response(),
     }
 }
 
@@ -392,17 +338,9 @@ pub async fn hybrid_search(
     Path(name): Path<String>,
     Json(req): Json<HybridSearchRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // Parse filter before spawn_blocking
@@ -458,12 +396,6 @@ pub async fn hybrid_search(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Hybrid search", &e).into_response(),
     }
 }

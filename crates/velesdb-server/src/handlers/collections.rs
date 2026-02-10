@@ -12,6 +12,8 @@ use crate::types::{CollectionResponse, CreateCollectionRequest, ErrorResponse};
 use crate::AppState;
 use velesdb_core::{DistanceMetric, StorageMode};
 
+use super::helpers::internal_error;
+
 /// List all collections.
 #[utoipa::path(
     get,
@@ -25,13 +27,7 @@ pub async fn list_collections(State(state): State<Arc<AppState>>) -> impl IntoRe
     let result = tokio::task::spawn_blocking(move || state.db.list_collections()).await;
     match result {
         Ok(collections) => Json(serde_json::json!({ "collections": collections })).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("List collections", &e).into_response(),
     }
 }
 
@@ -158,13 +154,7 @@ pub async fn create_collection(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Create collection", &e).into_response(),
     }
 }
 
@@ -209,13 +199,7 @@ pub async fn get_collection(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Get collection", &e).into_response(),
     }
 }
 
@@ -252,13 +236,7 @@ pub async fn delete_collection(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Delete collection", &e).into_response(),
     }
 }
 
@@ -297,13 +275,7 @@ pub async fn is_empty(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Is empty", &e).into_response(),
     }
 }
 
@@ -359,12 +331,6 @@ pub async fn flush_collection(
                     .into_response()
             }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Flush collection", &e).into_response(),
     }
 }

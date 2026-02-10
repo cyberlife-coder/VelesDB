@@ -12,6 +12,7 @@ use std::sync::Arc;
 use velesdb_core::collection::graph::GraphEdge;
 use velesdb_core::Collection;
 
+use crate::handlers::helpers::{get_collection_or_404, internal_error};
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -19,21 +20,6 @@ use super::types::{
     AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse,
     TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
 };
-
-/// Helper: get a collection or return 404.
-fn get_collection_or_404(
-    state: &AppState,
-    name: &str,
-) -> Result<Collection, (StatusCode, Json<ErrorResponse>)> {
-    state.db.get_collection(name).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{name}' not found"),
-            }),
-        )
-    })
-}
 
 /// Adapter: convert core's node-ID paths to edge-ID paths.
 ///
@@ -118,14 +104,7 @@ pub async fn get_edges(
             .collect()
     })
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-    })?;
+    .map_err(|e| internal_error("Get edges", &e))?;
 
     let count = edges.len();
     Ok(Json(EdgesResponse { edges, count }))
@@ -185,14 +164,7 @@ pub async fn add_edge(
 
     tokio::task::spawn_blocking(move || -> velesdb_core::Result<()> { collection.add_edge(edge) })
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Task panicked: {e}"),
-                }),
-            )
-        })?
+        .map_err(|e| internal_error("Add edge", &e))?
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -277,14 +249,7 @@ pub async fn traverse_graph(
             })
         })
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Task panicked: {e}"),
-                }),
-            )
-        })?
+        .map_err(|e| internal_error("Traverse graph", &e))?
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -338,14 +303,7 @@ pub async fn get_node_degree(
         collection.get_node_degree(node_id)
     })
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-    })?;
+    .map_err(|e| internal_error("Get node degree", &e))?;
 
     Ok(Json(DegreeResponse {
         in_degree,

@@ -35,6 +35,7 @@ pub use query::{explain, query};
 pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
 
 pub mod auth;
+pub mod helpers;
 pub mod rate_limit;
 
 // Graph handlers: re-exported via lib.rs directly from handlers::graph

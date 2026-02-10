@@ -11,6 +11,8 @@ use std::sync::Arc;
 use crate::types::{CreateIndexRequest, ErrorResponse, IndexResponse, ListIndexesResponse};
 use crate::AppState;
 
+use super::helpers::{get_collection_or_404, internal_error};
+
 /// Create a property index on a graph collection.
 #[utoipa::path(
     post,
@@ -31,17 +33,9 @@ pub async fn create_index(
     Path(name): Path<String>,
     Json(req): Json<CreateIndexRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // Validate index_type before spawn_blocking
@@ -90,13 +84,7 @@ pub async fn create_index(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Create index", &e).into_response(),
     }
 }
 
@@ -117,17 +105,9 @@ pub async fn list_indexes(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -150,13 +130,7 @@ pub async fn list_indexes(
             let total = indexes.len();
             Json(ListIndexesResponse { indexes, total }).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("List indexes", &e).into_response(),
     }
 }
 
@@ -179,17 +153,9 @@ pub async fn delete_index(
     State(state): State<Arc<AppState>>,
     Path((name, label, property)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     let l = label.clone();
@@ -217,12 +183,6 @@ pub async fn delete_index(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Delete index", &e).into_response(),
     }
 }

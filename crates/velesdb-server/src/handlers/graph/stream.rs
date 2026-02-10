@@ -147,8 +147,9 @@ pub async fn stream_traverse(
             stream::iter(vec![Ok(Event::default().event("error").data(error_data))])
         }
         Err(e) => {
+            tracing::error!(error = %e, "Stream traverse task panicked");
             let error_event = StreamErrorEvent {
-                error: format!("Task panicked: {e}"),
+                error: "Stream traverse: internal error".to_string(),
             };
             let error_data =
                 serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());

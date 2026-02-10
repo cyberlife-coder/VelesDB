@@ -11,6 +11,8 @@ use crate::types::{
 use crate::AppState;
 use velesdb_core::velesql::{self, Condition, Query, SelectColumns};
 
+use super::helpers::{get_collection_or_404, internal_error};
+
 /// Execute a VelesQL query.
 ///
 /// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
@@ -52,17 +54,9 @@ pub async fn query(
     };
 
     let collection_name = parsed.select.from.clone();
-    let collection = match state.db.get_collection(&collection_name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", collection_name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &collection_name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
@@ -118,13 +112,7 @@ pub async fn query(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Query", &e).into_response(),
     }
 }
 

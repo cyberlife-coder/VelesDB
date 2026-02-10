@@ -12,6 +12,8 @@ use crate::types::{ErrorResponse, UpsertPointsRequest};
 use crate::AppState;
 use velesdb_core::Point;
 
+use super::helpers::{get_collection_or_404, internal_error};
+
 /// Upsert points to a collection.
 #[utoipa::path(
     post,
@@ -32,17 +34,9 @@ pub async fn upsert_points(
     Path(name): Path<String>,
     Json(req): Json<UpsertPointsRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     let points: Vec<Point> = req
@@ -68,13 +62,7 @@ pub async fn upsert_points(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Upsert points", &e).into_response(),
     }
 }
 
@@ -96,17 +84,9 @@ pub async fn get_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     let result =
@@ -127,13 +107,7 @@ pub async fn get_point(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Get point", &e).into_response(),
     }
 }
 
@@ -155,17 +129,9 @@ pub async fn delete_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
-                }),
-            )
-                .into_response()
-        }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
 
     let result = tokio::task::spawn_blocking(move || collection.delete(&[id])).await;
@@ -183,12 +149,6 @@ pub async fn delete_point(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
+        Err(e) => internal_error("Delete point", &e).into_response(),
     }
 }
