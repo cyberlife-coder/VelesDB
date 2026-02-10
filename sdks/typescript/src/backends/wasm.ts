@@ -22,6 +22,8 @@ import type {
   DegreeResponse,
   QueryOptions,
   QueryResponse,
+  MatchQueryOptions,
+  MatchQueryResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -492,6 +494,23 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     throw new VelesDBError(
       'Graph degree query is not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  // ========================================================================
+  // MATCH Query — requires server endpoint
+  // ========================================================================
+
+  async matchQuery(
+    _collection: string,
+    _queryString: string,
+    _params?: Record<string, unknown>,
+    _options?: MatchQueryOptions
+  ): Promise<MatchQueryResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'MATCH queries are not supported in WASM backend. Use REST backend for graph traversal queries.',
       'NOT_SUPPORTED'
     );
   }

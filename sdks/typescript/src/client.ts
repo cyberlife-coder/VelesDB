@@ -21,6 +21,8 @@ import type {
   DegreeResponse,
   QueryOptions,
   QueryResponse,
+  MatchQueryOptions,
+  MatchQueryResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -665,5 +667,53 @@ export class VelesDB {
     }
 
     return this.backend.getNodeDegree(collection, nodeId);
+  }
+
+  // ========================================================================
+  // MATCH Query (Graph Traversal via VelesQL)
+  // ========================================================================
+
+  /**
+   * Execute a MATCH graph traversal query
+   * 
+   * Calls the server's MATCH endpoint for Cypher-like graph pattern matching.
+   * Only available with the REST backend.
+   * 
+   * @param collection - Collection name (used in endpoint URL)
+   * @param queryString - VelesQL MATCH query string
+   * @param params - Query parameters (e.g., vector bindings)
+   * @param options - Optional vector and threshold for similarity matching
+   * @returns MATCH query response with results, timing, and count
+   * 
+   * @example
+   * ```typescript
+   * const result = await db.matchQuery('docs',
+   *   'MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.embedding, $v) > 0.8 RETURN a.name',
+   *   { v: queryVector },
+   *   { vector: queryVector, threshold: 0.8 }
+   * );
+   * 
+   * for (const r of result.results) {
+   *   console.log(`${r.bindings.a} → score: ${r.score}`);
+   * }
+   * ```
+   */
+  async matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<MatchQueryResponse> {
+    this.ensureInitialized();
+
+    if (!collection || typeof collection !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+
+    if (!queryString || typeof queryString !== 'string') {
+      throw new ValidationError('Query string must be a non-empty string');
+    }
+
+    return this.backend.matchQuery(collection, queryString, params, options);
   }
 }

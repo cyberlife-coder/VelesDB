@@ -413,6 +413,16 @@ export interface IVelesDBBackend {
 
   /** Get the in-degree and out-degree of a node */
   getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
+
+  // MATCH Query (Graph Traversal via VelesQL)
+
+  /** Execute a MATCH graph traversal query */
+  matchQuery(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>,
+    options?: MatchQueryOptions
+  ): Promise<MatchQueryResponse>;
 }
 
 // ============================================================================
