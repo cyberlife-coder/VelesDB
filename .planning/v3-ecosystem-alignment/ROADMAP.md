@@ -89,6 +89,28 @@
 
 ---
 
+## Phase 2.2: Server Hardening — Validation, Consistency, Error Hygiene
+
+**Goal:** Address code review findings: harmonize handler patterns, add input validation, sanitize 500 error messages.
+
+**Inserted:** 2025-02-10 — Code review identified validation gaps, inconsistent patterns, and exposed internals in error messages
+
+### Tasks
+
+1. **Consistency** — Extract `get_collection_or_404()` to shared helpers module, replace duplicated match blocks in all handlers
+2. **Input Validation** — Add server-side bounds: `top_k` (1..10000), `dimension` > 0, `vector.len() == collection.dimension`, query strings non-empty
+3. **Error Hygiene** — Replace `"Task panicked: {e}"` in 500 responses with generic client message; log internal details server-side via `tracing::error!`
+
+### Success Criteria
+
+- [ ] Single `get_collection_or_404()` used by all handlers (zero duplicated match blocks)
+- [ ] Invalid `top_k`, `dimension`, or vector length returns 400 with clear message
+- [ ] No internal error details leaked in HTTP 500 responses
+- [ ] All existing tests still pass
+- [ ] Clippy clean (`-D warnings`)
+
+---
+
 ## Phase 3: TypeScript SDK Fixes
 
 **Goal:** SDK correctly maps server responses and handles concurrent init.
@@ -164,6 +186,7 @@
 | 1 - WASM Rebinding | ⬜ Pending | BEG-01,05,06, W-01→03 | 🚨 Architecture |
 | 2 - Server Binding | ✅ Complete | S-01→04, BEG-05 | 🚨 Security |
 | 2.1 - Server Docs | ✅ Complete | Documentation gaps | 📚 Documentation |
+| 2.2 - Server Hardening | ✅ Complete | Validation, consistency, error hygiene | 🛡️ Quality |
 | 3 - SDK Fixes | ⬜ Pending | T-01→03, BEG-07 | 🐛 Contracts |
 | 4 - Python Integrations | ⬜ Pending | I-01→03, BEG-02→04 | 🐛 Contracts |
 | 5 - GPU + Ecosystem CI | ⬜ Pending | I-04, CI-04 | ⚠️ Polish |
