@@ -415,6 +415,40 @@ export interface IVelesDBBackend {
   getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
 }
 
+// ============================================================================
+// MATCH Query Types
+// ============================================================================
+
+/** Options for MATCH graph traversal queries */
+export interface MatchQueryOptions {
+  /** Optional vector for similarity matching within MATCH */
+  vector?: number[] | Float32Array;
+  /** Similarity threshold for vector matching */
+  threshold?: number;
+}
+
+/** A single result item from a MATCH query */
+export interface MatchQueryResultItem {
+  /** Variable bindings from MATCH pattern (e.g., { a: 123, b: 456 }) */
+  bindings: Record<string, unknown>;
+  /** Similarity score (if vector matching was used) */
+  score: number | null;
+  /** Traversal depth */
+  depth: number;
+  /** Projected fields from RETURN clause */
+  projected: Record<string, unknown>;
+}
+
+/** Full response from a MATCH query */
+export interface MatchQueryResponse {
+  /** MATCH query results */
+  results: MatchQueryResultItem[];
+  /** Execution time in milliseconds */
+  tookMs: number;
+  /** Total result count */
+  count: number;
+}
+
 /** Error types */
 export class VelesDBError extends Error {
   constructor(

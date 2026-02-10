@@ -24,6 +24,8 @@ import type {
   DegreeResponse,
   QueryOptions,
   QueryResponse,
+  MatchQueryOptions,
+  MatchQueryResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -41,41 +43,7 @@ interface BatchSearchResponse {
   results: Array<{ results: SearchResult[] }>;
 }
 
-// ========================================================================
-// MATCH Query Types
-// ========================================================================
-
-/** Options for MATCH graph traversal queries */
-export interface MatchQueryOptions {
-  /** Optional vector for similarity matching within MATCH */
-  vector?: number[] | Float32Array;
-  /** Similarity threshold for vector matching */
-  threshold?: number;
-}
-
-/** A single result item from a MATCH query */
-export interface MatchQueryResultItem {
-  /** Variable bindings from MATCH pattern (e.g., { a: 123, b: 456 }) */
-  bindings: Record<string, unknown>;
-  /** Similarity score (if vector matching was used) */
-  score: number | null;
-  /** Traversal depth */
-  depth: number;
-  /** Projected fields from RETURN clause */
-  projected: Record<string, unknown>;
-}
-
-/** Full response from a MATCH query */
-export interface MatchQueryResponse {
-  /** MATCH query results */
-  results: MatchQueryResultItem[];
-  /** Execution time in milliseconds */
-  tookMs: number;
-  /** Total result count */
-  count: number;
-}
-
-/** Server-side MATCH response (snake_case contract) */
+/** Server-side MATCH response (snake_case contract — internal) */
 interface ServerMatchQueryResponse {
   results: Array<{
     bindings: Record<string, unknown>;
