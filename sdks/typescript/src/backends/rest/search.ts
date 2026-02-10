@@ -34,6 +34,9 @@ export async function search(
   if (options?.mode !== undefined) {
     body.mode = options.mode;
   }
+  if (options?.timeoutMs !== undefined) {
+    body.timeout_ms = options.timeoutMs;
+  }
 
   const response = await client.request<{ results: SearchResult[] }>(
     'POST',
@@ -58,6 +61,7 @@ export async function searchBatch(
     vector: number[] | Float32Array;
     k?: number;
     filter?: Record<string, unknown>;
+    includeVectors?: boolean;
   }>
 ): Promise<SearchResult[][]> {
   client.ensureInitialized();
@@ -66,6 +70,7 @@ export async function searchBatch(
     vector: s.vector instanceof Float32Array ? Array.from(s.vector) : s.vector,
     top_k: s.k ?? 10,
     filter: s.filter,
+    include_vectors: s.includeVectors ?? false,
   }));
 
   const response = await client.request<BatchSearchResponse>(
@@ -165,6 +170,9 @@ export async function multiQuerySearch(
       top_k: options?.k ?? 10,
       strategy: options?.fusion ?? 'rrf',
       rrf_k: options?.fusionParams?.k ?? 60,
+      avg_weight: options?.fusionParams?.avgWeight,
+      max_weight: options?.fusionParams?.maxWeight,
+      hit_weight: options?.fusionParams?.hitWeight,
       filter: options?.filter,
     }
   );

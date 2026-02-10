@@ -29,3 +29,4 @@ export { RestBackend } from './backends/rest';
 export { VelesQLBuilder, velesql } from './query-builder';
 export type { RelDirection, RelOptions, NearVectorOptions, SimilarityOptions, FusionOptions } from './query-builder';
 export { SelectBuilder, selectql } from './select-builder';
+export type { HealthResponse } from './types';

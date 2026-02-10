@@ -742,6 +742,89 @@ describe('RestBackend', () => {
       expect(callBody.mode).toBeUndefined();
       expect(callBody.top_k).toBe(5);
     });
+
+    it('should send timeout_ms when timeoutMs option is provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.search('docs', [0.1, 0.2], { k: 10, timeoutMs: 5000 });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.timeout_ms).toBe(5000);
+    });
+
+    it('should not send timeout_ms when not provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.search('docs', [0.1, 0.2], { k: 10 });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.timeout_ms).toBeUndefined();
+    });
+
+    it('should send include_vectors in searchBatch per search item', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [{ results: [] }] }),
+      });
+
+      await backend.searchBatch('docs', [
+        { vector: [0.1, 0.2], k: 5, includeVectors: true },
+      ]);
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.searches[0].include_vectors).toBe(true);
+    });
+
+    it('should send weighted fusion params in multiQuerySearch', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.multiQuerySearch('docs', [[0.1, 0.2], [0.3, 0.4]], {
+        fusion: 'weighted',
+        fusionParams: { avgWeight: 0.5, maxWeight: 0.3, hitWeight: 0.2 },
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.strategy).toBe('weighted');
+      expect(callBody.avg_weight).toBe(0.5);
+      expect(callBody.max_weight).toBe(0.3);
+      expect(callBody.hit_weight).toBe(0.2);
+    });
+
+    it('should not send weighted params when not provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.multiQuerySearch('docs', [[0.1, 0.2]], { fusion: 'rrf' });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.avg_weight).toBeUndefined();
+      expect(callBody.max_weight).toBeUndefined();
+      expect(callBody.hit_weight).toBeUndefined();
+    });
+  });
+
+  describe('health', () => {
+    it('should return health status from server', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'healthy', version: '1.4.1' }),
+      });
+
+      const result = await backend.health();
+      expect(result.status).toBe('healthy');
+      expect(result.version).toBe('1.4.1');
+    });
   });
 
   describe('edge cases', () => {

@@ -86,6 +86,8 @@ export interface SearchOptions {
   efSearch?: number;
   /** Search mode preset: fast(64), balanced(128), accurate(256), perfect(max) */
   mode?: SearchMode;
+  /** Query timeout in milliseconds (server-side) */
+  timeoutMs?: number;
 }
 
 /** Fusion strategy for multi-query search */
@@ -305,6 +307,14 @@ export interface CreateIndexOptions {
   indexType?: IndexType;
 }
 
+/** Server health check response */
+export interface HealthResponse {
+  /** Server status (e.g., "healthy") */
+  status: string;
+  /** Server version */
+  version?: string;
+}
+
 /** Backend interface that all backends must implement */
 export interface IVelesDBBackend {
   /** Initialize the backend */
@@ -312,6 +322,9 @@ export interface IVelesDBBackend {
   
   /** Check if backend is initialized */
   isInitialized(): boolean;
+
+  /** Check server health without reinitializing */
+  health(): Promise<HealthResponse>;
   
   /** Create a new collection */
   createCollection(name: string, config: CollectionConfig): Promise<void>;
@@ -351,6 +364,7 @@ export interface IVelesDBBackend {
       vector: number[] | Float32Array;
       k?: number;
       filter?: Record<string, unknown>;
+      includeVectors?: boolean;
     }>
   ): Promise<SearchResult[][]>;
   

@@ -56,6 +56,15 @@ export class HttpClient {
     return this._initialized;
   }
 
+  /** Health check — works even before init() */
+  async health(): Promise<{ status: string; version?: string }> {
+    const response = await this.request<{ status: string; version?: string }>('GET', '/health');
+    if (response.error) {
+      throw new ConnectionError(`Health check failed: ${response.error.message}`);
+    }
+    return response.data ?? { status: 'unknown' };
+  }
+
   ensureInitialized(): void {
     if (!this._initialized) {
       throw new ConnectionError('REST backend not initialized');

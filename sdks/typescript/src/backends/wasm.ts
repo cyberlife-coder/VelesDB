@@ -17,6 +17,7 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  HealthResponse,
   TraverseRequest,
   TraverseResponse,
   DegreeResponse,
@@ -72,6 +73,13 @@ export class WasmBackend implements IVelesDBBackend {
 
   isInitialized(): boolean {
     return this._initialized;
+  }
+
+  async health(): Promise<HealthResponse> {
+    return {
+      status: this._initialized ? 'healthy' : 'not_initialized',
+      version: 'wasm-local',
+    };
   }
 
   private ensureInitialized(): void {
@@ -272,6 +280,7 @@ export class WasmBackend implements IVelesDBBackend {
       vector: number[] | Float32Array;
       k?: number;
       filter?: Record<string, unknown>;
+      includeVectors?: boolean;
     }>
   ): Promise<SearchResult[][]> {
     this.ensureInitialized();

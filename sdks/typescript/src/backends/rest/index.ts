@@ -26,6 +26,7 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   ExplainResponse,
+  HealthResponse,
 } from '../../types';
 
 import { HttpClient } from './http-client';
@@ -62,6 +63,10 @@ export class RestBackend implements IVelesDBBackend {
 
   async close(): Promise<void> {
     this.client.close();
+  }
+
+  async health(): Promise<HealthResponse> {
+    return this.client.health();
   }
 
   // ========================================================================
@@ -130,6 +135,7 @@ export class RestBackend implements IVelesDBBackend {
       vector: number[] | Float32Array;
       k?: number;
       filter?: Record<string, unknown>;
+      includeVectors?: boolean;
     }>
   ): Promise<SearchResult[][]> {
     return searchOps.searchBatch(this.client, collection, searches);

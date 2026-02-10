@@ -216,6 +216,20 @@ describe('WasmBackend', () => {
     });
   });
 
+  describe('health', () => {
+    it('should return healthy status when initialized', async () => {
+      await backend.init();
+      const result = await backend.health();
+      expect(result.status).toBe('healthy');
+      expect(result.version).toBe('wasm-local');
+    });
+
+    it('should return not_initialized when not initialized', async () => {
+      const result = await backend.health();
+      expect(result.status).toBe('not_initialized');
+    });
+  });
+
   describe('error handling', () => {
     it('should throw when not initialized', async () => {
       await expect(backend.createCollection('test', { dimension: 128 }))

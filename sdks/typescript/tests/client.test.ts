@@ -399,5 +399,22 @@ describe('VelesDB Client', () => {
           .rejects.toThrow(ValidationError);
       });
     });
+
+    describe('health', () => {
+      it('should delegate to backend health()', async () => {
+        mockBackend.health = vi.fn().mockResolvedValue({ status: 'healthy', version: '1.4.1' });
+
+        const result = await db.health();
+
+        expect(mockBackend.health).toHaveBeenCalled();
+        expect(result.status).toBe('healthy');
+      });
+
+      it('should work even before init()', async () => {
+        const uninitDb = new VelesDB({ backend: 'wasm' });
+        const result = await uninitDb.health();
+        expect(result.status).toBe('not_initialized');
+      });
+    });
   });
 });

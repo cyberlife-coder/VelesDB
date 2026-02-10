@@ -24,6 +24,7 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   ExplainResponse,
+  HealthResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -111,6 +112,14 @@ export class VelesDB {
     if (!this.initialized) {
       throw new ValidationError('Client not initialized. Call init() first.');
     }
+  }
+
+  /**
+   * Check server health without reinitializing.
+   * Works even before init() for REST backends.
+   */
+  async health(): Promise<HealthResponse> {
+    return this.backend.health();
   }
 
   /**

@@ -17,7 +17,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
-    delete_point, flush_collection, get_collection, get_edges, get_node_degree, get_point,
+    delete_point, explain, flush_collection, get_collection, get_edges, get_node_degree, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
     multi_query_search, query, search, text_search, traverse_graph, upsert_points, ApiDoc,
     AppState, GraphService,
@@ -119,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
             delete(delete_index),
         )
         .route("/query", post(query))
+        .route("/query/explain", post(explain))
         .route("/collections/{name}/match", post(match_query))
         .with_state(state)
         // FLAG-2 FIX: Merge graph router with its own state
