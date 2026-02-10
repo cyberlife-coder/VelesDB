@@ -22,6 +22,9 @@ mod builders;
 mod conversion;
 #[cfg(test)]
 mod conversion_tests;
+pub mod json_filter;
+#[cfg(test)]
+mod json_filter_tests;
 mod matching;
 
 use serde::{Deserialize, Serialize};

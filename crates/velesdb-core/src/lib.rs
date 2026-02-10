@@ -78,6 +78,7 @@ pub mod fusion;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
+pub mod graph;
 #[cfg(feature = "persistence")]
 pub mod guardrails;
 #[cfg(all(test, feature = "persistence"))]
