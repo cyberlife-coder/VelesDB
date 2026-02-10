@@ -230,7 +230,7 @@ fn test_return_avg_aggregation() {
     let avg = smith
         .projected
         .get("AVG(p.success_rate)")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .expect("AVG should be a number");
     assert!(
         (avg - 0.9).abs() < 0.01,
@@ -247,7 +247,7 @@ fn test_return_avg_aggregation() {
     let avg = jones
         .projected
         .get("AVG(p.success_rate)")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .expect("AVG should be a number");
     assert!(
         (avg - 0.80).abs() < 0.01,

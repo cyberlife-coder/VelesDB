@@ -324,7 +324,7 @@ fn test_database_join_with_vector_search() {
 /// Creates a Database with two collections for compound query tests:
 /// - "tech_docs": IDs 1,2,3 with category "tech"
 /// - "food_docs": IDs 2,3,4 with category "food"
-/// Overlap on IDs 2 and 3 to exercise dedup/intersect/except.
+///   Overlap on IDs 2 and 3 to exercise dedup/intersect/except.
 fn setup_compound_db() -> (Database, tempfile::TempDir) {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();

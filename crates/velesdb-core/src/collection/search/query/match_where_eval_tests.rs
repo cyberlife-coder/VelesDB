@@ -296,7 +296,7 @@ fn test_match_where_is_null_filters_correctly() {
 
     // Node 3 has description: null, node 4 has no description field
     assert!(
-        results.len() >= 1,
+        !results.is_empty(),
         "IS NULL should match at least node 3 (null description)"
     );
     let ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();

@@ -250,6 +250,6 @@ mod tests {
 
     #[test]
     fn test_trigram_accelerator_default() {
-        let _accel = TrigramAccelerator::default();
+        let _accel = TrigramAccelerator;
     }
 }

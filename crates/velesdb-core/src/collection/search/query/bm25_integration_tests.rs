@@ -135,7 +135,7 @@ fn make_filter(column: &str, value: &str) -> Condition {
     })
 }
 
-fn make_vector_params(name: &str, vec: Vec<f32>) -> HashMap<String, serde_json::Value> {
+fn make_vector_params(name: &str, vec: &[f32]) -> HashMap<String, serde_json::Value> {
     let mut params = HashMap::new();
     params.insert(
         name.to_string(),
@@ -294,9 +294,9 @@ fn test_velesql_match_empty_query() {
 
 #[test]
 fn test_velesql_match_plus_near_fused_is_error() {
-    let (_dir, collection) = setup_bm25_collection();
-
     use crate::velesql::{FusionConfig, VectorFusedSearch};
+
+    let (_dir, collection) = setup_bm25_collection();
 
     let text = make_match_condition("rust");
     let fused = Condition::VectorFusedSearch(VectorFusedSearch {

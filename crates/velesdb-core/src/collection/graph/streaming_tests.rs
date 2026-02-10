@@ -198,7 +198,7 @@ fn test_bfs_overflow_preserves_visited() {
 
     // Consume all results
     let mut results = Vec::new();
-    while let Some(r) = iter.next() {
+    for r in iter.by_ref() {
         results.push(r);
     }
 
