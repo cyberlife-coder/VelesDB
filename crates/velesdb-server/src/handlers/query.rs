@@ -67,10 +67,9 @@ pub async fn query(
         };
 
         let params = req.params;
-        let result = tokio::task::spawn_blocking(move || {
-            collection.execute_aggregate(&parsed, &params)
-        })
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || collection.execute_aggregate(&parsed, &params))
+                .await;
 
         let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -93,10 +92,8 @@ pub async fn query(
 
     // Standard query: use Database::execute_query() for cross-collection JOIN + compound support
     let params = req.params;
-    let result = tokio::task::spawn_blocking(move || {
-        state.db.execute_query(&parsed, &params)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.db.execute_query(&parsed, &params)).await;
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
 
