@@ -46,6 +46,8 @@ pub async fn list_collections(State(state): State<Arc<AppState>>) -> impl IntoRe
         (status = 400, description = "Invalid request", body = ErrorResponse)
     )
 )]
+#[allow(clippy::too_many_lines)]
+// Reason: validation of 3 enums (metric, storage, type) + spawn_blocking makes this inherently long
 pub async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
@@ -107,7 +109,7 @@ pub async fn create_collection(
             )
                 .into_response()
         }
-    };
+    }
 
     if matches!(collection_type_str.as_str(), "vector" | "") && dimension.is_none() {
         return (
@@ -338,7 +340,7 @@ pub async fn flush_collection(
         .into_response(),
         Ok(Err(err_or_name)) => {
             // Reason: if get_collection fails, err_or_name is the collection name
-            if err_or_name.contains(" ") {
+            if err_or_name.contains(' ') {
                 // It's a flush error message
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

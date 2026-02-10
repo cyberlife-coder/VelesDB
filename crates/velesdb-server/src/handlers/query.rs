@@ -148,6 +148,8 @@ enum QueryResult {
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
+#[allow(clippy::too_many_lines)]
+// Reason: explain builds a multi-step query plan — inherently long sequential logic
 pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,
@@ -189,8 +191,7 @@ pub async fn explain(
     let has_vector_search = select
         .where_clause
         .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
+        .is_some_and(condition_has_vector_search);
 
     let has_filter = select.where_clause.is_some() && !has_vector_search;
 
@@ -221,6 +222,8 @@ pub async fn explain(
             step: step_num,
             operation: "VectorSearch".to_string(),
             description: "ANN search using HNSW index with NEAR clause".to_string(),
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: LIMIT values from SQL are small; truncation on 32-bit is acceptable
             estimated_rows: select.limit.map(|l| l as usize),
         });
     } else {
@@ -300,6 +303,8 @@ pub async fn explain(
                 select.limit.unwrap_or(0),
                 select.offset.unwrap_or(0)
             ),
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: LIMIT values from SQL are small; truncation on 32-bit is acceptable
             estimated_rows: select.limit.map(|l| l as usize),
         });
     }
@@ -383,8 +388,7 @@ pub fn detect_query_type(query: &Query) -> QueryType {
     let has_vector = select
         .where_clause
         .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
+        .is_some_and(condition_has_vector_search);
 
     if has_vector {
         return QueryType::Search;

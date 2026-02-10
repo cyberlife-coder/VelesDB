@@ -29,6 +29,8 @@ type TraversalTuple = (u64, u32, Vec<u64>);
 /// - `stats`: Periodic statistics (every 100 nodes)
 /// - `done`: Traversal completed
 /// - `error`: If an error occurs
+#[allow(clippy::too_many_lines)]
+// Reason: SSE stream handler with validation + spawn_blocking + event mapping — inherently long
 pub async fn stream_traverse(
     State(state): State<Arc<AppState>>,
     Path(collection_name): Path<String>,

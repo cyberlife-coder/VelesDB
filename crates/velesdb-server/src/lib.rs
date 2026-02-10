@@ -1,16 +1,8 @@
-// Server - pedantic/nursery lints relaxed
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
+// Reason: doc_markdown fires on "VelesDB", "OpenAPI" etc. in doc comments — acceptable
 #![allow(clippy::doc_markdown)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::manual_let_else)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::ref_option)]
+// Reason: match_same_arms used intentionally in metric/storage_mode parsing for clarity
 #![allow(clippy::match_same_arms)]
-#![allow(clippy::trivially_copy_pass_by_ref)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::enum_glob_use)]
-#![allow(clippy::unused_async)]
+// Reason: needless_for_each triggered by utoipa's OpenApi derive macro — not our code
 #![allow(clippy::needless_for_each)]
 //! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
