@@ -203,16 +203,18 @@ fn test_clear_all_modes() {
 }
 
 // =========================================================================
-// Fusion Logic Tests (now using fusion module)
+// Fusion Logic Tests (using core's FusionStrategy)
 // =========================================================================
 
 #[test]
 fn test_fuse_results_rrf() {
+    use velesdb_core::fusion::FusionStrategy;
+
     let results1 = vec![(1, 0.9), (2, 0.8), (3, 0.7)];
     let results2 = vec![(2, 0.95), (1, 0.85), (4, 0.6)];
     let all_results = vec![results1, results2];
 
-    let fused = fusion::fuse_results(&all_results, "rrf", 60);
+    let fused = FusionStrategy::RRF { k: 60 }.fuse(all_results).unwrap();
     assert!(!fused.is_empty());
     // ID 2 appears in rank 0 and rank 1, should have high RRF score
     // ID 1 appears in rank 0 and rank 1, should also be high
@@ -220,11 +222,13 @@ fn test_fuse_results_rrf() {
 
 #[test]
 fn test_fuse_results_average() {
+    use velesdb_core::fusion::FusionStrategy;
+
     let results1 = vec![(1, 0.9), (2, 0.8)];
     let results2 = vec![(1, 0.7), (2, 0.6)];
     let all_results = vec![results1, results2];
 
-    let fused = fusion::fuse_results(&all_results, "average", 60);
+    let fused = FusionStrategy::Average.fuse(all_results).unwrap();
     assert_eq!(fused.len(), 2);
     // ID 1: (0.9 + 0.7) / 2 = 0.8
     // ID 2: (0.8 + 0.6) / 2 = 0.7
@@ -234,11 +238,13 @@ fn test_fuse_results_average() {
 
 #[test]
 fn test_fuse_results_maximum() {
+    use velesdb_core::fusion::FusionStrategy;
+
     let results1 = vec![(1, 0.9), (2, 0.5)];
     let results2 = vec![(1, 0.7), (2, 0.8)];
     let all_results = vec![results1, results2];
 
-    let fused = fusion::fuse_results(&all_results, "maximum", 60);
+    let fused = FusionStrategy::Maximum.fuse(all_results).unwrap();
     // ID 1: max(0.9, 0.7) = 0.9
     // ID 2: max(0.5, 0.8) = 0.8
     let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
@@ -249,8 +255,10 @@ fn test_fuse_results_maximum() {
 
 #[test]
 fn test_fuse_results_empty() {
+    use velesdb_core::fusion::FusionStrategy;
+
     let all_results: Vec<Vec<(u64, f32)>> = vec![];
-    let fused = fusion::fuse_results(&all_results, "rrf", 60);
+    let fused = FusionStrategy::RRF { k: 60 }.fuse(all_results).unwrap();
     assert!(fused.is_empty());
 }
 

@@ -23,7 +23,7 @@
 //! # Features
 //!
 //! - **In-memory vector store**: Fast vector storage and retrieval
-//! - **SIMD-optimized**: Uses WASM SIMD128 for distance calculations
+//! - **Core-delegated**: Distance calculations via velesdb-core
 //! - **Multiple metrics**: Cosine, Euclidean, Dot Product
 //! - **Half-precision**: f16/bf16 support for 50% memory reduction
 //!
@@ -43,14 +43,11 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 mod agent;
-mod filter;
-mod fusion;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
 mod persistence;
 mod serialization;
-mod simd;
 mod store_get;
 mod store_insert;
 mod store_new;
@@ -258,7 +255,10 @@ impl VectorStore {
             self.metric,
             self.storage_mode,
             k,
-            |payload: &serde_json::Value| filter::matches_filter(payload, &filter_obj),
+            |payload: &serde_json::Value| {
+                velesdb_core::filter::json_filter::json_to_condition(&filter_obj)
+                    .is_some_and(|cond| cond.matches(payload))
+            },
         )
     }
 
@@ -334,8 +334,58 @@ impl VectorStore {
         vector_weight: Option<f32>,
     ) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query_vector.len(), self.dimension)?;
+        // ECO-07 fix: non-Full modes still support hybrid search —
+        // compute vector scores from quantized data, then combine with text scores.
+        // Only Full-mode data is passed to hybrid_search_impl for vector scoring;
+        // for SQ8/Binary we fall back to the full compute_scores path + text reranking.
         if self.storage_mode != StorageMode::Full {
-            return self.search(query_vector, k);
+            // Vector search via quantized path
+            let mut vec_results = vector_ops::compute_scores(
+                query_vector,
+                &self.ids,
+                &self.data,
+                &self.data_sq8,
+                &self.data_binary,
+                &self.sq8_mins,
+                &self.sq8_scales,
+                self.dimension,
+                self.metric,
+                self.storage_mode,
+            );
+            vector_ops::sort_results(&mut vec_results, self.metric.higher_is_better());
+
+            let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+            let t_weight = 1.0 - v_weight;
+            let text_query_lower = text_query.to_lowercase();
+
+            let mut results: Vec<serde_json::Value> = vec_results
+                .into_iter()
+                .filter_map(|(id, vector_score)| {
+                    let idx = self.ids.iter().position(|&x| x == id)?;
+                    let payload = self.payloads.get(idx)?.as_ref();
+                    let text_score = payload.map_or(0.0, |p| {
+                        if text_search::search_all_fields(p, &text_query_lower) {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    });
+                    let combined = v_weight * vector_score + t_weight * text_score;
+                    if combined > 0.0 {
+                        Some(serde_json::json!({
+                            "id": id,
+                            "score": combined,
+                            "payload": payload
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .take(k)
+                .collect();
+            results.truncate(k);
+            return serde_wasm_bindgen::to_value(&results)
+                .map_err(|e| JsValue::from_str(&e.to_string()));
         }
         store_search::hybrid_search_impl(
             query_vector,
@@ -555,15 +605,9 @@ impl VectorStore {
                 )));
             }
         }
-        self.ids.reserve(batch.len());
-        self.data.reserve(batch.len() * self.dimension);
+        // ECO-06 fix: delegate to insert_vector which respects storage_mode
         for (id, vector) in batch {
-            if let Some(idx) = self.ids.iter().position(|&x| x == id) {
-                self.remove_at_index(idx);
-            }
-            self.ids.push(id);
-            self.data.extend_from_slice(&vector);
-            self.payloads.push(None);
+            store_insert::insert_vector(self, id, &vector);
         }
         Ok(())
     }
