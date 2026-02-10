@@ -12,6 +12,8 @@
 
 This roadmap delivers a comprehensive refactoring of the VelesDB Core codebase, transforming it from a functional but complex system into a production-ready, maintainable, and performant vector database. The refactoring follows Martin Fowler patterns and Rust best practices while maintaining zero breaking changes to public APIs.
 
+principe fondamental de VelesDB : core = single source of truth, tout composant = binding/wrapper fidèle.
+
 Each phase delivers a coherent, verifiable capability that builds upon previous phases. Progress is measured by observable outcomes, not just tasks completed.
 
 ---

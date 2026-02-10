@@ -4,6 +4,8 @@
 
 A comprehensive refactoring milestone for VelesDB Core, a local-first vector database and cognitive memory system for AI agents. This milestone focuses on improving code quality, performance, stability, and maintainability across the entire Rust codebase while maintaining backward compatibility with existing APIs.
 
+principe fondamental de VelesDB : core = single source of truth, tout composant = binding/wrapper fidèle.
+
 ## Core Value
 
 The codebase becomes faster, cleaner, more maintainable, and production-ready without breaking existing functionality or public APIs.
