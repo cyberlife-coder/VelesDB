@@ -36,6 +36,14 @@ export interface NearVectorOptions {
   topK?: number;
 }
 
+/** Options for similarity() convenience method */
+export interface SimilarityOptions {
+  /** Similarity threshold (default: 0) */
+  threshold?: number;
+  /** Vector field name on the node (default: 'embedding') */
+  field?: string;
+}
+
 /** Fusion configuration */
 export interface FusionOptions {
   strategy: FusionStrategy;
@@ -325,6 +333,63 @@ export class VelesQLBuilder {
         ...options,
       },
     });
+  }
+
+  /**
+   * Add a similarity() WHERE clause for MATCH+vector patterns
+   * 
+   * Generates: `similarity({alias}.{field}, ${paramName}) > {threshold}`
+   * 
+   * @param alias - Node alias (e.g., 'd' for a Document node)
+   * @param paramName - Parameter name for the vector (e.g., '$q')
+   * @param vector - Vector data
+   * @param options - Threshold and field name options
+   * 
+   * @example
+   * ```typescript
+   * velesql()
+   *   .match('d', 'Document')
+   *   .similarity('d', '$q', embedding, { threshold: 0.8 })
+   *   .orderBySimilarity()
+   *   .limit(10)
+   *   .toVelesQL();
+   * // => "MATCH (d:Document) WHERE similarity(d.embedding, $q) > 0.8 ORDER BY similarity() DESC LIMIT 10"
+   * ```
+   */
+  similarity(
+    alias: string,
+    paramName: string,
+    vector: number[] | Float32Array,
+    options?: SimilarityOptions
+  ): VelesQLBuilder {
+    const cleanParam = paramName.startsWith('$') ? paramName.slice(1) : paramName;
+    const field = options?.field ?? 'embedding';
+    const threshold = options?.threshold ?? 0;
+    const condition = `similarity(${alias}.${field}, $${cleanParam}) > ${threshold}`;
+
+    const newParams = { ...this.state.params, [cleanParam]: vector };
+
+    if (this.state.whereClauses.length === 0) {
+      return this.clone({
+        whereClauses: [condition],
+        params: newParams,
+      });
+    }
+
+    return this.clone({
+      whereClauses: [...this.state.whereClauses, condition],
+      whereOperators: [...this.state.whereOperators, 'AND'],
+      params: newParams,
+    });
+  }
+
+  /**
+   * Shorthand for ORDER BY similarity() with direction
+   * 
+   * @param direction - Sort direction (default: 'DESC' — most similar first)
+   */
+  orderBySimilarity(direction: 'ASC' | 'DESC' = 'DESC'): VelesQLBuilder {
+    return this.clone({ orderByClause: `similarity() ${direction}` });
   }
 
   /**

@@ -319,6 +319,91 @@ describe('VelesQLBuilder', () => {
     });
   });
 
+  describe('similarity() convenience method', () => {
+    it('should add similarity WHERE clause with alias and threshold', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('d', 'Document')
+        .similarity('d', '$q', embedding, { threshold: 0.8 });
+      
+      expect(builder.toVelesQL()).toBe(
+        'MATCH (d:Document) WHERE similarity(d.embedding, $q) > 0.8'
+      );
+      expect(builder.getParams()).toEqual({ q: embedding });
+    });
+
+    it('should add similarity with custom field name', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('n', 'Note')
+        .similarity('n', '$vec', embedding, { threshold: 0.7, field: 'content_vector' });
+      
+      expect(builder.toVelesQL()).toBe(
+        'MATCH (n:Note) WHERE similarity(n.content_vector, $vec) > 0.7'
+      );
+    });
+
+    it('should default threshold to 0.0 when not provided', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('d', 'Document')
+        .similarity('d', '$q', embedding);
+      
+      expect(builder.toVelesQL()).toBe(
+        'MATCH (d:Document) WHERE similarity(d.embedding, $q) > 0'
+      );
+    });
+
+    it('should combine similarity with other WHERE conditions via AND', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('d', 'Document')
+        .where('d.status = $s', { s: 'published' })
+        .similarity('d', '$q', embedding, { threshold: 0.85 });
+      
+      const query = builder.toVelesQL();
+      expect(query).toContain('d.status = $s');
+      expect(query).toContain('AND similarity(d.embedding, $q) > 0.85');
+    });
+
+    it('should work with relationship traversal', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('u', 'User')
+        .rel('WROTE')
+        .to('d', 'Document')
+        .similarity('d', '$q', embedding, { threshold: 0.9 })
+        .limit(5);
+      
+      const query = builder.toVelesQL();
+      expect(query).toContain('(u:User)-[:WROTE]->(d:Document)');
+      expect(query).toContain('similarity(d.embedding, $q) > 0.9');
+      expect(query).toContain('LIMIT 5');
+    });
+  });
+
+  describe('orderBySimilarity() convenience method', () => {
+    it('should add ORDER BY similarity() DESC by default', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('d', 'Document')
+        .similarity('d', '$q', embedding, { threshold: 0.7 })
+        .orderBySimilarity();
+      
+      expect(builder.toVelesQL()).toContain('ORDER BY similarity() DESC');
+    });
+
+    it('should support ASC direction', () => {
+      const embedding = [0.1, 0.2, 0.3];
+      const builder = velesql()
+        .match('d', 'Document')
+        .similarity('d', '$q', embedding)
+        .orderBySimilarity('ASC');
+      
+      expect(builder.toVelesQL()).toContain('ORDER BY similarity() ASC');
+    });
+  });
+
   describe('Type safety', () => {
     it('should accept number[] for vectors', () => {
       const embedding: number[] = [0.1, 0.2, 0.3];
