@@ -396,7 +396,7 @@ fn test_ndcg_equivalence() {
 fn test_f16_roundtrip_equivalence() {
     use velesdb_core::half_precision::{VectorData, VectorPrecision};
 
-    let original: Vec<f32> = vec![1.0, -0.5, 0.0, 3.141, -2.71, 100.0, 0.001];
+    let original: Vec<f32> = vec![1.0, -0.5, 0.0, 3.15, -2.71, 100.0, 0.001];
 
     // f16 roundtrip
     let f16_data = VectorData::from_f32_slice(&original, VectorPrecision::F16);

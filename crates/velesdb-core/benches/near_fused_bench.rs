@@ -29,6 +29,7 @@ fn setup_collection(n: usize) -> (tempfile::TempDir, Collection) {
     let points: Vec<Point> = (0..n)
         .map(|i| {
             // Deterministic pseudo-random vector
+            #[allow(clippy::cast_precision_loss)]
             let vec: Vec<f32> = (0..DIM)
                 .map(|d| ((i * 7 + d * 13) % 1000) as f32 / 1000.0)
                 .collect();
@@ -40,10 +41,12 @@ fn setup_collection(n: usize) -> (tempfile::TempDir, Collection) {
     (dir, col)
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn query_vec(seed: usize) -> Vec<f32> {
-    (0..DIM)
+    let v: Vec<f32> = (0..DIM)
         .map(|d| ((seed * 11 + d * 17) % 1000) as f32 / 1000.0)
-        .collect()
+        .collect();
+    v
 }
 
 fn bench_single_vector_search(c: &mut Criterion) {

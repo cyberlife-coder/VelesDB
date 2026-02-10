@@ -22,14 +22,14 @@ fn make_store() -> ColumnStore {
 }
 
 /// Helper: insert a row with string interning.
-fn insert_row(store: &mut ColumnStore, id: i64, name: &str, age: i64, score: f64, active: bool) {
+fn insert_row(store: &mut ColumnStore, id: i64, name: &str, age: i64, grade: f64, active: bool) {
     let name_id = store.string_table_mut().intern(name);
     store
         .insert_row(&[
             ("id", ColumnValue::Int(id)),
             ("name", ColumnValue::String(name_id)),
             ("age", ColumnValue::Int(age)),
-            ("score", ColumnValue::Float(score)),
+            ("score", ColumnValue::Float(grade)),
             ("active", ColumnValue::Bool(active)),
         ])
         .unwrap();

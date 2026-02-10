@@ -250,6 +250,7 @@ mod tests {
 
     #[test]
     fn test_trigram_accelerator_default() {
-        let _accel = TrigramAccelerator;
+        // Reason: verify the struct can be constructed (compile-time check)
+        let _ = TrigramAccelerator;
     }
 }
