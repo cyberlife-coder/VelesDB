@@ -71,6 +71,9 @@ export interface VectorDocument {
   payload?: Record<string, unknown>;
 }
 
+/** Search mode presets for HNSW recall/speed tradeoff */
+export type SearchMode = 'fast' | 'balanced' | 'accurate' | 'perfect';
+
 /** Search options */
 export interface SearchOptions {
   /** Number of results to return (default: 10) */
@@ -79,6 +82,10 @@ export interface SearchOptions {
   filter?: Record<string, unknown>;
   /** Include vectors in results (default: false) */
   includeVectors?: boolean;
+  /** HNSW ef_search parameter — higher = better recall, slower (overrides mode) */
+  efSearch?: number;
+  /** Search mode preset: fast(64), balanced(128), accurate(256), perfect(max) */
+  mode?: SearchMode;
 }
 
 /** Fusion strategy for multi-query search */
@@ -423,6 +430,80 @@ export interface IVelesDBBackend {
     params?: Record<string, unknown>,
     options?: MatchQueryOptions
   ): Promise<MatchQueryResponse>;
+
+  // EXPLAIN Query (EPIC-058 US-002)
+
+  /** Explain a VelesQL query without executing it — returns query plan, cost, and features */
+  explain(
+    queryString: string,
+    params?: Record<string, unknown>
+  ): Promise<ExplainResponse>;
+}
+
+// ============================================================================
+// EXPLAIN Query Types (EPIC-058 US-002)
+// ============================================================================
+
+/** A step in the query execution plan */
+export interface ExplainStep {
+  /** Step number (1-indexed) */
+  step: number;
+  /** Operation type (e.g., "VectorSearch", "Filter", "Sort") */
+  operation: string;
+  /** Description of what this step does */
+  description: string;
+  /** Estimated rows processed/produced */
+  estimatedRows?: number;
+}
+
+/** Estimated cost metrics for the query */
+export interface ExplainCost {
+  /** Whether an index can be used */
+  usesIndex: boolean;
+  /** Index name if used (e.g., "HNSW") */
+  indexName?: string;
+  /** Estimated selectivity (0.0 - 1.0) */
+  selectivity: number;
+  /** Estimated complexity class (e.g., "O(log n)", "O(n)") */
+  complexity: string;
+}
+
+/** Features detected in the query */
+export interface ExplainFeatures {
+  /** Has vector search (NEAR clause) */
+  hasVectorSearch: boolean;
+  /** Has metadata filter (WHERE without NEAR) */
+  hasFilter: boolean;
+  /** Has ORDER BY clause */
+  hasOrderBy: boolean;
+  /** Has GROUP BY clause */
+  hasGroupBy: boolean;
+  /** Has aggregation functions */
+  hasAggregation: boolean;
+  /** Has JOIN clause */
+  hasJoin: boolean;
+  /** Has FUSION clause */
+  hasFusion: boolean;
+  /** LIMIT value if present */
+  limit?: number;
+  /** OFFSET value if present */
+  offset?: number;
+}
+
+/** Full response from query EXPLAIN */
+export interface ExplainResponse {
+  /** The original query */
+  query: string;
+  /** Query type (SELECT, MATCH, etc.) */
+  queryType: string;
+  /** Target collection name */
+  collection: string;
+  /** Query plan steps */
+  plan: ExplainStep[];
+  /** Estimated cost metrics */
+  estimatedCost: ExplainCost;
+  /** Query features detected */
+  features: ExplainFeatures;
 }
 
 // ============================================================================

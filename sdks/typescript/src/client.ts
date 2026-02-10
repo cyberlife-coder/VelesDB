@@ -23,6 +23,7 @@ import type {
   QueryResponse,
   MatchQueryOptions,
   MatchQueryResponse,
+  ExplainResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -715,5 +716,42 @@ export class VelesDB {
     }
 
     return this.backend.matchQuery(collection, queryString, params, options);
+  }
+
+  // ========================================================================
+  // EXPLAIN Query (EPIC-058 US-002)
+  // ========================================================================
+
+  /**
+   * Explain a VelesQL query without executing it.
+   * 
+   * Returns the query plan, estimated costs, and detected features.
+   * Useful for understanding query performance before execution.
+   * 
+   * @param queryString - VelesQL query to explain
+   * @param params - Named parameters for the query (optional)
+   * @returns Query plan with steps, cost estimation, and feature detection
+   * 
+   * @example
+   * ```typescript
+   * const plan = await db.explain(
+   *   'SELECT * FROM docs WHERE similarity(embedding, $v) > 0.8 LIMIT 10'
+   * );
+   * console.log(plan.queryType);              // 'SELECT'
+   * console.log(plan.estimatedCost.complexity); // 'O(log n)'
+   * console.log(plan.features.hasVectorSearch); // true
+   * ```
+   */
+  async explain(
+    queryString: string,
+    params?: Record<string, unknown>
+  ): Promise<ExplainResponse> {
+    this.ensureInitialized();
+
+    if (!queryString || typeof queryString !== 'string') {
+      throw new ValidationError('Query string must be a non-empty string');
+    }
+
+    return this.backend.explain(queryString, params);
   }
 }

@@ -26,6 +26,7 @@ import type {
   QueryResponse,
   MatchQueryOptions,
   MatchQueryResponse,
+  ExplainResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -70,6 +71,36 @@ interface ServerSelectQueryResponse {
 interface ServerAggregationResponse {
   result: unknown;
   timing_ms: number;
+}
+
+/** Server-side EXPLAIN response (snake_case contract — internal) */
+interface ServerExplainResponse {
+  query: string;
+  query_type: string;
+  collection: string;
+  plan: Array<{
+    step: number;
+    operation: string;
+    description: string;
+    estimated_rows?: number | null;
+  }>;
+  estimated_cost: {
+    uses_index: boolean;
+    index_name?: string | null;
+    selectivity: number;
+    complexity: string;
+  };
+  features: {
+    has_vector_search: boolean;
+    has_filter: boolean;
+    has_order_by: boolean;
+    has_group_by: boolean;
+    has_aggregation: boolean;
+    has_join: boolean;
+    has_fusion: boolean;
+    limit?: number | null;
+    offset?: number | null;
+  };
 }
 
 /**
@@ -386,15 +417,24 @@ export class RestBackend implements IVelesDBBackend {
 
     const queryVector = query instanceof Float32Array ? Array.from(query) : query;
 
+    const body: Record<string, unknown> = {
+      vector: queryVector,
+      top_k: options?.k ?? 10,
+      filter: options?.filter,
+      include_vectors: options?.includeVectors ?? false,
+    };
+
+    if (options?.efSearch !== undefined) {
+      body.ef_search = options.efSearch;
+    }
+    if (options?.mode !== undefined) {
+      body.mode = options.mode;
+    }
+
     const response = await this.request<{ results: SearchResult[] }>(
       'POST',
       `/collections/${encodeURIComponent(collection)}/search`,
-      {
-        vector: queryVector,
-        k: options?.k ?? 10,
-        filter: options?.filter,
-        include_vectors: options?.includeVectors ?? false,
-      }
+      body
     );
 
     if (response.error) {
@@ -957,6 +997,66 @@ export class RestBackend implements IVelesDBBackend {
     return {
       inDegree: response.data?.in_degree ?? 0,
       outDegree: response.data?.out_degree ?? 0,
+    };
+  }
+
+  // ========================================================================
+  // EXPLAIN Query (EPIC-058 US-002)
+  // ========================================================================
+
+  async explain(
+    queryString: string,
+    params?: Record<string, unknown>
+  ): Promise<ExplainResponse> {
+    this.ensureInitialized();
+
+    const body: Record<string, unknown> = { query: queryString };
+    if (params) {
+      body.params = params;
+    }
+
+    const response = await this.request<ServerExplainResponse>(
+      'POST',
+      '/query/explain',
+      body
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data;
+    if (!data) {
+      throw new VelesDBError('Empty response from explain endpoint', 'EMPTY_RESPONSE');
+    }
+
+    return {
+      query: data.query,
+      queryType: data.query_type,
+      collection: data.collection,
+      plan: data.plan.map(step => ({
+        step: step.step,
+        operation: step.operation,
+        description: step.description,
+        estimatedRows: step.estimated_rows ?? undefined,
+      })),
+      estimatedCost: {
+        usesIndex: data.estimated_cost.uses_index,
+        indexName: data.estimated_cost.index_name ?? undefined,
+        selectivity: data.estimated_cost.selectivity,
+        complexity: data.estimated_cost.complexity,
+      },
+      features: {
+        hasVectorSearch: data.features.has_vector_search,
+        hasFilter: data.features.has_filter,
+        hasOrderBy: data.features.has_order_by,
+        hasGroupBy: data.features.has_group_by,
+        hasAggregation: data.features.has_aggregation,
+        hasJoin: data.features.has_join,
+        hasFusion: data.features.has_fusion,
+        limit: data.features.limit ?? undefined,
+        offset: data.features.offset ?? undefined,
+      },
     };
   }
 }

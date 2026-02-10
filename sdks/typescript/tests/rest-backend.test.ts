@@ -572,6 +572,178 @@ describe('RestBackend', () => {
     });
   });
 
+  describe('explain', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should send explain request and map snake_case response to camelCase', async () => {
+      const serverResponse = {
+        query: 'SELECT * FROM docs WHERE similarity(embedding, $v) > 0.8 LIMIT 10',
+        query_type: 'SELECT',
+        collection: 'docs',
+        plan: [
+          { step: 1, operation: 'VectorSearch', description: 'ANN search using HNSW', estimated_rows: 10 },
+          { step: 2, operation: 'Limit', description: 'Apply LIMIT 10 OFFSET 0', estimated_rows: 10 },
+        ],
+        estimated_cost: {
+          uses_index: true,
+          index_name: 'HNSW',
+          selectivity: 0.01,
+          complexity: 'O(log n)',
+        },
+        features: {
+          has_vector_search: true,
+          has_filter: false,
+          has_order_by: false,
+          has_group_by: false,
+          has_aggregation: false,
+          has_join: false,
+          has_fusion: false,
+          limit: 10,
+          offset: null,
+        },
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(serverResponse),
+      });
+
+      const result = await backend.explain(
+        'SELECT * FROM docs WHERE similarity(embedding, $v) > 0.8 LIMIT 10'
+      );
+
+      expect(result.queryType).toBe('SELECT');
+      expect(result.collection).toBe('docs');
+      expect(result.plan).toHaveLength(2);
+      expect(result.plan[0].operation).toBe('VectorSearch');
+      expect(result.plan[0].estimatedRows).toBe(10);
+      expect(result.plan[1].operation).toBe('Limit');
+      expect(result.estimatedCost.usesIndex).toBe(true);
+      expect(result.estimatedCost.indexName).toBe('HNSW');
+      expect(result.estimatedCost.selectivity).toBe(0.01);
+      expect(result.estimatedCost.complexity).toBe('O(log n)');
+      expect(result.features.hasVectorSearch).toBe(true);
+      expect(result.features.hasFilter).toBe(false);
+      expect(result.features.hasAggregation).toBe(false);
+      expect(result.features.limit).toBe(10);
+      expect(result.features.offset).toBeUndefined();
+    });
+
+    it('should send params when provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          query: 'SELECT * FROM docs',
+          query_type: 'SELECT',
+          collection: 'docs',
+          plan: [],
+          estimated_cost: { uses_index: false, index_name: null, selectivity: 1.0, complexity: 'O(n)' },
+          features: {
+            has_vector_search: false, has_filter: false, has_order_by: false,
+            has_group_by: false, has_aggregation: false, has_join: false, has_fusion: false,
+          },
+        }),
+      });
+
+      await backend.explain('SELECT * FROM docs', { v: [0.1, 0.2] });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.query).toBe('SELECT * FROM docs');
+      expect(callBody.params).toEqual({ v: [0.1, 0.2] });
+    });
+
+    it('should throw on parse error', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ code: 'BAD_REQUEST', message: 'Parse error at position 5' }),
+      });
+
+      await expect(backend.explain('INVALID QUERY'))
+        .rejects.toThrow(VelesDBError);
+    });
+
+    it('should handle null estimated_rows and index_name', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          query: 'SELECT * FROM docs',
+          query_type: 'SELECT',
+          collection: 'docs',
+          plan: [{ step: 1, operation: 'FullScan', description: 'Scan docs', estimated_rows: null }],
+          estimated_cost: { uses_index: false, index_name: null, selectivity: 1.0, complexity: 'O(n)' },
+          features: {
+            has_vector_search: false, has_filter: false, has_order_by: false,
+            has_group_by: false, has_aggregation: false, has_join: false, has_fusion: false,
+            limit: null, offset: null,
+          },
+        }),
+      });
+
+      const result = await backend.explain('SELECT * FROM docs');
+      expect(result.plan[0].estimatedRows).toBeUndefined();
+      expect(result.estimatedCost.indexName).toBeUndefined();
+      expect(result.features.limit).toBeUndefined();
+    });
+  });
+
+  describe('search efSearch and mode', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should send ef_search when efSearch option is provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.search('docs', [0.1, 0.2], { k: 10, efSearch: 200 });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.ef_search).toBe(200);
+      expect(callBody.mode).toBeUndefined();
+    });
+
+    it('should send mode when mode option is provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.search('docs', [0.1, 0.2], { k: 10, mode: 'accurate' });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.mode).toBe('accurate');
+      expect(callBody.ef_search).toBeUndefined();
+    });
+
+    it('should not send ef_search or mode when not provided (backward compatible)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ results: [] }),
+      });
+
+      await backend.search('docs', [0.1, 0.2], { k: 5 });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.ef_search).toBeUndefined();
+      expect(callBody.mode).toBeUndefined();
+      expect(callBody.top_k).toBe(5);
+    });
+  });
+
   describe('error handling', () => {
     beforeEach(async () => {
       mockFetch.mockResolvedValueOnce({

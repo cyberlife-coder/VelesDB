@@ -24,6 +24,7 @@ import type {
   QueryResponse,
   MatchQueryOptions,
   MatchQueryResponse,
+  ExplainResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -511,6 +512,21 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     throw new VelesDBError(
       'MATCH queries are not supported in WASM backend. Use REST backend for graph traversal queries.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  // ========================================================================
+  // EXPLAIN Query — requires server endpoint
+  // ========================================================================
+
+  async explain(
+    _queryString: string,
+    _params?: Record<string, unknown>
+  ): Promise<ExplainResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'EXPLAIN is not supported in WASM backend. Use REST backend for query plan analysis.',
       'NOT_SUPPORTED'
     );
   }
