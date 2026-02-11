@@ -2,7 +2,7 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** v3-04.1 next — Python Feature Parity (10 missing features)  
+**Phase:** v3-04.1 planned (4 plans) — Python Feature Parity (10 missing features)  
 **Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 8 complete. Phases 4.1, 5–7 remain.  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
@@ -97,7 +97,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ## Session Continuity
 
 **Last session:** 2026-02-11  
-**Stopped at:** Phase v3-04.1 CONTEXT.md captured. Next: /gsd-plan-phase 4.1 (Python Feature Parity — 10 missing features).
+**Stopped at:** Phase v3-04.1 planned (4 plans, sequential). Next: /gsd-execute-plan 04.1-01 (Collection & Index Management).
 
 ## Decisions
 
