@@ -7,8 +7,13 @@
 .vscode/
 *.swp
 
+.planning/*
+.phases/*
+
 # Windsurf local config (accessible by Cascade but not pushed)
-.windsurf/
+.windsurf*/
+# Mistral Vibe local config
+.vibe/
 AGENTS.md
 *.swo
 *~

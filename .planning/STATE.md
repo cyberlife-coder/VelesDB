@@ -3,7 +3,7 @@
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
 **Phase:** v3-04.1 complete (4/4 plans done) — Python Feature Parity (10 missing features)  
-**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 8 complete. Phase 4.2 next (5 plans). Phases 5–7 remain.  
+**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 8 complete. Phase 4.2 planned (5 plans, 3 waves). Phases 5–7 remain.  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -82,7 +82,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ### Remaining Work
 
 1. ~~**v3-04.1**: Python Feature Parity~~ ✅ Complete (4/4 plans, 324 tests pass)
-2. **v3-04.2**: Python SDK Parity Fixes — 5 plans (SDK Rust graph methods, integration name fixes, contract tests, READMEs, backlog)
+2. **v3-04.2**: Python SDK Parity Fixes — 5 plans PLANNED (SDK Rust graph methods, integration name fixes, contract tests, READMEs, backlog)
 3. **v3-05**: Demos & Examples Update — plan & execute
 4. **v3-06**: Tauri Plugin Audit — plan & execute
 5. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
@@ -100,7 +100,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ## Session Continuity
 
 **Last session:** 2026-02-11  
-**Stopped at:** Phase v3-04.1 complete (4/4 plans). Next: /gsd-plan-phase 04.2 or /gsd-execute-plan for Phase 4.2.
+**Stopped at:** Phase v3-04.2 planned (5 plans, 3 waves). Next: /gsd-execute-plan for Phase 4.2 Plan 01.
 
 ## Decisions
 
