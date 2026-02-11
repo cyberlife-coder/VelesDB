@@ -17,6 +17,8 @@ MAX_K_VALUE = 10_000  # Max top_k for search
 MAX_DIMENSION = 65_536  # Max vector dimension (reasonable for any model)
 MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096  # Max path length
+MAX_LABEL_LENGTH = 128  # Max label length for graph edges/nodes
+MAX_NODE_ID = 2**63 - 1  # Max node ID (i64 range)
 ALLOWED_METRICS = {"cosine", "euclidean", "dot", "hamming", "jaccard"}
 ALLOWED_STORAGE_MODES = {"full", "sq8", "binary"}
 DEFAULT_TIMEOUT_MS = 30_000  # 30 seconds max timeout
@@ -353,6 +355,71 @@ def validate_weight(weight: float, name: str = "weight") -> float:
         raise SecurityError(f"{name} must be between 0.0 and 1.0, got {weight}")
 
     return float(weight)
+
+
+def validate_label(label: str) -> str:
+    """Validate a graph edge or node label.
+
+    Labels follow the same pattern as collection names: non-empty,
+    alphanumeric + underscore + hyphen, max 128 chars.
+
+    Args:
+        label: Edge or node label to validate.
+
+    Returns:
+        Validated label string.
+
+    Raises:
+        SecurityError: If label is invalid or potentially malicious.
+    """
+    if not isinstance(label, str):
+        raise SecurityError(f"Label must be a string, got {type(label).__name__}")
+
+    if not label:
+        raise SecurityError("Label cannot be empty")
+
+    if len(label) > MAX_LABEL_LENGTH:
+        raise SecurityError(f"Label exceeds maximum length of {MAX_LABEL_LENGTH}")
+
+    # Reject null bytes
+    if "\x00" in label:
+        raise SecurityError("Label contains null bytes")
+
+    # Only allow alphanumeric, underscore, hyphen
+    if not re.match(r"^[a-zA-Z0-9_-]+$", label):
+        raise SecurityError(
+            "Label can only contain alphanumeric characters, underscores, and hyphens"
+        )
+
+    return label
+
+
+def validate_node_id(node_id: int) -> int:
+    """Validate a graph node ID.
+
+    Node IDs must be non-negative integers fitting in VelesDB's i64 range.
+
+    Args:
+        node_id: Graph node ID to validate.
+
+    Returns:
+        Validated node ID.
+
+    Raises:
+        SecurityError: If node_id is invalid.
+    """
+    if not isinstance(node_id, int) or isinstance(node_id, bool):
+        raise SecurityError(f"Node ID must be an integer, got {type(node_id).__name__}")
+
+    if node_id < 0:
+        raise SecurityError("Node ID must be non-negative")
+
+    if node_id > MAX_NODE_ID:
+        raise SecurityError(
+            f"Node ID exceeds maximum of {MAX_NODE_ID} (63-bit range)"
+        )
+
+    return node_id
 
 
 def validate_timeout(timeout_ms: int) -> int:

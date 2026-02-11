@@ -16,12 +16,16 @@ from velesdb_common.security import (
     validate_url,
     validate_weight,
     validate_timeout,
+    validate_label,
+    validate_node_id,
     MAX_QUERY_LENGTH,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
     MAX_K_VALUE,
     MAX_DIMENSION,
     MIN_DIMENSION,
+    MAX_LABEL_LENGTH,
+    MAX_NODE_ID,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
     DEFAULT_TIMEOUT_MS,
@@ -398,3 +402,78 @@ class TestValidateTimeout:
     def test_non_int_rejected(self):
         with pytest.raises(SecurityError, match="integer"):
             validate_timeout(5.0)  # type: ignore
+
+
+class TestValidateLabel:
+    """Tests for validate_label."""
+
+    def test_validate_label_valid(self):
+        assert validate_label("PERSON") == "PERSON"
+        assert validate_label("KNOWS") == "KNOWS"
+        assert validate_label("works_at") == "works_at"
+        assert validate_label("has-role") == "has-role"
+
+    def test_validate_label_empty(self):
+        with pytest.raises(SecurityError, match="cannot be empty"):
+            validate_label("")
+
+    def test_validate_label_injection(self):
+        with pytest.raises(SecurityError, match="alphanumeric"):
+            validate_label('"; DROP TABLE')
+
+    def test_validate_label_special_chars(self):
+        with pytest.raises(SecurityError, match="alphanumeric"):
+            validate_label("KNOWS (well)")
+
+    def test_validate_label_too_long(self):
+        with pytest.raises(SecurityError, match="maximum length"):
+            validate_label("A" * 200)
+
+    def test_validate_label_null_bytes(self):
+        with pytest.raises(SecurityError, match="null bytes"):
+            validate_label("KNOWS\x00evil")
+
+    def test_validate_label_non_string(self):
+        with pytest.raises(SecurityError, match="string"):
+            validate_label(42)  # type: ignore
+
+    def test_validate_label_max_length_ok(self):
+        label = "A" * MAX_LABEL_LENGTH
+        assert validate_label(label) == label
+
+
+class TestValidateNodeId:
+    """Tests for validate_node_id."""
+
+    def test_validate_node_id_valid(self):
+        assert validate_node_id(0) == 0
+        assert validate_node_id(1) == 1
+        assert validate_node_id(42) == 42
+        assert validate_node_id(2**62) == 2**62
+
+    def test_validate_node_id_negative(self):
+        with pytest.raises(SecurityError, match="non-negative"):
+            validate_node_id(-1)
+
+    def test_validate_node_id_too_large(self):
+        with pytest.raises(SecurityError, match="maximum"):
+            validate_node_id(2**64)
+
+    def test_validate_node_id_non_int(self):
+        with pytest.raises(SecurityError, match="integer"):
+            validate_node_id("abc")  # type: ignore
+
+    def test_validate_node_id_float_rejected(self):
+        with pytest.raises(SecurityError, match="integer"):
+            validate_node_id(1.5)  # type: ignore
+
+    def test_validate_node_id_bool_rejected(self):
+        with pytest.raises(SecurityError, match="integer"):
+            validate_node_id(True)  # type: ignore
+
+    def test_validate_node_id_max_ok(self):
+        assert validate_node_id(MAX_NODE_ID) == MAX_NODE_ID
+
+    def test_validate_node_id_over_max(self):
+        with pytest.raises(SecurityError, match="maximum"):
+            validate_node_id(MAX_NODE_ID + 1)
