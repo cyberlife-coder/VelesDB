@@ -612,6 +612,102 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             return False
         return self._collection.is_metadata_only()
 
+    def list_collections(self) -> List[dict]:
+        """List all collections in the database.
+
+        Returns:
+            List of dicts with collection information (name, dimension, metric, etc.).
+
+        Example:
+            >>> collections = vector_store.list_collections()
+            >>> for col in collections:
+            ...     print(col["name"], col["dimension"])
+        """
+        return self._get_db().list_collections()
+
+    def delete_collection(self, name: str) -> None:
+        """Delete a collection from the database.
+
+        If deleting the current collection, the internal reference is reset.
+
+        Args:
+            name: Name of the collection to delete.
+
+        Raises:
+            SecurityError: If name fails validation.
+
+        Example:
+            >>> vector_store.delete_collection("old_data")
+        """
+        name = validate_collection_name(name)
+        self._get_db().delete_collection(name)
+        # Reset internal reference if deleting the current collection
+        if name == self.collection_name:
+            self._collection = None
+
+    def create_index(self, label: str, property: str) -> dict:
+        """Create a property index on the current collection.
+
+        Property indexes accelerate WHERE filters on metadata fields.
+
+        Args:
+            label: Node/document label for the index.
+            property: Property name to index.
+
+        Returns:
+            Dict with index information.
+
+        Raises:
+            SecurityError: If label or property fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> info = vector_store.create_index(label="Document", property="category")
+        """
+        label = validate_collection_name(label)
+        property = validate_collection_name(property)
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+        return self._collection.create_index(label=label, property=property)
+
+    def list_indexes(self) -> List[dict]:
+        """List all property indexes on the current collection.
+
+        Returns:
+            List of dicts with index information.
+
+        Raises:
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> indexes = vector_store.list_indexes()
+            >>> for idx in indexes:
+            ...     print(idx["label"], idx["property"])
+        """
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+        return self._collection.list_indexes()
+
+    def delete_index(self, label: str, property: str) -> None:
+        """Delete a property index from the current collection.
+
+        Args:
+            label: Node/document label of the index.
+            property: Property name of the index.
+
+        Raises:
+            SecurityError: If label or property fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> vector_store.delete_index(label="Document", property="category")
+        """
+        label = validate_collection_name(label)
+        property = validate_collection_name(property)
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+        self._collection.delete_index(label=label, property=property)
+
     def velesql(self, query_str: str, params: Optional[dict] = None, **kwargs: Any) -> VectorStoreQueryResult:
         """Execute a VelesQL query."""
         query_str = validate_query(query_str)
