@@ -246,6 +246,7 @@
 | 3 - TypeScript SDK Fixes | ✅ Done (5/5) | ECO-08,09,10,15 | 🐛 Contracts |
 | 3.1 - TS SDK Docs & Examples | ✅ Done (3/3) | Audit gaps (6 docs, 6 examples, 1 route) | 📝 Completeness |
 | 4 - Python Integrations | ✅ Done (3/3) | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality |
+| 4.1 - Python Feature Parity | ⬜ Pending | Audit: 10 missing features | 🚨 Completeness |
 | 5 - Demos & Examples Update | ⬜ Pending | ECO-23→28,30 | 📝 User Experience |
 | 6 - Tauri Plugin Audit | ⬜ Pending | ECO-29 | 🐛 Completeness |
 | 7 - GPU Extras + Ecosystem CI | ⬜ Pending | ECO-21,22 | ⚠️ Polish |

@@ -2,8 +2,8 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** v3-04 closed — next is Phase 5 (Demos & Examples Update)  
-**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 8 complete. Phases 5–7 remain.  
+**Phase:** v3-04.1 next — Python Feature Parity (10 missing features)  
+**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 8 complete. Phases 4.1, 5–7 remain.  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -54,9 +54,10 @@ Phase 2.1  ██████████ 100%  Server Documentation       ✅ (
 Phase 3    ██████████ 100%  TypeScript SDK Fixes        ✅ (5/5 plans)
 Phase 3.1  ██████████ 100%  TS SDK Docs & Examples     ✅ (3/3 plans)
 Phase 4    ██████████ 100%  Python Integrations        ✅ (3/3 plans)
-Phase 5    ░░░░░░░░░░   0%  GPU Ecosystem CI           ⬜ Pending
+Phase 4.1  ░░░░░░░░░░   0%  Python Feature Parity      ⬜ Pending
+Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    ⬜ Pending
 Phase 6    ░░░░░░░░░░   0%  Tauri Plugin Audit         ⬜ Pending
-Phase 7    ░░░░░░░░░░   0%  GPU Ecosystem CI           ⬜ Pending
+Phase 7    ░░░░░░░░░░   0%  GPU Extras + Ecosystem CI  ⬜ Pending
 Phase 8    ██████████ 100%  WASM Feature Parity         ✅ (5/5 plans)
 ```
 
@@ -70,16 +71,18 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | 3 | TypeScript SDK Fixes | ECO-08,09,10,15 | 🐛 Contracts | ✅ Done |
 | 3.1 | TS SDK Docs & Examples | Audit gaps | 📝 Completeness | ✅ Done |
 | 4 | Python Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ✅ Done |
-| 5 | GPU Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
+| 4.1 | Python Feature Parity | Audit: 10 missing features | 🚨 Completeness | ⬜ Pending |
+| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ⬜ Pending |
 | 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness | ⬜ Pending |
-| 7 | GPU Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
+| 7 | GPU Extras + Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
 | 8 | WASM Feature Parity | — | 🚨 Architecture | ✅ Done |
 
 ### Remaining Work
 
-1. **v3-05**: Demos & Examples Update — plan & execute
-2. **v3-06**: Tauri Plugin Audit — plan & execute
-3. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
+1. **v3-04.1**: Python Feature Parity — plan & execute (10 missing features)
+2. **v3-05**: Demos & Examples Update — plan & execute
+3. **v3-06**: Tauri Plugin Audit — plan & execute
+4. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
 
 ### Deferred Requirements (from v1/v2)
 - **TEST-05**: Fuzz testing expansion
@@ -94,7 +97,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ## Session Continuity
 
 **Last session:** 2026-02-11  
-**Stopped at:** Phase v3-04 closed (3/3 plans: common pkg, security hardening, bug fixes + wiring). Next: Phase 5 (Demos & Examples Update).
+**Stopped at:** Phase v3-04.1 CONTEXT.md captured. Next: /gsd-plan-phase 4.1 (Python Feature Parity — 10 missing features).
 
 ## Decisions
 
@@ -143,4 +146,4 @@ pytest                                 # Python integrations (Phase 4)
 ```
 
 *State file last updated: 2026-02-11*  
-*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 8 done. Phases 5–7 remain.*
+*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 8 done. Phases 4.1, 5–7 remain.*
