@@ -724,6 +724,88 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             i_list.append(nid)
         return VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list)
 
+    def explain(self, query_str: str, params: Optional[dict] = None, **kwargs: Any) -> dict:
+        """Get the query execution plan for a VelesQL query.
+
+        Provides observability into how VelesDB will execute a query,
+        including scan steps, cost estimates, and feature usage.
+
+        Args:
+            query_str: VelesQL query string to analyze.
+            params: Optional dict of query parameters.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Dict with query plan details::
+
+                {
+                    "steps": [{"type": "scan", "collection": "docs"}],
+                    "cost": {"estimated_rows": 100},
+                    "features": {"similarity": True}
+                }
+
+        Raises:
+            SecurityError: If query fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> plan = vector_store.explain(
+            ...     "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10"
+            ... )
+            >>> print(plan["steps"])
+        """
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        return self._collection.explain(query_str, params)
+
+    def match_query(
+        self, query_str: str, params: Optional[dict] = None, **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Execute a MATCH graph traversal query.
+
+        Unlocks VelesDB's Cypher-like MATCH syntax for multi-hop
+        graph reasoning directly from Python.
+
+        Args:
+            query_str: MATCH query string (Cypher-like syntax).
+            params: Optional dict of query parameters.
+            **kwargs: Additional arguments.
+
+        Returns:
+            VectorStoreQueryResult with TextNode objects from graph traversal.
+
+        Raises:
+            SecurityError: If query fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> result = vector_store.match_query(
+            ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN b"
+            ... )
+            >>> for node in result.nodes:
+            ...     print(node.text)
+        """
+        validate_query(query_str)
+
+        if self._collection is None:
+            return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+
+        results = self._collection.match_query(query_str, params)
+
+        n_list, s_list, i_list = [], [], []
+        for r in results:
+            p = r.get("payload", {})
+            nid = p.get("node_id", str(r.get("id", "")))
+            n_list.append(TextNode(text=p.get("text", ""), id_=nid,
+                metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
+            s_list.append(r.get("score", 0.0))
+            i_list.append(nid)
+
+        return VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list)
+
     def multi_query_search(
         self,
         query_embeddings: List[List[float]],

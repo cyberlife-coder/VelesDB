@@ -896,6 +896,95 @@ class VelesDBVectorStore(VectorStore):
 
         return documents
 
+    def explain(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Get the query execution plan for a VelesQL query.
+
+        Provides observability into how VelesDB will execute a query,
+        including scan steps, cost estimates, and feature usage.
+
+        Args:
+            query_str: VelesQL query string to analyze.
+            params: Optional dict of query parameters.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Dict with query plan details::
+
+                {
+                    "steps": [{"type": "scan", "collection": "docs"}],
+                    "cost": {"estimated_rows": 100},
+                    "features": {"similarity": True}
+                }
+
+        Raises:
+            SecurityError: If query fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> plan = vectorstore.explain(
+            ...     "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10"
+            ... )
+            >>> print(plan["steps"])
+        """
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        return self._collection.explain(query_str, params)
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Execute a MATCH graph traversal query.
+
+        Unlocks VelesDB's Cypher-like MATCH syntax for multi-hop
+        graph reasoning directly from Python.
+
+        Args:
+            query_str: MATCH query string (Cypher-like syntax).
+            params: Optional dict of query parameters.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Documents matching the graph traversal.
+
+        Raises:
+            SecurityError: If query fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> results = vectorstore.match_query(
+            ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN b"
+            ... )
+            >>> for doc in results:
+            ...     print(doc.page_content)
+        """
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        results = self._collection.match_query(query_str, params)
+
+        documents: List[Document] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            doc = Document(page_content=text, metadata=metadata)
+            documents.append(doc)
+
+        return documents
+
     def multi_query_search(
         self,
         queries: List[str],
