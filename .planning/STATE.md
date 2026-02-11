@@ -55,7 +55,7 @@ Phase 3    ██████████ 100%  TypeScript SDK Fixes        ✅ 
 Phase 3.1  ██████████ 100%  TS SDK Docs & Examples     ✅ (3/3 plans)
 Phase 4    ██████████ 100%  Python Integrations        ✅ (3/3 plans)
 Phase 4.1  ██████████ 100%  Python Feature Parity      ✅ (4/4 plans)
-Phase 4.2  ░░░░░░░░░░   0%  Python SDK Parity Fixes    ⬜ Pending (5 plans)
+Phase 4.2  ██████████  20%  Python SDK Parity Fixes    🟨 In progress (1/5 plans)
 Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    ⬜ Pending
 Phase 6    ░░░░░░░░░░   0%  Tauri Plugin Audit         ⬜ Pending
 Phase 7    ░░░░░░░░░░   0%  GPU Extras + Ecosystem CI  ⬜ Pending
@@ -99,8 +99,8 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 
 ## Session Continuity
 
-**Last session:** 2026-02-11  
-**Stopped at:** Phase v3-04.2 planned (5 plans, 3 waves). Next: /gsd-execute-plan for Phase 4.2 Plan 01.
+**Last session:** 2026-02-12  
+**Stopped at:** Phase v3-04.2 Plan 01 completed (SDK graph methods). Next: /gsd-execute-plan for Phase 4.2 Plan 02.
 
 ## Decisions
 
@@ -118,6 +118,8 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | Unify graph in Collection (not separate GraphStore) | DX: agents use one object; server already deleted GraphService | 2026-02-11 |
 | match_query/explain → NotImplementedError | MATCH engine not in core yet (EPIC-045); better explicit error than AttributeError | 2026-02-11 |
 | Fix integration names, don't add SDK aliases | SDK names match core; integrations should adapt | 2026-02-11 |
+| Direct PyO3 bindings to core graph API | Zero reimplementation; SDK delegates to velesdb-core | 2026-02-12 |
+| Inline traversal result conversion | Core's TraversalResult differs from graph module's type | 2026-02-12 |
 
 ## Blockers & Concerns
 

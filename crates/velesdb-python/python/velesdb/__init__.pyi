@@ -349,6 +349,99 @@ class Collection:
         """
         ...
 
+    # ========================================================================
+    # Graph Operations (EPIC-015 US-001)
+    # ========================================================================
+
+    def add_edge(
+        self,
+        id: int,
+        source: int,
+        target: int,
+        label: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add an edge to the collection's knowledge graph.
+        
+        Args:
+            id: Edge ID (must be unique)
+            source: Source node ID
+            target: Target node ID
+            label: Relationship type/label
+            metadata: Optional edge properties (dict)
+        
+        Example:
+            >>> collection.add_edge(1, 100, 200, "RELATED_TO", {"weight": 0.95})
+        """
+        ...
+
+    def get_edges(self) -> List[Dict[str, Any]]:
+        """Get all edges from the collection's knowledge graph.
+        
+        Returns:
+            List of edge dicts with id, source, target, label, and metadata keys
+        
+        Example:
+            >>> edges = collection.get_edges()
+            >>> for edge in edges:
+            ...     print(f"Edge {edge['id']}: {edge['source']} -> {edge['target']} ({edge['label']})")
+        """
+        ...
+
+    def get_edges_by_label(self, label: str) -> List[Dict[str, Any]]:
+        """Get edges filtered by label (relationship type).
+        
+        Args:
+            label: Relationship type to filter by
+        
+        Returns:
+            List of edge dicts matching the label
+        
+        Example:
+            >>> related_edges = collection.get_edges_by_label("RELATED_TO")
+        """
+        ...
+
+    def traverse(
+        self,
+        source: int,
+        max_depth: int = 2,
+        strategy: str = "bfs",
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Traverse the graph from a source node using BFS or DFS.
+        
+        Args:
+            source: Starting node ID
+            max_depth: Maximum traversal depth (default: 2)
+            strategy: Traversal strategy, either "bfs" or "dfs" (default: "bfs")
+            limit: Maximum number of results (default: 100)
+        
+        Returns:
+            List of traversal result dicts with target_id, depth, and path keys
+        
+        Example:
+            >>> results = collection.traverse(100, max_depth=3, strategy="bfs")
+            >>> for result in results:
+            ...     print(f"Found node {result['target_id']} at depth {result['depth']}")
+        """
+        ...
+
+    def get_node_degree(self, node_id: int) -> Dict[str, int]:
+        """Get the in-degree and out-degree of a node.
+        
+        Args:
+            node_id: The node ID
+        
+        Returns:
+            Dict with node_id, in_degree, out_degree, and total_degree keys
+        
+        Example:
+            >>> degree = collection.get_node_degree(100)
+            >>> print(f"Node 100 has {degree['total_degree']} connections")
+        """
+        ...
+
 
 class Database:
     """VelesDB Database - the main entry point for interacting with VelesDB.
