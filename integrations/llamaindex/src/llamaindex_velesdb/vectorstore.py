@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from llama_index.core.schema import BaseNode, TextNode
+from llama_index.core.schema import BaseNode, NodeWithScore, TextNode
 from llama_index.core.vector_stores.types import (
     BasePydanticVectorStore,
     VectorStoreQuery,
@@ -29,6 +29,8 @@ from velesdb_common import (
     validate_batch_size,
     validate_collection_name,
     validate_weight,
+    validate_label,
+    validate_node_id,
     stable_hash_id,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
@@ -805,6 +807,169 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             i_list.append(nid)
 
         return VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list)
+
+    def add_edge(
+        self,
+        id: int,
+        source: int,
+        target: int,
+        label: str,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        """Add an edge to the knowledge graph.
+
+        Creates a directed edge between two nodes in the collection's
+        graph layer. Validates all inputs before delegating to VelesDB.
+
+        Args:
+            id: Unique edge identifier.
+            source: Source node ID.
+            target: Target node ID.
+            label: Edge label (e.g. "KNOWS", "WORKS_AT").
+            metadata: Optional metadata dict for the edge.
+
+        Raises:
+            SecurityError: If any ID or label fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> vector_store.add_edge(
+            ...     id=1, source=100, target=200,
+            ...     label="KNOWS", metadata={"since": 2020}
+            ... )
+        """
+        validate_node_id(id)
+        validate_node_id(source)
+        validate_node_id(target)
+        validate_label(label)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        self._collection.add_edge(
+            id=id, source=source, target=target,
+            label=label, metadata=metadata or {},
+        )
+
+    def get_edges(self, label: Optional[str] = None) -> List[dict]:
+        """Get edges from the knowledge graph.
+
+        Retrieves all edges or filters by label.
+
+        Args:
+            label: Optional edge label to filter by.
+
+        Returns:
+            List of dicts with keys: id, source, target, label, properties.
+
+        Raises:
+            SecurityError: If label fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> edges = vector_store.get_edges(label="KNOWS")
+            >>> for e in edges:
+            ...     print(e["source"], "->", e["target"])
+        """
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        if label is not None:
+            validate_label(label)
+            return self._collection.get_edges_by_label(label)
+
+        return self._collection.get_edges()
+
+    def traverse_graph(
+        self,
+        source: int,
+        max_depth: int = 2,
+        strategy: str = "bfs",
+        limit: int = 100,
+    ) -> List[NodeWithScore]:
+        """Traverse the knowledge graph from a source node.
+
+        Performs breadth-first or depth-first traversal and returns
+        reachable nodes as LlamaIndex ``NodeWithScore`` objects with
+        depth-based scoring (closer nodes get higher scores).
+
+        Args:
+            source: Source node ID to start traversal from.
+            max_depth: Maximum traversal depth. Defaults to 2.
+            strategy: Traversal strategy — "bfs" or "dfs". Defaults to "bfs".
+            limit: Maximum number of results. Defaults to 100.
+
+        Returns:
+            List of NodeWithScore where score = ``1.0 - (depth / (max_depth + 1))``.
+
+        Raises:
+            SecurityError: If source or limit fails validation.
+            ValueError: If strategy is invalid or collection not initialized.
+
+        Example:
+            >>> nodes = vector_store.traverse_graph(source=100, max_depth=3)
+            >>> for ns in nodes:
+            ...     print(ns.score, ns.node.text)
+        """
+        validate_node_id(source)
+        validate_k(limit, param_name="limit")
+
+        if strategy not in ("bfs", "dfs"):
+            raise ValueError(
+                f"Invalid strategy '{strategy}'. Must be 'bfs' or 'dfs'."
+            )
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        results = self._collection.traverse(
+            source=source, max_depth=max_depth,
+            strategy=strategy, limit=limit,
+        )
+
+        nodes_with_score: List[NodeWithScore] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")
+            target_id = result.get("target_id", 0)
+            depth = result.get("depth", 0)
+            node_id = payload.get("node_id", str(target_id))
+
+            metadata = {k: v for k, v in payload.items() if k not in ("text", "node_id")}
+            metadata["graph_depth"] = depth
+            metadata["target_id"] = target_id
+
+            node = TextNode(text=text, id_=node_id, metadata=metadata)
+            # Reason: Closer nodes (lower depth) get higher scores
+            depth_score = 1.0 - (depth / (max_depth + 1))
+            nodes_with_score.append(NodeWithScore(node=node, score=depth_score))
+
+        return nodes_with_score
+
+    def get_node_degree(self, node_id: int) -> dict:
+        """Get the degree (edge counts) of a graph node.
+
+        Args:
+            node_id: Node ID to query.
+
+        Returns:
+            Dict with keys: ``node_id``, ``in_degree``, ``out_degree``,
+            ``total_degree``.
+
+        Raises:
+            SecurityError: If node_id fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> info = vector_store.get_node_degree(100)
+            >>> print(info["total_degree"])
+        """
+        validate_node_id(node_id)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        return self._collection.get_node_degree(node_id)
 
     def multi_query_search(
         self,
