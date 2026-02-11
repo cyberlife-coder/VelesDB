@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import logging
 import requests
 
-from llamaindex_velesdb.security import (
+from velesdb_common import (
     validate_url,
     validate_k,
     validate_timeout,

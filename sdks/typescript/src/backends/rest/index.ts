@@ -27,6 +27,8 @@ import type {
   MatchQueryResponse,
   ExplainResponse,
   HealthResponse,
+  StreamTraverseOptions,
+  StreamTraverseCallbacks,
 } from '../../types';
 
 import { HttpClient } from './http-client';
@@ -233,5 +235,13 @@ export class RestBackend implements IVelesDBBackend {
 
   async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
     return graph.getNodeDegree(this.client, collection, nodeId);
+  }
+
+  async streamTraverseGraph(
+    collection: string,
+    options: StreamTraverseOptions,
+    callbacks: StreamTraverseCallbacks
+  ): Promise<void> {
+    return graph.streamTraverseGraph(this.client, collection, options, callbacks);
   }
 }

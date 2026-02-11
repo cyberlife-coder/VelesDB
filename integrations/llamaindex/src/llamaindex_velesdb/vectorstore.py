@@ -6,7 +6,6 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any, List, Optional
 
 from llama_index.core.schema import BaseNode, TextNode
@@ -19,41 +18,22 @@ from pydantic import ConfigDict
 
 import velesdb
 
-from llamaindex_velesdb.security import (
+from velesdb_common import (
     validate_path,
     validate_dimension,
     validate_k,
     validate_text,
     validate_query,
     validate_metric,
+    validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
     validate_weight,
+    stable_hash_id,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
     SecurityError,
 )
-
-
-def _stable_hash_id(value: str) -> int:
-    """Generate a stable numeric ID from a string using SHA256.
-    
-    Python's hash() is non-deterministic across processes, so we use
-    SHA256 for consistent IDs across runs.
-    
-    Uses 63 bits (fits in i64/u64) from SHA256. For datasets >1M documents,
-    collision probability increases but remains acceptable (<0.01%).
-    For mission-critical deduplication, use explicit UUIDs.
-    
-    Args:
-        value: String to hash.
-        
-    Returns:
-        Positive 63-bit integer ID compatible with VelesDB Core.
-    """
-    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 8 bytes (64 bits) and mask sign bit for positive i64
-    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 class VelesDBVectorStore(BasePydanticVectorStore):
@@ -167,6 +147,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                     self.collection_name,
                     dimension=dimension,
                     metric=self.metric,
+                    storage_mode=self.storage_mode,
                 )
                 self._collection = db.get_collection(self.collection_name)
             else:
@@ -242,7 +223,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                         payload[key] = value
 
             # Convert node_id to int for VelesDB
-            int_id = _stable_hash_id(node_id)
+            int_id = stable_hash_id(node_id)
 
             points.append({
                 "id": int_id,
@@ -265,7 +246,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         if self._collection is None:
             return
 
-        int_id = _stable_hash_id(ref_doc_id)
+        int_id = stable_hash_id(ref_doc_id)
         self._collection.delete([int_id])
 
     def query(
@@ -575,7 +556,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             if hasattr(node, "metadata") and node.metadata:
                 payload.update({k: v for k, v in node.metadata.items() 
                                if isinstance(v, (str, int, float, bool))})
-            points.append({"id": _stable_hash_id(nid), "vector": emb, "payload": payload})
+            points.append({"id": stable_hash_id(nid), "vector": emb, "payload": payload})
         if points:
             collection.upsert_bulk(points)
         return result_ids
@@ -584,7 +565,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         """Retrieve nodes by their IDs."""
         if not node_ids or self._collection is None:
             return []
-        int_ids = [_stable_hash_id(nid) for nid in node_ids]
+        int_ids = [stable_hash_id(nid) for nid in node_ids]
         points = self._collection.get(int_ids)
         result = []
         for pt in points:
@@ -633,6 +614,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
     def velesql(self, query_str: str, params: Optional[dict] = None, **kwargs: Any) -> VectorStoreQueryResult:
         """Execute a VelesQL query."""
+        query_str = validate_query(query_str)
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
         results = self._collection.query(query_str, params)

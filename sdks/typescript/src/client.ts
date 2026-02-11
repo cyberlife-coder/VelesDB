@@ -25,6 +25,8 @@ import type {
   MatchQueryResponse,
   ExplainResponse,
   HealthResponse,
+  StreamTraverseOptions,
+  StreamTraverseCallbacks,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -762,5 +764,49 @@ export class VelesDB {
     }
 
     return this.backend.explain(queryString, params);
+  }
+
+  // ========================================================================
+  // Streaming Graph Traversal (SSE)
+  // ========================================================================
+
+  /**
+   * Stream graph traversal results via Server-Sent Events.
+   * 
+   * Connects to the server's SSE endpoint and invokes callbacks as nodes
+   * are discovered during traversal. Only available with the REST backend.
+   * 
+   * @param collection - Collection name
+   * @param options - Traversal options (source, strategy, maxDepth, limit, relTypes)
+   * @param callbacks - Event callbacks (onNode, onStats, onDone, onError)
+   * 
+   * @example
+   * ```typescript
+   * await db.streamTraverseGraph('social', { source: 1, strategy: 'bfs', maxDepth: 3 }, {
+   *   onNode: (node) => console.log(`Node ${node.id} at depth ${node.depth}`),
+   *   onDone: (done) => console.log(`Traversal complete: ${done.totalNodes} nodes`),
+   * });
+   * ```
+   */
+  async streamTraverseGraph(
+    collection: string,
+    options: StreamTraverseOptions,
+    callbacks: StreamTraverseCallbacks
+  ): Promise<void> {
+    this.ensureInitialized();
+
+    if (!collection || typeof collection !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+
+    if (typeof options.source !== 'number') {
+      throw new ValidationError('Source node ID must be a number');
+    }
+
+    if (options.strategy && options.strategy !== 'bfs' && options.strategy !== 'dfs') {
+      throw new ValidationError("Strategy must be 'bfs' or 'dfs'");
+    }
+
+    return this.backend.streamTraverseGraph(collection, options, callbacks);
   }
 }

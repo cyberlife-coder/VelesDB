@@ -6,7 +6,6 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from typing import Any, Iterable, List, Optional, Tuple, Type
 
@@ -16,7 +15,7 @@ from langchain_core.vectorstores import VectorStore
 
 import velesdb
 
-from langchain_velesdb.security import (
+from velesdb_common import (
     validate_path,
     validate_dimension,
     validate_k,
@@ -27,31 +26,11 @@ from langchain_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_weight,
+    stable_hash_id,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
     SecurityError,
 )
-
-
-def _stable_hash_id(value: str) -> int:
-    """Generate a stable numeric ID from a string using SHA256.
-    
-    Python's hash() is non-deterministic across processes, so we use
-    SHA256 for consistent IDs across runs.
-    
-    Uses 63 bits (fits in i64/u64) from SHA256. For datasets >1M documents,
-    collision probability increases but remains acceptable (<0.01%).
-    For mission-critical deduplication, use explicit UUIDs.
-    
-    Args:
-        value: String to hash.
-        
-    Returns:
-        Positive 63-bit integer ID compatible with VelesDB Core.
-    """
-    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 8 bytes (64 bits) and mask sign bit for positive i64
-    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 class VelesDBVectorStore(VectorStore):
@@ -117,7 +96,6 @@ class VelesDBVectorStore(VectorStore):
         self._embedding = embedding
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
-        self._next_id = 1
 
     @property
     def embeddings(self) -> Embeddings:
@@ -149,16 +127,11 @@ class VelesDBVectorStore(VectorStore):
                     self._collection_name,
                     dimension=dimension,
                     metric=self._metric,
+                    storage_mode=self._storage_mode,
                 )
                 # Reload to get the collection object
                 self._collection = db.get_collection(self._collection_name)
         return self._collection
-
-    def _generate_id(self) -> int:
-        """Generate a unique ID for a document."""
-        id_val = self._next_id
-        self._next_id += 1
-        return id_val
 
     def add_texts(
         self,
@@ -205,9 +178,9 @@ class VelesDBVectorStore(VectorStore):
             if ids and i < len(ids):
                 doc_id = ids[i]
                 # Convert string ID to int for VelesDB
-                int_id = _stable_hash_id(doc_id)
+                int_id = stable_hash_id(doc_id)
             else:
-                int_id = self._generate_id()
+                int_id = stable_hash_id(str(uuid.uuid4()))
                 doc_id = str(int_id)
 
             result_ids.append(doc_id)
@@ -501,7 +474,7 @@ class VelesDBVectorStore(VectorStore):
             return False
 
         # Convert string IDs to int
-        int_ids = [_stable_hash_id(id_str) for id_str in ids]
+        int_ids = [stable_hash_id(id_str) for id_str in ids]
         self._collection.delete(int_ids)
         return True
 
@@ -681,9 +654,9 @@ class VelesDBVectorStore(VectorStore):
         for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
             if ids and i < len(ids):
                 doc_id = ids[i]
-                int_id = _stable_hash_id(doc_id)
+                int_id = stable_hash_id(doc_id)
             else:
-                int_id = self._generate_id()
+                int_id = stable_hash_id(str(uuid.uuid4()))
                 doc_id = str(int_id)
 
             result_ids.append(doc_id)
@@ -721,7 +694,7 @@ class VelesDBVectorStore(VectorStore):
             try:
                 return int(id_str)
             except ValueError:
-                return _stable_hash_id(id_str)
+                return stable_hash_id(id_str)
 
         int_ids = [to_int_id(id_str) for id_str in ids]
         points = self._collection.get(int_ids)

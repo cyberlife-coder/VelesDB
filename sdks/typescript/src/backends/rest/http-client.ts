@@ -95,6 +95,20 @@ export class HttpClient {
     return 0;
   }
 
+  /** Get base URL for building custom endpoints (e.g., SSE streams) */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /** Get auth headers for custom requests (e.g., SSE streams) */
+  getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    return headers;
+  }
+
   close(): void {
     this._initialized = false;
   }

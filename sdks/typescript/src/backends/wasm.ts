@@ -26,6 +26,8 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   ExplainResponse,
+  StreamTraverseOptions,
+  StreamTraverseCallbacks,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -536,6 +538,22 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     throw new VelesDBError(
       'EXPLAIN is not supported in WASM backend. Use REST backend for query plan analysis.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  // ========================================================================
+  // Streaming Graph Traversal — requires server SSE endpoint
+  // ========================================================================
+
+  async streamTraverseGraph(
+    _collection: string,
+    _options: StreamTraverseOptions,
+    _callbacks: StreamTraverseCallbacks
+  ): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Streaming graph traversal is not supported in WASM backend. Use REST backend for SSE streaming.',
       'NOT_SUPPORTED'
     );
   }

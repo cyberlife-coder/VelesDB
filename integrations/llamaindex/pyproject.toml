@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "llama-index-core>=0.10.0",
     "velesdb>=0.8.0",
+    "velesdb-python-common",
 ]
 
 [project.optional-dependencies]

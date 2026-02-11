@@ -14,7 +14,7 @@ Example:
 from llamaindex_velesdb.vectorstore import VelesDBVectorStore
 from llamaindex_velesdb.graph_loader import GraphLoader
 from llamaindex_velesdb.graph_retriever import GraphRetriever, GraphQARetriever
-from llamaindex_velesdb.security import SecurityError
+from velesdb_common import SecurityError
 
 __all__ = [
     "VelesDBVectorStore",

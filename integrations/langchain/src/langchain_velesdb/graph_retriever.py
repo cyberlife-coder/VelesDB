@@ -23,7 +23,7 @@ import hashlib
 import logging
 import requests
 
-from langchain_velesdb.security import (
+from velesdb_common import (
     validate_url,
     validate_k,
     validate_collection_name,

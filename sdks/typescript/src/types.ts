@@ -452,6 +452,15 @@ export interface IVelesDBBackend {
     queryString: string,
     params?: Record<string, unknown>
   ): Promise<ExplainResponse>;
+
+  // Streaming Graph Traversal (SSE)
+
+  /** Stream graph traversal results via Server-Sent Events */
+  streamTraverseGraph(
+    collection: string,
+    options: StreamTraverseOptions,
+    callbacks: StreamTraverseCallbacks
+  ): Promise<void>;
 }
 
 // ============================================================================
@@ -552,6 +561,64 @@ export interface MatchQueryResponse {
   tookMs: number;
   /** Total result count */
   count: number;
+}
+
+// ============================================================================
+// Streaming Graph Traversal Types (SSE)
+// ============================================================================
+
+/** Options for streaming graph traversal via SSE */
+export interface StreamTraverseOptions {
+  /** Source node ID to start traversal from */
+  source: number;
+  /** Traversal strategy: 'bfs' or 'dfs' (default: 'bfs') */
+  strategy?: 'bfs' | 'dfs';
+  /** Maximum traversal depth (default: 5) */
+  maxDepth?: number;
+  /** Maximum number of results to stream (default: 1000) */
+  limit?: number;
+  /** Filter by relationship types */
+  relTypes?: string[];
+}
+
+/** SSE event: a node reached during streaming traversal */
+export interface StreamNodeEvent {
+  /** Target node ID */
+  id: number;
+  /** Depth from source */
+  depth: number;
+  /** Path of edge IDs taken to reach this node */
+  path: number[];
+}
+
+/** SSE event: periodic statistics update */
+export interface StreamStatsEvent {
+  /** Number of nodes visited so far */
+  nodesVisited: number;
+  /** Elapsed time in milliseconds */
+  elapsedMs: number;
+}
+
+/** SSE event: traversal completed */
+export interface StreamDoneEvent {
+  /** Total nodes returned */
+  totalNodes: number;
+  /** Maximum depth reached */
+  maxDepthReached: number;
+  /** Total elapsed time in milliseconds */
+  elapsedMs: number;
+}
+
+/** Callbacks for streaming traversal events */
+export interface StreamTraverseCallbacks {
+  /** Called for each node reached */
+  onNode: (event: StreamNodeEvent) => void;
+  /** Called periodically with stats (every 100 nodes) */
+  onStats?: (event: StreamStatsEvent) => void;
+  /** Called when traversal completes */
+  onDone?: (event: StreamDoneEvent) => void;
+  /** Called on error */
+  onError?: (error: Error) => void;
 }
 
 /** Error types */

@@ -400,6 +400,41 @@ describe('VelesDB Client', () => {
       });
     });
 
+    describe('streamTraverseGraph validation', () => {
+      it('should throw ValidationError for empty collection', async () => {
+        mockBackend.streamTraverseGraph = vi.fn();
+        await expect(db.streamTraverseGraph('', { source: 1 }, { onNode: vi.fn() }))
+          .rejects.toThrow(ValidationError);
+      });
+
+      it('should throw ValidationError for non-number source', async () => {
+        mockBackend.streamTraverseGraph = vi.fn();
+        await expect(db.streamTraverseGraph('social', { source: 'abc' as any }, { onNode: vi.fn() }))
+          .rejects.toThrow(ValidationError);
+      });
+
+      it('should throw ValidationError for invalid strategy', async () => {
+        mockBackend.streamTraverseGraph = vi.fn();
+        await expect(db.streamTraverseGraph('social', { source: 1, strategy: 'invalid' as any }, { onNode: vi.fn() }))
+          .rejects.toThrow(ValidationError);
+      });
+
+      it('should delegate to backend with valid params', async () => {
+        mockBackend.streamTraverseGraph = vi.fn().mockResolvedValue(undefined);
+        const callbacks = { onNode: vi.fn() };
+        await db.streamTraverseGraph('social', { source: 1, strategy: 'bfs', maxDepth: 3 }, callbacks);
+        expect(mockBackend.streamTraverseGraph).toHaveBeenCalledWith(
+          'social', { source: 1, strategy: 'bfs', maxDepth: 3 }, callbacks
+        );
+      });
+
+      it('should throw when called before init', async () => {
+        const uninitDb = new VelesDB({ backend: 'wasm' });
+        await expect(uninitDb.streamTraverseGraph('social', { source: 1 }, { onNode: vi.fn() }))
+          .rejects.toThrow();
+      });
+    });
+
     describe('health', () => {
       it('should delegate to backend health()', async () => {
         mockBackend.health = vi.fn().mockResolvedValue({ status: 'healthy', version: '1.4.1' });

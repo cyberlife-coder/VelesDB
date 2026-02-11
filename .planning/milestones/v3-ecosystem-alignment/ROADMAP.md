@@ -132,6 +132,30 @@
 
 ---
 
+## Phase 4.1: TypeScript SDK Documentation & Examples Completeness 📝
+
+**Goal:** Fix all documentation gaps and example deficiencies found during SDK audit. Every public method documented in README, comprehensive examples for all features, and streaming traversal route coverage.
+
+**Inserted:** 2026-02-11 — Post-audit found 6 undocumented methods, 1 missing route, 6 missing example files  
+**Depends on:** Phase 4 (SDK code fixes must be done first)
+
+### Plans
+
+1. **03.1-01: Fix README.md Documentation Gaps** — Add matchQuery(), explain(), SelectBuilder, searchBatch(), createMetadataCollection(), SearchMode/efSearch to README (~1h)
+2. **03.1-02: Add Comprehensive SDK Examples** — 6 new example files (graph, match, builders, explain, fusion, indexes) + update hybrid_queries.ts to use real SDK calls (~2h)
+3. **03.1-03: Implement Streaming Traversal + Tests** — Add streamTraverseGraph() for SSE route (the only 1/21 server route not covered by SDK) (~1.5h)
+
+### Success Criteria
+
+- [ ] All public SDK methods documented in README (currently 6 missing)
+- [ ] 7 example files (6 new + 1 updated) covering all SDK features
+- [ ] `streamTraverseGraph()` implemented for REST backend (SSE)
+- [ ] 21/21 server routes covered by SDK (currently 20/21)
+- [ ] `npm test` passes
+- [ ] README under 600 lines
+
+---
+
 ## Phase 5: Demos & Examples Update 📝
 
 **Goal:** Every demo compiles, every example runs, every user-facing artifact reflects the current API.
@@ -216,17 +240,20 @@
 
 | Phase | Status | Requirements | Priority |
 |-------|--------|-------------|----------|
-| 1 - WASM Rebinding | ⬜ Pending | ECO-01,02,06,07,16,17 | 🚨 Architecture |
-| 2 - Server Binding & Security | ⬜ Pending | ECO-03,04,05,14 | 🚨 Security |
-| 3 - Python Common + Integrations | ⬜ Pending | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality |
-| 4 - TypeScript SDK Fixes | ⬜ Pending | ECO-08,09,10,15 | 🐛 Contracts |
+| 1 - WASM Rebinding | ✅ Done (5/5) | ECO-01,02,06,07,16,17 | 🚨 Architecture |
+| 2 - Server Binding & Security | ✅ Done (5/5) | ECO-03,04,05,14 | 🚨 Security |
+| 2.1 - Server Documentation | ✅ Done | — | � Docs |
+| 3 - TypeScript SDK Fixes | ✅ Done (5/5) | ECO-08,09,10,15 | 🐛 Contracts |
+| 3.1 - TS SDK Docs & Examples | ✅ Done (3/3) | Audit gaps (6 docs, 6 examples, 1 route) | 📝 Completeness |
+| 4 - Python Integrations | ✅ Done (3/3) | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality |
 | 5 - Demos & Examples Update | ⬜ Pending | ECO-23→28,30 | 📝 User Experience |
 | 6 - Tauri Plugin Audit | ⬜ Pending | ECO-29 | 🐛 Completeness |
 | 7 - GPU Extras + Ecosystem CI | ⬜ Pending | ECO-21,22 | ⚠️ Polish |
+| 8 - WASM Feature Parity | ✅ Done (5/5) | — | 🚨 Architecture |
 
-**Execution:** `1 → 2 → 3 → 4 → 5 → 6 → 7`  
-(Phases 1, 2, 3 can run in parallel)  
-**Findings covered:** 30/30
+**Execution:** `1 → 2 → 3 → 4 → 4.1 → 5 → 6 → 7 → 8`  
+**Findings covered:** 30/30 + audit gaps  
+*Last updated: 2026-02-11*
 
 ---
 

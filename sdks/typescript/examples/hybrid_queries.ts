@@ -1,227 +1,305 @@
 /**
  * Hybrid Query Examples for VelesDB TypeScript SDK
  *
- * Demonstrates vector similarity search combined with metadata filtering,
- * aggregations, and multi-model query patterns.
+ * Demonstrates real VelesQL queries through db.query() and db.matchQuery():
+ * - SELECT + NEAR + WHERE filters + ORDER BY + LIMIT
+ * - MATCH graph traversal + similarity() + multi-column RETURN
+ * - JOIN + vector search + aggregation
+ * - FUSION hybrid + filters
+ * - Agent memory patterns
  *
- * See docs/guides/USE_CASES.md for the 10 documented use cases.
+ * All examples use the real SDK API — no mocks.
  */
 
-import { VelesDB, Collection, SearchResult } from '../src';
+import { VelesDB } from '../src';
 
-/**
- * Generate a deterministic mock embedding for demo purposes.
- */
-function generateEmbedding(seed: number, dim: number = 128): number[] {
-  const embedding: number[] = [];
+/** Helper: generate a deterministic mock embedding */
+function mockEmbedding(seed: number, dim = 128): number[] {
+  const emb: number[] = [];
   for (let i = 0; i < dim; i++) {
-    embedding.push(Math.sin(seed * 0.1 + i * 0.01));
+    emb.push(Math.sin(seed * 0.1 + i * 0.01));
   }
-  // Normalize
-  const norm = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
-  return embedding.map((x) => x / norm);
+  const norm = Math.sqrt(emb.reduce((s, x) => s + x * x, 0));
+  return emb.map((x) => x / norm);
 }
 
-/**
- * Use Case 1: Contextual RAG
- *
- * Find documents similar to a query with metadata filtering.
- */
-async function example1ContextualRag(collection: Collection): Promise<void> {
-  console.log('\n=== Use Case 1: Contextual RAG ===');
+// ============================================================================
+// 1. SELECT + NEAR + filters + ORDER + LIMIT
+// ============================================================================
 
-  const queryEmbedding = generateEmbedding(42);
+async function exampleVectorWithFilters(db: VelesDB): Promise<void> {
+  console.log('\n=== 1. Vector Search + Filters + ORDER + LIMIT ===');
 
-  // VelesQL query
-  const velesql = `
-    SELECT id, title, category 
-    FROM documents 
-    WHERE similarity(embedding, $query) > 0.75 
-      AND category = 'ai'
-    ORDER BY similarity(embedding, $query) DESC
-    LIMIT 10
-  `;
-  console.log('VelesQL:', velesql.trim());
-
-  // Programmatic API
-  const results = await collection.search(queryEmbedding, 20);
-  const filtered = results.filter(
-    (r) => r.score > 0.75 && r.payload?.category === 'ai'
+  const vec = mockEmbedding(42);
+  const result = await db.query(
+    'documents',
+    `SELECT id, title, category, price
+     FROM documents
+     WHERE vector NEAR $v
+       AND category IN ('tech', 'science')
+       AND price BETWEEN 10 AND 100
+     ORDER BY similarity(vector, $v) DESC
+     LIMIT 10 OFFSET 0`,
+    { v: vec }
   );
-  console.log(`Found ${filtered.length} relevant AI documents`);
-}
 
-/**
- * Use Case 5: Semantic Search with Filters
- *
- * Combine vector NEAR with multiple metadata filters.
- */
-async function example2SemanticSearchWithFilters(
-  collection: Collection
-): Promise<void> {
-  console.log('\n=== Use Case 5: Semantic Search with Filters ===');
-
-  const velesql = `
-    SELECT id, title, price 
-    FROM articles 
-    WHERE vector NEAR $query 
-      AND category IN ('technology', 'science') 
-      AND published_date >= '2024-01-01'
-    LIMIT 20
-    WITH (mode = 'balanced')
-  `;
-  console.log('VelesQL:', velesql.trim());
-
-  const queryVec = generateEmbedding(100);
-  const results = await collection.search(queryVec, 50);
-
-  const filtered = results
-    .filter((r) => {
-      const cat = r.payload?.category as string;
-      return ['technology', 'science'].includes(cat);
-    })
-    .slice(0, 20);
-
-  console.log(`Found ${filtered.length} matching articles`);
-}
-
-/**
- * Use Case 4: Document Clustering with Aggregations
- *
- * Group similar documents by category.
- */
-async function example3Aggregations(collection: Collection): Promise<void> {
-  console.log('\n=== Use Case 4: Document Clustering ===');
-
-  const velesql = `
-    SELECT category, COUNT(*) 
-    FROM documents 
-    WHERE similarity(embedding, $query) > 0.6 
-    GROUP BY category 
-    ORDER BY COUNT(*) DESC
-  `;
-  console.log('VelesQL:', velesql.trim());
-
-  const queryVec = generateEmbedding(50);
-  const results = await collection.search(queryVec, 100);
-
-  // Manual aggregation
-  const counts = new Map<string, number>();
-  for (const r of results.filter((r) => r.score > 0.6)) {
-    const cat = (r.payload?.category as string) || 'unknown';
-    counts.set(cat, (counts.get(cat) || 0) + 1);
-  }
-
-  console.log('Category counts:');
-  for (const [cat, count] of counts.entries()) {
-    console.log(`  ${cat}: ${count}`);
+  console.log(`Found ${result.results.length} docs in ${result.stats.executionTimeMs}ms`);
+  for (const r of result.results) {
+    console.log(`  [${r.nodeId}] ${r.columnData?.title} — ${r.columnData?.category} ($${r.columnData?.price})`);
   }
 }
 
-/**
- * Use Case 6: Recommendation Engine
- *
- * Find similar items based on user preferences.
- */
-async function example4RecommendationEngine(
-  collection: Collection
-): Promise<void> {
-  console.log('\n=== Use Case 6: Recommendation Engine ===');
+// ============================================================================
+// 2. similarity() threshold + LIKE + multi-column
+// ============================================================================
 
-  const velesql = `
-    SELECT id, name, category, price 
-    FROM items 
-    WHERE similarity(embedding, $user_preference) > 0.7 
-      AND category = 'electronics' 
-      AND price < 100
-    ORDER BY similarity(embedding, $user_preference) DESC
-    LIMIT 10
-  `;
-  console.log('VelesQL:', velesql.trim());
+async function exampleSimilarityWithLike(db: VelesDB): Promise<void> {
+  console.log('\n=== 2. Similarity Threshold + LIKE + Multi-Column ===');
 
-  const userPreference = generateEmbedding(42);
-  const results = await collection.search(userPreference, 30);
+  const vec = mockEmbedding(99);
+  const result = await db.query(
+    'articles',
+    `SELECT id, title, author, journal, published_at
+     FROM articles
+     WHERE similarity(embedding, $v) > 0.7
+       AND title ILIKE '%machine learning%'
+       AND status = $s
+     ORDER BY similarity(embedding, $v) DESC
+     LIMIT 15`,
+    { v: vec, s: 'published' }
+  );
 
-  const recommendations = results
-    .filter((r) => {
-      const price = r.payload?.price as number;
-      const cat = r.payload?.category as string;
-      return price < 100 && cat === 'electronics';
-    })
-    .slice(0, 10);
+  console.log(`Matched ${result.results.length} articles`);
+}
 
-  console.log(`Generated ${recommendations.length} recommendations`);
+// ============================================================================
+// 3. MATCH graph + similarity + multi-column RETURN
+// ============================================================================
+
+async function exampleMatchGraphVector(db: VelesDB): Promise<void> {
+  console.log('\n=== 3. MATCH Graph + Similarity + Multi-Column ===');
+
+  const vec = mockEmbedding(50);
+  const result = await db.matchQuery(
+    'knowledge',
+    `MATCH (doc:Document)-[:REFERENCES]->(ref:Document)
+     WHERE similarity(doc.embedding, $v) > 0.8
+       AND doc.category = 'AI'
+     RETURN doc.title, doc.category, doc.author, ref.title, ref.journal
+     ORDER BY similarity() DESC
+     LIMIT 20`,
+    { v: vec },
+    { vector: vec, threshold: 0.8 }
+  );
+
+  console.log(`Found ${result.count} document-reference pairs in ${result.tookMs}ms`);
+  for (const r of result.results) {
+    console.log(`  "${r.projected['doc.title']}" (${r.projected['doc.category']}) → "${r.projected['ref.title']}"`);
+  }
+}
+
+// ============================================================================
+// 4. MATCH multi-hop + vector + filters + multi-column
+// ============================================================================
+
+async function exampleMatchMultiHopVector(db: VelesDB): Promise<void> {
+  console.log('\n=== 4. MATCH Multi-Hop + Vector + Filters + Multi-Column ===');
+
+  const vec = mockEmbedding(77);
+  const result = await db.matchQuery(
+    'social',
+    `MATCH (user:User)-[:FOLLOWS]->(friend:User)-[:POSTED]->(post:Post)
+     WHERE similarity(post.embedding, $v) > 0.75
+       AND post.status = 'published'
+       AND friend.verified = true
+     RETURN user.name, user.email, friend.name, post.title, post.category, post.created_at
+     ORDER BY similarity() DESC
+     LIMIT 10`,
+    { v: vec },
+    { vector: vec, threshold: 0.75 }
+  );
+
+  console.log(`Found ${result.count} social-vector matches`);
+  for (const r of result.results) {
+    console.log(`  ${r.projected['user.name']} → ${r.projected['friend.name']} → "${r.projected['post.title']}"`);
+  }
+}
+
+// ============================================================================
+// 5. MATCH bidirectional + vector + WHERE conditions
+// ============================================================================
+
+async function exampleMatchBidirectionalVector(db: VelesDB): Promise<void> {
+  console.log('\n=== 5. MATCH Bidirectional + Vector + Conditions ===');
+
+  const vec = mockEmbedding(33);
+  const result = await db.matchQuery(
+    'research',
+    `MATCH (a:Researcher)-[:COLLABORATES]-(b:Researcher)-[:PUBLISHED]->(p:Paper)
+     WHERE similarity(p.abstract_emb, $v) > 0.7
+       AND p.year >= 2024
+       AND a.institution = $inst
+     RETURN a.name, a.institution, b.name, b.institution, p.title, p.journal, p.year
+     ORDER BY similarity() DESC
+     LIMIT 15`,
+    { v: vec, inst: 'MIT' },
+    { vector: vec, threshold: 0.7 }
+  );
+
+  console.log(`Found ${result.count} researcher-paper matches`);
+}
+
+// ============================================================================
+// 6. MATCH + NEAR (without similarity threshold)
+// ============================================================================
+
+async function exampleMatchWithNear(db: VelesDB): Promise<void> {
+  console.log('\n=== 6. MATCH + NEAR + Multi-Column ===');
+
+  const vec = mockEmbedding(66);
+  const result = await db.matchQuery(
+    'docs',
+    `MATCH (author:Author)-[:WROTE]->(doc:Document)
+     WHERE doc.vector NEAR $v AND doc.category = $cat
+     RETURN author.name, author.email, doc.title, doc.category, doc.published_at
+     LIMIT 10`,
+    { v: vec, cat: 'AI' }
+  );
+
+  console.log(`Found ${result.count} author-document pairs`);
+}
+
+// ============================================================================
+// 7. MATCH variable-length path + similarity
+// ============================================================================
+
+async function exampleMatchVariablePath(db: VelesDB): Promise<void> {
+  console.log('\n=== 7. MATCH Variable-Length Path + Similarity ===');
+
+  const vec = mockEmbedding(88);
+  const result = await db.matchQuery(
+    'knowledge',
+    `MATCH (concept:Topic)-[:RELATED_TO*1..3]->(related:Topic)
+     WHERE similarity(concept.embedding, $v) > 0.6
+     RETURN concept.name, concept.domain, related.name, related.domain
+     LIMIT 50`,
+    { v: vec },
+    { vector: vec, threshold: 0.6 }
+  );
+
+  console.log(`Found ${result.count} topic connections within 3 hops`);
+}
+
+// ============================================================================
+// 8. JOIN + vector search + aggregation + ORDER + LIMIT
+// ============================================================================
+
+async function exampleJoinVectorAggregation(db: VelesDB): Promise<void> {
+  console.log('\n=== 8. JOIN + Vector + Aggregation + ORDER + LIMIT ===');
+
+  const vec = mockEmbedding(55);
+  const result = await db.query(
+    'orders',
+    `SELECT c.country, COUNT(*) AS total, SUM(o.amount) AS revenue
+     FROM orders AS o
+     JOIN customers AS c ON o.customer_id = c.id
+     WHERE similarity(o.embedding, $v) > 0.6
+       AND o.created_at > $since
+     GROUP BY c.country
+     HAVING SUM(o.amount) > 1000
+     ORDER BY revenue DESC
+     LIMIT 10`,
+    { v: vec, since: '2025-01-01' }
+  );
+
+  console.log(`Analytics: ${result.results.length} country groups`);
+}
+
+// ============================================================================
+// 9. FUSION hybrid + filters + ORDER + LIMIT
+// ============================================================================
+
+async function exampleFusionHybrid(db: VelesDB): Promise<void> {
+  console.log('\n=== 9. FUSION Hybrid + Filters + ORDER + LIMIT ===');
+
+  const result = await db.query(
+    'docs',
+    `SELECT id, title, category, score
+     FROM docs
+     USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)
+     WHERE category = $cat AND status = 'published'
+     ORDER BY score DESC
+     LIMIT 20`,
+    { cat: 'engineering' }
+  );
+
+  console.log(`Fusion results: ${result.results.length} docs`);
+}
+
+// ============================================================================
+// 10. Agent memory: NEAR + scope filter + IN + ORDER + LIMIT
+// ============================================================================
+
+async function exampleAgentMemory(db: VelesDB): Promise<void> {
+  console.log('\n=== 10. Agent Memory: Vector + Scope + Recency ===');
+
+  const vec = mockEmbedding(75);
+  const result = await db.query(
+    'agent_memory',
+    `SELECT content, role, timestamp, importance
+     FROM agent_memory
+     WHERE vector NEAR $v
+       AND session_id = $sid
+       AND role IN ('user', 'assistant')
+       AND NOT archived = true
+     ORDER BY timestamp DESC
+     LIMIT 20`,
+    { v: vec, sid: 'sess-abc-123' }
+  );
+
+  console.log(`Retrieved ${result.results.length} memory fragments`);
 }
 
 /**
- * Use Case 10: Conversational Memory for AI Agents
- *
- * Retrieve relevant context from conversation history.
- */
-async function example5ConversationalMemory(
-  collection: Collection,
-  conversationId: string
-): Promise<void> {
-  console.log('\n=== Use Case 10: Conversational Memory ===');
-
-  const velesql = `
-    SELECT content, role, timestamp 
-    FROM messages 
-    WHERE conversation_id = $conv_id 
-      AND similarity(embedding, $current_query) > 0.6 
-    ORDER BY timestamp DESC 
-    LIMIT 10
-  `;
-  console.log('VelesQL:', velesql.trim());
-
-  const currentQueryEmb = generateEmbedding(75);
-  const results = await collection.search(currentQueryEmb, 30);
-
-  const relevantContext = results
-    .filter(
-      (r) => r.score > 0.6 && r.payload?.conversation_id === conversationId
-    )
-    .slice(0, 10);
-
-  console.log(`Retrieved ${relevantContext.length} relevant messages for context`);
-}
-
-/**
- * Main function demonstrating all hybrid query examples.
+ * Main: run all hybrid query examples
  */
 async function main(): Promise<void> {
   console.log('='.repeat(60));
-  console.log('VelesDB Hybrid Query Examples - TypeScript SDK');
+  console.log('VelesDB Hybrid Query Examples — TypeScript SDK');
   console.log('='.repeat(60));
+  console.log('\nRequires velesdb-server running on localhost:3030');
+  console.log('with collections: documents, articles, knowledge, social,');
+  console.log('research, docs, orders, agent_memory\n');
 
-  // Note: This is a demo - in real usage, you'd open a real database
-  console.log('\nNote: These examples show the query patterns.');
-  console.log('Replace with real VelesDB instance for actual usage.\n');
+  const db = new VelesDB({ backend: 'rest', url: 'http://localhost:3030' });
+  await db.init();
 
-  // Show VelesQL examples without executing (demo mode)
-  const mockCollection = {
-    search: async (_vec: number[], _k: number): Promise<SearchResult[]> => [],
-  } as Collection;
+  await exampleVectorWithFilters(db);
+  await exampleSimilarityWithLike(db);
+  await exampleMatchGraphVector(db);
+  await exampleMatchMultiHopVector(db);
+  await exampleMatchBidirectionalVector(db);
+  await exampleMatchWithNear(db);
+  await exampleMatchVariablePath(db);
+  await exampleJoinVectorAggregation(db);
+  await exampleFusionHybrid(db);
+  await exampleAgentMemory(db);
 
-  await example1ContextualRag(mockCollection);
-  await example2SemanticSearchWithFilters(mockCollection);
-  await example3Aggregations(mockCollection);
-  await example4RecommendationEngine(mockCollection);
-  await example5ConversationalMemory(mockCollection, 'conv_001');
-
-  console.log('\n' + '='.repeat(60));
-  console.log('See docs/guides/USE_CASES.md for all 10 use cases');
-  console.log('See docs/VELESQL_SPEC.md for complete VelesQL reference');
-  console.log('='.repeat(60));
+  await db.close();
+  console.log('\nDone.');
 }
 
-// Run if executed directly
 main().catch(console.error);
 
 export {
-  example1ContextualRag,
-  example2SemanticSearchWithFilters,
-  example3Aggregations,
-  example4RecommendationEngine,
-  example5ConversationalMemory,
+  exampleVectorWithFilters,
+  exampleSimilarityWithLike,
+  exampleMatchGraphVector,
+  exampleMatchMultiHopVector,
+  exampleMatchBidirectionalVector,
+  exampleMatchWithNear,
+  exampleMatchVariablePath,
+  exampleJoinVectorAggregation,
+  exampleFusionHybrid,
+  exampleAgentMemory,
 };

@@ -110,6 +110,20 @@ await db.createCollection('embeddings', {
 });
 ```
 
+### `db.createMetadataCollection(name)` (v1.4.0+)
+
+Create a metadata-only collection (no vectors). Useful for reference data that can be JOINed with vector collections.
+
+```typescript
+await db.createMetadataCollection('products');
+await db.insert('products', { id: 'P001', vector: [], payload: { name: 'Widget', price: 99 } });
+
+// JOIN with vector collection
+const result = await db.query('orders', `
+  SELECT * FROM orders JOIN products AS p ON orders.product_id = p.id
+`);
+```
+
 ### `db.insert(collection, document)`
 
 Insert a single vector.
@@ -135,6 +149,30 @@ Search for similar vectors.
 | `k` | `number` | `10` | Number of results |
 | `filter` | `object` | - | Filter expression |
 | `includeVectors` | `boolean` | `false` | Include vectors in results |
+| `efSearch` | `number` | - | HNSW ef_search parameter (higher = better recall, slower) |
+| `mode` | `'fast' \| 'balanced' \| 'accurate' \| 'perfect'` | - | Search mode preset (sets efSearch automatically) |
+| `timeoutMs` | `number` | - | Server-side query timeout in milliseconds |
+
+#### Search Modes
+
+| Mode | ef_search | Use Case |
+|------|-----------|----------|
+| `fast` | 64 | Low-latency, acceptable recall |
+| `balanced` | 128 | Default tradeoff |
+| `accurate` | 256 | High recall |
+| `perfect` | max | Maximum recall, slowest |
+
+### `db.searchBatch(collection, searches)` (v1.4.0+)
+
+Search for multiple vectors in parallel.
+
+```typescript
+const results = await db.searchBatch('docs', [
+  { vector: queryVec1, k: 5 },
+  { vector: queryVec2, k: 10, filter: { category: 'tech' } },
+]);
+// results[0] = results for queryVec1, results[1] = results for queryVec2
+```
 
 ### `db.delete(collection, id)`
 
@@ -277,10 +315,53 @@ const result = await db.traverseGraph('social', {
 });
 ```
 
+### `db.streamTraverseGraph(collection, options, callbacks)` (v1.5.0+)
+
+Stream graph traversal results via Server-Sent Events. Nodes are delivered as they are discovered, ideal for large graphs or real-time UIs.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `source` | `number` | Required | Source node ID |
+| `strategy` | `'bfs' \| 'dfs'` | `'bfs'` | Traversal algorithm |
+| `maxDepth` | `number` | `5` | Maximum depth |
+| `limit` | `number` | `1000` | Max results |
+| `relTypes` | `string[]` | all | Filter by relationship types |
+
+```typescript
+await db.streamTraverseGraph('social', { source: 1, strategy: 'bfs', maxDepth: 3 }, {
+  onNode: (node) => console.log(`Node ${node.id} at depth ${node.depth}`),
+  onStats: (stats) => console.log(`Visited ${stats.nodesVisited} nodes`),
+  onDone: (done) => console.log(`Complete: ${done.totalNodes} nodes in ${done.elapsedMs}ms`),
+  onError: (err) => console.error(err),
+});
+```
+
 ### `db.getNodeDegree(collection, nodeId)`
 
 ```typescript
 const degree = await db.getNodeDegree('social', 100);
+console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
+```
+
+### `db.matchQuery(collection, query, params?, options?)` (v1.4.0+)
+
+Execute a MATCH graph traversal query using Cypher-like pattern matching.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `vector` | `number[] \| Float32Array` | Optional vector for similarity matching |
+| `threshold` | `number` | Similarity threshold |
+
+```typescript
+const result = await db.matchQuery('docs',
+  'MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.embedding, $v) > 0.8 RETURN a.name, b.name',
+  { v: queryVector },
+  { vector: queryVector, threshold: 0.8 }
+);
+
+for (const r of result.results) {
+  console.log(`${r.projected['a.name']} knows ${r.projected['b.name']} (score: ${r.score})`);
+}
 ```
 
 ## VelesQL v2.0 Queries (v1.4.0+)
@@ -362,9 +443,29 @@ const result = await db.query('docs', `
 `);
 ```
 
-## VelesQL Query Builder (v1.2.0+)
+### `db.explain(query, params?)` (v1.4.0+)
 
-Build type-safe VelesQL queries with the fluent builder API.
+Analyze a VelesQL query without executing it. Returns the query plan, cost estimation, and feature detection.
+
+```typescript
+const plan = await db.explain(
+  'SELECT * FROM docs WHERE similarity(embedding, $v) > 0.8 LIMIT 10'
+);
+
+console.log(plan.queryType);                // 'SELECT'
+console.log(plan.estimatedCost.complexity);  // 'O(log n)'
+console.log(plan.features.hasVectorSearch);  // true
+console.log(plan.features.hasFilter);        // false
+
+// Inspect plan steps
+for (const step of plan.plan) {
+  console.log(`Step ${step.step}: ${step.operation} — ${step.description}`);
+}
+```
+
+## MATCH Query Builder (v1.2.0+)
+
+Build type-safe VelesQL MATCH queries with the fluent builder API.
 
 ```typescript
 import { velesql } from '@wiscale/velesdb-sdk';
@@ -388,6 +489,46 @@ const graphQuery = velesql()
   .where('p.age > 25')
   .return(['p.name', 'f.name'])
   .toVelesQL();
+```
+
+## SELECT Query Builder (v1.4.0+)
+
+Build type-safe VelesQL SELECT queries with the fluent builder API.
+
+```typescript
+import { selectql } from '@wiscale/velesdb-sdk';
+
+// Vector search with filters
+const { query, params } = selectql()
+  .select('id', 'title', 'category')
+  .from('documents')
+  .similarity('embedding', 'v', queryVector, { threshold: 0.7 })
+  .andWhere('category = $cat', { cat: 'tech' })
+  .orderBy('title', 'ASC')
+  .limit(20)
+  .build();
+
+const results = await db.query('documents', query, params);
+
+// Aggregation query
+const { query: aggQuery, params: aggParams } = selectql()
+  .selectAgg('COUNT', '*', 'total')
+  .selectAgg('AVG', 'price', 'avg_price')
+  .select('category')
+  .from('products')
+  .where('price > $min', { min: 10 })
+  .groupBy('category')
+  .orderBy('total', 'DESC')
+  .limit(10)
+  .build();
+
+// JOIN query
+const { query: joinQuery } = selectql()
+  .selectAll()
+  .from('orders')
+  .join('customers', 'orders.customer_id = customers.id', 'LEFT')
+  .where('status = $s', { s: 'active' })
+  .build();
 ```
 
 ## Error Handling

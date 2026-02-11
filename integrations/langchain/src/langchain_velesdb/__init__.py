@@ -22,7 +22,7 @@ Example:
 
 from langchain_velesdb.vectorstore import VelesDBVectorStore
 from langchain_velesdb.graph_retriever import GraphRetriever, GraphQARetriever
-from langchain_velesdb.security import SecurityError
+from velesdb_common import SecurityError
 
 # Memory classes require full langchain - optional import
 try:
