@@ -26,6 +26,8 @@ from velesdb_common import (
     validate_batch_size,
     validate_collection_name,
     validate_weight,
+    validate_label,
+    validate_node_id,
     stable_hash_id,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
@@ -984,6 +986,166 @@ class VelesDBVectorStore(VectorStore):
             documents.append(doc)
 
         return documents
+
+    def add_edge(
+        self,
+        id: int,
+        source: int,
+        target: int,
+        label: str,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        """Add an edge to the knowledge graph.
+
+        Creates a directed edge between two nodes in the collection's
+        graph layer. Validates all inputs before delegating to VelesDB.
+
+        Args:
+            id: Unique edge identifier.
+            source: Source node ID.
+            target: Target node ID.
+            label: Edge label (e.g. "KNOWS", "WORKS_AT").
+            metadata: Optional metadata dict for the edge.
+
+        Raises:
+            SecurityError: If any ID or label fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> vectorstore.add_edge(
+            ...     id=1, source=100, target=200,
+            ...     label="KNOWS", metadata={"since": 2020}
+            ... )
+        """
+        validate_node_id(id)
+        validate_node_id(source)
+        validate_node_id(target)
+        validate_label(label)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        self._collection.add_edge(
+            id=id, source=source, target=target,
+            label=label, metadata=metadata or {},
+        )
+
+    def get_edges(self, label: Optional[str] = None) -> List[dict]:
+        """Get edges from the knowledge graph.
+
+        Retrieves all edges or filters by label.
+
+        Args:
+            label: Optional edge label to filter by.
+
+        Returns:
+            List of dicts with keys: id, source, target, label, properties.
+
+        Raises:
+            SecurityError: If label fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> edges = vectorstore.get_edges(label="KNOWS")
+            >>> for e in edges:
+            ...     print(e["source"], "->", e["target"])
+        """
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        if label is not None:
+            validate_label(label)
+            return self._collection.get_edges_by_label(label)
+
+        return self._collection.get_edges()
+
+    def traverse_graph(
+        self,
+        source: int,
+        max_depth: int = 2,
+        strategy: str = "bfs",
+        limit: int = 100,
+    ) -> List[Document]:
+        """Traverse the knowledge graph from a source node.
+
+        Performs breadth-first or depth-first traversal and returns
+        reachable nodes as LangChain Documents.
+
+        Args:
+            source: Source node ID to start traversal from.
+            max_depth: Maximum traversal depth. Defaults to 2.
+            strategy: Traversal strategy — "bfs" or "dfs". Defaults to "bfs".
+            limit: Maximum number of results. Defaults to 100.
+
+        Returns:
+            List of Documents with metadata including ``graph_depth``
+            and ``target_id``.
+
+        Raises:
+            SecurityError: If source or limit fails validation.
+            ValueError: If strategy is invalid or collection not initialized.
+
+        Example:
+            >>> docs = vectorstore.traverse_graph(source=100, max_depth=3)
+            >>> for doc in docs:
+            ...     print(doc.metadata["graph_depth"], doc.page_content)
+        """
+        validate_node_id(source)
+        validate_k(limit, param_name="limit")
+
+        if strategy not in ("bfs", "dfs"):
+            raise ValueError(
+                f"Invalid strategy '{strategy}'. Must be 'bfs' or 'dfs'."
+            )
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        results = self._collection.traverse(
+            source=source, max_depth=max_depth,
+            strategy=strategy, limit=limit,
+        )
+
+        documents: List[Document] = []
+        for result in results:
+            payload = result.get("payload", {})
+            text = payload.get("text", "")
+            target_id = result.get("target_id", 0)
+            depth = result.get("depth", 0)
+
+            metadata = {k: v for k, v in payload.items() if k != "text"}
+            metadata["graph_depth"] = depth
+            metadata["target_id"] = target_id
+
+            doc = Document(page_content=text, metadata=metadata)
+            documents.append(doc)
+
+        return documents
+
+    def get_node_degree(self, node_id: int) -> dict:
+        """Get the degree (edge counts) of a graph node.
+
+        Args:
+            node_id: Node ID to query.
+
+        Returns:
+            Dict with keys: ``node_id``, ``in_degree``, ``out_degree``,
+            ``total_degree``.
+
+        Raises:
+            SecurityError: If node_id fails validation.
+            ValueError: If collection is not initialized.
+
+        Example:
+            >>> info = vectorstore.get_node_degree(100)
+            >>> print(info["total_degree"])
+        """
+        validate_node_id(node_id)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        return self._collection.get_node_degree(node_id)
 
     def multi_query_search(
         self,
