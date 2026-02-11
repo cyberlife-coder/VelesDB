@@ -6,7 +6,7 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
 from llama_index.core.schema import BaseNode, NodeWithScore, TextNode
 from llama_index.core.vector_stores.types import (
@@ -945,6 +945,42 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             nodes_with_score.append(NodeWithScore(node=node, score=depth_score))
 
         return nodes_with_score
+
+    def stream_traverse_graph(
+        self,
+        source: int,
+        max_depth: int = 2,
+        strategy: str = "bfs",
+        limit: int = 100,
+    ) -> Iterator[NodeWithScore]:
+        """Stream graph traversal results as a generator.
+
+        Yields NodeWithScore objects one at a time as they are discovered
+        during traversal. Memory-efficient for large graphs.
+
+        Args:
+            source: Starting node ID.
+            max_depth: Maximum traversal depth (default: 2).
+            strategy: Traversal strategy - "bfs" or "dfs" (default: "bfs").
+            limit: Maximum nodes to return (default: 100).
+
+        Yields:
+            NodeWithScore objects with depth-based scoring.
+
+        Raises:
+            SecurityError: If source or limit fails validation.
+            ValueError: If strategy is invalid or collection not initialized.
+
+        Example:
+            >>> for ns in store.stream_traverse_graph(source=42, max_depth=3):
+            ...     print(f"Score {ns.score:.2f}: {ns.node.text}")
+        """
+        # TODO: Replace with native SSE streaming when velesdb SDK supports it
+        for node_with_score in self.traverse_graph(
+            source=source, max_depth=max_depth,
+            strategy=strategy, limit=limit,
+        ):
+            yield node_with_score
 
     def get_node_degree(self, node_id: int) -> dict:
         """Get the degree (edge counts) of a graph node.

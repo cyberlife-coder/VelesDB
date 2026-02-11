@@ -55,6 +55,7 @@ Phase 3    ██████████ 100%  TypeScript SDK Fixes        ✅ 
 Phase 3.1  ██████████ 100%  TS SDK Docs & Examples     ✅ (3/3 plans)
 Phase 4    ██████████ 100%  Python Integrations        ✅ (3/3 plans)
 Phase 4.1  ████████░░  75%  Python Feature Parity      🔄 Plans 01-03 done
+Phase 4.2  ░░░░░░░░░░   0%  Python SDK Parity Fixes    ⬜ Pending (5 plans)
 Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    ⬜ Pending
 Phase 6    ░░░░░░░░░░   0%  Tauri Plugin Audit         ⬜ Pending
 Phase 7    ░░░░░░░░░░   0%  GPU Extras + Ecosystem CI  ⬜ Pending
@@ -72,6 +73,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | 3.1 | TS SDK Docs & Examples | Audit gaps | 📝 Completeness | ✅ Done |
 | 4 | Python Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ✅ Done |
 | 4.1 | Python Feature Parity | Audit: 10 missing features | 🚨 Completeness | ⬜ Pending |
+| 4.2 | Python SDK Parity Fixes | Audit: phantom methods, wrong names, docs | 🚨 Production Safety | ⬜ Pending |
 | 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ⬜ Pending |
 | 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness | ⬜ Pending |
 | 7 | GPU Extras + Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
@@ -80,9 +82,10 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ### Remaining Work
 
 1. **v3-04.1**: Python Feature Parity — plan & execute (10 missing features)
-2. **v3-05**: Demos & Examples Update — plan & execute
-3. **v3-06**: Tauri Plugin Audit — plan & execute
-4. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
+2. **v3-04.2**: Python SDK Parity Fixes — 5 plans (SDK Rust graph methods, integration name fixes, contract tests, READMEs, backlog)
+3. **v3-05**: Demos & Examples Update — plan & execute
+4. **v3-06**: Tauri Plugin Audit — plan & execute
+5. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
 
 ### Deferred Requirements (from v1/v2)
 - **TEST-05**: Fuzz testing expansion
@@ -112,6 +115,9 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | spawn_blocking: all CPU handlers wrapped | Only health_check stays pure async | 2026-02-10 |
 | tower-governor for per-IP rate limiting | Global rate limit is insufficient; need per-IP granularity | 2026-02-10 |
 | Mock data aligned with real QueryResult/QueryStats types | SDK tests must use actual interface shapes, not invented fields | 2026-02-11 |
+| Unify graph in Collection (not separate GraphStore) | DX: agents use one object; server already deleted GraphService | 2026-02-11 |
+| match_query/explain → NotImplementedError | MATCH engine not in core yet (EPIC-045); better explicit error than AttributeError | 2026-02-11 |
+| Fix integration names, don't add SDK aliases | SDK names match core; integrations should adapt | 2026-02-11 |
 
 ## Blockers & Concerns
 
@@ -146,4 +152,4 @@ pytest                                 # Python integrations (Phase 4)
 ```
 
 *State file last updated: 2026-02-11*  
-*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 8 done. Phase 4.1 plans 01–03 done. Plan 04, Phases 5–7 remain.*
+*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 8 done. Phase 4.1 plans 01–03 done. Plan 04, Phase 4.2 (5 plans), Phases 5–7 remain.*

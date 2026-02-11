@@ -1,11 +1,11 @@
 # VelesDB v3 — Ecosystem Alignment Roadmap (Expanded)
 
-**Version:** 2.0  
+**Version:** 2.1  
 **Created:** 2026-02-09  
 **Milestone:** v3-ecosystem-alignment  
 **Previous Milestones:** v1-refactoring, v2-core-trust, v4-verify-promise  
-**Total Phases:** 7  
-**Findings covered:** 30 (22 Devil's Advocate + 8 ecosystem audit)  
+**Total Phases:** 8 (+ 3 decimal)  
+**Findings covered:** 30 (22 Devil's Advocate + 8 ecosystem audit) + feature parity audit  
 **Source:** `DEVIL_ADVOCATE_FINDINGS.md` + v3 ecosystem audit
 
 ---
@@ -156,6 +156,33 @@
 
 ---
 
+## Phase 4.2: Python SDK Parity Fixes 🚨
+
+**Goal:** Fix the structural mismatch between Python integrations and the Python SDK. Integrations call 10+ methods on `Collection` that don't exist in the Rust PyO3 bindings. Add graph methods to SDK, fix wrong method names in integrations, guard unimplemented features, update READMEs.
+
+**Inserted:** 2026-02-11 — Post-audit revealed phantom methods that pass mocked tests but crash in production  
+**Depends on:** Phase 4.1 (integration-side methods must exist first)
+
+### Plans
+
+1. **04.2-01: SDK Graph Methods on Collection (Rust)** — Add `add_edge`, `get_edges`, `get_edges_by_label`, `traverse`, `get_node_degree` to `crates/velesdb-python/src/collection.rs` via PyO3, delegating to core's EdgeStore (~4h)
+2. **04.2-02: Fix Integration Method Names + NotImplementedError Guards** — Rename `create_index`→`create_property_index`, `delete_index`→`drop_index`. Guard `match_query`/`explain` with `NotImplementedError`. Fix `add_node` in GraphLoader. Fix `list_collections` docstring (~2h)
+3. **04.2-03: SDK Contract Tests** — Create `test_sdk_contract.py` verifying every `self._collection.xxx()` call uses a method that actually exists on `velesdb.Collection` via `hasattr()` (~2h)
+4. **04.2-04: README Updates (Both Integrations)** — Document all features, add SDK method parity table, document known limitations (~3h)
+5. **04.2-05: Remaining Gaps Backlog** — Document deferred items (AgentMemory LlamaIndex, ProceduralMemory, VelesQL Parser exposure) in backlog (~1h)
+
+### Success Criteria
+
+- [ ] All `self._collection.xxx()` calls in integrations correspond to real SDK methods
+- [ ] `cargo test --workspace` passes (Rust SDK changes)
+- [ ] `pytest` passes for both integrations (zero regressions)
+- [ ] `match_query()`/`explain()` raise `NotImplementedError` (not `AttributeError`)
+- [ ] `create_index`/`delete_index` renamed to correct SDK names
+- [ ] READMEs document all public methods
+- [ ] Deferred gaps documented in backlog
+
+---
+
 ## Phase 5: Demos & Examples Update 📝
 
 **Goal:** Every demo compiles, every example runs, every user-facing artifact reflects the current API.
@@ -247,13 +274,14 @@
 | 3.1 - TS SDK Docs & Examples | ✅ Done (3/3) | Audit gaps (6 docs, 6 examples, 1 route) | 📝 Completeness |
 | 4 - Python Integrations | ✅ Done (3/3) | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality |
 | 4.1 - Python Feature Parity | ⬜ Pending | Audit: 10 missing features | 🚨 Completeness |
+| 4.2 - Python SDK Parity Fixes | ⬜ Pending | Audit: phantom methods, wrong names, docs | 🚨 Production Safety |
 | 5 - Demos & Examples Update | ⬜ Pending | ECO-23→28,30 | 📝 User Experience |
 | 6 - Tauri Plugin Audit | ⬜ Pending | ECO-29 | 🐛 Completeness |
 | 7 - GPU Extras + Ecosystem CI | ⬜ Pending | ECO-21,22 | ⚠️ Polish |
 | 8 - WASM Feature Parity | ✅ Done (5/5) | — | 🚨 Architecture |
 
-**Execution:** `1 → 2 → 3 → 4 → 4.1 → 5 → 6 → 7 → 8`  
-**Findings covered:** 30/30 + audit gaps  
+**Execution:** `1 → 2 → 3 → 4 → 4.1 → 4.2 → 5 → 6 → 7 → 8`  
+**Findings covered:** 30/30 + audit gaps + feature parity audit  
 *Last updated: 2026-02-11*
 
 ---
@@ -277,4 +305,4 @@ cargo check --package tauri-plugin-velesdb # Phase 6 (Tauri)
 ```
 
 ---
-*Milestone v3 — Ecosystem Alignment (Expanded). 30 findings, 7 phases, 10 components.*
+*Milestone v3 — Ecosystem Alignment (Expanded). 30 findings + parity audit, 8 phases (+3 decimal), 10 components.*

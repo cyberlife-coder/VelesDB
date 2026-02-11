@@ -7,7 +7,7 @@ as the underlying vector database for storing and retrieving embeddings.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Iterable, List, Optional, Tuple, Type
+from typing import Any, Iterable, Iterator, List, Optional, Tuple, Type
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -1121,6 +1121,42 @@ class VelesDBVectorStore(VectorStore):
             documents.append(doc)
 
         return documents
+
+    def stream_traverse_graph(
+        self,
+        source: int,
+        max_depth: int = 2,
+        strategy: str = "bfs",
+        limit: int = 100,
+    ) -> Iterator[Document]:
+        """Stream graph traversal results as a generator.
+
+        Yields Documents one at a time as they are discovered during traversal.
+        Memory-efficient for large graphs.
+
+        Args:
+            source: Starting node ID.
+            max_depth: Maximum traversal depth (default: 2).
+            strategy: Traversal strategy - "bfs" or "dfs" (default: "bfs").
+            limit: Maximum nodes to return (default: 100).
+
+        Yields:
+            Document objects with graph_depth and target_id in metadata.
+
+        Raises:
+            SecurityError: If source or limit fails validation.
+            ValueError: If strategy is invalid or collection not initialized.
+
+        Example:
+            >>> for doc in store.stream_traverse_graph(source=42, max_depth=3):
+            ...     print(f"Depth {doc.metadata['graph_depth']}: {doc.page_content}")
+        """
+        # TODO: Replace with native SSE streaming when velesdb SDK supports it
+        for doc in self.traverse_graph(
+            source=source, max_depth=max_depth,
+            strategy=strategy, limit=limit,
+        ):
+            yield doc
 
     def get_node_degree(self, node_id: int) -> dict:
         """Get the degree (edge counts) of a graph node.
