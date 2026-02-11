@@ -121,40 +121,45 @@ def test_get_node_degree_signature():
 def test_edge_structure():
     """Test that edge dictionaries have the expected structure."""
     # This test defines the expected structure for edge dictionaries
-    expected_edge_keys = {'id', 'source', 'target', 'label', 'metadata'}
+    # Reason: edge_to_dict in graph.rs uses 'properties' key, not 'metadata'
+    expected_edge_keys = {'id', 'source', 'target', 'label'}
+    optional_edge_keys = {'properties'}  # only present when edge has properties
     
-    # Mock edge data for validation
+    # Mock edge data for validation (matches edge_to_dict output)
     mock_edge = {
         'id': 1,
         'source': 100,
         'target': 200,
         'label': 'related_to',
-        'metadata': {'weight': 0.95}
+        'properties': {'weight': 0.95}
     }
     
-    # Verify all expected keys are present
+    # Verify all required keys are present
     for key in expected_edge_keys:
         assert key in mock_edge, f"Edge should have '{key}' key"
+    
+    # Verify optional keys are valid
+    for key in mock_edge:
+        assert key in expected_edge_keys | optional_edge_keys, f"Unexpected key '{key}'"
     
     # Verify types
     assert isinstance(mock_edge['id'], int), "Edge id should be int"
     assert isinstance(mock_edge['source'], int), "Edge source should be int"
     assert isinstance(mock_edge['target'], int), "Edge target should be int"
     assert isinstance(mock_edge['label'], str), "Edge label should be str"
-    assert isinstance(mock_edge['metadata'], dict), "Edge metadata should be dict"
+    assert isinstance(mock_edge['properties'], dict), "Edge properties should be dict"
 
 
 def test_traversal_result_structure():
     """Test that traversal result dictionaries have the expected structure."""
-    # This test defines the expected structure for traversal results
-    expected_keys = {'target_id', 'depth', 'path', 'payload'}
+    # Reason: traverse() in collection.rs returns {target_id, depth, path} — no payload
+    expected_keys = {'target_id', 'depth', 'path'}
     
-    # Mock traversal result for validation
+    # Mock traversal result for validation (matches traverse() output)
     mock_result = {
         'target_id': 200,
         'depth': 1,
         'path': [100, 200],
-        'payload': {'name': 'target_node'}
     }
     
     # Verify all expected keys are present
@@ -165,7 +170,6 @@ def test_traversal_result_structure():
     assert isinstance(mock_result['target_id'], int), "target_id should be int"
     assert isinstance(mock_result['depth'], int), "depth should be int"
     assert isinstance(mock_result['path'], list), "path should be list"
-    assert isinstance(mock_result['payload'], dict), "payload should be dict"
 
 
 def test_node_degree_structure():
@@ -314,7 +318,6 @@ def test_traverse_integration():
             assert 'target_id' in result, "Result should have target_id"
             assert 'depth' in result, "Result should have depth"
             assert 'path' in result, "Result should have path"
-            assert 'payload' in result, "Result should have payload"
             
     except ImportError:
         pytest.skip("velesdb module not available")

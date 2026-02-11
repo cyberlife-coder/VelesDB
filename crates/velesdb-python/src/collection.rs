@@ -14,8 +14,8 @@ use crate::collection_helpers::{
 };
 use crate::utils::{extract_vector, python_to_json, to_pyobject};
 use crate::FusionStrategy;
-use velesdb_core::{FusionStrategy as CoreFusionStrategy, Point};
 use velesdb_core::collection::graph::GraphEdge;
+use velesdb_core::{FusionStrategy as CoreFusionStrategy, Point};
 
 /// A vector collection in VelesDB.
 ///
@@ -731,15 +731,11 @@ impl Collection {
             let results = match strategy {
                 "bfs" => self.inner.traverse_bfs(source, max_depth, None, limit),
                 "dfs" => self.inner.traverse_dfs(source, max_depth, None, limit),
-                _ => {
-                    return Err(PyValueError::new_err(
-                        "strategy must be 'bfs' or 'dfs'",
-                    ))
-                }
+                _ => return Err(PyValueError::new_err("strategy must be 'bfs' or 'dfs'")),
             };
 
-            let results = results
-                .map_err(|e| PyRuntimeError::new_err(format!("Traversal failed: {e}")))?;
+            let results =
+                results.map_err(|e| PyRuntimeError::new_err(format!("Traversal failed: {e}")))?;
 
             let py_results = results
                 .into_iter()
