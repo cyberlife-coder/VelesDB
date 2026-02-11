@@ -2,8 +2,8 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** v3-04.1 in progress (1/4 plans done) — Python Feature Parity (10 missing features)  
-**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 8 complete. Phase 4.1 in progress (plan 01 done). Phases 5–7 remain.  
+**Phase:** v3-04.1 in progress (2/4 plans done) — Python Feature Parity (10 missing features)  
+**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 8 complete. Phase 4.1 in progress (plans 01–02 done). Phases 5–7 remain.  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -54,7 +54,7 @@ Phase 2.1  ██████████ 100%  Server Documentation       ✅ (
 Phase 3    ██████████ 100%  TypeScript SDK Fixes        ✅ (5/5 plans)
 Phase 3.1  ██████████ 100%  TS SDK Docs & Examples     ✅ (3/3 plans)
 Phase 4    ██████████ 100%  Python Integrations        ✅ (3/3 plans)
-Phase 4.1  ██░░░░░░░░  25%  Python Feature Parity      🔄 Plan 01 done
+Phase 4.1  █████░░░░░  50%  Python Feature Parity      🔄 Plans 01-02 done
 Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    ⬜ Pending
 Phase 6    ░░░░░░░░░░   0%  Tauri Plugin Audit         ⬜ Pending
 Phase 7    ░░░░░░░░░░   0%  GPU Extras + Ecosystem CI  ⬜ Pending
@@ -97,7 +97,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ## Session Continuity
 
 **Last session:** 2026-02-11  
-**Stopped at:** Phase v3-04.1, Plan 01 complete (Collection & Index Management). Next: /gsd-execute-plan 04.1-02 (Query Analysis).
+**Stopped at:** Phase v3-04.1, Plan 02 complete (Query Analysis — explain + match_query). Next: /gsd-execute-plan 04.1-03.
 
 ## Decisions
 
@@ -146,4 +146,4 @@ pytest                                 # Python integrations (Phase 4)
 ```
 
 *State file last updated: 2026-02-11*  
-*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 8 done. Phase 4.1 plan 01 done. Plans 02–04, Phases 5–7 remain.*
+*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 8 done. Phase 4.1 plans 01–02 done. Plans 03–04, Phases 5–7 remain.*
