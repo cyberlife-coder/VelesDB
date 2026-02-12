@@ -1,6 +1,6 @@
 # langchain-velesdb
 
-LangChain integration for [VelesDB](https://github.com/cyberlife-coder/VelesDB) vector database.
+LangChain integration for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — the local knowledge engine for AI agents combining **Vector + Graph + ColumnStore** in a single Rust binary.
 
 ## Installation
 
@@ -14,22 +14,21 @@ pip install langchain-velesdb
 from langchain_velesdb import VelesDBVectorStore
 from langchain_openai import OpenAIEmbeddings
 
-# Initialize vector store
 vectorstore = VelesDBVectorStore(
-    path="./my_vectors",
+    path="./my_data",
     collection_name="documents",
-    embedding=OpenAIEmbeddings()
+    embedding=OpenAIEmbeddings(),
 )
 
 # Add documents
 vectorstore.add_texts([
-    "VelesDB is a high-performance vector database",
-    "Built entirely in Rust for speed and safety",
-    "Perfect for RAG applications and semantic search"
+    "VelesDB combines vector, graph, and columnar storage",
+    "Built entirely in Rust for microsecond latencies",
+    "Perfect for RAG applications and agent memory",
 ])
 
 # Search
-results = vectorstore.similarity_search("fast database", k=2)
+results = vectorstore.similarity_search("fast knowledge engine", k=2)
 for doc in results:
     print(doc.page_content)
 ```
@@ -41,23 +40,20 @@ from langchain_velesdb import VelesDBVectorStore
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.chains import RetrievalQA
 
-# Create vector store with documents
 vectorstore = VelesDBVectorStore.from_texts(
     texts=["Document 1 content", "Document 2 content"],
     embedding=OpenAIEmbeddings(),
     path="./rag_data",
-    collection_name="knowledge_base"
+    collection_name="knowledge_base",
 )
 
-# Create RAG chain
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 qa_chain = RetrievalQA.from_chain_type(
     llm=ChatOpenAI(),
     chain_type="stuff",
-    retriever=retriever
+    retriever=retriever,
 )
 
-# Ask questions
 answer = qa_chain.run("What is VelesDB?")
 print(answer)
 ```
@@ -71,126 +67,232 @@ VelesDBVectorStore(
     embedding: Embeddings,
     path: str = "./velesdb_data",
     collection_name: str = "langchain",
-    metric: str = "cosine"  # "cosine", "euclidean", "dot", "hamming", "jaccard"
+    metric: str = "cosine",       # "cosine", "euclidean", "dot", "hamming", "jaccard"
+    storage_mode: str = "full",   # "full", "sq8", "binary"
 )
 ```
 
-#### Methods
+#### Core Operations
 
-**Core Operations:**
-- `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
-- `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (2-3x faster for large batches)
-- `delete(ids)` - Delete documents by ID
-- `get_by_ids(ids)` - Retrieve documents by their IDs
-- `flush()` - Flush pending changes to disk
+| Method | Description |
+|--------|-------------|
+| `add_texts(texts, metadatas, ids)` | Add texts with optional metadata and IDs |
+| `add_texts_bulk(texts, metadatas, ids)` | Bulk insert (2-3x faster for large batches) |
+| `delete(ids)` | Delete documents by ID |
+| `get_by_ids(ids)` | Retrieve documents by their IDs |
+| `flush()` | Flush pending changes to disk |
+| `from_texts(texts, embedding, ...)` | Create store from texts (class method) |
+| `as_retriever(**kwargs)` | Convert to LangChain retriever |
 
-**Search:**
-- `similarity_search(query, k=4)` - Search for similar documents
-- `similarity_search_with_score(query, k=4)` - Search with similarity scores
-- `similarity_search_with_filter(query, k=4, filter=None)` - Search with metadata filtering
-- `batch_search(queries, k=4)` - Batch search multiple queries in parallel
-- `batch_search_with_score(queries, k=4)` - Batch search with scores
-- `multi_query_search(queries, k=4, fusion="rrf", ...)` - **Multi-query fusion search** ⭐ NEW
-- `multi_query_search_with_score(queries, k=4, ...)` - Multi-query search with fused scores
-- `hybrid_search(query, k=4, vector_weight=0.5, filter=None)` - Hybrid vector+BM25 search
-- `text_search(query, k=4, filter=None)` - Full-text BM25 search
-- `query(velesql_str, params=None)` - Execute VelesQL query
+#### Search
 
-**Utilities:**
-- `as_retriever(**kwargs)` - Convert to LangChain retriever
-- `from_texts(texts, embedding, ...)` - Create store from texts (class method)
-- `get_collection_info()` - Get collection metadata (name, dimension, point_count)
-- `is_empty()` - Check if collection is empty
+| Method | Description |
+|--------|-------------|
+| `similarity_search(query, k)` | Semantic search for similar documents |
+| `similarity_search_with_score(query, k)` | Search with similarity scores |
+| `similarity_search_with_filter(query, k, filter)` | Search with metadata filtering |
+| `batch_search(queries, k)` | Batch search multiple queries in parallel |
+| `batch_search_with_score(queries, k)` | Batch search with scores |
+| `multi_query_search(queries, k, fusion, ...)` | Multi-query fusion search (RRF/Weighted) |
+| `multi_query_search_with_score(queries, k, ...)` | Multi-query search with fused scores |
+| `hybrid_search(query, k, vector_weight, filter)` | Hybrid vector + BM25 search |
+| `text_search(query, k, filter)` | Full-text BM25 search |
+| `query(velesql_str, params)` | Execute a VelesQL query |
+
+#### Knowledge Graph
+
+| Method | Description |
+|--------|-------------|
+| `add_edge(id, source, target, label, metadata)` | Add a relationship edge |
+| `get_edges(label, source, target)` | Get edges (optionally filtered) |
+| `traverse_graph(source, max_depth, strategy, limit)` | BFS/DFS graph traversal → `List[Document]` |
+| `stream_traverse_graph(source, max_depth, strategy, limit)` | Streaming traversal → `Iterator[Document]` |
+| `get_node_degree(node_id)` | Get in/out degree of a node |
+
+#### Index & Collection Management
+
+| Method | Description |
+|--------|-------------|
+| `create_property_index(label, property_name)` | Create a property index for faster WHERE filters |
+| `list_indexes()` | List all indexes on the collection |
+| `drop_index(label, property_name)` | Remove a property index |
+| `list_collections()` | List all collection names → `List[str]` |
+| `delete_collection(name)` | Delete a collection |
+| `create_metadata_collection(name)` | Create a metadata-only collection (no vectors) |
+
+#### Utilities
+
+| Method | Description |
+|--------|-------------|
+| `get_collection_info()` | Get collection metadata (name, dimension, point_count) |
+| `is_empty()` | Check if collection is empty |
+| `is_metadata_only()` | Check if collection is metadata-only |
 
 ## Advanced Features
 
-### Multi-Query Fusion (MQG) ⭐ NEW
+### Multi-Query Fusion
 
-Search with multiple query reformulations and fuse results using various strategies.
-Perfect for RAG pipelines using Multiple Query Generation (MQG).
+Search with multiple query reformulations and fuse results. Ideal for RAG pipelines using Multiple Query Generation (MQG).
 
 ```python
-# Basic usage with RRF (Reciprocal Rank Fusion)
+# Reciprocal Rank Fusion (default)
 results = vectorstore.multi_query_search(
     queries=["travel to Greece", "Greek vacation", "Athens trip"],
     k=10,
 )
 
-# With weighted fusion (like SearchXP's scoring)
+# Weighted fusion
 results = vectorstore.multi_query_search(
     queries=["travel Greece", "vacation Mediterranean"],
     k=10,
     fusion="weighted",
-    fusion_params={
-        "avg_weight": 0.6,   # Average score weight
-        "max_weight": 0.3,   # Maximum score weight  
-        "hit_weight": 0.1,   # Hit ratio weight
-    }
+    fusion_params={"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1},
 )
 
-# Get fused scores
-results_with_scores = vectorstore.multi_query_search_with_score(
-    queries=["query1", "query2", "query3"],
-    k=5,
-    fusion="rrf",
-    fusion_params={"k": 60}  # RRF parameter
-)
-for doc, score in results_with_scores:
+# With scores
+for doc, score in vectorstore.multi_query_search_with_score(
+    queries=["query1", "query2"], k=5, fusion="rrf", fusion_params={"k": 60}
+):
     print(f"{score:.3f}: {doc.page_content}")
 ```
 
-**Fusion Strategies:**
-- `"rrf"` - Reciprocal Rank Fusion (default, robust to score scale differences)
-- `"average"` - Mean score across all queries
-- `"maximum"` - Maximum score from any query
-- `"weighted"` - Custom combination of avg, max, and hit ratio
+**Fusion strategies:** `"rrf"` (default), `"average"`, `"maximum"`, `"weighted"`
 
 ### Hybrid Search (Vector + BM25)
 
 ```python
-# Combine vector similarity with keyword matching
 results = vectorstore.hybrid_search(
     query="machine learning performance",
     k=5,
-    vector_weight=0.7  # 70% vector, 30% BM25
+    vector_weight=0.7,  # 70% vector, 30% BM25
 )
-for doc, score in results:
-    print(f"{score:.3f}: {doc.page_content}")
 ```
 
 ### Full-Text Search (BM25)
 
 ```python
-# Pure keyword-based search
 results = vectorstore.text_search("VelesDB Rust", k=5)
-for doc, score in results:
-    print(f"{score:.3f}: {doc.page_content}")
 ```
 
 ### Metadata Filtering
 
 ```python
-# Search with filters
 results = vectorstore.similarity_search_with_filter(
     query="database",
     k=5,
-    filter={"condition": {"type": "eq", "field": "category", "value": "tech"}}
+    filter={"condition": {"type": "eq", "field": "category", "value": "tech"}},
 )
 ```
 
-## Features
+### Knowledge Graph Operations
 
-- **High Performance**: VelesDB's Rust backend delivers microsecond latencies
-- **SIMD Optimized**: Hardware-accelerated vector operations  
-- **Multi-Query Fusion**: Native support for MQG pipelines with RRF/Weighted fusion ⭐ NEW
-- **Hybrid Search**: Combine vector similarity with BM25 text matching
-- **Full-Text Search**: BM25 ranking for keyword queries
-- **Metadata Filtering**: Filter results by document attributes
-- **Simple Setup**: Single binary, no external dependencies
-- **Full LangChain Compatibility**: Works with all LangChain chains and agents
+VelesDB is more than a vector database — it natively combines vector search with a knowledge graph. Build and traverse relationships directly from the vectorstore:
+
+```python
+# Add edges (relationships between nodes)
+vectorstore.add_edge(id=1, source=100, target=200, label="KNOWS")
+vectorstore.add_edge(id=2, source=100, target=300, label="WORKS_AT")
+
+# Traverse the graph (BFS or DFS)
+neighbors = vectorstore.traverse_graph(source=100, max_depth=2, strategy="bfs")
+for doc in neighbors:
+    print(f"Node {doc.metadata['target_id']} at depth {doc.metadata['graph_depth']}")
+
+# Streaming traversal (memory-efficient generator)
+for doc in vectorstore.stream_traverse_graph(source=100, max_depth=3):
+    process(doc)
+
+# Analyze connectivity
+degree = vectorstore.get_node_degree(node_id=100)
+print(f"In: {degree['in_degree']}, Out: {degree['out_degree']}")
+```
+
+### VelesQL Queries
+
+Execute structured queries using VelesDB's SQL-like query language:
+
+```python
+results = vectorstore.query(
+    "SELECT * FROM documents WHERE similarity(vector, $q) > 0.8",
+    params={"q": embedding},
+)
+```
+
+### Agent Memory
+
+LangChain-compatible memory classes backed by VelesDB's agent memory system:
+
+```python
+from langchain_velesdb import VelesDBChatMemory
+from langchain.chains import ConversationChain
+from langchain_openai import ChatOpenAI
+
+memory = VelesDBChatMemory(path="./agent_data")
+chain = ConversationChain(llm=ChatOpenAI(), memory=memory)
+response = chain.predict(input="Hello!")
+```
+
+**Available classes:** `VelesDBChatMemory` (episodic), `VelesDBSemanticMemory` (fact storage)
+
+### Graph Toolkit
+
+Higher-level utilities for building knowledge graphs from documents:
+
+- **`GraphRetriever`** — Seed + expand pattern: vector search → graph traversal → combined context
+- **`GraphQARetriever`** — Graph-augmented QA retriever
+- **Graph Toolkit** — `chunker`, `extractor`, `loader` for document → knowledge graph pipelines
+
+```python
+from langchain_velesdb import GraphRetriever
+
+retriever = GraphRetriever(
+    vector_store=vectorstore,
+    max_depth=2,
+    expand_k=5,
+)
+docs = retriever.get_relevant_documents("What is machine learning?")
+```
+
+### Storage Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `"full"` | Full float32 precision (default) | Maximum accuracy |
+| `"sq8"` | Scalar quantization (8-bit) | 4x memory reduction |
+| `"binary"` | Binary quantization | Maximum compression |
+
+## SDK Method Parity
+
+This table shows the mapping between integration methods and the underlying `velesdb.Collection` SDK methods:
+
+| Integration Method | SDK Method | Status |
+|-------------------|------------|--------|
+| `add_texts()` | `collection.upsert()` | ✅ Available |
+| `similarity_search()` | `collection.search()` | ✅ Available |
+| `hybrid_search()` | `collection.hybrid_search()` | ✅ Available |
+| `text_search()` | `collection.text_search()` | ✅ Available |
+| `multi_query_search()` | `collection.multi_query_search()` | ✅ Available |
+| `query()` | `collection.query()` | ✅ Available |
+| `add_edge()` | `collection.add_edge()` | ✅ Available |
+| `get_edges()` | `collection.get_edges()` / `get_edges_by_label()` | ✅ Available |
+| `traverse_graph()` | `collection.traverse()` | ✅ Available |
+| `stream_traverse_graph()` | `collection.traverse()` (yield) | ✅ Available |
+| `get_node_degree()` | `collection.get_node_degree()` | ✅ Available |
+| `create_property_index()` | `collection.create_property_index()` | ✅ Available |
+| `list_indexes()` | `collection.list_indexes()` | ✅ Available |
+| `drop_index()` | `collection.drop_index()` | ✅ Available |
+| `list_collections()` | `db.list_collections()` | ✅ Available |
+| `delete_collection()` | `db.delete_collection()` | ✅ Available |
+| `match_query()` | — | ⏳ Planned v2.0 |
+| `explain()` | — | ⏳ Planned v2.0 |
+
+## Known Limitations
+
+- **`match_query()`** raises `NotImplementedError` — MATCH execution engine planned for v2.0
+- **`explain()`** raises `NotImplementedError` — query plan analysis planned for v2.0
+- **`list_collections()`** returns `List[str]` (collection names only, not full metadata)
+- **Graph streaming** uses `traverse()` + yield (native SSE streaming planned for a future SDK release)
 
 ## License
 
-MIT License (this integration)
-
-See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.
+[Elastic License 2.0 (ELv2)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
