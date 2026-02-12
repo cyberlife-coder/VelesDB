@@ -269,6 +269,51 @@ export class VelesDB {
   }
 
   /**
+   * Search with explicit ef_search parameter for recall tuning.
+   * 
+   * Higher ef_search = better recall but slower. Convenience wrapper
+   * around `search()` with `efSearch` option pre-set.
+   * 
+   * @param collection - Collection name
+   * @param query - Query vector
+   * @param k - Number of results to return
+   * @param efSearch - HNSW ef_search parameter (higher = better recall)
+   * @param options - Additional search options (filter, includeVectors, etc.)
+   * @returns Search results sorted by relevance
+   */
+  async searchWithEf(
+    collection: string,
+    query: number[] | Float32Array,
+    k: number,
+    efSearch: number,
+    options?: Omit<SearchOptions, 'k' | 'efSearch'>
+  ): Promise<SearchResult[]> {
+    return this.search(collection, query, { ...options, k, efSearch });
+  }
+
+  /**
+   * Lightweight search returning only IDs and scores (no payload).
+   * 
+   * Useful when you only need to identify matching documents without
+   * retrieving their full payload data.
+   * 
+   * @param collection - Collection name
+   * @param query - Query vector
+   * @param k - Number of results to return (default: 10)
+   * @param options - Additional search options (filter, efSearch, mode)
+   * @returns Array of { id, score } objects (no payload)
+   */
+  async searchIds(
+    collection: string,
+    query: number[] | Float32Array,
+    k: number = 10,
+    options?: Omit<SearchOptions, 'k' | 'includeVectors'>
+  ): Promise<Array<{ id: string | number; score: number }>> {
+    const results = await this.search(collection, query, { ...options, k, includeVectors: false });
+    return results.map(r => ({ id: r.id, score: r.score }));
+  }
+
+  /**
    * Search for multiple vectors in parallel
    * 
    * @param collection - Collection name

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### SDK & Integration Full Parity (v3-04.3) ✅
+
+- **Python SDK: `match_query()`** — PyO3 binding to `Collection::execute_match()` / `execute_match_with_similarity()`
+  - Parses VelesQL MATCH queries, executes graph traversal, returns result dicts
+  - Supports optional `vector` + `threshold` for similarity-weighted MATCH
+- **Python SDK: `explain()`** — PyO3 binding to `QueryPlan::from_select()` / `from_match()`
+  - Returns query plan dict with `query_type`, `estimated_cost_ms`, `index_used`, `filter_strategy`
+- **Python SDK: `search_with_ef()`** — ANN search with custom `ef_search` parameter for recall tuning
+- **Python SDK: `search_ids()`** — Lightweight ID+score search without payload retrieval
+- **Python SDK: file split** — `collection.rs` (988 lines) split into 5 files under 300 lines each
+  - Enabled PyO3 `multiple-pymethods` feature for multi-file impl blocks
+- **LangChain integration** — `explain()` and `match_query()` now delegate to SDK (was `NotImplementedError`)
+  - `match_query()` returns `List[Document]` with projected/bindings as `page_content`
+- **LlamaIndex integration** — `explain()` and `match_query()` now delegate to SDK (was `NotImplementedError`)
+  - `match_query()` returns `VectorStoreQueryResult` with `TextNode` objects
+- **Zero `NotImplementedError`** remaining in integration code for MATCH or EXPLAIN
+
 ### Server Binding & Security (v3-02) ✅
 
 - **API Key Authentication** — `Authorization: Bearer <key>` middleware with constant-time comparison

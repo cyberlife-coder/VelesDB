@@ -205,6 +205,44 @@ describe('VelesDB Client', () => {
       expect(mockBackend.close).toHaveBeenCalled();
       expect(db.isInitialized()).toBe(false);
     });
+
+    it('should call searchWithEf with efSearch option', async () => {
+      mockBackend.search.mockResolvedValue([{ id: '1', score: 0.95 }]);
+      const result = await db.searchWithEf('test', [0.1, 0.2], 5, 256);
+      expect(result).toEqual([{ id: '1', score: 0.95 }]);
+      expect(mockBackend.search).toHaveBeenCalledWith('test', [0.1, 0.2], { k: 5, efSearch: 256 });
+    });
+
+    it('should call searchWithEf with extra options', async () => {
+      mockBackend.search.mockResolvedValue([]);
+      await db.searchWithEf('test', [0.1, 0.2], 10, 512, { filter: { type: 'doc' } });
+      expect(mockBackend.search).toHaveBeenCalledWith('test', [0.1, 0.2], {
+        k: 10, efSearch: 512, filter: { type: 'doc' },
+      });
+    });
+
+    it('should call searchIds and strip payloads', async () => {
+      mockBackend.search.mockResolvedValue([
+        { id: '1', score: 0.95, payload: { title: 'Hello' } },
+        { id: '2', score: 0.88, payload: { title: 'World' } },
+      ]);
+      const result = await db.searchIds('test', [0.1, 0.2], 5);
+      expect(result).toEqual([
+        { id: '1', score: 0.95 },
+        { id: '2', score: 0.88 },
+      ]);
+      expect(mockBackend.search).toHaveBeenCalledWith('test', [0.1, 0.2], {
+        k: 5, includeVectors: false,
+      });
+    });
+
+    it('should call searchIds with default k=10', async () => {
+      mockBackend.search.mockResolvedValue([]);
+      await db.searchIds('test', [0.1, 0.2]);
+      expect(mockBackend.search).toHaveBeenCalledWith('test', [0.1, 0.2], {
+        k: 10, includeVectors: false,
+      });
+    });
   });
 
   describe('multiQuerySearch', () => {
