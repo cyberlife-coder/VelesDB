@@ -397,6 +397,66 @@ class Collection:
         """
         ...
 
+    # -- Query Plan / EXPLAIN (Phase 4.3) ------------------------------------
+
+    def explain(self, query_str: str) -> Dict[str, Any]:
+        """Explain a VelesQL query without executing it.
+
+        Args:
+            query_str: VelesQL query string to explain.
+
+        Returns:
+            Dict with keys: query_type, plan, estimated_cost_ms,
+            index_used, filter_strategy.
+
+        Example:
+            >>> plan = collection.explain(
+            ...     "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10"
+            ... )
+            >>> print(plan['estimated_cost_ms'])
+        """
+        ...
+
+    # -- Advanced Search (Phase 4.3) -----------------------------------------
+
+    def search_with_ef(
+        self,
+        vector: Union[List[float], Any],
+        top_k: int = 10,
+        ef_search: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Search with custom ef_search parameter for HNSW tuning.
+
+        Higher ef_search increases recall but is slower.
+
+        Args:
+            vector: Query vector (list of floats or numpy array).
+            top_k: Number of results (default: 10).
+            ef_search: HNSW ef_search parameter (default: 100).
+
+        Returns:
+            List of result dicts with id, score, and payload keys.
+        """
+        ...
+
+    def search_ids(
+        self,
+        vector: Union[List[float], Any],
+        top_k: int = 10,
+    ) -> List[Tuple[int, float]]:
+        """Lightweight search returning only IDs and scores (no payload).
+
+        Faster than search() when you only need IDs (~3-5x speedup).
+
+        Args:
+            vector: Query vector (list of floats or numpy array).
+            top_k: Number of results (default: 10).
+
+        Returns:
+            List of (id, score) tuples.
+        """
+        ...
+
     # -- Index Management (EPIC-009) -----------------------------------------
 
     def create_property_index(self, label: str, property: str) -> None:

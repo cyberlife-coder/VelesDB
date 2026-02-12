@@ -18,7 +18,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 velesdb-core = { path = "../velesdb-core", version = "1.4.0" }
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods"] }
 serde_json = { workspace = true }
 numpy = "0.24"
 

@@ -2,8 +2,8 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** v3-04.1 complete (4/4 plans done) — Python Feature Parity (10 missing features)  
-**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 8 complete. Phase 4.2 planned (5 plans, 3 waves). Phases 5–7 remain.  
+**Phase:** v3-04.3 in progress (1/3 plans done) — SDK & Integration Full Parity  
+**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 4.2, 8 complete. Phase 4.3 in progress (1/3 plans done). Phase 5 planned (4 plans). Phases 6–7 remain.  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -55,8 +55,9 @@ Phase 3    ██████████ 100%  TypeScript SDK Fixes        ✅ 
 Phase 3.1  ██████████ 100%  TS SDK Docs & Examples     ✅ (3/3 plans)
 Phase 4    ██████████ 100%  Python Integrations        ✅ (3/3 plans)
 Phase 4.1  ██████████ 100%  Python Feature Parity      ✅ (4/4 plans)
-Phase 4.2  ██████████  20%  Python SDK Parity Fixes    🟨 In progress (1/5 plans)
-Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    ⬜ Pending
+Phase 4.2  ██████████ 100%  Python SDK Parity Fixes    ✅ (5/5 plans)
+Phase 4.3  ███░░░░░░░  33%  SDK & Integration Parity   � In Progress (1/3 plans)
+Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    🟨 Planned (4 plans)
 Phase 6    ░░░░░░░░░░   0%  Tauri Plugin Audit         ⬜ Pending
 Phase 7    ░░░░░░░░░░   0%  GPU Extras + Ecosystem CI  ⬜ Pending
 Phase 8    ██████████ 100%  WASM Feature Parity         ✅ (5/5 plans)
@@ -73,8 +74,9 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | 3.1 | TS SDK Docs & Examples | Audit gaps | 📝 Completeness | ✅ Done |
 | 4 | Python Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ✅ Done |
 | 4.1 | Python Feature Parity | Audit: 10 missing features | 🚨 Completeness | ⬜ Pending |
-| 4.2 | Python SDK Parity Fixes | Audit: phantom methods, wrong names, docs | 🚨 Production Safety | ⬜ Pending |
-| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ⬜ Pending |
+| 4.2 | Python SDK Parity Fixes | Audit: phantom methods, wrong names, docs | 🚨 Production Safety | ✅ Done |
+| 4.3 | SDK & Integration Full Parity | Audit: MATCH+EXPLAIN missing from PyO3+integrations | 🚨 Feature Parity | 🟨 Planned |
+| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | 🟨 Planned |
 | 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness | ⬜ Pending |
 | 7 | GPU Extras + Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
 | 8 | WASM Feature Parity | — | 🚨 Architecture | ✅ Done |
@@ -82,10 +84,11 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ### Remaining Work
 
 1. ~~**v3-04.1**: Python Feature Parity~~ ✅ Complete (4/4 plans, 324 tests pass)
-2. **v3-04.2**: Python SDK Parity Fixes — 5 plans PLANNED (SDK Rust graph methods, integration name fixes, contract tests, READMEs, backlog)
-3. **v3-05**: Demos & Examples Update — plan & execute
-4. **v3-06**: Tauri Plugin Audit — plan & execute
-5. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
+2. ~~**v3-04.2**: Python SDK Parity Fixes~~ ✅ Complete (5/5 plans)
+3. **v3-04.3**: SDK & Integration Full Parity — MATCH + EXPLAIN (3 plans)
+4. **v3-05**: Demos & Examples Update — plan & execute
+5. **v3-06**: Tauri Plugin Audit — plan & execute
+6. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
 
 ### Deferred Requirements (from v1/v2)
 - **TEST-05**: Fuzz testing expansion
@@ -100,7 +103,8 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 ## Session Continuity
 
 **Last session:** 2026-02-12  
-**Stopped at:** Phase v3-04.2 Plan 01 completed (SDK graph methods). Next: /gsd-execute-plan for Phase 4.2 Plan 02.
+**Stopped at:** Phase v3-04.3 Plan 01 done (match_query binding). Next: /gsd-execute-plan for Phase 4.3 Plan 02 (explain + search_with_ef + search_ids bindings).  
+**Resume file:** .planning/.continue-here
 
 ## Decisions
 
@@ -116,7 +120,7 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | tower-governor for per-IP rate limiting | Global rate limit is insufficient; need per-IP granularity | 2026-02-10 |
 | Mock data aligned with real QueryResult/QueryStats types | SDK tests must use actual interface shapes, not invented fields | 2026-02-11 |
 | Unify graph in Collection (not separate GraphStore) | DX: agents use one object; server already deleted GraphService | 2026-02-11 |
-| match_query/explain → NotImplementedError | MATCH engine not in core yet (EPIC-045); better explicit error than AttributeError | 2026-02-11 |
+| ~~match_query/explain → NotImplementedError~~ **REVERTED** | MATCH IS implemented in core (EPIC-045 US-002, 476 lines). EXPLAIN IS implemented (EPIC-046 US-004, 539 lines). Decision was wrong — Phase 4.3 fixes this. | 2026-02-12 |
 | Fix integration names, don't add SDK aliases | SDK names match core; integrations should adapt | 2026-02-11 |
 | Direct PyO3 bindings to core graph API | Zero reimplementation; SDK delegates to velesdb-core | 2026-02-12 |
 | Inline traversal result conversion | Core's TraversalResult differs from graph module's type | 2026-02-12 |
@@ -153,5 +157,5 @@ npm test                               # TypeScript SDK (Phase 3)
 pytest                                 # Python integrations (Phase 4)
 ```
 
-*State file last updated: 2026-02-11*  
-*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 8 done. Phase 4.2 (5 plans), Phases 5–7 remain.*
+*State file last updated: 2026-02-12*  
+*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 4.2, 8 done. Phase 4.3 in progress (1/3). Phases 5–7 remain.*

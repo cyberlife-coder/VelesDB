@@ -28,7 +28,10 @@
 
 mod agent;
 mod collection;
+mod collection_graph;
 mod collection_helpers;
+mod collection_query;
+mod collection_search;
 mod graph;
 mod graph_store;
 mod utils;
