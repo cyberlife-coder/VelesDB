@@ -88,7 +88,10 @@ class GraphLoader:
                 "payload": payload,
             }])
         else:
-            collection.add_node(id=id, label=label, metadata=metadata or {})
+            collection.upsert_metadata([{
+                "id": id,
+                "payload": payload,
+            }])
 
     def add_edge(
         self,

@@ -1,62 +1,54 @@
 """VelesDB Python Bindings - Type Stubs.
 
 High-performance vector database with native Python bindings.
+
+Source of truth: crates/velesdb-python/src/ (collection.rs, lib.rs, agent.rs,
+graph_store.rs, velesql.rs).
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Union
-import numpy as np
 
 __version__: str
 
+
+# =============================================================================
+# Fusion Strategy
+# =============================================================================
+
 class FusionStrategy:
     """Strategy for fusing results from multiple vector searches.
-    
+
     Example:
-        >>> # Average fusion
         >>> strategy = FusionStrategy.average()
-        >>> # RRF with default k=60
         >>> strategy = FusionStrategy.rrf()
-        >>> # Weighted fusion
         >>> strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
     """
-    
+
     @staticmethod
     def average() -> "FusionStrategy":
         """Create an Average fusion strategy.
-        
+
         Computes the mean score for each document across all queries.
-        
-        Returns:
-            FusionStrategy: Average fusion strategy
         """
         ...
-    
+
     @staticmethod
     def maximum() -> "FusionStrategy":
         """Create a Maximum fusion strategy.
-        
+
         Takes the maximum score for each document across all queries.
-        
-        Returns:
-            FusionStrategy: Maximum fusion strategy
         """
         ...
-    
+
     @staticmethod
     def rrf(k: int = 60) -> "FusionStrategy":
         """Create a Reciprocal Rank Fusion (RRF) strategy.
-        
-        Uses position-based scoring: score = Σ 1/(k + rank)
-        This is robust to score scale differences between queries.
-        
+
         Args:
             k: Ranking constant (default: 60). Lower k gives more weight to top ranks.
-        
-        Returns:
-            FusionStrategy: RRF fusion strategy
         """
         ...
-    
+
     @staticmethod
     def weighted(
         avg_weight: float,
@@ -64,294 +56,359 @@ class FusionStrategy:
         hit_weight: float,
     ) -> "FusionStrategy":
         """Create a Weighted fusion strategy.
-        
-        Combines average score, maximum score, and hit ratio with custom weights.
+
         Formula: score = avg_weight * avg + max_weight * max + hit_weight * hit_ratio
-        
+
         Args:
             avg_weight: Weight for average score (0.0-1.0)
             max_weight: Weight for maximum score (0.0-1.0)
             hit_weight: Weight for hit ratio (0.0-1.0)
-        
-        Returns:
-            FusionStrategy: Weighted fusion strategy
-        
+
         Raises:
             ValueError: If weights don't sum to 1.0 or are negative
         """
         ...
 
 
-class SearchResult:
-    """A single search result from a vector search.
-    
-    Attributes:
-        id: Unique identifier of the vector
-        score: Similarity score (0.0 to 1.0 for cosine similarity)
-        payload: Optional metadata associated with the vector
-    """
-    
-    @property
-    def id(self) -> str:
-        """Unique identifier of the vector."""
-        ...
-    
-    @property
-    def score(self) -> float:
-        """Similarity score."""
-        ...
-    
-    @property
-    def payload(self) -> Optional[Dict[str, Any]]:
-        """Optional metadata payload."""
-        ...
+# =============================================================================
+# SearchResult (pyclass with #[pyo3(get)] fields)
+# =============================================================================
 
+class SearchResult:
+    """A single search result from a vector query.
+
+    Attributes:
+        id: Point ID (int)
+        score: Similarity score (float)
+        payload: Metadata payload (PyObject)
+    """
+
+    id: int
+    score: float
+    payload: Any
+
+
+# =============================================================================
+# Collection  (source: collection.rs — 30 methods)
+# =============================================================================
 
 class Collection:
-    """A collection of vectors in VelesDB.
-    
-    Collections store vectors with optional metadata payloads and support
-    various search operations including similarity search, filtered search,
-    and multi-query fusion search.
+    """A vector collection in VelesDB.
+
+    Collections store vectors with optional metadata (payload) and support
+    efficient similarity search, full-text search, hybrid search, graph
+    operations, and VelesQL queries.
     """
-    
+
+    # -- Properties ----------------------------------------------------------
+
     @property
     def name(self) -> str:
         """Name of the collection."""
         ...
-    
-    @property
-    def dimension(self) -> int:
-        """Dimension of vectors in this collection."""
-        ...
-    
-    @property
-    def len(self) -> int:
-        """Number of vectors in this collection."""
-        ...
-    
-    def insert(
-        self,
-        id: str,
-        vector: Union[List[float], np.ndarray],
-        payload: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Insert a single vector into the collection.
-        
-        Args:
-            id: Unique identifier for the vector
-            vector: The vector data (list of floats or numpy array)
-            payload: Optional metadata to store with the vector
-        """
-        ...
-    
-    def insert_batch(
-        self,
-        ids: List[str],
-        vectors: Union[List[List[float]], np.ndarray],
-        payloads: Optional[List[Optional[Dict[str, Any]]]] = None,
-    ) -> None:
-        """Insert multiple vectors in a single batch.
-        
-        Args:
-            ids: List of unique identifiers
-            vectors: List of vectors or 2D numpy array
-            payloads: Optional list of metadata payloads
-        """
-        ...
-    
-    def search(
-        self,
-        vector: Union[List[float], np.ndarray],
-        top_k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> List[SearchResult]:
-        """Search for similar vectors.
-        
-        Args:
-            vector: Query vector
-            top_k: Number of results to return
-            filter: Optional metadata filter
-        
+
+    # -- Core CRUD -----------------------------------------------------------
+
+    def info(self) -> Dict[str, Any]:
+        """Get collection configuration info.
+
         Returns:
-            List of SearchResult objects sorted by similarity
-        """
-        ...
-    
-    def search_ids(
-        self,
-        vector: Union[List[float], np.ndarray],
-        top_k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
-        """Search and return only IDs and scores.
-        
-        Args:
-            vector: Query vector
-            top_k: Number of results to return
-            filter: Optional metadata filter
-        
-        Returns:
-            List of (id, score) tuples
-        """
-        ...
-    
-    def multi_query_search(
-        self,
-        vectors: Union[List[List[float]], np.ndarray],
-        top_k: int = 10,
-        fusion: Optional[FusionStrategy] = None,
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> List[SearchResult]:
-        """Multi-query search with result fusion.
-        
-        Executes parallel searches for multiple query vectors and fuses
-        the results using the specified fusion strategy. Ideal for Multiple
-        Query Generation (MQG) pipelines.
-        
-        Args:
-            vectors: List of query vectors (max 10)
-            top_k: Number of results to return after fusion
-            fusion: Fusion strategy (default: RRF with k=60)
-            filter: Optional metadata filter applied to all queries
-        
-        Returns:
-            List of SearchResult objects with fused scores
-        
-        Example:
-            >>> results = collection.multi_query_search(
-            ...     vectors=[query1, query2, query3],
-            ...     top_k=10,
-            ...     fusion=FusionStrategy.weighted(0.6, 0.3, 0.1)
-            ... )
-        """
-        ...
-    
-    def multi_query_search_ids(
-        self,
-        vectors: Union[List[List[float]], np.ndarray],
-        top_k: int = 10,
-        fusion: Optional[FusionStrategy] = None,
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
-        """Multi-query search returning only IDs and fused scores.
-        
-        Args:
-            vectors: List of query vectors (max 10)
-            top_k: Number of results to return after fusion
-            fusion: Fusion strategy (default: RRF with k=60)
-            filter: Optional metadata filter
-        
-        Returns:
-            List of (id, fused_score) tuples
-        """
-        ...
-    
-    def get(self, id: str) -> Optional[SearchResult]:
-        """Get a vector by its ID.
-        
-        Args:
-            id: The vector's unique identifier
-        
-        Returns:
-            SearchResult if found, None otherwise
-        """
-        ...
-    
-    def delete(self, id: str) -> bool:
-        """Delete a vector by its ID.
-        
-        Args:
-            id: The vector's unique identifier
-        
-        Returns:
-            True if deleted, False if not found
-        """
-        ...
-    
-    def update_payload(self, id: str, payload: Dict[str, Any]) -> bool:
-        """Update the payload of an existing vector.
-        
-        Args:
-            id: The vector's unique identifier
-            payload: New metadata payload
-        
-        Returns:
-            True if updated, False if not found
-        """
-        ...
-    
-    def flush(self) -> None:
-        """Flush pending changes to disk."""
-        ...
-    
-    # Index Management (EPIC-009)
-    
-    def create_property_index(self, label: str, property: str) -> None:
-        """Create a property index for O(1) equality lookups on graph nodes.
-        
-        Args:
-            label: Node label to index (e.g., "Person")
-            property: Property name to index (e.g., "email")
-        """
-        ...
-    
-    def create_range_index(self, label: str, property: str) -> None:
-        """Create a range index for O(log n) range queries on graph nodes.
-        
-        Args:
-            label: Node label to index (e.g., "Event")
-            property: Property name to index (e.g., "timestamp")
-        """
-        ...
-    
-    def has_property_index(self, label: str, property: str) -> bool:
-        """Check if a property index exists.
-        
-        Args:
-            label: Node label
-            property: Property name
-        
-        Returns:
-            True if a property index exists for this label/property
-        """
-        ...
-    
-    def has_range_index(self, label: str, property: str) -> bool:
-        """Check if a range index exists.
-        
-        Args:
-            label: Node label
-            property: Property name
-        
-        Returns:
-            True if a range index exists for this label/property
-        """
-        ...
-    
-    def list_indexes(self) -> List[Dict[str, Any]]:
-        """List all indexes on this collection.
-        
-        Returns:
-            List of dicts with keys: label, property, index_type, cardinality, memory_bytes
-        """
-        ...
-    
-    def drop_index(self, label: str, property: str) -> bool:
-        """Drop an index (either property or range).
-        
-        Args:
-            label: Node label
-            property: Property name
-        
-        Returns:
-            True if an index was dropped, False if no index existed
+            Dict with name, dimension, metric, storage_mode, point_count,
+            and metadata_only keys.
         """
         ...
 
-    # ========================================================================
-    # Graph Operations (EPIC-015 US-001)
-    # ========================================================================
+    def is_metadata_only(self) -> bool:
+        """Check if this is a metadata-only collection (no vectors)."""
+        ...
+
+    def upsert(self, points: List[Dict[str, Any]]) -> int:
+        """Insert or update vectors in the collection.
+
+        Each dict must contain ``id`` (int), ``vector`` (list[float]),
+        and optionally ``payload`` (dict).
+
+        Returns:
+            Number of points upserted.
+
+        Example:
+            >>> collection.upsert([
+            ...     {"id": 1, "vector": [0.1, 0.2, ...], "payload": {"title": "Doc"}}
+            ... ])
+        """
+        ...
+
+    def upsert_metadata(self, points: List[Dict[str, Any]]) -> int:
+        """Insert or update metadata-only points (no vectors).
+
+        Each dict must contain ``id`` (int) and ``payload`` (dict).
+
+        Returns:
+            Number of points upserted.
+        """
+        ...
+
+    def upsert_bulk(self, points: List[Dict[str, Any]]) -> int:
+        """Bulk insert optimized for high-throughput import.
+
+        Same format as :meth:`upsert`.
+
+        Returns:
+            Number of points upserted.
+        """
+        ...
+
+    def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
+        """Get points by their IDs.
+
+        Args:
+            ids: List of point IDs.
+
+        Returns:
+            List where each element is a point dict or None if not found.
+        """
+        ...
+
+    def delete(self, ids: List[int]) -> None:
+        """Delete points by their IDs.
+
+        Args:
+            ids: List of point IDs to delete.
+        """
+        ...
+
+    def is_empty(self) -> bool:
+        """Check if the collection is empty."""
+        ...
+
+    def flush(self) -> None:
+        """Flush all pending changes to disk."""
+        ...
+
+    # -- Search --------------------------------------------------------------
+
+    def search(
+        self,
+        vector: Union[List[float], Any],
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search for similar vectors.
+
+        Args:
+            vector: Query vector (list of floats or numpy array).
+            top_k: Number of results to return.
+
+        Returns:
+            List of result dicts with id, score, and payload keys.
+        """
+        ...
+
+    def search_with_filter(
+        self,
+        vector: Union[List[float], Any],
+        top_k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search with metadata filtering.
+
+        Args:
+            vector: Query vector.
+            top_k: Number of results to return.
+            filter: Metadata filter dict (required).
+
+        Returns:
+            List of result dicts.
+        """
+        ...
+
+    def text_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Full-text search using BM25 ranking.
+
+        Args:
+            query: Text query string.
+            top_k: Number of results to return.
+            filter: Optional metadata filter.
+
+        Returns:
+            List of result dicts.
+        """
+        ...
+
+    def hybrid_search(
+        self,
+        vector: Union[List[float], Any],
+        query: str,
+        top_k: int = 10,
+        vector_weight: float = 0.5,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Hybrid search combining vector similarity and text search.
+
+        Args:
+            vector: Query vector.
+            query: Text query string.
+            top_k: Number of results to return.
+            vector_weight: Weight for vector vs text (0.0-1.0, default 0.5).
+            filter: Optional metadata filter.
+
+        Returns:
+            List of result dicts.
+        """
+        ...
+
+    def batch_search(
+        self,
+        searches: List[Dict[str, Any]],
+    ) -> List[List[Dict[str, Any]]]:
+        """Batch search for multiple query vectors in parallel.
+
+        Each dict in *searches* must contain ``vector`` (list[float]),
+        and optionally ``top_k`` (int) and ``filter`` (dict).
+
+        Returns:
+            List of result lists, one per search query.
+        """
+        ...
+
+    def multi_query_search(
+        self,
+        vectors: List[Union[List[float], Any]],
+        top_k: int = 10,
+        fusion: Optional[FusionStrategy] = None,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Multi-query search with result fusion.
+
+        Args:
+            vectors: List of query vectors (max 10).
+            top_k: Number of results to return after fusion.
+            fusion: Fusion strategy (default: RRF with k=60).
+            filter: Optional metadata filter applied to all queries.
+
+        Returns:
+            List of result dicts with fused scores.
+
+        Example:
+            >>> results = collection.multi_query_search(
+            ...     vectors=[q1, q2, q3],
+            ...     top_k=10,
+            ...     fusion=FusionStrategy.weighted(0.6, 0.3, 0.1),
+            ... )
+        """
+        ...
+
+    def multi_query_search_ids(
+        self,
+        vectors: List[Union[List[float], Any]],
+        top_k: int = 10,
+        fusion: Optional[FusionStrategy] = None,
+    ) -> List[Dict[str, Any]]:
+        """Multi-query search returning only IDs and fused scores.
+
+        Args:
+            vectors: List of query vectors (max 10).
+            top_k: Number of results to return after fusion.
+            fusion: Fusion strategy (default: RRF with k=60).
+
+        Returns:
+            List of dicts with id and score keys.
+        """
+        ...
+
+    # -- VelesQL -------------------------------------------------------------
+
+    def query(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL SELECT query.
+
+        Args:
+            query_str: VelesQL query string.
+            params: Optional dict of query parameters (vectors, scalars).
+
+        Returns:
+            List of result dicts with node_id, vector_score, graph_score,
+            fused_score, bindings, and column_data keys.
+
+        Example:
+            >>> results = collection.query(
+            ...     "SELECT * FROM docs WHERE vector NEAR $q LIMIT 20",
+            ...     params={"q": query_embedding},
+            ... )
+        """
+        ...
+
+    def query_ids(
+        self,
+        velesql: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query returning only IDs and scores (no payload).
+
+        More efficient than :meth:`query` when payload is not needed.
+
+        Args:
+            velesql: VelesQL query string.
+            params: Optional dict of query parameters.
+
+        Returns:
+            List of dicts with id and score keys.
+        """
+        ...
+
+    # -- Index Management (EPIC-009) -----------------------------------------
+
+    def create_property_index(self, label: str, property: str) -> None:
+        """Create a property index for O(1) equality lookups.
+
+        Args:
+            label: Node label to index (e.g., "Person").
+            property: Property name to index (e.g., "email").
+        """
+        ...
+
+    def create_range_index(self, label: str, property: str) -> None:
+        """Create a range index for O(log n) range queries.
+
+        Args:
+            label: Node label to index (e.g., "Event").
+            property: Property name to index (e.g., "timestamp").
+        """
+        ...
+
+    def has_property_index(self, label: str, property: str) -> bool:
+        """Check if a property index exists."""
+        ...
+
+    def has_range_index(self, label: str, property: str) -> bool:
+        """Check if a range index exists."""
+        ...
+
+    def list_indexes(self) -> List[Dict[str, Any]]:
+        """List all indexes on this collection.
+
+        Returns:
+            List of dicts with keys: label, property, index_type,
+            cardinality, memory_bytes.
+        """
+        ...
+
+    def drop_index(self, label: str, property: str) -> bool:
+        """Drop an index (either property or range).
+
+        Returns:
+            True if an index was dropped, False if no index existed.
+        """
+        ...
+
+    # -- Graph Operations (EPIC-015 US-001) ----------------------------------
 
     def add_edge(
         self,
@@ -362,43 +419,35 @@ class Collection:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add an edge to the collection's knowledge graph.
-        
+
         Args:
-            id: Edge ID (must be unique)
-            source: Source node ID
-            target: Target node ID
-            label: Relationship type/label
-            metadata: Optional edge properties (dict)
-        
+            id: Edge ID (must be unique).
+            source: Source node ID.
+            target: Target node ID.
+            label: Relationship type/label.
+            metadata: Optional edge properties (dict).
+
         Example:
             >>> collection.add_edge(1, 100, 200, "RELATED_TO", {"weight": 0.95})
         """
         ...
 
     def get_edges(self) -> List[Dict[str, Any]]:
-        """Get all edges from the collection's knowledge graph.
-        
+        """Get all edges from the knowledge graph.
+
         Returns:
-            List of edge dicts with id, source, target, label, and metadata keys
-        
-        Example:
-            >>> edges = collection.get_edges()
-            >>> for edge in edges:
-            ...     print(f"Edge {edge['id']}: {edge['source']} -> {edge['target']} ({edge['label']})")
+            List of edge dicts with id, source, target, label, and properties keys.
         """
         ...
 
     def get_edges_by_label(self, label: str) -> List[Dict[str, Any]]:
         """Get edges filtered by label (relationship type).
-        
+
         Args:
-            label: Relationship type to filter by
-        
+            label: Relationship type to filter by.
+
         Returns:
-            List of edge dicts matching the label
-        
-        Example:
-            >>> related_edges = collection.get_edges_by_label("RELATED_TO")
+            List of edge dicts matching the label.
         """
         ...
 
@@ -410,131 +459,306 @@ class Collection:
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """Traverse the graph from a source node using BFS or DFS.
-        
+
         Args:
-            source: Starting node ID
-            max_depth: Maximum traversal depth (default: 2)
-            strategy: Traversal strategy, either "bfs" or "dfs" (default: "bfs")
-            limit: Maximum number of results (default: 100)
-        
+            source: Starting node ID.
+            max_depth: Maximum traversal depth (default: 2).
+            strategy: "bfs" or "dfs" (default: "bfs").
+            limit: Maximum number of results (default: 100).
+
         Returns:
-            List of traversal result dicts with target_id, depth, and path keys
-        
-        Example:
-            >>> results = collection.traverse(100, max_depth=3, strategy="bfs")
-            >>> for result in results:
-            ...     print(f"Found node {result['target_id']} at depth {result['depth']}")
+            List of dicts with target_id, depth, and path keys.
         """
         ...
 
     def get_node_degree(self, node_id: int) -> Dict[str, int]:
         """Get the in-degree and out-degree of a node.
-        
-        Args:
-            node_id: The node ID
-        
+
         Returns:
-            Dict with node_id, in_degree, out_degree, and total_degree keys
-        
-        Example:
-            >>> degree = collection.get_node_degree(100)
-            >>> print(f"Node 100 has {degree['total_degree']} connections")
+            Dict with node_id, in_degree, out_degree, and total_degree keys.
         """
         ...
 
+
+# =============================================================================
+# Database  (source: lib.rs — 7 methods)
+# =============================================================================
 
 class Database:
-    """VelesDB Database - the main entry point for interacting with VelesDB.
-    
+    """VelesDB Database — the main entry point.
+
     Example:
-        >>> db = Database.open("./my_database")
-        >>> collection = db.get_or_create_collection("vectors", dimension=1536)
-        >>> collection.insert("id1", [0.1, 0.2, ...], {"text": "hello"})
+        >>> db = Database("./my_data")
+        >>> collection = db.create_collection("docs", dimension=768)
+        >>> collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Doc"}}])
     """
-    
-    @staticmethod
-    def open(path: str) -> "Database":
-        """Open or create a database at the specified path.
-        
+
+    def __init__(self, path: str) -> None:
+        """Create or open a VelesDB database at the specified path.
+
         Args:
-            path: Path to the database directory
-        
-        Returns:
-            Database instance
+            path: Directory path for database storage.
+
+        Example:
+            >>> db = Database("./my_vectors")
         """
         ...
-    
+
     def create_collection(
         self,
         name: str,
         dimension: int,
         metric: str = "cosine",
+        storage_mode: str = "full",
     ) -> Collection:
-        """Create a new collection.
-        
+        """Create a new vector collection.
+
         Args:
-            name: Collection name
-            dimension: Vector dimension
-            metric: Distance metric ("cosine", "euclidean", "dot")
-        
+            name: Collection name.
+            dimension: Vector dimension (e.g., 768 for BERT).
+            metric: Distance metric — "cosine", "euclidean", "dot",
+                    "hamming", or "jaccard" (default: "cosine").
+            storage_mode: "full", "sq8", or "binary" (default: "full").
+
         Returns:
-            The created Collection
-        
-        Raises:
-            ValueError: If collection already exists
+            The created Collection.
         """
         ...
-    
+
     def get_collection(self, name: str) -> Optional[Collection]:
         """Get an existing collection by name.
-        
-        Args:
-            name: Collection name
-        
+
         Returns:
-            Collection if found, None otherwise
+            Collection if found, None otherwise.
         """
         ...
-    
-    def get_or_create_collection(
-        self,
-        name: str,
-        dimension: int,
-        metric: str = "cosine",
-    ) -> Collection:
-        """Get an existing collection or create a new one.
-        
-        Args:
-            name: Collection name
-            dimension: Vector dimension (used only if creating)
-            metric: Distance metric (used only if creating)
-        
-        Returns:
-            The Collection (existing or newly created)
-        """
-        ...
-    
-    def delete_collection(self, name: str) -> bool:
-        """Delete a collection.
-        
-        Args:
-            name: Collection name
-        
-        Returns:
-            True if deleted, False if not found
-        """
-        ...
-    
+
     def list_collections(self) -> List[str]:
         """List all collection names.
-        
+
         Returns:
-            List of collection names
+            List of collection name strings.
         """
         ...
-    
-    def flush(self) -> None:
-        """Flush all pending changes to disk."""
+
+    def delete_collection(self, name: str) -> None:
+        """Delete a collection by name.
+
+        Args:
+            name: Collection name to delete.
+        """
+        ...
+
+    def create_metadata_collection(self, name: str) -> Collection:
+        """Create a metadata-only collection (no vectors, no HNSW index).
+
+        Args:
+            name: Collection name.
+
+        Returns:
+            The created Collection.
+
+        Example:
+            >>> products = db.create_metadata_collection("products")
+            >>> products.upsert_metadata([
+            ...     {"id": 1, "payload": {"name": "Widget", "price": 9.99}}
+            ... ])
+        """
+        ...
+
+    def agent_memory(self, dimension: Optional[int] = None) -> "AgentMemory":
+        """Create an AgentMemory instance for AI agent workflows.
+
+        Args:
+            dimension: Embedding dimension (default: 384).
+
+        Returns:
+            AgentMemory with semantic, episodic, and procedural subsystems.
+        """
+        ...
+
+
+# =============================================================================
+# Agent Memory  (source: agent.rs)
+# =============================================================================
+
+class AgentMemory:
+    """Unified memory for AI agents with three subsystems.
+
+    Example:
+        >>> memory = AgentMemory(db)
+        >>> memory.semantic.store(1, "Paris is the capital of France", embedding)
+    """
+
+    def __init__(self, db: Database, dimension: Optional[int] = None) -> None:
+        """Create a new AgentMemory.
+
+        Args:
+            db: Database instance.
+            dimension: Embedding dimension (default: 384).
+        """
+        ...
+
+    @property
+    def semantic(self) -> "PySemanticMemory":
+        """Returns the semantic memory subsystem."""
+        ...
+
+    @property
+    def episodic(self) -> "PyEpisodicMemory":
+        """Returns the episodic memory subsystem."""
+        ...
+
+    @property
+    def procedural(self) -> "PyProceduralMemory":
+        """Returns the procedural memory subsystem."""
+        ...
+
+    @property
+    def dimension(self) -> int:
+        """Returns the embedding dimension."""
+        ...
+
+
+class PySemanticMemory:
+    """Long-term knowledge storage with vector similarity search.
+
+    Example:
+        >>> memory.semantic.store(1, "The sky is blue", [0.1, 0.2, ...])
+        >>> results = memory.semantic.query([0.1, 0.2, ...], top_k=5)
+    """
+
+    def store(self, id: int, content: str, embedding: List[float]) -> None:
+        """Store a knowledge fact with its embedding.
+
+        Args:
+            id: Unique identifier for the fact.
+            content: Text content of the knowledge.
+            embedding: Vector representation (list of floats).
+        """
+        ...
+
+    def query(self, embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
+        """Query semantic memory by similarity.
+
+        Args:
+            embedding: Query vector.
+            top_k: Number of results (default: 10).
+
+        Returns:
+            List of dicts with id, score, and content keys.
+        """
+        ...
+
+
+class PyEpisodicMemory:
+    """Event timeline with temporal and similarity queries.
+
+    Example:
+        >>> memory.episodic.record(1, "User asked about weather", timestamp=1234567890)
+        >>> events = memory.episodic.recent(limit=10)
+    """
+
+    def record(
+        self,
+        event_id: int,
+        description: str,
+        timestamp: int,
+        embedding: Optional[List[float]] = None,
+    ) -> None:
+        """Record an event in episodic memory.
+
+        Args:
+            event_id: Unique identifier.
+            description: Event description.
+            timestamp: Unix timestamp.
+            embedding: Optional embedding for similarity search.
+        """
+        ...
+
+    def recent(
+        self, limit: int = 10, since: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Get recent events.
+
+        Args:
+            limit: Maximum number of events (default: 10).
+            since: Only return events after this timestamp.
+
+        Returns:
+            List of dicts with id, description, and timestamp keys.
+        """
+        ...
+
+    def recall_similar(
+        self, embedding: List[float], top_k: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Find similar events by embedding.
+
+        Args:
+            embedding: Query vector.
+            top_k: Number of results (default: 10).
+
+        Returns:
+            List of dicts with id, description, timestamp, and score keys.
+        """
+        ...
+
+
+class PyProceduralMemory:
+    """Learned patterns with confidence scoring and reinforcement.
+
+    Example:
+        >>> memory.procedural.learn(1, "greet_user", ["say hello", "ask name"], confidence=0.8)
+        >>> patterns = memory.procedural.recall(embedding, min_confidence=0.5)
+    """
+
+    def learn(
+        self,
+        procedure_id: int,
+        name: str,
+        steps: List[str],
+        embedding: Optional[List[float]] = None,
+        confidence: float = 0.5,
+    ) -> None:
+        """Learn a new procedure/pattern.
+
+        Args:
+            procedure_id: Unique identifier.
+            name: Human-readable name.
+            steps: List of action steps.
+            embedding: Optional embedding for similarity matching.
+            confidence: Initial confidence (0.0-1.0, default: 0.5).
+        """
+        ...
+
+    def recall(
+        self,
+        embedding: List[float],
+        top_k: int = 10,
+        min_confidence: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Recall procedures by similarity.
+
+        Args:
+            embedding: Query vector.
+            top_k: Number of results (default: 10).
+            min_confidence: Minimum confidence threshold (default: 0.0).
+
+        Returns:
+            List of dicts with id, name, steps, confidence, and score keys.
+        """
+        ...
+
+    def reinforce(self, procedure_id: int, success: bool) -> None:
+        """Reinforce a procedure based on success/failure.
+
+        Updates confidence: +0.1 on success, -0.05 on failure.
+
+        Args:
+            procedure_id: ID of the procedure to reinforce.
+            success: True if the procedure succeeded.
+        """
         ...
 
 
@@ -544,21 +768,16 @@ class Database:
 
 class StreamingConfig:
     """Configuration for streaming BFS traversal.
-    
-    Args:
-        max_depth: Maximum traversal depth (default: 3)
-        max_visited: Maximum nodes to visit for memory bound (default: 10000)
-        relationship_types: Optional filter by relationship types
-    
+
     Example:
         >>> config = StreamingConfig(max_depth=3, max_visited=10000)
         >>> config.relationship_types = ["KNOWS", "FOLLOWS"]
     """
-    
+
     max_depth: int
     max_visited: int
     relationship_types: Optional[List[str]]
-    
+
     def __init__(
         self,
         max_depth: int = 3,
@@ -569,15 +788,15 @@ class StreamingConfig:
 
 class TraversalResult:
     """Result of a BFS traversal step.
-    
+
     Attributes:
-        depth: Current depth in the traversal
-        source: Source node ID
-        target: Target node ID
-        label: Edge label
-        edge_id: Edge ID
+        depth: Current depth in the traversal.
+        source: Source node ID.
+        target: Target node ID.
+        label: Edge label.
+        edge_id: Edge ID.
     """
-    
+
     depth: int
     source: int
     target: int
@@ -587,106 +806,206 @@ class TraversalResult:
 
 class GraphStore:
     """In-memory graph store for knowledge graph operations.
-    
+
     Example:
         >>> store = GraphStore()
         >>> store.add_edge({"id": 1, "source": 100, "target": 200, "label": "KNOWS"})
-        >>> edges = store.get_edges_by_label("KNOWS")
         >>> for result in store.traverse_bfs_streaming(100, StreamingConfig()):
         ...     print(f"Depth {result.depth}: {result.source} -> {result.target}")
     """
-    
+
     def __init__(self) -> None:
         """Creates a new empty graph store."""
         ...
-    
+
     def add_edge(self, edge: Dict[str, Any]) -> None:
         """Adds an edge to the graph.
-        
+
         Args:
-            edge: Dict with keys: id (int), source (int), target (int), 
-                  label (str), properties (dict, optional)
+            edge: Dict with keys: id (int), source (int), target (int),
+                  label (str), properties (dict, optional).
         """
         ...
-    
+
     def get_edges_by_label(self, label: str) -> List[Dict[str, Any]]:
         """Gets all edges with the specified label.
-        
-        Args:
-            label: The relationship type to filter by (e.g., "KNOWS", "FOLLOWS")
-        
+
         Returns:
-            List of edge dicts with keys: id, source, target, label, properties
-        
-        Note:
-            Uses internal label index for O(1) lookup per label.
+            List of edge dicts with keys: id, source, target, label, properties.
         """
         ...
-    
+
     def get_outgoing(self, node_id: int) -> List[Dict[str, Any]]:
-        """Gets outgoing edges from a node.
-        
-        Args:
-            node_id: The source node ID
-        
-        Returns:
-            List of edge dicts
-        """
+        """Gets outgoing edges from a node."""
         ...
-    
+
     def get_incoming(self, node_id: int) -> List[Dict[str, Any]]:
-        """Gets incoming edges to a node.
-        
-        Args:
-            node_id: The target node ID
-        
-        Returns:
-            List of edge dicts
-        """
+        """Gets incoming edges to a node."""
         ...
-    
+
     def get_outgoing_by_label(self, node_id: int, label: str) -> List[Dict[str, Any]]:
-        """Gets outgoing edges from a node filtered by label.
-        
-        Args:
-            node_id: The source node ID
-            label: The relationship type to filter by
-        
-        Returns:
-            List of edge dicts matching the label
-        """
+        """Gets outgoing edges from a node filtered by label."""
         ...
-    
+
     def traverse_bfs_streaming(
         self, start_node: int, config: StreamingConfig
     ) -> List[TraversalResult]:
         """Performs streaming BFS traversal from a start node.
-        
+
         Args:
-            start_node: The node ID to start traversal from
-            config: StreamingConfig with max_depth, max_visited, relationship_types
-        
+            start_node: The node ID to start traversal from.
+            config: StreamingConfig with max_depth, max_visited, relationship_types.
+
         Returns:
-            List of TraversalResult objects
-        
-        Note:
-            Results are bounded by config.max_visited to prevent memory exhaustion.
-        
-        Example:
-            >>> config = StreamingConfig(max_depth=2, max_visited=100)
-            >>> for result in store.traverse_bfs_streaming(100, config):
-            ...     print(f"{result.source} -> {result.target}")
+            List of TraversalResult objects.
         """
         ...
-    
+
     def remove_edge(self, edge_id: int) -> None:
-        """Removes an edge by ID.
-        
-        Args:
-            edge_id: The edge ID to remove
-        """
+        """Removes an edge by ID."""
         ...
-    
+
     def edge_count(self) -> int:
         """Returns the number of edges in the store."""
         ...
+
+
+# =============================================================================
+# VelesQL  (source: velesql.rs)
+# =============================================================================
+
+class VelesQL:
+    """VelesQL query parser.
+
+    Example:
+        >>> parsed = VelesQL.parse("SELECT * FROM docs LIMIT 10")
+        >>> print(parsed.table_name)
+    """
+
+    @staticmethod
+    def parse(query: str) -> "ParsedStatement":
+        """Parse a VelesQL query string.
+
+        Args:
+            query: VelesQL query string.
+
+        Returns:
+            ParsedStatement for introspection.
+
+        Raises:
+            VelesQLSyntaxError: If the query has syntax errors.
+        """
+        ...
+
+    @staticmethod
+    def is_valid(query: str) -> bool:
+        """Validate a VelesQL query without full parsing.
+
+        Returns:
+            True if syntactically valid.
+        """
+        ...
+
+
+class ParsedStatement:
+    """A parsed VelesQL statement for introspection.
+
+    Example:
+        >>> parsed = VelesQL.parse("SELECT id, name FROM users WHERE active = true")
+        >>> parsed.columns  # ['id', 'name']
+        >>> parsed.has_where_clause()  # True
+    """
+
+    @property
+    def table_name(self) -> Optional[str]:
+        """Table name from the FROM clause, or None for MATCH queries."""
+        ...
+
+    @property
+    def table_alias(self) -> Optional[str]:
+        """Table alias if present."""
+        ...
+
+    @property
+    def columns(self) -> List[str]:
+        """List of selected column names, or ['*'] for SELECT *."""
+        ...
+
+    @property
+    def limit(self) -> Optional[int]:
+        """LIMIT value, or None."""
+        ...
+
+    @property
+    def offset(self) -> Optional[int]:
+        """OFFSET value, or None."""
+        ...
+
+    @property
+    def order_by(self) -> List[Tuple[str, str]]:
+        """ORDER BY columns as (column, direction) tuples."""
+        ...
+
+    @property
+    def group_by(self) -> List[str]:
+        """GROUP BY column names."""
+        ...
+
+    @property
+    def join_count(self) -> int:
+        """Number of JOIN clauses."""
+        ...
+
+    def is_valid(self) -> bool:
+        """Always True for successfully parsed queries."""
+        ...
+
+    def is_select(self) -> bool:
+        """True if this is a SELECT query."""
+        ...
+
+    def is_match(self) -> bool:
+        """True if this is a MATCH (graph) query."""
+        ...
+
+    def has_distinct(self) -> bool:
+        """True if SELECT DISTINCT."""
+        ...
+
+    def has_where_clause(self) -> bool:
+        """True if WHERE clause is present."""
+        ...
+
+    def has_order_by(self) -> bool:
+        """True if ORDER BY clause is present."""
+        ...
+
+    def has_group_by(self) -> bool:
+        """True if GROUP BY clause is present."""
+        ...
+
+    def has_having(self) -> bool:
+        """True if HAVING clause is present."""
+        ...
+
+    def has_joins(self) -> bool:
+        """True if query contains JOIN clauses."""
+        ...
+
+    def has_fusion(self) -> bool:
+        """True if USING FUSION is present."""
+        ...
+
+    def has_vector_search(self) -> bool:
+        """True if query contains vector search (NEAR clause)."""
+        ...
+
+
+class VelesQLSyntaxError(Exception):
+    """Raised when a VelesQL query has syntax errors."""
+    ...
+
+
+class VelesQLParameterError(Exception):
+    """Raised when VelesQL query parameters are invalid."""
+    ...

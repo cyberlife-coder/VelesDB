@@ -29,11 +29,12 @@ class TestGraphLoader:
         loader = GraphLoader(mock_store)
         loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
 
-        mock_collection.add_node.assert_called_once_with(
-            id=1,
-            label="PERSON",
-            metadata={"name": "John"}
-        )
+        mock_collection.upsert_metadata.assert_called_once_with([
+            {
+                "id": 1,
+                "payload": {"label": "PERSON", "name": "John"},
+            }
+        ])
 
     def test_add_node_with_vector(self):
         """Test adding a node with embedding vector."""
@@ -164,7 +165,7 @@ class TestGraphLoader:
 
         assert result["nodes"] == 1
         assert result["edges"] == 0
-        mock_collection.add_node.assert_called_once()
+        mock_collection.upsert_metadata.assert_called_once()
 
     def test_load_from_nodes_with_none_content(self):
         """Test loading nodes when get_content() returns None.
@@ -190,11 +191,12 @@ class TestGraphLoader:
 
         assert result["nodes"] == 1
         assert result["edges"] == 0
-        mock_collection.add_node.assert_called_once()
+        mock_collection.upsert_metadata.assert_called_once()
         
         # Verify text_preview is empty string, not None slice
-        call_args = mock_collection.add_node.call_args
-        assert call_args[1]["metadata"]["text_preview"] == ""
+        call_args = mock_collection.upsert_metadata.call_args
+        actual_payload = call_args[0][0][0]["payload"]
+        assert actual_payload["text_preview"] == ""
 
     def test_add_node_no_collection_raises(self):
         """Test that add_node raises when collection not initialized."""

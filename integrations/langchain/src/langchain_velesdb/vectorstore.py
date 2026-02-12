@@ -35,6 +35,9 @@ from velesdb_common import (
 )
 
 
+_ERR_COLLECTION_NOT_INIT = "Collection not initialized. Add documents first."
+
+
 class VelesDBVectorStore(VectorStore):
     """VelesDB vector store for LangChain.
 
@@ -438,7 +441,7 @@ class VelesDBVectorStore(VectorStore):
         
         # Get collection (use a dummy dimension since text search doesn't need it)
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
         # Text search
         if filter:
@@ -765,16 +768,16 @@ class VelesDBVectorStore(VectorStore):
             return False
         return self._collection.is_metadata_only()
 
-    def list_collections(self) -> List[dict]:
+    def list_collections(self) -> List[str]:
         """List all collections in the database.
 
         Returns:
-            List of dicts with collection information (name, dimension, metric, etc.).
+            List of collection name strings.
 
         Example:
             >>> collections = vectorstore.list_collections()
             >>> for col in collections:
-            ...     print(col["name"], col["dimension"])
+            ...     print(col)
         """
         return self._get_db().list_collections()
 
@@ -796,30 +799,27 @@ class VelesDBVectorStore(VectorStore):
         if name == self._collection_name:
             self._collection = None
 
-    def create_index(self, label: str, property: str) -> dict:
+    def create_property_index(self, label: str, property_name: str) -> None:
         """Create a property index on the current collection.
 
         Property indexes accelerate WHERE filters on metadata fields.
 
         Args:
             label: Node/document label for the index.
-            property: Property name to index.
-
-        Returns:
-            Dict with index information.
+            property_name: Property name to index.
 
         Raises:
-            SecurityError: If label or property fails validation.
+            SecurityError: If label or property_name fails validation.
             ValueError: If collection is not initialized.
 
         Example:
-            >>> info = vectorstore.create_index(label="Document", property="category")
+            >>> vectorstore.create_property_index(label="Document", property_name="category")
         """
         label = validate_collection_name(label)
-        property = validate_collection_name(property)
+        property_name = validate_collection_name(property_name)
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
-        return self._collection.create_index(label=label, property=property)
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
+        self._collection.create_property_index(label=label, property=property_name)
 
     def list_indexes(self) -> List[dict]:
         """List all property indexes on the current collection.
@@ -836,28 +836,31 @@ class VelesDBVectorStore(VectorStore):
             ...     print(idx["label"], idx["property"])
         """
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
         return self._collection.list_indexes()
 
-    def delete_index(self, label: str, property: str) -> None:
+    def drop_index(self, label: str, property_name: str) -> bool:
         """Delete a property index from the current collection.
 
         Args:
             label: Node/document label of the index.
-            property: Property name of the index.
+            property_name: Property name of the index.
+
+        Returns:
+            True if an index was dropped, False if no index existed.
 
         Raises:
-            SecurityError: If label or property fails validation.
+            SecurityError: If label or property_name fails validation.
             ValueError: If collection is not initialized.
 
         Example:
-            >>> vectorstore.delete_index(label="Document", property="category")
+            >>> dropped = vectorstore.drop_index(label="Document", property_name="category")
         """
         label = validate_collection_name(label)
-        property = validate_collection_name(property)
+        property_name = validate_collection_name(property_name)
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
-        self._collection.delete_index(label=label, property=property)
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
+        return self._collection.drop_index(label=label, property=property_name)
 
     def query(
         self,
@@ -884,7 +887,7 @@ class VelesDBVectorStore(VectorStore):
         validate_query(query_str)
         
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
         results = self._collection.query(query_str, params)
 
@@ -926,6 +929,7 @@ class VelesDBVectorStore(VectorStore):
         Raises:
             SecurityError: If query fails validation.
             ValueError: If collection is not initialized.
+            NotImplementedError: EXPLAIN planned for v2.0.
 
         Example:
             >>> plan = vectorstore.explain(
@@ -936,9 +940,9 @@ class VelesDBVectorStore(VectorStore):
         validate_query(query_str)
 
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
-        return self._collection.explain(query_str, params)
+        raise NotImplementedError("EXPLAIN planned for v2.0.")
 
     def match_query(
         self,
@@ -962,6 +966,7 @@ class VelesDBVectorStore(VectorStore):
         Raises:
             SecurityError: If query fails validation.
             ValueError: If collection is not initialized.
+            NotImplementedError: MATCH execution engine planned for v2.0. Use query() for SELECT-style VelesQL queries.
 
         Example:
             >>> results = vectorstore.match_query(
@@ -973,19 +978,9 @@ class VelesDBVectorStore(VectorStore):
         validate_query(query_str)
 
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
-        results = self._collection.match_query(query_str, params)
-
-        documents: List[Document] = []
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            metadata = {k: v for k, v in payload.items() if k != "text"}
-            doc = Document(page_content=text, metadata=metadata)
-            documents.append(doc)
-
-        return documents
+        raise NotImplementedError("MATCH execution engine planned for v2.0. Use query() for SELECT-style VelesQL queries.")
 
     def add_edge(
         self,
@@ -1023,7 +1018,7 @@ class VelesDBVectorStore(VectorStore):
         validate_label(label)
 
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
         self._collection.add_edge(
             id=id, source=source, target=target,
@@ -1051,7 +1046,7 @@ class VelesDBVectorStore(VectorStore):
             ...     print(e["source"], "->", e["target"])
         """
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
         if label is not None:
             validate_label(label)
@@ -1099,7 +1094,7 @@ class VelesDBVectorStore(VectorStore):
             )
 
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
         results = self._collection.traverse(
             source=source, max_depth=max_depth,
@@ -1151,7 +1146,7 @@ class VelesDBVectorStore(VectorStore):
             >>> for doc in store.stream_traverse_graph(source=42, max_depth=3):
             ...     print(f"Depth {doc.metadata['graph_depth']}: {doc.page_content}")
         """
-        # TODO: Replace with native SSE streaming when velesdb SDK supports it
+        # Note: Wraps traverse_graph as a generator. Replace with native SSE streaming when SDK supports it.
         for doc in self.traverse_graph(
             source=source, max_depth=max_depth,
             strategy=strategy, limit=limit,
@@ -1179,7 +1174,7 @@ class VelesDBVectorStore(VectorStore):
         validate_node_id(node_id)
 
         if self._collection is None:
-            raise ValueError("Collection not initialized. Add documents first.")
+            raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
         return self._collection.get_node_degree(node_id)
 

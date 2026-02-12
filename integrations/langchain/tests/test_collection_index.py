@@ -53,15 +53,12 @@ class TestListCollections:
     """Tests for list_collections()."""
 
     def test_list_collections_returns_list(self, store):
-        """Happy path: returns list of dicts from db."""
-        store._db.list_collections.return_value = [
-            {"name": "col1", "dimension": 128},
-            {"name": "col2", "dimension": 384},
-        ]
+        """Happy path: returns list of collection name strings from db."""
+        store._db.list_collections.return_value = ["col1", "col2"]
         result = store.list_collections()
         assert isinstance(result, list)
         assert len(result) == 2
-        assert result[0]["name"] == "col1"
+        assert result[0] == "col1"
         store._db.list_collections.assert_called_once()
 
     def test_list_collections_empty(self, store):
@@ -101,29 +98,29 @@ class TestDeleteCollection:
 # --- create_index ---
 
 class TestCreateIndex:
-    """Tests for create_index()."""
+    """Tests for create_property_index()."""
 
     def test_create_index_delegates(self, store):
-        """Happy path: delegates to collection.create_index()."""
-        store._collection.create_index.return_value = {"label": "Doc", "property": "category"}
-        result = store.create_index(label="Doc", property="category")
-        store._collection.create_index.assert_called_once_with(label="Doc", property="category")
-        assert result["label"] == "Doc"
+        """Happy path: delegates to collection.create_property_index() which returns None."""
+        store._collection.create_property_index.return_value = None
+        result = store.create_property_index(label="Doc", property_name="category")
+        store._collection.create_property_index.assert_called_once_with(label="Doc", property="category")
+        assert result is None
 
     def test_create_index_no_collection(self, store_no_collection):
         """ValueError when collection not initialized."""
         with pytest.raises(ValueError, match="Collection not initialized"):
-            store_no_collection.create_index(label="Doc", property="category")
+            store_no_collection.create_property_index(label="Doc", property_name="category")
 
     def test_create_index_invalid_label(self, store):
         """SecurityError on injection attempt in label."""
         with pytest.raises(SecurityError):
-            store.create_index(label="'; DROP TABLE --", property="category")
+            store.create_property_index(label="'; DROP TABLE --", property_name="category")
 
     def test_create_index_invalid_property(self, store):
         """SecurityError on injection attempt in property."""
         with pytest.raises(SecurityError):
-            store.create_index(label="Doc", property="cat; DELETE")
+            store.create_property_index(label="Doc", property_name="cat; DELETE")
 
 
 # --- list_indexes ---
@@ -150,24 +147,42 @@ class TestListIndexes:
 # --- delete_index ---
 
 class TestDeleteIndex:
-    """Tests for delete_index()."""
+    """Tests for drop_index()."""
 
     def test_delete_index_delegates(self, store):
-        """Happy path: delegates to collection.delete_index()."""
-        store.delete_index(label="Doc", property="category")
-        store._collection.delete_index.assert_called_once_with(label="Doc", property="category")
+        """Happy path: delegates to collection.drop_index() and returns bool."""
+        store._collection.drop_index.return_value = True
+        result = store.drop_index(label="Doc", property_name="category")
+        store._collection.drop_index.assert_called_once_with(label="Doc", property="category")
+        assert result is True
 
     def test_delete_index_no_collection(self, store_no_collection):
         """ValueError when collection not initialized."""
         with pytest.raises(ValueError, match="Collection not initialized"):
-            store_no_collection.delete_index(label="Doc", property="category")
+            store_no_collection.drop_index(label="Doc", property_name="category")
 
     def test_delete_index_invalid_params(self, store):
         """SecurityError on bad label."""
         with pytest.raises(SecurityError):
-            store.delete_index(label="bad name!", property="category")
+            store.drop_index(label="bad name!", property_name="category")
 
     def test_delete_index_invalid_property(self, store):
         """SecurityError on bad property."""
         with pytest.raises(SecurityError):
-            store.delete_index(label="Doc", property="bad prop!")
+            store.drop_index(label="Doc", property_name="bad prop!")
+
+
+# --- match_query and explain NotImplementedError tests ---
+
+class TestNotImplementedMethods:
+    """Tests for methods that raise NotImplementedError."""
+
+    def test_match_query_raises_not_implemented(self, store):
+        """match_query() raises NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
+            store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+
+    def test_explain_raises_not_implemented(self, store):
+        """explain() raises NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="EXPLAIN planned for v2.0"):
+            store.explain("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10")
