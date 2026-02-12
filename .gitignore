@@ -88,7 +88,18 @@ migration-*.yaml
 
 # Benchmark output files
 bench_output.txt
+bench_*_results.txt
+benchmark_results*.txt
+coverage_summary.txt
+test_results.txt
+crates/velesdb-core/bench_*.txt
 *.bench.json
+
+# Packaging metadata artifacts
+**/*.egg-info/
+
+# Local generated schema snapshots
+database_schema.md
 
 # Criterion benchmark data
 /target/criterion/

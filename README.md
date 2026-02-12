@@ -1067,7 +1067,7 @@ LIMIT 10
 
 ### 🔥 Core Vector Operations (768D — SIMD Native)
 
-> Benchmarked with `cargo bench` on Windows x86_64 with AVX2. See `bench_simd_results.txt` for full data.
+> Benchmarked with `cargo bench` on Windows x86_64 with AVX2. See `docs/BENCHMARKS.md` for methodology and current benchmark snapshots.
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
