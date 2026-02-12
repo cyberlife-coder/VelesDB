@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::collection_helpers::{
-    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, point_to_dict,
-    search_result_to_dict, search_results_to_dicts, search_results_to_multimodel_dicts,
+    id_score_pairs_to_dicts, match_result_to_dict, parse_filter, parse_optional_filter,
+    point_to_dict, search_result_to_dict, search_results_to_dicts,
+    search_results_to_multimodel_dicts,
 };
 use crate::utils::{extract_vector, python_to_json, to_pyobject};
 use crate::FusionStrategy;
@@ -613,6 +614,81 @@ impl Collection {
                     dict.insert("score".to_string(), to_pyobject(py, r.score));
                     dict
                 })
+                .collect())
+        })
+    }
+
+    // ========================================================================
+    // MATCH Graph Traversal (Phase 4.3 Plan 01)
+    // ========================================================================
+
+    /// Execute a MATCH graph traversal query.
+    ///
+    /// Delegates to core's execute_match() and execute_match_with_similarity().
+    ///
+    /// Args:
+    ///     query_str: VelesQL MATCH query string
+    ///     params: Query parameters (default: empty dict)
+    ///     vector: Optional query vector for similarity scoring
+    ///     threshold: Similarity threshold 0.0-1.0 (default: 0.0)
+    ///
+    /// Returns:
+    ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
+    ///
+    /// Example:
+    ///     >>> results = collection.match_query(
+    ///     ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name",
+    ///     ...     params={}
+    ///     ... )
+    ///     >>> for r in results:
+    ///     ...     print(f"Node {r['node_id']} at depth {r['depth']}")
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    fn match_query(
+        &self,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+        vector: Option<PyObject>,
+        threshold: f32,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            // 1. Parse query
+            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
+                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
+            })?;
+
+            // 2. Extract match_clause (error if not MATCH)
+            let match_clause = parsed.match_clause.as_ref().ok_or_else(|| {
+                PyValueError::new_err("Query is not a MATCH query. Use query() for SELECT queries.")
+            })?;
+
+            // 3. Convert params from Python dict to HashMap<String, serde_json::Value>
+            let rust_params: std::collections::HashMap<String, serde_json::Value> = params
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+                .collect();
+
+            // 4. Execute: with or without similarity
+            let results = if let Some(ref vec_obj) = vector {
+                let query_vector = extract_vector(py, vec_obj)?;
+                self.inner
+                    .execute_match_with_similarity(
+                        match_clause,
+                        &query_vector,
+                        threshold,
+                        &rust_params,
+                    )
+                    .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
+            } else {
+                self.inner
+                    .execute_match(match_clause, &rust_params)
+                    .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
+            };
+
+            // 5. Convert MatchResult to Python dicts
+            Ok(results
+                .into_iter()
+                .map(|r| match_result_to_dict(py, r))
                 .collect())
         })
     }

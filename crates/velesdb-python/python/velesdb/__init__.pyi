@@ -363,6 +363,40 @@ class Collection:
         """
         ...
 
+    # -- MATCH Graph Traversal (Phase 4.3) -----------------------------------
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+        vector: Optional[Union[List[float], Any]] = None,
+        threshold: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Execute a MATCH graph traversal query.
+
+        Delegates to core's execute_match() and execute_match_with_similarity().
+
+        Args:
+            query_str: VelesQL MATCH query string.
+            params: Optional dict of query parameters.
+            vector: Optional query vector for similarity scoring
+                    (list of floats or numpy array).
+            threshold: Similarity threshold 0.0-1.0 (default: 0.0).
+
+        Returns:
+            List of dicts with keys: node_id, depth, path, bindings,
+            score, projected.
+
+        Example:
+            >>> results = collection.match_query(
+            ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name",
+            ...     params={},
+            ... )
+            >>> for r in results:
+            ...     print(f"Node {r['node_id']} at depth {r['depth']}")
+        """
+        ...
+
     # -- Index Management (EPIC-009) -----------------------------------------
 
     def create_property_index(self, label: str, property: str) -> None:

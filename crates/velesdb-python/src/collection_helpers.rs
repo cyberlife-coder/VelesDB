@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::utils::{json_to_python, to_pyobject};
+use velesdb_core::collection::search::query::match_exec::MatchResult;
 use velesdb_core::{Filter, Point, SearchResult};
 
 /// Parse a Python filter object into a VelesDB Filter.
@@ -126,4 +127,40 @@ pub fn id_score_pairs_to_dicts(
             dict
         })
         .collect()
+}
+
+/// Convert a MatchResult to a Python dictionary (Phase 4.3 Plan 01).
+///
+/// Returns dict with keys: node_id, depth, path, bindings, score, projected.
+/// Delegates to core's MatchResult — no reimplemented logic.
+pub fn match_result_to_dict(py: Python<'_>, result: MatchResult) -> HashMap<String, PyObject> {
+    let mut dict = HashMap::new();
+    dict.insert("node_id".to_string(), to_pyobject(py, result.node_id));
+    dict.insert("depth".to_string(), to_pyobject(py, result.depth));
+    dict.insert("path".to_string(), to_pyobject(py, result.path));
+
+    // bindings: HashMap<String, u64> → Python dict[str, int]
+    let bindings_dict: HashMap<String, PyObject> = result
+        .bindings
+        .into_iter()
+        .map(|(k, v)| (k, to_pyobject(py, v)))
+        .collect();
+    dict.insert("bindings".to_string(), to_pyobject(py, bindings_dict));
+
+    // score: Option<f32> → Python float or None
+    let score_py = match result.score {
+        Some(s) => to_pyobject(py, s),
+        None => py.None(),
+    };
+    dict.insert("score".to_string(), score_py);
+
+    // projected: HashMap<String, serde_json::Value> → Python dict[str, Any]
+    let projected_dict: HashMap<String, PyObject> = result
+        .projected
+        .into_iter()
+        .map(|(k, v)| (k, json_to_python(py, &v)))
+        .collect();
+    dict.insert("projected".to_string(), to_pyobject(py, projected_dict));
+
+    dict
 }
