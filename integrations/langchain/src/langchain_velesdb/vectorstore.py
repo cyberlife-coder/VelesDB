@@ -910,7 +910,7 @@ class VelesDBVectorStore(VectorStore):
         """Get the query execution plan for a VelesQL query.
 
         Provides observability into how VelesDB will execute a query,
-        including scan steps, cost estimates, and feature usage.
+        including estimated costs, index usage, and filter strategy.
 
         Args:
             query_str: VelesQL query string to analyze.
@@ -918,31 +918,25 @@ class VelesDBVectorStore(VectorStore):
             **kwargs: Additional arguments.
 
         Returns:
-            Dict with query plan details::
-
-                {
-                    "steps": [{"type": "scan", "collection": "docs"}],
-                    "cost": {"estimated_rows": 100},
-                    "features": {"similarity": True}
-                }
+            Dict with keys: query_type, plan, estimated_cost_ms,
+            index_used, filter_strategy.
 
         Raises:
             SecurityError: If query fails validation.
             ValueError: If collection is not initialized.
-            NotImplementedError: EXPLAIN planned for v2.0.
 
         Example:
             >>> plan = vectorstore.explain(
             ...     "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10"
             ... )
-            >>> print(plan["steps"])
+            >>> print(plan["estimated_cost_ms"])
         """
         validate_query(query_str)
 
         if self._collection is None:
             raise ValueError(_ERR_COLLECTION_NOT_INIT)
 
-        raise NotImplementedError("EXPLAIN planned for v2.0.")
+        return self._collection.explain(query_str)
 
     def match_query(
         self,
@@ -952,21 +946,23 @@ class VelesDBVectorStore(VectorStore):
     ) -> List[Document]:
         """Execute a MATCH graph traversal query.
 
-        Unlocks VelesDB's Cypher-like MATCH syntax for multi-hop
+        Delegates to VelesDB's Cypher-like MATCH engine for multi-hop
         graph reasoning directly from Python.
 
         Args:
             query_str: MATCH query string (Cypher-like syntax).
             params: Optional dict of query parameters.
-            **kwargs: Additional arguments.
+            **kwargs: Additional arguments (vector, threshold).
 
         Returns:
             List of Documents matching the graph traversal.
+            Each Document has:
+            - page_content: str(projected) or str(bindings)
+            - metadata: full result dict (node_id, depth, path, bindings, score, projected)
 
         Raises:
             SecurityError: If query fails validation.
             ValueError: If collection is not initialized.
-            NotImplementedError: MATCH execution engine planned for v2.0. Use query() for SELECT-style VelesQL queries.
 
         Example:
             >>> results = vectorstore.match_query(
@@ -978,9 +974,21 @@ class VelesDBVectorStore(VectorStore):
         validate_query(query_str)
 
         if self._collection is None:
-            raise ValueError(_ERR_COLLECTION_NOT_INIT)
+            return []
 
-        raise NotImplementedError("MATCH execution engine planned for v2.0. Use query() for SELECT-style VelesQL queries.")
+        results = self._collection.match_query(query_str, params=params, **kwargs)
+
+        documents: List[Document] = []
+        for r in results:
+            # page_content from projected properties or bindings
+            projected = r.get("projected", {})
+            bindings = r.get("bindings", {})
+            page_content = str(projected) if projected else str(bindings)
+
+            doc = Document(page_content=page_content, metadata=r)
+            documents.append(doc)
+
+        return documents
 
     def add_edge(
         self,

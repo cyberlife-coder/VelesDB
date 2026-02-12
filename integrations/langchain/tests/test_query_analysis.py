@@ -56,14 +56,20 @@ MOCK_EXPLAIN_RESULT = {
 
 MOCK_MATCH_RESULTS = [
     {
-        "id": 1,
-        "payload": {"text": "Alice knows Bob", "label": "Person", "age": 30},
+        "node_id": 1,
+        "depth": 0,
+        "path": [],
+        "bindings": {"a": 1},
         "score": 0.95,
+        "projected": {"name": "Alice"},
     },
     {
-        "id": 2,
-        "payload": {"text": "Bob knows Carol", "label": "Person", "age": 25},
+        "node_id": 2,
+        "depth": 1,
+        "path": [100],
+        "bindings": {"b": 2},
         "score": 0.88,
+        "projected": {"name": "Bob"},
     },
 ]
 
@@ -74,25 +80,29 @@ class TestExplain:
     """Tests for explain()."""
 
     def test_explain_returns_dict(self, store):
-        """explain() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="EXPLAIN planned for v2.0"):
-            store.explain("SELECT * FROM docs LIMIT 10")
+        """explain() delegates to collection.explain() and returns dict."""
+        store._collection.explain.return_value = MOCK_EXPLAIN_RESULT
+        result = store.explain("SELECT * FROM docs LIMIT 10")
+        assert isinstance(result, dict)
+        store._collection.explain.assert_called_once_with("SELECT * FROM docs LIMIT 10")
 
     def test_explain_validates_query(self, store):
-        """SecurityError on SQL injection attempt (validated before NotImplementedError)."""
+        """SecurityError on SQL injection attempt (validated before delegation)."""
         with pytest.raises(SecurityError):
             store.explain("SELECT * FROM docs; DROP TABLE users --")
 
     def test_explain_no_collection(self, store_no_collection):
-        """ValueError when collection not initialized (checked before NotImplementedError)."""
+        """ValueError when collection not initialized."""
         with pytest.raises(ValueError, match="Collection not initialized"):
             store_no_collection.explain("SELECT * FROM docs LIMIT 10")
 
     def test_explain_with_params(self, store):
-        """explain() raises NotImplementedError even with params."""
+        """explain() delegates even with params."""
+        store._collection.explain.return_value = MOCK_EXPLAIN_RESULT
         params = {"v": [0.1, 0.2, 0.3]}
-        with pytest.raises(NotImplementedError, match="EXPLAIN planned for v2.0"):
-            store.explain("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10", params=params)
+        result = store.explain("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10", params=params)
+        assert isinstance(result, dict)
+        store._collection.explain.assert_called_once()
 
 
 # --- match_query() ---
@@ -101,37 +111,49 @@ class TestMatchQuery:
     """Tests for match_query()."""
 
     def test_match_query_returns_documents(self, store):
-        """match_query() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
-            store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        """match_query() delegates and returns Document list."""
+        store._collection.match_query.return_value = MOCK_MATCH_RESULTS
+        results = store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        assert isinstance(results, list)
+        assert len(results) == 2
+        assert isinstance(results[0], Document)
+        store._collection.match_query.assert_called_once()
 
     def test_match_query_validates_query(self, store):
-        """SecurityError on malicious input (validated before NotImplementedError)."""
+        """SecurityError on malicious input (validated before delegation)."""
         with pytest.raises(SecurityError):
             store.match_query("MATCH (a); DROP TABLE users --")
 
     def test_match_query_no_collection(self, store_no_collection):
-        """ValueError when collection not initialized (checked before NotImplementedError)."""
-        with pytest.raises(ValueError, match="Collection not initialized"):
-            store_no_collection.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        """Empty list when collection not initialized."""
+        results = store_no_collection.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        assert results == []
 
-    def test_match_query_converts_payload(self, store):
-        """match_query() raises NotImplementedError (no payload conversion)."""
-        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
-            store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+    def test_match_query_metadata_populated(self, store):
+        """match_query() populates Document metadata from result dict."""
+        store._collection.match_query.return_value = MOCK_MATCH_RESULTS
+        results = store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        meta = results[0].metadata
+        assert meta["node_id"] == 1
+        assert meta["depth"] == 0
+        assert "bindings" in meta
 
     def test_match_query_with_params(self, store):
-        """match_query() raises NotImplementedError even with params."""
+        """match_query() delegates with params."""
+        store._collection.match_query.return_value = MOCK_MATCH_RESULTS
         params = {"label": "Person"}
-        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
-            store.match_query("MATCH (a:Person) RETURN a", params=params)
+        results = store.match_query("MATCH (a:Person) RETURN a", params=params)
+        assert len(results) == 2
+        store._collection.match_query.assert_called_once()
 
     def test_match_query_empty_results(self, store):
-        """match_query() raises NotImplementedError (no empty results)."""
-        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
-            store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        """Empty list from SDK returns empty Document list."""
+        store._collection.match_query.return_value = []
+        results = store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        assert results == []
 
-    def test_match_query_missing_text_field(self, store):
-        """match_query() raises NotImplementedError (no document creation)."""
-        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
-            store.match_query("MATCH (a) RETURN a")
+    def test_match_query_page_content_from_projected(self, store):
+        """page_content uses projected or bindings."""
+        store._collection.match_query.return_value = MOCK_MATCH_RESULTS
+        results = store.match_query("MATCH (a) RETURN a")
+        assert results[0].page_content != ""

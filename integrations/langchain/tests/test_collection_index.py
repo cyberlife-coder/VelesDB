@@ -172,17 +172,21 @@ class TestDeleteIndex:
             store.drop_index(label="Doc", property_name="bad prop!")
 
 
-# --- match_query and explain NotImplementedError tests ---
+# --- match_query and explain delegation tests ---
 
-class TestNotImplementedMethods:
-    """Tests for methods that raise NotImplementedError."""
+class TestDelegationMethods:
+    """Tests for methods that delegate to collection."""
 
-    def test_match_query_raises_not_implemented(self, store):
-        """match_query() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="MATCH execution engine planned for v2.0"):
-            store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+    def test_match_query_delegates(self, store):
+        """match_query() delegates to collection.match_query()."""
+        store._collection.match_query.return_value = []
+        result = store.match_query("MATCH (a:Person)-[:KNOWS]->(b) RETURN b")
+        assert result == []
+        store._collection.match_query.assert_called_once()
 
-    def test_explain_raises_not_implemented(self, store):
-        """explain() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="EXPLAIN planned for v2.0"):
-            store.explain("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10")
+    def test_explain_delegates(self, store):
+        """explain() delegates to collection.explain()."""
+        store._collection.explain.return_value = {"query_type": "SELECT"}
+        result = store.explain("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10")
+        assert isinstance(result, dict)
+        store._collection.explain.assert_called_once()
