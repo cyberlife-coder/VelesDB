@@ -3,9 +3,11 @@
 # 
 # This notebook demonstrates VelesDB's multi-model query capabilities:
 # - Vector similarity search
-# - Graph traversal with MATCH
-# - Custom ORDER BY expressions
+# - VelesQL filtered queries
+# - ORDER BY similarity()
 # - Hybrid search (vector + text)
+#
+# **Note:** Requires `velesdb` PyO3 package built from source (`maturin develop`).
 
 # %% [markdown]
 # ## Setup
@@ -107,62 +109,53 @@ for r in results:
     print(f"  ID: {r['node_id']}, Score: {r['fused_score']:.4f}")
 
 # %% [markdown]
-# ## Example 3: Custom ORDER BY Expression
+# ## Example 3: ORDER BY Similarity
 
 # %%
-# Use custom scoring formula
+# Order results by similarity score
 results = collection.query(
     """
     SELECT * FROM documents 
     WHERE vector NEAR $v 
-    ORDER BY 0.7 * vector_score + 0.3 * graph_score DESC
+    ORDER BY similarity() DESC
     LIMIT 5
     """,
     params={"v": query_vector}
 )
 
-print("\nCustom ORDER BY Results:")
+print("\nORDER BY Similarity Results:")
 for r in results:
     print(f"  ID: {r['node_id']}, Fused Score: {r['fused_score']:.4f}")
 
 # %% [markdown]
-# ## Example 4: Multi-Model Query
+# ## Example 4: Filtered Vector Search with Multiple Conditions
 
 # %%
-# Combine vector search with graph traversal
+# Combine vector search with metadata filters
 results = collection.query(
     """
-    MATCH (d:Document)
+    SELECT * FROM documents
     WHERE vector NEAR $v
-    RETURN d.title, d.category
+      AND category = 'programming'
+    ORDER BY similarity() DESC
     LIMIT 5
     """,
     params={"v": query_vector}
 )
 
-print("\nMulti-Model Query Results:")
+print("\nFiltered Vector Search Results:")
 for r in results:
     print(f"  ID: {r['node_id']}, Score: {r['fused_score']:.4f}")
-    if r.get('bindings'):
-        print(f"    Bindings: {r['bindings']}")
 
 # %% [markdown]
 # ## Example 5: Hybrid Search (Vector + Text)
 
 # %%
-# Combine vector similarity with text search
-results = collection.query(
-    """
-    SELECT * FROM documents 
-    WHERE vector NEAR $v AND content MATCH 'rust'
-    LIMIT 5
-    """,
-    params={"v": query_vector}
-)
-
-print("\nHybrid Search Results (vector + 'rust'):")
-for r in results:
-    print(f"  ID: {r['node_id']}, Score: {r['fused_score']:.4f}")
+# Combine vector similarity with text search using programmatic API
+print("\nHybrid Search (vector + text 'rust'):")
+print("  # Programmatic API:")
+print("  results = collection.hybrid_search(query_vector, 'rust', top_k=5, alpha=0.7)")
+print("  # Returns results scored by both vector similarity and BM25 text relevance")
 
 # %% [markdown]
 # ## Result Format
