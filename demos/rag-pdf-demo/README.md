@@ -36,6 +36,9 @@ A complete RAG (Retrieval-Augmented Generation) demo using **VelesDB** for vecto
    ```bash
    velesdb-server --data-dir ./rag-data
    ```
+   > **Note:** If the server is started with `VELESDB_API_KEY` set, all requests must include
+   > `Authorization: Bearer <key>` header. This demo does not send auth headers, so ensure
+   > `VELESDB_API_KEY` is **not** set when running the demo.
 
 2. **Python 3.10+**
 

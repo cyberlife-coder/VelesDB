@@ -30,6 +30,21 @@ Then visit http://localhost:8080
 
 Open `index.html` directly in your browser - no build step required!
 
+## Build from Source
+
+If the CDN version is outdated or you want to use your local changes:
+
+```bash
+# Build the WASM package
+wasm-pack build --target web crates/velesdb-wasm
+
+# Serve locally
+cd examples/wasm-browser-demo
+python -m http.server 8080
+```
+
+Then update the import in `index.html` to point to your local build.
+
 ## How it Works
 
 1. The page loads the `velesdb-wasm` npm package from unpkg CDN

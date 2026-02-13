@@ -1,6 +1,6 @@
 {
   "name": "tauri-rag-app",
-  "version": "0.1.0",
+  "version": "1.4.1",
   "description": "Local RAG Desktop App with VelesDB + Tauri",
   "type": "module",
   "scripts": {
