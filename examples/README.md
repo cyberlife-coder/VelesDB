@@ -57,8 +57,7 @@ cargo run
 
 Advanced multi-model queries combining:
 - Vector similarity search
-- Graph traversal
-- Custom ORDER BY expressions
+- VelesQL filtered queries with ORDER BY similarity()
 - Hybrid search (vector + BM25 text)
 
 ```bash
@@ -113,21 +112,36 @@ See [wasm-browser-demo/README.md](./wasm-browser-demo/README.md) for details.
 
 ## API Reference
 
-### REST API Endpoints
+### REST API Endpoints (21 routes)
 
 | Operation | Method | Endpoint |
 |-----------|--------|----------|
-| Create collection | POST | `/collections` |
+| Health check | GET | `/health` |
 | List collections | GET | `/collections` |
+| Create collection | POST | `/collections` |
+| Get collection info | GET | `/collections/{name}` |
 | Delete collection | DELETE | `/collections/{name}` |
-| Insert points | POST | `/collections/{name}/points` |
-| Search | POST | `/collections/{name}/search` |
-| Text search | POST | `/collections/{name}/search/text` |
-| Hybrid search | POST | `/collections/{name}/search/hybrid` |
+| Check if empty | GET | `/collections/{name}/empty` |
+| Flush to disk | POST | `/collections/{name}/flush` |
+| Upsert points | POST | `/collections/{name}/points` |
+| Get point by ID | GET | `/collections/{name}/points/{id}` |
+| Delete point | DELETE | `/collections/{name}/points/{id}` |
+| Vector search | POST | `/collections/{name}/search` |
+| Batch search | POST | `/collections/{name}/search/batch` |
 | Multi-query search | POST | `/collections/{name}/search/multi` |
-| Graph edges | POST/GET | `/collections/{name}/graph/edges` |
-| Graph traverse | POST | `/collections/{name}/graph/traverse` |
+| Text search (BM25) | POST | `/collections/{name}/search/text` |
+| Hybrid search | POST | `/collections/{name}/search/hybrid` |
+| List indexes | GET | `/collections/{name}/indexes` |
+| Create index | POST | `/collections/{name}/indexes` |
+| Drop index | DELETE | `/collections/{name}/indexes/{label}/{property}` |
 | VelesQL query | POST | `/query` |
+| Explain query plan | POST | `/query/explain` |
+| MATCH graph query | POST | `/collections/{name}/match` |
+| Get graph edges | GET | `/collections/{name}/graph/edges` |
+| Add graph edge | POST | `/collections/{name}/graph/edges` |
+| Graph traverse | POST | `/collections/{name}/graph/traverse` |
+| Stream traverse (SSE) | GET | `/collections/{name}/graph/traverse/stream` |
+| Node degree | GET | `/collections/{name}/graph/nodes/{node_id}/degree` |
 
 ### VelesQL Examples
 
@@ -135,17 +149,34 @@ See [wasm-browser-demo/README.md](./wasm-browser-demo/README.md) for details.
 -- Basic vector search
 SELECT * FROM documents WHERE vector NEAR $query LIMIT 10
 
--- Filtered search
+-- Filtered search with ORDER BY similarity
 SELECT * FROM articles 
 WHERE vector NEAR $query 
   AND category = 'tech'
   AND price < 100
+ORDER BY similarity() DESC
 LIMIT 20
 
--- Hybrid search (vector + text)
+-- Hybrid search (vector + text) with fusion
 SELECT * FROM docs 
-WHERE vector NEAR $vec AND text MATCH 'machine learning'
-FUSION rrf(k=60)
+WHERE vector NEAR $vec
+USING FUSION rrf(k=60)
+LIMIT 10
+
+-- NEAR_FUSED: combined vector + text in one clause
+SELECT * FROM docs 
+WHERE vector NEAR_FUSED($vec, 'search text')
+LIMIT 10
+
+-- JOIN syntax
+SELECT a.*, b.name FROM orders a 
+JOIN products b ON a.product_id = b.id
+WHERE vector NEAR $query
+LIMIT 10
+
+-- Subquery
+SELECT * FROM products 
+WHERE id IN (SELECT product_id FROM orders WHERE user_id = 42)
 LIMIT 10
 
 -- Aggregations
@@ -156,8 +187,9 @@ GROUP BY category
 
 ## Requirements
 
-- **Rust examples**: Rust 1.75+ with Cargo
-- **Python examples**: Python 3.9+, `requests` library
+- **Rust examples**: Rust 1.83+ with Cargo
+- **Python SDK examples**: Python 3.10+, `velesdb-python` PyO3 package (`maturin develop`)
+- **Python REST example**: Python 3.10+, `requests` library
 - **WASM demo**: Modern browser (Chrome, Firefox, Edge, Safari)
 
 ## License
