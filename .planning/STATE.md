@@ -2,8 +2,8 @@
 
 **Project:** VelesDB Core  
 **Current Milestone:** v3-ecosystem-alignment  
-**Phase:** v3-04.3 in progress (1/3 plans done) — SDK & Integration Full Parity  
-**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 4.2, 8 complete. Phase 4.3 in progress (1/3 plans done). Phase 5 planned (4 plans). Phases 6–7 remain.  
+**Phase:** v3-05 complete (4/4 plans done) — Demos & Examples Update  
+**Status:** Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 4.2, 4.3, 5, 8 complete. Phases 6–7 remain.  
 **Completed Milestones:**  
 - v1-refactoring (2026-02-06 → 2026-02-08) — 7 phases, 29 plans  
 - v2-core-trust (2026-02-08) — 4 phases, 10 plans  
@@ -56,8 +56,8 @@ Phase 3.1  ██████████ 100%  TS SDK Docs & Examples     ✅ (
 Phase 4    ██████████ 100%  Python Integrations        ✅ (3/3 plans)
 Phase 4.1  ██████████ 100%  Python Feature Parity      ✅ (4/4 plans)
 Phase 4.2  ██████████ 100%  Python SDK Parity Fixes    ✅ (5/5 plans)
-Phase 4.3  ███░░░░░░░  33%  SDK & Integration Parity   � In Progress (1/3 plans)
-Phase 5    ░░░░░░░░░░   0%  Demos & Examples Update    🟨 Planned (4 plans)
+Phase 4.3  ██████████ 100%  SDK & Integration Parity   ✅ (3/3 plans)
+Phase 5    ██████████ 100%  Demos & Examples Update    ✅ (4/4 plans)
 Phase 6    ░░░░░░░░░░   0%  Tauri Plugin Audit         ⬜ Pending
 Phase 7    ░░░░░░░░░░   0%  GPU Extras + Ecosystem CI  ⬜ Pending
 Phase 8    ██████████ 100%  WASM Feature Parity         ✅ (5/5 plans)
@@ -75,8 +75,8 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 | 4 | Python Integrations | ECO-11,12,13,18,19,20 | 🐛 DRY + Quality | ✅ Done |
 | 4.1 | Python Feature Parity | Audit: 10 missing features | 🚨 Completeness | ⬜ Pending |
 | 4.2 | Python SDK Parity Fixes | Audit: phantom methods, wrong names, docs | 🚨 Production Safety | ✅ Done |
-| 4.3 | SDK & Integration Full Parity | Audit: MATCH+EXPLAIN missing from PyO3+integrations | 🚨 Feature Parity | 🟨 Planned |
-| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | 🟨 Planned |
+| 4.3 | SDK & Integration Full Parity | Audit: MATCH+EXPLAIN missing from PyO3+integrations | 🚨 Feature Parity | ✅ Done |
+| 5 | Demos & Examples Update | ECO-23→28,30 | 📝 User Experience | ✅ Done |
 | 6 | Tauri Plugin Audit | ECO-29 | 🐛 Completeness | ⬜ Pending |
 | 7 | GPU Extras + Ecosystem CI | ECO-21,22 | ⚠️ Polish | ⬜ Pending |
 | 8 | WASM Feature Parity | — | 🚨 Architecture | ✅ Done |
@@ -85,8 +85,8 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 
 1. ~~**v3-04.1**: Python Feature Parity~~ ✅ Complete (4/4 plans, 324 tests pass)
 2. ~~**v3-04.2**: Python SDK Parity Fixes~~ ✅ Complete (5/5 plans)
-3. **v3-04.3**: SDK & Integration Full Parity — MATCH + EXPLAIN (3 plans)
-4. **v3-05**: Demos & Examples Update — plan & execute
+3. ~~**v3-04.3**: SDK & Integration Full Parity~~ ✅ Complete (3/3 plans)
+4. ~~**v3-05**: Demos & Examples Update~~ ✅ Complete (4/4 plans, 3 commits)
 5. **v3-06**: Tauri Plugin Audit — plan & execute
 6. **v3-07**: GPU Extras + Ecosystem CI — plan & execute
 
@@ -102,8 +102,8 @@ Phase 8    ██████████ 100%  WASM Feature Parity         ✅ 
 
 ## Session Continuity
 
-**Last session:** 2026-02-12  
-**Stopped at:** Phase v3-04.3 Plan 01 done (match_query binding). Next: /gsd-execute-plan for Phase 4.3 Plan 02 (explain + search_with_ef + search_ids bindings).  
+**Last session:** 2026-02-13  
+**Stopped at:** Phase v3-05 complete (4/4 plans). Next: /gsd-plan-phase for Phase 6 (Tauri Plugin Audit).  
 **Resume file:** .planning/.continue-here
 
 ## Decisions
@@ -157,5 +157,5 @@ npm test                               # TypeScript SDK (Phase 3)
 pytest                                 # Python integrations (Phase 4)
 ```
 
-*State file last updated: 2026-02-12*  
-*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 4.2, 8 done. Phase 4.3 in progress (1/3). Phases 5–7 remain.*
+*State file last updated: 2026-02-13*  
+*Status: Phases 1, 2, 2.1, 3, 3.1, 4, 4.1, 4.2, 4.3, 5, 8 done. Phases 6–7 remain.*
