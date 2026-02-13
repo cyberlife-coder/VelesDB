@@ -70,8 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ];
 
-    collection.upsert(points.clone())?;
-    println!("Inserted {} documents\n", points.len());
+    let num_points = points.len();
+    collection.upsert(points)?;
+    println!("Inserted {} documents\n", num_points);
 
     // 4. Example 1: Basic vector search
     println!("--- Example 1: Basic Vector Search ---");
