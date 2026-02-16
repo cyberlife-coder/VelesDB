@@ -225,7 +225,7 @@ export class RestBackend implements IVelesDBBackend {
     return graph.addEdge(this.client, collection, edge);
   }
 
-  async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
+  async getEdges(collection: string, options: GetEdgesOptions): Promise<GraphEdge[]> {
     return graph.getEdges(this.client, collection, options);
   }
 

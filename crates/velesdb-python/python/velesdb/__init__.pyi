@@ -963,6 +963,53 @@ class GraphStore:
         """Returns the number of edges in the store."""
         ...
 
+    def has_edge(self, edge_id: int) -> bool:
+        """Checks if an edge exists.
+
+        Args:
+            edge_id: The edge ID to check.
+
+        Returns:
+            True if the edge exists, False otherwise.
+        """
+        ...
+
+    def out_degree(self, node_id: int) -> int:
+        """Gets the out-degree (number of outgoing edges) of a node.
+
+        Args:
+            node_id: The node ID.
+
+        Returns:
+            Number of outgoing edges from this node.
+        """
+        ...
+
+    def in_degree(self, node_id: int) -> int:
+        """Gets the in-degree (number of incoming edges) of a node.
+
+        Args:
+            node_id: The node ID.
+
+        Returns:
+            Number of incoming edges to this node.
+        """
+        ...
+
+    def traverse_dfs(
+        self, source_id: int, config: "StreamingConfig"
+    ) -> List["TraversalResult"]:
+        """Performs DFS traversal from a source node.
+
+        Args:
+            source_id: Starting node ID.
+            config: StreamingConfig with max_depth, max_visited, relationship_types.
+
+        Returns:
+            List of TraversalResult objects for each edge visited.
+        """
+        ...
+
 
 # =============================================================================
 # VelesQL  (source: velesql.rs)

@@ -110,6 +110,9 @@ pub struct SearchRequest {
     /// Optional metadata filter to apply to results (JSON object with condition).
     #[serde(default)]
     pub filter: Option<serde_json::Value>,
+    /// Whether to include vectors in results (default: false).
+    #[serde(default)]
+    pub include_vectors: bool,
 }
 
 /// Request for batch vector search.
@@ -160,6 +163,9 @@ pub struct SearchResultResponse {
     pub score: f32,
     /// Point payload.
     pub payload: Option<serde_json::Value>,
+    /// Vector data (only present when include_vectors is true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector: Option<Vec<f32>>,
 }
 
 /// Error response.

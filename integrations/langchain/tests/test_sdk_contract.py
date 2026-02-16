@@ -49,6 +49,9 @@ EXPECTED_COLLECTION_METHODS = [
     "get_edges_by_label",
     "traverse", 
     "get_node_degree",
+    "explain",
+    "match_query",
+    "upsert_bulk",
 ]
 
 

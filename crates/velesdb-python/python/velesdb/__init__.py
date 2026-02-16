@@ -9,6 +9,10 @@ from velesdb.velesdb import (
     GraphStore,
     StreamingConfig,
     TraversalResult,
+    VelesQL,
+    ParsedStatement,
+    VelesQLSyntaxError,
+    VelesQLParameterError,
     __version__,
 )
 
@@ -20,5 +24,9 @@ __all__ = [
     "GraphStore",
     "StreamingConfig",
     "TraversalResult",
+    "VelesQL",
+    "ParsedStatement",
+    "VelesQLSyntaxError",
+    "VelesQLParameterError",
     "__version__",
 ]

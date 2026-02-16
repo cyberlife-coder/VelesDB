@@ -657,7 +657,7 @@ export class VelesDB {
    * const edges = await db.getEdges('social', { label: 'FOLLOWS' });
    * ```
    */
-  async getEdges(collection: string, options?: GetEdgesOptions): Promise<GraphEdge[]> {
+  async getEdges(collection: string, options: GetEdgesOptions): Promise<GraphEdge[]> {
     this.ensureInitialized();
     return this.backend.getEdges(collection, options);
   }

@@ -41,11 +41,11 @@ export async function addEdge(
 }
 
 export async function getEdges(
-  client: HttpClient, collection: string, options?: GetEdgesOptions
+  client: HttpClient, collection: string, options: GetEdgesOptions
 ): Promise<GraphEdge[]> {
   client.ensureInitialized();
 
-  const queryParams = options?.label ? `?label=${encodeURIComponent(options.label)}` : '';
+  const queryParams = `?label=${encodeURIComponent(options.label)}`;
 
   const response = await client.request<{ edges: GraphEdge[]; count: number }>(
     'GET',

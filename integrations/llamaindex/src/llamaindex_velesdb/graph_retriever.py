@@ -287,12 +287,12 @@ class GraphRetriever(BaseRetriever):
             TextNode or None if not found
         """
         try:
-            # Try to get from vector store
+            # Reason: vectorstore exposes get_nodes([ids]), not get_by_id(id)
             vs = self._index._vector_store
-            if hasattr(vs, "get_by_id"):
-                result = vs.get_by_id(node_id)
-                if result:
-                    return result
+            if hasattr(vs, "get_nodes"):
+                nodes = vs.get_nodes([str(node_id)])
+                if nodes:
+                    return nodes[0]
         except Exception:
             pass
         return None

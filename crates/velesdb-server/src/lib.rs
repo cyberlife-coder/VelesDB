@@ -378,6 +378,7 @@ mod tests {
                 id: 1,
                 score: 0.95,
                 payload: None,
+                vector: None,
             }],
         };
         let json = serde_json::to_string(&resp).unwrap();

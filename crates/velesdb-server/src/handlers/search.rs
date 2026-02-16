@@ -70,6 +70,8 @@ pub async fn search(
         None
     };
 
+    let include_vectors = req.include_vectors;
+
     let result = tokio::task::spawn_blocking(move || {
         let search_result = if let Some(ref f) = filter {
             collection.search_with_filter(&req.vector, req.top_k, f)
@@ -86,6 +88,11 @@ pub async fn search(
                     id: r.point.id,
                     score: r.score,
                     payload: r.point.payload,
+                    vector: if include_vectors {
+                        Some(r.point.vector)
+                    } else {
+                        None
+                    },
                 })
                 .collect(),
         })
@@ -166,6 +173,7 @@ pub async fn batch_search(
                                 id: r.point.id,
                                 score: r.score,
                                 payload: r.point.payload,
+                                vector: None,
                             })
                             .collect(),
                     })
@@ -248,6 +256,7 @@ pub async fn multi_query_search(
                         id: r.point.id,
                         score: r.score,
                         payload: r.point.payload,
+                        vector: None,
                     })
                     .collect(),
             })
@@ -330,6 +339,7 @@ pub async fn text_search(
                     id: r.point.id,
                     score: r.score,
                     payload: r.point.payload,
+                    vector: None,
                 })
                 .collect(),
         }
@@ -412,6 +422,7 @@ pub async fn hybrid_search(
                     id: r.point.id,
                     score: r.score,
                     payload: r.point.payload,
+                    vector: None,
                 })
                 .collect(),
         })

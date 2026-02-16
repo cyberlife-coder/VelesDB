@@ -371,16 +371,16 @@ describe('RestBackend', () => {
       );
     });
 
-    it('should send GET to /graph/edges for getEdges', async () => {
+    it('should send GET to /graph/edges for getEdges with label', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ edges: [], count: 0 }),
       });
 
-      await backend.getEdges('social');
+      await backend.getEdges('social', { label: 'KNOWS' });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:8080/collections/social/graph/edges',
+        'http://localhost:8080/collections/social/graph/edges?label=KNOWS',
         expect.objectContaining({ method: 'GET' })
       );
     });

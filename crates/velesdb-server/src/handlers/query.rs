@@ -107,6 +107,7 @@ pub async fn query(
                         id: r.point.id,
                         score: r.score,
                         payload: r.point.payload,
+                        vector: None,
                     })
                     .collect(),
                 timing_ms,

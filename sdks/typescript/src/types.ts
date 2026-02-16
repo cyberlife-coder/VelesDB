@@ -168,8 +168,8 @@ export interface EdgesResponse {
 
 /** Options for querying edges */
 export interface GetEdgesOptions {
-  /** Filter by edge label */
-  label?: string;
+  /** Filter by edge label (required — server returns 400 without it) */
+  label: string;
 }
 
 /** Request for graph traversal (EPIC-016 US-050) */

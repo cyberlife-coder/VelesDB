@@ -264,6 +264,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
@@ -343,6 +347,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
@@ -408,6 +416,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
@@ -455,6 +467,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
@@ -580,6 +596,10 @@ class VelesDBVectorStore(VectorStore):
                 payload = result.get("payload", {})
                 text = payload.get("text", "")
                 metadata = {k: v for k, v in payload.items() if k != "text"}
+                # Reason: propagate point ID for graph retriever seed extraction
+                point_id = result.get("id")
+                if point_id is not None:
+                    metadata["id"] = point_id
                 doc = Document(page_content=text, metadata=metadata)
                 documents.append(doc)
             all_documents.append(documents)
@@ -617,6 +637,10 @@ class VelesDBVectorStore(VectorStore):
                 payload = result.get("payload", {})
                 text = payload.get("text", "")
                 metadata = {k: v for k, v in payload.items() if k != "text"}
+                # Reason: propagate point ID for graph retriever seed extraction
+                point_id = result.get("id")
+                if point_id is not None:
+                    metadata["id"] = point_id
                 doc = Document(page_content=text, metadata=metadata)
                 score = result.get("score", 0.0)
                 documents.append((doc, score))
@@ -710,6 +734,10 @@ class VelesDBVectorStore(VectorStore):
                 payload = point.get("payload", {})
                 text = payload.get("text", "")
                 metadata = {k: v for k, v in payload.items() if k != "text"}
+                # Reason: propagate point ID for graph retriever seed extraction
+                point_id = point.get("id")
+                if point_id is not None:
+                    metadata["id"] = point_id
                 doc = Document(page_content=text, metadata=metadata)
                 documents.append(doc)
 
@@ -896,6 +924,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
@@ -1255,6 +1287,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
@@ -1303,6 +1339,10 @@ class VelesDBVectorStore(VectorStore):
             payload = result.get("payload", {})
             text = payload.get("text", "")
             metadata = {k: v for k, v in payload.items() if k != "text"}
+            # Reason: propagate point ID for graph retriever seed extraction
+            point_id = result.get("id")
+            if point_id is not None:
+                metadata["id"] = point_id
             doc = Document(page_content=text, metadata=metadata)
             score = result.get("score", 0.0)
             documents.append((doc, score))
