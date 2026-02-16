@@ -158,6 +158,7 @@ pub async fn batch_search(
         .collect();
 
     let top_k = req.searches.first().map_or(10, |s| s.top_k);
+    let include_vectors: Vec<bool> = req.searches.iter().map(|s| s.include_vectors).collect();
 
     let result = tokio::task::spawn_blocking(move || {
         let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
@@ -166,14 +167,19 @@ pub async fn batch_search(
             .map(|batch_results| {
                 batch_results
                     .into_iter()
-                    .map(|results| SearchResponse {
+                    .zip(include_vectors)
+                    .map(|(results, include_vectors)| SearchResponse {
                         results: results
                             .into_iter()
                             .map(|r| SearchResultResponse {
                                 id: r.point.id,
                                 score: r.score,
                                 payload: r.point.payload,
-                                vector: None,
+                                vector: if include_vectors {
+                                    Some(r.point.vector)
+                                } else {
+                                    None
+                                },
                             })
                             .collect(),
                     })

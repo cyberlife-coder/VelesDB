@@ -277,13 +277,11 @@ This table shows the mapping between integration methods and the underlying `vel
 | `drop_index()` | `collection.drop_index()` | ✅ Available |
 | `list_collections()` | `db.list_collections()` | ✅ Available |
 | `delete_collection()` | `db.delete_collection()` | ✅ Available |
-| `match_query()` | — | ⏳ Planned v2.0 |
-| `explain()` | — | ⏳ Planned v2.0 |
+| `match_query()` | `collection.match_query()` | ✅ Available |
+| `explain()` | `collection.explain()` | ✅ Available |
 
 ## Known Limitations
 
-- **`match_query()`** raises `NotImplementedError` — MATCH execution engine planned for v2.0
-- **`explain()`** raises `NotImplementedError` — query plan analysis planned for v2.0
 - **`list_collections()`** returns `List[str]` (collection names only, not full metadata)
 - **GraphLoader `add_node()`** without a vector uses `upsert_metadata` internally
 - **AgentMemory** wrapper not yet available for LlamaIndex (available in LangChain integration)

@@ -8,7 +8,6 @@ on the SDK.
 """
 
 import ast
-import inspect
 import re
 from pathlib import Path
 from typing import List, Set
@@ -22,6 +21,8 @@ try:
     HAS_VELESDB = True
 except ImportError:
     HAS_VELESDB = False
+
+MIN_VELESDB_VERSION = (1, 4, 0)
 
 
 # List of all expected collection methods that should exist on velesdb.Collection
@@ -93,21 +94,63 @@ def get_velesdb_collection_methods() -> Set[str]:
     """Get all methods available on velesdb.Collection class."""
     if not HAS_VELESDB:
         return set()
-    
+
+    # PyO3 methods are exposed as method descriptors on builtins types.
+    # `inspect.isfunction/ismethod` returns False, so use callable+dir().
     methods = set()
-    for name, member in inspect.getmembers(velesdb.Collection):
-        if inspect.isfunction(member) or inspect.ismethod(member):
+    for name in dir(velesdb.Collection):
+        if name.startswith("_"):
+            continue
+        member = getattr(velesdb.Collection, name, None)
+        if callable(member):
             methods.add(name)
-    
+
     return methods
+
+
+def parse_version_tuple(version_str: str) -> tuple[int, int, int]:
+    """Parse semantic-like version string into (major, minor, patch)."""
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version_str)
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part) for part in match.groups())
+
+
+def assert_supported_velesdb_runtime() -> None:
+    """Fail early with actionable message when local velesdb runtime is stale."""
+    if not HAS_VELESDB:
+        return
+
+    version_str = getattr(velesdb, "__version__", "0.0.0")
+    version_tuple = parse_version_tuple(version_str)
+    assert version_tuple >= MIN_VELESDB_VERSION, (
+        f"Loaded velesdb runtime version {version_str} is too old for this contract test. "
+        "Expected at least 1.4.0. Rebuild local bindings first: "
+        "cd crates/velesdb-python && maturin develop --release"
+    )
 
 
 @pytest.mark.skipif(not HAS_VELESDB, reason="velesdb SDK not installed")
 class TestSDKContractRuntime:
     """Runtime verification tests that require velesdb SDK to be installed."""
+
+    def test_runtime_version_is_supported(self):
+        """Ensure local runtime is recent enough for strict contract checks."""
+        assert_supported_velesdb_runtime()
+
+    def test_runtime_introspection_detects_methods(self):
+        """Guard against false negatives from unsupported introspection strategy."""
+        assert_supported_velesdb_runtime()
+        sdk_methods = get_velesdb_collection_methods()
+        assert len(sdk_methods) > 0, (
+            "No callable methods detected on velesdb.Collection. "
+            "If bindings were rebuilt, check runtime import path and rebuild: "
+            "cd crates/velesdb-python && maturin develop --release"
+        )
     
     def test_all_expected_methods_exist_on_sdk(self):
         """Verify that all expected collection methods exist on velesdb.Collection."""
+        assert_supported_velesdb_runtime()
         sdk_methods = get_velesdb_collection_methods()
         
         missing_methods = []
@@ -121,6 +164,7 @@ class TestSDKContractRuntime:
     
     def test_vectorstore_methods_exist_on_sdk(self):
         """Verify that methods used in vectorstore.py exist on velesdb.Collection."""
+        assert_supported_velesdb_runtime()
         vectorstore_path = Path(__file__).parent.parent / "src" / "langchain_velesdb" / "vectorstore.py"
         
         if not vectorstore_path.exists():

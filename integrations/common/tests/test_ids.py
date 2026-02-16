@@ -23,11 +23,11 @@ class TestStableHashId:
         assert isinstance(result, int)
         assert result >= 0
 
-    def test_fits_in_i64(self):
-        """Result fits in positive i64 range (0 to 2^63-1)."""
+    def test_fits_in_u32(self):
+        """Result fits in u32 range required by BM25 index (0 to 2^32-1)."""
         for val in ["a", "test", "doc-999", "uuid-" * 100]:
             result = stable_hash_id(val)
-            assert 0 <= result <= (2**63 - 1)
+            assert 0 <= result <= (2**32 - 1)
 
     def test_empty_string(self):
         """Empty string produces a valid ID."""

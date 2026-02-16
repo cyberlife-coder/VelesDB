@@ -399,6 +399,49 @@ describe('RestBackend', () => {
       );
       expect(edges.length).toBe(1);
     });
+
+    it('should parse streamTraverseGraph SSE events (node/stats/done)', async () => {
+      const encoder = new TextEncoder();
+      const ssePayload = [
+        'event: node\n',
+        'data: {"id":42,"depth":1,"path":[1001]}\n\n',
+        'event: stats\n',
+        'data: {"nodes_visited":7,"elapsed_ms":12}\n\n',
+        'event: done\n',
+        'data: {"total_nodes":1,"max_depth_reached":1,"elapsed_ms":15}\n\n',
+      ];
+      let idx = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (idx < ssePayload.length) {
+            controller.enqueue(encoder.encode(ssePayload[idx++]));
+          } else {
+            controller.close();
+          }
+        },
+      });
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+      });
+
+      const onNode = vi.fn();
+      const onStats = vi.fn();
+      const onDone = vi.fn();
+      const onError = vi.fn();
+
+      await backend.streamTraverseGraph(
+        'social',
+        { source: 1, strategy: 'bfs', maxDepth: 2, limit: 10 },
+        { onNode, onStats, onDone, onError }
+      );
+
+      expect(onNode).toHaveBeenCalledWith({ id: 42, depth: 1, path: [1001] });
+      expect(onStats).toHaveBeenCalledWith({ nodesVisited: 7, elapsedMs: 12 });
+      expect(onDone).toHaveBeenCalledWith({ totalNodes: 1, maxDepthReached: 1, elapsedMs: 15 });
+      expect(onError).not.toHaveBeenCalled();
+    });
   });
 
   describe('query() smart routing + aggregation', () => {
@@ -779,6 +822,30 @@ describe('RestBackend', () => {
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(callBody.searches[0].include_vectors).toBe(true);
+    });
+
+    it('should return vectors from searchBatch results when provided by server', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [
+            {
+              results: [
+                { id: '1', score: 0.95, payload: { title: 'Doc' }, vector: [0.1, 0.2] },
+              ],
+            },
+          ],
+          timing_ms: 0.4,
+        }),
+      });
+
+      const results = await backend.searchBatch('docs', [
+        { vector: [0.1, 0.2], k: 1, includeVectors: true },
+      ]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toHaveLength(1);
+      expect(results[0][0].vector).toEqual([0.1, 0.2]);
     });
 
     it('should send weighted fusion params in multiQuerySearch', async () => {

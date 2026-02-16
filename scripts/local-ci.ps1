@@ -4,12 +4,13 @@
 # Ce script reproduit les vérifications CI en local AVANT tout push vers origin.
 # Objectif: Réduire les coûts GitHub Actions en validant localement.
 #
-# Usage: .\scripts\local-ci.ps1 [-Quick] [-SkipTests] [-SkipSecurity] [-Miri]
+# Usage: .\scripts\local-ci.ps1 [-Quick] [-SkipTests] [-SkipSecurity] [-SkipPythonIntegrations] [-Miri]
 #
 # Options:
 #   -Quick       : Mode rapide (fmt + clippy uniquement)
 #   -SkipTests   : Sauter les tests
 #   -SkipSecurity: Sauter l'audit de sécurité
+#   -SkipPythonIntegrations: Sauter les tests d'intégration Python (langchain/llamaindex)
 #   -Miri        : Activer les tests Miri (EPIC-032/US-004, nécessite nightly)
 # =============================================================================
 
@@ -17,6 +18,7 @@ param(
     [switch]$Quick,
     [switch]$SkipTests,
     [switch]$SkipSecurity,
+    [switch]$SkipPythonIntegrations,
     [switch]$Miri
 )
 
@@ -100,10 +102,39 @@ if ($Quick) {
     }
 
     # ============================================================================
-    # Check 5: Miri (optional, EPIC-032/US-004)
+    # Check 5: Python SDK + Integration tests
+    # ============================================================================
+    if (-not $SkipPythonIntegrations) {
+        Write-Step "Check 5/7: Python SDK + integration tests"
+        try {
+            Push-Location crates/velesdb-python
+            try {
+                maturin develop --release 2>&1 | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "maturin develop failed" }
+            } finally {
+                Pop-Location
+            }
+
+            pytest -q integrations/langchain/tests 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "LangChain integration tests failed" }
+
+            pytest -q integrations/llamaindex/tests 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "LlamaIndex integration tests failed" }
+
+            Write-Success "Python SDK + integrations OK"
+        } catch {
+            Write-Fail "Python SDK/integration checks failed!"
+            $errors += "PythonIntegrations"
+        }
+    } else {
+        Write-Warn "Skipping Python integrations (-SkipPythonIntegrations)"
+    }
+
+    # ============================================================================
+    # Check 6: Miri (optional, EPIC-032/US-004)
     # ============================================================================
     if ($Miri) {
-        Write-Step "Check 5/6: Miri - Undefined Behavior Detection"
+        Write-Step "Check 6/7: Miri - Undefined Behavior Detection"
         try {
             # Check if nightly is available
             $nightlyCheck = rustup run nightly rustc --version 2>&1
@@ -137,9 +168,9 @@ if ($Quick) {
     }
 
     # ============================================================================
-    # Check 6: File size validation
+    # Check 7: File size validation
     # ============================================================================
-    Write-Step "Check 6/6: File size validation (< 500 lines)"
+    Write-Step "Check 7/7: File size validation (< 500 lines)"
     $largeFiles = Get-ChildItem -Path "crates" -Recurse -Filter "*.rs" | 
         Where-Object { (Get-Content $_.FullName | Measure-Object -Line).Lines -gt 500 } |
         Select-Object FullName, @{N='Lines';E={(Get-Content $_.FullName | Measure-Object -Line).Lines}}
