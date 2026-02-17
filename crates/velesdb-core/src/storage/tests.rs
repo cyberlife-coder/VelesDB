@@ -562,10 +562,10 @@ fn test_metrics_latency_percentiles() {
 // Regression Tests for Bug Fixes
 // =============================================================================
 
-/// Regression test for: MmapStorage compaction leaves data_file pointing to old file
+/// Regression test for: `MmapStorage` compaction leaves `data_file` pointing to old file
 ///
-/// After compaction, ensure_capacity() uses self.data_file for resizing.
-/// If data_file still points to the old (replaced) file, the next resize
+/// After compaction, `ensure_capacity()` uses `self.data_file` for resizing.
+/// If `data_file` still points to the old (replaced) file, the next resize
 /// will corrupt data by writing to the wrong file.
 ///
 /// This test verifies that after compaction + resize, data remains consistent.
@@ -651,7 +651,7 @@ fn test_compaction_then_resize_data_integrity() {
 // operations. Ensures stale guards are rejected and snapshot reads remain
 // consistent after concurrent resize.
 
-/// Verify that VectorSliceGuard becomes invalid after a resize triggers
+/// Verify that `VectorSliceGuard` becomes invalid after a resize triggers
 /// epoch increment. Guards created before resize must detect staleness.
 #[test]
 fn test_guard_invalidation_after_resize() {
@@ -735,7 +735,7 @@ fn test_resize_epoch_increments_and_data_consistency() {
     }
 }
 
-/// Concurrent reads via VectorSliceGuard while no resize occurs:
+/// Concurrent reads via `VectorSliceGuard` while no resize occurs:
 /// multiple guards must coexist and return correct data.
 #[test]
 fn test_concurrent_snapshot_reads_consistency() {
@@ -819,7 +819,7 @@ fn test_epoch_mismatch_detection() {
     assert_ne!(guard_epoch, current, "Stale guard still invalid");
 }
 
-/// Test concurrent store + retrieve_ref interleaving.
+/// Test concurrent store + `retrieve_ref` interleaving.
 /// Verifies that store operations don't corrupt data visible through
 /// subsequent guards.
 #[test]

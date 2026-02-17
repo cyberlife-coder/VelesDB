@@ -1,6 +1,6 @@
-//! Query validation for VelesQL (EPIC-044 US-007).
+//! Query validation for `VelesQL` (EPIC-044 US-007).
 //!
-//! This module provides parse-time validation to detect VelesQL limitations
+//! This module provides parse-time validation to detect `VelesQL` limitations
 //! and provide helpful error messages before query execution.
 //!
 //! # Limitations Detected
@@ -114,11 +114,11 @@ impl std::error::Error for ValidationError {}
 /// Kind of validation error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationErrorKind {
-    /// Multiple similarity() conditions in one query (V001).
+    /// Multiple `similarity()` conditions in one query (V001).
     MultipleSimilarity,
-    /// similarity() used with OR operator (V002).
+    /// `similarity()` used with OR operator (V002).
     SimilarityWithOr,
-    /// NOT similarity() detected - performance warning (V003).
+    /// NOT `similarity()` detected - performance warning (V003).
     NotSimilarity,
     /// Reserved keyword used without escaping (V004).
     ReservedKeyword,
@@ -155,8 +155,8 @@ impl ValidationErrorKind {
 /// Configuration for query validation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationConfig {
-    /// If true, NOT similarity() without LIMIT is an error.
-    /// If false, NOT similarity() with LIMIT is allowed.
+    /// If true, NOT `similarity()` without LIMIT is an error.
+    /// If false, NOT `similarity()` with LIMIT is allowed.
     pub strict_not_similarity: bool,
 }
 
@@ -186,7 +186,7 @@ impl ValidationConfig {
     }
 }
 
-/// Query validator for detecting VelesQL limitations.
+/// Query validator for detecting `VelesQL` limitations.
 pub struct QueryValidator;
 
 impl QueryValidator {
@@ -225,9 +225,9 @@ impl QueryValidator {
 
     /// Validates a condition tree.
     ///
-    /// # EPIC-044 US-001: Multiple similarity() with AND is supported
+    /// # EPIC-044 US-001: Multiple `similarity()` with AND is supported
     ///
-    /// Multiple similarity() conditions are allowed when combined with AND
+    /// Multiple `similarity()` conditions are allowed when combined with AND
     /// (cascade filtering). Only OR combinations are rejected.
     fn validate_condition(
         condition: &Condition,
@@ -256,7 +256,7 @@ impl QueryValidator {
     }
 
     /// Counts the number of vector search conditions in a condition tree.
-    /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
+    /// Includes Similarity, `VectorSearch` (NEAR), and `VectorFusedSearch` (`NEAR_FUSED`).
     pub(crate) fn count_similarity_conditions(condition: &Condition) -> usize {
         match condition {
             Condition::Similarity(_)
@@ -275,7 +275,7 @@ impl QueryValidator {
     // EPIC-044 US-002: has_similarity_with_or removed - no longer blocking similarity() OR metadata
     // D-03/M-01: contains_similarity() and has_not_similarity() removed — never called in production.
 
-    /// EPIC-044 US-001: Check if multiple similarity() appear under same OR.
+    /// EPIC-044 US-001: Check if multiple `similarity()` appear under same OR.
     /// Multiple similarity in AND is allowed (cascade), but OR requires union (unsupported).
     fn has_multiple_similarity_in_or(condition: &Condition) -> bool {
         match condition {

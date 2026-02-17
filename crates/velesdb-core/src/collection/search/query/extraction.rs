@@ -1,4 +1,4 @@
-//! Condition extraction utilities for VelesQL queries.
+//! Condition extraction utilities for `VelesQL` queries.
 //!
 //! Extracts vector searches, similarity conditions, and metadata filters
 //! from complex WHERE clause condition trees.
@@ -11,7 +11,7 @@ impl Collection {
     /// Helper to extract MATCH query from any nested condition.
     /// Note: Production code now uses `extract_match_and_filter()` which also returns
     /// the remaining metadata filter. This function is kept for backward compatibility
-    /// and used in extraction_tests.
+    /// and used in `extraction_tests`.
     #[allow(dead_code)]
     pub(crate) fn extract_match_query(condition: &Condition) -> Option<String> {
         match condition {
@@ -208,7 +208,6 @@ impl Collection {
     /// - The parameter is not an array
     /// - Any value is not a number or is outside f32 representable range
     pub(crate) fn resolve_vector(
-        &self,
         vector: &crate::velesql::VectorExpr,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<f32>> {
@@ -282,7 +281,7 @@ impl Collection {
         }
     }
 
-    /// Extract NEAR_FUSED condition from WHERE clause (VP-012).
+    /// Extract `NEAR_FUSED` condition from WHERE clause (VP-012).
     ///
     /// Returns the resolved vectors and fusion strategy if a `VectorFusedSearch`
     /// condition is found. Recurses into AND and Group conditions.
@@ -292,7 +291,7 @@ impl Collection {
     /// Returns an error if:
     /// - Vector parameters are missing or invalid
     /// - The fusion strategy is unknown
-    /// - NEAR_FUSED is combined with similarity() or NEAR (conflicting modes)
+    /// - `NEAR_FUSED` is combined with `similarity()` or NEAR (conflicting modes)
     #[allow(clippy::self_only_used_in_recursion)]
     pub(crate) fn extract_fused_vector_search(
         &self,
@@ -305,7 +304,7 @@ impl Collection {
                 let vectors: Vec<Vec<f32>> = fused
                     .vectors
                     .iter()
-                    .map(|v| self.resolve_vector(v, params))
+                    .map(|v| Self::resolve_vector(v, params))
                     .collect::<Result<Vec<Vec<f32>>>>()?;
 
                 // Map FusionConfig (String-based) to FusionStrategy (enum)
@@ -328,7 +327,7 @@ impl Collection {
     ///
     /// This bridges the parser's string representation to the core fusion engine.
     /// Uses `FusionStrategy::weighted()` which returns `Result` instead of
-    /// `FusionConfig::weighted()` which panics on invalid weights (SecDev fix).
+    /// `FusionConfig::weighted()` which panics on invalid weights (`SecDev` fix).
     ///
     /// # Errors
     ///
@@ -385,7 +384,7 @@ impl Collection {
     /// **Note:** This returns the raw metric score, not a normalized similarity.
     /// The interpretation depends on the metric:
     /// - **Cosine**: Returns cosine similarity (higher = more similar)
-    /// - **DotProduct**: Returns dot product (higher = more similar)
+    /// - **`DotProduct`**: Returns dot product (higher = more similar)
     /// - **Euclidean**: Returns euclidean distance (lower = more similar)
     /// - **Hamming**: Returns hamming distance (lower = more similar)
     /// - **Jaccard**: Returns jaccard similarity (higher = more similar)

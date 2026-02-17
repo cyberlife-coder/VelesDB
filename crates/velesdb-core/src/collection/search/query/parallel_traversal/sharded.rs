@@ -1,4 +1,4 @@
-//! ShardedTraverser: shard-parallel traversal for partitioned graphs (EPIC-051 US-003).
+//! `ShardedTraverser`: shard-parallel traversal for partitioned graphs (EPIC-051 US-003).
 //!
 //! Designed for graphs that are logically partitioned into shards,
 //! handling cross-shard edges transparently.
@@ -77,7 +77,7 @@ impl ShardedTraverser {
     /// 2. Run BFS within each shard in parallel
     /// 3. Collect cross-shard edges
     /// 4. Continue BFS from cross-shard frontier
-    /// 5. Repeat until max_depth or limit reached
+    /// 5. Repeat until `max_depth` or limit reached
     pub fn traverse_parallel<F>(
         &self,
         start_nodes: &[u64],

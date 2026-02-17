@@ -1,8 +1,8 @@
-//! Tests for BM25 + NEAR VelesQL integration (VP-011, Plan 06-02).
+//! Tests for BM25 + NEAR `VelesQL` integration (VP-011, Plan 06-02).
 //!
-//! Tests verify that VelesQL queries combining full-text MATCH with
-//! vector NEAR correctly dispatch to hybrid_search(), text_search(),
-//! and text_search_with_filter() through execute_query().
+//! Tests verify that `VelesQL` queries combining full-text MATCH with
+//! vector NEAR correctly dispatch to `hybrid_search()`, `text_search()`,
+//! and `text_search_with_filter()` through `execute_query()`.
 
 use std::collections::HashMap;
 

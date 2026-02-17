@@ -1,7 +1,7 @@
-//! Tests for VelesQL query validation (EPIC-044 US-007).
+//! Tests for `VelesQL` query validation (EPIC-044 US-007).
 //!
 //! These tests validate that parse-time validation correctly detects
-//! VelesQL limitations and provides helpful error messages.
+//! `VelesQL` limitations and provides helpful error messages.
 
 use super::ast::{
     CompareOp, Comparison, Condition, Query, SelectColumns, SelectStatement, SimilarityCondition,
@@ -191,7 +191,7 @@ fn test_validation_error_display_format() {
     );
 
     // When: Displayed
-    let display = format!("{}", err);
+    let display = format!("{err}");
 
     // Then: Contains useful information
     assert!(display.contains("V001"));
@@ -237,7 +237,7 @@ fn create_query_with_multiple_similarity() -> Query {
     }
 }
 
-/// Creates a query with multiple similarity() using OR (should fail validation).
+/// Creates a query with multiple `similarity()` using OR (should fail validation).
 fn create_query_with_multiple_similarity_or() -> Query {
     let sim1 = Condition::Similarity(SimilarityCondition {
         field: "v".to_string(),

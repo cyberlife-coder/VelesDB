@@ -1,4 +1,4 @@
-//! Batch operations for HnswIndex.
+//! Batch operations for `HnswIndex`.
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;

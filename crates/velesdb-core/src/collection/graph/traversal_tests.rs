@@ -159,8 +159,7 @@ fn test_bfs_cyclic_graph_no_infinite_loop() {
     for (node_id, count) in &target_counts {
         assert_eq!(
             *count, 1,
-            "Node {} appeared {} times, expected 1",
-            node_id, count
+            "Node {node_id} appeared {count} times, expected 1"
         );
     }
 

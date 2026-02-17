@@ -55,7 +55,7 @@ impl Parser {
         }
     }
 
-    /// Parses a temporal expression (NOW(), INTERVAL, arithmetic).
+    /// Parses a temporal expression (`NOW()`, INTERVAL, arithmetic).
     pub(crate) fn parse_temporal_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<TemporalExpr, ParseError> {

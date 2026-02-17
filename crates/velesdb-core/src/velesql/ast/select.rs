@@ -1,4 +1,4 @@
-//! SELECT statement types for VelesQL.
+//! SELECT statement types for `VelesQL`.
 //!
 //! This module defines the SELECT statement and related types.
 

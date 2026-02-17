@@ -3,7 +3,7 @@
 //! Provides software prefetching hints to warm up CPU caches before
 //! SIMD data access, reducing memory latency in batch operations.
 
-/// L2 cache line size in bytes (standard for modern x86_64 CPUs).
+/// L2 cache line size in bytes (standard for modern `x86_64` CPUs).
 pub const L2_CACHE_LINE_BYTES: usize = 64;
 
 /// Calculates optimal prefetch distance based on vector dimension.
@@ -33,7 +33,7 @@ pub const fn calculate_prefetch_distance(dimension: usize) -> usize {
 ///
 /// # Platform Support
 ///
-/// - **x86_64**: Uses `_mm_prefetch` with `_MM_HINT_T0`
+/// - **`x86_64`**: Uses `_mm_prefetch` with `_MM_HINT_T0`
 /// - **aarch64**: Uses inline ASM workaround (rust-lang/rust#117217)
 /// - **Other**: No-op (graceful degradation)
 ///
@@ -99,17 +99,17 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
 
             if vector_bytes > L2_CACHE_LINE_BYTES {
-                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES);
+                let ptr = vector.as_ptr().cast::<i8>().add(L2_CACHE_LINE_BYTES);
                 _mm_prefetch(ptr, _MM_HINT_T1);
             }
 
             if vector_bytes > L2_CACHE_LINE_BYTES * 2 {
-                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 2);
+                let ptr = vector.as_ptr().cast::<i8>().add(L2_CACHE_LINE_BYTES * 2);
                 _mm_prefetch(ptr, _MM_HINT_T2);
             }
 
             if vector_bytes > L2_CACHE_LINE_BYTES * 4 {
-                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 4);
+                let ptr = vector.as_ptr().cast::<i8>().add(L2_CACHE_LINE_BYTES * 4);
                 _mm_prefetch(ptr, _MM_HINT_T2);
             }
         }

@@ -1,4 +1,4 @@
-//! Tests for GraphNode and Element types.
+//! Tests for `GraphNode` and Element types.
 //!
 //! TDD: Tests written BEFORE implementation (RED phase).
 

@@ -1,4 +1,4 @@
-//! Aggregation query execution for VelesQL (EPIC-017 US-002, US-003, US-006).
+//! Aggregation query execution for `VelesQL` (EPIC-017 US-002, US-003, US-006).
 //!
 //! Implements streaming aggregation with O(1) memory complexity.
 //! Supports GROUP BY for grouped aggregations (US-003).
@@ -34,7 +34,7 @@ use std::hash::{Hash, Hasher};
 pub(crate) struct GroupKey {
     /// Original values for result construction
     pub(crate) values: Vec<serde_json::Value>,
-    /// Pre-computed hash for fast HashMap lookup
+    /// Pre-computed hash for fast `HashMap` lookup
     hash: u64,
 }
 
@@ -109,7 +109,7 @@ impl Collection {
     ///
     /// # Arguments
     ///
-    /// * `query` - Parsed VelesQL query with aggregation functions
+    /// * `query` - Parsed `VelesQL` query with aggregation functions
     /// * `params` - Query parameters for placeholders
     ///
     /// # Returns
@@ -118,6 +118,11 @@ impl Collection {
     /// ```json
     /// {"count": 100, "sum_price": 5000.0, "avg_rating": 4.5}
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when query shape is invalid for aggregation or when
+    /// underlying scan/aggregation execution fails.
     #[allow(clippy::too_many_lines)]
     pub fn execute_aggregate(
         &self,

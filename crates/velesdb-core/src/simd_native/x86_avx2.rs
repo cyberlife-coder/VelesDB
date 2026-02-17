@@ -1,4 +1,4 @@
-//! AVX2+FMA kernel implementations for x86_64.
+//! AVX2+FMA kernel implementations for `x86_64`.
 //!
 //! Contains hand-tuned AVX2 SIMD kernels for dot product and squared L2 distance
 //! with 1-acc, 2-acc, and 4-acc variants for different vector sizes.

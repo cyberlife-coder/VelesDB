@@ -1,8 +1,8 @@
 //! SIMD-optimized trigram operations.
 //!
 //! Multi-architecture support:
-//! - **x86_64 AVX-512**: 64 bytes per iteration (21 trigrams)
-//! - **x86_64 AVX2**: 32 bytes per iteration (10 trigrams)
+//! - **`x86_64` AVX-512**: 64 bytes per iteration (21 trigrams)
+//! - **`x86_64` AVX2**: 32 bytes per iteration (10 trigrams)
 //! - **ARM NEON**: 16 bytes per iteration (5 trigrams)
 //! - **Scalar**: Fallback for all platforms
 //!
@@ -15,6 +15,7 @@
 //! | NEON         | 5              | ~1.8x             |
 
 use std::collections::HashSet;
+use std::hash::BuildHasher;
 
 /// Trigram type alias
 pub type Trigram = [u8; 3];
@@ -136,7 +137,7 @@ fn build_padded_bytes(text: &str) -> Vec<u8> {
     padded
 }
 
-/// Prefetch-enhanced trigram extraction (x86_64, AVX2 target feature).
+/// Prefetch-enhanced trigram extraction (`x86_64`, AVX2 target feature).
 ///
 /// Note: The core extraction logic is scalar (byte-by-byte). The AVX2 target
 /// feature enables `_mm_prefetch` intrinsic for cache-line prefetching, which
@@ -146,7 +147,7 @@ fn build_padded_bytes(text: &str) -> Vec<u8> {
 #[target_feature(enable = "avx2")]
 #[must_use]
 unsafe fn extract_trigrams_avx2_inner(bytes: &[u8]) -> HashSet<Trigram> {
-    use std::arch::x86_64::*;
+    use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
 
     let mut trigrams = HashSet::with_capacity(bytes.len());
     let len = bytes.len();
@@ -163,7 +164,7 @@ unsafe fn extract_trigrams_avx2_inner(bytes: &[u8]) -> HashSet<Trigram> {
         // - Condition 1: Address is derived from `bytes.as_ptr()`.
         // - Condition 2: Prefetch does not dereference or write memory.
         // Reason: Hinting improves throughput in long trigram scans.
-        _mm_prefetch(bytes.as_ptr().add(i + 64) as *const i8, _MM_HINT_T0);
+        _mm_prefetch(bytes.as_ptr().add(i + 64).cast::<i8>(), _MM_HINT_T0);
 
         // Scalar trigram extraction within the chunk
         for j in 0..30 {
@@ -207,7 +208,7 @@ pub fn extract_trigrams_avx2(text: &str) -> HashSet<Trigram> {
     }
 }
 
-/// Prefetch-enhanced trigram extraction (x86_64, AVX-512 target feature).
+/// Prefetch-enhanced trigram extraction (`x86_64`, AVX-512 target feature).
 ///
 /// Note: Like `extract_trigrams_avx2_inner`, the core logic is scalar.
 /// The AVX-512 target feature enables wider prefetch reach (128 bytes ahead).
@@ -216,7 +217,7 @@ pub fn extract_trigrams_avx2(text: &str) -> HashSet<Trigram> {
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 #[must_use]
 unsafe fn extract_trigrams_avx512_inner(bytes: &[u8]) -> HashSet<Trigram> {
-    use std::arch::x86_64::*;
+    use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
 
     let mut trigrams = HashSet::with_capacity(bytes.len());
     let len = bytes.len();
@@ -233,7 +234,7 @@ unsafe fn extract_trigrams_avx512_inner(bytes: &[u8]) -> HashSet<Trigram> {
         // - Condition 1: Address is derived from `bytes.as_ptr()`.
         // - Condition 2: Prefetch does not dereference or mutate memory.
         // Reason: Improve cache locality in AVX-512 scan loop.
-        _mm_prefetch(bytes.as_ptr().add(i + 128) as *const i8, _MM_HINT_T0);
+        _mm_prefetch(bytes.as_ptr().add(i + 128).cast::<i8>(), _MM_HINT_T0);
 
         // Scalar trigram extraction within the chunk
         for j in 0..62 {
@@ -340,7 +341,7 @@ pub fn extract_trigrams_neon(text: &str) -> HashSet<Trigram> {
 #[allow(clippy::cast_possible_truncation)]
 pub fn count_matching_trigrams_simd(
     query_trigrams: &[[u8; 3]],
-    doc_trigrams: &HashSet<[u8; 3]>,
+    doc_trigrams: &HashSet<[u8; 3], impl BuildHasher>,
 ) -> usize {
     // For small sets, scalar is fast enough
     if query_trigrams.len() < 16 {
@@ -364,14 +365,17 @@ pub fn count_matching_trigrams_simd(
         .count()
 }
 
-/// Chunked trigram matching (x86_64).
+/// Chunked trigram matching (`x86_64`).
 ///
-/// Note: Despite the name, this function uses scalar HashSet lookups in
+/// Note: Despite the name, this function uses scalar `HashSet` lookups in
 /// 8-element chunks. No AVX2 SIMD instructions are used. The chunking
 /// pattern was intended to enable future SIMD comparison but is currently
 /// equivalent to the scalar fallback.
 #[cfg(target_arch = "x86_64")]
-fn count_matching_avx2(query_trigrams: &[[u8; 3]], doc_trigrams: &HashSet<[u8; 3]>) -> usize {
+fn count_matching_avx2(
+    query_trigrams: &[[u8; 3]],
+    doc_trigrams: &HashSet<[u8; 3], impl BuildHasher>,
+) -> usize {
     let mut count = 0;
 
     for chunk in query_trigrams.chunks(8) {

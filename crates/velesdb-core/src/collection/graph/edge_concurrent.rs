@@ -25,7 +25,7 @@ const DEFAULT_NUM_SHARDS: usize = 256;
 /// Below this threshold, having more shards adds overhead without benefit.
 const MIN_EDGES_PER_SHARD: usize = 1000;
 
-/// Maximum recommended shards to limit memory overhead from RwLock + EdgeStore structures.
+/// Maximum recommended shards to limit memory overhead from `RwLock` + `EdgeStore` structures.
 const MAX_SHARDS: usize = 512;
 
 /// A thread-safe edge store using sharded locking.
@@ -53,9 +53,9 @@ pub struct ConcurrentEdgeStore {
     shards: Vec<RwLock<EdgeStore>>,
     num_shards: usize,
     /// Global registry of edge IDs with source node for optimized removal.
-    /// Maps edge_id -> source_node_id for O(1) shard lookup during removal.
+    /// Maps `edge_id` -> `source_node_id` for O(1) shard lookup during removal.
     ///
-    /// **FLAG-5: Changed from HashSet to HashMap intentionally.**
+    /// **FLAG-5: Changed from `HashSet` to `HashMap` intentionally.**
     /// This trades ~8 bytes extra memory per edge for O(1) removal lookup
     /// instead of O(shards) iteration. Worth it for graphs with frequent deletions.
     edge_ids: RwLock<std::collections::HashMap<u64, u64>>,
@@ -72,7 +72,7 @@ impl ConcurrentEdgeStore {
     ///
     /// # Panics
     ///
-    /// Panics if `num_shards` is 0 (would cause division-by-zero in shard_index).
+    /// Panics if `num_shards` is 0 (would cause division-by-zero in `shard_index`).
     #[must_use]
     pub fn with_shards(num_shards: usize) -> Self {
         assert!(num_shards > 0, "num_shards must be at least 1");
@@ -200,33 +200,31 @@ impl ConcurrentEdgeStore {
     ///
     /// # Performance
     ///
-    /// Instead of iterating all 256 shards, uses stored source_id to find
+    /// Instead of iterating all 256 shards, uses stored `source_id` to find
     /// the exact 2 shards (source + target) where the edge is stored.
     ///
     /// # Concurrency Safety
     ///
-    /// Lock ordering: edge_ids FIRST, then shards in ascending order.
+    /// Lock ordering: `edge_ids` FIRST, then shards in ascending order.
     pub fn remove_edge(&self, edge_id: u64) {
         // Acquire edge_ids lock FIRST (same ordering as add_edge)
         let mut ids = self.edge_ids.write();
 
         // Get source_id for optimized shard lookup
-        let source_id = match ids.get(&edge_id) {
-            Some(&src) => src,
-            None => return, // Edge doesn't exist
+        let Some(&source_id) = ids.get(&edge_id) else {
+            return; // Edge doesn't exist
         };
 
         // Get the edge to find target_id (need to read from source shard)
         let source_shard_idx = self.shard_index(source_id);
         let target_id = {
             let guard = self.shards[source_shard_idx].read();
-            match guard.get_edge(edge_id) {
-                Some(edge) => edge.target(),
-                None => {
-                    // Edge in registry but not in shard - cleanup registry
-                    ids.remove(&edge_id);
-                    return;
-                }
+            if let Some(edge) = guard.get_edge(edge_id) {
+                edge.target()
+            } else {
+                // Edge in registry but not in shard - cleanup registry
+                ids.remove(&edge_id);
+                return;
             }
         };
 
@@ -321,7 +319,7 @@ impl ConcurrentEdgeStore {
     /// This method iterates through ALL shards and aggregates results.
     /// For large graphs with many shards, this can be expensive.
     /// Consider using `get_outgoing_by_label(node_id, label)` if you know
-    /// the source node, which is O(k) instead of O(shards × edges_per_label).
+    /// the source node, which is O(k) instead of O(shards × `edges_per_label`).
     ///
     /// # Use Cases
     ///
@@ -367,9 +365,9 @@ impl ConcurrentEdgeStore {
     ///
     /// # Concurrency Safety
     ///
-    /// Lock ordering: edge_ids FIRST, then shards in ascending order.
-    /// This matches add_edge/remove_edge ordering to prevent deadlocks.
-    /// The edge_ids lock is held throughout to prevent add_edge from
+    /// Lock ordering: `edge_ids` FIRST, then shards in ascending order.
+    /// This matches `add_edge/remove_edge` ordering to prevent deadlocks.
+    /// The `edge_ids` lock is held throughout to prevent `add_edge` from
     /// inserting IDs we're about to remove.
     pub fn remove_node_edges(&self, node_id: u64) {
         // CRITICAL: Acquire edge_ids lock FIRST (same ordering as add_edge/remove_edge)

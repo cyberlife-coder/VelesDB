@@ -61,16 +61,16 @@ pub struct ColumnStore {
     pub(crate) row_count: usize,
     /// Primary key column name (if any)
     pub(crate) primary_key_column: Option<String>,
-    /// Primary key index: pk_value → row_idx (O(1) lookup)
+    /// Primary key index: `pk_value` → `row_idx` (O(1) lookup)
     pub(crate) primary_index: HashMap<i64, usize>,
-    /// Reverse index: row_idx → pk_value (O(1) reverse lookup for expire_rows)
+    /// Reverse index: `row_idx` → `pk_value` (O(1) reverse lookup for `expire_rows`)
     pub(crate) row_idx_to_pk: HashMap<usize, i64>,
-    /// Deleted row indices (tombstones) — single RoaringBitmap for O(1) contains.
+    /// Deleted row indices (tombstones) — single `RoaringBitmap` for O(1) contains.
     ///
     /// Note: Row indices are stored as u32. This limits deletion tracking to ~4B rows.
-    /// Indices > u32::MAX cannot be marked as deleted (always considered live).
+    /// Indices > `u32::MAX` cannot be marked as deleted (always considered live).
     pub(crate) deletion_bitmap: RoaringBitmap,
-    /// Row expiry timestamps: row_idx → expiry_timestamp (US-004 TTL)
+    /// Row expiry timestamps: `row_idx` → `expiry_timestamp` (US-004 TTL)
     pub(crate) row_expiry: HashMap<usize, u64>,
 }
 
@@ -160,9 +160,9 @@ impl ColumnStore {
         self.deletion_bitmap.len() as usize
     }
 
-    /// Checks if a row is deleted (O(1) via RoaringBitmap).
+    /// Checks if a row is deleted (O(1) via `RoaringBitmap`).
     ///
-    /// Row indices > u32::MAX cannot be tracked and are always considered live.
+    /// Row indices > `u32::MAX` cannot be tracked and are always considered live.
     #[must_use]
     #[inline]
     pub fn is_deleted(&self, row_idx: usize) -> bool {
@@ -240,6 +240,11 @@ impl ColumnStore {
     }
 
     /// Inserts a row with primary key validation and index update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when primary key validation, type validation,
+    /// or insert/update operations fail.
     pub fn insert_row(
         &mut self,
         values: &[(&str, ColumnValue)],
@@ -326,6 +331,11 @@ impl ColumnStore {
     }
 
     /// Updates a single column value for a row identified by primary key - O(1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the row/column is missing, the row is deleted,
+    /// primary-key mutation is attempted, or value typing is invalid.
     pub fn update_by_pk(
         &mut self,
         pk: i64,
@@ -363,6 +373,11 @@ impl ColumnStore {
     ///
     /// This function will not panic under normal operation. The internal expect
     /// is guarded by prior validation that all columns exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the row is missing/deleted, a column is missing,
+    /// primary-key mutation is attempted, or value typing is invalid.
     pub fn update_multi_by_pk(
         &mut self,
         pk: i64,

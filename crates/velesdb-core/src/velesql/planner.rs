@@ -76,7 +76,7 @@ impl QueryStats {
     /// Updates average vector search latency using exponential moving average.
     ///
     /// Uses EMA with α=0.1 for thread-safe updates without race conditions.
-    /// EMA formula: new_avg = α * latency + (1-α) * old_avg
+    /// EMA formula: `new_avg` = α * latency + (1-α) * `old_avg`
     /// This avoids the race condition in running average calculations.
     pub fn update_vector_latency(&self, latency_us: u64) {
         self.vector_query_count.fetch_add(1, Ordering::Relaxed);
@@ -148,9 +148,9 @@ impl QueryStats {
 pub struct QueryPlanner {
     /// Runtime statistics for adaptive planning.
     stats: QueryStats,
-    /// Selectivity threshold for GraphFirst strategy.
+    /// Selectivity threshold for `GraphFirst` strategy.
     graph_first_threshold: f64,
-    /// Selectivity threshold for VectorFirst strategy.
+    /// Selectivity threshold for `VectorFirst` strategy.
     vector_first_threshold: f64,
 }
 
@@ -198,8 +198,8 @@ impl QueryPlanner {
     /// Estimates selectivity based on label and relationship type counts.
     ///
     /// This is a heuristic based on the principle that:
-    /// - Rare labels/types → low selectivity → GraphFirst
-    /// - Common labels/types → high selectivity → VectorFirst
+    /// - Rare labels/types → low selectivity → `GraphFirst`
+    /// - Common labels/types → high selectivity → `VectorFirst`
     #[must_use]
     pub fn estimate_selectivity(
         &self,
@@ -232,15 +232,15 @@ impl QueryPlanner {
         label_sel * rel_sel
     }
 
-    /// Choose optimal strategy for hybrid queries with ORDER BY similarity().
+    /// Choose optimal strategy for hybrid queries with ORDER BY `similarity()`.
     ///
-    /// When ORDER BY similarity() is present, we optimize for:
+    /// When ORDER BY `similarity()` is present, we optimize for:
     /// 1. Always execute vector search first (it naturally orders by similarity)
     /// 2. Apply filters as post-processing to preserve ordering
     /// 3. Use early termination when LIMIT is specified
     ///
     /// # Arguments
-    /// * `has_order_by_similarity` - True if ORDER BY similarity() is in query
+    /// * `has_order_by_similarity` - True if ORDER BY `similarity()` is in query
     /// * `has_filter` - True if WHERE clause with non-vector conditions
     /// * `limit` - Optional LIMIT value for early termination optimization
     /// * `estimated_selectivity` - Optional estimated filter selectivity

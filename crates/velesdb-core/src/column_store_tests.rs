@@ -1129,8 +1129,8 @@ mod tests {
     // Regression Tests for Bugfixes
     // =========================================================================
 
-    /// Bug: Upsert cannot reuse deleted row slots because delete_by_pk removes
-    /// pk from primary_index, making the deleted row check unreachable.
+    /// Bug: Upsert cannot reuse deleted row slots because `delete_by_pk` removes
+    /// pk from `primary_index`, making the deleted row check unreachable.
     #[test]
     fn test_upsert_reuses_deleted_row_slot() {
         // Arrange
@@ -1173,7 +1173,7 @@ mod tests {
         assert!(!matches.is_empty(), "Updated value should be findable");
     }
 
-    /// Bug: update_multi_by_pk is not atomic - if type mismatch occurs mid-update,
+    /// Bug: `update_multi_by_pk` is not atomic - if type mismatch occurs mid-update,
     /// earlier updates are already applied, violating atomicity.
     #[test]
     fn test_update_multi_atomic_on_type_mismatch() {
@@ -1218,7 +1218,7 @@ mod tests {
         );
     }
 
-    /// Bug: batch_update silently ignores updates for non-existent columns
+    /// Bug: `batch_update` silently ignores updates for non-existent columns
     /// without recording them as failures.
     #[test]
     fn test_batch_update_reports_nonexistent_column_failures() {
@@ -1317,7 +1317,7 @@ mod tests {
         );
     }
 
-    /// Bug: insert_row rejects previously-deleted PKs instead of reusing slot
+    /// Bug: `insert_row` rejects previously-deleted PKs instead of reusing slot
     #[test]
     fn test_insert_row_allows_previously_deleted_pk() {
         // Arrange
@@ -1350,7 +1350,7 @@ mod tests {
         );
     }
 
-    /// Bug: update_by_pk allows corrupting primary key index by updating PK column
+    /// Bug: `update_by_pk` allows corrupting primary key index by updating PK column
     #[test]
     fn test_update_by_pk_rejects_pk_column_update() {
         // Arrange
@@ -1377,8 +1377,8 @@ mod tests {
         );
     }
 
-    /// Regression test: expire_rows uses O(1) reverse index lookup
-    /// Previously used O(n) iter().find() which was inefficient for large datasets
+    /// Regression test: `expire_rows` uses O(1) reverse index lookup
+    /// Previously used O(n) `iter().find()` which was inefficient for large datasets
     #[test]
     fn test_expire_rows_uses_reverse_index() {
         // Arrange: Create store with multiple rows and TTL
@@ -1410,14 +1410,13 @@ mod tests {
         for i in 1..=100 {
             assert!(
                 store.get_row_idx_by_pk(i).is_none(),
-                "Row {} should be deleted after expiry",
-                i
+                "Row {i} should be deleted after expiry"
             );
         }
     }
 
-    /// Regression test: batch_update must reject updates to PK column
-    /// PR Review Bug: batch_update allowed PK updates, corrupting the index
+    /// Regression test: `batch_update` must reject updates to PK column
+    /// PR Review Bug: `batch_update` allowed PK updates, corrupting the index
     #[test]
     fn test_batch_update_rejects_pk_column_update() {
         // Arrange: Create store with primary key
@@ -1452,8 +1451,8 @@ mod tests {
         assert!(store.get_row_idx_by_pk(999).is_none());
     }
 
-    /// Regression test: update_multi_by_pk must reject updates to PK column
-    /// PR Review Bug: update_multi_by_pk allowed PK updates, corrupting the index
+    /// Regression test: `update_multi_by_pk` must reject updates to PK column
+    /// PR Review Bug: `update_multi_by_pk` allowed PK updates, corrupting the index
     #[test]
     fn test_update_multi_by_pk_rejects_pk_column_update() {
         // Arrange: Create store with primary key
@@ -1551,7 +1550,7 @@ mod tests {
     }
 
     /// Regression test: upsert must propagate type mismatch errors
-    /// PR Review Bug: upsert silently ignored set_column_value errors
+    /// PR Review Bug: upsert silently ignored `set_column_value` errors
     #[test]
     fn test_upsert_propagates_type_mismatch_errors() {
         // Arrange: Create store with primary key
@@ -1574,13 +1573,12 @@ mod tests {
         // Assert: Should fail with TypeMismatch error
         assert!(
             matches!(result, Err(ColumnStoreError::TypeMismatch { .. })),
-            "Upsert should return TypeMismatch error for wrong column type, got: {:?}",
-            result
+            "Upsert should return TypeMismatch error for wrong column type, got: {result:?}"
         );
     }
 
-    /// Regression test: insert_row reusing deleted slot must be atomic
-    /// PR Review Bug: insert_row silently ignored errors and left row in inconsistent state
+    /// Regression test: `insert_row` reusing deleted slot must be atomic
+    /// PR Review Bug: `insert_row` silently ignored errors and left row in inconsistent state
     #[test]
     fn test_insert_row_reuse_slot_atomic_on_type_mismatch() {
         // Arrange: Create store and insert then delete a row
@@ -1647,7 +1645,7 @@ mod tests {
         );
     }
 
-    /// Test: with_primary_key validates pk_column exists
+    /// Test: `with_primary_key` validates `pk_column` exists
     #[test]
     fn test_with_primary_key_validates_column_exists() {
         // Should return error - pk column doesn't exist
@@ -1660,7 +1658,7 @@ mod tests {
         );
     }
 
-    /// Test: with_primary_key validates pk_column is Int type
+    /// Test: `with_primary_key` validates `pk_column` is Int type
     #[test]
     fn test_with_primary_key_validates_column_type() {
         // Should return error - pk column is not Int
@@ -1751,7 +1749,7 @@ mod tests {
         );
     }
 
-    /// Test: active_row_count excludes deleted rows
+    /// Test: `active_row_count` excludes deleted rows
     #[test]
     fn test_active_row_count_excludes_deleted() {
         let mut store = ColumnStore::with_primary_key(
@@ -1787,8 +1785,8 @@ mod tests {
         assert_eq!(store.deleted_row_count(), 1);
     }
 
-    /// Regression test: upsert returns ColumnNotFound for non-existent columns
-    /// (consistency with update_by_pk behavior)
+    /// Regression test: upsert returns `ColumnNotFound` for non-existent columns
+    /// (consistency with `update_by_pk` behavior)
     #[test]
     fn test_upsert_rejects_nonexistent_column() {
         let mut store = ColumnStore::with_primary_key(
@@ -1807,13 +1805,12 @@ mod tests {
         // Should fail with ColumnNotFound (not silently ignore)
         assert!(
             matches!(result, Err(ColumnStoreError::ColumnNotFound(ref col)) if col == "nonexistent"),
-            "upsert should return ColumnNotFound for non-existent column, got: {:?}",
-            result
+            "upsert should return ColumnNotFound for non-existent column, got: {result:?}"
         );
     }
 
-    /// Regression test: delete_by_pk must clear row_expiry to prevent false-positive expirations
-    /// PR #91 Review Bug: deleted rows were still reported by expire_rows()
+    /// Regression test: `delete_by_pk` must clear `row_expiry` to prevent false-positive expirations
+    /// PR #91 Review Bug: deleted rows were still reported by `expire_rows()`
     #[test]
     fn test_delete_by_pk_clears_row_expiry() {
         // Arrange: Create store with TTL row

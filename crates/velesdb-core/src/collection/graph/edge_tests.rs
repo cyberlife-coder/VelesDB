@@ -425,7 +425,7 @@ fn test_property_access() {
 // EPIC-019 US-002: Pré-allocation HashMap avec with_capacity
 // =============================================================================
 
-/// AC-1: EdgeStore::with_capacity creates store with pre-allocated HashMaps
+/// AC-1: `EdgeStore::with_capacity` creates store with pre-allocated `HashMaps`
 #[test]
 fn test_edgestore_with_capacity_basic() {
     let store = EdgeStore::with_capacity(1000, 100);
@@ -433,7 +433,7 @@ fn test_edgestore_with_capacity_basic() {
     assert_eq!(store.edge_count(), 0);
 }
 
-/// AC-2: EdgeStore::with_capacity reduces reallocations during bulk insert
+/// AC-2: `EdgeStore::with_capacity` reduces reallocations during bulk insert
 #[test]
 fn test_edgestore_with_capacity_no_realloc_1000_edges() {
     let mut store = EdgeStore::with_capacity(1000, 500);
@@ -512,7 +512,7 @@ fn test_remove_edge_updates_label_index() {
     assert_eq!(knows_edges[0].id(), 2);
 }
 
-/// AC-3: get_edges_by_label returns correct edges
+/// AC-3: `get_edges_by_label` returns correct edges
 #[test]
 fn test_get_edges_by_label_returns_correct_edges() {
     let mut store = EdgeStore::new();
@@ -542,7 +542,7 @@ fn test_get_edges_by_label_returns_correct_edges() {
     assert!(a_edges.iter().all(|e| e.label() == "A"));
 }
 
-/// AC-4: get_outgoing_by_label uses composite index - O(k) not O(degree)
+/// AC-4: `get_outgoing_by_label` uses composite index - O(k) not O(degree)
 #[test]
 fn test_get_outgoing_by_label_uses_index() {
     let mut store = EdgeStore::new();
@@ -575,7 +575,7 @@ fn test_get_edges_by_label_nonexistent_returns_empty() {
     assert!(edges.is_empty());
 }
 
-/// AC-6: remove_node_edges cleans up label indices
+/// AC-6: `remove_node_edges` cleans up label indices
 #[test]
 fn test_remove_node_edges_cleans_label_index() {
     let mut store = EdgeStore::new();

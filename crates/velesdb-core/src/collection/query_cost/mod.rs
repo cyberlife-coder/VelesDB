@@ -5,10 +5,10 @@
 //!
 //! # Features
 //!
-//! - **Cost estimation**: Predict query cost based on dataset size, ef_search, etc.
+//! - **Cost estimation**: Predict query cost based on dataset size, `ef_search`, etc.
 //! - **Latency estimation**: Convert cost to estimated milliseconds
-//! - **Cost limits**: Reject queries exceeding max_cost threshold
-//! - **EXPLAIN support**: Provide cost breakdown for VelesQL queries
+//! - **Cost limits**: Reject queries exceeding `max_cost` threshold
+//! - **EXPLAIN support**: Provide cost breakdown for `VelesQL` queries
 //!
 //! # Example
 //!
@@ -57,7 +57,7 @@ pub use query_executor::{ExecutionContext, PlanCache, QueryOptimizer};
 pub struct QueryParams {
     /// Number of vectors in the dataset
     pub dataset_size: usize,
-    /// ef_search parameter for HNSW
+    /// `ef_search` parameter for HNSW
     pub ef_search: usize,
     /// Number of results requested
     pub top_k: usize,
@@ -102,11 +102,11 @@ impl QueryParams {
 pub struct CostFactors {
     /// Cost from dataset size (O(log n) for HNSW)
     pub dataset_size_factor: f64,
-    /// Cost from ef_search parameter
+    /// Cost from `ef_search` parameter
     pub ef_search_factor: f64,
     /// Cost reduction from filter selectivity
     pub filter_selectivity_factor: f64,
-    /// Cost from top_k (sub-linear)
+    /// Cost from `top_k` (sub-linear)
     pub top_k_factor: f64,
 }
 
@@ -149,9 +149,9 @@ impl QueryCostEstimate {
 pub struct CostCalibration {
     /// Base cost unit (normalized to 1.0)
     pub base_cost: f64,
-    /// Reference ef_search for normalization (default 100)
+    /// Reference `ef_search` for normalization (default 100)
     pub reference_ef_search: f64,
-    /// Reference top_k for normalization (default 10)
+    /// Reference `top_k` for normalization (default 10)
     pub reference_top_k: f64,
     /// Milliseconds per cost unit (calibrated via benchmarks)
     pub ms_per_cost_unit: f64,
@@ -333,7 +333,7 @@ impl QueryCostEstimator {
     ///
     /// # Errors
     ///
-    /// Returns `QueryCostExceeded` if max_cost is set and exceeded.
+    /// Returns `QueryCostExceeded` if `max_cost` is set and exceeded.
     pub fn check_collection_limit(
         &self,
         params: &QueryParams,
@@ -401,14 +401,14 @@ impl QueryParamsBuilder {
         self
     }
 
-    /// Sets ef_search
+    /// Sets `ef_search`
     #[must_use]
     pub fn ef_search(mut self, ef: usize) -> Self {
         self.params.ef_search = ef;
         self
     }
 
-    /// Sets top_k
+    /// Sets `top_k`
     #[must_use]
     pub fn top_k(mut self, k: usize) -> Self {
         self.params.top_k = k;
@@ -422,7 +422,7 @@ impl QueryParamsBuilder {
         self
     }
 
-    /// Builds the QueryParams
+    /// Builds the `QueryParams`
     #[must_use]
     pub fn build(self) -> QueryParams {
         self.params

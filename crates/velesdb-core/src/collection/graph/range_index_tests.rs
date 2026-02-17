@@ -1,4 +1,4 @@
-//! Tests for RangeIndex.
+//! Tests for `RangeIndex`.
 
 use super::range_index::{OrderedFloat, OrderedValue, RangeIndex};
 use serde_json::json;

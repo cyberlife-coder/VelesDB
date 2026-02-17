@@ -1,6 +1,6 @@
 //! Graph pattern AST types for MATCH clause (Graph Pattern Matching).
 //!
-//! This module contains AST types for Cypher-like graph queries in VelesQL.
+//! This module contains AST types for Cypher-like graph queries in `VelesQL`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

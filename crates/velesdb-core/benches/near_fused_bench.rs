@@ -1,11 +1,11 @@
-//! Benchmark suite for NEAR_FUSED multi-vector fused search (VP-012, Plan 06-04).
+//! Benchmark suite for `NEAR_FUSED` multi-vector fused search (VP-012, Plan 06-04).
 //!
 //! Run with: `cargo bench --bench near_fused_bench`
 //!
 //! Measures:
 //! - Single vector search baseline
-//! - NEAR_FUSED with 2 vectors (RRF, Average)
-//! - NEAR_FUSED with 3 vectors (RRF)
+//! - `NEAR_FUSED` with 2 vectors (RRF, Average)
+//! - `NEAR_FUSED` with 3 vectors (RRF)
 //! - Fusion overhead percentage
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

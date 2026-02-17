@@ -85,7 +85,7 @@ impl WithClause {
         self.get("mode").and_then(|v| v.as_str())
     }
 
-    /// Gets ef_search if specified.
+    /// Gets `ef_search` if specified.
     #[must_use]
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn get_ef_search(&self) -> Option<usize> {

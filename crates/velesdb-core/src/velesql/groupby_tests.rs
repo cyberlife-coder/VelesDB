@@ -1,4 +1,4 @@
-//! Tests for VelesQL GROUP BY (EPIC-017 US-003).
+//! Tests for `VelesQL` GROUP BY (EPIC-017 US-003).
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::distance::DistanceMetric;

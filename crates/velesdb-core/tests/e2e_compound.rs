@@ -1,7 +1,7 @@
 //! E2E integration tests for compound query execution (UNION/INTERSECT/EXCEPT).
 //!
 //! Validates that `Database::execute_query()` correctly handles set operations
-//! across collections through the full VelesQL pipeline.
+//! across collections through the full `VelesQL` pipeline.
 
 use std::collections::HashMap;
 
@@ -11,8 +11,8 @@ use velesdb_core::distance::DistanceMetric;
 use velesdb_core::{Database, Point};
 
 /// Creates a Database with two collections for compound query scenarios:
-/// - "active_docs": IDs {1,2,3} — currently active documents
-/// - "archived_docs": IDs {2,3,4,5} — archived documents
+/// - "`active_docs"`: IDs {1,2,3} — currently active documents
+/// - "`archived_docs"`: IDs {2,3,4,5} — archived documents
 ///   Overlap on IDs 2 and 3 exercises dedup/intersect/except.
 fn setup_compound_db() -> (Database, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -92,8 +92,7 @@ fn test_e2e_union_deduplicates_across_collections() {
     assert_eq!(
         ids.len(),
         5,
-        "UNION should deduplicate: expected 5 unique IDs, got {:?}",
-        ids
+        "UNION should deduplicate: expected 5 unique IDs, got {ids:?}"
     );
     for expected_id in 1..=5 {
         assert!(ids.contains(&expected_id), "Missing ID {expected_id}");
@@ -138,8 +137,7 @@ fn test_e2e_intersect_common_documents() {
     assert_eq!(
         ids.len(),
         2,
-        "INTERSECT should return only common IDs, got {:?}",
-        ids
+        "INTERSECT should return only common IDs, got {ids:?}"
     );
     assert!(ids.contains(&2), "ID 2 should be in intersection");
     assert!(ids.contains(&3), "ID 3 should be in intersection");
@@ -201,8 +199,7 @@ fn test_e2e_union_same_collection_different_where() {
     assert_eq!(
         ids.len(),
         3,
-        "UNION on same collection with different WHERE should yield 3 results, got {:?}",
-        ids
+        "UNION on same collection with different WHERE should yield 3 results, got {ids:?}"
     );
     assert!(ids.contains(&1));
     assert!(ids.contains(&2));

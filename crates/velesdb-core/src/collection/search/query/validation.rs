@@ -1,13 +1,13 @@
-//! Query validation for VelesQL similarity queries.
+//! Query validation for `VelesQL` similarity queries.
 //!
-//! Validates that similarity() queries don't use unsupported patterns:
-//! - Multiple similarity() in OR (requires union of results)
-//! - similarity() in OR with non-similarity conditions
-//! - NOT similarity() patterns
+//! Validates that `similarity()` queries don't use unsupported patterns:
+//! - Multiple `similarity()` in OR (requires union of results)
+//! - `similarity()` in OR with non-similarity conditions
+//! - NOT `similarity()` patterns
 //!
 //! # Supported Patterns (EPIC-044 US-001)
 //!
-//! Multiple similarity() with AND is supported:
+//! Multiple `similarity()` with AND is supported:
 //! ```sql
 //! WHERE similarity(v, $v1) > 0.8 AND similarity(v, $v2) > 0.7
 //! ```
@@ -18,24 +18,24 @@ use crate::error::{Error, Result};
 use crate::velesql::Condition;
 
 impl Collection {
-    /// Validate that similarity() queries don't use unsupported patterns.
+    /// Validate that `similarity()` queries don't use unsupported patterns.
     ///
     /// # Supported Patterns (EPIC-044 US-001)
     ///
-    /// - **Multiple similarity() with AND**: Filters applied sequentially
+    /// - **Multiple `similarity()` with AND**: Filters applied sequentially
     ///   `WHERE similarity(v, $v1) > 0.8 AND similarity(v, $v2) > 0.7`
     ///
     /// # Unsupported Patterns
     ///
-    /// 1. **similarity() in OR with non-similarity conditions** (EPIC-044 US-002):
+    /// 1. **`similarity()` in OR with non-similarity conditions** (EPIC-044 US-002):
     ///    `WHERE similarity(v, $v) > 0.8 OR category = 'tech'`
     ///    ✅ NOW SUPPORTED - Executes vector search + metadata scan, then unions results.
     ///
-    /// 2. **Multiple similarity() in OR**:
+    /// 2. **Multiple `similarity()` in OR**:
     ///    `WHERE similarity(v, $v1) > 0.8 OR similarity(v, $v2) > 0.7`
     ///    This would require union of two vector searches - not currently supported.
     ///
-    /// 3. **NOT similarity()**:
+    /// 3. **NOT `similarity()`**:
     ///    Cannot be efficiently executed with ANN indexes.
     ///
     /// Returns Ok(()) if the query structure is valid, or an error describing the issue.
@@ -60,12 +60,12 @@ impl Collection {
         Ok(())
     }
 
-    /// Check if similarity() appears under a NOT condition.
+    /// Check if `similarity()` appears under a NOT condition.
     /// This pattern is not supported because negating similarity cannot be efficiently executed.
     ///
     /// # Note
     ///
-    /// This function is prepared for when VelesQL parser supports `NOT condition` syntax.
+    /// This function is prepared for when `VelesQL` parser supports `NOT condition` syntax.
     /// Currently, the parser only supports `IS NOT NULL` and `!=` operators.
     /// When parser is extended (see EPIC-005), this validation will activate.
     pub(crate) fn has_similarity_under_not(condition: &Condition) -> bool {
@@ -82,7 +82,7 @@ impl Collection {
         }
     }
 
-    /// Check if multiple similarity() conditions appear under the same OR.
+    /// Check if multiple `similarity()` conditions appear under the same OR.
     /// This pattern requires unioning two vector search results which is not supported.
     ///
     /// # Example (Unsupported)
@@ -112,7 +112,7 @@ impl Collection {
     }
 
     /// Count the number of vector search conditions in a condition tree.
-    /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
+    /// Includes Similarity, `VectorSearch` (NEAR), and `VectorFusedSearch` (`NEAR_FUSED`).
     pub(crate) fn count_similarity_conditions(condition: &Condition) -> usize {
         match condition {
             // PR #119 Review Fix: Count ALL vector search conditions
@@ -129,7 +129,7 @@ impl Collection {
         }
     }
 
-    /// Check if similarity() appears in an OR clause with non-similarity conditions.
+    /// Check if `similarity()` appears in an OR clause with non-similarity conditions.
     /// This pattern cannot be correctly executed with current architecture.
     pub(crate) fn has_similarity_in_problematic_or(condition: &Condition) -> bool {
         match condition {

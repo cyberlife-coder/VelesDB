@@ -1,4 +1,4 @@
-//! JOIN clause types for VelesQL.
+//! JOIN clause types for `VelesQL`.
 //!
 //! This module defines join types and conditions for cross-store queries.
 

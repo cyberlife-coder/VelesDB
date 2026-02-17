@@ -8,12 +8,13 @@
 
 use crate::velesql::{Condition, JoinClause};
 use std::collections::HashSet;
+use std::hash::BuildHasher;
 
 /// Result of pushdown analysis, classifying conditions by data source.
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::struct_field_names)]
 pub struct PushdownAnalysis {
-    /// Filters that can be applied to ColumnStore before JOIN.
+    /// Filters that can be applied to `ColumnStore` before JOIN.
     pub column_store_filters: Vec<Condition>,
     /// Filters that should remain on graph traversal (pre-traversal).
     pub graph_filters: Vec<Condition>,
@@ -44,7 +45,7 @@ impl PushdownAnalysis {
 /// Analyzes a WHERE condition for filter pushdown optimization.
 ///
 /// Classifies each predicate based on which data source it references:
-/// - Column references matching JOIN tables → ColumnStore filters (pushdown)
+/// - Column references matching JOIN tables → `ColumnStore` filters (pushdown)
 /// - Graph variable references → Graph filters (pre-traversal)
 /// - Mixed references → Post-JOIN filters
 ///
@@ -58,10 +59,10 @@ impl PushdownAnalysis {
 ///
 /// A `PushdownAnalysis` with conditions classified by source.
 #[must_use]
-pub fn analyze_for_pushdown(
+pub fn analyze_for_pushdown<S1: BuildHasher, S2: BuildHasher>(
     condition: &Condition,
-    graph_vars: &HashSet<String>,
-    join_tables: &HashSet<String>,
+    graph_vars: &HashSet<String, S1>,
+    join_tables: &HashSet<String, S2>,
 ) -> PushdownAnalysis {
     let mut analysis = PushdownAnalysis::new();
     classify_condition(condition, graph_vars, join_tables, &mut analysis);
@@ -82,10 +83,10 @@ pub fn extract_join_tables(joins: &[JoinClause]) -> HashSet<String> {
 }
 
 /// Classifies a condition and adds it to the appropriate category.
-fn classify_condition(
+fn classify_condition<S1: BuildHasher, S2: BuildHasher>(
     condition: &Condition,
-    graph_vars: &HashSet<String>,
-    join_tables: &HashSet<String>,
+    graph_vars: &HashSet<String, S1>,
+    join_tables: &HashSet<String, S2>,
     analysis: &mut PushdownAnalysis,
 ) {
     match condition {
@@ -148,7 +149,7 @@ fn classify_condition(
 /// Data source for a condition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Source {
-    /// Condition references only ColumnStore columns.
+    /// Condition references only `ColumnStore` columns.
     ColumnStore,
     /// Condition references only graph variables.
     Graph,
@@ -159,10 +160,10 @@ enum Source {
 }
 
 /// Determines the data source for a condition.
-fn get_condition_source(
+fn get_condition_source<S1: BuildHasher, S2: BuildHasher>(
     condition: &Condition,
-    graph_vars: &HashSet<String>,
-    join_tables: &HashSet<String>,
+    graph_vars: &HashSet<String, S1>,
+    join_tables: &HashSet<String, S2>,
 ) -> Source {
     match condition {
         Condition::Comparison(cmp) => classify_column(&cmp.column, graph_vars, join_tables),
@@ -202,13 +203,13 @@ fn get_condition_source(
 /// Classifies a column reference to determine its data source.
 ///
 /// Supports both simple column names and qualified names (table.column).
-/// - Qualified names with known table → ColumnStore or Graph
+/// - Qualified names with known table → `ColumnStore` or Graph
 /// - Qualified names with unknown table → Unknown (for post-join filtering)
 /// - Unqualified names → Graph (collection columns)
-fn classify_column(
+fn classify_column<S1: BuildHasher, S2: BuildHasher>(
     column: &str,
-    graph_vars: &HashSet<String>,
-    join_tables: &HashSet<String>,
+    graph_vars: &HashSet<String, S1>,
+    join_tables: &HashSet<String, S2>,
 ) -> Source {
     // Check for qualified name: table.column
     if let Some((table, _column)) = column.split_once('.') {
@@ -232,7 +233,7 @@ fn classify_column(
 /// Combines two sources into a single classification.
 ///
 /// Unknown is treated conservatively - combining with Unknown yields Unknown
-/// to ensure conditions with unresolved references go to post_join_filters.
+/// to ensure conditions with unresolved references go to `post_join_filters`.
 fn combine_sources(a: Source, b: Source) -> Source {
     match (a, b) {
         (Source::ColumnStore, Source::ColumnStore) => Source::ColumnStore,

@@ -45,6 +45,9 @@
 //! ```
 
 #![warn(missing_docs)]
+// Reason: one generated test path currently triggers clippy without a precise span.
+// Keep production code strict while unblocking pedantic validation for test builds.
+#![cfg_attr(test, allow(clippy::large_stack_arrays))]
 // Clippy lints configured in workspace Cargo.toml [workspace.lints.clippy]
 
 #[cfg(feature = "persistence")]
@@ -345,10 +348,10 @@ impl Database {
         Ok(())
     }
 
-    /// Executes a VelesQL query with cross-collection support.
+    /// Executes a `VelesQL` query with cross-collection support.
     ///
     /// This method extends `Collection::execute_query()` with:
-    /// - JOIN execution (resolves JOIN tables as collections → ColumnStore)
+    /// - JOIN execution (resolves JOIN tables as collections → `ColumnStore`)
     /// - Compound query execution (UNION/INTERSECT/EXCEPT across collections)
     ///
     /// # Flow
@@ -606,8 +609,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("nonexistent"),
-            "Error should mention collection name: {}",
-            err
+            "Error should mention collection name: {err}"
         );
     }
 

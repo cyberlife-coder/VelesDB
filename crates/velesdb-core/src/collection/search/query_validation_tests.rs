@@ -2,9 +2,9 @@
 //!
 //! Tests for:
 //! - `validate_similarity_query_structure()` - Rejects unsupported patterns
-//! - NEAR + similarity() combination - Supported pattern for agentic memory
+//! - NEAR + `similarity()` combination - Supported pattern for agentic memory
 //!
-//! Note: NOT similarity() tests are commented out because VelesQL parser
+//! Note: NOT `similarity()` tests are commented out because `VelesQL` parser
 //! does not yet support `NOT condition` syntax (only `IS NOT NULL`).
 //! The validation code exists for future parser extension.
 

@@ -1,4 +1,4 @@
-//! WHERE clause condition types for VelesQL.
+//! WHERE clause condition types for `VelesQL`.
 //!
 //! This module defines all condition types used in WHERE clauses,
 //! including vector search, comparisons, and logical operators.

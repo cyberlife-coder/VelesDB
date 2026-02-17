@@ -28,7 +28,7 @@ use super::error::{ParseError, ParseErrorKind};
 pub(crate) struct VelesQLParser;
 
 /// EPIC-044 US-005: Extract identifier string from any identifier form.
-/// Handles: regular_identifier, backtick_identifier, doublequote_identifier
+/// Handles: `regular_identifier`, `backtick_identifier`, `doublequote_identifier`
 pub(crate) fn extract_identifier(pair: &Pair<'_, Rule>) -> String {
     match pair.as_rule() {
         Rule::identifier => {

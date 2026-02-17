@@ -21,7 +21,7 @@ pub struct ScoreExplanation {
 /// Explanation of a single score component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentExplanation {
-    /// Component name (e.g., "vector_similarity").
+    /// Component name (e.g., "`vector_similarity`").
     pub name: String,
     /// Raw value of the component.
     pub value: f32,

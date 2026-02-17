@@ -81,7 +81,7 @@ pub fn add_edges(collection: &Collection, edges: &[(u64, u64, u64, &str)]) {
 ///
 /// Pattern: `(start_alias:start_label {start_properties})-[:rel_type]->(end_alias:end_label)`
 ///
-/// `start_properties` filters start nodes via inline property matching (OpenCypher style).
+/// `start_properties` filters start nodes via inline property matching (`OpenCypher` style).
 /// Use this instead of WHERE for properties on the start node, since single-hop WHERE
 /// evaluates on the target (end) node.
 #[allow(clippy::too_many_arguments)] // Reason: mirrors MatchClause AST structure directly

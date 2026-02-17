@@ -36,10 +36,7 @@ fn test_dispatch_uses_scalar_for_small_vectors() {
         let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         assert!(
             (result - expected).abs() < EPSILON,
-            "Scalar dispatch failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "Scalar dispatch failed for size {size}: got {result}, expected {expected}"
         );
     }
 }
@@ -57,10 +54,7 @@ fn test_dispatch_uses_simd_for_medium_vectors() {
         let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         assert!(
             (result - expected).abs() < EPSILON,
-            "Medium vector dispatch failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "Medium vector dispatch failed for size {size}: got {result}, expected {expected}"
         );
     }
 }
@@ -78,10 +72,7 @@ fn test_dispatch_uses_2acc_for_large_vectors() {
         let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         assert!(
             (result - expected).abs() < EPSILON,
-            "2-acc dispatch failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "2-acc dispatch failed for size {size}: got {result}, expected {expected}"
         );
     }
 }
@@ -101,10 +92,7 @@ fn test_dispatch_uses_4acc_for_very_large_vectors() {
         let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         assert!(
             (result - expected).abs() < EPSILON,
-            "4-acc dispatch failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "4-acc dispatch failed for size {size}: got {result}, expected {expected}"
         );
     }
 }
@@ -165,8 +153,7 @@ fn test_dispatch_no_regression_on_small_vectors() {
         let result = dot_product_native(&a, &b);
         assert!(
             (result - size as f32).abs() < 1e-3,
-            "Failed for size {}",
-            size
+            "Failed for size {size}"
         );
     }
 }
@@ -197,10 +184,7 @@ fn test_euclidean_dispatch_thresholds() {
 
         assert!(
             (result - expected).abs() < EPSILON,
-            "Euclidean dispatch failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "Euclidean dispatch failed for size {size}: got {result}, expected {expected}"
         );
     }
 }

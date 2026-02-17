@@ -1,6 +1,6 @@
-//! LRU Cache implementation for VelesDB.
+//! LRU Cache implementation for `VelesDB`.
 //!
-//! Thread-safe LRU cache with O(1) operations using IndexMap.
+//! Thread-safe LRU cache with O(1) operations using `IndexMap`.
 //! Based on arXiv:2310.11703v2 recommendations.
 //!
 //! # Performance (US-CORE-003-14)
@@ -55,7 +55,7 @@ where
     /// Maximum capacity.
     capacity: usize,
     /// Internal data protected by `RwLock`.
-    /// IndexMap preserves insertion order (front = LRU, back = MRU).
+    /// `IndexMap` preserves insertion order (front = LRU, back = MRU).
     inner: RwLock<IndexMap<K, V>>,
     /// Statistics (atomic for lock-free reads).
     hits: AtomicU64,
@@ -134,17 +134,14 @@ where
             inner.get(key).cloned()
         };
 
-        match value {
-            Some(v) => {
-                self.hits.fetch_add(1, Ordering::Relaxed);
-                // Update recency: remove and re-insert at back
-                self.move_to_back(key, &v);
-                Some(v)
-            }
-            None => {
-                self.misses.fetch_add(1, Ordering::Relaxed);
-                None
-            }
+        if let Some(v) = value {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            // Update recency: remove and re-insert at back
+            self.move_to_back(key, &v);
+            Some(v)
+        } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+            None
         }
     }
 
@@ -159,7 +156,7 @@ where
 
     /// Remove a key from the cache.
     ///
-    /// O(1) complexity using swap_remove (doesn't preserve order of other elements).
+    /// O(1) complexity using `swap_remove` (doesn't preserve order of other elements).
     pub fn remove(&self, key: &K) {
         let mut inner = self.inner.write();
         inner.swap_remove(key);
@@ -182,7 +179,7 @@ where
     }
 
     /// Move a key to the back (most recently used).
-    /// O(1) amortized using shift_remove + insert.
+    /// O(1) amortized using `shift_remove` + insert.
     fn move_to_back(&self, key: &K, value: &V) {
         let mut inner = self.inner.write();
         // Remove from current position

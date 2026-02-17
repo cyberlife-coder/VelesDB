@@ -1,13 +1,13 @@
 //! Cross-store execution strategies for combined Vector + Graph MATCH queries.
 //!
-//! Implements VectorFirst and Parallel strategies from `QueryPlanner`.
-//! GraphFirst delegates to the existing `execute_match_with_similarity()`.
+//! Implements `VectorFirst` and Parallel strategies from `QueryPlanner`.
+//! `GraphFirst` delegates to the existing `execute_match_with_similarity()`.
 //!
 //! # Strategies
 //!
-//! - **VectorFirst**: NEAR search (over-fetch) → graph MATCH validate → results
+//! - **`VectorFirst`**: NEAR search (over-fetch) → graph MATCH validate → results
 //! - **Parallel**: execute both V and G → fuse with RRF → results
-//! - **GraphFirst**: delegates to `execute_match_with_similarity()`
+//! - **`GraphFirst`**: delegates to `execute_match_with_similarity()`
 
 use std::collections::HashMap;
 
@@ -17,11 +17,15 @@ use crate::point::SearchResult;
 use crate::velesql::MatchClause;
 
 impl Collection {
-    /// VectorFirst cross-store execution.
+    /// `VectorFirst` cross-store execution.
     ///
     /// 1. Execute vector NEAR search with over-fetch (2× limit)
     /// 2. For each candidate, validate against graph MATCH pattern
     /// 3. Return results sorted by vector score, truncated to limit
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when vector search or MATCH execution fails.
     pub fn execute_vector_first_cross_store(
         &self,
         query_vector: &[f32],
@@ -61,6 +65,10 @@ impl Collection {
     /// 1. Execute vector search and graph MATCH independently
     /// 2. Fuse results using Reciprocal Rank Fusion (RRF)
     /// 3. Return fused results truncated to limit
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when vector search, MATCH execution, or result conversion fails.
     pub fn execute_parallel_cross_store(
         &self,
         query_vector: &[f32],

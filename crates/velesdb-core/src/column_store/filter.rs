@@ -1,4 +1,4 @@
-//! Filter operations for ColumnStore.
+//! Filter operations for `ColumnStore`.
 //!
 //! This module provides efficient filtering methods for column-oriented data,
 //! including bitmap-based operations for large datasets.
@@ -190,8 +190,8 @@ impl ColumnStore {
     ///
     /// # Note
     ///
-    /// Row indices are safely converted to u32 for RoaringBitmap. This limits
-    /// stores to ~4B rows. Indices >= u32::MAX are safely skipped (not truncated).
+    /// Row indices are safely converted to u32 for `RoaringBitmap`. This limits
+    /// stores to ~4B rows. Indices >= `u32::MAX` are safely skipped (not truncated).
     #[must_use]
     pub fn filter_eq_int_bitmap(&self, column: &str, value: i64) -> RoaringBitmap {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
@@ -212,7 +212,7 @@ impl ColumnStore {
 
     /// Filters rows by equality on a string column, returning a bitmap.
     ///
-    /// Indices >= u32::MAX are safely skipped.
+    /// Indices >= `u32::MAX` are safely skipped.
     #[must_use]
     pub fn filter_eq_string_bitmap(&self, column: &str, value: &str) -> RoaringBitmap {
         let Some(TypedColumn::String(col)) = self.columns.get(column) else {
@@ -237,7 +237,7 @@ impl ColumnStore {
 
     /// Filters rows by range on an integer column, returning a bitmap.
     ///
-    /// Indices >= u32::MAX are safely skipped.
+    /// Indices >= `u32::MAX` are safely skipped.
     #[must_use]
     pub fn filter_range_int_bitmap(&self, column: &str, low: i64, high: i64) -> RoaringBitmap {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {

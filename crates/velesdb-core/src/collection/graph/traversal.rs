@@ -19,7 +19,7 @@ pub const DEFAULT_MAX_DEPTH: u32 = 3;
 /// Safety cap for maximum depth to prevent runaway traversals.
 /// Only applied when user requests unbounded traversal (*).
 ///
-/// Note: Neo4j and ArangoDB do NOT impose hard limits.
+/// Note: Neo4j and `ArangoDB` do NOT impose hard limits.
 /// 100 is chosen to cover most real-world use cases:
 /// - Social networks (6 degrees of separation)
 /// - Dependency graphs (deep npm/cargo trees)
@@ -77,7 +77,7 @@ impl Default for TraversalConfig {
 impl TraversalConfig {
     /// Creates a config for a specific range (e.g., *1..3).
     ///
-    /// Respects the caller's max_depth without artificial capping.
+    /// Respects the caller's `max_depth` without artificial capping.
     /// For unbounded traversals, use `with_unbounded_range()` instead.
     #[must_use]
     pub fn with_range(min: u32, max: u32) -> Self {
@@ -90,7 +90,7 @@ impl TraversalConfig {
 
     /// Creates a config for unbounded traversal (e.g., *1..).
     ///
-    /// Applies SAFETY_MAX_DEPTH cap to prevent runaway traversals.
+    /// Applies `SAFETY_MAX_DEPTH` cap to prevent runaway traversals.
     #[must_use]
     pub fn with_unbounded_range(min: u32) -> Self {
         Self {

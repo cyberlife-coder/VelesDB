@@ -1,4 +1,4 @@
-//! Scalar subquery execution for VelesQL (VP-002).
+//! Scalar subquery execution for `VelesQL` (VP-002).
 //!
 //! This module implements the subquery executor that takes a `Subquery` AST node,
 //! executes the inner `SelectStatement` against the collection, and returns a
@@ -10,7 +10,7 @@ use crate::velesql::SelectColumns;
 use std::collections::HashMap;
 
 impl Collection {
-    /// Executes a scalar subquery and returns the result as a VelesQL Value.
+    /// Executes a scalar subquery and returns the result as a `VelesQL` Value.
     ///
     /// A scalar subquery must return at most one column and one row.
     /// If no rows match, returns `Value::Null`.
@@ -32,7 +32,7 @@ impl Collection {
         outer_row: Option<&serde_json::Value>,
     ) -> Result<crate::velesql::Value> {
         // VP-002: Build resolved params by merging outer row correlations
-        let resolved_params = self.build_subquery_params(subquery, params, outer_row);
+        let resolved_params = Self::build_subquery_params(subquery, params, outer_row);
 
         // Route to aggregation or regular query path based on SELECT columns
         let is_aggregation = matches!(
@@ -80,7 +80,6 @@ impl Collection {
     /// For correlated subqueries, looks up `outer_column` in `outer_row` and
     /// adds it to params so the inner WHERE clause can reference it via `$outer_column`.
     fn build_subquery_params(
-        &self,
         subquery: &crate::velesql::Subquery,
         params: &HashMap<String, serde_json::Value>,
         outer_row: Option<&serde_json::Value>,

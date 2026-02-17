@@ -1,8 +1,8 @@
-//! Lock-Free LRU Cache with DashMap L1 (US-CORE-003-15)
+//! Lock-Free LRU Cache with `DashMap` L1 (US-CORE-003-15)
 //!
 //! Two-tier cache architecture for maximum concurrent throughput:
-//! - **L1**: DashMap (lock-free concurrent HashMap) for hot keys
-//! - **L2**: LruCache (with LRU eviction) for capacity management
+//! - **L1**: `DashMap` (lock-free concurrent `HashMap`) for hot keys
+//! - **L2**: `LruCache` (with LRU eviction) for capacity management
 //!
 //! # Performance
 //!
@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::LruCache;
 
-/// Lock-free two-tier cache with DashMap L1 and LruCache L2.
+/// Lock-free two-tier cache with `DashMap` L1 and `LruCache` L2.
 ///
 /// Optimized for read-heavy workloads with hot keys.
 pub struct LockFreeLruCache<K, V>

@@ -1,6 +1,6 @@
-//! Abstract Syntax Tree (AST) for VelesQL queries.
+//! Abstract Syntax Tree (AST) for `VelesQL` queries.
 //!
-//! This module defines the data structures representing parsed VelesQL queries.
+//! This module defines the data structures representing parsed `VelesQL` queries.
 
 mod aggregation;
 mod condition;
@@ -32,7 +32,7 @@ pub use values::{
 };
 pub use with_clause::{QuantizationMode, WithClause, WithOption, WithValue};
 
-/// A complete VelesQL query.
+/// A complete `VelesQL` query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
     /// The SELECT statement.

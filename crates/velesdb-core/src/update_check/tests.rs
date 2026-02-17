@@ -1,4 +1,4 @@
-//! Integration tests for update_check module
+//! Integration tests for `update_check` module
 
 use super::*;
 

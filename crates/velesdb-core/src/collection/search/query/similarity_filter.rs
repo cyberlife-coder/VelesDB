@@ -15,13 +15,13 @@ use crate::storage::{PayloadStorage, VectorStorage};
 impl Collection {
     /// Filter search results by similarity threshold.
     ///
-    /// For similarity() function queries, we need to check if results meet the threshold.
+    /// For `similarity()` function queries, we need to check if results meet the threshold.
     ///
     /// **BUG-2 FIX:** Recomputes similarity using `query_vec`, not the cached NEAR scores.
-    /// This is critical when NEAR and similarity() use different vectors.
+    /// This is critical when NEAR and `similarity()` use different vectors.
     ///
     /// **Metric-aware semantics:**
-    /// - For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
+    /// - For similarity metrics (Cosine, `DotProduct`, Jaccard): higher score = more similar
     ///   - `similarity() > 0.8` keeps results with score > 0.8
     /// - For distance metrics (Euclidean, Hamming): lower score = more similar
     ///   - `similarity() > 0.8` is interpreted as "more similar than threshold"
@@ -93,7 +93,7 @@ impl Collection {
             .collect()
     }
 
-    /// EPIC-044 US-003: Execute NOT similarity() query via full scan.
+    /// EPIC-044 US-003: Execute NOT `similarity()` query via full scan.
     ///
     /// This method handles queries like:
     /// `WHERE NOT similarity(v, $v) > 0.8`
@@ -114,8 +114,7 @@ impl Collection {
         // Validate field
         if sim_field != "vector" {
             return Err(crate::error::Error::Config(format!(
-                "similarity() field '{}' not found. Only 'vector' field is supported.",
-                sim_field
+                "similarity() field '{sim_field}' not found. Only 'vector' field is supported."
             )));
         }
 

@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// # Platform Support
 ///
 /// - **Linux**: Uses `fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE)`
-/// - **Windows**: Uses `FSCTL_SET_ZERO_DATA` DeviceIoControl
+/// - **Windows**: Uses `FSCTL_SET_ZERO_DATA` `DeviceIoControl`
 /// - **Other**: Falls back to writing zeros (no disk reclamation)
 ///
 /// # Arguments
@@ -103,7 +103,7 @@ fn punch_hole_linux(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     }
 }
 
-/// Windows implementation using FSCTL_SET_ZERO_DATA.
+/// Windows implementation using `FSCTL_SET_ZERO_DATA`.
 #[cfg(target_os = "windows")]
 fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     use std::os::windows::io::AsRawHandle;
@@ -230,7 +230,7 @@ fn atomic_replace(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 /// Compaction configuration and state.
-/// EPIC-033/US-004: Updated to use ShardedIndex for reduced lock contention.
+/// EPIC-033/US-004: Updated to use `ShardedIndex` for reduced lock contention.
 pub(super) struct CompactionContext<'a> {
     pub path: &'a Path,
     pub dimension: usize,

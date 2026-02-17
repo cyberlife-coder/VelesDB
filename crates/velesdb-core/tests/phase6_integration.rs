@@ -1,10 +1,10 @@
 //! E2E integration tests for Phase 6: Unified Query & Full-Text Search.
 //!
 //! Exercises all new query paths introduced in Phase 6:
-//! - VP-012: NEAR_FUSED multi-vector fused search
-//! - VP-011: BM25 + NEAR hybrid search via VelesQL
-//! - VP-011: MATCH + metadata filter via VelesQL
-//! - VP-011: Three-way (NEAR + MATCH + filter) via VelesQL
+//! - VP-012: `NEAR_FUSED` multi-vector fused search
+//! - VP-011: BM25 + NEAR hybrid search via `VelesQL`
+//! - VP-011: MATCH + metadata filter via `VelesQL`
+//! - VP-011: Three-way (NEAR + MATCH + filter) via `VelesQL`
 
 use std::collections::HashMap;
 

@@ -1,4 +1,4 @@
-//! Operational metrics for monitoring VelesDB in production.
+//! Operational metrics for monitoring `VelesDB` in production.
 //!
 //! Provides thread-safe counters and gauges for:
 //! - Query throughput and errors (Prometheus-exportable)
@@ -17,7 +17,7 @@ pub const DEPTH_BUCKETS: [u64; 6] = [1, 2, 3, 5, 10, 20];
 /// Nodes visited histogram buckets.
 pub const NODES_BUCKETS: [u64; 7] = [10, 50, 100, 500, 1000, 5000, 10000];
 
-/// Operational metrics for VelesDB monitoring (EPIC-050 US-001).
+/// Operational metrics for `VelesDB` monitoring (EPIC-050 US-001).
 ///
 /// Thread-safe counters and gauges that can be exported in Prometheus format.
 #[derive(Debug, Default)]
@@ -98,7 +98,7 @@ impl OperationalMetrics {
 
     /// Decrements active connections.
     ///
-    /// Uses a CAS loop to saturate at 0, preventing underflow wrap to u64::MAX.
+    /// Uses a CAS loop to saturate at 0, preventing underflow wrap to `u64::MAX`.
     pub fn dec_connections(&self) {
         // BUG-3 FIX: Use CAS loop to prevent underflow
         loop {
@@ -133,13 +133,11 @@ impl OperationalMetrics {
         output.push_str("# TYPE velesdb_queries_total counter\n");
         let _ = writeln!(
             output,
-            "velesdb_queries_total{{status=\"success\"}} {}",
-            success
+            "velesdb_queries_total{{status=\"success\"}} {success}"
         );
         let _ = writeln!(
             output,
-            "velesdb_queries_total{{status=\"error\"}} {}\n",
-            errors
+            "velesdb_queries_total{{status=\"error\"}} {errors}\n"
         );
 
         // Query types

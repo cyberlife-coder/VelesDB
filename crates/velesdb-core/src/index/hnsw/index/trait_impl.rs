@@ -1,4 +1,4 @@
-//! VectorIndex trait implementation for HnswIndex.
+//! `VectorIndex` trait implementation for `HnswIndex`.
 
 use super::HnswIndex;
 use crate::distance::DistanceMetric;

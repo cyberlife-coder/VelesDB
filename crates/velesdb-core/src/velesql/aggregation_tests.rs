@@ -1,4 +1,4 @@
-//! Tests for VelesQL aggregation parsing (EPIC-017 US-001).
+//! Tests for `VelesQL` aggregation parsing (EPIC-017 US-001).
 
 use crate::velesql::{AggregateArg, AggregateType, Parser, SelectColumns};
 

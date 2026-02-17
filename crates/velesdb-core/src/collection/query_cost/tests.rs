@@ -92,13 +92,11 @@ fn test_estimate_cost_scales_with_top_k() {
     let ratio = large_k_estimate.total_cost / small_k_estimate.total_cost;
     assert!(
         ratio < 5.0,
-        "Cost should scale sub-linearly with top_k (got {:.2})",
-        ratio
+        "Cost should scale sub-linearly with top_k (got {ratio:.2})"
     );
     assert!(
         ratio > 2.0,
-        "But still increase significantly (got {:.2})",
-        ratio
+        "But still increase significantly (got {ratio:.2})"
     );
 }
 
@@ -123,8 +121,7 @@ fn test_filter_selectivity_reduces_cost() {
     let ratio = selective_estimate.total_cost / no_filter_estimate.total_cost;
     assert!(
         ratio < 10.0,
-        "Filter overhead should be moderate (got {:.2})",
-        ratio
+        "Filter overhead should be moderate (got {ratio:.2})"
     );
 }
 

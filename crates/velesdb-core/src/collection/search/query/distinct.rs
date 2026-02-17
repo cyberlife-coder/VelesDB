@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet;
 
 /// Apply DISTINCT deduplication to results based on selected columns (EPIC-052 US-001).
 ///
-/// Uses HashSet for O(n) complexity and preserves insertion order.
+/// Uses `HashSet` for O(n) complexity and preserves insertion order.
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
     // If SELECT *, deduplicate by all payload fields
     let column_names: Vec<String> = match columns {

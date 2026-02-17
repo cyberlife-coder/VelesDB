@@ -189,9 +189,9 @@ fn test_lockfree_cache_scaling_8_threads() {
     let scaling_factor = eight_throughput / single_throughput;
 
     println!("LockFreeLruCache scaling test:");
-    println!("  1 thread:  {:.0} ops/sec", single_throughput);
-    println!("  8 threads: {:.0} ops/sec", eight_throughput);
-    println!("  Scaling:   {:.2}x", scaling_factor);
+    println!("  1 thread:  {single_throughput:.0} ops/sec");
+    println!("  8 threads: {eight_throughput:.0} ops/sec");
+    println!("  Scaling:   {scaling_factor:.2}x");
 
     assert!(
         scaling_factor > 0.5,

@@ -1,7 +1,7 @@
 //! JOIN execution for cross-store queries (EPIC-031 US-005, Phase 08-02).
 //!
 //! This module implements JOIN execution between search results
-//! and ColumnStore data with adaptive batch sizing.
+//! and `ColumnStore` data with adaptive batch sizing.
 //!
 //! Integrated into `Database::execute_query()` for cross-collection JOINs.
 //! Supports INNER JOIN and LEFT JOIN types.
@@ -17,12 +17,12 @@ use std::collections::HashMap;
 pub struct JoinedResult {
     /// Original search result from graph/vector search.
     pub search_result: SearchResult,
-    /// Joined column data from ColumnStore as JSON values.
+    /// Joined column data from `ColumnStore` as JSON values.
     pub column_data: HashMap<String, serde_json::Value>,
 }
 
 impl JoinedResult {
-    /// Creates a new JoinedResult by merging search result with column data.
+    /// Creates a new `JoinedResult` by merging search result with column data.
     #[must_use]
     pub fn new(
         search_result: SearchResult,
@@ -57,7 +57,7 @@ pub fn adaptive_batch_size(key_count: usize) -> usize {
 /// the right side of the join condition (e.g., `products.id`).
 ///
 /// # Note
-/// Point IDs > i64::MAX are filtered out to prevent overflow issues.
+/// Point IDs > `i64::MAX` are filtered out to prevent overflow issues.
 #[must_use]
 pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) -> Vec<(usize, i64)> {
     let key_column = &condition.right.column;
@@ -98,26 +98,31 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
         .collect()
 }
 
-/// Executes a JOIN between search results and a ColumnStore.
+/// Executes a JOIN between search results and a `ColumnStore`.
 ///
 /// # Algorithm
 ///
-/// 1. Validate that join condition's left column matches ColumnStore's primary key
+/// 1. Validate that join condition's left column matches `ColumnStore`'s primary key
 /// 2. Extract join keys from search results
 /// 3. Determine adaptive batch size
-/// 4. Batch lookup in ColumnStore by primary key
+/// 4. Batch lookup in `ColumnStore` by primary key
 /// 5. Merge matching rows with search results
 ///
 /// # Arguments
 ///
 /// * `results` - Search results from vector/graph query
 /// * `join` - JOIN clause from parsed query
-/// * `column_store` - ColumnStore to join with
+/// * `column_store` - `ColumnStore` to join with
 ///
 /// # Returns
 ///
-/// Vector of JoinedResults containing merged data.
+/// Vector of `JoinedResults` containing merged data.
 /// Returns empty vector if the join condition's left column doesn't match the primary key.
+///
+/// # Errors
+///
+/// Returns an error for unsupported join forms (e.g. `USING` during execution)
+/// or when join evaluation fails.
 #[allow(clippy::cognitive_complexity)] // Reason: Linear flow with early returns, splitting would reduce readability
 pub fn execute_join(
     results: &[SearchResult],
@@ -125,14 +130,11 @@ pub fn execute_join(
     column_store: &ColumnStore,
 ) -> Result<Vec<JoinedResult>> {
     // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
-    let condition = match &join.condition {
-        Some(cond) => cond,
-        None => {
-            return Err(Error::UnsupportedFeature(format!(
-                "JOIN with USING clause not yet supported for execution on table '{}'",
-                join.table
-            )));
-        }
+    let Some(condition) = &join.condition else {
+        return Err(Error::UnsupportedFeature(format!(
+            "JOIN with USING clause not yet supported for execution on table '{}'",
+            join.table
+        )));
     };
 
     // 1. Validate that join column matches ColumnStore's primary key
@@ -229,7 +231,7 @@ pub fn execute_join(
     Ok(joined_results)
 }
 
-/// Batch get rows from ColumnStore by primary keys.
+/// Batch get rows from `ColumnStore` by primary keys.
 ///
 /// Returns a map of pk -> column values (as JSON) for found rows.
 fn batch_get_rows(
@@ -254,9 +256,9 @@ fn batch_get_rows(
     result
 }
 
-/// Converts JoinedResults back to SearchResults with merged payload.
+/// Converts `JoinedResults` back to `SearchResults` with merged payload.
 ///
-/// This is useful when the query expects SearchResult format but
+/// This is useful when the query expects `SearchResult` format but
 /// we want to include joined column data in the payload.
 #[must_use]
 pub fn joined_to_search_results(joined: Vec<JoinedResult>) -> Vec<SearchResult> {

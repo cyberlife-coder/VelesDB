@@ -276,12 +276,12 @@ fn test_nan_rejected_in_similarity_condition() {
 
 #[test]
 fn test_nan_rejected_in_resolve_vector() {
-    let collection = make_test_collection();
+    let _collection = make_test_collection();
     let mut params = std::collections::HashMap::new();
     params.insert("v".to_string(), serde_json::json!([f64::NAN, 2.0, 3.0]));
 
     let vector_expr = VectorExpr::Parameter("v".to_string());
-    let result = collection.resolve_vector(&vector_expr, &params);
+    let result = Collection::resolve_vector(&vector_expr, &params);
     assert!(result.is_err(), "NaN should be rejected in resolve_vector");
 }
 

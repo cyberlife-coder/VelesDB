@@ -33,7 +33,7 @@ pub enum PhysicalPlan {
         collection: String,
         /// Top-k results
         k: u64,
-        /// ef_search parameter
+        /// `ef_search` parameter
         ef_search: u64,
     },
     /// Graph pattern traversal
@@ -116,7 +116,7 @@ pub struct QueryCharacteristics {
     pub filter_selectivity: Option<f64>,
     /// Top-k for vector search
     pub top_k: Option<u64>,
-    /// ef_search parameter
+    /// `ef_search` parameter
     pub ef_search: Option<u64>,
     /// Graph traversal depth
     pub max_depth: Option<u32>,

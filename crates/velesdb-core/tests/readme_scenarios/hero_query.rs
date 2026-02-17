@@ -1,4 +1,4 @@
-//! Hero Query E2E test — the defining VelesDB query from README (VP-007).
+//! Hero Query E2E test — the defining `VelesDB` query from README (VP-007).
 //!
 //! Tests the flagship query:
 //! ```sql
@@ -13,7 +13,7 @@
 //! # API mapping
 //!
 //! - `doc.category = 'research'` → `NodePattern.properties` on start node
-//!   (OpenCypher inline property syntax `(doc:Document {category: 'research'})`)
+//!   (`OpenCypher` inline property syntax `(doc:Document {category: 'research'})`)
 //! - `similarity()` → `execute_match_with_similarity` scores on end node (Person)
 //! - `RETURN alias.property` → `project_properties` resolves from bindings
 
@@ -99,7 +99,7 @@ fn person_nodes() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
 /// Sets up the hero query scenario:
 /// - 6 Document nodes (some research, some not)
 /// - 3 Person nodes (with vectors near question for similarity scoring)
-/// - AUTHORED_BY edges linking documents to persons
+/// - `AUTHORED_BY` edges linking documents to persons
 fn setup_hero_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
     let (temp_dir, db) = helpers::setup_test_db();
     let collection = helpers::setup_labeled_collection(&db, "hero_docs", 4, DistanceMetric::Cosine);
@@ -168,8 +168,7 @@ fn test_hero_query_graph_traversal_and_property_filter() {
     for &id in &author_ids {
         assert!(
             id == 10 || id == 11,
-            "Result node_id {} should be Alice (10) or Bob (11)",
-            id
+            "Result node_id {id} should be Alice (10) or Bob (11)"
         );
     }
 
@@ -348,22 +347,19 @@ fn test_hero_query_projected_properties_from_both_nodes() {
         if let Some(name) = result.projected.get("author.name") {
             assert!(
                 name.is_string(),
-                "author.name should be a string, got: {}",
-                name
+                "author.name should be a string, got: {name}"
             );
         }
         if let Some(email) = result.projected.get("author.email") {
             assert!(
                 email.is_string(),
-                "author.email should be a string, got: {}",
-                email
+                "author.email should be a string, got: {email}"
             );
         }
         if let Some(title) = result.projected.get("doc.title") {
             assert!(
                 title.is_string(),
-                "doc.title should be a string, got: {}",
-                title
+                "doc.title should be a string, got: {title}"
             );
         }
     }

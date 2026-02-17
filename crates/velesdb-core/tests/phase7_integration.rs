@@ -1,11 +1,11 @@
 //! E2E integration tests for Phase 7: Cross-Store Execution & EXPLAIN Completeness.
 //!
 //! Exercises all new query paths introduced in Phase 7:
-//! - VP-010: VectorFirst cross-store execution (NEAR + graph MATCH)
+//! - VP-010: `VectorFirst` cross-store execution (NEAR + graph MATCH)
 //! - VP-010: Parallel cross-store execution (NEAR + graph MATCH)
-//! - VP-010: QueryPlanner wiring in execute_query()
-//! - VP-012: EXPLAIN FusedSearch node for NEAR_FUSED
-//! - VP-010: EXPLAIN CrossStoreSearch node for combined V+G
+//! - VP-010: `QueryPlanner` wiring in `execute_query()`
+//! - VP-012: EXPLAIN `FusedSearch` node for `NEAR_FUSED`
+//! - VP-010: EXPLAIN `CrossStoreSearch` node for combined V+G
 
 use std::collections::HashMap;
 
@@ -78,7 +78,7 @@ fn setup_phase7_collection() -> (tempfile::TempDir, velesdb_core::Collection) {
     (dir, col)
 }
 
-/// Build a RELATED_TO match clause for testing.
+/// Build a `RELATED_TO` match clause for testing.
 fn build_related_to_match(limit: Option<u64>) -> MatchClause {
     let pattern = GraphPattern {
         name: None,
@@ -287,8 +287,7 @@ fn e2e_explain_near_fused_via_parser() {
         // Should show FusedSearch node, not VectorSearch
         assert!(
             tree.contains("FusedSearch"),
-            "EXPLAIN of NEAR_FUSED should show FusedSearch node, got: {}",
-            tree
+            "EXPLAIN of NEAR_FUSED should show FusedSearch node, got: {tree}"
         );
     }
     // If parser doesn't support NEAR_FUSED syntax yet, test with manual construction
@@ -321,8 +320,7 @@ fn e2e_explain_near_fused_via_parser() {
         let tree = plan.to_tree();
         assert!(
             tree.contains("FusedSearch"),
-            "EXPLAIN should show FusedSearch: {}",
-            tree
+            "EXPLAIN should show FusedSearch: {tree}"
         );
     }
 }
@@ -360,12 +358,10 @@ fn e2e_explain_cross_store_combined() {
 
     assert!(
         tree.contains("CrossStoreSearch"),
-        "EXPLAIN should show CrossStoreSearch node: {}",
-        tree
+        "EXPLAIN should show CrossStoreSearch node: {tree}"
     );
     assert!(
         tree.contains("Parallel") || tree.contains("VectorFirst"),
-        "Should show strategy: {}",
-        tree
+        "Should show strategy: {tree}"
     );
 }

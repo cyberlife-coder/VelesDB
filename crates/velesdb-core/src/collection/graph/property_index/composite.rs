@@ -33,7 +33,7 @@ pub struct CompositeGraphIndex {
     properties: Vec<String>,
     /// Index type (hash or range)
     index_type: CompositeIndexType,
-    /// (property_values_hash) -> Vec<NodeId>
+    /// (`property_values_hash`) -> Vec<NodeId>
     hash_index: HashMap<u64, Vec<u64>>,
 }
 

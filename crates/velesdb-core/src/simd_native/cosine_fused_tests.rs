@@ -40,10 +40,7 @@ fn test_fused_cosine_correctness() {
 
         assert!(
             (result - expected).abs() < EPSILON,
-            "Fused cosine failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "Fused cosine failed for size {size}: got {result}, expected {expected}"
         );
     }
 }
@@ -57,9 +54,7 @@ fn test_fused_cosine_identical_vectors() {
 
         assert!(
             (result - 1.0).abs() < EPSILON,
-            "Cosine of identical vectors should be 1.0, got {} for size {}",
-            result,
-            size
+            "Cosine of identical vectors should be 1.0, got {result} for size {size}"
         );
     }
 }
@@ -73,8 +68,7 @@ fn test_fused_cosine_orthogonal_vectors() {
 
     assert!(
         result.abs() < EPSILON,
-        "Cosine of orthogonal vectors should be ~0.0, got {}",
-        result
+        "Cosine of orthogonal vectors should be ~0.0, got {result}"
     );
 }
 
@@ -107,8 +101,7 @@ fn test_fused_cosine_opposite_vectors() {
 
     assert!(
         (result - (-1.0)).abs() < EPSILON,
-        "Cosine of opposite vectors should be -1.0, got {}",
-        result
+        "Cosine of opposite vectors should be -1.0, got {result}"
     );
 }
 
@@ -140,7 +133,6 @@ fn test_fused_cosine_performance() {
     // Target < 35ns with Harley-Seal when optimized
     assert!(
         avg_ns < 200.0,
-        "Cosine similarity too slow: {:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)",
-        avg_ns
+        "Cosine similarity too slow: {avg_ns:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)"
     );
 }

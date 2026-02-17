@@ -90,8 +90,7 @@ fn test_estimate_selectivity_missing_rel_type_returns_zero() {
 
     assert!(
         sel < 0.01,
-        "Missing relationship type should give selectivity ~0.0, got {}",
-        sel
+        "Missing relationship type should give selectivity ~0.0, got {sel}"
     );
 }
 

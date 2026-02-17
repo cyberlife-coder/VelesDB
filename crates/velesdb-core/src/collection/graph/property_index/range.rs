@@ -265,7 +265,7 @@ pub struct IndexIntersection;
 
 #[allow(dead_code)]
 impl IndexIntersection {
-    /// Intersects multiple node ID sets using RoaringBitmap for efficiency.
+    /// Intersects multiple node ID sets using `RoaringBitmap` for efficiency.
     #[must_use]
     pub fn intersect_bitmaps(sets: &[RoaringBitmap]) -> RoaringBitmap {
         if sets.is_empty() {
@@ -301,9 +301,10 @@ impl IndexIntersection {
             .iter()
             .map(|s| {
                 s.iter()
-                    .filter_map(|&id| match u32::try_from(id) {
-                        Ok(id32) => Some(id32),
-                        Err(_) => {
+                    .filter_map(|&id| {
+                        if let Ok(id32) = u32::try_from(id) {
+                            Some(id32)
+                        } else {
                             dropped_count += 1;
                             None
                         }

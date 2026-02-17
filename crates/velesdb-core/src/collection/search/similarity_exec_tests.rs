@@ -1,4 +1,4 @@
-//! Integration tests for similarity() function execution.
+//! Integration tests for `similarity()` function execution.
 
 #[cfg(test)]
 mod tests {
@@ -158,9 +158,9 @@ mod tests {
         assert!(result.is_err(), "Should error on missing parameter");
     }
 
-    /// Regression test: similarity() with additional filter conditions.
+    /// Regression test: `similarity()` with additional filter conditions.
     ///
-    /// Bug: similarity() queries were ignoring additional filter conditions
+    /// Bug: `similarity()` queries were ignoring additional filter conditions
     /// in the WHERE clause (e.g., `AND category = 'tech'`).
     #[test]
     fn test_similarity_with_metadata_filter_applied() {
@@ -223,8 +223,7 @@ mod tests {
         let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
         assert!(
             !ids.contains(&2),
-            "id=2 (sports) should be filtered out, but got ids: {:?}",
-            ids
+            "id=2 (sports) should be filtered out, but got ids: {ids:?}"
         );
     }
 
@@ -431,20 +430,17 @@ mod tests {
         let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
         assert!(
             !ids.contains(&3),
-            "Issue #122: id=3 has status='inactive', should be filtered by outer AND, but got ids: {:?}",
-            ids
+            "Issue #122: id=3 has status='inactive', should be filtered by outer AND, but got ids: {ids:?}"
         );
         assert!(
             !ids.contains(&4),
-            "Issue #122: id=4 has status='inactive', should be filtered by outer AND, but got ids: {:?}",
-            ids
+            "Issue #122: id=4 has status='inactive', should be filtered by outer AND, but got ids: {ids:?}"
         );
 
         // id=1 and id=2 should be in results
         assert!(
             ids.contains(&1) || ids.contains(&2),
-            "Should have at least one result matching the criteria, got ids: {:?}",
-            ids
+            "Should have at least one result matching the criteria, got ids: {ids:?}"
         );
     }
 }

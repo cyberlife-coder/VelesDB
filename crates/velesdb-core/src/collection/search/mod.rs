@@ -1,11 +1,11 @@
 //! Search implementation for Collection.
 //!
-//! This module provides all search functionality for VelesDB collections:
+//! This module provides all search functionality for `VelesDB` collections:
 //! - Vector similarity search (HNSW)
 //! - Full-text search (BM25)
 //! - Hybrid search (vector + text with RRF fusion)
 //! - Batch and multi-query search
-//! - VelesQL query execution
+//! - `VelesQL` query execution
 
 mod batch;
 #[cfg(test)]

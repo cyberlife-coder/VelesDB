@@ -1,8 +1,8 @@
 //! Tests for WITH clause options (EPIC-040 US-004).
 //!
 //! Covers:
-//! - WITH(max_groups=N) for GROUP BY limit
-//! - Parsing and execution of max_groups option
+//! - `WITH(max_groups=N)` for GROUP BY limit
+//! - Parsing and execution of `max_groups` option
 
 use crate::velesql::Parser;
 

@@ -297,8 +297,7 @@ fn test_fast_rsqrt_basic() {
     let result = fast_rsqrt(4.0);
     assert!(
         (result - 0.5).abs() < 0.01,
-        "rsqrt(4) should be ~0.5, got {}",
-        result
+        "rsqrt(4) should be ~0.5, got {result}"
     );
 }
 
@@ -307,8 +306,7 @@ fn test_fast_rsqrt_one() {
     let result = fast_rsqrt(1.0);
     assert!(
         (result - 1.0).abs() < 0.01,
-        "rsqrt(1) should be ~1.0, got {}",
-        result
+        "rsqrt(1) should be ~1.0, got {result}"
     );
 }
 
@@ -318,12 +316,7 @@ fn test_fast_rsqrt_accuracy() {
         let fast = fast_rsqrt(x);
         let exact = 1.0 / x.sqrt();
         let rel_error = (fast - exact).abs() / exact;
-        assert!(
-            rel_error < 0.02,
-            "rsqrt({}) rel_error {} > 2%",
-            x,
-            rel_error
-        );
+        assert!(rel_error < 0.02, "rsqrt({x}) rel_error {rel_error} > 2%");
     }
 }
 
@@ -334,12 +327,7 @@ fn test_fast_rsqrt_vs_std() {
         let fast = fast_rsqrt(x);
         let std = 1.0 / x.sqrt();
         let rel_error = (fast - std).abs() / std;
-        assert!(
-            rel_error < 0.02,
-            "rsqrt({}) rel_error {} > 2%",
-            x,
-            rel_error
-        );
+        assert!(rel_error < 0.02, "rsqrt({x}) rel_error {rel_error} > 2%");
     }
 }
 
@@ -370,9 +358,7 @@ fn test_cosine_fast_normalized_vectors() {
     let expected = 0.6 * 0.8 + 0.8 * 0.6;
     assert!(
         (result - expected).abs() < 0.02,
-        "cosine mismatch: {} vs {}",
-        result,
-        expected
+        "cosine mismatch: {result} vs {expected}"
     );
 }
 
@@ -395,9 +381,7 @@ fn test_dot_product_remainder_accuracy() {
         };
         assert!(
             rel_error < SIMD_REL_TOLERANCE,
-            "len={} error={}",
-            len,
-            rel_error
+            "len={len} error={rel_error}"
         );
     }
 }
@@ -420,9 +404,7 @@ fn test_squared_l2_remainder_accuracy() {
         let rel_error = (result - expected).abs() / expected.abs();
         assert!(
             rel_error < SIMD_REL_TOLERANCE,
-            "len={} error={}",
-            len,
-            rel_error
+            "len={len} error={rel_error}"
         );
     }
 }
@@ -434,7 +416,7 @@ fn test_dot_product_small_vectors_no_simd() {
         let b: Vec<f32> = vec![1.0; len];
         let result = dot_product_native(&a, &b);
         let expected: f32 = (1..=len).map(|i| i as f32).sum();
-        assert!((result - expected).abs() < 1e-5, "len={} mismatch", len);
+        assert!((result - expected).abs() < 1e-5, "len={len} mismatch");
     }
 }
 
@@ -461,11 +443,7 @@ fn test_dot_product_threshold_512_boundary() {
 
         assert!(
             rel_error < SIMD_REL_TOLERANCE,
-            "Threshold test len={} failed: rel_error={} (simd={}, scalar={})",
-            len,
-            rel_error,
-            simd_result,
-            scalar_result
+            "Threshold test len={len} failed: rel_error={rel_error} (simd={simd_result}, scalar={scalar_result})"
         );
     }
 }
@@ -478,8 +456,7 @@ fn test_dot_product_empty_vectors() {
     let result = dot_product_native(&a, &b);
     assert!(
         result.abs() < 1e-6,
-        "Empty vectors should return ~0.0, got {}",
-        result
+        "Empty vectors should return ~0.0, got {result}"
     );
 }
 
@@ -498,9 +475,7 @@ fn test_dot_product_avx512_4acc_numerical_equivalence() {
     // Expert: "L'ordre des opérations flottantes change par rapport au scalaire (associativité)"
     assert!(
         (simd_result - scalar_result).abs() < 1e-4,
-        "Numerical divergence: simd={}, scalar={}",
-        simd_result,
-        scalar_result
+        "Numerical divergence: simd={simd_result}, scalar={scalar_result}"
     );
 }
 
@@ -523,11 +498,7 @@ fn test_dot_product_avx512_4acc_large_vectors() {
 
         assert!(
             rel_error < SIMD_REL_TOLERANCE,
-            "len={} rel_error={} (simd={}, scalar={})",
-            len,
-            rel_error,
-            simd_result,
-            scalar_result
+            "len={len} rel_error={rel_error} (simd={simd_result}, scalar={scalar_result})"
         );
     }
 }
@@ -546,10 +517,7 @@ fn test_dot_product_remainder_bounds_elimination() {
 
         assert!(
             (result - expected).abs() < SIMD_ABS_TOLERANCE,
-            "len={} mismatch: got={}, expected={}",
-            len,
-            result,
-            expected
+            "len={len} mismatch: got={result}, expected={expected}"
         );
     }
 }
@@ -561,7 +529,7 @@ fn test_dot_product_nan_propagation() {
     let b = vec![1.0, 1.0, 1.0, 1.0];
 
     let result = dot_product_native(&a, &b);
-    assert!(result.is_nan(), "NaN should propagate, got {}", result);
+    assert!(result.is_nan(), "NaN should propagate, got {result}");
 }
 
 #[test]
@@ -573,8 +541,7 @@ fn test_dot_product_inf_handling() {
     let result = dot_product_native(&a, &b);
     assert!(
         result.is_infinite(),
-        "Infinity should propagate, got {}",
-        result
+        "Infinity should propagate, got {result}"
     );
 }
 
@@ -589,8 +556,7 @@ fn test_cosine_fused_identical_vectors() {
     let result = cosine_similarity_native(&a, &a);
     assert!(
         (result - 1.0).abs() < 1e-5,
-        "Identical vectors should have cosine=1.0, got {}",
-        result
+        "Identical vectors should have cosine=1.0, got {result}"
     );
 }
 
@@ -601,8 +567,7 @@ fn test_cosine_fused_opposite_vectors() {
     let result = cosine_similarity_native(&a, &b);
     assert!(
         (result - (-1.0)).abs() < 1e-5,
-        "Opposite vectors should have cosine=-1.0, got {}",
-        result
+        "Opposite vectors should have cosine=-1.0, got {result}"
     );
 }
 
@@ -613,8 +578,7 @@ fn test_cosine_fused_orthogonal_vectors() {
     let result = cosine_similarity_native(&a, &b);
     assert!(
         result.abs() < 1e-5,
-        "Orthogonal vectors should have cosine=0.0, got {}",
-        result
+        "Orthogonal vectors should have cosine=0.0, got {result}"
     );
 }
 
@@ -635,9 +599,7 @@ fn test_cosine_fused_large_vectors_precision() {
 
     assert!(
         (simd_result - scalar_result).abs() < 0.02,
-        "Cosine precision: simd={}, scalar={}",
-        simd_result,
-        scalar_result
+        "Cosine precision: simd={simd_result}, scalar={scalar_result}"
     );
 }
 
@@ -648,8 +610,7 @@ fn test_cosine_fused_zero_vector() {
     let result = cosine_similarity_native(&a, &b);
     assert!(
         result.abs() < 1e-5,
-        "Zero vector should give cosine=0.0, got {}",
-        result
+        "Zero vector should give cosine=0.0, got {result}"
     );
 }
 
@@ -661,8 +622,7 @@ fn test_cosine_result_clamped() {
     let result = cosine_similarity_native(&a, &b);
     assert!(
         (-1.0..=1.0).contains(&result),
-        "Cosine should be clamped to [-1, 1], got {}",
-        result
+        "Cosine should be clamped to [-1, 1], got {result}"
     );
 }
 
@@ -676,8 +636,7 @@ fn test_jaccard_scalar_identical_vectors() {
     let result = jaccard_similarity_native(&a, &a);
     assert!(
         (result - 1.0).abs() < 1e-5,
-        "Identical vectors should have Jaccard=1.0, got {}",
-        result
+        "Identical vectors should have Jaccard=1.0, got {result}"
     );
 }
 
@@ -689,8 +648,7 @@ fn test_jaccard_scalar_disjoint_vectors() {
     // intersection = 0, union = 2, Jaccard = 0/2 = 0
     assert!(
         result.abs() < 1e-5,
-        "Disjoint vectors should have Jaccard=0.0, got {}",
-        result
+        "Disjoint vectors should have Jaccard=0.0, got {result}"
     );
 }
 
@@ -705,8 +663,7 @@ fn test_jaccard_scalar_partial_overlap() {
     let expected = 1.0 / 6.0;
     assert!(
         (result - expected).abs() < 1e-5,
-        "Jaccard should be ~0.1667, got {}",
-        result
+        "Jaccard should be ~0.1667, got {result}"
     );
 }
 
@@ -717,8 +674,7 @@ fn test_jaccard_scalar_empty_union() {
     let result = jaccard_similarity_native(&a, &b);
     assert!(
         (result - 1.0).abs() < 1e-5,
-        "Empty union should return Jaccard=1.0, got {}",
-        result
+        "Empty union should return Jaccard=1.0, got {result}"
     );
 }
 
@@ -732,8 +688,7 @@ fn test_jaccard_simd_small_vector() {
     let expected = 8.0 / 12.0;
     assert!(
         (result - expected).abs() < 1e-5,
-        "Jaccard should be ~0.6667, got {}",
-        result
+        "Jaccard should be ~0.6667, got {result}"
     );
 }
 
@@ -758,10 +713,7 @@ fn test_jaccard_simd_matches_scalar() {
 
         assert!(
             (simd_result - scalar_result).abs() < SIMD_ABS_TOLERANCE,
-            "len={}: SIMD result {} != scalar result {}",
-            len,
-            simd_result,
-            scalar_result
+            "len={len}: SIMD result {simd_result} != scalar result {scalar_result}"
         );
     }
 }
@@ -776,8 +728,7 @@ fn test_hamming_scalar_identical_vectors() {
     let result = hamming_distance_native(&a, &a);
     assert!(
         (result - 0.0).abs() < 1e-5,
-        "Identical vectors should have Hamming=0.0, got {}",
-        result
+        "Identical vectors should have Hamming=0.0, got {result}"
     );
 }
 
@@ -789,8 +740,7 @@ fn test_hamming_scalar_completely_different() {
     // All 4 positions differ (1.0 > 0.5 vs 0.0 <= 0.5)
     assert!(
         (result - 4.0).abs() < 1e-5,
-        "Completely different vectors should have Hamming=4.0, got {}",
-        result
+        "Completely different vectors should have Hamming=4.0, got {result}"
     );
 }
 
@@ -802,8 +752,7 @@ fn test_hamming_scalar_partial_differences() {
     // Positions 1 and 2 differ
     assert!(
         (result - 2.0).abs() < 1e-5,
-        "Should have 2 differences, got {}",
-        result
+        "Should have 2 differences, got {result}"
     );
 }
 
@@ -817,8 +766,7 @@ fn test_hamming_scalar_threshold_behavior() {
     // Only position 3 differs (0.5001 > 0.5 vs 0.4999 <= 0.5)
     assert!(
         (result - 1.0).abs() < 1e-5,
-        "Should have 1 difference at position 3, got {}",
-        result
+        "Should have 1 difference at position 3, got {result}"
     );
 }
 
@@ -831,8 +779,7 @@ fn test_hamming_simd_small_vector() {
     // Positions 0 and 1 differ
     assert!(
         (result - 2.0).abs() < 1e-5,
-        "Should have 2 differences, got {}",
-        result
+        "Should have 2 differences, got {result}"
     );
 }
 
@@ -859,10 +806,7 @@ fn test_hamming_simd_matches_scalar() {
 
         assert!(
             (simd_result - scalar_result).abs() < 1e-4,
-            "len={}: SIMD result {} != scalar result {}",
-            len,
-            simd_result,
-            scalar_result
+            "len={len}: SIMD result {simd_result} != scalar result {scalar_result}"
         );
     }
 }
@@ -902,10 +846,7 @@ fn test_avx512_mask_remainder_16_no_overflow() {
 
         assert!(
             (result - expected).abs() < 1e-3,
-            "len={}: result={} expected={}",
-            len,
-            result,
-            expected
+            "len={len}: result={result} expected={expected}"
         );
     }
 }
@@ -933,10 +874,7 @@ fn test_avx512_cosine_remainder_32_no_overflow() {
 
         assert!(
             (result - expected).abs() < 1e-4,
-            "len={}: result={} expected={}",
-            len,
-            result,
-            expected
+            "len={len}: result={result} expected={expected}"
         );
     }
 }
@@ -967,11 +905,7 @@ fn test_squared_l2_remainder_boundary() {
 
         assert!(
             rel_error < SIMD_REL_TOLERANCE,
-            "len={}: result={} expected={} rel_error={}",
-            len,
-            result,
-            expected,
-            rel_error
+            "len={len}: result={result} expected={expected} rel_error={rel_error}"
         );
     }
 }

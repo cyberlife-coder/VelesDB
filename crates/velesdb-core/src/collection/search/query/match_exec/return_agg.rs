@@ -2,7 +2,7 @@
 //!
 //! Detects aggregation functions (COUNT, AVG, SUM, MIN, MAX) in RETURN items,
 //! classifies items into grouping keys vs aggregations, and computes grouped
-//! aggregation results following OpenCypher implicit grouping semantics.
+//! aggregation results following `OpenCypher` implicit grouping semantics.
 
 use super::{parse_property_path, MatchResult};
 use crate::collection::types::Collection;
@@ -24,7 +24,7 @@ enum AggType {
 #[derive(Debug, Clone)]
 struct ReturnAggregation {
     agg_type: AggType,
-    /// Column inside the aggregation, e.g. "p.success_rate" or "*".
+    /// Column inside the aggregation, e.g. "`p.success_rate`" or "*".
     column: String,
     /// Key to use in the result map (alias or original expression).
     result_key: String,
@@ -61,7 +61,7 @@ fn parse_return_aggregation(expression: &str) -> Option<(AggType, String)> {
 
 /// Classifies RETURN items into grouping keys and aggregations.
 ///
-/// Non-aggregation items become implicit grouping keys (OpenCypher standard).
+/// Non-aggregation items become implicit grouping keys (`OpenCypher` standard).
 fn classify_return_items(items: &[ReturnItem]) -> (Vec<&ReturnItem>, Vec<ReturnAggregation>) {
     let mut grouping_keys: Vec<&ReturnItem> = Vec::new();
     let mut aggregations: Vec<ReturnAggregation> = Vec::new();
@@ -85,7 +85,7 @@ fn classify_return_items(items: &[ReturnItem]) -> (Vec<&ReturnItem>, Vec<ReturnA
     (grouping_keys, aggregations)
 }
 
-/// Resolves a dot-qualified column (e.g. "p.success_rate") from bindings + payloads.
+/// Resolves a dot-qualified column (e.g. "`p.success_rate`") from bindings + payloads.
 ///
 /// Splits on first dot to get (alias, property), resolves alias from bindings,
 /// then fetches the property from that node's payload.
@@ -124,7 +124,7 @@ impl Collection {
     /// Returns `None` if no aggregation functions are detected (caller uses normal projection).
     /// Returns `Some(aggregated_results)` if aggregation is present.
     ///
-    /// OpenCypher implicit grouping: non-aggregated items become grouping keys.
+    /// `OpenCypher` implicit grouping: non-aggregated items become grouping keys.
     pub(crate) fn aggregate_match_results(
         &self,
         results: &[MatchResult],
@@ -194,7 +194,7 @@ impl Collection {
     }
 }
 
-/// Computes a single aggregation over a group of MatchResults.
+/// Computes a single aggregation over a group of `MatchResults`.
 fn compute_aggregation(
     agg: &ReturnAggregation,
     members: &[&MatchResult],

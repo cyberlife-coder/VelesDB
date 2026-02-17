@@ -335,7 +335,7 @@ fn build_bs3_pattern() -> GraphPattern {
 /// WHERE: `related.risk_level = 'high'`
 ///
 /// Expected results: 2 paths ending at high-risk accounts (acc201 via tx100, acc204 via tx101).
-/// tx102 path excluded because acc207 has risk_level='low'.
+/// tx102 path excluded because acc207 has `risk_level`='low'.
 #[test]
 fn test_bs2_fraud_detection() {
     let (_dir, collection) = setup_bs2_scenario();
@@ -398,8 +398,7 @@ fn test_bs2_fraud_detection() {
         assert_eq!(
             risk,
             Some("high"),
-            "Projected related.risk_level should be 'high', got {:?}",
-            risk
+            "Projected related.risk_level should be 'high', got {risk:?}"
         );
     }
 
@@ -476,8 +475,7 @@ fn test_bs3_healthcare() {
         .expect("AVG should be a number");
     assert!(
         (amox_avg - 0.85).abs() < 0.01,
-        "Amoxicillin AVG should be ~0.85, got {}",
-        amox_avg
+        "Amoxicillin AVG should be ~0.85, got {amox_avg}"
     );
 
     let azith = results
@@ -493,8 +491,7 @@ fn test_bs3_healthcare() {
         .expect("AVG should be a number");
     assert!(
         (azith_avg - 0.90).abs() < 0.01,
-        "Azithromycin AVG should be ~0.90, got {}",
-        azith_avg
+        "Azithromycin AVG should be ~0.90, got {azith_avg}"
     );
 
     let osel = results
@@ -508,8 +505,7 @@ fn test_bs3_healthcare() {
         .expect("AVG should be a number");
     assert!(
         (osel_avg - 0.75).abs() < 0.01,
-        "Oseltamivir AVG should be ~0.75, got {}",
-        osel_avg
+        "Oseltamivir AVG should be ~0.75, got {osel_avg}"
     );
 
     // Omeprazole should NOT appear (K21.0 not in filter)
@@ -578,8 +574,7 @@ fn test_bs3_in_filter_raw_results() {
             .expect("icd10_code should be projected");
         assert!(
             code == "J18.9" || code == "J12.89",
-            "Only J18.9 or J12.89 should pass IN filter, got '{}'",
-            code
+            "Only J18.9 or J12.89 should pass IN filter, got '{code}'"
         );
     }
 }

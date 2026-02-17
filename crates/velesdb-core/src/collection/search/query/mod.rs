@@ -1,4 +1,4 @@
-//! VelesQL query execution for Collection.
+//! `VelesQL` query execution for Collection.
 //!
 //! This module orchestrates query execution by combining:
 //! - Query validation (`validation.rs`)
@@ -8,12 +8,12 @@
 //! # Cross-Store Execution (VP-010, Phase 7)
 //!
 //! Combined NEAR + graph MATCH queries are dispatched via `QueryPlanner::choose_hybrid_strategy()`
-//! which selects VectorFirst, Parallel, or GraphFirst execution based on:
+//! which selects `VectorFirst`, Parallel, or `GraphFirst` execution based on:
 //! - Query pattern (ORDER BY similarity, filters, etc.)
 //! - Runtime statistics (latency, selectivity)
 //! - Over-fetch factor for filtered queries
 //!
-//! See `cross_store_exec.rs` for VectorFirst and Parallel implementations.
+//! See `cross_store_exec.rs` for `VectorFirst` and Parallel implementations.
 
 // SAFETY: Numeric casts in query execution are intentional:
 // - f64->f32 for similarity thresholds: precision loss acceptable for filtering

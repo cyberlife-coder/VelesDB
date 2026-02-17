@@ -1,7 +1,7 @@
 //! PR Review Bugfix Tests - TDD approach (Martin Fowler)
 //!
 //! Each bug gets a failing test FIRST, then we fix the code.
-//! Tests are named: test_bug_XX_description
+//! Tests are named: `test_bug_XX_description`
 
 use crate::velesql::ast::Value;
 use crate::velesql::{LogicalOp, Parser};
@@ -21,8 +21,7 @@ fn test_bug_10_sum_star_should_fail() {
     // After fix: result.is_err() should be true
     assert!(
         result.is_err(),
-        "SUM(*) should be rejected - only COUNT(*) is valid with *. Got: {:?}",
-        result
+        "SUM(*) should be rejected - only COUNT(*) is valid with *. Got: {result:?}"
     );
 }
 
@@ -34,8 +33,7 @@ fn test_bug_10_avg_star_should_fail() {
 
     assert!(
         result.is_err(),
-        "AVG(*) should be rejected - only COUNT(*) is valid with *. Got: {:?}",
-        result
+        "AVG(*) should be rejected - only COUNT(*) is valid with *. Got: {result:?}"
     );
 }
 

@@ -1,4 +1,4 @@
-//! Tests for similarity() function parsing in VelesQL.
+//! Tests for `similarity()` function parsing in `VelesQL`.
 //!
 //! TDD: These tests are written BEFORE implementation.
 
@@ -28,7 +28,7 @@ mod tests {
                     assert_eq!(sim.operator, CompareOp::Gt);
                     assert!((sim.threshold - 0.8).abs() < 0.001);
                 }
-                _ => panic!("Expected Similarity condition, got {:?}", condition),
+                _ => panic!("Expected Similarity condition, got {condition:?}"),
             }
         } else {
             panic!("Expected condition in statement");
@@ -388,8 +388,8 @@ mod tests {
         assert!(!order_by[1].descending);
     }
 
-    /// BUG-001: compute_similarity must respect collection's configured metric
-    /// This test verifies that ORDER BY similarity() uses the collection's metric
+    /// BUG-001: `compute_similarity` must respect collection's configured metric
+    /// This test verifies that ORDER BY `similarity()` uses the collection's metric
     /// instead of always using cosine similarity.
     ///
     /// Semantics: DESC = most similar first, ASC = least similar first

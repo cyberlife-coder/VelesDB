@@ -27,9 +27,7 @@ fn test_harley_seal_hamming_correctness() {
 
     assert!(
         (result - expected).abs() < 1e-6,
-        "Harley-Seal Hamming failed: got {}, expected {}",
-        result,
-        expected
+        "Harley-Seal Hamming failed: got {result}, expected {expected}"
     );
 }
 
@@ -41,8 +39,7 @@ fn test_harley_seal_hamming_all_ones() {
         let result = hamming_distance_native(&a, &a);
         assert!(
             result.abs() < 1e-6,
-            "Hamming of identical vectors should be 0 for size {}",
-            size
+            "Hamming of identical vectors should be 0 for size {size}"
         );
     }
 }
@@ -55,8 +52,7 @@ fn test_harley_seal_hamming_all_zeros() {
         let result = hamming_distance_native(&a, &a);
         assert!(
             result.abs() < 1e-6,
-            "Hamming of zero vectors should be 0 for size {}",
-            size
+            "Hamming of zero vectors should be 0 for size {size}"
         );
     }
 }
@@ -77,9 +73,7 @@ fn test_harley_seal_hamming_opposite() {
 
     assert!(
         (result - expected).abs() < 1e-6,
-        "Harley-Seal Hamming opposite failed: got {}, expected {}",
-        result,
-        expected
+        "Harley-Seal Hamming opposite failed: got {result}, expected {expected}"
     );
 }
 
@@ -106,9 +100,7 @@ fn test_harley_seal_jaccard_correctness() {
 
     assert!(
         (result - expected).abs() < 1e-5,
-        "Harley-Seal Jaccard failed: got {}, expected {}",
-        result,
-        expected
+        "Harley-Seal Jaccard failed: got {result}, expected {expected}"
     );
 }
 
@@ -123,9 +115,7 @@ fn test_harley_seal_jaccard_identical() {
 
         assert!(
             (result - 1.0).abs() < 1e-6,
-            "Jaccard of identical sets should be 1.0 for size {}: got {}",
-            size,
-            result
+            "Jaccard of identical sets should be 1.0 for size {size}: got {result}"
         );
     }
 }
@@ -141,8 +131,7 @@ fn test_harley_seal_jaccard_disjoint() {
 
     assert!(
         result.abs() < 1e-6,
-        "Jaccard of disjoint sets should be 0.0: got {}",
-        result
+        "Jaccard of disjoint sets should be 0.0: got {result}"
     );
 }
 
@@ -175,8 +164,7 @@ fn test_harley_seal_jaccard_performance() {
     // Target < 35ns with Harley-Seal when optimized
     assert!(
         avg_ns < 200.0,
-        "Jaccard similarity too slow: {:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)",
-        avg_ns
+        "Jaccard similarity too slow: {avg_ns:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)"
     );
 }
 
@@ -206,10 +194,7 @@ fn test_harley_seal_vs_scalar_hamming() {
 
         assert!(
             (result - expected).abs() < 1e-6,
-            "Harley-Seal vs scalar failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "Harley-Seal vs scalar failed for size {size}: got {result}, expected {expected}"
         );
     }
 }
@@ -245,10 +230,7 @@ fn test_harley_seal_vs_scalar_jaccard() {
 
         assert!(
             (result - expected).abs() < 1e-5,
-            "Harley-Seal Jaccard vs scalar failed for size {}: got {}, expected {}",
-            size,
-            result,
-            expected
+            "Harley-Seal Jaccard vs scalar failed for size {size}: got {result}, expected {expected}"
         );
     }
 }

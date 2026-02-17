@@ -49,9 +49,10 @@ fn test_lru_cache_no_deadlock_concurrent_ops() {
     // Wait with timeout
     let start = std::time::Instant::now();
     while !completed.load(std::sync::atomic::Ordering::SeqCst) {
-        if start.elapsed() > DEADLOCK_TIMEOUT {
-            panic!("DEADLOCK DETECTED: LRU cache operations did not complete within timeout");
-        }
+        assert!(
+            start.elapsed() <= DEADLOCK_TIMEOUT,
+            "DEADLOCK DETECTED: LRU cache operations did not complete within timeout"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -94,9 +95,10 @@ fn test_lru_cache_no_deadlock_stats_during_eviction() {
 
     let start = std::time::Instant::now();
     while !completed.load(std::sync::atomic::Ordering::SeqCst) {
-        if start.elapsed() > DEADLOCK_TIMEOUT {
-            panic!("DEADLOCK DETECTED: Stats during eviction caused deadlock");
-        }
+        assert!(
+            start.elapsed() <= DEADLOCK_TIMEOUT,
+            "DEADLOCK DETECTED: Stats during eviction caused deadlock"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -136,9 +138,10 @@ fn test_bloom_filter_no_deadlock_concurrent_ops() {
 
     let start = std::time::Instant::now();
     while !completed.load(std::sync::atomic::Ordering::SeqCst) {
-        if start.elapsed() > DEADLOCK_TIMEOUT {
-            panic!("DEADLOCK DETECTED: Bloom filter operations caused deadlock");
-        }
+        assert!(
+            start.elapsed() <= DEADLOCK_TIMEOUT,
+            "DEADLOCK DETECTED: Bloom filter operations caused deadlock"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -179,9 +182,10 @@ fn test_bloom_filter_no_deadlock_insert_during_contains() {
 
     let start = std::time::Instant::now();
     while !completed.load(std::sync::atomic::Ordering::SeqCst) {
-        if start.elapsed() > DEADLOCK_TIMEOUT {
-            panic!("DEADLOCK DETECTED: Bloom insert during contains caused deadlock");
-        }
+        assert!(
+            start.elapsed() <= DEADLOCK_TIMEOUT,
+            "DEADLOCK DETECTED: Bloom insert during contains caused deadlock"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -229,9 +233,10 @@ fn test_no_deadlock_cache_and_bloom_together() {
 
     let start = std::time::Instant::now();
     while !completed.load(std::sync::atomic::Ordering::SeqCst) {
-        if start.elapsed() > DEADLOCK_TIMEOUT {
-            panic!("DEADLOCK DETECTED: Cache + Bloom together caused deadlock");
-        }
+        assert!(
+            start.elapsed() <= DEADLOCK_TIMEOUT,
+            "DEADLOCK DETECTED: Cache + Bloom together caused deadlock"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 

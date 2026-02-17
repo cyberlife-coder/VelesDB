@@ -1,7 +1,7 @@
 //! MATCH query execution for graph pattern matching (EPIC-045 US-002).
 //!
 //! This module implements the `execute_match()` method for executing
-//! Cypher-like MATCH queries on VelesDB collections.
+//! Cypher-like MATCH queries on `VelesDB` collections.
 
 // SAFETY: Numeric casts in MATCH query execution are intentional:
 // - u64->usize for result limits: limits are small (< 1M) and bounded
@@ -31,7 +31,7 @@ pub struct MatchResult {
     pub depth: u32,
     /// Path of edge IDs from start to this node.
     pub path: Vec<u64>,
-    /// Bound variables from the pattern (alias -> node_id).
+    /// Bound variables from the pattern (alias -> `node_id`).
     pub bindings: HashMap<String, u64>,
     /// Similarity score if combined with vector search.
     pub score: Option<f32>,
@@ -191,8 +191,8 @@ impl Collection {
         }
 
         // Single-hop: use existing BFS logic (no regression)
-        let max_depth = self.compute_max_depth(pattern);
-        let rel_types = self.extract_rel_types(pattern);
+        let max_depth = Self::compute_max_depth(pattern);
+        let rel_types = Self::extract_rel_types(pattern);
 
         let edge_store = self.edge_store.read();
         let mut results = Vec::new();
@@ -424,7 +424,7 @@ impl Collection {
     }
 
     /// Computes maximum traversal depth from pattern.
-    fn compute_max_depth(&self, pattern: &GraphPattern) -> u32 {
+    fn compute_max_depth(pattern: &GraphPattern) -> u32 {
         let mut max_depth = 0u32;
 
         for rel in &pattern.relationships {
@@ -445,7 +445,7 @@ impl Collection {
     }
 
     /// Extracts relationship type filters from pattern.
-    fn extract_rel_types(&self, pattern: &GraphPattern) -> Vec<String> {
+    fn extract_rel_types(pattern: &GraphPattern) -> Vec<String> {
         let mut types = Vec::new();
         for rel in &pattern.relationships {
             types.extend(rel.types.clone());
@@ -453,7 +453,7 @@ impl Collection {
         types
     }
 
-    /// Compares a VelesQL Value with a JSON value.
+    /// Compares a `VelesQL` Value with a JSON value.
     fn values_match(velesql_value: &crate::velesql::Value, json_value: &serde_json::Value) -> bool {
         use crate::velesql::Value;
 

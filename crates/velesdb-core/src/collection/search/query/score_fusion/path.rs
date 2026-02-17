@@ -64,7 +64,7 @@ impl PathScorer {
     /// Scores a path based on length and relationship types.
     ///
     /// # Arguments
-    /// * `path` - Slice of (source_id, target_id, rel_type) tuples representing edges
+    /// * `path` - Slice of (`source_id`, `target_id`, `rel_type`) tuples representing edges
     ///
     /// # Returns
     /// Score between 0.0 and 1.0 where:

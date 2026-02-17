@@ -1,4 +1,4 @@
-//! Tests for AgentMemory (EPIC-010/US-001, US-002, US-003, US-004)
+//! Tests for `AgentMemory` (EPIC-010/US-001, US-002, US-003, US-004)
 
 use super::*;
 use crate::Database;
@@ -8,7 +8,7 @@ use tempfile::tempdir;
 // US-001: Basic API tests
 // ============================================================================
 
-/// Test: AgentMemory can be created from a Database
+/// Test: `AgentMemory` can be created from a Database
 #[test]
 fn test_agent_memory_new() {
     let dir = tempdir().unwrap();
@@ -18,7 +18,7 @@ fn test_agent_memory_new() {
     assert!(memory.is_ok(), "AgentMemory::new should succeed");
 }
 
-/// Test: AgentMemory provides access to SemanticMemory
+/// Test: `AgentMemory` provides access to `SemanticMemory`
 #[test]
 fn test_agent_memory_semantic_access() {
     let dir = tempdir().unwrap();
@@ -29,7 +29,7 @@ fn test_agent_memory_semantic_access() {
     assert!(semantic.collection_name().starts_with("_semantic"));
 }
 
-/// Test: AgentMemory provides access to EpisodicMemory
+/// Test: `AgentMemory` provides access to `EpisodicMemory`
 #[test]
 fn test_agent_memory_episodic_access() {
     let dir = tempdir().unwrap();
@@ -40,7 +40,7 @@ fn test_agent_memory_episodic_access() {
     assert!(episodic.collection_name().starts_with("_episodic"));
 }
 
-/// Test: AgentMemory provides access to ProceduralMemory
+/// Test: `AgentMemory` provides access to `ProceduralMemory`
 #[test]
 fn test_agent_memory_procedural_access() {
     let dir = tempdir().unwrap();
@@ -51,7 +51,7 @@ fn test_agent_memory_procedural_access() {
     assert!(procedural.collection_name().starts_with("_procedural"));
 }
 
-/// Test: Multiple AgentMemory instances share the same collections
+/// Test: Multiple `AgentMemory` instances share the same collections
 #[test]
 fn test_agent_memory_shared_collections() {
     let dir = tempdir().unwrap();
@@ -70,7 +70,7 @@ fn test_agent_memory_shared_collections() {
 // US-002: SemanticMemory tests
 // ============================================================================
 
-/// Test: SemanticMemory can store and query facts
+/// Test: `SemanticMemory` can store and query facts
 #[test]
 fn test_semantic_store_and_query() {
     let dir = tempdir().unwrap();
@@ -91,7 +91,7 @@ fn test_semantic_store_and_query() {
     assert!(results[0].2.contains("blue")); // Content
 }
 
-/// Test: SemanticMemory dimension validation
+/// Test: `SemanticMemory` dimension validation
 #[test]
 fn test_semantic_dimension_mismatch() {
     let dir = tempdir().unwrap();
@@ -104,7 +104,7 @@ fn test_semantic_dimension_mismatch() {
     assert!(result.is_err());
 }
 
-/// Test: AgentMemory rejects mismatched dimension when collection exists (PR #93 bug fix)
+/// Test: `AgentMemory` rejects mismatched dimension when collection exists (PR #93 bug fix)
 #[test]
 fn test_dimension_mismatch_on_existing_collection() {
     let dir = tempdir().unwrap();
@@ -131,7 +131,7 @@ fn test_dimension_mismatch_on_existing_collection() {
 // US-003: EpisodicMemory tests
 // ============================================================================
 
-/// Test: EpisodicMemory can record and retrieve events
+/// Test: `EpisodicMemory` can record and retrieve events
 #[test]
 fn test_episodic_record_and_recent() {
     let dir = tempdir().unwrap();
@@ -150,7 +150,7 @@ fn test_episodic_record_and_recent() {
     assert_eq!(events[1].0, 2); // Then Event B
 }
 
-/// Test: EpisodicMemory similarity search
+/// Test: `EpisodicMemory` similarity search
 #[test]
 fn test_episodic_recall_similar() {
     let dir = tempdir().unwrap();
@@ -179,7 +179,7 @@ fn test_episodic_recall_similar() {
 // US-004: ProceduralMemory tests
 // ============================================================================
 
-/// Test: ProceduralMemory can learn and recall procedures
+/// Test: `ProceduralMemory` can learn and recall procedures
 #[test]
 fn test_procedural_learn_and_recall() {
     let dir = tempdir().unwrap();
@@ -203,7 +203,7 @@ fn test_procedural_learn_and_recall() {
     assert!((results[0].confidence - 0.8).abs() < 0.01);
 }
 
-/// Test: ProceduralMemory reinforcement
+/// Test: `ProceduralMemory` reinforcement
 #[test]
 fn test_procedural_reinforce() {
     let dir = tempdir().unwrap();
@@ -226,7 +226,7 @@ fn test_procedural_reinforce() {
     assert!((results[0].confidence - 0.6).abs() < 0.01); // 0.5 + 0.1 = 0.6
 }
 
-/// Test: ProceduralMemory min_confidence filter
+/// Test: `ProceduralMemory` `min_confidence` filter
 #[test]
 fn test_procedural_min_confidence_filter() {
     let dir = tempdir().unwrap();

@@ -1,4 +1,4 @@
-//! Conversion from VelesQL conditions to filter conditions.
+//! Conversion from `VelesQL` conditions to filter conditions.
 
 use super::Condition;
 use serde_json::Value;

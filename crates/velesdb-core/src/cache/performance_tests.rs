@@ -134,7 +134,7 @@ fn test_lru_cache_concurrent_throughput() {
 
     let elapsed = start.elapsed();
     let total_ops = num_threads * ops_per_thread;
-    let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
+    let ops_per_sec = f64::from(total_ops) / elapsed.as_secs_f64();
 
     // Should achieve at least 10K ops/sec (CI machines are slower)
     assert!(
@@ -182,7 +182,7 @@ fn test_bloom_filter_concurrent_throughput() {
 
     let elapsed = start.elapsed();
     let total_ops = num_threads * ops_per_thread;
-    let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
+    let ops_per_sec = f64::from(total_ops) / elapsed.as_secs_f64();
 
     // Should achieve at least 100K ops/sec (relaxed for CI)
     assert!(
@@ -230,7 +230,7 @@ fn test_lru_cache_thread_scalability() {
 
         let elapsed = start.elapsed();
         let total_ops = num_threads * ops_per_thread;
-        let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
+        let ops_per_sec = f64::from(total_ops) / elapsed.as_secs_f64();
         throughputs.push((num_threads, ops_per_sec));
     }
 
@@ -273,7 +273,7 @@ fn test_bloom_filter_memory_efficiency() {
         }
     }
 
-    let actual_fpr = false_positives as f64 / capacity as f64;
+    let actual_fpr = f64::from(false_positives) / capacity as f64;
 
     // Should be within 10x of target (1% target → < 10% actual)
     assert!(

@@ -1,4 +1,4 @@
-//! Tests for `conversion` module - VelesQL to Filter conversion.
+//! Tests for `conversion` module - `VelesQL` to Filter conversion.
 
 use super::{Condition, Value};
 use crate::velesql::{

@@ -3,7 +3,7 @@
 //! EPIC-034/US-005: Provides async bulk insert API using `spawn_blocking`
 //! to avoid blocking the async executor during I/O-intensive operations.
 //!
-//! # Why spawn_blocking?
+//! # Why `spawn_blocking`?
 //!
 //! Collection operations like bulk insert involve:
 //! - Memory-mapped file writes (blocking syscalls)

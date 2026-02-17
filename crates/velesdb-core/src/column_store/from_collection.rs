@@ -1,18 +1,18 @@
-//! Builds a ColumnStore from a Collection's stored points.
+//! Builds a `ColumnStore` from a Collection's stored points.
 //!
 //! This module provides the bridge between Collection (point-oriented storage)
-//! and ColumnStore (column-oriented storage) for JOIN operations.
+//! and `ColumnStore` (column-oriented storage) for JOIN operations.
 //! The point ID is used as the primary key for O(1) lookups during JOINs.
 
 use crate::collection::Collection;
 use crate::column_store::{ColumnStore, ColumnType, ColumnValue};
 use crate::error::Result;
 
-/// Maximum number of rows to materialize from a collection into a ColumnStore.
+/// Maximum number of rows to materialize from a collection into a `ColumnStore`.
 /// Prevents OOM on very large collections during JOIN operations.
 const DEFAULT_MAX_ROWS: usize = 100_000;
 
-/// Builds a ColumnStore from a Collection's stored point payloads.
+/// Builds a `ColumnStore` from a Collection's stored point payloads.
 ///
 /// Scans points in the collection and extracts payload fields into typed columns.
 /// The point ID becomes the integer primary key (`"id"` column) for O(1) JOIN lookups.
@@ -24,7 +24,7 @@ const DEFAULT_MAX_ROWS: usize = 100_000;
 /// - JSON Number (float) → `ColumnType::Float`
 /// - JSON String → `ColumnType::String`
 /// - JSON Bool → `ColumnType::Bool`
-/// - JSON Array/Object → skipped (not supported in ColumnStore)
+/// - JSON Array/Object → skipped (not supported in `ColumnStore`)
 ///
 /// # Arguments
 ///
@@ -33,7 +33,7 @@ const DEFAULT_MAX_ROWS: usize = 100_000;
 ///
 /// # Errors
 ///
-/// Returns an error if the ColumnStore cannot be created (e.g., schema conflict).
+/// Returns an error if the `ColumnStore` cannot be created (e.g., schema conflict).
 pub fn column_store_from_collection(
     collection: &Collection,
     max_rows: usize,
@@ -122,7 +122,7 @@ pub fn column_store_from_collection(
 
 /// Infers a `ColumnType` from a JSON value.
 ///
-/// Returns `None` for arrays and objects (not supported in ColumnStore).
+/// Returns `None` for arrays and objects (not supported in `ColumnStore`).
 fn infer_column_type(value: &serde_json::Value) -> Option<ColumnType> {
     match value {
         serde_json::Value::Bool(_) => Some(ColumnType::Bool),
@@ -142,7 +142,7 @@ fn infer_column_type(value: &serde_json::Value) -> Option<ColumnType> {
 
 /// Converts a JSON value to a `ColumnValue` for the given column type.
 ///
-/// Uses the ColumnStore's string table for string interning.
+/// Uses the `ColumnStore`'s string table for string interning.
 fn json_to_column_value(
     value: &serde_json::Value,
     col_type: ColumnType,

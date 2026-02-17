@@ -1,4 +1,4 @@
-//! ParallelTraverser: parallel BFS/DFS across multiple start nodes (EPIC-051 US-001).
+//! `ParallelTraverser`: parallel BFS/DFS across multiple start nodes (EPIC-051 US-001).
 //!
 //! Uses rayon to parallelize traversal from independent start nodes.
 

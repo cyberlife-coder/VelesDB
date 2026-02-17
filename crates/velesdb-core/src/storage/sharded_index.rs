@@ -1,4 +1,4 @@
-//! Sharded index for MmapStorage.
+//! Sharded index for `MmapStorage`.
 //!
 //! EPIC-033/US-004: Reduces lock contention for read-heavy workloads.
 //!
@@ -52,7 +52,7 @@ impl ShardedIndex {
         }
     }
 
-    /// Creates a sharded index from an existing HashMap.
+    /// Creates a sharded index from an existing `HashMap`.
     #[must_use]
     pub fn from_hashmap(map: FxHashMap<u64, usize>) -> Self {
         let index = Self::new();
@@ -137,7 +137,7 @@ impl ShardedIndex {
         keys
     }
 
-    /// Collects all entries into a single HashMap for serialization.
+    /// Collects all entries into a single `HashMap` for serialization.
     #[must_use]
     pub fn to_hashmap(&self) -> FxHashMap<u64, usize> {
         let mut map = FxHashMap::default();

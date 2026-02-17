@@ -1,7 +1,7 @@
 //! Thread-Safety Tests for Trigram Index (US-CORE-003-11)
 //!
 //! Validates concurrent access patterns and absence of data races.
-//! Run with: cargo test --package velesdb-core trigram::thread_safety
+//! Run with: cargo test --package velesdb-core `trigram::thread_safety`
 
 use std::sync::Arc;
 use std::thread;
@@ -11,7 +11,7 @@ use parking_lot::RwLock;
 
 use super::index::TrigramIndex;
 
-/// Thread-safe wrapper for TrigramIndex
+/// Thread-safe wrapper for `TrigramIndex`
 pub struct ConcurrentTrigramIndex {
     inner: RwLock<TrigramIndex>,
 }

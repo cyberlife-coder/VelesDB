@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use super::GroupKey;
 
 /// Default maximum number of groups allowed (memory protection).
-/// Can be overridden via WITH(max_groups=N) or WITH(group_limit=N).
+/// Can be overridden via `WITH(max_groups=N)` or `WITH(group_limit=N)`.
 const DEFAULT_MAX_GROUPS: usize = 10000;
 
 impl Collection {
@@ -353,9 +353,8 @@ impl Collection {
 
     /// Compare aggregate value against threshold using operator.
     fn compare_values(agg_value: Option<f64>, op: CompareOp, threshold: &Value) -> bool {
-        let agg = match agg_value {
-            Some(v) => v,
-            None => return false,
+        let Some(agg) = agg_value else {
+            return false;
         };
 
         let thresh = match threshold {
@@ -378,9 +377,9 @@ impl Collection {
         }
     }
 
-    /// Extract max_groups limit from WITH clause (EPIC-040 US-004).
+    /// Extract `max_groups` limit from WITH clause (EPIC-040 US-004).
     /// Supports both `max_groups` and `group_limit` option names.
-    /// Returns DEFAULT_MAX_GROUPS if not specified.
+    /// Returns `DEFAULT_MAX_GROUPS` if not specified.
     fn extract_max_groups_limit(with_clause: Option<&crate::velesql::WithClause>) -> usize {
         let Some(with) = with_clause else {
             return DEFAULT_MAX_GROUPS;
@@ -401,7 +400,7 @@ impl Collection {
     }
 
     /// BUG-5 FIX: Resolve parameter placeholders in a condition.
-    /// Replaces Value::Parameter("name") with the actual value from params HashMap.
+    /// Replaces `Value::Parameter("name`") with the actual value from params `HashMap`.
     pub(crate) fn resolve_condition_params(
         cond: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,

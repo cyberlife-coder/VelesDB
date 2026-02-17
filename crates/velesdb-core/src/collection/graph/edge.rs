@@ -120,13 +120,13 @@ impl GraphEdge {
 pub struct EdgeStore {
     /// All edges indexed by ID
     edges: HashMap<u64, GraphEdge>,
-    /// Outgoing edges: source_id -> Vec<edge_id>
+    /// Outgoing edges: `source_id` -> Vec<`edge_id`>
     outgoing: HashMap<u64, Vec<u64>>,
-    /// Incoming edges: target_id -> Vec<edge_id>
+    /// Incoming edges: `target_id` -> Vec<`edge_id`>
     incoming: HashMap<u64, Vec<u64>>,
-    /// Secondary index: label -> Vec<edge_id> for fast label queries
+    /// Secondary index: label -> Vec<`edge_id`> for fast label queries
     by_label: HashMap<String, Vec<u64>>,
-    /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
+    /// Composite index: (`source_id`, label) -> Vec<`edge_id`> for fast filtered traversal
     outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
 }
 
@@ -248,7 +248,7 @@ impl EdgeStore {
     ///
     /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
     /// The edge is stored and indexed by target node only.
-    /// Note: Label indices are maintained by the source shard in ConcurrentEdgeStore.
+    /// Note: Label indices are maintained by the source shard in `ConcurrentEdgeStore`.
     ///
     /// # Errors
     ///
@@ -365,7 +365,7 @@ impl EdgeStore {
 
     /// Removes an edge by ID.
     ///
-    /// Cleans up all indices: outgoing, incoming, by_label, and outgoing_by_label.
+    /// Cleans up all indices: outgoing, incoming, `by_label`, and `outgoing_by_label`.
     pub fn remove_edge(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
             let source = edge.source();

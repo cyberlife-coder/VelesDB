@@ -1,7 +1,7 @@
 //! Trigram Index implementation using Roaring Bitmaps.
 //!
 //! SOTA 2026 implementation based on:
-//! - PostgreSQL pg_trgm algorithm
+//! - `PostgreSQL` `pg_trgm` algorithm
 //! - arXiv:2310.11703v2 recommendations
 //! - Roaring Bitmaps for compressed bitmap operations
 
@@ -133,13 +133,12 @@ impl TrigramIndex {
     /// # Panics
     ///
     /// Panics if `doc_id` exceeds `u32::MAX` (4 billion documents).
-    /// This is a limitation of the underlying RoaringBitmap storage.
+    /// This is a limitation of the underlying `RoaringBitmap` storage.
     pub fn insert(&mut self, doc_id: u64, text: &str) {
         // Bounds check: RoaringBitmap uses u32 internally
         assert!(
             u32::try_from(doc_id).is_ok(),
-            "TrigramIndex: doc_id {} exceeds u32::MAX limit. Maximum 4B documents supported.",
-            doc_id
+            "TrigramIndex: doc_id {doc_id} exceeds u32::MAX limit. Maximum 4B documents supported."
         );
 
         // Remove old entry if exists
@@ -247,9 +246,8 @@ impl TrigramIndex {
     /// Returns a value between 0.0 (no overlap) and 1.0 (identical).
     #[must_use]
     pub fn score_jaccard(&self, doc_id: u64, query_trigrams: &HashSet<Trigram>) -> f32 {
-        let doc_trigrams = match self.doc_trigrams.get(&doc_id) {
-            Some(t) => t,
-            None => return 0.0,
+        let Some(doc_trigrams) = self.doc_trigrams.get(&doc_id) else {
+            return 0.0;
         };
 
         if doc_trigrams.is_empty() || query_trigrams.is_empty() {

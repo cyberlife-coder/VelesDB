@@ -81,18 +81,14 @@ impl FusionConfig {
         // Validate weights are non-negative
         assert!(
             avg_weight >= 0.0 && max_weight >= 0.0 && hit_weight >= 0.0,
-            "FusionConfig::weighted: all weights must be non-negative, got avg={}, max={}, hit={}",
-            avg_weight,
-            max_weight,
-            hit_weight
+            "FusionConfig::weighted: all weights must be non-negative, got avg={avg_weight}, max={max_weight}, hit={hit_weight}"
         );
 
         // Validate weights sum to 1.0 (with tolerance for floating-point errors)
         let sum = avg_weight + max_weight + hit_weight;
         assert!(
             (sum - 1.0).abs() < 0.001,
-            "FusionConfig::weighted: weights must sum to 1.0, got sum={}",
-            sum
+            "FusionConfig::weighted: weights must sum to 1.0, got sum={sum}"
         );
 
         let mut params = std::collections::HashMap::new();

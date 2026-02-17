@@ -1,4 +1,4 @@
-//! Range index for ordered property lookups using BTreeMap.
+//! Range index for ordered property lookups using `BTreeMap`.
 //!
 //! Provides O(log n) range queries (>, <, >=, <=, BETWEEN) instead of O(n) scans.
 
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
 
-/// Wrapper for comparable numeric values in BTreeMap.
+/// Wrapper for comparable numeric values in `BTreeMap`.
 ///
 /// JSON values are converted to this for ordered comparison.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,7 +79,7 @@ impl Ord for OrderedValue {
 }
 
 impl OrderedValue {
-    /// Convert a JSON value to an OrderedValue for comparison.
+    /// Convert a JSON value to an `OrderedValue` for comparison.
     #[must_use]
     pub fn from_json(value: &serde_json::Value) -> Option<Self> {
         match value {
@@ -97,13 +97,13 @@ impl OrderedValue {
     }
 }
 
-/// Current schema version for RangeIndex serialization.
+/// Current schema version for `RangeIndex` serialization.
 /// Increment this when making breaking changes to the index format.
 pub const RANGE_INDEX_VERSION: u32 = 1;
 
 /// Range index for ordered property lookups.
 ///
-/// Uses BTreeMap for O(log n) range queries on numeric/string properties.
+/// Uses `BTreeMap` for O(log n) range queries on numeric/string properties.
 ///
 /// # Example
 ///
@@ -121,7 +121,7 @@ pub struct RangeIndex {
     /// Schema version for forward compatibility.
     #[serde(default = "default_range_version")]
     version: u32,
-    /// (label, property_name) -> (ordered_value -> node_ids)
+    /// (label, `property_name`) -> (`ordered_value` -> `node_ids`)
     indexes: HashMap<(String, String), BTreeMap<OrderedValue, RoaringBitmap>>,
 }
 
@@ -153,7 +153,7 @@ impl RangeIndex {
     /// Insert a node into the range index.
     ///
     /// Returns `true` if the index exists and the value is comparable.
-    /// Returns `false` if node_id > u32::MAX to prevent data corruption.
+    /// Returns `false` if `node_id` > `u32::MAX` to prevent data corruption.
     pub fn insert(
         &mut self,
         label: &str,
@@ -178,7 +178,7 @@ impl RangeIndex {
 
     /// Remove a node from the range index.
     ///
-    /// Returns `false` if node_id > u32::MAX (cannot exist in index).
+    /// Returns `false` if `node_id` > `u32::MAX` (cannot exist in index).
     pub fn remove(
         &mut self,
         label: &str,
@@ -287,7 +287,7 @@ impl RangeIndex {
         )
     }
 
-    /// Internal range query using BTreeMap::range()
+    /// Internal range query using `BTreeMap::range()`
     fn range_query(
         &self,
         label: &str,

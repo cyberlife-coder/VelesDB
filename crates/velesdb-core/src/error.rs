@@ -116,7 +116,7 @@ pub enum Error {
     /// Numeric overflow (VELES-023).
     ///
     /// Indicates a numeric conversion would overflow or truncate.
-    /// Use try_from() instead of `as` casts for user-provided data.
+    /// Use `try_from()` instead of `as` casts for user-provided data.
     #[error("[VELES-023] Numeric overflow: {0}")]
     Overflow(String),
 

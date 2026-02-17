@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::float_cmp
 )]
-//! Tests for vector_bytes module.
+//! Tests for `vector_bytes` module.
 
 use super::vector_bytes::{bytes_to_vector, vector_to_bytes};
 
@@ -91,8 +91,8 @@ fn test_vector_to_bytes_preserves_special_values() {
 // EPIC-032/US-001: Alignment Safety Tests
 // ============================================================================
 
-/// EPIC-032/US-001: Verify bytes_to_vector works with unaligned source bytes.
-/// This is safe because we use ptr::copy_nonoverlapping which doesn't require
+/// EPIC-032/US-001: Verify `bytes_to_vector` works with unaligned source bytes.
+/// This is safe because we use `ptr::copy_nonoverlapping` which doesn't require
 /// source alignment - it copies byte-by-byte into an aligned destination.
 #[test]
 fn test_bytes_to_vector_unaligned_source_is_safe() {
@@ -111,7 +111,7 @@ fn test_bytes_to_vector_unaligned_source_is_safe() {
     assert_eq!(original, recovered);
 }
 
-/// EPIC-032/US-001: Verify vector_to_bytes output is naturally aligned.
+/// EPIC-032/US-001: Verify `vector_to_bytes` output is naturally aligned.
 #[test]
 fn test_vector_to_bytes_output_alignment() {
     let vector = vec![1.0f32, 2.0, 3.0, 4.0];

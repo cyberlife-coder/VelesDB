@@ -188,9 +188,7 @@ fn test_path_scorer_shorter_path_scores_higher() {
 
     assert!(
         short_score > long_score,
-        "Short path {} should score higher than long path {}",
-        short_score,
-        long_score
+        "Short path {short_score} should score higher than long path {long_score}"
     );
 }
 
@@ -209,9 +207,7 @@ fn test_path_scorer_rel_type_weights() {
 
     assert!(
         authored_score > mentions_score,
-        "AUTHORED {} should score higher than MENTIONS {}",
-        authored_score,
-        mentions_score
+        "AUTHORED {authored_score} should score higher than MENTIONS {mentions_score}"
     );
     assert!((authored_score - 1.0).abs() < f32::EPSILON);
     assert!((mentions_score - 0.5).abs() < f32::EPSILON);

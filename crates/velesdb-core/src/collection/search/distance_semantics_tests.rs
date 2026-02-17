@@ -1,7 +1,7 @@
 //! Tests for distance metrics semantics (EPIC-027/US-001).
 //!
-//! These tests verify that similarity() filtering and sorting
-//! behave correctly for both similarity metrics (Cosine, DotProduct, Jaccard)
+//! These tests verify that `similarity()` filtering and sorting
+//! behave correctly for both similarity metrics (Cosine, `DotProduct`, Jaccard)
 //! and distance metrics (Euclidean, Hamming).
 
 use crate::distance::DistanceMetric;
@@ -11,7 +11,7 @@ fn should_sort_descending(metric: DistanceMetric) -> bool {
     metric.higher_is_better()
 }
 
-/// Helper: Filter by "similarity() > threshold" with metric awareness.
+/// Helper: Filter by "`similarity()` > threshold" with metric awareness.
 fn filter_by_similarity_gt(metric: DistanceMetric, score: f32, threshold: f32) -> bool {
     if metric.higher_is_better() {
         // Similarity metric: higher score = more similar
@@ -38,7 +38,7 @@ fn sort_by_similarity(metric: DistanceMetric, scores: &mut [f32]) {
 mod tests {
     use super::*;
 
-    /// Test that higher_is_better returns correct values for all metrics.
+    /// Test that `higher_is_better` returns correct values for all metrics.
     #[test]
     fn test_higher_is_better_semantics() {
         // Similarity metrics: higher = more similar
@@ -67,8 +67,8 @@ mod tests {
     }
 
     /// Test that similarity threshold comparison is metric-aware.
-    /// For Cosine: similarity() > 0.8 means "score > 0.8" (more similar)
-    /// For Euclidean: similarity() > 0.8 should mean "distance < 0.8" (more similar)
+    /// For Cosine: `similarity()` > 0.8 means "score > 0.8" (more similar)
+    /// For Euclidean: `similarity()` > 0.8 should mean "distance < 0.8" (more similar)
     #[test]
     fn test_threshold_comparison_semantics() {
         // Scores from search results

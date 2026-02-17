@@ -1,4 +1,4 @@
-//! AVX2+FMA similarity kernel implementations for x86_64.
+//! AVX2+FMA similarity kernel implementations for `x86_64`.
 //!
 //! Contains hand-tuned AVX2 SIMD kernels for cosine similarity (fused),
 //! Hamming distance, and Jaccard similarity.
@@ -219,28 +219,28 @@ pub(crate) unsafe fn hamming_avx2(a: &[f32], b: &[f32]) -> f32 {
         let cmp_a0 = _mm256_cmp_ps(va0, threshold, _CMP_GT_OQ);
         let cmp_b0 = _mm256_cmp_ps(vb0, threshold, _CMP_GT_OQ);
         let diff0 = _mm256_xor_ps(cmp_a0, cmp_b0);
-        diff_count += _mm256_movemask_ps(diff0).count_ones() as u64;
+        diff_count += u64::from(_mm256_movemask_ps(diff0).count_ones());
 
         let va1 = _mm256_loadu_ps(a_ptr.add(8));
         let vb1 = _mm256_loadu_ps(b_ptr.add(8));
         let cmp_a1 = _mm256_cmp_ps(va1, threshold, _CMP_GT_OQ);
         let cmp_b1 = _mm256_cmp_ps(vb1, threshold, _CMP_GT_OQ);
         let diff1 = _mm256_xor_ps(cmp_a1, cmp_b1);
-        diff_count += _mm256_movemask_ps(diff1).count_ones() as u64;
+        diff_count += u64::from(_mm256_movemask_ps(diff1).count_ones());
 
         let va2 = _mm256_loadu_ps(a_ptr.add(16));
         let vb2 = _mm256_loadu_ps(b_ptr.add(16));
         let cmp_a2 = _mm256_cmp_ps(va2, threshold, _CMP_GT_OQ);
         let cmp_b2 = _mm256_cmp_ps(vb2, threshold, _CMP_GT_OQ);
         let diff2 = _mm256_xor_ps(cmp_a2, cmp_b2);
-        diff_count += _mm256_movemask_ps(diff2).count_ones() as u64;
+        diff_count += u64::from(_mm256_movemask_ps(diff2).count_ones());
 
         let va3 = _mm256_loadu_ps(a_ptr.add(24));
         let vb3 = _mm256_loadu_ps(b_ptr.add(24));
         let cmp_a3 = _mm256_cmp_ps(va3, threshold, _CMP_GT_OQ);
         let cmp_b3 = _mm256_cmp_ps(vb3, threshold, _CMP_GT_OQ);
         let diff3 = _mm256_xor_ps(cmp_a3, cmp_b3);
-        diff_count += _mm256_movemask_ps(diff3).count_ones() as u64;
+        diff_count += u64::from(_mm256_movemask_ps(diff3).count_ones());
 
         a_ptr = a_ptr.add(32);
         b_ptr = b_ptr.add(32);

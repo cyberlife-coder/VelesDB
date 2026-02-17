@@ -1,6 +1,6 @@
 //! Compressed Adaptive Radix Tree (C-ART) for high-degree vertex storage.
 //!
-//! This module implements C-ART based on RapidStore (arXiv:2507.00839) for
+//! This module implements C-ART based on `RapidStore` (arXiv:2507.00839) for
 //! efficient storage of large adjacency lists in graph databases.
 //!
 //! # EPIC-020 US-002: C-ART for High-Degree Vertices
@@ -160,7 +160,7 @@ impl CompressedART {
     }
 }
 
-/// C-ART implementation of EdgeIndex for integration with DegreeRouter.
+/// C-ART implementation of `EdgeIndex` for integration with `DegreeRouter`.
 #[derive(Debug, Clone, Default)]
 pub struct CARTEdgeIndex {
     tree: CompressedART,

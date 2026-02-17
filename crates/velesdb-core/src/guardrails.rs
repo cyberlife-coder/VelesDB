@@ -1,7 +1,7 @@
-//! Guard-Rails, Quotas & Timeouts for VelesDB queries (EPIC-048).
+//! Guard-Rails, Quotas & Timeouts for `VelesDB` queries (EPIC-048).
 //!
 //! This module provides production-grade protections against runaway queries:
-//! - **Query Timeout**: Maximum execution time (US-001 - already in SearchConfig)
+//! - **Query Timeout**: Maximum execution time (US-001 - already in `SearchConfig`)
 //! - **Traversal Depth Limit**: Maximum graph traversal depth (US-002)
 //! - **Cardinality Limit**: Maximum intermediate results (US-003)
 //! - **Memory Limit**: Memory budget per query (US-004)
@@ -71,7 +71,7 @@ impl Default for QueryLimits {
 }
 
 impl QueryLimits {
-    /// Creates a new QueryLimits with default values.
+    /// Creates a new `QueryLimits` with default values.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -218,6 +218,10 @@ impl QueryContext {
     }
 
     /// Checks if the query has timed out (US-001).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when elapsed execution time exceeds configured timeout.
     pub fn check_timeout(&self) -> Result<(), GuardRailViolation> {
         let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
         if elapsed_ms > self.limits.timeout_ms {
@@ -230,6 +234,10 @@ impl QueryContext {
     }
 
     /// Checks and updates traversal depth (US-002).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when depth exceeds configured maximum.
     pub fn check_depth(&self, depth: u32) -> Result<(), GuardRailViolation> {
         self.current_depth
             .store(u64::from(depth), Ordering::Relaxed);
@@ -243,6 +251,10 @@ impl QueryContext {
     }
 
     /// Checks and updates cardinality (US-003).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when accumulated cardinality exceeds configured maximum.
     pub fn check_cardinality(&self, count: usize) -> Result<(), GuardRailViolation> {
         let current = self.current_cardinality.fetch_add(count, Ordering::Relaxed) + count;
         if current > self.limits.max_cardinality {
@@ -255,6 +267,10 @@ impl QueryContext {
     }
 
     /// Checks and updates memory usage (US-004).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tracked memory exceeds configured limit.
     pub fn check_memory(&self, bytes: usize) -> Result<(), GuardRailViolation> {
         let current = self.memory_used.fetch_add(bytes, Ordering::Relaxed) + bytes;
         if current > self.limits.memory_limit_bytes {
@@ -305,6 +321,10 @@ impl RateLimiter {
     }
 
     /// Checks if a request from the given client is allowed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when rate limits are exceeded.
     pub fn check(&self, client_id: &str) -> Result<(), GuardRailViolation> {
         let mut clients = self.clients.write();
         let now = Instant::now();
@@ -372,6 +392,10 @@ impl CircuitBreaker {
     }
 
     /// Checks if a request is allowed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the circuit is open and recovery delay has not elapsed.
     pub fn check(&self) -> Result<(), GuardRailViolation> {
         let state = *self.state.read();
         match state {
@@ -469,6 +493,10 @@ impl GuardRails {
     }
 
     /// Checks all pre-execution guard-rails for a client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either circuit breaker or rate limiter rejects the request.
     pub fn pre_check(&self, client_id: &str) -> Result<(), GuardRailViolation> {
         self.circuit_breaker.check()?;
         self.rate_limiter.check(client_id)?;

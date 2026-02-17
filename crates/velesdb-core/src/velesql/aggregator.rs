@@ -1,7 +1,7 @@
-//! Streaming aggregation for VelesQL (EPIC-017 US-002).
+//! Streaming aggregation for `VelesQL` (EPIC-017 US-002).
 //!
 //! Implements O(1) memory aggregation using single-pass streaming algorithm.
-//! Based on state-of-art practices from DuckDB and DataFusion (arXiv 2024).
+//! Based on state-of-art practices from `DuckDB` and `DataFusion` (arXiv 2024).
 
 // SAFETY: Numeric casts in aggregation are intentional:
 // - u64->f64 for count-to-double conversion: precision loss acceptable for averages
@@ -96,7 +96,7 @@ impl Aggregator {
     /// # Panics
     ///
     /// This function will not panic under normal operation. The internal `expect()`
-    /// calls are guarded by invariant that all HashMaps are kept in sync.
+    /// calls are guarded by invariant that all `HashMaps` are kept in sync.
     pub fn process_value(&mut self, column: &str, value: &serde_json::Value) {
         if let Some(num) = Self::extract_number(value) {
             // Fast path: column already tracked - no allocation
@@ -148,7 +148,7 @@ impl Aggregator {
     /// # Panics
     ///
     /// This function will not panic under normal operation. The internal `expect()`
-    /// calls are guarded by invariant that all HashMaps are kept in sync.
+    /// calls are guarded by invariant that all `HashMaps` are kept in sync.
     pub fn process_batch(&mut self, column: &str, values: &[f64]) {
         if values.is_empty() {
             return;

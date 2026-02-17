@@ -1,4 +1,4 @@
-//! AVX-512F kernel implementations for x86_64.
+//! AVX-512F kernel implementations for `x86_64`.
 //!
 //! Contains hand-tuned AVX-512 SIMD kernels for dot product, squared L2,
 //! cosine similarity, Hamming distance, and Jaccard similarity.
@@ -415,7 +415,7 @@ pub(crate) unsafe fn hamming_avx512(a: &[f32], b: &[f32]) -> f32 {
 
         // XOR to find positions where binary values differ
         let diff_mask = mask_a ^ mask_b;
-        diff_count += diff_mask.count_ones() as u64;
+        diff_count += u64::from(diff_mask.count_ones());
 
         i += 16;
     }

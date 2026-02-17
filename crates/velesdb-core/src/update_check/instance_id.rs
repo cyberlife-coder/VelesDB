@@ -1,6 +1,6 @@
 //! Instance ID Generation (US-001)
 //!
-//! Generates a stable, non-reversible hash unique to each VelesDB installation.
+//! Generates a stable, non-reversible hash unique to each `VelesDB` installation.
 
 use sha2::{Digest, Sha256};
 use std::path::Path;

@@ -1,6 +1,6 @@
 //! Tests for MATCH WHERE clause evaluation of all condition types (VP-001).
 //!
-//! Verifies that LIKE, BETWEEN, IN, IsNull, Match (full-text), and temporal
+//! Verifies that LIKE, BETWEEN, IN, `IsNull`, Match (full-text), and temporal
 //! conditions are properly evaluated in MATCH WHERE context — NOT silently
 //! passed through as `Ok(true)`.
 

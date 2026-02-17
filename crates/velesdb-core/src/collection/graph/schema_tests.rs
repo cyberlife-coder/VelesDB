@@ -1,4 +1,4 @@
-//! Tests for GraphSchema, NodeType, and EdgeType.
+//! Tests for `GraphSchema`, `NodeType`, and `EdgeType`.
 //!
 //! TDD: Tests written BEFORE implementation (RED phase).
 

@@ -1,7 +1,7 @@
 //! Aggregation types for GROUP BY and HAVING clauses.
 //!
 //! This module defines aggregate functions and grouping types
-//! used in VelesQL aggregation queries.
+//! used in `VelesQL` aggregation queries.
 
 use serde::{Deserialize, Serialize};
 

@@ -76,7 +76,7 @@ impl StreamingConfig {
 /// # Memory Characteristics
 ///
 /// - Queue: O(width × depth) - typically small for sparse graphs
-/// - Visited: O(min(nodes_traversed, max_visited_size))
+/// - Visited: `O(min(nodes_traversed`, `max_visited_size`))
 /// - Total: Bounded by `max_visited_size` configuration
 ///
 /// # Example

@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn test_simd_features_debug() {
         let features = SimdFeatures::detect();
-        let debug_str = format!("{:?}", features);
+        let debug_str = format!("{features:?}");
         assert!(debug_str.contains("SimdFeatures"));
     }
 

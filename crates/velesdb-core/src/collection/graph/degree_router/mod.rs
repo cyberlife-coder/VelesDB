@@ -15,9 +15,9 @@
 //!
 //! ## References
 //!
-//! - RapidStore (arXiv:2507.00839): "To handle degree skewness in real-world graphs,
+//! - `RapidStore` (arXiv:2507.00839): "To handle degree skewness in real-world graphs,
 //!   N(u) is stored differently based on vertex degree"
-//! - LSMGraph (arXiv:2411.06392): Multi-Level CSR with vertex-grained versioning
+//! - `LSMGraph` (arXiv:2411.06392): Multi-Level CSR with vertex-grained versioning
 
 #[cfg(test)]
 mod tests;
@@ -29,7 +29,7 @@ use super::cart::CARTEdgeIndex;
 /// Default threshold for switching from low-degree to high-degree storage.
 pub const DEFAULT_DEGREE_THRESHOLD: usize = 100;
 
-/// Threshold for switching from HashSet to C-ART (very high-degree hubs).
+/// Threshold for switching from `HashSet` to C-ART (very high-degree hubs).
 pub const CART_THRESHOLD: usize = 1000;
 
 /// Trait for edge index implementations.
@@ -201,7 +201,7 @@ impl DegreeAdaptiveStorage {
         Self::default()
     }
 
-    /// Returns true if this is high-degree storage (HashSet or C-ART).
+    /// Returns true if this is high-degree storage (`HashSet` or C-ART).
     #[must_use]
     pub fn is_high_degree(&self) -> bool {
         matches!(self, Self::HighDegree(_) | Self::VeryHighDegree(_))
@@ -220,7 +220,7 @@ impl DegreeAdaptiveStorage {
         }
     }
 
-    /// Promotes to very high-degree C-ART storage if currently HashSet.
+    /// Promotes to very high-degree C-ART storage if currently `HashSet`.
     pub fn promote_to_cart(&mut self) {
         if let Self::HighDegree(hash_index) = self {
             let targets: Vec<u64> = hash_index.targets.iter().copied().collect();
@@ -302,8 +302,8 @@ impl DegreeRouter {
     /// Inserts a target, potentially triggering promotion to high-degree storage.
     ///
     /// Promotion thresholds:
-    /// - Vec → HashSet: when len > DEFAULT_DEGREE_THRESHOLD (100)
-    /// - HashSet → C-ART: when len > CART_THRESHOLD (1000)
+    /// - Vec → `HashSet`: when len > `DEFAULT_DEGREE_THRESHOLD` (100)
+    /// - `HashSet` → C-ART: when len > `CART_THRESHOLD` (1000)
     pub fn insert(&mut self, target: u64) {
         self.storage.insert(target);
 

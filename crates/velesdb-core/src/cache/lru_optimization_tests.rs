@@ -140,8 +140,8 @@ fn test_peek_faster_than_get() {
     let get_time = start.elapsed();
 
     println!("Peek vs Get:");
-    println!("  Peek: {:?}", peek_time);
-    println!("  Get:  {:?}", get_time);
+    println!("  Peek: {peek_time:?}");
+    println!("  Get:  {get_time:?}");
     println!(
         "  Ratio get/peek: {:.2}x",
         get_time.as_nanos() as f64 / peek_time.as_nanos() as f64
@@ -175,7 +175,7 @@ fn test_eviction_performance_scaling() {
             cache.insert(key, format!("evict_{key}"));
         }
         let elapsed = start.elapsed();
-        let time_per_op = elapsed.as_nanos() as f64 / ops as f64;
+        let time_per_op = elapsed.as_nanos() as f64 / f64::from(ops);
         times_per_eviction.push((size, time_per_op));
     }
 
@@ -217,7 +217,7 @@ fn test_move_to_back_o1_complexity() {
             let _ = cache.get(&0);
         }
         let elapsed = start.elapsed();
-        let time_per_op = elapsed.as_nanos() as f64 / ops as f64;
+        let time_per_op = elapsed.as_nanos() as f64 / f64::from(ops);
         times_per_op.push((size, time_per_op));
     }
 

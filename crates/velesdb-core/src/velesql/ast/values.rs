@@ -1,7 +1,7 @@
-//! Value types for VelesQL expressions.
+//! Value types for `VelesQL` expressions.
 //!
 //! This module defines values, vectors, temporal expressions,
-//! and subquery types used in VelesQL queries.
+//! and subquery types used in `VelesQL` queries.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ pub enum VectorExpr {
     Parameter(String),
 }
 
-/// A value in VelesQL.
+/// A value in `VelesQL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     /// Integer value.

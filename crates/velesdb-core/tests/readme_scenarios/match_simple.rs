@@ -3,7 +3,7 @@
 //! Tests created by Phase 4 Plan 04-04 (VP-007).
 //!
 //! - **BS1**: Single-hop `(product:Product)-[:SUPPLIED_BY]->(supplier:Supplier)`
-//!   with similarity threshold + supplier trust_score filter.
+//!   with similarity threshold + supplier `trust_score` filter.
 //! - **BS4**: Multi-hop `(user:User)-[:HAD_CONVERSATION]->(conv)-[:CONTAINS]->(msg)`
 //!   with binding-aware temporal filter on intermediate node.
 
@@ -90,7 +90,7 @@ fn supplier_nodes() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
     ]
 }
 
-/// Sets up BS1 scenario: Products, Suppliers, and SUPPLIED_BY edges.
+/// Sets up BS1 scenario: Products, Suppliers, and `SUPPLIED_BY` edges.
 fn setup_bs1_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
     let (temp_dir, db) = helpers::setup_test_db();
     let collection = helpers::setup_labeled_collection(&db, "ecommerce", 4, DistanceMetric::Cosine);
@@ -114,12 +114,12 @@ fn setup_bs1_scenario() -> (tempfile::TempDir, velesdb_core::Collection) {
     (temp_dir, collection)
 }
 
-/// BS1 core test: single-hop MATCH + similarity + supplier trust_score filter.
+/// BS1 core test: single-hop MATCH + similarity + supplier `trust_score` filter.
 ///
 /// Verifies:
-/// - MATCH traversal follows SUPPLIED_BY edges correctly
+/// - MATCH traversal follows `SUPPLIED_BY` edges correctly
 /// - Similarity threshold filters low-similarity products
-/// - Supplier trust_score filter works via WHERE on target node
+/// - Supplier `trust_score` filter works via WHERE on target node
 /// - Results ordered by similarity DESC
 #[test]
 fn test_bs1_ecommerce_discovery() {
@@ -243,8 +243,7 @@ fn test_bs1_cross_node_projection() {
         if let Some(ts) = result.projected.get("supplier.trust_score") {
             assert!(
                 ts.is_number(),
-                "supplier.trust_score should be a number, got: {}",
-                ts
+                "supplier.trust_score should be a number, got: {ts}"
             );
         }
     }
@@ -504,8 +503,7 @@ fn test_bs4_agent_memory() {
     for &id in &message_ids {
         assert!(
             (40..=43).contains(&id),
-            "Result node {} should be a recent message (40-43)",
-            id
+            "Result node {id} should be a recent message (40-43)"
         );
     }
 
@@ -632,22 +630,19 @@ fn test_bs4_cross_node_projection() {
         if let Some(name) = result.projected.get("user.name") {
             assert!(
                 name.is_string(),
-                "user.name should be a string, got: {}",
-                name
+                "user.name should be a string, got: {name}"
             );
         }
         if let Some(ts) = result.projected.get("conv.timestamp") {
             assert!(
                 ts.is_number(),
-                "conv.timestamp should be a number, got: {}",
-                ts
+                "conv.timestamp should be a number, got: {ts}"
             );
         }
         if let Some(content) = result.projected.get("message.content") {
             assert!(
                 content.is_string(),
-                "message.content should be a string, got: {}",
-                content
+                "message.content should be a string, got: {content}"
             );
         }
     }
@@ -796,10 +791,10 @@ fn test_bs4_order_by_timestamp_asc() {
     );
 }
 
-/// BS1 ORDER BY similarity() ASC test: proves similarity ordering works both directions.
+/// BS1 ORDER BY `similarity()` ASC test: proves similarity ordering works both directions.
 ///
 /// DESC was tested in `test_bs1_ecommerce_discovery`. This tests ASC to confirm
-/// ORDER BY similarity() is real and not just default insertion order.
+/// ORDER BY `similarity()` is real and not just default insertion order.
 #[test]
 fn test_bs1_order_by_similarity_asc() {
     let (_dir, collection) = setup_bs1_scenario();

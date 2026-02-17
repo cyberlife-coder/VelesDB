@@ -26,7 +26,7 @@
 ///
 /// # References
 ///
-/// - SimSIMD v5.4.0: Newton-Raphson substitution
+/// - `SimSIMD` v5.4.0: Newton-Raphson substitution
 /// - arXiv: "Bang for the Buck: Vector Search on Cloud CPUs"
 #[inline]
 #[must_use]
@@ -45,14 +45,18 @@ pub fn fast_rsqrt(x: f32) -> f32 {
 
 /// Fast cosine similarity using Newton-Raphson rsqrt.
 ///
-/// Optimized version that avoids two `sqrt()` calls by using fast_rsqrt.
+/// Optimized version that avoids two `sqrt()` calls by using `fast_rsqrt`.
 /// Accuracy is within 2% of exact computation, acceptable for similarity ranking.
 ///
 /// # Performance
 ///
-/// - ~20-50% faster than standard cosine_similarity_native
+/// - ~20-50% faster than standard `cosine_similarity_native`
 /// - Uses single-pass dot product + norms computation
-/// - Avoids libc sqrt() overhead
+/// - Avoids libc `sqrt()` overhead
+///
+/// # Panics
+///
+/// Panics when `a.len() != b.len()`.
 #[inline]
 #[must_use]
 pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {

@@ -1,4 +1,4 @@
-//! Tests for InMemoryEdgeStore.
+//! Tests for `InMemoryEdgeStore`.
 
 use super::edge_store::InMemoryEdgeStore;
 use super::types::{GraphEdge, GraphNode};

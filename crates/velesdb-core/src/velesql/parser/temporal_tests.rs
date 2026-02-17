@@ -56,10 +56,7 @@ fn test_interval_units() {
     ];
 
     for (interval_str, expected_unit) in units {
-        let query = format!(
-            "SELECT * FROM events WHERE ts > INTERVAL '{}'",
-            interval_str
-        );
+        let query = format!("SELECT * FROM events WHERE ts > INTERVAL '{interval_str}'");
         let result = Parser::parse(&query);
         assert!(
             result.is_ok(),
@@ -127,7 +124,7 @@ fn test_interval_shorthand_units() {
     let shorthands = ["1 s", "30 sec", "5 min", "2 h", "7 d", "2 w"];
 
     for shorthand in shorthands {
-        let query = format!("SELECT * FROM events WHERE ts > INTERVAL '{}'", shorthand);
+        let query = format!("SELECT * FROM events WHERE ts > INTERVAL '{shorthand}'");
         let result = Parser::parse(&query);
         assert!(
             result.is_ok(),

@@ -564,8 +564,7 @@ fn test_concurrent_remove_node_edges_and_add() {
     // (1 if thread 2 managed to add after removal completed)
     assert!(
         count <= 1,
-        "edge count should be <= 1 after remove_node_edges, got {}",
-        count
+        "edge count should be <= 1 after remove_node_edges, got {count}"
     );
 }
 
@@ -710,9 +709,9 @@ fn test_self_loop_remove_node_edges() {
         .is_ok());
 }
 
-/// Regression test for Devin R74-157: Race between add_edge and remove_edge
-/// Scenario: remove_edge must not free an ID while add_edge is inserting it.
-/// Fix: edge_ids lock is held throughout add_edge/remove_edge operations.
+/// Regression test for Devin R74-157: Race between `add_edge` and `remove_edge`
+/// Scenario: `remove_edge` must not free an ID while `add_edge` is inserting it.
+/// Fix: `edge_ids` lock is held throughout `add_edge/remove_edge` operations.
 #[test]
 fn test_add_remove_race_registry_consistency() {
     use std::sync::Arc;
@@ -751,12 +750,11 @@ fn test_add_remove_race_registry_consistency() {
 
     assert_eq!(
         in_registry, in_shard,
-        "Registry and shard must be consistent: registry={}, shard={}",
-        in_registry, in_shard
+        "Registry and shard must be consistent: registry={in_registry}, shard={in_shard}"
     );
 }
 
-/// Test that edge_ids lock ordering prevents deadlock between add and remove
+/// Test that `edge_ids` lock ordering prevents deadlock between add and remove
 #[test]
 fn test_lock_ordering_no_deadlock_add_remove() {
     use std::sync::Arc;

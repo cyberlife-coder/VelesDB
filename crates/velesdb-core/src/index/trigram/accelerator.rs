@@ -48,13 +48,12 @@ impl TrigramAccelerator {
     ) -> Vec<RoaringBitmap> {
         patterns
             .iter()
-            .map(|pattern| self.search_single(pattern, inverted_index))
+            .map(|pattern| Self::search_single(pattern, inverted_index))
             .collect()
     }
 
     /// Search a single pattern using extracted trigrams.
     fn search_single(
-        &self,
         pattern: &str,
         inverted_index: &std::collections::HashMap<[u8; 3], RoaringBitmap>,
     ) -> RoaringBitmap {
@@ -133,11 +132,12 @@ pub enum TrigramComputeBackend {
 impl TrigramComputeBackend {
     /// Select best available backend based on workload size.
     #[must_use]
-    pub fn auto_select(_doc_count: usize, _pattern_count: usize) -> Self {
+    #[cfg_attr(not(feature = "gpu"), allow(unused_variables))]
+    pub fn auto_select(doc_count: usize, pattern_count: usize) -> Self {
         #[cfg(feature = "gpu")]
         {
             // GPU is better for large workloads
-            if _doc_count > 500_000 || (_doc_count > 100_000 && _pattern_count > 10) {
+            if doc_count > 500_000 || (doc_count > 100_000 && pattern_count > 10) {
                 if crate::gpu::ComputeBackend::gpu_available() {
                     return Self::Gpu;
                 }

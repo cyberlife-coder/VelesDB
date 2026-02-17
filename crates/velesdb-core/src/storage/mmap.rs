@@ -374,9 +374,8 @@ impl MmapStorage {
     /// This should never happen with properly stored data.
     pub fn retrieve_ref(&self, id: u64) -> io::Result<Option<VectorSliceGuard<'_>>> {
         // EPIC-033/US-004: Use sharded index for reduced contention
-        let offset = match self.index.get(id) {
-            Some(offset) => offset,
-            None => return Ok(None),
+        let Some(offset) = self.index.get(id) else {
+            return Ok(None);
         };
 
         // Now acquire mmap read lock and validate bounds

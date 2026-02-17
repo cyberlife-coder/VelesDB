@@ -1,13 +1,13 @@
-//! Integration tests for VelesQL v2.0 features (EPIC-040).
+//! Integration tests for `VelesQL` v2.0 features (EPIC-040).
 //!
 //! Tests for:
 //! - US-001: HAVING with AND/OR operators
 //! - US-002: ORDER BY multi-expressions
 //! - US-003: Extended JOIN (LEFT/RIGHT/FULL, USING)
-//! - US-004: WITH max_groups/group_limit
+//! - US-004: WITH `max_groups/group_limit`
 //! - US-006: UNION/INTERSECT/EXCEPT set operations
 //!
-//! Note: US-005 (USING FUSION) tests are in fusion_clause_tests.rs
+//! Note: US-005 (USING FUSION) tests are in `fusion_clause_tests.rs`
 
 use crate::velesql::{Parser, SetOperator};
 

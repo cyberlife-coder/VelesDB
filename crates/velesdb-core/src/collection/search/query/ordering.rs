@@ -1,8 +1,8 @@
-//! ORDER BY clause execution for VelesQL queries.
+//! ORDER BY clause execution for `VelesQL` queries.
 //!
 //! Handles multi-column sorting with support for:
 //! - Metadata field sorting (ASC/DESC)
-//! - similarity() function sorting
+//! - `similarity()` function sorting
 //! - Mixed type JSON value comparison with total ordering
 
 use crate::collection::types::Collection;
@@ -92,7 +92,7 @@ impl Collection {
             std::collections::HashMap::new();
         for (idx, ob) in order_by.iter().enumerate() {
             if let OrderByExpr::Similarity(sim) = &ob.expr {
-                let order_vec = self.resolve_vector(&sim.vector, params)?;
+                let order_vec = Self::resolve_vector(&sim.vector, params)?;
                 let scores: Vec<f32> = results
                     .iter()
                     .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))

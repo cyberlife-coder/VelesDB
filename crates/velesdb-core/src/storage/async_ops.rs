@@ -11,7 +11,7 @@
 //! EPIC-034/US-001: Provides `spawn_blocking` wrappers for I/O-intensive
 //! storage operations to avoid blocking the async executor.
 //!
-//! # Why spawn_blocking?
+//! # Why `spawn_blocking`?
 //!
 //! Memory-mapped file operations (mmap resize, flush, compaction) perform
 //! blocking syscalls that can stall the async runtime. This module wraps
@@ -108,7 +108,7 @@ pub async fn flush_async(storage: Arc<RwLock<MmapStorage>>) -> io::Result<()> {
 /// # Arguments
 ///
 /// * `storage` - Arc-wrapped storage instance
-/// * `vectors` - Vector of (id, vector_data) pairs
+/// * `vectors` - Vector of (id, `vector_data`) pairs
 ///
 /// # Errors
 ///

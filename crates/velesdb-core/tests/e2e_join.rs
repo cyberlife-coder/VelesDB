@@ -2,7 +2,7 @@
 //!
 //! Validates that `Database::execute_query()` correctly wires
 //! INNER JOIN, LEFT JOIN, chained JOINs, and error handling
-//! through the full VelesQL pipeline.
+//! through the full `VelesQL` pipeline.
 
 use std::collections::HashMap;
 
@@ -350,8 +350,7 @@ fn test_e2e_join_order_by_limit() {
         // Verify alphabetical ascending order
         assert!(
             titles.windows(2).all(|w| w[0] <= w[1]),
-            "Results should be sorted by title ASC, got {:?}",
-            titles
+            "Results should be sorted by title ASC, got {titles:?}"
         );
     }
 }
@@ -373,7 +372,6 @@ fn test_e2e_join_table_not_found() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nonexistent_table"),
-        "Error should mention missing collection name: {}",
-        err_msg
+        "Error should mention missing collection name: {err_msg}"
     );
 }

@@ -3,7 +3,7 @@
 //! Tests covering partial writes, data corruption detection, and crash recovery
 //! scenarios for `LogPayloadStorage`.
 //!
-//! # WAL Binary Format (LogPayloadStorage)
+//! # WAL Binary Format (`LogPayloadStorage`)
 //!
 //! ```text
 //! Store:  [marker=1: 1B] [id: 8B LE] [len: 4B LE] [crc32: 4B LE] [payload: len bytes]
@@ -38,7 +38,7 @@ use tempfile::TempDir;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Simple CRC32 (IEEE 802.3) — mirrors the implementation in log_payload.rs
+/// Simple CRC32 (IEEE 802.3) — mirrors the implementation in `log_payload.rs`
 #[allow(clippy::cast_possible_truncation)]
 fn test_crc32_hash(data: &[u8]) -> u32 {
     const CRC32_TABLE: [u32; 256] = {
@@ -166,13 +166,12 @@ fn test_wal_recovery_truncated_payload_data() {
 
     let result = open_storage_with_wal(&wal);
     // The seek past payload should fail or overshoot — no panic expected
-    match result {
-        Ok((_dir, storage)) => {
-            // If recovery tolerates this, the entry may or may not be indexed.
-            // Key assertion: no panic.
-            let _ = storage.ids();
-        }
-        Err(_) => { /* acceptable */ }
+    if let Ok((_dir, storage)) = result {
+        // If recovery tolerates this, the entry may or may not be indexed.
+        // Key assertion: no panic.
+        let _ = storage.ids();
+    } else {
+        /* acceptable */
     }
 }
 
@@ -202,23 +201,20 @@ fn test_wal_recovery_multiple_valid_then_truncated() {
     wal.extend_from_slice(&6u64.to_le_bytes()[..3]); // truncated id
 
     let result = open_storage_with_wal(&wal);
-    match result {
-        Ok((_dir, storage)) => {
-            // At minimum, the 5 valid entries should be recovered
-            let ids = storage.ids();
-            assert!(
-                ids.len() >= 5,
-                "Expected at least 5 recovered entries, got {}",
-                ids.len()
-            );
-            for i in 1..=5 {
-                assert!(ids.contains(&i), "Missing entry {i}");
-            }
+    if let Ok((_dir, storage)) = result {
+        // At minimum, the 5 valid entries should be recovered
+        let ids = storage.ids();
+        assert!(
+            ids.len() >= 5,
+            "Expected at least 5 recovered entries, got {}",
+            ids.len()
+        );
+        for i in 1..=5 {
+            assert!(ids.contains(&i), "Missing entry {i}");
         }
-        Err(_) => {
-            // If the implementation propagates the truncation error, that's acceptable
-            // as long as there is no panic
-        }
+    } else {
+        // If the implementation propagates the truncation error, that's acceptable
+        // as long as there is no panic
     }
 }
 
@@ -239,13 +235,12 @@ fn test_wal_recovery_write_interrupted_mid_vector() {
 
     let result = open_storage_with_wal(&wal);
     // No panic — either error or empty storage
-    match result {
-        Ok((_dir, storage)) => {
-            // If indexed, the entry may point to invalid data — that's a separate concern.
-            // Key: no panic during recovery.
-            let _ = storage.ids();
-        }
-        Err(_) => { /* acceptable */ }
+    if let Ok((_dir, storage)) = result {
+        // If indexed, the entry may point to invalid data — that's a separate concern.
+        // Key: no panic during recovery.
+        let _ = storage.ids();
+    } else {
+        /* acceptable */
     }
 }
 
@@ -335,12 +330,11 @@ fn test_wal_recovery_oversized_payload_length() {
 
     let result = open_storage_with_wal(&wal);
     // Recovery should handle this gracefully — the seek will overshoot
-    match result {
-        Ok((_dir, storage)) => {
-            // May index entry pointing beyond file — key: no panic
-            let _ = storage.ids();
-        }
-        Err(_) => { /* acceptable — seek past EOF */ }
+    if let Ok((_dir, storage)) = result {
+        // May index entry pointing beyond file — key: no panic
+        let _ = storage.ids();
+    } else {
+        /* acceptable — seek past EOF */
     }
 }
 
@@ -362,15 +356,12 @@ fn test_wal_recovery_valid_entries_then_garbage() {
     wal.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
 
     let result = open_storage_with_wal(&wal);
-    match result {
-        Ok((_dir, storage)) => {
-            let ids = storage.ids();
-            // At least some valid entries should be recovered
-            assert!(!ids.is_empty(), "Should recover at least some entries");
-        }
-        Err(_) => {
-            // Any error is acceptable (InvalidData or UnexpectedEof)
-        }
+    if let Ok((_dir, storage)) = result {
+        let ids = storage.ids();
+        // At least some valid entries should be recovered
+        assert!(!ids.is_empty(), "Should recover at least some entries");
+    } else {
+        // Any error is acceptable (InvalidData or UnexpectedEof)
     }
 }
 
@@ -586,16 +577,13 @@ fn test_crash_recovery_empty_wal_with_snapshot() {
     // Recovery should load from snapshot, WAL replay range is 0..0 (no-op)
     // But snapshot's wal_pos might point beyond truncated WAL → edge case
     let result = LogPayloadStorage::new(temp.path());
-    match result {
-        Ok(storage) => {
-            // Snapshot data should be available
-            let ids = storage.ids();
-            assert_eq!(ids.len(), 10, "Snapshot data should be loaded");
-        }
-        Err(_) => {
-            // If WAL truncation invalidates snapshot replay, that's a known edge case
-            // Key: no panic
-        }
+    if let Ok(storage) = result {
+        // Snapshot data should be available
+        let ids = storage.ids();
+        assert_eq!(ids.len(), 10, "Snapshot data should be loaded");
+    } else {
+        // If WAL truncation invalidates snapshot replay, that's a known edge case
+        // Key: no panic
     }
 }
 

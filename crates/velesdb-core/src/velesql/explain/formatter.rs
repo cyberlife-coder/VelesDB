@@ -93,8 +93,7 @@ impl QueryPlan {
                 if let Some(threshold) = mt.similarity_threshold {
                     let _ = writeln!(
                         output,
-                        "{child_prefix}└─ Similarity Threshold: {:.2}",
-                        threshold
+                        "{child_prefix}└─ Similarity Threshold: {threshold:.2}"
                     );
                 } else {
                     let _ = writeln!(

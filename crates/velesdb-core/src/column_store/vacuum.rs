@@ -24,7 +24,7 @@ impl ColumnStore {
     ///
     /// # Arguments
     ///
-    /// * `_config` - Vacuum configuration (batch_size, sync options)
+    /// * `_config` - Vacuum configuration (`batch_size`, sync options)
     ///
     /// # Returns
     ///
@@ -172,7 +172,7 @@ impl ColumnStore {
     // EPIC-043 US-002: RoaringBitmap Filtering
     // =========================================================================
 
-    /// Checks if a row is deleted using RoaringBitmap (O(1) lookup).
+    /// Checks if a row is deleted using `RoaringBitmap` (O(1) lookup).
     ///
     /// Delegates to [`is_deleted`](Self::is_deleted). Kept for backward compatibility.
     #[must_use]
@@ -183,7 +183,7 @@ impl ColumnStore {
 
     /// Returns an iterator over live (non-deleted) row indices.
     ///
-    /// Uses RoaringBitmap for efficient filtering.
+    /// Uses `RoaringBitmap` for efficient filtering.
     pub fn live_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
         (0..self.row_count).filter(|&idx| !self.is_row_deleted_bitmap(idx))
     }

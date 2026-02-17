@@ -4,9 +4,9 @@
     clippy::cast_sign_loss,
     clippy::float_cmp
 )]
-//! Tests for OnceLock warmup (EPIC-052/US-004)
+//! Tests for `OnceLock` warmup (EPIC-052/US-004)
 //!
-//! Tests that warmup_simd_cache correctly initializes SIMD caches.
+//! Tests that `warmup_simd_cache` correctly initializes SIMD caches.
 
 use super::{cosine_similarity_native, dot_product_native, warmup_simd_cache};
 
@@ -37,8 +37,7 @@ fn test_warmup_reduces_first_request_latency() {
     // Should be < 250ns (not cold start - cold start can be 2-3x slower)
     assert!(
         first_call_ns < 250.0,
-        "First call after warmup too slow: {:.2}ns (should be < 250ns)",
-        first_call_ns
+        "First call after warmup too slow: {first_call_ns:.2}ns (should be < 250ns)"
     );
 
     // Verify correctness
@@ -46,9 +45,7 @@ fn test_warmup_reduces_first_request_latency() {
     let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     assert!(
         (result - expected).abs() < 1e-3,
-        "Warmup affected correctness: got {}, expected {}",
-        result,
-        expected
+        "Warmup affected correctness: got {result}, expected {expected}"
     );
 }
 

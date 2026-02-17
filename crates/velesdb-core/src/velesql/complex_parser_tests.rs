@@ -1,4 +1,4 @@
-//! Complex VelesQL parser tests (EPIC-017 US-003/US-006).
+//! Complex `VelesQL` parser tests (EPIC-017 US-003/US-006).
 //!
 //! Tests combining: aggregates, multicolumn, vector search, graph patterns, EXPLAIN.
 //! Based on research: VLDB 2024 hybrid vector+graph queries, cost estimation patterns.
@@ -403,7 +403,7 @@ fn test_case_insensitive_keywords() {
 
     for sql in &queries {
         let result = Parser::parse(sql);
-        assert!(result.is_ok(), "Failed to parse: {}", sql);
+        assert!(result.is_ok(), "Failed to parse: {sql}");
     }
 }
 
@@ -416,7 +416,7 @@ fn test_case_insensitive_groupby_having() {
     ];
 
     for sql in &queries {
-        let query = Parser::parse(sql).unwrap_or_else(|_| panic!("Failed: {}", sql));
+        let query = Parser::parse(sql).unwrap_or_else(|_| panic!("Failed: {sql}"));
         assert!(query.select.group_by.is_some());
         assert!(query.select.having.is_some());
     }
@@ -436,10 +436,10 @@ fn test_parse_empty_result_query() {
 #[test]
 fn test_parse_very_long_column_list() {
     let columns = (1..=20)
-        .map(|i| format!("col{}", i))
+        .map(|i| format!("col{i}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("SELECT {} FROM wide_table LIMIT 100", columns);
+    let sql = format!("SELECT {columns} FROM wide_table LIMIT 100");
 
     let query = Parser::parse(&sql);
     assert!(query.is_ok());

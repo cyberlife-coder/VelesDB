@@ -161,7 +161,7 @@ fn test_scalar_subquery_max_price() {
     match result {
         Value::Integer(i) => assert_eq!(i, 50, "MAX(price) should be 50"),
         Value::Float(f) => assert!((f - 50.0).abs() < 0.01, "MAX(price) should be 50.0"),
-        other => panic!("Expected numeric value for MAX(price), got {:?}", other),
+        other => panic!("Expected numeric value for MAX(price), got {other:?}"),
     }
 }
 
@@ -181,11 +181,10 @@ fn test_scalar_subquery_avg_price() {
     match result {
         Value::Float(f) => assert!(
             (f - 30.0).abs() < 0.01,
-            "AVG(price) should be 30.0, got {}",
-            f
+            "AVG(price) should be 30.0, got {f}"
         ),
         Value::Integer(i) => assert_eq!(i, 30, "AVG(price) should be 30"),
-        other => panic!("Expected numeric value for AVG(price), got {:?}", other),
+        other => panic!("Expected numeric value for AVG(price), got {other:?}"),
     }
 }
 
@@ -270,11 +269,10 @@ fn test_scalar_subquery_with_where_filter() {
             // avg of 10, 20, 40 = 23.33
             assert!(
                 (f - 23.33).abs() < 0.5,
-                "AVG(price) for electronics should be ~23.33, got {}",
-                f
+                "AVG(price) for electronics should be ~23.33, got {f}"
             );
         }
-        other => panic!("Expected Float for AVG, got {:?}", other),
+        other => panic!("Expected Float for AVG, got {other:?}"),
     }
 }
 
@@ -385,11 +383,10 @@ fn test_correlated_subquery_with_outer_context() {
             // electronics prices: 10, 20, 40 → avg = 23.33
             assert!(
                 (f - 23.33).abs() < 0.5,
-                "Correlated AVG should be ~23.33, got {}",
-                f
+                "Correlated AVG should be ~23.33, got {f}"
             );
         }
-        other => panic!("Expected Float for correlated AVG, got {:?}", other),
+        other => panic!("Expected Float for correlated AVG, got {other:?}"),
     }
 }
 

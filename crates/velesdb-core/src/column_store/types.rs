@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Errors that can occur in ColumnStore operations.
+/// Errors that can occur in `ColumnStore` operations.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ColumnStoreError {
     /// Duplicate primary key value.
@@ -251,18 +251,18 @@ pub struct VacuumStats {
 
 /// Configuration for automatic vacuum triggering.
 ///
-/// Based on PostgreSQL best practices:
-/// - Default threshold: 20% (same as PostgreSQL autovacuum_vacuum_scale_factor)
+/// Based on `PostgreSQL` best practices:
+/// - Default threshold: 20% (same as `PostgreSQL` `autovacuum_vacuum_scale_factor`)
 /// - Check interval: 300s (5 minutes)
 #[derive(Debug, Clone)]
 pub struct AutoVacuumConfig {
     /// Enable automatic vacuum.
     pub enabled: bool,
     /// Trigger when deletion ratio exceeds this (0.0-1.0).
-    /// PostgreSQL default is 0.20 (20%).
+    /// `PostgreSQL` default is 0.20 (20%).
     pub threshold_ratio: f64,
     /// Minimum number of deleted rows before considering vacuum.
-    /// PostgreSQL default is 50.
+    /// `PostgreSQL` default is 50.
     pub min_dead_rows: usize,
     /// How often to check for vacuum need (seconds).
     pub check_interval_secs: u64,

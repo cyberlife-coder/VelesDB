@@ -1,4 +1,4 @@
-//! FrontierParallelBFS: single-start, frontier-parallel BFS (EPIC-051 US-002).
+//! `FrontierParallelBFS`: single-start, frontier-parallel BFS (EPIC-051 US-002).
 //!
 //! Instead of parallelizing across start nodes, this parallelizes the
 //! expansion of each BFS level's frontier using rayon.

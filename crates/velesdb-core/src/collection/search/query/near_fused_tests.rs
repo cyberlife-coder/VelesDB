@@ -1,6 +1,6 @@
-//! Tests for NEAR_FUSED execution wiring (VP-012, Plan 06-01).
+//! Tests for `NEAR_FUSED` execution wiring (VP-012, Plan 06-01).
 //!
-//! Tests verify that `VectorFusedSearch` conditions in VelesQL queries
+//! Tests verify that `VectorFusedSearch` conditions in `VelesQL` queries
 //! are correctly dispatched to `multi_query_search()` with proper
 //! fusion strategy mapping and metadata filtering.
 
@@ -17,7 +17,7 @@ use crate::velesql::{
 };
 use crate::Database;
 
-/// Helper: create a collection with diverse vectors for NEAR_FUSED testing.
+/// Helper: create a collection with diverse vectors for `NEAR_FUSED` testing.
 fn setup_near_fused_collection() -> (tempfile::TempDir, Collection) {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let db = Database::open(temp_dir.path()).expect("Failed to open database");
@@ -87,7 +87,7 @@ fn make_query(where_clause: Option<Condition>, limit: Option<u64>) -> Query {
     }
 }
 
-/// Helper: build a NEAR_FUSED condition with parameter vectors.
+/// Helper: build a `NEAR_FUSED` condition with parameter vectors.
 fn make_near_fused(
     param_names: &[&str],
     strategy: &str,

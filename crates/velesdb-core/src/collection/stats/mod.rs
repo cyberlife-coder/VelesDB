@@ -147,7 +147,7 @@ impl ColumnStats {
 pub struct IndexStats {
     /// Index name
     pub name: String,
-    /// Index type (HNSW, PropertyIndex, etc.)
+    /// Index type (HNSW, `PropertyIndex`, etc.)
     pub index_type: String,
     /// Number of entries in the index
     pub entry_count: u64,
@@ -183,7 +183,7 @@ impl IndexStats {
     }
 }
 
-/// Statistics collector for building CollectionStats.
+/// Statistics collector for building `CollectionStats`.
 #[derive(Debug, Default)]
 pub struct StatsCollector {
     stats: CollectionStats,
@@ -221,7 +221,7 @@ impl StatsCollector {
         self.stats.index_stats.insert(stats.name.clone(), stats);
     }
 
-    /// Builds the final CollectionStats
+    /// Builds the final `CollectionStats`
     #[must_use]
     pub fn build(mut self) -> CollectionStats {
         // Calculate average row size

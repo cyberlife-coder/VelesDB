@@ -1,7 +1,7 @@
 //! Database-level query integration tests for JOIN and compound queries.
 //!
 //! These tests verify that `Database::execute_query()` correctly wires
-//! JOIN execution across collections via ColumnStore bridge.
+//! JOIN execution across collections via `ColumnStore` bridge.
 
 use super::*;
 use tempfile::tempdir;
@@ -112,8 +112,7 @@ fn test_database_join_collection_not_found() {
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("nonexistent"),
-        "Error should mention missing collection: {}",
-        err
+        "Error should mention missing collection: {err}"
     );
 }
 
@@ -322,8 +321,8 @@ fn test_database_join_with_vector_search() {
 // ========== Database Compound Query Integration Tests (Plan 08-03, Task 2) ==========
 
 /// Creates a Database with two collections for compound query tests:
-/// - "tech_docs": IDs 1,2,3 with category "tech"
-/// - "food_docs": IDs 2,3,4 with category "food"
+/// - "`tech_docs"`: IDs 1,2,3 with category "tech"
+/// - "`food_docs"`: IDs 2,3,4 with category "food"
 ///   Overlap on IDs 2 and 3 to exercise dedup/intersect/except.
 fn setup_compound_db() -> (Database, tempfile::TempDir) {
     let dir = tempdir().unwrap();
@@ -391,7 +390,7 @@ fn test_database_union_two_collections() {
 
     // tech_docs: {1,2,3}, food_docs: {2,3,4} → UNION: {1,2,3,4}
     let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
-    assert_eq!(ids.len(), 4, "UNION should deduplicate: got {:?}", ids);
+    assert_eq!(ids.len(), 4, "UNION should deduplicate: got {ids:?}");
     assert!(ids.contains(&1));
     assert!(ids.contains(&2));
     assert!(ids.contains(&3));
@@ -430,8 +429,7 @@ fn test_database_intersect() {
     assert_eq!(
         ids.len(),
         2,
-        "INTERSECT should return only common IDs: got {:?}",
-        ids
+        "INTERSECT should return only common IDs: got {ids:?}"
     );
     assert!(ids.contains(&2));
     assert!(ids.contains(&3));
@@ -470,8 +468,7 @@ fn test_database_union_same_collection() {
     assert_eq!(
         ids.len(),
         3,
-        "UNION on same collection should deduplicate: got {:?}",
-        ids
+        "UNION on same collection should deduplicate: got {ids:?}"
     );
 }
 
@@ -493,8 +490,7 @@ fn test_database_compound_collection_not_found() {
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("nonexistent_collection"),
-        "Error should mention missing collection: {}",
-        err
+        "Error should mention missing collection: {err}"
     );
 }
 

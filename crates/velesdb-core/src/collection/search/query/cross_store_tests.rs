@@ -1,6 +1,6 @@
 //! Tests for cross-store query planner integration (VP-010, Plan 06-03).
 //!
-//! Tests verify that the QueryPlanner selects correct strategies
+//! Tests verify that the `QueryPlanner` selects correct strategies
 //! and that hybrid.rs fusion functions are actively wired.
 
 use crate::velesql::{
@@ -125,8 +125,7 @@ fn test_cross_store_rrf_fusion() {
     let top_ids: Vec<u64> = fused.iter().take(2).map(|r| r.id).collect();
     assert!(
         top_ids.contains(&1) && top_ids.contains(&2),
-        "IDs in both sources should rank highest: {:?}",
-        top_ids
+        "IDs in both sources should rank highest: {top_ids:?}"
     );
 }
 

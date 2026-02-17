@@ -156,7 +156,7 @@ impl CostEstimator {
     pub fn estimate_index_lookup(&self, index: &IndexStats, selectivity: f64) -> OperationCost {
         let selectivity = selectivity.clamp(0.0001, 1.0);
         let entries = (index.entry_count as f64 * selectivity) as u64;
-        let io_cost = (index.depth as f64) * self.factors.random_page_cost;
+        let io_cost = f64::from(index.depth) * self.factors.random_page_cost;
         let cpu_cost = entries as f64 * self.factors.cpu_index_cost;
 
         OperationCost {

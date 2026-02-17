@@ -1,6 +1,6 @@
 //! Parity tests for validation modules (EPIC-065).
 //!
-//! These tests ensure that the public QueryValidator and internal Collection
+//! These tests ensure that the public `QueryValidator` and internal Collection
 //! validation methods produce consistent results.
 #![cfg(all(test, feature = "persistence"))]
 

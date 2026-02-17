@@ -54,7 +54,7 @@ pub enum PlanNode {
     Sequence(Vec<PlanNode>),
     /// MATCH graph traversal (EPIC-046 US-004).
     MatchTraversal(MatchTraversalPlan),
-    /// NEAR_FUSED multi-vector fused search (VP-012, Phase 7).
+    /// `NEAR_FUSED` multi-vector fused search (VP-012, Phase 7).
     FusedSearch(FusedSearchPlan),
     /// Cross-store combined Vector + Graph MATCH (VP-010, Phase 7).
     CrossStoreSearch(CrossStoreSearchPlan),
@@ -129,7 +129,7 @@ pub struct MatchTraversalPlan {
     pub similarity_threshold: Option<f32>,
 }
 
-/// NEAR_FUSED multi-vector fused search plan (VP-012, Phase 7).
+/// `NEAR_FUSED` multi-vector fused search plan (VP-012, Phase 7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FusedSearchPlan {
     /// Collection name.
@@ -147,7 +147,7 @@ pub struct FusedSearchPlan {
 pub struct CrossStoreSearchPlan {
     /// Collection name.
     pub collection: String,
-    /// Execution strategy chosen by QueryPlanner.
+    /// Execution strategy chosen by `QueryPlanner`.
     pub strategy: String,
     /// Over-fetch factor for filtered queries.
     pub over_fetch_factor: f64,
@@ -392,7 +392,7 @@ impl QueryPlan {
         }
     }
 
-    /// Extracts NEAR_FUSED info: (vector_count, fusion_strategy_name).
+    /// Extracts `NEAR_FUSED` info: (`vector_count`, `fusion_strategy_name`).
     fn extract_fused_info(condition: &Condition) -> Option<(usize, String)> {
         match condition {
             Condition::VectorFusedSearch(vfs) => {

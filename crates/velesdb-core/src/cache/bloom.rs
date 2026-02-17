@@ -76,7 +76,7 @@ impl BloomFilter {
         let mut bits = self.bits.write();
 
         for i in 0..self.num_hashes {
-            let hash = self.hash_with_seed(item, i);
+            let hash = Self::hash_with_seed(item, i);
             let bit_index = (hash as usize) % self.num_bits;
             let word_index = bit_index / 64;
             let bit_offset = bit_index % 64;
@@ -95,7 +95,7 @@ impl BloomFilter {
         let bits = self.bits.read();
 
         for i in 0..self.num_hashes {
-            let hash = self.hash_with_seed(item, i);
+            let hash = Self::hash_with_seed(item, i);
             let bit_index = (hash as usize) % self.num_bits;
             let word_index = bit_index / 64;
             let bit_offset = bit_index % 64;
@@ -151,7 +151,7 @@ impl BloomFilter {
     }
 
     /// Hash with seed for multiple hash functions.
-    fn hash_with_seed<T: Hash>(&self, item: &T, seed: u32) -> u64 {
+    fn hash_with_seed<T: Hash>(item: &T, seed: u32) -> u64 {
         let mut hasher = FxHasher::default();
         seed.hash(&mut hasher);
         item.hash(&mut hasher);

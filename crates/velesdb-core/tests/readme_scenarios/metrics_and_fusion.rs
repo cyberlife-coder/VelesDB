@@ -1,7 +1,7 @@
 //! Metrics & Fusion scenario tests (Scenarios 0b/0c) — Tests created by Phase 4 Plan 03.
 //!
 //! **Scenario 0c**: All 5 distance metrics produce correct search results with
-//! proper ordering semantics (higher_is_better vs lower_is_better).
+//! proper ordering semantics (`higher_is_better` vs `lower_is_better`).
 //!
 //! **Scenario 0b**: Multi-vector fusion via `multi_query_search()` API with
 //! all 4 strategies (RRF, Average, Maximum, Weighted).
@@ -215,7 +215,7 @@ fn test_scenario0c_euclidean_metric() {
     );
 }
 
-/// DotProduct (RAG/Recommendations):
+/// `DotProduct` (RAG/Recommendations):
 /// ```sql
 /// SELECT * FROM products
 /// WHERE vector NEAR $user_pref AND in_stock = true
@@ -460,7 +460,7 @@ fn test_scenario0c_jaccard_metric() {
 // Scenario 0b: NEAR_FUSED Multi-Vector Fusion
 // ============================================================================
 
-/// Tests NEAR_FUSED VelesQL syntax parsing.
+/// Tests `NEAR_FUSED` `VelesQL` syntax parsing.
 /// Verifies the parser accepts the README fusion query format.
 #[test]
 fn test_scenario0b_near_fused_parsing() {

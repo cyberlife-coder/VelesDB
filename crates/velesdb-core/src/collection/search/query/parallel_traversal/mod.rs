@@ -27,7 +27,7 @@ pub struct TraversalResult {
     pub end_node: u64,
     /// Path from start to end (edge IDs).
     pub path: Vec<u64>,
-    /// Depth at which end_node was found.
+    /// Depth at which `end_node` was found.
     pub depth: u32,
     /// Optional score for ranking.
     pub score: Option<f32>,

@@ -1,13 +1,13 @@
 //! Query dispatch logic extracted from mod.rs (VP-010, Plan 06-03 Task 6).
 //!
-//! Contains the main dispatch functions that route VelesQL queries to the
+//! Contains the main dispatch functions that route `VelesQL` queries to the
 //! appropriate search backend based on extracted conditions.
 
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 
-/// Extracted query context passed from execute_query() to dispatch functions.
+/// Extracted query context passed from `execute_query()` to dispatch functions.
 pub(super) struct QueryContext<'a> {
     pub vector_search: Option<&'a [f32]>,
     pub first_similarity: Option<(String, Vec<f32>, crate::velesql::CompareOp, f64)>,
@@ -22,10 +22,10 @@ pub(super) struct QueryContext<'a> {
 const MAX_LIMIT: usize = 100_000;
 
 impl Collection {
-    /// VP-012: Dispatch NEAR_FUSED multi-vector fused search.
+    /// VP-012: Dispatch `NEAR_FUSED` multi-vector fused search.
     ///
-    /// Returns `Ok(Some(results))` if NEAR_FUSED was found and dispatched,
-    /// `Ok(None)` if no NEAR_FUSED condition was present.
+    /// Returns `Ok(Some(results))` if `NEAR_FUSED` was found and dispatched,
+    /// `Ok(None)` if no `NEAR_FUSED` condition was present.
     pub(super) fn dispatch_fused_search(
         &self,
         cond: &crate::velesql::Condition,
@@ -79,7 +79,7 @@ impl Collection {
     /// Dispatch the main query based on extracted vector/similarity/filter conditions.
     ///
     /// This handles the core match statement for all combinations of:
-    /// - similarity() only, NEAR + similarity(), NEAR + MATCH, NEAR + filter,
+    /// - `similarity()` only, NEAR + `similarity()`, NEAR + MATCH, NEAR + filter,
     ///   pure NEAR, MATCH + filter, metadata-only, and no-WHERE scans.
     #[allow(clippy::too_many_lines)]
     pub(super) fn dispatch_main_query(&self, ctx: &QueryContext<'_>) -> Result<Vec<SearchResult>> {
@@ -188,7 +188,7 @@ impl Collection {
         ))
     }
 
-    /// Dispatch NEAR + similarity() queries.
+    /// Dispatch NEAR + `similarity()` queries.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_near_similarity_query(
         &self,

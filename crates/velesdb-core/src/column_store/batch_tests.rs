@@ -1,4 +1,4 @@
-//! Tests for `batch` module - Batch operations for ColumnStore.
+//! Tests for `batch` module - Batch operations for `ColumnStore`.
 
 use super::{BatchUpdate, ColumnStore, ColumnType, ColumnValue, TypedColumn};
 

@@ -1,5 +1,5 @@
 //! Tests for compound query execution (UNION/INTERSECT/EXCEPT).
-//! Plan 08-03: Validates set operations on SearchResult vectors.
+//! Plan 08-03: Validates set operations on `SearchResult` vectors.
 
 use super::compound::apply_set_operation;
 use crate::point::{Point, SearchResult};

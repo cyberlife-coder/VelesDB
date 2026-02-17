@@ -2,7 +2,7 @@
 //!
 //! # Safety (EPIC-032/US-010)
 //!
-//! StringId uses u32 internally, limiting the table to ~4 billion strings.
+//! `StringId` uses u32 internally, limiting the table to ~4 billion strings.
 //! The `intern()` method panics if this limit is exceeded.
 
 use rustc_hash::FxHashMap;

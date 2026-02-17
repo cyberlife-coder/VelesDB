@@ -1,4 +1,4 @@
-//! Tests for index_management.rs (EPIC-041 US-001)
+//! Tests for `index_management.rs` (EPIC-041 US-001)
 
 #[cfg(test)]
 mod tests {
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(cloned.label, info.label);
 
         // Test Debug
-        let debug_str = format!("{:?}", info);
+        let debug_str = format!("{info:?}");
         assert!(debug_str.contains("IndexInfo"));
     }
 }

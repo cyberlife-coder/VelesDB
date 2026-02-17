@@ -15,8 +15,8 @@
 //!
 //! | Architecture | Instruction Set | Trigrams/cycle |
 //! |--------------|-----------------|----------------|
-//! | x86_64       | AVX-512         | ~21            |
-//! | x86_64       | AVX2            | ~10            |
+//! | `x86_64`       | AVX-512         | ~21            |
+//! | `x86_64`       | AVX2            | ~10            |
 //! | aarch64      | NEON            | ~5             |
 //! | Fallback     | Scalar          | ~3             |
 //!

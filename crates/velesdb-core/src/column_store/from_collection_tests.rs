@@ -1,4 +1,4 @@
-//! Tests for column_store_from_collection (Plan 08-01 Task 1).
+//! Tests for `column_store_from_collection` (Plan 08-01 Task 1).
 
 use crate::collection::Collection;
 use crate::column_store::from_collection::column_store_from_collection;

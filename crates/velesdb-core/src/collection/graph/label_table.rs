@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use thiserror::Error;
 
-/// Error type for LabelTable operations.
+/// Error type for `LabelTable` operations.
 #[derive(Debug, Error)]
 pub enum LabelTableError {
     /// The label table has reached its maximum capacity.
@@ -36,7 +36,7 @@ impl LabelId {
         self.0
     }
 
-    /// Creates a LabelId from a raw value (for deserialization).
+    /// Creates a `LabelId` from a raw value (for deserialization).
     #[must_use]
     pub fn from_u32(id: u32) -> Self {
         Self(id)
@@ -65,9 +65,9 @@ impl LabelId {
 /// ```
 #[derive(Debug, Default)]
 pub struct LabelTable {
-    /// Stored strings indexed by LabelId
+    /// Stored strings indexed by `LabelId`
     strings: Vec<String>,
-    /// Reverse lookup: string -> LabelId
+    /// Reverse lookup: string -> `LabelId`
     ids: HashMap<String, LabelId>,
 }
 
@@ -126,11 +126,11 @@ impl LabelTable {
         Ok(id)
     }
 
-    /// Resolves a LabelId back to its original string.
+    /// Resolves a `LabelId` back to its original string.
     ///
     /// # Arguments
     ///
-    /// * `id` - The LabelId to resolve
+    /// * `id` - The `LabelId` to resolve
     ///
     /// # Returns
     ///

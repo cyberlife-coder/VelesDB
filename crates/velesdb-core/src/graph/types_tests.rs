@@ -1,4 +1,4 @@
-//! Tests for graph types (GraphNode, GraphEdge).
+//! Tests for graph types (`GraphNode`, `GraphEdge`).
 
 use super::types::{GraphEdge, GraphNode};
 use serde_json::json;

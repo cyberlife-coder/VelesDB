@@ -1,7 +1,7 @@
 //! Tests for MATCH RETURN aggregation (VP-005).
 //!
 //! Verifies that RETURN clauses with aggregation functions (COUNT, AVG, SUM, MIN, MAX)
-//! compute correct results with implicit grouping per OpenCypher standard.
+//! compute correct results with implicit grouping per `OpenCypher` standard.
 
 use std::collections::HashMap;
 
@@ -234,8 +234,7 @@ fn test_return_avg_aggregation() {
         .expect("AVG should be a number");
     assert!(
         (avg - 0.9).abs() < 0.01,
-        "DrSmith AVG should be ~0.9, got {}",
-        avg
+        "DrSmith AVG should be ~0.9, got {avg}"
     );
 
     let jones = results
@@ -251,8 +250,7 @@ fn test_return_avg_aggregation() {
         .expect("AVG should be a number");
     assert!(
         (avg - 0.80).abs() < 0.01,
-        "DrJones AVG should be ~0.80, got {}",
-        avg
+        "DrJones AVG should be ~0.80, got {avg}"
     );
 }
 

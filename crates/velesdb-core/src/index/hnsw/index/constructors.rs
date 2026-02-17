@@ -1,4 +1,4 @@
-//! HnswIndex constructors and initialization methods.
+//! `HnswIndex` constructors and initialization methods.
 
 use super::{HnswIndex, HnswInner};
 use crate::distance::DistanceMetric;
@@ -14,7 +14,7 @@ impl HnswIndex {
     ///
     /// # Arguments
     ///
-    /// * `dimension` - Vector dimension (e.g., 768 for OpenAI embeddings)
+    /// * `dimension` - Vector dimension (e.g., 768 for `OpenAI` embeddings)
     /// * `metric` - Distance metric for similarity computation
     ///
     /// # Example
@@ -36,7 +36,7 @@ impl HnswIndex {
     /// # Performance
     ///
     /// - **~2x faster inserts** than `new()` (vectors not stored for re-ranking)
-    /// - **~50% less memory** (no ShardedVectors duplication)
+    /// - **~50% less memory** (no `ShardedVectors` duplication)
     ///
     /// # Limitations
     ///
@@ -70,7 +70,7 @@ impl HnswIndex {
     /// # Parameters
     ///
     /// Uses auto-tuned parameters for the dimension, plus:
-    /// - Higher ef_construction for better graph quality
+    /// - Higher `ef_construction` for better graph quality
     /// - Optimized for modern hardware
     ///
     /// # Example

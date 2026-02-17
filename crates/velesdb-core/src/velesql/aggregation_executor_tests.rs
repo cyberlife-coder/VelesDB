@@ -1,4 +1,4 @@
-//! Tests for VelesQL aggregation execution (EPIC-017 US-002).
+//! Tests for `VelesQL` aggregation execution (EPIC-017 US-002).
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::distance::DistanceMetric;

@@ -1,4 +1,4 @@
-//! Vacuum and maintenance operations for HnswIndex.
+//! Vacuum and maintenance operations for `HnswIndex`.
 
 use super::{HnswIndex, HnswInner};
 use crate::index::hnsw::params::HnswParams;

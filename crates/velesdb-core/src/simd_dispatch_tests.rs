@@ -145,7 +145,7 @@ fn test_simd_features_detect() {
 
     // Assert - just verify it doesn't panic
     let _name = features.best_instruction_set();
-    println!("SIMD features: {:?}", features);
+    println!("SIMD features: {features:?}");
     println!("Best instruction set: {}", features.best_instruction_set());
 }
 

@@ -6,7 +6,7 @@
 )]
 //! Bug 5 Fix Tests: Aggregation params resolution
 //!
-//! Tests that params are properly resolved in execute_aggregate queries.
+//! Tests that params are properly resolved in `execute_aggregate` queries.
 #![cfg(all(test, feature = "persistence"))]
 
 use crate::collection::Collection;
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 
 /// BUG 5: Aggregation params become NULL
-/// The params parameter in execute_aggregate was prefixed with _ and ignored.
+/// The params parameter in `execute_aggregate` was prefixed with _ and ignored.
 /// Placeholders like $cat in WHERE clauses were never resolved.
 #[test]
 fn test_bug_5_aggregation_params_should_be_resolved() {
@@ -83,8 +83,7 @@ fn test_bug_5_aggregation_params_should_be_resolved() {
 
     assert_eq!(
         count, 2,
-        "Should count only 'electronics' category (2 items). Got {}. Params may not be resolved.",
-        count
+        "Should count only 'electronics' category (2 items). Got {count}. Params may not be resolved."
     );
 
     // Sum should be 100 + 200 = 300, not 350 (all items)
@@ -94,8 +93,7 @@ fn test_bug_5_aggregation_params_should_be_resolved() {
         .unwrap_or(0.0);
     assert!(
         (sum - 300.0).abs() < 0.01,
-        "Sum should be 300.0 for electronics. Got {}",
-        sum
+        "Sum should be 300.0 for electronics. Got {sum}"
     );
 }
 

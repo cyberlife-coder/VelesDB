@@ -1,4 +1,4 @@
-//! Tests for graph_pattern module.
+//! Tests for `graph_pattern` module.
 
 use super::graph_pattern::{
     Direction, GraphPattern, MatchClause, NodePattern, OrderByItem, RelationshipPattern,

@@ -151,7 +151,7 @@ fn test_memory_pool_prefetch() {
     assert_eq!(pool.get(idx), Some(&42));
 }
 
-/// Regression test for BUG-1: allocate() without store() must not cause UB in Drop.
+/// Regression test for BUG-1: `allocate()` without `store()` must not cause UB in Drop.
 /// Previously, Drop assumed all non-free slots were initialized, which was wrong.
 #[test]
 fn test_allocate_without_store_no_ub() {
@@ -171,7 +171,7 @@ fn test_allocate_without_store_no_ub() {
     drop(pool);
 }
 
-/// Regression test: deallocate() on uninitialized slot must not crash
+/// Regression test: `deallocate()` on uninitialized slot must not crash
 #[test]
 fn test_deallocate_uninitialized_slot() {
     let mut pool: MemoryPool<String> = MemoryPool::new(4);

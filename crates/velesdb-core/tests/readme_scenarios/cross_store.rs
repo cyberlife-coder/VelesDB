@@ -1,7 +1,7 @@
-//! Cross-store & VelesQL scenario tests (Scenario 0 + API) — Tests created by Phase 4 Plan 06.
+//! Cross-store & `VelesQL` scenario tests (Scenario 0 + API) — Tests created by Phase 4 Plan 06.
 //!
 //! **Scenario 0**: Technical Deep-Dive — MATCH + similarity + column filter + subquery.
-//! **VelesQL API**: Basic SELECT/NEAR, category filter, GROUP BY/HAVING, UNION parsing.
+//! **`VelesQL` API**: Basic SELECT/NEAR, category filter, GROUP BY/HAVING, UNION parsing.
 //! **Manufacturing QC**: Bonus MATCH traversal with material filter.
 
 use std::collections::HashMap;
@@ -68,7 +68,7 @@ fn scenario0_documents() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
 }
 
 /// 4 Authors with varying citation counts.
-/// AVG(citation_count) = (80 + 120 + 30 + 200) / 4 = 107.5
+/// `AVG(citation_count)` = (80 + 120 + 30 + 200) / 4 = 107.5
 fn scenario0_authors() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
     vec![
         (
@@ -94,7 +94,7 @@ fn scenario0_authors() -> Vec<(u64, Vec<f32>, serde_json::Value)> {
     ]
 }
 
-/// Sets up Scenario 0: Documents, Authors, and AUTHORED_BY edges.
+/// Sets up Scenario 0: Documents, Authors, and `AUTHORED_BY` edges.
 fn setup_scenario0() -> (tempfile::TempDir, velesdb_core::Collection) {
     let (dir, db) = helpers::setup_test_db();
     let collection = helpers::setup_labeled_collection(&db, "scenario0", 4, DistanceMetric::Cosine);
@@ -119,7 +119,7 @@ fn setup_scenario0() -> (tempfile::TempDir, velesdb_core::Collection) {
 /// Test A: MATCH + similarity + category filter (without subquery).
 ///
 /// Verifies:
-/// - MATCH traversal follows AUTHORED_BY edges
+/// - MATCH traversal follows `AUTHORED_BY` edges
 /// - `start_properties` filters documents by category = 'peer-reviewed'
 /// - Similarity threshold filters distant vectors
 /// - Cross-node property projection (doc.title + author.name)
@@ -281,7 +281,7 @@ fn test_scenario0_subquery_in_where() {
 // VelesQL API Validation (README examples)
 // ============================================================================
 
-/// VelesQL: Basic SELECT + NEAR with category filter.
+/// `VelesQL`: Basic SELECT + NEAR with category filter.
 ///
 /// ```sql
 /// SELECT title, category
@@ -368,7 +368,7 @@ fn test_velesql_select_near_with_filter() {
     }
 }
 
-/// VelesQL: GROUP BY + HAVING aggregation.
+/// `VelesQL`: GROUP BY + HAVING aggregation.
 ///
 /// ```sql
 /// SELECT category, COUNT(*), AVG(rating)
@@ -455,7 +455,7 @@ fn test_velesql_group_by_having() {
     );
 }
 
-/// VelesQL: UNION parsing validation.
+/// `VelesQL`: UNION parsing validation.
 ///
 /// Verifies the parser accepts UNION syntax. Execution requires multi-collection
 /// routing which is not yet implemented at core level — parse-only test.
@@ -491,7 +491,7 @@ fn test_velesql_union_parses() {
 // RETURN batch.batch_id, test.test_name, test.result
 // ```
 
-/// Sets up Manufacturing QC scenario: Batches → QualityTests.
+/// Sets up Manufacturing QC scenario: Batches → `QualityTests`.
 fn setup_manufacturing_qc() -> (tempfile::TempDir, velesdb_core::Collection) {
     let (dir, db) = helpers::setup_test_db();
     let collection =
@@ -554,9 +554,9 @@ fn setup_manufacturing_qc() -> (tempfile::TempDir, velesdb_core::Collection) {
 /// Manufacturing QC: MATCH with material filter + test result filter.
 ///
 /// Verifies:
-/// - start_properties filter on batch.material = 'steel'
+/// - `start_properties` filter on batch.material = 'steel'
 /// - WHERE on target: test.result = 'fail'
-/// - Cross-node projection: batch_id + test_name + result
+/// - Cross-node projection: `batch_id` + `test_name` + result
 #[test]
 fn test_manufacturing_qc_failed_steel_tests() {
     let (_dir, collection) = setup_manufacturing_qc();

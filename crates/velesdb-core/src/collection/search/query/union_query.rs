@@ -1,4 +1,4 @@
-//! Union query execution for similarity() OR metadata patterns (EPIC-044 US-002).
+//! Union query execution for `similarity()` OR metadata patterns (EPIC-044 US-002).
 //!
 //! Handles OR-based queries that combine vector similarity with metadata filters,
 //! including nested AND/OR patterns.
@@ -11,7 +11,7 @@ use crate::point::SearchResult;
 const MAX_LIMIT: usize = 100_000;
 
 impl Collection {
-    /// EPIC-044 US-002: Execute union query for similarity() OR metadata patterns.
+    /// EPIC-044 US-002: Execute union query for `similarity()` OR metadata patterns.
     ///
     /// This method handles queries like:
     /// `WHERE similarity(v, $v) > 0.8 OR category = 'tech'`
@@ -51,8 +51,7 @@ impl Collection {
             if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
                 if field != "vector" {
                     return Err(crate::error::Error::Config(format!(
-                        "similarity() field '{}' not found. Only 'vector' field is supported.",
-                        field
+                        "similarity() field '{field}' not found. Only 'vector' field is supported."
                     )));
                 }
 
@@ -68,7 +67,7 @@ impl Collection {
                 for result in filtered {
                     // Issue #122: Apply outer filter to similarity results
                     if let Some(ref outer) = outer_filter {
-                        if !self.matches_metadata_filter(&result.point, outer) {
+                        if !Self::matches_metadata_filter(&result.point, outer) {
                             continue;
                         }
                     }
@@ -113,7 +112,6 @@ impl Collection {
     /// Check if a point matches a metadata filter condition.
     /// Used for applying outer AND filters to similarity results.
     pub(crate) fn matches_metadata_filter(
-        &self,
         point: &crate::Point,
         condition: &crate::velesql::Condition,
     ) -> bool {
@@ -127,14 +125,14 @@ impl Collection {
     /// Split an OR condition into similarity and metadata parts, extracting outer AND filters.
     ///
     /// For `similarity() > 0.8 OR category = 'tech'`, returns:
-    /// - similarity_cond: Some(similarity() > 0.8)
-    /// - metadata_cond: Some(category = 'tech')
-    /// - outer_filter: None
+    /// - `similarity_cond`: `Some(similarity()` > 0.8)
+    /// - `metadata_cond`: Some(category = 'tech')
+    /// - `outer_filter`: None
     ///
     /// For `(similarity() > 0.8 OR category = 'tech') AND status = 'active'`, returns:
-    /// - similarity_cond: Some(similarity() > 0.8)
-    /// - metadata_cond: Some(category = 'tech')
-    /// - outer_filter: Some(status = 'active')
+    /// - `similarity_cond`: `Some(similarity()` > 0.8)
+    /// - `metadata_cond`: Some(category = 'tech')
+    /// - `outer_filter`: Some(status = 'active')
     ///
     /// Issue #122: Handle nested AND/OR patterns correctly.
     pub(crate) fn split_or_condition_with_outer_filter(

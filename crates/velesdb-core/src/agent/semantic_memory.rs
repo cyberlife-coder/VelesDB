@@ -24,6 +24,12 @@ pub struct SemanticMemory<'a> {
 impl<'a> SemanticMemory<'a> {
     const COLLECTION_NAME: &'static str = "_semantic_memory";
 
+    /// Creates or opens semantic memory on top of an existing database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection cannot be created/opened or
+    /// when an existing collection uses a different embedding dimension.
     pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
@@ -78,6 +84,12 @@ impl<'a> SemanticMemory<'a> {
         self.dimension
     }
 
+    /// Stores a semantic fact and its embedding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid or when
+    /// the underlying write operation fails.
     pub fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), AgentMemoryError> {
         if embedding.len() != self.dimension {
             return Err(AgentMemoryError::DimensionMismatch {
@@ -100,6 +112,11 @@ impl<'a> SemanticMemory<'a> {
         Ok(())
     }
 
+    /// Stores a semantic fact and assigns a TTL to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when storing the fact fails.
     pub fn store_with_ttl(
         &self,
         id: u64,
@@ -112,6 +129,11 @@ impl<'a> SemanticMemory<'a> {
         Ok(())
     }
 
+    /// Queries semantic memory by vector similarity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when query dimension is invalid or search fails.
     pub fn query(
         &self,
         query_embedding: &[f32],
@@ -150,6 +172,11 @@ impl<'a> SemanticMemory<'a> {
             .collect())
     }
 
+    /// Deletes a semantic entry and associated TTL state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying delete operation fails.
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
@@ -165,6 +192,11 @@ impl<'a> SemanticMemory<'a> {
         Ok(())
     }
 
+    /// Serializes semantic memory points to JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access or JSON serialization fails.
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = self
             .db
@@ -180,6 +212,11 @@ impl<'a> SemanticMemory<'a> {
         Ok(serialized)
     }
 
+    /// Replaces semantic memory with the provided serialized data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when deserialization or collection writes fail.
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         if data.is_empty() {
             return Ok(());

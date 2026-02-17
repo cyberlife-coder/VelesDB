@@ -1,7 +1,7 @@
-//! E2E Scenario Test Suite for VelesDB README queries (VP-007).
+//! E2E Scenario Test Suite for `VelesDB` README queries (VP-007).
 //!
 //! This integration test module validates that every query example in the README
-//! actually works against the real VelesDB engine. Each submodule covers a
+//! actually works against the real `VelesDB` engine. Each submodule covers a
 //! specific domain of functionality.
 
 mod helpers;

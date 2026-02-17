@@ -225,7 +225,7 @@ fn test_parse_node_single_quote_property() {
 fn test_keyword_inside_string_literal_ignored() {
     // RETURN inside a string literal should not be matched
     let result = parse_match_clause("MATCH (n:Person {name: 'RETURN'}) RETURN n");
-    assert!(result.is_ok(), "Should parse correctly: {:?}", result);
+    assert!(result.is_ok(), "Should parse correctly: {result:?}");
     let clause = result.unwrap();
     // The pattern should have the full property value
     assert_eq!(clause.patterns.len(), 1);
@@ -235,7 +235,7 @@ fn test_keyword_inside_string_literal_ignored() {
 fn test_keyword_where_inside_string_literal() {
     // WHERE inside a string literal should not be matched
     let result = parse_match_clause("MATCH (n:Person {status: 'WHERE'}) RETURN n");
-    assert!(result.is_ok(), "Should parse correctly: {:?}", result);
+    assert!(result.is_ok(), "Should parse correctly: {result:?}");
 }
 
 // === != and <> operator tests (Bug fix) ===
@@ -243,7 +243,7 @@ fn test_keyword_where_inside_string_literal() {
 #[test]
 fn test_where_not_equal_operator() {
     let result = parse_match_clause("MATCH (n:Person) WHERE n.age != 18 RETURN n");
-    assert!(result.is_ok(), "Should parse != operator: {:?}", result);
+    assert!(result.is_ok(), "Should parse != operator: {result:?}");
     let clause = result.unwrap();
     assert!(clause.where_clause.is_some());
 }
@@ -251,7 +251,7 @@ fn test_where_not_equal_operator() {
 #[test]
 fn test_where_diamond_not_equal_operator() {
     let result = parse_match_clause("MATCH (n:Person) WHERE n.age <> 18 RETURN n");
-    assert!(result.is_ok(), "Should parse <> operator: {:?}", result);
+    assert!(result.is_ok(), "Should parse <> operator: {result:?}");
     let clause = result.unwrap();
     assert!(clause.where_clause.is_some());
 }
@@ -264,8 +264,7 @@ fn test_relationship_bracket_reversed_order() {
     let result = parse_relationship_pattern("-]foo[->");
     assert!(
         result.is_err(),
-        "Should error on reversed brackets: {:?}",
-        result
+        "Should error on reversed brackets: {result:?}"
     );
 }
 
@@ -275,8 +274,7 @@ fn test_node_brace_reversed_order() {
     let result = parse_node_pattern("(n } foo {a: 1)");
     assert!(
         result.is_err(),
-        "Should error on reversed braces: {:?}",
-        result
+        "Should error on reversed braces: {result:?}"
     );
 }
 
@@ -286,8 +284,7 @@ fn test_relationship_brace_reversed_order() {
     let result = parse_relationship_pattern("-[r:KNOWS } foo {a: 1]->");
     assert!(
         result.is_err(),
-        "Should error on reversed braces in relationship: {:?}",
-        result
+        "Should error on reversed braces in relationship: {result:?}"
     );
 }
 
@@ -299,8 +296,7 @@ fn test_property_with_comma_in_string() {
     let result = parse_node_pattern("(n:Person {name: 'Alice, Bob', age: 30})");
     assert!(
         result.is_ok(),
-        "Should parse comma inside string: {:?}",
-        result
+        "Should parse comma inside string: {result:?}"
     );
     let node = result.unwrap();
     assert_eq!(node.properties.len(), 2);
@@ -319,8 +315,7 @@ fn test_keyword_not_matched_after_underscore() {
     let result = parse_match_clause("MATCH (foo_RETURN:Label) RETURN foo_RETURN");
     assert!(
         result.is_ok(),
-        "Should parse identifier with keyword substring: {:?}",
-        result
+        "Should parse identifier with keyword substring: {result:?}"
     );
 }
 
@@ -330,8 +325,7 @@ fn test_keyword_not_matched_before_underscore() {
     let result = parse_match_clause("MATCH (RETURN_value:Label) RETURN RETURN_value");
     assert!(
         result.is_ok(),
-        "Should parse identifier starting with keyword: {:?}",
-        result
+        "Should parse identifier starting with keyword: {result:?}"
     );
 }
 
@@ -341,8 +335,7 @@ fn test_where_clause_identifier_with_underscore() {
     let result = parse_match_clause("MATCH (n:Person) WHERE n.where_status = 'active' RETURN n");
     assert!(
         result.is_ok(),
-        "Should handle where_status identifier: {:?}",
-        result
+        "Should handle where_status identifier: {result:?}"
     );
 }
 
@@ -352,11 +345,7 @@ fn test_where_clause_identifier_with_underscore() {
 fn test_nested_parentheses_in_pattern() {
     // Nested patterns should be handled correctly
     let result = parse_match_clause("MATCH (a)-[:R]->(b)-[:S]->(c) RETURN a, b, c");
-    assert!(
-        result.is_ok(),
-        "Should handle chained patterns: {:?}",
-        result
-    );
+    assert!(result.is_ok(), "Should handle chained patterns: {result:?}");
     let clause = result.unwrap();
     assert_eq!(clause.patterns[0].nodes.len(), 3);
     assert_eq!(clause.patterns[0].relationships.len(), 2);
@@ -366,7 +355,7 @@ fn test_nested_parentheses_in_pattern() {
 fn test_empty_relationship_brackets() {
     // Empty brackets should be valid
     let result = parse_relationship_pattern("-[]->");
-    assert!(result.is_ok(), "Should handle empty brackets: {:?}", result);
+    assert!(result.is_ok(), "Should handle empty brackets: {result:?}");
 }
 
 #[test]
@@ -392,7 +381,7 @@ fn test_node_with_only_label_no_alias() {
 fn test_empty_where_condition() {
     // WHERE immediately followed by RETURN should error, not panic
     let result = parse_match_clause("MATCH (n) WHERE RETURN n");
-    assert!(result.is_err(), "Should error on empty WHERE: {:?}", result);
+    assert!(result.is_err(), "Should error on empty WHERE: {result:?}");
 }
 
 #[test]
@@ -401,8 +390,7 @@ fn test_where_with_only_whitespace() {
     let result = parse_match_clause("MATCH (n) WHERE   RETURN n");
     assert!(
         result.is_err(),
-        "Should error on whitespace-only WHERE: {:?}",
-        result
+        "Should error on whitespace-only WHERE: {result:?}"
     );
 }
 
@@ -429,7 +417,7 @@ fn test_where_operator_inside_string_literal() {
     // Operators inside string literals should be ignored
     // The = operator should be found, not the > inside 'x > y'
     let result = parse_match_clause("MATCH (n) WHERE n.status = 'x > y' RETURN n");
-    assert!(result.is_ok(), "Should parse correctly: {:?}", result);
+    assert!(result.is_ok(), "Should parse correctly: {result:?}");
     let clause = result.unwrap();
     assert!(clause.where_clause.is_some());
 }
@@ -440,8 +428,7 @@ fn test_where_multiple_operators_in_string() {
     let result = parse_match_clause("MATCH (n) WHERE n.expr = 'a >= b && c <= d' RETURN n");
     assert!(
         result.is_ok(),
-        "Should handle multiple operators in string: {:?}",
-        result
+        "Should handle multiple operators in string: {result:?}"
     );
 }
 
@@ -449,9 +436,5 @@ fn test_where_multiple_operators_in_string() {
 fn test_where_not_equal_inside_string() {
     // != inside string should be ignored, real != outside should be found
     let result = parse_match_clause("MATCH (n) WHERE n.value != 'test != value' RETURN n");
-    assert!(
-        result.is_ok(),
-        "Should find != outside string: {:?}",
-        result
-    );
+    assert!(result.is_ok(), "Should find != outside string: {result:?}");
 }

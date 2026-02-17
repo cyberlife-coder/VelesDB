@@ -1,6 +1,6 @@
 //! Property index for fast graph node lookups.
 //!
-//! Provides O(1) lookups on (label, property_name, value) instead of O(n) scans.
+//! Provides O(1) lookups on (label, `property_name`, value) instead of O(n) scans.
 //! Also includes composite indexes for (label, property1, property2, ...) lookups.
 
 // SAFETY: Numeric casts in property indexing are intentional:
@@ -30,13 +30,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Current schema version for PropertyIndex serialization.
+/// Current schema version for `PropertyIndex` serialization.
 /// Increment this when making breaking changes to the index format.
 pub const PROPERTY_INDEX_VERSION: u32 = 1;
 
 /// Index for fast property-based node lookups.
 ///
-/// Maps (label, property_name) -> (value -> node_ids) for O(1) lookups.
+/// Maps (label, `property_name`) -> (value -> `node_ids`) for O(1) lookups.
 ///
 /// # Example
 ///
@@ -53,7 +53,7 @@ pub struct PropertyIndex {
     /// Schema version for forward compatibility.
     #[serde(default = "default_version")]
     version: u32,
-    /// (label, property_name) -> (value_json -> node_ids)
+    /// (label, `property_name`) -> (`value_json` -> `node_ids`)
     indexes: HashMap<(String, String), HashMap<String, RoaringBitmap>>,
 }
 
@@ -90,8 +90,8 @@ impl PropertyIndex {
     ///
     /// # Note
     ///
-    /// Uses RoaringBitmap internally which only supports u32 IDs.
-    /// Returns `false` if node_id > u32::MAX to prevent data corruption.
+    /// Uses `RoaringBitmap` internally which only supports u32 IDs.
+    /// Returns `false` if `node_id` > `u32::MAX` to prevent data corruption.
     pub fn insert(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
         // BUG FIX: Reject node_id > u32::MAX instead of silently truncating
         // This prevents data corruption from ID collisions
@@ -120,7 +120,7 @@ impl PropertyIndex {
     /// Remove a node from the index.
     ///
     /// Returns `true` if the node was removed.
-    /// Returns `false` if node_id > u32::MAX (cannot exist in index).
+    /// Returns `false` if `node_id` > `u32::MAX` (cannot exist in index).
     pub fn remove(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
         // BUG FIX: node_id > u32::MAX cannot exist in index, return false
         let Some(safe_id) = u32::try_from(node_id).ok() else {

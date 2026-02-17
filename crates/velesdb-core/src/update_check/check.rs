@@ -10,13 +10,13 @@ use std::time::Duration;
 /// Telemetry payload - Minimal, no PII
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateCheckPayload {
-    /// VelesDB version (e.g., "0.5.4")
+    /// `VelesDB` version (e.g., "0.5.4")
     pub version: String,
 
     /// OS identifier (e.g., "linux", "windows", "macos")
     pub os: String,
 
-    /// Architecture (e.g., "x86_64", "aarch64")
+    /// Architecture (e.g., "`x86_64`", "aarch64")
     pub arch: String,
 
     /// SHA256 hash of instance ID (stable per install)

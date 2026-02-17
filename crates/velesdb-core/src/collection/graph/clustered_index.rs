@@ -13,7 +13,7 @@
 //!
 //! ## References
 //!
-//! - RapidStore Section 6.3: "low-degree vertices use small arrays further
+//! - `RapidStore` Section 6.3: "low-degree vertices use small arrays further
 //!   grouped into a tree to optimize memory usage"
 
 // SAFETY: Numeric casts in clustered index are intentional:
@@ -35,7 +35,7 @@ const FRAGMENTATION_THRESHOLD: f64 = 0.30;
 pub struct ClusteredIndex {
     /// Contiguous storage for all neighbor targets
     data: Vec<u64>,
-    /// Maps node_id -> (offset, length) in data
+    /// Maps `node_id` -> (offset, length) in data
     index: FxHashMap<u64, (usize, usize)>,
     /// Free slots available for reuse: (offset, length)
     free_slots: Vec<(usize, usize)>,
@@ -304,7 +304,7 @@ impl Default for ClusteredIndex {
     }
 }
 
-/// Wrapper to implement EdgeIndex trait for ClusteredIndex per node.
+/// Wrapper to implement `EdgeIndex` trait for `ClusteredIndex` per node.
 #[derive(Debug)]
 pub struct ClusteredEdgeIndex<'a> {
     index: &'a mut ClusteredIndex,

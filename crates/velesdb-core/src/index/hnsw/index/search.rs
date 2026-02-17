@@ -1,4 +1,4 @@
-//! Search methods for HnswIndex.
+//! Search methods for `HnswIndex`.
 
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
@@ -274,9 +274,8 @@ impl HnswIndex {
                     return None;
                 }
             };
-            let similarities = match similarities {
-                Ok(s) => s,
-                Err(_) => return None,
+            let Ok(similarities) = similarities else {
+                return None;
             };
 
             // Combine IDs with similarities

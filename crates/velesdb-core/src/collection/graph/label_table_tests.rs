@@ -99,7 +99,7 @@ fn test_label_table_many_labels() {
     let mut table = LabelTable::new();
 
     for i in 0..1000 {
-        let label = format!("Label{}", i);
+        let label = format!("Label{i}");
         let id = table.intern(&label).unwrap();
         assert_eq!(id.as_u32(), i as u32);
     }
@@ -107,7 +107,7 @@ fn test_label_table_many_labels() {
     assert_eq!(table.len(), 1000);
 
     for i in 0..1000 {
-        let label = format!("Label{}", i);
+        let label = format!("Label{i}");
         let id = LabelId::from_u32(i as u32);
         assert_eq!(table.resolve(id), Some(label.as_str()));
     }

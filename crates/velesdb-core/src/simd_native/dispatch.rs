@@ -15,9 +15,9 @@ use super::scalar;
 /// SIMD capability level detected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimdLevel {
-    /// AVX-512F available (x86_64 only).
+    /// AVX-512F available (`x86_64` only).
     Avx512,
-    /// AVX2 + FMA available (x86_64 only).
+    /// AVX2 + FMA available (`x86_64` only).
     Avx2,
     /// NEON available (aarch64, always true).
     Neon,
@@ -115,6 +115,10 @@ pub fn warmup_simd_cache() {
 /// - Loop simple pour tous les cas
 ///
 /// Les seuils sont calibrés pour éviter les régressions sur chaque architecture.
+///
+/// # Panics
+///
+/// Panics when `a.len() != b.len()`.
 #[allow(clippy::inline_always)] // Reason: Hot-path function called millions of times in similarity search loops
 #[inline(always)]
 #[must_use]
@@ -163,6 +167,10 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Squared L2 distance with automatic dispatch to best available SIMD.
+///
+/// # Panics
+///
+/// Panics when `a.len() != b.len()`.
 #[allow(clippy::inline_always)] // Reason: Hot-path function for Euclidean distance calculations
 #[inline(always)]
 #[must_use]
@@ -244,6 +252,10 @@ pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Full cosine similarity (with normalization) using native SIMD.
+///
+/// # Panics
+///
+/// Panics when `a.len() != b.len()`.
 #[allow(clippy::inline_always)] // Reason: Primary similarity function, hot-path in all vector searches
 #[inline(always)]
 #[must_use]
@@ -305,6 +317,10 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
 // =============================================================================
 
 /// Hamming distance between two vectors using SIMD.
+///
+/// # Panics
+///
+/// Panics when `a.len() != b.len()`.
 #[inline]
 #[must_use]
 pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
@@ -319,6 +335,10 @@ pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Jaccard similarity between two vectors using SIMD.
+///
+/// # Panics
+///
+/// Panics when `a.len() != b.len()`.
 #[inline]
 #[must_use]
 pub fn jaccard_similarity_native(a: &[f32], b: &[f32]) -> f32 {
@@ -409,7 +429,7 @@ fn squared_l2_scalar(a: &[f32], b: &[f32]) -> f32 {
 /// # References
 ///
 /// - arXiv:2505.07621 "Bang for the Buck" — function pointer dispatch for SIMD
-/// - SimSIMD library uses similar function-pointer tables
+/// - `SimSIMD` library uses similar function-pointer tables
 #[derive(Clone, Copy)]
 pub struct DistanceEngine {
     dot_product_fn: fn(&[f32], &[f32]) -> f32,

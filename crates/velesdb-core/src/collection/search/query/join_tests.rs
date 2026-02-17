@@ -1,4 +1,4 @@
-//! Tests for `join` module - JOIN execution for VelesQL.
+//! Tests for `join` module - JOIN execution for `VelesQL`.
 
 use super::join::{adaptive_batch_size, execute_join, extract_join_keys, joined_to_search_results};
 use crate::column_store::{ColumnStore, ColumnType, ColumnValue};
@@ -189,8 +189,7 @@ fn test_extract_join_keys_u64_overflow_safety() {
 
     assert!(
         keys.is_empty() || keys.iter().all(|(_, k)| *k >= 0),
-        "Large u64 IDs should not produce negative join keys: {:?}",
-        keys
+        "Large u64 IDs should not produce negative join keys: {keys:?}"
     );
 }
 
@@ -248,8 +247,7 @@ fn test_extract_join_keys_just_above_i64_max() {
     let keys = extract_join_keys(&[result], &condition);
     assert!(
         keys.is_empty(),
-        "IDs > i64::MAX should be filtered out, got: {:?}",
-        keys
+        "IDs > i64::MAX should be filtered out, got: {keys:?}"
     );
 }
 
@@ -455,8 +453,7 @@ fn test_right_join_returns_error() {
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("RIGHT JOIN"),
-        "Error should mention RIGHT JOIN: {}",
-        err
+        "Error should mention RIGHT JOIN: {err}"
     );
 }
 
@@ -487,7 +484,6 @@ fn test_full_join_returns_error() {
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("FULL JOIN"),
-        "Error should mention FULL JOIN: {}",
-        err
+        "Error should mention FULL JOIN: {err}"
     );
 }

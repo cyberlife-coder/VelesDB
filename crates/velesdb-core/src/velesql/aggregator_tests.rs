@@ -85,7 +85,7 @@ fn test_result_to_json() {
 #[test]
 fn test_process_batch_sum() {
     let mut agg = Aggregator::new();
-    let values: Vec<f64> = (1..=100).map(|x| x as f64).collect();
+    let values: Vec<f64> = (1..=100).map(f64::from).collect();
     agg.process_batch("value", &values);
 
     let result = agg.finalize();

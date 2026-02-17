@@ -1,4 +1,4 @@
-//! Tests for PropertyIndex and CompositeGraphIndex.
+//! Tests for `PropertyIndex` and `CompositeGraphIndex`.
 
 use super::property_index::{
     CompositeGraphIndex, CompositeIndexManager, CompositeIndexType, CompositeRangeIndex,

@@ -562,21 +562,19 @@ fn test_parse_reserved_keywords_as_identifiers() {
     ];
 
     for kw in keywords {
-        let query_backtick = format!("SELECT * FROM `{}`", kw);
+        let query_backtick = format!("SELECT * FROM `{kw}`");
         let result = Parser::parse(&query_backtick);
         assert!(
             result.is_ok(),
-            "Failed to parse backtick-quoted keyword: {}",
-            kw
+            "Failed to parse backtick-quoted keyword: {kw}"
         );
         assert_eq!(result.unwrap().select.from, kw);
 
-        let query_doublequote = format!(r#"SELECT * FROM "{}""#, kw);
+        let query_doublequote = format!(r#"SELECT * FROM "{kw}""#);
         let result = Parser::parse(&query_doublequote);
         assert!(
             result.is_ok(),
-            "Failed to parse double-quoted keyword: {}",
-            kw
+            "Failed to parse double-quoted keyword: {kw}"
         );
         assert_eq!(result.unwrap().select.from, kw);
     }

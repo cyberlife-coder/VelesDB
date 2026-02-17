@@ -166,7 +166,7 @@ impl MatchQueryPlanner {
         where_clause.is_some_and(Self::condition_has_similarity)
     }
 
-    /// Recursively check if a condition contains similarity().
+    /// Recursively check if a condition contains `similarity()`.
     fn condition_has_similarity(condition: &Condition) -> bool {
         match condition {
             Condition::Similarity(_) => true,
@@ -250,7 +250,7 @@ impl MatchQueryPlanner {
     /// Higher threshold = more selective.
     pub(crate) fn estimate_selectivity(threshold: f32) -> f64 {
         // Heuristic: threshold 0.9 → ~10% pass, 0.5 → ~50% pass
-        (1.0 - threshold as f64).max(0.01)
+        (1.0 - f64::from(threshold)).max(0.01)
     }
 
     /// Decide if parallel execution is beneficial.
@@ -283,8 +283,7 @@ impl MatchQueryPlanner {
                     start_labels.join(", ")
                 };
                 format!(
-                    "GraphFirst: Traverse from nodes with labels [{}], max depth {}",
-                    labels, max_depth
+                    "GraphFirst: Traverse from nodes with labels [{labels}], max depth {max_depth}"
                 )
             }
             MatchExecutionStrategy::VectorFirst {
@@ -293,8 +292,7 @@ impl MatchQueryPlanner {
                 threshold,
             } => {
                 format!(
-                    "VectorFirst: Search top-{} candidates for '{}' with threshold {:.2}, then validate graph",
-                    top_k, similarity_alias, threshold
+                    "VectorFirst: Search top-{top_k} candidates for '{similarity_alias}' with threshold {threshold:.2}, then validate graph"
                 )
             }
             MatchExecutionStrategy::Parallel {
