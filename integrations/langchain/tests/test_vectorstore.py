@@ -625,5 +625,46 @@ class TestMultiQuerySearch:
         assert len(results) <= 2
 
 
+class _MockCollectionQuery:
+    def explain(self, query_str, params=None):
+        return {"tree": "MockPlan", "estimated_cost_ms": 0.01}
+
+    def match_query(self, query_str, params=None, **kwargs):
+        return [
+            {
+                "node_id": 1,
+                "depth": 0,
+                "path": [],
+                "bindings": {"n": 1},
+                "score": 0.9,
+                "projected": {"n.name": "Alice"},
+            }
+        ]
+
+
+class TestVelesDBVectorStoreQueryAnalysis:
+    def test_explain_delegates_to_collection(self, temp_db_path, embeddings):
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_explain_delegate",
+        )
+        vectorstore._collection = _MockCollectionQuery()
+        plan = vectorstore.explain("SELECT * FROM test_explain_delegate LIMIT 1")
+        assert plan["tree"] == "MockPlan"
+
+    def test_match_query_delegates_and_converts_documents(self, temp_db_path, embeddings):
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_match_delegate",
+        )
+        vectorstore._collection = _MockCollectionQuery()
+        docs = vectorstore.match_query("MATCH (n) RETURN n")
+        assert len(docs) == 1
+        assert isinstance(docs[0], Document)
+        assert docs[0].metadata["node_id"] == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

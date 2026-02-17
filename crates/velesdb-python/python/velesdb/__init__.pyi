@@ -195,6 +195,37 @@ class Collection:
             List of (id, score) tuples
         """
         ...
+
+    def search_with_ef(
+        self,
+        vector: Union[List[float], np.ndarray],
+        top_k: int = 10,
+        ef_search: int = 128,
+    ) -> List[Dict[str, Any]]:
+        """Search with custom HNSW ef_search parameter."""
+        ...
+
+    def query(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query."""
+        ...
+
+    def query_ids(self, velesql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query returning only IDs and scores."""
+        ...
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+        vector: Optional[Union[List[float], np.ndarray]] = None,
+        threshold: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Execute a MATCH graph query."""
+        ...
+
+    def explain(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Return execution plan for a VelesQL query."""
+        ...
     
     def multi_query_search(
         self,

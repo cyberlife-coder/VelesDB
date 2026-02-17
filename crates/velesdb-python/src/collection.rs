@@ -12,7 +12,7 @@ use crate::collection_helpers::{
     id_score_pairs_to_dicts, parse_filter, parse_optional_filter, point_to_dict,
     search_result_to_dict, search_results_to_dicts, search_results_to_multimodel_dicts,
 };
-use crate::utils::{extract_vector, python_to_json, to_pyobject};
+use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 use crate::FusionStrategy;
 use velesdb_core::{FusionStrategy as CoreFusionStrategy, Point};
 
@@ -222,6 +222,41 @@ impl Collection {
         })
     }
 
+    /// Search for similar vectors with custom HNSW ef_search parameter.
+    #[pyo3(signature = (vector, top_k = 10, ef_search = 128))]
+    fn search_with_ef(
+        &self,
+        vector: PyObject,
+        top_k: usize,
+        ef_search: usize,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let query_vector = extract_vector(py, &vector)?;
+            let results = self
+                .inner
+                .search_with_ef(&query_vector, top_k, ef_search)
+                .map_err(|e| PyRuntimeError::new_err(format!("Search with ef failed: {e}")))?;
+            Ok(search_results_to_dicts(py, results))
+        })
+    }
+
+    /// Search returning only IDs and scores.
+    #[pyo3(signature = (vector, top_k = 10))]
+    fn search_ids(
+        &self,
+        vector: PyObject,
+        top_k: usize,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let query_vector = extract_vector(py, &vector)?;
+            let results = self
+                .inner
+                .search_ids(&query_vector, top_k)
+                .map_err(|e| PyRuntimeError::new_err(format!("Search IDs failed: {e}")))?;
+            Ok(id_score_pairs_to_dicts(py, results))
+        })
+    }
+
     /// Get points by their IDs.
     #[pyo3(signature = (ids))]
     fn get(&self, ids: Vec<u64>) -> PyResult<Vec<Option<HashMap<String, PyObject>>>> {
@@ -382,9 +417,6 @@ impl Collection {
     ///
     /// Executes SELECT-style VelesQL queries with vector similarity search.
     ///
-    /// Note: Currently supports SELECT syntax only. MATCH/graph traversal
-    /// syntax is planned for a future release (see EPIC-010).
-    ///
     /// Args:
     ///     query_str: VelesQL SELECT query string
     ///     params: Query parameters (vectors as lists/numpy arrays, scalars)
@@ -423,6 +455,120 @@ impl Collection {
                 .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {e}")))?;
 
             Ok(search_results_to_multimodel_dicts(py, results))
+        })
+    }
+
+    /// Execute a MATCH graph traversal query.
+    ///
+    /// Args:
+    ///     query_str: VelesQL MATCH query string
+    ///     params: Query parameters (default: empty dict)
+    ///     vector: Optional query vector for similarity scoring
+    ///     threshold: Similarity threshold (default: 0.0)
+    ///
+    /// Returns:
+    ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    fn match_query(
+        &self,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+        vector: Option<PyObject>,
+        threshold: f32,
+    ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        Python::with_gil(|py| {
+            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
+                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
+            })?;
+            let match_clause = parsed
+                .match_clause
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("Query is not a MATCH query"))?;
+
+            let rust_params: std::collections::HashMap<String, serde_json::Value> = params
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+                .collect();
+
+            let results = if let Some(vector_obj) = vector {
+                let query_vector = extract_vector(py, &vector_obj)?;
+                self.inner
+                    .execute_match_with_similarity(
+                        match_clause,
+                        &query_vector,
+                        threshold,
+                        &rust_params,
+                    )
+                    .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
+            } else {
+                self.inner
+                    .execute_match(match_clause, &rust_params)
+                    .map_err(|e| PyRuntimeError::new_err(format!("MATCH query failed: {e}")))?
+            };
+
+            let py_results: Vec<HashMap<String, PyObject>> = results
+                .into_iter()
+                .map(|r| {
+                    let mut dict = HashMap::new();
+                    dict.insert("node_id".to_string(), to_pyobject(py, r.node_id));
+                    dict.insert("depth".to_string(), to_pyobject(py, r.depth));
+                    dict.insert("path".to_string(), to_pyobject(py, r.path));
+                    dict.insert("bindings".to_string(), to_pyobject(py, r.bindings));
+                    dict.insert("score".to_string(), to_pyobject(py, r.score));
+                    let projected: HashMap<String, PyObject> = r
+                        .projected
+                        .into_iter()
+                        .map(|(k, v)| (k, json_to_python(py, &v)))
+                        .collect();
+                    dict.insert("projected".to_string(), to_pyobject(py, projected));
+                    dict
+                })
+                .collect();
+            Ok(py_results)
+        })
+    }
+
+    /// Return query execution plan (EXPLAIN).
+    #[pyo3(signature = (query_str, params = None))]
+    fn explain(
+        &self,
+        query_str: &str,
+        params: Option<HashMap<String, PyObject>>,
+    ) -> PyResult<HashMap<String, PyObject>> {
+        Python::with_gil(|py| {
+            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
+                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
+            })?;
+
+            let _json_params: std::collections::HashMap<String, serde_json::Value> = params
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+                .collect();
+
+            let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
+                let stats = velesdb_core::collection::search::query::match_planner::CollectionStats::default();
+                velesdb_core::velesql::QueryPlan::from_match(match_clause, &stats)
+            } else {
+                velesdb_core::velesql::QueryPlan::from_select(&parsed.select)
+            };
+
+            let mut out = HashMap::new();
+            out.insert("tree".to_string(), to_pyobject(py, plan.to_tree()));
+            out.insert(
+                "estimated_cost_ms".to_string(),
+                to_pyobject(py, plan.estimated_cost_ms),
+            );
+            out.insert(
+                "filter_strategy".to_string(),
+                to_pyobject(py, plan.filter_strategy.as_str()),
+            );
+            out.insert(
+                "index_used".to_string(),
+                to_pyobject(py, plan.index_used.map(|i| i.as_str().to_string())),
+            );
+            Ok(out)
         })
     }
 

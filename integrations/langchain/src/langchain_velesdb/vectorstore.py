@@ -829,6 +829,41 @@ class VelesDBVectorStore(VectorStore):
 
         return documents
 
+    def explain(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Get the query execution plan for a VelesQL query."""
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        return self._collection.explain(query_str, params)
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Execute a MATCH query and convert results to LangChain Documents."""
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        results = self._collection.match_query(query_str, params=params, **kwargs)
+        documents: List[Document] = []
+        for result in results:
+            projected = result.get("projected", {})
+            bindings = result.get("bindings", {})
+            page_content = str(projected if projected else bindings)
+            documents.append(Document(page_content=page_content, metadata=result))
+        return documents
+
     def multi_query_search(
         self,
         queries: List[str],
