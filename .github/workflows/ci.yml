@@ -80,7 +80,7 @@ jobs:
 
       - name: Check doctests compile
         run: |
-          cargo test --doc --package velesdb-core --no-run
+          cargo test --doc --package velesdb-core
         continue-on-error: false  # EPIC-080: Doctests fixes completed
 
   # ===========================================================================
