@@ -3,7 +3,7 @@
 //! Covers both happy-path and error-path GPU scenarios:
 //! - Graceful fallback when GPU is unavailable
 //! - Consistency of availability checks
-//! - ComputeBackend dispatch logic
+//! - `ComputeBackend` dispatch logic
 
 use super::gpu::*;
 
@@ -67,10 +67,10 @@ fn test_gpu_accelerator_none_without_gpu() {
     // GpuAccelerator::new() returns Option — must not panic regardless of hardware
     let gpu = GpuAccelerator::new();
     if gpu.is_none() {
-        // Graceful degradation: no GPU available
+        // Graceful degradation: unavailable accelerator must report unavailable.
         assert!(
-            !GpuAccelerator::is_available() || true,
-            "Fallback is acceptable"
+            !GpuAccelerator::is_available(),
+            "GpuAccelerator::new() returned None while is_available() reported true"
         );
     }
 }

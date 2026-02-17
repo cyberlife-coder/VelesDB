@@ -249,7 +249,7 @@ pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
         if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
             0.0
         } else {
-            dot / (norm_a * norm_b)
+            (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
         }
     }
 }
@@ -375,5 +375,17 @@ mod tests {
         let v2 = VectorData::from_f32_slice(&[1.0, 2.0, 3.0], VectorPrecision::F32);
         let sim = cosine_similarity(&v1, &v2);
         assert!((sim - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cosine_similarity_is_clamped_to_unit_interval() {
+        // Mixed precision path (non-F32/F32) must respect cosine bounds.
+        let v1 = VectorData::from_f32_slice(&[1.0, 1.0, 1.0, 1.0], VectorPrecision::F16);
+        let v2 = VectorData::from_f32_slice(&[1.0, 1.0, 1.0, 1.0], VectorPrecision::BF16);
+        let sim = cosine_similarity(&v1, &v2);
+        assert!(
+            (-1.0..=1.0).contains(&sim),
+            "cosine similarity must be clamped to [-1, 1], got {sim}"
+        );
     }
 }
