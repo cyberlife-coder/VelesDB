@@ -82,12 +82,24 @@ fn punch_hole_linux(file: &File, offset: u64, len: u64) -> io::Result<bool> {
 
     let fd = file.as_raw_fd();
     let mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
+    let offset_off_t = libc::off_t::try_from(offset).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "offset does not fit in libc::off_t",
+        )
+    })?;
+    let len_off_t = libc::off_t::try_from(len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "len does not fit in libc::off_t",
+        )
+    })?;
 
     // SAFETY: `libc::fallocate` requires a valid fd and offsets.
     // - Condition 1: `fd` comes from `file.as_raw_fd()` on an open file handle.
     // - Condition 2: `offset`/`len` are caller-provided ranges for the same file.
     // Reason: Hole punching is only exposed through this syscall on Linux.
-    let ret = unsafe { libc::fallocate(fd, mode, offset as libc::off_t, len as libc::off_t) };
+    let ret = unsafe { libc::fallocate(fd, mode, offset_off_t, len_off_t) };
 
     if ret == 0 {
         Ok(true) // Disk space reclaimed
