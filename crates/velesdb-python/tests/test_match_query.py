@@ -77,7 +77,7 @@ def test_explain_returns_plan_dict(temp_db_path):
     assert "estimated_cost_ms" in explain
     assert "filter_strategy" in explain
     assert "index_used" in explain
-    assert "tree" in explain or "plan" in explain
+    assert "tree" in explain
 
 
 def test_search_with_ef_and_search_ids(temp_db_path):
@@ -92,9 +92,6 @@ def test_search_with_ef_and_search_ids(temp_db_path):
     assert len(id_results) <= 2
     if id_results:
         first = id_results[0]
-        if isinstance(first, dict):
-            assert "id" in first
-            assert "score" in first
-        else:
-            assert isinstance(first, (tuple, list))
-            assert len(first) == 2
+        assert isinstance(first, dict)
+        assert "id" in first
+        assert "score" in first

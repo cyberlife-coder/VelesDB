@@ -530,22 +530,12 @@ impl Collection {
     }
 
     /// Return query execution plan (EXPLAIN).
-    #[pyo3(signature = (query_str, params = None))]
-    fn explain(
-        &self,
-        query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<HashMap<String, PyObject>> {
+    #[pyo3(signature = (query_str))]
+    fn explain(&self, query_str: &str) -> PyResult<HashMap<String, PyObject>> {
         Python::with_gil(|py| {
             let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
                 PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
             })?;
-
-            let _json_params: std::collections::HashMap<String, serde_json::Value> = params
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
-                .collect();
 
             let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
                 let stats = velesdb_core::collection::search::query::match_planner::CollectionStats::default();

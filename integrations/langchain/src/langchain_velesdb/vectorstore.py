@@ -832,7 +832,6 @@ class VelesDBVectorStore(VectorStore):
     def explain(
         self,
         query_str: str,
-        params: Optional[dict] = None,
         **kwargs: Any,
     ) -> dict:
         """Get the query execution plan for a VelesQL query."""
@@ -841,7 +840,7 @@ class VelesDBVectorStore(VectorStore):
         if self._collection is None:
             raise ValueError("Collection not initialized. Add documents first.")
 
-        return self._collection.explain(query_str, params)
+        return self._collection.explain(query_str)
 
     def match_query(
         self,

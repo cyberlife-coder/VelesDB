@@ -494,7 +494,7 @@ class TestMultiQuerySearch:
 
 
 class _MockCollectionQuery:
-    def explain(self, query_str, params=None):
+    def explain(self, query_str):
         return {"tree": "MockPlan", "estimated_cost_ms": 0.01}
 
     def match_query(self, query_str, params=None, **kwargs):

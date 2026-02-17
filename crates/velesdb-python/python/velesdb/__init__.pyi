@@ -182,8 +182,7 @@ class Collection:
         self,
         vector: Union[List[float], np.ndarray],
         top_k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
+    ) -> List[Dict[str, Any]]:
         """Search and return only IDs and scores.
         
         Args:
@@ -223,7 +222,7 @@ class Collection:
         """Execute a MATCH graph query."""
         ...
 
-    def explain(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def explain(self, query_str: str) -> Dict[str, Any]:
         """Return execution plan for a VelesQL query."""
         ...
     
