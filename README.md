@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57µs HNSW Search • 18.7ns SIMD • 3,100+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57-102µs HNSW Search* • 18.7ns SIMD • 3,100+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -43,7 +43,7 @@
 
 | Pain Point | Business Impact | VelesDB Solution |
 |------------|-----------------|------------------|
-| **🐌 Latency kills UX** | Cloud vector DBs add 50-100ms/query. 10 retrievals = **1+ second delay** | **57µs local** — 1000x faster |
+| **🐌 Latency kills UX** | Cloud vector DBs add 50-100ms/query. 10 retrievals = **1+ second delay** | **<0.11ms local** — network-free retrieval |
 | **🔗 Vectors alone aren't enough** | Semantic similarity misses relationships ("Who authored this?") | **Vector + Graph unified** in one query |
 | **🔒 Privacy & deployment friction** | Cloud dependencies, API keys, GDPR concerns | **15MB binary** — works offline, air-gapped |
 
@@ -120,9 +120,11 @@
 | **SIMD Dot Product (768D)** | 18.7 ns | 41.1 Gelem/s |
 | **SIMD Cosine (768D)** | 27 ns | 28.4 Gelem/s |
 | **SIMD Hamming (768D)** | 19 ns | 52.6M ops/sec |
-| **HNSW Search (10K vectors)** | 57 µs | k=10, 768D |
-| **ColumnStore Filter (100K)** | 88 µs | 44x vs JSON |
-| **VelesQL Cache Hit** | 84 ns | 12M qps |
+| **HNSW Search (10K vectors)** | 96-106 µs (median 102 µs) | k=10, 768D, measured 2026-02-17 |
+| **ColumnStore Filter (100K)** | 44-84 µs | eq string: 44 µs, int range: 84 µs |
+| **VelesQL Cache Hit** | 86 ns | criterion run, 2026-02-17 |
+
+> \*Measured latency depends on CPU/flags/dataset. Current run measured **96-106 µs**; **57 µs** remains the best-case reference in optimized balanced mode.
 
 ### Codebase Health
 
@@ -236,7 +238,7 @@ cargo run --release
 | **Graph Lookup** | **88 µs** | Co-purchased products (BOUGHT_TOGETHER) |
 | **Combined (Full Power)** | **202 µs** | Union of Vector + Graph + Filters |
 
-> 💡 **Real-world latency** — includes payload retrieval, filtering, and result construction. Pure HNSW search is 57µs.
+> 💡 **Real-world latency** — includes payload retrieval, filtering, and result construction. Pure HNSW search measured **96-106 µs** on 2026-02-17 (best-case reference: 57 µs).
 
 **Includes 15 Playwright E2E tests** validating data generation, query execution, and performance thresholds.
 
@@ -1055,10 +1057,10 @@ LIMIT 10
 
 | Benchmark | Result | Details |
 |-----------|--------|----------|
-| **HNSW Search** | **57 µs** | Balanced mode (ef=128) |
+| **HNSW Search** | **102 µs** | Balanced mode (ef=128), measured 2026-02-17 |
 | **Hybrid Search** | **139 µs** | Vector + filter |
 | **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
-| **VelesQL Parsing**| **84 ns** | Cache hit (12M qps) |
+| **VelesQL Parsing**| **86 ns** | Cache hit (~11.7M qps), measured 2026-02-17 |
 | **Recall@10** | **100%** | Accurate mode |
 | **Code Coverage** | **82.30%** | 3,000+ tests |
 
@@ -1067,7 +1069,7 @@ LIMIT 10
 | Mode | Recall@10 | Latency (10K/128D) | Use Case |
 |------|-----------|--------------------|-----------|
 | Fast (ef=64) | 92.2% | **36µs** | Real-time, high throughput |
-| Balanced (ef=128) | 98.8% | **57µs** | Production recommended |
+| Balanced (ef=128) | 98.8% | **~102µs** | Production recommended |
 | Accurate (ef=256) | 100% | **130µs** | High precision |
 | **Perfect (ef=2048)** | **100%** | **200µs** | Maximum recall |
 
@@ -1140,7 +1142,7 @@ pie title Deployment Locations
 | Pipeline Step | Cloud Vector DB | VelesDB |
 |---------------|-----------------|---------|
 | Network round-trip | 50-100ms | **0ms** (local) |
-| Vector search | 10-50ms | **0.057ms** |
+| Vector search | 10-50ms | **~0.10ms** |
 | Graph traversal | 20-100ms | **0.1ms** |
 | **Total latency** | **100-250ms** | **< 1ms** |
 
@@ -1170,7 +1172,7 @@ let results = db.search(query_vector, filters, graph_traversal);
 | Feature | Technical Capability | Real-World Impact |
 |---------|----------------------|-------------------|
 | **🧠 Vector + Graph Fusion** | Unified query language for semantic + relationship queries | **Build smarter AI agents** with contextual understanding |
-| **⚡ 57µs Search** | Native HNSW + AVX-512 SIMD | **Create real-time experiences** previously impossible |
+| **⚡ ~102µs Search** | Native HNSW + AVX-512 SIMD | **Create real-time experiences** previously impossible |
 | **📦 15MB Binary** | Zero dependencies, single executable | **Deploy anywhere** - from servers to edge devices |
 | **🔒 Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **🌍 Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |
