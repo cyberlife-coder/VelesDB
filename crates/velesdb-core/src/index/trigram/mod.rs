@@ -27,6 +27,7 @@
 //! | 10K    | 45ms          | < 5ms        | > 9x    |
 //! | 100K   | 450ms         | < 20ms       | > 22x   |
 //! | 1M     | 4.5s          | < 100ms      | > 45x   |
+#![allow(clippy::doc_markdown)] // Includes architecture/ISA identifiers in markdown tables.
 
 pub mod gpu;
 mod index;

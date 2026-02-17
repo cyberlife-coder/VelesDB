@@ -18,6 +18,7 @@
 //! | d ≤ 256     | 12-16 | 100-200         | 64-128    |
 //! | 256 < d ≤768| 16-24 | 200-400         | 128-256   |
 //! | d > 768     | 24-32 | 300-600         | 256-512   |
+#![allow(clippy::doc_markdown)] // API names and parameter labels are kept verbatim in docs.
 
 mod batch;
 mod constructors;

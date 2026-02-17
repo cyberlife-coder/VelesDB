@@ -26,6 +26,7 @@
 // - Precision loss acceptable for column statistics
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::doc_markdown)] // Column-store docs include many storage type identifiers.
 
 mod batch;
 #[cfg(test)]
@@ -217,6 +218,11 @@ impl ColumnStore {
     }
 
     /// Inserts a row with primary key validation and index update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the primary key is missing, duplicated, or any
+    /// provided value does not match the target column type.
     pub fn insert_row(
         &mut self,
         values: &[(&str, ColumnValue)],
@@ -308,6 +314,12 @@ impl ColumnStore {
     }
 
     /// Updates a single column value for a row identified by primary key - O(1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the row does not exist, the column does not exist,
+    /// the update targets the primary-key column, or the value type mismatches
+    /// the column type.
     pub fn update_by_pk(
         &mut self,
         pk: i64,
@@ -345,6 +357,12 @@ impl ColumnStore {
     ///
     /// This function will not panic under normal operation. The internal expect
     /// is guarded by prior validation that all columns exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the row does not exist, one of the columns does not
+    /// exist, one update attempts to modify the primary key, or a value type
+    /// mismatches its target column type.
     pub fn update_multi_by_pk(
         &mut self,
         pk: i64,

@@ -160,10 +160,10 @@ impl Collection {
         }
 
         // Compute max depth from pattern
-        let max_depth = self.compute_max_depth(pattern);
+        let max_depth = Self::compute_max_depth(pattern);
 
         // Get relationship type filter
-        let rel_types = self.extract_rel_types(pattern);
+        let rel_types = Self::extract_rel_types(pattern);
 
         // Execute traversal from each start node
         let edge_store = self.edge_store.read();
@@ -300,7 +300,7 @@ impl Collection {
     }
 
     /// Computes maximum traversal depth from pattern.
-    fn compute_max_depth(&self, pattern: &GraphPattern) -> u32 {
+    fn compute_max_depth(pattern: &GraphPattern) -> u32 {
         let mut max_depth = 0u32;
 
         for rel in &pattern.relationships {
@@ -321,7 +321,7 @@ impl Collection {
     }
 
     /// Extracts relationship type filters from pattern.
-    fn extract_rel_types(&self, pattern: &GraphPattern) -> Vec<String> {
+    fn extract_rel_types(pattern: &GraphPattern) -> Vec<String> {
         let mut types = Vec::new();
         for rel in &pattern.relationships {
             types.extend(rel.types.clone());

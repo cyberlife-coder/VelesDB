@@ -265,7 +265,7 @@ impl Collection {
     ///
     /// # Returns
     ///
-    /// Tuple of (in_degree, out_degree).
+    /// Tuple of (`in_degree`, `out_degree`).
     #[must_use]
     pub fn get_node_degree(&self, node_id: u64) -> (usize, usize) {
         let store = self.edge_store.read();

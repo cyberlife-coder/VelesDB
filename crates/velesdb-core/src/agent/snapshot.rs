@@ -1,7 +1,7 @@
 #![allow(missing_docs)] // Documentation will be added in follow-up PR
-//! Snapshot and versioning support for AgentMemory.
+//! Snapshot and versioning support for `AgentMemory`.
 //!
-//! Provides serialization/deserialization of AgentMemory state for:
+//! Provides serialization/deserialization of `AgentMemory` state for:
 //! - Persistence across restarts
 //! - Rollback to previous versions
 //! - State transfer between instances
@@ -33,7 +33,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-/// Snapshot file magic bytes for AgentMemory.
+/// Snapshot file magic bytes for `AgentMemory`.
 pub const SNAPSHOT_MAGIC: &[u8; 4] = b"VAMM";
 
 /// Current snapshot format version.

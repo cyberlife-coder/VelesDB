@@ -13,6 +13,7 @@
 //! - Metadata-only collections (no vectors) for reference tables
 //! - Graph collections for knowledge graph storage (nodes, edges, traversal)
 //! - Async operations via `spawn_blocking` (EPIC-034/US-005)
+#![allow(clippy::doc_markdown)] // Collection docs contain many API/algorithm identifiers.
 
 pub mod async_ops;
 #[cfg(test)]

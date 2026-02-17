@@ -13,6 +13,9 @@
 //! | AVX-512      | 21             | ~7x               |
 //! | AVX2         | 10             | ~3.5x             |
 //! | NEON         | 5              | ~1.8x             |
+#![allow(clippy::wildcard_imports)] // SIMD intrinsics imports are clearer in this low-level module.
+#![allow(clippy::ptr_as_ptr)] // Pointer casts are intrinsic-compatible and kept explicit.
+#![allow(clippy::implicit_hasher)] // Default HashSet hasher is sufficient for trigram sets.
 
 use std::collections::HashSet;
 

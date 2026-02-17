@@ -88,11 +88,11 @@ pub enum ReindexEvent {
 pub struct AutoReindexConfig {
     /// Enable automatic reindex detection
     pub enabled: bool,
-    /// Threshold ratio for triggering reindex (optimal_m / current_m)
+    /// Threshold ratio for triggering reindex (`optimal_m` / `current_m`)
     /// Default: 1.5 (trigger if optimal M is 50% higher than current)
     pub param_divergence_threshold: f64,
     /// Minimum dataset size before considering reindex
-    /// Default: 10_000 vectors
+    /// Default: `10_000` vectors
     pub min_size_for_reindex: usize,
     /// Maximum acceptable latency regression (%) for rollback
     /// Default: 10.0 (rollback if new index is >10% slower)
@@ -169,7 +169,7 @@ pub struct DivergenceCheck {
     pub optimal_m: usize,
     /// Ratio of optimal/current
     pub ratio: f64,
-    /// Reason (if should_reindex is true)
+    /// Reason (if `should_reindex` is true)
     pub reason: Option<ReindexReason>,
 }
 

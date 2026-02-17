@@ -146,7 +146,7 @@ impl GpuAccelerator {
     ///
     /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
     /// * `query` - Query vector
-    /// * `dimension` - Vector dimension (must be <= u32::MAX)
+    /// * `dimension` - Vector dimension (must be <= `u32::MAX`)
     ///
     /// # Returns
     ///
@@ -174,14 +174,12 @@ impl GpuAccelerator {
         // Validate GPU shader parameter constraints
         if u32::try_from(dimension).is_err() {
             return Err(crate::error::Error::GpuError(format!(
-                "dimension {} exceeds u32::MAX",
-                dimension
+                "dimension {dimension} exceeds u32::MAX"
             )));
         }
         if u32::try_from(num_vectors).is_err() {
             return Err(crate::error::Error::GpuError(format!(
-                "num_vectors {} exceeds u32::MAX",
-                num_vectors
+                "num_vectors {num_vectors} exceeds u32::MAX"
             )));
         }
 

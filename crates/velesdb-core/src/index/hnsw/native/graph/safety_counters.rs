@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// All counters use relaxed ordering since they are advisory/diagnostic
 /// and do not need to synchronize with other operations.
+#[allow(clippy::struct_field_names)] // `_total` suffix aligns with metrics naming conventions.
 pub(crate) struct HnswSafetyCounters {
     /// Number of times a lock acquisition blocked (contention detected).
     pub lock_contention_total: AtomicU64,
@@ -74,6 +75,7 @@ impl HnswSafetyCounters {
 
 /// Immutable snapshot of counter values for reporting.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_field_names)] // `_total` suffix aligns with Prometheus counter conventions.
 pub(crate) struct CounterSnapshot {
     pub lock_contention_total: u64,
     pub operation_retry_total: u64,

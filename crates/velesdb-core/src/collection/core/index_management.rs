@@ -106,6 +106,10 @@ impl Collection {
     /// # Returns
     ///
     /// Ok(true) if an index was dropped, Ok(false) if no index existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if underlying index stores fail while dropping.
     pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
         // Try property index first
         let dropped_prop = self.property_index.write().drop_index(label, property);

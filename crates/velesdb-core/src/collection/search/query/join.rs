@@ -126,16 +126,13 @@ pub fn execute_join(
     column_store: &ColumnStore,
 ) -> Vec<JoinedResult> {
     // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
-    let condition = match &join.condition {
-        Some(cond) => cond,
-        None => {
-            // BUG-003 FIX: Log instead of silent return
-            tracing::warn!(
-                "JOIN with USING clause not yet supported for execution on table '{}'",
-                join.table
-            );
-            return Vec::new();
-        }
+    let Some(condition) = &join.condition else {
+        // BUG-003 FIX: Log instead of silent return
+        tracing::warn!(
+            "JOIN with USING clause not yet supported for execution on table '{}'",
+            join.table
+        );
+        return Vec::new();
     };
 
     // 1. Validate that join column matches ColumnStore's primary key

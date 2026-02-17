@@ -25,6 +25,9 @@
 //!
 //! - arXiv:2505.07621 "Bang for the Buck: Vector Search on Cloud CPUs"
 //! - arXiv:2502.18113 "Accelerating Graph Indexing for ANNS on Modern CPUs"
+#![allow(clippy::doc_markdown)] // Contains ISA/architecture nomenclature in docs.
+#![allow(clippy::cast_lossless)] // Numeric widening in SIMD kernels is intentional.
+#![allow(clippy::missing_panics_doc)] // Dispatch APIs assert equal vector dimensions by design.
 
 // =============================================================================
 // Shared submodules (scalar, macros, prefetch)

@@ -28,6 +28,11 @@ pub struct EpisodicMemory<'a> {
 impl<'a> EpisodicMemory<'a> {
     const COLLECTION_NAME: &'static str = "_episodic_memory";
 
+    /// Creates or opens the episodic memory collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection creation/opening fails or dimensions mismatch.
     pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(
             db,
@@ -90,6 +95,12 @@ impl<'a> EpisodicMemory<'a> {
         &self.collection_name
     }
 
+    /// Stores an event in episodic memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the embedding dimension is invalid, when the collection
+    /// is unavailable, or when storage upsert fails.
     pub fn record(
         &self,
         event_id: u64,
@@ -131,6 +142,11 @@ impl<'a> EpisodicMemory<'a> {
         Ok(())
     }
 
+    /// Stores an event and assigns a TTL for automatic expiration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::record`].
     pub fn record_with_ttl(
         &self,
         event_id: u64,
@@ -144,6 +160,11 @@ impl<'a> EpisodicMemory<'a> {
         Ok(())
     }
 
+    /// Returns recent events, optionally filtered by a lower timestamp bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is unavailable.
     pub fn recent(
         &self,
         limit: usize,
@@ -191,6 +212,11 @@ impl<'a> EpisodicMemory<'a> {
         Ok(events)
     }
 
+    /// Returns events older than `timestamp`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is unavailable.
     pub fn older_than(
         &self,
         timestamp: i64,
@@ -238,6 +264,12 @@ impl<'a> EpisodicMemory<'a> {
         Ok(events)
     }
 
+    /// Retrieves the `k` most similar episodic events to a query embedding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the embedding dimension is invalid, when the collection
+    /// is unavailable, or when vector search fails.
     pub fn recall_similar(
         &self,
         query_embedding: &[f32],
@@ -271,6 +303,11 @@ impl<'a> EpisodicMemory<'a> {
             .collect())
     }
 
+    /// Retrieves an event with its embedding payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is unavailable.
     pub fn get_with_embedding(
         &self,
         id: u64,
@@ -281,18 +318,16 @@ impl<'a> EpisodicMemory<'a> {
             .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
 
         let points = collection.get(&[id]);
-        let point = match points.into_iter().flatten().next() {
-            Some(p) => p,
-            None => return Ok(None),
+        let Some(point) = points.into_iter().flatten().next() else {
+            return Ok(None);
         };
 
         if self.ttl.is_expired(point.id) {
             return Ok(None);
         }
 
-        let payload = match point.payload.as_ref() {
-            Some(p) => p,
-            None => return Ok(None),
+        let Some(payload) = point.payload.as_ref() else {
+            return Ok(None);
         };
 
         let desc = payload
@@ -308,6 +343,11 @@ impl<'a> EpisodicMemory<'a> {
         Ok(Some((desc, ts, point.vector.clone())))
     }
 
+    /// Deletes an episodic event by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is unavailable or delete fails.
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
@@ -323,6 +363,11 @@ impl<'a> EpisodicMemory<'a> {
         Ok(())
     }
 
+    /// Serializes episodic points in temporal-order id set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is unavailable or JSON encoding fails.
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = self
             .db
@@ -338,6 +383,12 @@ impl<'a> EpisodicMemory<'a> {
         Ok(serialized)
     }
 
+    /// Replaces episodic storage with previously serialized points.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when JSON decoding fails, collection access fails, or
+    /// persistence operations fail.
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         if data.is_empty() {
             return Ok(());

@@ -99,17 +99,17 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
             _mm_prefetch(vector.as_ptr().cast::<i8>(), _MM_HINT_T0);
 
             if vector_bytes > L2_CACHE_LINE_BYTES {
-                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES);
+                let ptr = vector.as_ptr().cast::<i8>().add(L2_CACHE_LINE_BYTES);
                 _mm_prefetch(ptr, _MM_HINT_T1);
             }
 
             if vector_bytes > L2_CACHE_LINE_BYTES * 2 {
-                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 2);
+                let ptr = vector.as_ptr().cast::<i8>().add(L2_CACHE_LINE_BYTES * 2);
                 _mm_prefetch(ptr, _MM_HINT_T2);
             }
 
             if vector_bytes > L2_CACHE_LINE_BYTES * 4 {
-                let ptr = (vector.as_ptr() as *const i8).add(L2_CACHE_LINE_BYTES * 4);
+                let ptr = vector.as_ptr().cast::<i8>().add(L2_CACHE_LINE_BYTES * 4);
                 _mm_prefetch(ptr, _MM_HINT_T2);
             }
         }

@@ -10,9 +10,9 @@
 //! All structures are thread-safe via `parking_lot::RwLock`.
 //!
 //! **Lock Hierarchy (acquire in this order to prevent deadlocks):**
-//! 1. `BloomFilter.bits` (RwLock)
-//! 2. `BloomFilter.count` (RwLock)
-//! 3. `LruCache.inner` (RwLock)
+//! 1. `BloomFilter.bits` (`RwLock`)
+//! 2. `BloomFilter.count` (`RwLock`)
+//! 3. `LruCache.inner` (`RwLock`)
 
 mod bloom;
 #[cfg(test)]

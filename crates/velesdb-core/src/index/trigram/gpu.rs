@@ -42,6 +42,8 @@ pub struct GpuTrigramAccelerator {
 impl GpuTrigramAccelerator {
     /// Create a new GPU trigram accelerator.
     ///
+    /// # Errors
+    ///
     /// Returns `Err` if no compatible GPU is available.
     pub fn new() -> Result<Self, String> {
         let accelerator = GpuAccelerator::new().ok_or("GPU not available")?;
@@ -75,17 +77,16 @@ impl GpuTrigramAccelerator {
         // For each pattern: extract trigrams, lookup in index, intersect bitmaps
         patterns
             .iter()
-            .map(|pattern| self.search_single(pattern, inverted_index))
+            .map(|pattern| Self::search_single(pattern, inverted_index))
             .collect()
     }
 
     /// Search a single pattern using GPU-extracted trigrams.
     fn search_single(
-        &self,
         pattern: &str,
         inverted_index: &std::collections::HashMap<[u8; 3], RoaringBitmap>,
     ) -> RoaringBitmap {
-        let trigrams = self.extract_trigrams_cpu(pattern);
+        let trigrams = Self::extract_trigrams_cpu(pattern);
         if trigrams.is_empty() {
             return RoaringBitmap::new();
         }
@@ -123,12 +124,12 @@ impl GpuTrigramAccelerator {
         // Each workgroup handles one document
         documents
             .iter()
-            .map(|doc| self.extract_trigrams_cpu(doc))
+            .map(|doc| Self::extract_trigrams_cpu(doc))
             .collect()
     }
 
     /// Extract trigrams from text (CPU fallback, used for small inputs).
-    fn extract_trigrams_cpu(&self, text: &str) -> HashSet<[u8; 3]> {
+    fn extract_trigrams_cpu(text: &str) -> HashSet<[u8; 3]> {
         let bytes = text.as_bytes();
         if bytes.len() < 3 {
             return HashSet::new();
@@ -162,11 +163,14 @@ pub enum TrigramComputeBackend {
 impl TrigramComputeBackend {
     /// Select best available backend based on workload size.
     #[must_use]
-    pub fn auto_select(_doc_count: usize, _pattern_count: usize) -> Self {
+    pub fn auto_select(doc_count: usize, pattern_count: usize) -> Self {
+        #[cfg(not(feature = "gpu"))]
+        let _ = (doc_count, pattern_count);
+
         #[cfg(feature = "gpu")]
         {
             // GPU is better for large workloads
-            if _doc_count > 500_000 || (_doc_count > 100_000 && _pattern_count > 10) {
+            if doc_count > 500_000 || (doc_count > 100_000 && pattern_count > 10) {
                 if crate::gpu::ComputeBackend::gpu_available() {
                     return Self::Gpu;
                 }

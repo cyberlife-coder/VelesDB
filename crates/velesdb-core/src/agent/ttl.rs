@@ -1,5 +1,5 @@
 #![allow(missing_docs)] // Documentation will be added in follow-up PR
-//! TTL (Time-To-Live) and eviction management for AgentMemory.
+//! TTL (Time-To-Live) and eviction management for `AgentMemory`.
 //!
 //! Provides automatic expiration and eviction policies for memory entries:
 //! - TTL-based expiration for all memory subsystems
@@ -165,7 +165,7 @@ impl MemoryTtl {
         self.entries.write().clear();
     }
 
-    /// Merges entries from another MemoryTtl instance.
+    /// Merges entries from another `MemoryTtl` instance.
     pub fn merge_from(&self, other: &MemoryTtl) {
         let other_entries = other.entries.read();
         let mut self_entries = self.entries.write();
@@ -174,7 +174,7 @@ impl MemoryTtl {
         }
     }
 
-    /// Replaces all entries with those from another MemoryTtl instance.
+    /// Replaces all entries with those from another `MemoryTtl` instance.
     pub fn replace_from(&self, other: &MemoryTtl) {
         let other_entries = other.entries.read();
         let mut self_entries = self.entries.write();

@@ -211,22 +211,20 @@ impl ConcurrentEdgeStore {
         let mut ids = self.edge_ids.write();
 
         // Get source_id for optimized shard lookup
-        let source_id = match ids.get(&edge_id) {
-            Some(&src) => src,
-            None => return, // Edge doesn't exist
+        let Some(&source_id) = ids.get(&edge_id) else {
+            return; // Edge doesn't exist
         };
 
         // Get the edge to find target_id (need to read from source shard)
         let source_shard_idx = self.shard_index(source_id);
         let target_id = {
             let guard = self.shards[source_shard_idx].read();
-            match guard.get_edge(edge_id) {
-                Some(edge) => edge.target(),
-                None => {
-                    // Edge in registry but not in shard - cleanup registry
-                    ids.remove(&edge_id);
-                    return;
-                }
+            if let Some(edge) = guard.get_edge(edge_id) {
+                edge.target()
+            } else {
+                // Edge in registry but not in shard - cleanup registry
+                ids.remove(&edge_id);
+                return;
             }
         };
 

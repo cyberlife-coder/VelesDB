@@ -46,6 +46,17 @@
 
 #![warn(missing_docs)]
 // Clippy lints configured in workspace Cargo.toml [workspace.lints.clippy]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::large_stack_arrays,
+        clippy::doc_markdown,
+        clippy::uninlined_format_args,
+        clippy::single_match_else,
+        clippy::cast_lossless,
+        clippy::manual_assert
+    )
+)]
 
 #[cfg(feature = "persistence")]
 pub mod agent;

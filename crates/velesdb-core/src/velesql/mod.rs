@@ -18,6 +18,7 @@
 //! let plan = QueryPlan::from_select(&query.select);
 //! println!("{}", plan.to_tree());
 //! ```
+#![allow(clippy::doc_markdown, clippy::uninlined_format_args)]
 
 #[cfg(test)]
 mod aggregation_executor_tests;

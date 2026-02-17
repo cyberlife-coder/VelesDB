@@ -34,6 +34,7 @@
 //! // Or use schemaless mode for flexibility
 //! let flexible_schema = GraphSchema::schemaless();
 //! ```
+#![allow(clippy::doc_markdown)] // Graph docs include many domain identifiers and acronyms.
 
 mod cart;
 mod clustered_index;

@@ -1,5 +1,5 @@
 #![allow(missing_docs)] // Documentation will be added in follow-up PR
-//! Adaptive reinforcement strategies for ProceduralMemory.
+//! Adaptive reinforcement strategies for `ProceduralMemory`.
 //!
 //! Provides extensible strategies for updating procedure confidence:
 //! - `FixedRate`: Simple fixed increment/decrement (default behavior)
@@ -328,13 +328,13 @@ impl Default for ContextualReinforcement {
 
 impl ContextualReinforcement {
     /// Calculates the recency factor (higher for recently used procedures).
-    fn recency_factor(&self, time_since_last_use: u64) -> f32 {
+    fn recency_factor(time_since_last_use: u64) -> f32 {
         let hours = time_since_last_use as f32 / 3600.0;
         (-hours / 168.0).exp() // Decay over ~1 week
     }
 
     /// Calculates the usage factor (higher for frequently used procedures).
-    fn usage_factor(&self, usage_count: u64) -> f32 {
+    fn usage_factor(usage_count: u64) -> f32 {
         let normalized = (usage_count as f32).ln_1p() / 10.0;
         normalized.min(1.0)
     }
@@ -347,8 +347,8 @@ impl ReinforcementStrategy for ContextualReinforcement {
         success: bool,
         context: &ReinforcementContext,
     ) -> f32 {
-        let recency = self.recency_factor(context.time_since_last_use());
-        let usage = self.usage_factor(context.usage_count);
+        let recency = Self::recency_factor(context.time_since_last_use());
+        let usage = Self::usage_factor(context.usage_count);
         let success_rate = context.recent_success_rate.unwrap_or(0.5);
 
         let context_score = self.recency_weight * recency
@@ -441,7 +441,7 @@ impl ReinforcementStrategy for CompositeStrategy {
 
 /// Default strategy factory.
 ///
-/// Returns the default reinforcement strategy (FixedRate).
+/// Returns the default reinforcement strategy (`FixedRate`).
 #[must_use]
 pub fn default_strategy() -> Box<dyn ReinforcementStrategy> {
     Box::new(FixedRate::default())

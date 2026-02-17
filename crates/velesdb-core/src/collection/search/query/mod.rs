@@ -21,6 +21,8 @@
 // - Thresholds are approximate bounds, exact precision not required
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::uninlined_format_args)] // Prefer readability in query error paths.
+#![allow(clippy::implicit_hasher)] // HashSet hasher genericity adds noise for internal APIs.
 
 mod aggregation;
 mod distinct;

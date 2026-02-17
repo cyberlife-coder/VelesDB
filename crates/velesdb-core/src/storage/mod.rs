@@ -11,6 +11,7 @@
 //! - [`VectorSliceGuard`]: Zero-copy vector slice guard
 //! - [`metrics`]: Storage operation metrics (P0 audit - latency monitoring)
 //! - [`async_ops`]: Async wrappers for blocking I/O (EPIC-034/US-001)
+#![allow(clippy::doc_markdown)] // Storage docs include API and platform identifiers.
 
 pub mod async_ops;
 mod compaction;

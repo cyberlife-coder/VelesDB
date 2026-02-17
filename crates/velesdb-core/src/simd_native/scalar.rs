@@ -53,6 +53,10 @@ pub fn fast_rsqrt(x: f32) -> f32 {
 /// - ~20-50% faster than standard cosine_similarity_native
 /// - Uses single-pass dot product + norms computation
 /// - Avoids libc sqrt() overhead
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`.
 #[inline]
 #[must_use]
 pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {

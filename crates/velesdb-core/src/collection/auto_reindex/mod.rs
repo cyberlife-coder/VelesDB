@@ -253,6 +253,11 @@ impl AutoReindexManager {
     /// Returns `Ok(())` if validation passes, `Err(reason)` if rollback needed
     ///
     /// Returns `Err` if the lock is poisoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message when lock access fails or when latency/recall
+    /// regressions exceed configured thresholds.
     pub fn validate_benchmark(
         &self,
         old_benchmark: &BenchmarkResult,

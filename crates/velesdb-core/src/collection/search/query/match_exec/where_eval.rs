@@ -88,7 +88,7 @@ impl Collection {
             VectorExpr::Parameter(name) => {
                 let param_value = params
                     .get(name)
-                    .ok_or_else(|| Error::Config(format!("Missing vector parameter: ${}", name)))?;
+                    .ok_or_else(|| Error::Config(format!("Missing vector parameter: ${name}")))?;
 
                 // Convert JSON array to Vec<f32>
                 match param_value {
@@ -98,8 +98,7 @@ impl Collection {
                         .collect(),
                     _ => {
                         return Err(Error::Config(format!(
-                            "Parameter ${} must be a vector array",
-                            name
+                            "Parameter ${name} must be a vector array"
                         )));
                     }
                 }
@@ -112,9 +111,8 @@ impl Collection {
 
         // Get node vector
         let vector_storage = self.vector_storage.read();
-        let node_vector = match vector_storage.retrieve(node_id)? {
-            Some(v) => v,
-            None => return Ok(false), // No vector = no match
+        let Some(node_vector) = vector_storage.retrieve(node_id)? else {
+            return Ok(false); // No vector = no match
         };
 
         if node_vector.len() != query_vector.len() {
@@ -187,7 +185,7 @@ impl Collection {
             Value::Parameter(name) => {
                 let param_value = params
                     .get(name)
-                    .ok_or_else(|| Error::Config(format!("Missing parameter: ${}", name)))?;
+                    .ok_or_else(|| Error::Config(format!("Missing parameter: ${name}")))?;
 
                 // Convert JSON value to VelesQL Value
                 Ok(match param_value {
@@ -205,8 +203,7 @@ impl Collection {
                     serde_json::Value::Null => Value::Null,
                     _ => {
                         return Err(Error::Config(format!(
-                            "Unsupported parameter type for ${}: {:?}",
-                            name, param_value
+                            "Unsupported parameter type for ${name}: {param_value:?}",
                         )));
                     }
                 })

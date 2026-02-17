@@ -21,6 +21,7 @@
 //! [update_check]
 //! enabled = false
 //! ```
+#![allow(clippy::doc_markdown)] // Docs intentionally reference product/arch identifiers.
 
 mod config;
 mod instance_id;
