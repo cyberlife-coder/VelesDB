@@ -1,7 +1,7 @@
 //! Similarity scoring and property projection for MATCH queries.
 //!
-//! Handles execute_match_with_similarity, property projection (EPIC-058 US-007),
-//! result ordering, and conversion to SearchResults.
+//! Handles `execute_match_with_similarity`, property projection (EPIC-058 US-007),
+//! result ordering, and conversion to `SearchResults`.
 
 // SAFETY: Numeric casts in similarity scoring are intentional:
 // - u32->f32 for depth scoring: depth values are small (< 1000)
@@ -11,7 +11,7 @@
 use super::parse_property_path;
 use super::MatchResult;
 use crate::collection::types::Collection;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::point::SearchResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ impl Collection {
     /// Projects properties from RETURN clause for a match result (EPIC-058 US-007).
     ///
     /// Resolves property paths like "author.name" by:
-    /// 1. Looking up the alias in bindings to get node_id
+    /// 1. Looking up the alias in bindings to get `node_id`
     /// 2. Fetching the payload for that node
     /// 3. Extracting the property value
     pub(crate) fn project_properties(
@@ -105,6 +105,11 @@ impl Collection {
     /// # Returns
     ///
     /// Vector of `MatchResult` with similarity scores and projected properties.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on dimension mismatch, underlying storage/search errors,
+    /// or `ORDER BY` failures.
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -122,7 +127,15 @@ impl Collection {
         // Get the metric from config
         let config = self.config.read();
         let metric = config.metric;
+        let expected_dimension = config.dimension;
         drop(config);
+
+        if query_vector.len() != expected_dimension {
+            return Err(Error::DimensionMismatch {
+                expected: expected_dimension,
+                actual: query_vector.len(),
+            });
+        }
 
         // Score each result by similarity/distance
         let vector_storage = self.vector_storage.read();
@@ -132,6 +145,14 @@ impl Collection {
         for mut result in results {
             // Get vector for this node
             if let Ok(Some(node_vector)) = vector_storage.retrieve(result.node_id) {
+                // Storage invariant: vectors must match collection dimension.
+                if node_vector.len() != expected_dimension {
+                    return Err(Error::DimensionMismatch {
+                        expected: expected_dimension,
+                        actual: node_vector.len(),
+                    });
+                }
+
                 // Calculate similarity/distance
                 let score = metric.calculate(&node_vector, query_vector);
 
@@ -208,10 +229,14 @@ impl Collection {
         }
     }
 
-    /// Converts MatchResults to SearchResults for unified API (EPIC-045 US-002).
+    /// Converts `MatchResults` to `SearchResults` for unified API (EPIC-045 US-002).
     ///
     /// This allows MATCH queries to return the same result type as SELECT queries,
     /// enabling consistent downstream processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when vector storage access fails for any matched node.
     pub fn match_results_to_search_results(
         &self,
         match_results: Vec<MatchResult>,
