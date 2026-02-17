@@ -1,6 +1,6 @@
 //! TDD tests for cross-store execution (VP-010, Plan 07-01).
 //!
-//! Tests VectorFirst, Parallel, and GraphFirst strategies for combined
+//! Tests `VectorFirst`, Parallel, and `GraphFirst` strategies for combined
 //! NEAR + graph MATCH queries.
 
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ const DIM: usize = 4;
 ///
 /// Creates:
 /// - 6 points with vectors and payloads (category: tech/food/science)
-/// - Graph edges: RELATED_TO between tech documents
+/// - Graph edges: `RELATED_TO` between tech documents
 fn setup_cross_store_collection() -> (TempDir, Collection) {
     let dir = TempDir::new().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
@@ -87,7 +87,7 @@ fn setup_cross_store_collection() -> (TempDir, Collection) {
     (dir, col)
 }
 
-/// Build a simple single-hop MatchClause: (a)-[:RELATED_TO]->(b)
+/// Build a simple single-hop `MatchClause`: (a)-[:`RELATED_TO`]->(b)
 fn build_related_to_match(limit: Option<u64>) -> MatchClause {
     let pattern = GraphPattern {
         name: None,
@@ -314,4 +314,27 @@ fn test_graph_first_delegates_to_existing() {
         !results.is_empty(),
         "GraphFirst via execute_match_with_similarity should work"
     );
+}
+
+#[test]
+fn test_graph_first_dimension_mismatch_returns_error_without_panic() {
+    let (_dir, col) = setup_cross_store_collection();
+
+    let match_clause = build_related_to_match(Some(10));
+    let wrong_dim_query = vec![1.0, 0.0]; // DIM is 4 in this fixture
+
+    let result =
+        col.execute_match_with_similarity(&match_clause, &wrong_dim_query, 0.0, &HashMap::new());
+
+    match result {
+        Err(crate::error::Error::DimensionMismatch { expected, actual }) => {
+            assert_eq!(expected, DIM, "expected collection dimension in error");
+            assert_eq!(
+                actual,
+                wrong_dim_query.len(),
+                "actual query dimension in error"
+            );
+        }
+        other => panic!("expected DimensionMismatch error, got {other:?}"),
+    }
 }
