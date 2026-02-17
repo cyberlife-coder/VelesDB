@@ -190,7 +190,8 @@ fn test_batch_cosine_zero_dimension() {
     if let Some(gpu) = GpuAccelerator::new() {
         // dimension=0 should return empty (early exit in batch_cosine_similarity)
         let results = gpu.batch_cosine_similarity(&[1.0, 2.0, 3.0], &[1.0], 0);
-        assert!(results.is_empty(), "Zero dimension should return empty");
+        let values = results.expect("zero-dimension cosine must return Ok(empty)");
+        assert!(values.is_empty(), "Zero dimension should return empty");
     }
 }
 
@@ -204,7 +205,8 @@ fn test_batch_cosine_dimension_mismatch() {
         let vectors = vec![1.0, 0.0, 0.0]; // 1 vector of dim 3
         let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
         // Should produce 1 result (vectors.len() / dimension = 1)
-        assert_eq!(results.len(), 1);
+        let values = results.expect("dimension mismatch should not panic");
+        assert_eq!(values.len(), 1);
     }
 }
 
@@ -245,9 +247,10 @@ fn test_batch_cosine_large_batch() {
         let vectors: Vec<f32> = vec![1.0; dim * num_vectors];
 
         let results = gpu.batch_cosine_similarity(&vectors, &query, dim);
-        assert_eq!(results.len(), num_vectors);
+        let values = results.expect("large cosine batch should succeed");
+        assert_eq!(values.len(), num_vectors);
         // All identical vectors → similarity should be ~1.0
-        for (i, &r) in results.iter().enumerate() {
+        for (i, &r) in values.iter().enumerate() {
             assert!((r - 1.0).abs() < 0.05, "Vector {i}: expected ~1.0, got {r}");
         }
     }
@@ -289,12 +292,13 @@ fn test_gpu_cosine_zero_norm_vectors() {
         let vectors = vec![0.0, 0.0, 0.0]; // Zero vector
 
         let results = gpu.batch_cosine_similarity(&vectors, &query, 3);
-        assert_eq!(results.len(), 1);
+        let values = results.expect("zero-norm cosine should return Ok");
+        assert_eq!(values.len(), 1);
         // Should return 0.0 (shader checks denom > 0.0)
         assert!(
-            results[0].is_finite(),
+            values[0].is_finite(),
             "Zero-norm cosine should be finite, got {}",
-            results[0]
+            values[0]
         );
     }
 }
