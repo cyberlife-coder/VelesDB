@@ -24,10 +24,30 @@ env:
   RUSTFLAGS: "-C target-cpu=native"
 
 jobs:
+  # Cheap placeholder on PRs without explicit perf label.
+  # Keeps the check green without spending ARM64 runner minutes.
+  bench-arm64-skip:
+    name: ARM64 Benchmarks
+    runs-on: ubuntu-latest
+    if: |
+      github.repository_owner == 'cyberlife-coder' &&
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'run-arm64-bench')
+    steps:
+      - name: Skip ARM64 benchmark (label required)
+        run: |
+          echo "Skipping ARM64 benchmark to reduce CI cost."
+          echo "Add label 'run-arm64-bench' on the PR to run the full ARM64 benchmark."
+
   bench-arm64:
     name: ARM64 Benchmarks
     runs-on: ubuntu-24.04-arm # GitHub ARM64 runner (larger runners)
-    if: github.repository_owner == 'cyberlife-coder'
+    if: |
+      github.repository_owner == 'cyberlife-coder' &&
+      (
+        github.event_name != 'pull_request' ||
+        contains(github.event.pull_request.labels.*.name, 'run-arm64-bench')
+      )
     
     steps:
       - name: Checkout repository
