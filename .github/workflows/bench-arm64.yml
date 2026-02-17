@@ -8,6 +8,7 @@ on:
       - 'crates/velesdb-core/src/index/**'
       - 'crates/velesdb-core/benches/**'
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
     paths:
       - 'crates/velesdb-core/src/simd/**'
       - 'crates/velesdb-core/src/index/**'
