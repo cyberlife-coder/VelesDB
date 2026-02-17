@@ -57,3 +57,8 @@ Add screenshots to help explain your changes.
 ## Additional Notes
 
 Add any other notes about the PR here.
+
+## Performance Labels
+
+- ARM64 benchmark is cost-gated on PRs.
+- Add label `run-arm64-bench` to run the full ARM64 benchmark workflow for this PR.
