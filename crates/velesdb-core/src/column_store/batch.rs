@@ -1,4 +1,4 @@
-//! Batch operations for ColumnStore.
+//! Batch operations for `ColumnStore`.
 //!
 //! This module provides batch update, TTL expiration, and upsert operations.
 
@@ -102,6 +102,10 @@ impl ColumnStore {
     }
 
     /// Sets a TTL (Time To Live) on a row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `pk` is missing or points to a deleted row.
     pub fn set_ttl(&mut self, pk: i64, ttl_seconds: u64) -> Result<(), ColumnStoreError> {
         let row_idx = *self
             .primary_index
@@ -146,6 +150,11 @@ impl ColumnStore {
     }
 
     /// Upsert: inserts a new row or updates an existing one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when primary key constraints are violated,
+    /// when a referenced column does not exist, or when types mismatch.
     pub fn upsert(
         &mut self,
         values: &[(&str, ColumnValue)],

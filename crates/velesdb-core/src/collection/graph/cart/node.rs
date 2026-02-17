@@ -495,7 +495,7 @@ impl CARTNode {
                 }
 
                 Self::Node256 {
-                    num_children: *num_children as u16,
+                    num_children: u16::from(*num_children),
                     children: new_children,
                 }
             }

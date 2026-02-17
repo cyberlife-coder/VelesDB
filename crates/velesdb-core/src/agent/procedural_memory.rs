@@ -46,6 +46,11 @@ pub struct ProceduralMemory<'a> {
 impl<'a> ProceduralMemory<'a> {
     const COLLECTION_NAME: &'static str = "_procedural_memory";
 
+    /// Creates or opens procedural memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection creation/opening fails or dimensions mismatch.
     pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
@@ -102,6 +107,12 @@ impl<'a> ProceduralMemory<'a> {
         &self.collection_name
     }
 
+    /// Learns a procedure and stores it in memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid, the collection is
+    /// unavailable, or persistence fails.
     pub fn learn(
         &self,
         procedure_id: u64,
@@ -154,6 +165,11 @@ impl<'a> ProceduralMemory<'a> {
         Ok(())
     }
 
+    /// Learns a procedure and assigns a TTL for auto-expiration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::learn`].
     pub fn learn_with_ttl(
         &self,
         procedure_id: u64,
@@ -168,6 +184,12 @@ impl<'a> ProceduralMemory<'a> {
         Ok(())
     }
 
+    /// Recalls matching procedures by vector similarity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid, collection access fails,
+    /// or vector search fails.
     pub fn recall(
         &self,
         query_embedding: &[f32],
@@ -219,10 +241,20 @@ impl<'a> ProceduralMemory<'a> {
             .collect())
     }
 
+    /// Reinforces a stored procedure using the configured strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when procedure retrieval or update fails.
     pub fn reinforce(&self, procedure_id: u64, success: bool) -> Result<(), AgentMemoryError> {
         self.reinforce_with_strategy(procedure_id, success, &*self.reinforcement_strategy)
     }
 
+    /// Reinforces a stored procedure using a custom strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when procedure retrieval or update fails.
     pub fn reinforce_with_strategy(
         &self,
         procedure_id: u64,
@@ -332,6 +364,11 @@ impl<'a> ProceduralMemory<'a> {
         Ok(())
     }
 
+    /// Lists all tracked procedures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access fails.
     pub fn list_all(&self) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
         let collection = self
             .db
@@ -367,6 +404,11 @@ impl<'a> ProceduralMemory<'a> {
             .collect())
     }
 
+    /// Deletes a procedure by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access or deletion fails.
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
@@ -382,6 +424,11 @@ impl<'a> ProceduralMemory<'a> {
         Ok(())
     }
 
+    /// Serializes all procedures into snapshot bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access or JSON encoding fails.
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = self
             .db
@@ -397,6 +444,12 @@ impl<'a> ProceduralMemory<'a> {
         Ok(serialized)
     }
 
+    /// Replaces procedural memory state from serialized snapshot bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when JSON decoding fails, collection access fails,
+    /// or persistence operations fail.
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         if data.is_empty() {
             return Ok(());

@@ -353,9 +353,8 @@ impl Collection {
 
     /// Compare aggregate value against threshold using operator.
     fn compare_values(agg_value: Option<f64>, op: CompareOp, threshold: &Value) -> bool {
-        let agg = match agg_value {
-            Some(v) => v,
-            None => return false,
+        let Some(agg) = agg_value else {
+            return false;
         };
 
         let thresh = match threshold {

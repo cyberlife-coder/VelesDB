@@ -208,8 +208,7 @@ impl MatchMetrics {
         }
         cumulative += self.latency_buckets[LATENCY_BUCKETS_MS.len()].load(Ordering::Relaxed);
         output.push_str(&format!(
-            "velesdb_match_latency_seconds_bucket{{le=\"+Inf\"}} {}\n",
-            cumulative
+            "velesdb_match_latency_seconds_bucket{{le=\"+Inf\"}} {cumulative}\n",
         ));
 
         // Results returned

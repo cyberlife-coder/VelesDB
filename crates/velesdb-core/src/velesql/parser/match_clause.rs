@@ -9,6 +9,11 @@ use crate::velesql::graph_pattern::{
 use std::collections::HashMap;
 
 /// Parses a complete MATCH clause.
+///
+/// # Errors
+///
+/// Returns [`ParseError`] when the input is not a valid MATCH query
+/// (missing required clauses or malformed pattern/WHERE segments).
 pub fn parse_match_clause(input: &str) -> Result<MatchClause, ParseError> {
     let input = input.trim();
     if !input.to_uppercase().starts_with("MATCH ") {
@@ -45,6 +50,10 @@ pub fn parse_match_clause(input: &str) -> Result<MatchClause, ParseError> {
 }
 
 /// Parses a single node pattern.
+///
+/// # Errors
+///
+/// Returns [`ParseError`] when delimiters are invalid or properties cannot be parsed.
 pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
     let input = input.trim();
     if !input.starts_with('(') {
@@ -93,6 +102,11 @@ pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
 }
 
 /// Parses a relationship pattern.
+///
+/// # Errors
+///
+/// Returns [`ParseError`] when direction/brackets are malformed or relationship
+/// details cannot be parsed.
 pub fn parse_relationship_pattern(input: &str) -> Result<RelationshipPattern, ParseError> {
     let input = input.trim();
     let (direction, is, ie) = if input.starts_with("<-") && input.ends_with('-') {

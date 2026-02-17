@@ -54,7 +54,7 @@ impl LatencyHistogram {
     pub fn observe(&self, duration: Duration) {
         // Cap at u64::MAX for durations > 584 years (u128 -> u64 truncation protection)
         let ns_u128 = duration.as_nanos();
-        let ns = if ns_u128 > u64::MAX as u128 {
+        let ns = if ns_u128 > u128::from(u64::MAX) {
             u64::MAX
         } else {
             ns_u128 as u64
@@ -64,7 +64,7 @@ impl LatencyHistogram {
 
         // Same protection for milliseconds (though less likely to overflow)
         let ms_u128 = duration.as_millis();
-        let ms = if ms_u128 > u64::MAX as u128 {
+        let ms = if ms_u128 > u128::from(u64::MAX) {
             u64::MAX
         } else {
             ms_u128 as u64
@@ -334,8 +334,8 @@ impl GraphMetrics {
         );
 
         // Latency histograms
-        self.append_histogram_prometheus(&mut output, "edge_insert", &self.edge_insert_latency);
-        self.append_histogram_prometheus(&mut output, "traversal", &self.traversal_latency);
+        Self::append_histogram_prometheus(&mut output, "edge_insert", &self.edge_insert_latency);
+        Self::append_histogram_prometheus(&mut output, "traversal", &self.traversal_latency);
 
         // Traversal metrics
         output.push_str("# HELP velesdb_graph_traversals_total Total traversals executed\n");
@@ -349,12 +349,7 @@ impl GraphMetrics {
         output
     }
 
-    fn append_histogram_prometheus(
-        &self,
-        output: &mut String,
-        name: &str,
-        histogram: &LatencyHistogram,
-    ) {
+    fn append_histogram_prometheus(output: &mut String, name: &str, histogram: &LatencyHistogram) {
         let bucket_bounds = [
             "0.001", "0.005", "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "+Inf",
         ];
@@ -369,16 +364,14 @@ impl GraphMetrics {
         );
         let _ = writeln!(
             output,
-            "# TYPE velesdb_graph_{}_duration_seconds histogram",
-            name
+            "# TYPE velesdb_graph_{name}_duration_seconds histogram"
         );
 
         for (i, &bound) in bucket_bounds.iter().enumerate() {
             cumulative += counts[i];
             let _ = writeln!(
                 output,
-                "velesdb_graph_{}_duration_seconds_bucket{{le=\"{}\"}} {}",
-                name, bound, cumulative
+                "velesdb_graph_{name}_duration_seconds_bucket{{le=\"{bound}\"}} {cumulative}",
             );
         }
 

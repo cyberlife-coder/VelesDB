@@ -19,20 +19,20 @@ use velesdb_core::{Error, Result};
 fn validate_dimension(dimension: usize) -> Result<u32> {
     // Production pattern: convert usize to u32 with overflow check
     u32::try_from(dimension)
-        .map_err(|_| Error::Overflow(format!("Dimension {} exceeds u32::MAX", dimension)))
+        .map_err(|_| Error::Overflow(format!("Dimension {dimension} exceeds u32::MAX")))
 }
 
 /// Helper function that simulates production code path for offset validation
 fn validate_offset(offset: u64) -> Result<usize> {
     // Production pattern: convert u64 to usize with overflow check
     usize::try_from(offset)
-        .map_err(|_| Error::Overflow(format!("Offset {} exceeds usize::MAX", offset)))
+        .map_err(|_| Error::Overflow(format!("Offset {offset} exceeds usize::MAX")))
 }
 
 /// Helper function that simulates production code path for count validation
 fn validate_count(count: usize) -> Result<u32> {
     // Production pattern: convert usize to u32 for serialization
-    u32::try_from(count).map_err(|_| Error::Overflow(format!("Count {} exceeds u32::MAX", count)))
+    u32::try_from(count).map_err(|_| Error::Overflow(format!("Count {count} exceeds u32::MAX")))
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn test_vector_dimension_bounds_realistic() {
 
     for dim in dimensions {
         let result = validate_dimension(dim);
-        assert!(result.is_ok(), "Dimension {} should be valid", dim);
+        assert!(result.is_ok(), "Dimension {dim} should be valid");
     }
 }
 

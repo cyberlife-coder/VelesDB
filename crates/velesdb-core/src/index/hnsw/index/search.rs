@@ -259,11 +259,11 @@ impl HnswIndex {
             }
 
             // GPU batch cosine similarity
-            let similarities =
-                match gpu.batch_cosine_similarity(&flat_vectors, query, self.dimension) {
-                    Ok(s) => s,
-                    Err(_) => return None,
-                };
+            let Ok(similarities) =
+                gpu.batch_cosine_similarity(&flat_vectors, query, self.dimension)
+            else {
+                return None;
+            };
 
             // Combine IDs with similarities
             let mut results: Vec<(u64, f32)> = id_map.into_iter().zip(similarities).collect();

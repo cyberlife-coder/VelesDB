@@ -122,7 +122,7 @@ fn reference_jaccard_f64(a: &[f32], b: &[f32]) -> JaccardRef {
 ///
 /// |error| ≤ (ΔI + |I/U| × ΔU) / |U| + u × |I/U|
 ///
-/// where ΔI = γ(N) × Σ|min_terms|, ΔU = γ(N) × Σ|max_terms|.
+/// where ΔI = γ(N) × `Σ|min_terms|`, ΔU = γ(N) × `Σ|max_terms|`.
 fn jaccard_error_bound(n: usize, jref: &JaccardRef) -> f64 {
     if jref.union_val.abs() < f64::EPSILON {
         return f64::from(f32::EPSILON);

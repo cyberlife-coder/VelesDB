@@ -213,8 +213,7 @@ impl Bm25Index {
     pub fn remove_document(&self, id: u64) -> bool {
         assert!(
             u32::try_from(id).is_ok(),
-            "BM25 document ID {} exceeds u32::MAX",
-            id
+            "BM25 document ID {id} exceeds u32::MAX"
         );
 
         let doc = {

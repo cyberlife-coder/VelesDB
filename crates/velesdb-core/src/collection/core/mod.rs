@@ -3,7 +3,8 @@
 //! This module provides the main implementation of Collection:
 //! - Lifecycle: create, open, flush, save
 //! - CRUD: upsert, get, delete
-//! - Index management: create_property_index, create_range_index, list_indexes, drop_index
+//! - Index management: `create_property_index`, `create_range_index`,
+//!   `list_indexes`, `drop_index`
 
 mod crud;
 mod graph_api;

@@ -66,7 +66,7 @@ impl Collection {
                 for result in filtered {
                     // Issue #122: Apply outer filter to similarity results
                     if let Some(ref outer) = outer_filter {
-                        if !self.matches_metadata_filter(&result.point, outer) {
+                        if !Self::matches_metadata_filter(&result.point, outer) {
                             continue;
                         }
                     }
@@ -111,7 +111,6 @@ impl Collection {
     /// Check if a point matches a metadata filter condition.
     /// Used for applying outer AND filters to similarity results.
     pub(crate) fn matches_metadata_filter(
-        &self,
         point: &crate::Point,
         condition: &crate::velesql::Condition,
     ) -> bool {

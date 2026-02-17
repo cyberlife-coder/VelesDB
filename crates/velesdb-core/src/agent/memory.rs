@@ -1,9 +1,9 @@
-//! AgentMemory - Unified memory interface for AI agents (EPIC-010)
+//! `AgentMemory` - Unified memory interface for AI agents (EPIC-010)
 //!
 //! Provides three memory subsystems for AI agents:
-//! - **SemanticMemory**: Long-term knowledge facts with vector similarity search
-//! - **EpisodicMemory**: Event timeline with temporal and similarity queries
-//! - **ProceduralMemory**: Learned patterns with confidence scoring
+//! - **`SemanticMemory`**: Long-term knowledge facts with vector similarity search
+//! - **`EpisodicMemory`**: Event timeline with temporal and similarity queries
+//! - **`ProceduralMemory`**: Learned patterns with confidence scoring
 //!
 //! # Enhanced Features
 //!
@@ -61,7 +61,7 @@ pub struct AgentMemory<'a> {
 }
 
 impl<'a> AgentMemory<'a> {
-    /// Creates a new AgentMemory instance from a Database.
+    /// Creates a new `AgentMemory` instance from a `Database`.
     ///
     /// Initializes or connects to the three memory subsystem collections:
     /// - `_semantic_memory`: For knowledge facts
@@ -69,11 +69,19 @@ impl<'a> AgentMemory<'a> {
     /// - `_procedural_memory`: For learned patterns
     ///
     /// Uses the default embedding dimension (384).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when one of the underlying memory subsystems cannot be initialized.
     pub fn new(db: &'a Database) -> Result<Self, AgentMemoryError> {
         Self::with_dimension(db, DEFAULT_DIMENSION)
     }
 
-    /// Creates a new AgentMemory with a custom embedding dimension.
+    /// Creates a new `AgentMemory` with a custom embedding dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when one of the underlying memory subsystems cannot be initialized.
     pub fn with_dimension(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
         let ttl = Arc::new(MemoryTtl::new());
         let temporal_index = Arc::new(TemporalIndex::new());
@@ -155,6 +163,10 @@ impl<'a> AgentMemory<'a> {
     /// # Returns
     ///
     /// Statistics about the expiration operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when consolidation operations fail.
     pub fn auto_expire(&self) -> Result<ExpireResult, AgentMemoryError> {
         let expired_ids = self.ttl.expire();
         let mut result = ExpireResult::default();
@@ -192,6 +204,10 @@ impl<'a> AgentMemory<'a> {
     /// # Returns
     ///
     /// Number of procedures evicted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when listing or deleting procedures fails.
     pub fn evict_low_confidence_procedures(
         &self,
         min_confidence: f32,
@@ -214,6 +230,10 @@ impl<'a> AgentMemory<'a> {
     /// # Returns
     ///
     /// The version number of the created snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot manager is not configured or snapshot persistence fails.
     pub fn snapshot(&self) -> Result<u64, AgentMemoryError> {
         let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
             AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
@@ -234,6 +254,11 @@ impl<'a> AgentMemory<'a> {
     /// # Returns
     ///
     /// The version number of the loaded snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot manager is not configured, loading fails,
+    /// or state restoration fails.
     pub fn load_latest_snapshot(&self) -> Result<u64, AgentMemoryError> {
         let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
             AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
@@ -245,6 +270,11 @@ impl<'a> AgentMemory<'a> {
     }
 
     /// Loads a specific snapshot version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot manager is not configured, loading fails,
+    /// or state restoration fails.
     pub fn load_snapshot_version(&self, version: u64) -> Result<(), AgentMemoryError> {
         let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
             AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
@@ -256,6 +286,10 @@ impl<'a> AgentMemory<'a> {
     }
 
     /// Lists all available snapshot versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot manager is not configured or listing fails.
     pub fn list_snapshot_versions(&self) -> Result<Vec<u64>, AgentMemoryError> {
         let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
             AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())

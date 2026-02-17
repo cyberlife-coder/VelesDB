@@ -209,6 +209,10 @@ impl GraphSchema {
     /// Validates a node type against this schema.
     ///
     /// Returns `Ok(())` if the type is valid, or an error with details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if schema is strict and `type_name` is not declared.
     pub fn validate_node_type(&self, type_name: &str) -> Result<()> {
         if self.schemaless {
             return Ok(());
@@ -220,14 +224,18 @@ impl GraphSchema {
 
         let allowed: Vec<&str> = self.node_types.iter().map(|nt| nt.name.as_str()).collect();
         Err(Error::SchemaValidation(format!(
-            "Node type '{}' not allowed. Valid types: {:?}",
-            type_name, allowed
+            "Node type '{type_name}' not allowed. Valid types: {allowed:?}",
         )))
     }
 
     /// Validates an edge type against this schema.
     ///
     /// Checks the edge type name and that source/target node types are valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if schema is strict and edge type or endpoint node types
+    /// violate schema constraints.
     pub fn validate_edge_type(
         &self,
         edge_type: &str,
@@ -241,45 +249,38 @@ impl GraphSchema {
         // Find the edge type definition
         let edge_def = self.edge_types.iter().find(|et| et.name == edge_type);
 
-        match edge_def {
-            Some(def) => {
-                // Validate source node type matches edge definition
-                if def.from_type != from_type {
-                    return Err(Error::SchemaValidation(format!(
-                        "Edge '{}' expects source type '{}', got '{}'",
-                        edge_type, def.from_type, from_type
-                    )));
-                }
-                // Validate target node type matches edge definition
-                if def.to_type != to_type {
-                    return Err(Error::SchemaValidation(format!(
-                        "Edge '{}' expects target type '{}', got '{}'",
-                        edge_type, def.to_type, to_type
-                    )));
-                }
-                // Validate that endpoint node types are declared in schema
-                if !self.has_node_type(from_type) {
-                    return Err(Error::SchemaValidation(format!(
-                        "Edge '{}' references undeclared source node type '{}'",
-                        edge_type, from_type
-                    )));
-                }
-                if !self.has_node_type(to_type) {
-                    return Err(Error::SchemaValidation(format!(
-                        "Edge '{}' references undeclared target node type '{}'",
-                        edge_type, to_type
-                    )));
-                }
-                Ok(())
+        if let Some(def) = edge_def {
+            // Validate source node type matches edge definition
+            if def.from_type != from_type {
+                return Err(Error::SchemaValidation(format!(
+                    "Edge '{edge_type}' expects source type '{}', got '{from_type}'",
+                    def.from_type
+                )));
             }
-            None => {
-                let allowed: Vec<&str> =
-                    self.edge_types.iter().map(|et| et.name.as_str()).collect();
-                Err(Error::SchemaValidation(format!(
-                    "Edge type '{}' not allowed. Valid types: {:?}",
-                    edge_type, allowed
-                )))
+            // Validate target node type matches edge definition
+            if def.to_type != to_type {
+                return Err(Error::SchemaValidation(format!(
+                    "Edge '{edge_type}' expects target type '{}', got '{to_type}'",
+                    def.to_type
+                )));
             }
+            // Validate that endpoint node types are declared in schema
+            if !self.has_node_type(from_type) {
+                return Err(Error::SchemaValidation(format!(
+                    "Edge '{edge_type}' references undeclared source node type '{from_type}'",
+                )));
+            }
+            if !self.has_node_type(to_type) {
+                return Err(Error::SchemaValidation(format!(
+                    "Edge '{edge_type}' references undeclared target node type '{to_type}'",
+                )));
+            }
+            Ok(())
+        } else {
+            let allowed: Vec<&str> = self.edge_types.iter().map(|et| et.name.as_str()).collect();
+            Err(Error::SchemaValidation(format!(
+                "Edge type '{edge_type}' not allowed. Valid types: {allowed:?}",
+            )))
         }
     }
 

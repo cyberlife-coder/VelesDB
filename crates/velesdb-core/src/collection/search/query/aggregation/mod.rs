@@ -118,6 +118,11 @@ impl Collection {
     /// ```json
     /// {"count": 100, "sum_price": 5000.0, "avg_rating": 4.5}
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when SELECT does not contain aggregations, when HAVING is
+    /// used without GROUP BY, or when underlying scan/filter/aggregation operations fail.
     #[allow(clippy::too_many_lines)]
     pub fn execute_aggregate(
         &self,

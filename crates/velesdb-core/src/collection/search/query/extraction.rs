@@ -208,7 +208,6 @@ impl Collection {
     /// - The parameter is not an array
     /// - Any value is not a number or is outside f32 representable range
     pub(crate) fn resolve_vector(
-        &self,
         vector: &crate::velesql::VectorExpr,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<f32>> {
