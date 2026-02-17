@@ -314,6 +314,14 @@ class Collection:
     def flush(self) -> None:
         """Flush pending changes to disk."""
         ...
+
+    def count(self) -> int:
+        """Return number of points in the collection."""
+        ...
+
+    def get_graph_store(self) -> "GraphStore":
+        """Get a graph store adapter for edge/traversal operations."""
+        ...
     
     # Index Management (EPIC-009)
     
@@ -473,6 +481,54 @@ class Database:
     def flush(self) -> None:
         """Flush all pending changes to disk."""
         ...
+
+
+# =============================================================================
+# VelesQL Classes
+# =============================================================================
+
+class VelesQLSyntaxError(Exception):
+    """Raised when VelesQL parsing fails due to syntax error."""
+    ...
+
+
+class VelesQLParameterError(Exception):
+    """Raised when VelesQL query parameters are invalid."""
+    ...
+
+
+class ParsedStatement:
+    """Parsed VelesQL statement with helper inspectors."""
+
+    table_name: str
+    columns: List[str]
+    limit: Optional[int]
+    offset: Optional[int]
+    group_by: List[str]
+    order_by: List[Tuple[str, str]]
+
+    def is_valid(self) -> bool: ...
+    def is_select(self) -> bool: ...
+    def is_match(self) -> bool: ...
+    def has_where_clause(self) -> bool: ...
+    def has_vector_search(self) -> bool: ...
+    def has_order_by(self) -> bool: ...
+    def has_group_by(self) -> bool: ...
+    def has_distinct(self) -> bool: ...
+    def has_joins(self) -> bool: ...
+    def has_fusion(self) -> bool: ...
+    @property
+    def join_count(self) -> int: ...
+
+
+class VelesQL:
+    """VelesQL parser entrypoint."""
+
+    def __init__(self) -> None: ...
+    @staticmethod
+    def parse(query: str) -> ParsedStatement: ...
+    @staticmethod
+    def is_valid(query: str) -> bool: ...
 
 
 # =============================================================================
