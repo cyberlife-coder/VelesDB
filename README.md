@@ -145,7 +145,7 @@
 ✅ Code coverage > 75% (82.30%)
 ```
 
-> 📊 **Full metrics:** [docs/RELEASE_METRICS_v1.4.0.md](docs/RELEASE_METRICS_v1.4.0.md)
+> 📊 **Full metrics:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
 ---
 

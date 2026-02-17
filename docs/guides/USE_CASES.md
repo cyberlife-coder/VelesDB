@@ -15,10 +15,8 @@ VelesDB uniquely combines **vector similarity search** with **knowledge graph tr
 | Metadata filters | ✅ Stable | `AND category = 'tech'` |
 | `GROUP BY` / aggregations | ✅ Stable | `GROUP BY category` |
 | `ORDER BY` expressions | ✅ Stable | `ORDER BY score DESC` |
-| `MATCH` graph traversal | 🔜 Planned | `MATCH (a)-[:REL]->(b)` |
+| `MATCH` graph traversal | ✅ Stable | `MATCH (a)-[:REL]->(b)` |
 | Table aliases | 🔜 Planned | `FROM docs d` |
-
-> **Note**: Examples marked with `MATCH` show the target syntax for graph traversal. Use the programmatic Graph API for graph operations until MATCH is released.
 
 | # | Use Case | Primary Capability | Complexity |
 |---|----------|-------------------|------------|

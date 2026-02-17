@@ -721,7 +721,6 @@ LIMIT 10
 |---------|--------|------------|
 | `LEFT/RIGHT/FULL JOIN` | ❌ Not supported | Use basic `JOIN` |
 | Subqueries | ❌ Not supported | Use multiple queries |
-| `DISTINCT` | ❌ Not supported | Dedupe in application |
 | `ORDER BY` aggregates | ❌ Not supported | Sort in application |
 | Nested `GROUP BY` fields | ❌ Not supported | Use simple column names |
 
@@ -733,6 +732,7 @@ LIMIT 10
 | `GROUP BY` | ✅ Supported | With aggregates |
 | `HAVING` | ✅ Supported | AND/OR operators |
 | `ORDER BY` | ✅ Supported | Columns, similarity() |
+| `DISTINCT` | ✅ Supported | `SELECT DISTINCT ...` |
 | `UNION/INTERSECT/EXCEPT` | ✅ Supported | Set operations |
 | `COUNT/SUM/AVG/MIN/MAX` | ✅ Supported | Aggregate functions |
 | `WITH (options)` | ✅ Supported | Query-time config |
