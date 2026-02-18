@@ -35,9 +35,19 @@ This matrix tracks implementation parity of VelesQL contracts and features acros
 | `GROUP BY`, `HAVING` | ✅ | ✅ | Stable |
 | `UNION/INTERSECT/EXCEPT` | ✅ | ✅ | Stable |
 
+## Conformance Test Coverage
+
+| Surface | Fixture | Test |
+|---------|---------|------|
+| Server REST contract | `conformance/velesql_contract_cases.json` | `crates/velesdb-server/tests/velesql_conformance_tests.rs` |
+| TypeScript SDK contract mapping | `conformance/velesql_contract_cases.json` | `sdks/typescript/tests/velesql-contract-fixtures.test.ts` |
+| Core parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-core/tests/velesql_parser_conformance.rs` |
+| CLI parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-cli/tests/velesql_parser_conformance.rs` |
+| WASM parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-wasm/tests/velesql_parser_conformance.rs` |
+
 ## Current Gaps and Action Items
 
-1. Add explicit CLI contract assertions for structured VelesQL errors (`code/hint/details`).
-2. Add cross-SDK conformance tests asserting `meta.velesql_contract_version`.
+1. Extend CLI runtime assertions from parser-level conformance to end-to-end REST contract checks (`code/hint/details`).
+2. Extend WASM conformance from parser-level fixture checks to feature-level execution assertions where applicable.
 3. Implement runtime support for `JOIN ... USING (...)` before claiming full JOIN parity.
 4. Keep docs/README/API examples synchronized whenever contract version changes.

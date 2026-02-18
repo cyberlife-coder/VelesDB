@@ -1,0 +1,30 @@
+{
+  "version": "2.1.0",
+  "cases": [
+    {
+      "id": "P001",
+      "query": "SELECT * FROM docs LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P002",
+      "query": "SELECT * FROM docs WHERE category = 'tech' AND MATCH (d:Doc)-[:REL]->(x) LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P003",
+      "query": "MATCH (d:Doc) RETURN d LIMIT 1",
+      "should_parse": true
+    },
+    {
+      "id": "P004",
+      "query": "SELEC * FROM docs",
+      "should_parse": false
+    },
+    {
+      "id": "P005",
+      "query": "SELECT * docs",
+      "should_parse": false
+    }
+  ]
+}

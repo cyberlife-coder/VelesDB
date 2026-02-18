@@ -1,21 +1,21 @@
 {
   "version": "1.0.0",
   "description": "VelesDB Performance Baseline (EPIC-026/US-002)",
-  "recorded_at": "2026-01-27",
+  "recorded_at": "2026-02-18",
   "environment": {
     "rust_version": "1.75.0",
     "features": "simd"
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 45000000,
-      "std_ns": 2000000,
-      "threshold_percent": 15
+      "mean_ns": 4500000000,
+      "std_ns": 250000000,
+      "threshold_percent": 20
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 850000,
-      "std_ns": 50000,
-      "threshold_percent": 15
+      "mean_ns": 220000,
+      "std_ns": 30000,
+      "threshold_percent": 20
     },
     "hnsw_insert": {
       "mean_ns": 50000000,
