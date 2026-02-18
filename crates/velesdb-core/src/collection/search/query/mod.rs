@@ -65,6 +65,7 @@ pub use join::{execute_join, JoinedResult};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
+use std::collections::HashSet;
 
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 const MAX_LIMIT: usize = 100_000;
@@ -100,6 +101,7 @@ impl Collection {
         let mut similarity_conditions: Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)> =
             Vec::new();
         let mut filter_condition = None;
+        let mut graph_match_predicates = Vec::new();
 
         // EPIC-044 US-002: Check for similarity() OR metadata pattern (union mode)
         let is_union_query = if let Some(ref cond) = stmt.where_clause {
@@ -118,6 +120,7 @@ impl Collection {
         if let Some(ref cond) = stmt.where_clause {
             // Validate query structure before extraction
             Self::validate_similarity_query_structure(cond)?;
+            Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
 
             let mut extracted_cond = cond.clone();
             vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
@@ -144,6 +147,12 @@ impl Collection {
         if is_not_similarity_query {
             if let Some(ref cond) = stmt.where_clause {
                 let mut results = self.execute_not_similarity_query(cond, params, limit)?;
+                results = self.apply_graph_match_predicates_to_results(
+                    results,
+                    &graph_match_predicates,
+                    params,
+                    stmt.from_alias.as_deref(),
+                )?;
 
                 // Apply ORDER BY if present
                 if let Some(ref order_by) = stmt.order_by {
@@ -158,6 +167,12 @@ impl Collection {
         if is_union_query {
             if let Some(ref cond) = stmt.where_clause {
                 let mut results = self.execute_union_query(cond, params, limit)?;
+                results = self.apply_graph_match_predicates_to_results(
+                    results,
+                    &graph_match_predicates,
+                    params,
+                    stmt.from_alias.as_deref(),
+                )?;
 
                 // Apply ORDER BY if present
                 if let Some(ref order_by) = stmt.order_by {
@@ -306,10 +321,15 @@ impl Collection {
                     // Hybrid search: NEAR + MATCH
                     self.hybrid_search(vector, &text_query, limit, None)?
                 } else {
-                    // Vector search with metadata filter
-                    let filter =
-                        crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
-                    self.search_with_filter(vector, limit, &filter)?
+                    // Vector search with metadata filter (graph predicates handled separately)
+                    if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
+                            metadata_cond,
+                        ));
+                        self.search_with_filter(vector, limit, &filter)?
+                    } else {
+                        self.search(vector, limit)?
+                    }
                 }
             }
             (Some(vector), _, None) => {
@@ -327,10 +347,21 @@ impl Collection {
                     // Pure text search - no filter needed
                     self.text_search(&m.query, limit)
                 } else {
-                    // Generic metadata filter: perform a scan (fallback)
-                    let filter =
-                        crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
-                    self.execute_scan_query(&filter, limit)
+                    // Generic metadata filter: perform a scan (fallback).
+                    // If condition only contains graph predicates, scan all then graph-filter.
+                    if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
+                            metadata_cond,
+                        ));
+                        self.execute_scan_query(&filter, limit)
+                    } else {
+                        self.execute_scan_query(
+                            &crate::filter::Filter::new(crate::filter::Condition::And {
+                                conditions: vec![],
+                            }),
+                            limit,
+                        )
+                    }
                 }
             }
             (None, None, None) => {
@@ -343,6 +374,13 @@ impl Collection {
                 )
             }
         };
+
+        results = self.apply_graph_match_predicates_to_results(
+            results,
+            &graph_match_predicates,
+            params,
+            stmt.from_alias.as_deref(),
+        )?;
 
         // EPIC-052 US-001: Apply DISTINCT deduplication if requested
         if stmt.distinct == crate::velesql::DistinctMode::All {
@@ -358,6 +396,79 @@ impl Collection {
         results.truncate(limit);
 
         Ok(results)
+    }
+
+    fn apply_graph_match_predicates_to_results(
+        &self,
+        results: Vec<SearchResult>,
+        predicates: &[crate::velesql::GraphMatchPredicate],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        from_alias: Option<&str>,
+    ) -> Result<Vec<SearchResult>> {
+        if predicates.is_empty() {
+            return Ok(results);
+        }
+
+        let anchor_sets: Vec<HashSet<u64>> = predicates
+            .iter()
+            .map(|p| self.evaluate_graph_match_anchor_ids(p, params, from_alias))
+            .collect::<Result<Vec<_>>>()?;
+
+        let filtered = results
+            .into_iter()
+            .filter(|r| anchor_sets.iter().all(|set| set.contains(&r.point.id)))
+            .collect();
+        Ok(filtered)
+    }
+
+    fn evaluate_graph_match_anchor_ids(
+        &self,
+        predicate: &crate::velesql::GraphMatchPredicate,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        from_alias: Option<&str>,
+    ) -> Result<HashSet<u64>> {
+        let pattern = &predicate.pattern;
+        let first_node = pattern.nodes.first().ok_or_else(|| {
+            crate::error::Error::Config("MATCH predicate requires at least one node".to_string())
+        })?;
+
+        let anchor_alias = first_node.alias.clone().ok_or_else(|| {
+            crate::error::Error::Config(
+                "MATCH predicate in SELECT WHERE requires an alias on the first node, e.g. MATCH (d:Doc)-[:REL]->(x)"
+                    .to_string(),
+            )
+        })?;
+
+        if let Some(from_alias) = from_alias {
+            if from_alias != anchor_alias {
+                return Err(crate::error::Error::Config(format!(
+                    "MATCH predicate anchor alias '{}' must match FROM alias '{}'",
+                    anchor_alias, from_alias
+                )));
+            }
+        }
+
+        let clause = crate::velesql::MatchClause {
+            patterns: vec![predicate.pattern.clone()],
+            where_clause: None,
+            return_clause: crate::velesql::ReturnClause {
+                items: vec![crate::velesql::ReturnItem {
+                    expression: "*".to_string(),
+                    alias: None,
+                }],
+                order_by: None,
+                limit: Some(MAX_LIMIT as u64),
+            },
+        };
+
+        let matches = self.execute_match(&clause, params)?;
+        let mut ids = HashSet::with_capacity(matches.len());
+        for m in matches {
+            if let Some(id) = m.bindings.get(&anchor_alias) {
+                ids.insert(*id);
+            }
+        }
+        Ok(ids)
     }
 
     // NOTE: apply_distinct and compute_distinct_key moved to distinct.rs

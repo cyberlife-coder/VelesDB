@@ -107,6 +107,10 @@ impl From<crate::velesql::Condition> for Condition {
                 field: m.column,
                 value: m.query,
             },
+            crate::velesql::Condition::GraphMatch(_) => {
+                // Graph predicates are handled separately by query execution.
+                Self::And { conditions: vec![] }
+            }
             crate::velesql::Condition::Between(btw) => {
                 let low = match btw.low {
                     crate::velesql::Value::Integer(i) => Value::Number(i.into()),

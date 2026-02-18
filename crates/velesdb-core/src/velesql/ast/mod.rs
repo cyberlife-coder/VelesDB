@@ -18,8 +18,9 @@ pub use aggregation::{
     LogicalOp,
 };
 pub use condition::{
-    BetweenCondition, CompareOp, Comparison, Condition, InCondition, IsNullCondition,
-    LikeCondition, MatchCondition, SimilarityCondition, VectorFusedSearch, VectorSearch,
+    BetweenCondition, CompareOp, Comparison, Condition, GraphMatchPredicate, InCondition,
+    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, VectorFusedSearch,
+    VectorSearch,
 };
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::fusion::FusionConfig;
 use super::values::{Value, VectorExpr};
+use crate::velesql::GraphPattern;
 
 /// A condition in a WHERE clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +30,8 @@ pub enum Condition {
     IsNull(IsNullCondition),
     /// Full-text search: column MATCH 'query'
     Match(MatchCondition),
+    /// Graph match predicate inside WHERE: MATCH (a)-[:REL]->(b)
+    GraphMatch(GraphMatchPredicate),
     /// Logical AND
     And(Box<Condition>, Box<Condition>),
     /// Logical OR
@@ -37,6 +40,13 @@ pub enum Condition {
     Not(Box<Condition>),
     /// Grouped condition (parentheses)
     Group(Box<Condition>),
+}
+
+/// Graph predicate condition used in SELECT WHERE clauses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphMatchPredicate {
+    /// Graph pattern to evaluate.
+    pub pattern: GraphPattern,
 }
 
 /// Vector similarity search condition.

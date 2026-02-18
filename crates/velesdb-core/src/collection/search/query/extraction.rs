@@ -159,7 +159,8 @@ impl Collection {
             // Remove vector search conditions - they're handled separately by the query executor
             Condition::Similarity(_)
             | Condition::VectorSearch(_)
-            | Condition::VectorFusedSearch(_) => None,
+            | Condition::VectorFusedSearch(_)
+            | Condition::GraphMatch(_) => None,
             // For AND: keep both sides if they exist, or just one side
             Condition::And(left, right) => {
                 let left_filter = Self::extract_metadata_filter(left);
@@ -196,6 +197,24 @@ impl Collection {
             }
             // Keep all other conditions (comparisons, IN, BETWEEN, etc.)
             other => Some(other.clone()),
+        }
+    }
+
+    /// Collect graph MATCH predicates embedded in SELECT WHERE.
+    pub(crate) fn collect_graph_match_predicates(
+        condition: &Condition,
+        out: &mut Vec<crate::velesql::GraphMatchPredicate>,
+    ) {
+        match condition {
+            Condition::GraphMatch(gm) => out.push(gm.clone()),
+            Condition::And(left, right) | Condition::Or(left, right) => {
+                Self::collect_graph_match_predicates(left, out);
+                Self::collect_graph_match_predicates(right, out);
+            }
+            Condition::Group(inner) | Condition::Not(inner) => {
+                Self::collect_graph_match_predicates(inner, out);
+            }
+            _ => {}
         }
     }
 

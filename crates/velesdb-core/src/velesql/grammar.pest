@@ -145,6 +145,7 @@ where_column = { identifier ~ ("." ~ identifier)* }
 
 primary_expr = {
     "(" ~ or_expr ~ ")" |
+    graph_match_expr |
     similarity_expr |
     vector_fused_search |
     vector_search |
@@ -155,6 +156,10 @@ primary_expr = {
     is_null_expr |
     compare_expr
 }
+
+// Graph predicate inside SELECT WHERE clause:
+// WHERE ... AND MATCH (a)-[:REL]->(b)
+graph_match_expr = { ^"MATCH" ~ graph_pattern }
 
 // Similarity function: similarity(field, vector) op threshold
 // Used in hybrid graph-vector queries

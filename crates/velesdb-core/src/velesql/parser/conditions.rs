@@ -92,6 +92,7 @@ impl Parser {
                 Ok(Condition::Group(Box::new(cond)))
             }
             Rule::similarity_expr => Self::parse_similarity_expr(inner),
+            Rule::graph_match_expr => Self::parse_graph_match_expr(inner),
             Rule::vector_fused_search => Self::parse_vector_fused_search(inner),
             Rule::vector_search => Self::parse_vector_search(inner),
             Rule::match_expr => Self::parse_match_expr(inner),
@@ -306,6 +307,23 @@ impl Parser {
             .to_string();
 
         Ok(Condition::Match(MatchCondition { column, query }))
+    }
+
+    pub(crate) fn parse_graph_match_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut graph_pattern = None;
+        for inner in pair.into_inner() {
+            if inner.as_rule() == Rule::graph_pattern {
+                graph_pattern = Some(Self::parse_graph_pattern(inner)?);
+            }
+        }
+
+        let pattern =
+            graph_pattern.ok_or_else(|| ParseError::syntax(0, "", "Expected MATCH pattern"))?;
+        Ok(Condition::GraphMatch(crate::velesql::GraphMatchPredicate {
+            pattern,
+        }))
     }
 
     pub(crate) fn parse_in_expr(

@@ -2,8 +2,8 @@
 
 use crate::collection::types::Collection;
 use crate::velesql::{
-    CompareOp, Comparison, Condition, MatchCondition, SimilarityCondition, Value, VectorExpr,
-    VectorSearch,
+    CompareOp, Comparison, Condition, MatchCondition, Parser, SimilarityCondition, Value,
+    VectorExpr, VectorSearch,
 };
 
 fn make_comparison(column: &str, val: i64) -> Condition {
@@ -34,6 +34,14 @@ fn make_vector_search() -> Condition {
     Condition::VectorSearch(VectorSearch {
         vector: VectorExpr::Parameter("v".to_string()),
     })
+}
+
+fn make_graph_match() -> Condition {
+    let query = Parser::parse("SELECT * FROM docs WHERE MATCH (d:Doc)-[:REFERENCES]->(x)").unwrap();
+    match query.select.where_clause {
+        Some(condition) => condition,
+        None => panic!("expected where clause"),
+    }
 }
 
 #[test]
@@ -169,4 +177,35 @@ fn test_extract_metadata_filter_not_similarity_returns_none() {
     let cond = Condition::Not(Box::new(make_similarity("embedding", 0.8)));
     let result = Collection::extract_metadata_filter(&cond);
     assert!(result.is_none());
+}
+
+#[test]
+fn test_extract_metadata_filter_removes_graph_match() {
+    let cond = make_graph_match();
+    let result = Collection::extract_metadata_filter(&cond);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_extract_metadata_filter_and_with_graph_match() {
+    let cond = Condition::And(
+        Box::new(make_comparison("category", 1)),
+        Box::new(make_graph_match()),
+    );
+    let result = Collection::extract_metadata_filter(&cond);
+    assert!(matches!(result, Some(Condition::Comparison(_))));
+}
+
+#[test]
+fn test_collect_graph_match_predicates_nested() {
+    let cond = Condition::And(
+        Box::new(make_comparison("a", 1)),
+        Box::new(Condition::Or(
+            Box::new(make_graph_match()),
+            Box::new(Condition::Not(Box::new(make_graph_match()))),
+        )),
+    );
+    let mut predicates = Vec::new();
+    Collection::collect_graph_match_predicates(&cond, &mut predicates);
+    assert_eq!(predicates.len(), 2);
 }

@@ -154,6 +154,52 @@ fn test_parse_vector_with_filter() {
     assert_eq!(query.select.limit, Some(10));
 }
 
+#[test]
+fn test_parse_select_where_graph_match_predicate() {
+    let query = Parser::parse("SELECT * FROM docs WHERE MATCH (d:Doc)-[:REFERENCES]->(x)")
+        .expect("query should parse");
+
+    match query.select.where_clause {
+        Some(Condition::GraphMatch(gm)) => {
+            assert_eq!(gm.pattern.nodes.len(), 2);
+            assert_eq!(gm.pattern.relationships.len(), 1);
+            assert_eq!(
+                gm.pattern.nodes[0].alias.as_deref(),
+                Some("d"),
+                "first node alias should be parsed for anchor binding"
+            );
+        }
+        _ => panic!("Expected GraphMatch condition"),
+    }
+}
+
+#[test]
+fn test_parse_select_where_and_graph_match_predicate() {
+    let query =
+        Parser::parse("SELECT * FROM docs WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)")
+            .expect("query should parse");
+
+    match query.select.where_clause {
+        Some(Condition::And(left, right)) => {
+            assert!(
+                matches!(*left, Condition::Comparison(_))
+                    || matches!(*left, Condition::GraphMatch(_))
+            );
+            assert!(
+                matches!(*right, Condition::Comparison(_))
+                    || matches!(*right, Condition::GraphMatch(_))
+            );
+            assert!(
+                (matches!(*left, Condition::Comparison(_))
+                    && matches!(*right, Condition::GraphMatch(_)))
+                    || (matches!(*left, Condition::GraphMatch(_))
+                        && matches!(*right, Condition::Comparison(_)))
+            );
+        }
+        _ => panic!("Expected AND with comparison + GraphMatch"),
+    }
+}
+
 // ========== IN/BETWEEN/LIKE tests ==========
 
 #[test]
