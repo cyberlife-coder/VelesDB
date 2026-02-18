@@ -303,6 +303,18 @@ All errors return a JSON object with an `error` field:
 }
 ```
 
+For VelesQL semantic/runtime errors (`/query`, `/query/explain`), payload is standardized:
+
+```json
+{
+  "error": {
+    "code": "VELESQL_COLLECTION_NOT_FOUND",
+    "message": "Collection 'documents' not found",
+    "hint": "Create the collection first or correct the collection name"
+  }
+}
+```
+
 ### HTTP Status Codes
 
 | Code | Description |
@@ -402,6 +414,7 @@ Execute a VelesQL query.
 |-------|------|----------|-------------|
 | query | string | Yes | VelesQL query string |
 | params | object | No | Bound parameters (e.g., vectors) |
+| collection | string | Conditional | Required for top-level `MATCH ...` queries sent to `/query` |
 
 **Example:**
 ```json
@@ -418,9 +431,17 @@ Execute a VelesQL query.
     {"id": 1, "score": 0.98, "payload": {"title": "AI Guide", "category": "tech"}}
   ],
   "timing_ms": 1.56,
-  "rows_returned": 1
+  "took_ms": 2,
+  "rows_returned": 1,
+  "meta": {
+    "velesql_contract_version": "2.1.0",
+    "count": 1
+  }
 }
 ```
+
+**Contract note:** top-level `MATCH` on `/query` requires `collection` in request body.  
+Canonical reference: [`VELESQL_CONTRACT.md`](./VELESQL_CONTRACT.md)
 
 ### VelesQL Syntax Reference
 
@@ -449,8 +470,8 @@ Execute a VelesQL query.
 | ORDER BY multi | `ORDER BY col1, col2` | `ORDER BY category, price DESC` |
 | ORDER BY similarity | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(vector, $query) DESC` |
 | JOIN | `JOIN table ON condition` | `JOIN prices ON prices.id = p.id` |
-| LEFT/RIGHT/FULL JOIN | `LEFT JOIN table ON ...` | `LEFT JOIN customers ON ...` |
-| JOIN USING | `JOIN table USING (col)` | `JOIN customers USING (customer_id)` |
+| LEFT/RIGHT/FULL JOIN | `LEFT JOIN table ON ...` | Parser/spec variants exist, runtime support pending |
+| JOIN USING | `JOIN table USING (col)` | Parser support only, runtime support pending |
 | UNION | `query1 UNION query2` | `SELECT * FROM a UNION SELECT * FROM b` |
 | INTERSECT | `query1 INTERSECT query2` | Set intersection |
 | EXCEPT | `query1 EXCEPT query2` | Set difference |
@@ -487,6 +508,36 @@ LIMIT 20
 SELECT * FROM active_users 
 UNION 
 SELECT * FROM archived_users
+```
+
+### POST /collections/:name/match
+
+Execute collection-scoped graph `MATCH` queries.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| query | string | Yes | VelesQL `MATCH ... RETURN ...` query |
+| params | object | No | Named query params |
+| vector | array[float] | No | Optional vector for similarity scoring |
+| threshold | float | No | Similarity threshold in `[0.0, 1.0]` |
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "bindings": {"doc": 123, "author": 456},
+      "score": 0.95,
+      "depth": 1,
+      "projected": {"author.name": "John Doe"}
+    }
+  ],
+  "took_ms": 15,
+  "count": 1,
+  "meta": {"velesql_contract_version": "2.1.0"}
+}
 ```
 
 ---

@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Canonical VelesQL contract version for REST responses.
+pub const VELESQL_CONTRACT_VERSION: &str = "2.1.0";
+
 // ============================================================================
 // Collection Types
 // ============================================================================
@@ -275,6 +278,10 @@ pub struct QueryRequest {
     /// Named parameters for the query.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+    /// Optional collection name.
+    /// Required for top-level MATCH queries executed via `/query`.
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 /// Query type for unified /query endpoint (EPIC-052 US-006).
@@ -298,8 +305,21 @@ pub struct QueryResponse {
     pub results: Vec<SearchResultResponse>,
     /// Query execution time in milliseconds.
     pub timing_ms: f64,
+    /// Query execution time in whole milliseconds (compat helper for API clients).
+    pub took_ms: u64,
     /// Number of rows returned.
     pub rows_returned: usize,
+    /// Query response metadata (contracted fields for SDK parity).
+    pub meta: QueryResponseMeta,
+}
+
+/// Metadata section for VelesQL query responses.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QueryResponseMeta {
+    /// VelesQL contract version used by this response.
+    pub velesql_contract_version: String,
+    /// Number of rows in `results`.
+    pub count: usize,
 }
 
 /// Unified response from /query endpoint (EPIC-052 US-006).
@@ -429,6 +449,27 @@ pub struct QueryErrorDetail {
     pub position: usize,
     /// Fragment of query around error.
     pub query: String,
+}
+
+/// Standardized VelesQL semantic/runtime error payload.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VelesqlErrorDetail {
+    /// Stable machine-readable error code.
+    pub code: String,
+    /// Human-readable error message.
+    pub message: String,
+    /// Actionable hint for developers.
+    pub hint: String,
+    /// Optional additional details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+/// Standardized VelesQL semantic/runtime error response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VelesqlErrorResponse {
+    /// Error details.
+    pub error: VelesqlErrorDetail,
 }
 
 // ============================================================================

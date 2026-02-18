@@ -475,7 +475,7 @@ curl -X POST http://localhost:8080/query \
 **VelesQL v2.0 Features:**
 - `GROUP BY` / `HAVING` with AND/OR operators
 - `ORDER BY` multi-column + `similarity()` function
-- `JOIN` with aliases across collections
+- `JOIN ... ON` across collections (inner join runtime support)
 - `UNION` / `INTERSECT` / `EXCEPT` set operations
 - `USING FUSION(strategy='rrf')` hybrid search
 - `WITH (max_groups=100)` query-time config
@@ -492,7 +492,8 @@ SELECT * FROM docs USING FUSION(strategy='rrf', k=60) LIMIT 20
 SELECT * FROM active UNION SELECT * FROM archived
 ```
 
-> **Note:** ColumnStore operations (INSERT, UPDATE, SELECT on structured data) are performed via the `/query` endpoint using VelesQL syntax.
+> **Note:** ColumnStore operations (INSERT, UPDATE, SELECT on structured data) are performed via the `/query` endpoint using VelesQL syntax.  
+> For top-level `MATCH` on `/query`, include `collection` in the JSON body (or use `/collections/{name}/match`).
 
 ### Health
 

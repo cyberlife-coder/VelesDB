@@ -19,12 +19,20 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | WITH clause | ✅ Stable | 1.0 |
 | ORDER BY | ✅ Stable | 2.0 |
 | GROUP BY, HAVING | ✅ Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL) | ✅ Stable | 2.0 |
+| JOIN (INNER ... ON) | ✅ Stable | 2.0 |
+| JOIN (LEFT, RIGHT, FULL) | ⚠️ Partial (parser/spec) | 2.0 |
+| JOIN USING | ⚠️ Parsed, runtime pending | 2.0 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
 | USING FUSION | ✅ Stable | 2.0 |
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
 | MATCH graph traversal | ✅ Stable | 2.1 |
 | Table aliases | 🔜 Planned | - |
+
+### REST Contract Notes
+
+- `/query` supports top-level `MATCH`, but request body must include `collection`.
+- `/collections/{name}/match` is the collection-scoped graph endpoint.
+- Canonical payload contract: `docs/reference/VELESQL_CONTRACT.md`.
 
 ## Basic Syntax
 
