@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 2.0.0 | **Last Updated**: 2026-01-26
+**Version**: 2.1.0 | **Last Updated**: 2026-02-18
 
 ## Overview
 
@@ -33,6 +33,9 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 - `/query` supports top-level `MATCH`, but request body must include `collection`.
 - `/collections/{name}/match` is the collection-scoped graph endpoint.
 - Canonical payload contract: `docs/reference/VELESQL_CONTRACT.md`.
+- Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_CASES.md`.
+- Recommended developer syntax for mixed filters:
+  `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
 
 ## Basic Syntax
 

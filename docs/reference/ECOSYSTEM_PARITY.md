@@ -7,6 +7,7 @@ This matrix tracks implementation parity of VelesQL contracts and features acros
 ## Contract Baseline
 
 - Canonical REST contract: `docs/reference/VELESQL_CONTRACT.md`
+- Canonical conformance cases: `docs/reference/VELESQL_CONFORMANCE_CASES.md`
 - Contract version: `2.1.0`
 
 ## Endpoint and Payload Parity
