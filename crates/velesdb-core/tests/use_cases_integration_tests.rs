@@ -810,4 +810,37 @@ mod cross_use_case {
         assert!(!results.is_empty());
         assert_eq!(results[0].point.id, 50);
     }
+
+    #[test]
+    fn test_execute_query_rejects_join_until_cross_store_runtime_is_wired() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db = Database::open(temp_dir.path()).expect("Failed to open database");
+        let collection = create_and_get_collection(&db, "orders", 16, DistanceMetric::Cosine);
+
+        let mut embedding = create_mock_embedding(1, 16);
+        normalize(&mut embedding);
+        collection
+            .upsert(vec![Point::new(
+                1,
+                embedding,
+                Some(json!({"id": 1, "customer_id": 10})),
+            )])
+            .expect("Failed to upsert");
+
+        let parsed = Parser::parse(
+            "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id",
+        )
+        .expect("JOIN query should parse");
+
+        let err = collection
+            .execute_query(&parsed, &std::collections::HashMap::new())
+            .expect_err("JOIN execution must fail fast until runtime wiring is complete");
+
+        assert!(
+            err.to_string()
+                .contains("JOIN clauses are parsed but not yet executable"),
+            "Unexpected error: {}",
+            err
+        );
+    }
 }

@@ -114,6 +114,13 @@ impl Collection {
         }
 
         let stmt = &query.select;
+        if !stmt.joins.is_empty() {
+            return Err(crate::error::Error::Config(
+                "JOIN clauses are parsed but not yet executable through Collection::execute_query"
+                    .to_string(),
+            ));
+        }
+
         // Cap limit to prevent overflow in over-fetch calculations
         let limit = usize::try_from(stmt.limit.unwrap_or(10))
             .unwrap_or(MAX_LIMIT)
