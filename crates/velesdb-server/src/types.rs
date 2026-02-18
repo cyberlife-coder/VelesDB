@@ -278,6 +278,10 @@ pub struct QueryRequest {
     /// Named parameters for the query.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+    /// Optional collection name.
+    /// Required for top-level MATCH queries executed via `/query`.
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 /// Query type for unified /query endpoint (EPIC-052 US-006).
