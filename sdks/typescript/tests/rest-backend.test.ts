@@ -395,4 +395,40 @@ describe('RestBackend', () => {
         .rejects.toThrow(ConnectionError);
     });
   });
+
+  describe('query forwarding', () => {
+    beforeEach(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+      await backend.init();
+      vi.clearAllMocks();
+    });
+
+    it('should forward collection in /query body for MATCH compatibility', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          results: [],
+          timing_ms: 0.1,
+          rows_returned: 0,
+        }),
+      });
+
+      await backend.query('docs', 'MATCH (d:Doc) RETURN d LIMIT 1', {});
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/query',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            query: 'MATCH (d:Doc) RETURN d LIMIT 1',
+            params: {},
+            collection: 'docs',
+          }),
+        })
+      );
+    });
+  });
 });

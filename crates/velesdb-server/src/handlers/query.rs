@@ -52,14 +52,31 @@ pub async fn query(
     };
 
     let select = &parsed.select;
+    let collection_name = if parsed.is_match_query() {
+        match req.collection.as_ref().filter(|name| !name.is_empty()) {
+            Some(name) => name.clone(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "MATCH query via /query requires 'collection' in request body"
+                            .to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        select.from.clone()
+    };
 
-    let collection = match state.db.get_collection(&select.from) {
+    let collection = match state.db.get_collection(&collection_name) {
         Some(c) => c,
         None => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", select.from),
+                    error: format!("Collection '{}' not found", collection_name),
                 }),
             )
                 .into_response()

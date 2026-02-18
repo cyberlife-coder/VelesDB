@@ -1401,6 +1401,110 @@ async fn test_velesql_collection_not_found() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn test_query_match_top_level_requires_collection() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "MATCH (d:Doc) RETURN d LIMIT 1",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_query_match_top_level_with_collection() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "docs_match_query",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/docs_match_query/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"_labels": ["Doc"], "title": "a"}},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"_labels": ["Doc"], "title": "b"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "MATCH (d:Doc) RETURN d LIMIT 1",
+                        "collection": "docs_match_query",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    let results = json["results"].as_array().expect("Not an array");
+    assert_eq!(results.len(), 1);
+}
+
 // =============================================================================
 // Graph E2E Tests (EPIC-011/US-001)
 // =============================================================================
