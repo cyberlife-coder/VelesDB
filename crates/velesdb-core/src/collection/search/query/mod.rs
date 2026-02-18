@@ -91,6 +91,28 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
+        if let Some(match_clause) = query.match_clause.as_ref() {
+            let mut match_results = self.execute_match(match_clause, params)?;
+
+            if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
+                for item in order_by.iter().rev() {
+                    Self::order_match_results(
+                        &mut match_results,
+                        &item.expression,
+                        item.descending,
+                    );
+                }
+            }
+
+            let mut results = self.match_results_to_search_results(match_results)?;
+            if let Some(limit) = match_clause.return_clause.limit {
+                let limit = usize::try_from(limit).unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
+                results.truncate(limit);
+            }
+            return Ok(results);
+        }
+
         let stmt = &query.select;
         // Cap limit to prevent overflow in over-fetch calculations
         let limit = usize::try_from(stmt.limit.unwrap_or(10))

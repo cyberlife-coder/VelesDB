@@ -436,4 +436,83 @@ mod tests {
         assert!(ids.contains(&2), "id=2 should remain");
         assert!(ids.contains(&3), "id=3 should remain");
     }
+
+    #[test]
+    fn test_execute_query_dispatches_top_level_match_query() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
+            },
+            crate::Point {
+                id: 3,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+        collection
+            .add_edge(GraphEdge::new(12, 1, 2, "REL").unwrap())
+            .unwrap();
+
+        let query = "MATCH (d:Doc)-[:REL]->(x:Doc) RETURN x LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+        let results = collection.execute_query(&parsed, &HashMap::new()).unwrap();
+
+        let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids.len(), 1);
+        assert!(
+            ids.contains(&2),
+            "MATCH should return graph traversal target"
+        );
+    }
+
+    #[test]
+    fn test_execute_query_dispatches_top_level_match_with_where_filter() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
+            },
+            crate::Point {
+                id: 3,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+        collection
+            .add_edge(GraphEdge::new(13, 1, 2, "REL").unwrap())
+            .unwrap();
+        collection
+            .add_edge(GraphEdge::new(14, 3, 2, "REL").unwrap())
+            .unwrap();
+
+        let query = "MATCH (d:Doc)-[:REL]->(x:Doc) WHERE d.category = 'tech' RETURN x LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+        let results = collection.execute_query(&parsed, &HashMap::new()).unwrap();
+
+        let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids.len(), 1);
+        assert!(
+            ids.contains(&2),
+            "Only traversal from d.category='tech' should match"
+        );
+    }
 }
