@@ -10,6 +10,25 @@ use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
 impl Parser {
+    fn extract_column_name(pair: &pest::iterators::Pair<'_, Rule>) -> String {
+        if pair.as_rule() != Rule::column_name && pair.as_rule() != Rule::where_column {
+            return extract_identifier(pair);
+        }
+
+        let parts: Vec<String> = pair
+            .clone()
+            .into_inner()
+            .filter(|p| p.as_rule() == Rule::identifier)
+            .map(|p| extract_identifier(&p))
+            .collect();
+
+        if parts.is_empty() {
+            pair.as_str().to_string()
+        } else {
+            parts.join(".")
+        }
+    }
+
     pub(crate) fn parse_where_clause(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
@@ -277,7 +296,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let query = inner
             .next()
@@ -297,7 +316,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let value_list = inner
             .next()
@@ -323,7 +342,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let low = Self::parse_value(
             inner
@@ -348,7 +367,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         // Parse LIKE or ILIKE operator
         let like_op = inner
@@ -380,8 +399,8 @@ impl Parser {
 
         for inner in pair.into_inner() {
             match inner.as_rule() {
-                Rule::identifier => {
-                    column = extract_identifier(&inner);
+                Rule::identifier | Rule::column_name | Rule::where_column => {
+                    column = Self::extract_column_name(&inner);
                 }
                 Rule::not_kw => {
                     has_not = true;
@@ -408,7 +427,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let op_pair = inner
             .next()

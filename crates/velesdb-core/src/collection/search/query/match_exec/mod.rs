@@ -138,7 +138,12 @@ impl Collection {
             for (node_id, bindings) in start_nodes {
                 // Apply WHERE filter if present (EPIC-045 US-002)
                 if let Some(ref where_clause) = match_clause.where_clause {
-                    if !self.evaluate_where_condition(node_id, where_clause, params)? {
+                    if !self.evaluate_where_condition(
+                        node_id,
+                        Some(&bindings),
+                        where_clause,
+                        params,
+                    )? {
                         continue;
                     }
                 }
@@ -209,6 +214,7 @@ impl Collection {
                 if let Some(ref where_clause) = match_clause.where_clause {
                     if !self.evaluate_where_condition(
                         traversal_result.target_id,
+                        Some(&match_result.bindings),
                         where_clause,
                         params,
                     )? {
