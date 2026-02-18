@@ -145,6 +145,7 @@ where_column = { identifier ~ ("." ~ identifier)* }
 
 primary_expr = {
     "(" ~ or_expr ~ ")" |
+    not_expr |
     graph_match_expr |
     similarity_expr |
     vector_fused_search |
@@ -156,6 +157,8 @@ primary_expr = {
     is_null_expr |
     compare_expr
 }
+
+not_expr = { ^"NOT" ~ primary_expr }
 
 // Graph predicate inside SELECT WHERE clause:
 // WHERE ... AND MATCH (a)-[:REL]->(b)

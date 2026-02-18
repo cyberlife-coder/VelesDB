@@ -54,6 +54,7 @@ mod score_fusion_tests;
 mod similarity_filter;
 mod union_query;
 mod validation;
+mod where_eval;
 
 // Re-export for potential external use
 #[allow(unused_imports)]
@@ -141,18 +142,27 @@ impl Collection {
 
         // Get first similarity condition for initial search (if any)
         let first_similarity = similarity_conditions.first().cloned();
+        let has_graph_predicates = !graph_match_predicates.is_empty();
+        let execution_limit = if has_graph_predicates {
+            MAX_LIMIT
+        } else {
+            limit
+        };
 
         // 3. Execute query based on extracted components
         // EPIC-044 US-003: NOT similarity() requires full scan
         if is_not_similarity_query {
             if let Some(ref cond) = stmt.where_clause {
-                let mut results = self.execute_not_similarity_query(cond, params, limit)?;
-                results = self.apply_graph_match_predicates_to_results(
-                    results,
-                    &graph_match_predicates,
-                    params,
-                    stmt.from_alias.as_deref(),
-                )?;
+                let mut results =
+                    self.execute_not_similarity_query(cond, params, execution_limit)?;
+                if has_graph_predicates {
+                    results = self.apply_where_condition_to_results(
+                        results,
+                        cond,
+                        params,
+                        stmt.from_alias.as_deref(),
+                    )?;
+                }
 
                 // Apply ORDER BY if present
                 if let Some(ref order_by) = stmt.order_by {
@@ -166,13 +176,15 @@ impl Collection {
         // EPIC-044 US-002: Union mode for similarity() OR metadata
         if is_union_query {
             if let Some(ref cond) = stmt.where_clause {
-                let mut results = self.execute_union_query(cond, params, limit)?;
-                results = self.apply_graph_match_predicates_to_results(
-                    results,
-                    &graph_match_predicates,
-                    params,
-                    stmt.from_alias.as_deref(),
-                )?;
+                let mut results = self.execute_union_query(cond, params, execution_limit)?;
+                if has_graph_predicates {
+                    results = self.apply_where_condition_to_results(
+                        results,
+                        cond,
+                        params,
+                        stmt.from_alias.as_deref(),
+                    )?;
+                }
 
                 // Apply ORDER BY if present
                 if let Some(ref order_by) = stmt.order_by {
@@ -203,11 +215,13 @@ impl Collection {
 
                 // Increase over-fetch factor for multiple similarity conditions
                 let overfetch_factor = 10 * similarity_conditions.len().max(1);
-                let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
+                let candidates_k = execution_limit
+                    .saturating_mul(overfetch_factor)
+                    .min(MAX_LIMIT);
                 let candidates = self.search(vec, candidates_k)?;
 
                 // EPIC-044 US-001: Apply ALL similarity filters sequentially (cascade)
-                let filter_k = limit.saturating_mul(2);
+                let filter_k = execution_limit.saturating_mul(2);
                 let mut filtered =
                     self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
 
@@ -243,7 +257,7 @@ impl Collection {
                                 Some(p) => filter.matches(p),
                                 None => filter.matches(&serde_json::Value::Null),
                             })
-                            .take(limit)
+                            .take(execution_limit)
                             .collect()
                     } else {
                         filtered
@@ -266,11 +280,13 @@ impl Collection {
 
                 // 1. NEAR finds candidates (overfetch for filtering headroom)
                 let overfetch_factor = 10 * similarity_conditions.len().max(1);
-                let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
+                let candidates_k = execution_limit
+                    .saturating_mul(overfetch_factor)
+                    .min(MAX_LIMIT);
                 let candidates = self.search(vector, candidates_k)?;
 
                 // 2. EPIC-044 US-001: Apply ALL similarity filters sequentially (cascade)
-                let filter_k = limit.saturating_mul(2);
+                let filter_k = execution_limit.saturating_mul(2);
                 let mut filtered = self
                     .filter_by_similarity(candidates, field, sim_vec, *op, *threshold, filter_k);
 
@@ -306,7 +322,7 @@ impl Collection {
                                 Some(p) => filter.matches(p),
                                 None => filter.matches(&serde_json::Value::Null),
                             })
-                            .take(limit)
+                            .take(execution_limit)
                             .collect()
                     } else {
                         filtered
@@ -319,25 +335,25 @@ impl Collection {
                 // Check if condition contains MATCH for hybrid search
                 if let Some(text_query) = Self::extract_match_query(cond) {
                     // Hybrid search: NEAR + MATCH
-                    self.hybrid_search(vector, &text_query, limit, None)?
+                    self.hybrid_search(vector, &text_query, execution_limit, None)?
                 } else {
                     // Vector search with metadata filter (graph predicates handled separately)
                     if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
                         let filter = crate::filter::Filter::new(crate::filter::Condition::from(
                             metadata_cond,
                         ));
-                        self.search_with_filter(vector, limit, &filter)?
+                        self.search_with_filter(vector, execution_limit, &filter)?
                     } else {
-                        self.search(vector, limit)?
+                        self.search(vector, execution_limit)?
                     }
                 }
             }
             (Some(vector), _, None) => {
                 // Pure vector search
                 if let Some(ef) = ef_search {
-                    self.search_with_ef(vector, limit, ef)?
+                    self.search_with_ef(vector, execution_limit, ef)?
                 } else {
-                    self.search(vector, limit)?
+                    self.search(vector, execution_limit)?
                 }
             }
             (None, None, Some(ref cond)) => {
@@ -345,7 +361,7 @@ impl Collection {
                 // If it's a MATCH condition, use text search
                 if let crate::velesql::Condition::Match(ref m) = cond {
                     // Pure text search - no filter needed
-                    self.text_search(&m.query, limit)
+                    self.text_search(&m.query, execution_limit)
                 } else {
                     // Generic metadata filter: perform a scan (fallback).
                     // If condition only contains graph predicates, scan all then graph-filter.
@@ -353,13 +369,13 @@ impl Collection {
                         let filter = crate::filter::Filter::new(crate::filter::Condition::from(
                             metadata_cond,
                         ));
-                        self.execute_scan_query(&filter, limit)
+                        self.execute_scan_query(&filter, execution_limit)
                     } else {
                         self.execute_scan_query(
                             &crate::filter::Filter::new(crate::filter::Condition::And {
                                 conditions: vec![],
                             }),
-                            limit,
+                            execution_limit,
                         )
                     }
                 }
@@ -370,17 +386,21 @@ impl Collection {
                     &crate::filter::Filter::new(crate::filter::Condition::And {
                         conditions: vec![],
                     }),
-                    limit,
+                    execution_limit,
                 )
             }
         };
 
-        results = self.apply_graph_match_predicates_to_results(
-            results,
-            &graph_match_predicates,
-            params,
-            stmt.from_alias.as_deref(),
-        )?;
+        if has_graph_predicates {
+            if let Some(cond) = stmt.where_clause.as_ref() {
+                results = self.apply_where_condition_to_results(
+                    results,
+                    cond,
+                    params,
+                    stmt.from_alias.as_deref(),
+                )?;
+            }
+        }
 
         // EPIC-052 US-001: Apply DISTINCT deduplication if requested
         if stmt.distinct == crate::velesql::DistinctMode::All {
@@ -398,30 +418,7 @@ impl Collection {
         Ok(results)
     }
 
-    fn apply_graph_match_predicates_to_results(
-        &self,
-        results: Vec<SearchResult>,
-        predicates: &[crate::velesql::GraphMatchPredicate],
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        from_alias: Option<&str>,
-    ) -> Result<Vec<SearchResult>> {
-        if predicates.is_empty() {
-            return Ok(results);
-        }
-
-        let anchor_sets: Vec<HashSet<u64>> = predicates
-            .iter()
-            .map(|p| self.evaluate_graph_match_anchor_ids(p, params, from_alias))
-            .collect::<Result<Vec<_>>>()?;
-
-        let filtered = results
-            .into_iter()
-            .filter(|r| anchor_sets.iter().all(|set| set.contains(&r.point.id)))
-            .collect();
-        Ok(filtered)
-    }
-
-    fn evaluate_graph_match_anchor_ids(
+    pub(crate) fn evaluate_graph_match_anchor_ids(
         &self,
         predicate: &crate::velesql::GraphMatchPredicate,
         params: &std::collections::HashMap<String, serde_json::Value>,

@@ -10,6 +10,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::collection::graph::GraphEdge;
     use crate::collection::types::Collection;
     use crate::distance::DistanceMetric;
     use crate::velesql::Parser;
@@ -362,5 +363,77 @@ mod tests {
         // We just verify it doesn't crash and returns all results
         let results = result.unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_select_where_or_graph_match_preserves_boolean_semantics() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
+            },
+            crate::Point {
+                id: 3,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+        collection
+            .add_edge(GraphEdge::new(10, 1, 2, "REL").unwrap())
+            .unwrap();
+
+        let query = "SELECT * FROM test AS d WHERE category = 'science' OR MATCH (d:Doc)-[:REL]->(x:Doc) LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+        let results = collection.execute_query(&parsed, &HashMap::new()).unwrap();
+
+        let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+        assert!(ids.contains(&1), "id=1 should match graph predicate");
+        assert!(ids.contains(&2), "id=2 should match metadata predicate");
+        assert!(!ids.contains(&3), "id=3 should match neither predicate");
+    }
+
+    #[test]
+    fn test_select_where_not_graph_match_preserves_boolean_semantics() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"tech"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"science"})),
+            },
+            crate::Point {
+                id: 3,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"_labels":["Doc"], "category":"other"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+        collection
+            .add_edge(GraphEdge::new(11, 1, 2, "REL").unwrap())
+            .unwrap();
+
+        let query = "SELECT * FROM test AS d WHERE NOT (MATCH (d:Doc)-[:REL]->(x:Doc)) LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+        let results = collection.execute_query(&parsed, &HashMap::new()).unwrap();
+
+        let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+        assert!(!ids.contains(&1), "id=1 should be excluded by NOT MATCH");
+        assert!(ids.contains(&2), "id=2 should remain");
+        assert!(ids.contains(&3), "id=3 should remain");
     }
 }

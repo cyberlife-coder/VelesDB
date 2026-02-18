@@ -200,6 +200,17 @@ fn test_parse_select_where_and_graph_match_predicate() {
     }
 }
 
+#[test]
+fn test_parse_select_where_not_graph_match_predicate() {
+    let query = Parser::parse("SELECT * FROM docs WHERE NOT MATCH (d)-[:REL]->(x)").expect("parse");
+    match query.select.where_clause {
+        Some(Condition::Not(inner)) => {
+            assert!(matches!(*inner, Condition::GraphMatch(_)));
+        }
+        _ => panic!("Expected NOT(GraphMatch) condition"),
+    }
+}
+
 // ========== IN/BETWEEN/LIKE tests ==========
 
 #[test]

@@ -91,6 +91,14 @@ impl Parser {
                 let cond = Self::parse_or_expr(inner)?;
                 Ok(Condition::Group(Box::new(cond)))
             }
+            Rule::not_expr => {
+                let nested = inner
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| ParseError::syntax(0, "", "Expected expression after NOT"))?;
+                let cond = Self::parse_primary_expr(nested)?;
+                Ok(Condition::Not(Box::new(cond)))
+            }
             Rule::similarity_expr => Self::parse_similarity_expr(inner),
             Rule::graph_match_expr => Self::parse_graph_match_expr(inner),
             Rule::vector_fused_search => Self::parse_vector_fused_search(inner),
