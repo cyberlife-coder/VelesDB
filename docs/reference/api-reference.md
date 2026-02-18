@@ -510,6 +510,36 @@ UNION
 SELECT * FROM archived_users
 ```
 
+### POST /collections/:name/match
+
+Execute collection-scoped graph `MATCH` queries.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| query | string | Yes | VelesQL `MATCH ... RETURN ...` query |
+| params | object | No | Named query params |
+| vector | array[float] | No | Optional vector for similarity scoring |
+| threshold | float | No | Similarity threshold in `[0.0, 1.0]` |
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "bindings": {"doc": 123, "author": 456},
+      "score": 0.95,
+      "depth": 1,
+      "projected": {"author.name": "John Doe"}
+    }
+  ],
+  "took_ms": 15,
+  "count": 1,
+  "meta": {"velesql_contract_version": "2.1.0"}
+}
+```
+
 ---
 
 ## EXPLAIN (Query Plan)

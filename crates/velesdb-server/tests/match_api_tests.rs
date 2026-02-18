@@ -36,7 +36,8 @@ fn test_match_response_json_format() {
             }
         ],
         "took_ms": 15,
-        "count": 1
+        "count": 1,
+        "meta": {"velesql_contract_version": "2.1.0"}
     });
 
     let results = response["results"].as_array().unwrap();
@@ -101,7 +102,8 @@ fn test_match_response_multiple_results() {
             {"bindings": {"a": 3}, "score": 0.90, "depth": 0, "projected": {}}
         ],
         "took_ms": 25,
-        "count": 3
+        "count": 3,
+        "meta": {"velesql_contract_version": "2.1.0"}
     });
 
     assert_eq!(response["count"].as_u64().unwrap(), 3);
@@ -121,7 +123,8 @@ fn test_match_response_empty_results() {
     let response = json!({
         "results": [],
         "took_ms": 5,
-        "count": 0
+        "count": 0,
+        "meta": {"velesql_contract_version": "2.1.0"}
     });
 
     assert_eq!(response["results"].as_array().unwrap().len(), 0);
@@ -133,7 +136,8 @@ fn test_match_response_empty_results() {
 fn test_match_error_response_format() {
     let error = json!({
         "error": "Collection 'nonexistent' not found",
-        "code": "COLLECTION_NOT_FOUND"
+        "code": "COLLECTION_NOT_FOUND",
+        "hint": "Create the collection first or correct the collection name in the route"
     });
 
     assert!(error["error"].as_str().unwrap().contains("not found"));
@@ -145,7 +149,8 @@ fn test_match_error_response_format() {
 fn test_match_parse_error_response() {
     let error = json!({
         "error": "Parse error: Expected MATCH clause",
-        "code": "PARSE_ERROR"
+        "code": "PARSE_ERROR",
+        "hint": "Check MATCH syntax and bound parameters"
     });
 
     assert!(error["error"].as_str().unwrap().contains("Parse error"));
@@ -157,7 +162,8 @@ fn test_match_parse_error_response() {
 fn test_match_not_match_query_error() {
     let error = json!({
         "error": "Query is not a MATCH query",
-        "code": "NOT_MATCH_QUERY"
+        "code": "NOT_MATCH_QUERY",
+        "hint": "Use MATCH (...) RETURN ... or call /query for SELECT statements"
     });
 
     assert_eq!(error["code"], "NOT_MATCH_QUERY");

@@ -46,6 +46,26 @@ Success response shape:
 
 Collection-scoped endpoint for graph `MATCH` queries.
 
+Success response shape:
+
+```json
+{
+  "results": [
+    {
+      "bindings": { "a": 1, "b": 2 },
+      "score": 0.91,
+      "depth": 1,
+      "projected": { "a.name": "Alice" }
+    }
+  ],
+  "took_ms": 4,
+  "count": 1,
+  "meta": {
+    "velesql_contract_version": "2.1.0"
+  }
+}
+```
+
 ## Standard Error Model (VelesQL)
 
 Semantic/runtime errors for VelesQL endpoints use:
@@ -71,6 +91,8 @@ Current codes:
 - `VELESQL_COLLECTION_NOT_FOUND`
 - `VELESQL_EXECUTION_ERROR`
 - `VELESQL_AGGREGATION_ERROR`
+
+`/collections/{name}/match` keeps compatibility fields (`error`, `code`) and now also returns `hint` and optional `details`.
 
 Syntax errors still use parser-specific payload (`QueryErrorResponse` with `type/message/position/query`).
 

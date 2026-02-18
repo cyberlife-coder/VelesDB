@@ -70,7 +70,7 @@ VelesDB provides a complete ecosystem of SDKs and integrations:
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| [Ecosystem Sync Report](./ecosystem-sync.md) | **Overview** | Feature parity matrix across all components |
+| [Ecosystem Sync Report](./reference/ECOSYSTEM_PARITY.md) | **Overview** | Feature parity matrix across all components |
 | [velesdb-core](../crates/velesdb-core/README.md) | Core | Rust core library |
 | [velesdb-server](../crates/velesdb-server/README.md) | Server | REST API server |
 | [velesdb-cli](../crates/velesdb-cli/README.md) | CLI | Command-line interface & REPL |
