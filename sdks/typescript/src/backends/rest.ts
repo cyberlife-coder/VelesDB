@@ -115,8 +115,15 @@ export class RestBackend implements IVelesDBBackend {
     }
 
     const payload = data as Record<string, unknown>;
-    const code = typeof payload.code === 'string' ? payload.code : undefined;
-    const messageField = payload.message ?? payload.error;
+    const nestedError =
+      payload.error && typeof payload.error === 'object'
+        ? (payload.error as Record<string, unknown>)
+        : undefined;
+
+    const codeField = nestedError?.code ?? payload.code;
+    const code = typeof codeField === 'string' ? codeField : undefined;
+
+    const messageField = nestedError?.message ?? payload.message ?? payload.error;
     const message = typeof messageField === 'string' ? messageField : undefined;
     return { code, message };
   }

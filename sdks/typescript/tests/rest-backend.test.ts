@@ -386,6 +386,25 @@ describe('RestBackend', () => {
         .rejects.toThrow(VelesDBError);
     });
 
+    it('should handle nested velesql error payload', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        json: () =>
+          Promise.resolve({
+            error: {
+              code: 'VELESQL_MISSING_COLLECTION',
+              message: 'MATCH query via /query requires `collection` in request body',
+              hint: 'Add collection',
+            },
+          }),
+      });
+
+      await expect(backend.query('docs', 'MATCH (d:Doc) RETURN d LIMIT 1', {})).rejects.toThrow(
+        VelesDBError
+      );
+    });
+
     it('should handle timeout', async () => {
       const abortError = new Error('Aborted');
       abortError.name = 'AbortError';

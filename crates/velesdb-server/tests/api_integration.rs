@@ -384,7 +384,10 @@ async fn test_velesql_query() {
 
     assert!(json["results"].is_array());
     assert!(json["timing_ms"].is_number());
+    assert!(json["took_ms"].is_number());
     assert!(json["rows_returned"].is_number());
+    assert_eq!(json["meta"]["velesql_contract_version"], "2.1.0");
+    assert!(json["meta"]["count"].is_number());
 }
 
 #[tokio::test]
@@ -1424,7 +1427,14 @@ async fn test_query_match_top_level_requires_collection() {
         .await
         .expect("Request failed");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    assert_eq!(json["error"]["code"], "VELESQL_MISSING_COLLECTION");
+    assert!(json["error"]["hint"].is_string());
 }
 
 #[tokio::test]
@@ -1504,7 +1514,6 @@ async fn test_query_match_top_level_with_collection() {
     let results = json["results"].as_array().expect("Not an array");
     assert_eq!(results.len(), 1);
 }
-
 // =============================================================================
 // Graph E2E Tests (EPIC-011/US-001)
 // =============================================================================

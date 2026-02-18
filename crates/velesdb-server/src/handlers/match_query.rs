@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::types::VELESQL_CONTRACT_VERSION;
 use crate::AppState;
 
 /// Request body for MATCH query execution.
@@ -55,6 +56,15 @@ pub struct MatchQueryResponse {
     pub took_ms: u64,
     /// Number of results.
     pub count: usize,
+    /// Response metadata.
+    pub meta: MatchQueryMeta,
+}
+
+/// Metadata section for MATCH query responses.
+#[derive(Debug, Serialize)]
+pub struct MatchQueryMeta {
+    /// VelesQL contract version used by this response.
+    pub velesql_contract_version: String,
 }
 
 /// Error response for MATCH query.
@@ -64,6 +74,12 @@ pub struct MatchQueryError {
     pub error: String,
     /// Error code.
     pub code: String,
+    /// Actionable hint for developers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Optional details for diagnostics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 /// Execute a MATCH query on a collection.
@@ -96,14 +112,25 @@ pub async fn match_query(
 ) -> Result<Json<MatchQueryResponse>, (StatusCode, Json<MatchQueryError>)> {
     let start = std::time::Instant::now();
 
+    let mk_error = |error: String, code: &str, hint: &str, details: Option<serde_json::Value>| {
+        Json(MatchQueryError {
+            error,
+            code: code.to_string(),
+            hint: Some(hint.to_string()),
+            details,
+        })
+    };
+
     // Get collection
     let collection = state.db.get_collection(&collection_name).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(MatchQueryError {
-                error: format!("Collection '{}' not found", collection_name),
-                code: "COLLECTION_NOT_FOUND".to_string(),
-            }),
+            mk_error(
+                format!("Collection '{}' not found", collection_name),
+                "COLLECTION_NOT_FOUND",
+                "Create the collection first or correct the collection name in the route",
+                Some(serde_json::json!({ "collection": collection_name })),
+            ),
         )
     })?;
 
@@ -111,10 +138,12 @@ pub async fn match_query(
     let query = velesdb_core::velesql::Parser::parse(&request.query).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(MatchQueryError {
-                error: format!("Parse error: {}", e),
-                code: "PARSE_ERROR".to_string(),
-            }),
+            mk_error(
+                format!("Parse error: {}", e),
+                "PARSE_ERROR",
+                "Check MATCH syntax and bound parameters",
+                None,
+            ),
         )
     })?;
 
@@ -122,10 +151,12 @@ pub async fn match_query(
     let match_clause = query.match_clause.ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(MatchQueryError {
-                error: "Query is not a MATCH query".to_string(),
-                code: "NOT_MATCH_QUERY".to_string(),
-            }),
+            mk_error(
+                "Query is not a MATCH query".to_string(),
+                "NOT_MATCH_QUERY",
+                "Use MATCH (...) RETURN ... or call /query for SELECT statements",
+                None,
+            ),
         )
     })?;
 
@@ -134,13 +165,15 @@ pub async fn match_query(
         if !(0.0..=1.0).contains(&threshold) {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(MatchQueryError {
-                    error: format!(
+                mk_error(
+                    format!(
                         "Invalid threshold: {}. Must be between 0.0 and 1.0",
                         threshold
                     ),
-                    code: "INVALID_THRESHOLD".to_string(),
-                }),
+                    "INVALID_THRESHOLD",
+                    "Provide threshold in inclusive range [0.0, 1.0]",
+                    Some(serde_json::json!({ "threshold": threshold })),
+                ),
             ));
         }
     }
@@ -153,10 +186,12 @@ pub async fn match_query(
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(MatchQueryError {
-                        error: format!("Execution error: {}", e),
-                        code: "EXECUTION_ERROR".to_string(),
-                    }),
+                    mk_error(
+                        format!("Execution error: {}", e),
+                        "EXECUTION_ERROR",
+                        "Validate graph labels/properties and parameter types for this collection",
+                        None,
+                    ),
                 )
             })?
     } else {
@@ -165,10 +200,12 @@ pub async fn match_query(
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(MatchQueryError {
-                        error: format!("Execution error: {}", e),
-                        code: "EXECUTION_ERROR".to_string(),
-                    }),
+                    mk_error(
+                        format!("Execution error: {}", e),
+                        "EXECUTION_ERROR",
+                        "Validate graph labels/properties and parameter types for this collection",
+                        None,
+                    ),
                 )
             })?
     };
@@ -191,6 +228,9 @@ pub async fn match_query(
         results: result_items,
         took_ms,
         count,
+        meta: MatchQueryMeta {
+            velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+        },
     }))
 }
 
@@ -221,6 +261,9 @@ mod tests {
             }],
             took_ms: 15,
             count: 1,
+            meta: MatchQueryMeta {
+                velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+            },
         };
 
         let json = serde_json::to_string(&response).unwrap();
@@ -242,6 +285,9 @@ mod tests {
             }],
             took_ms: 10,
             count: 1,
+            meta: MatchQueryMeta {
+                velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+            },
         };
 
         let json = serde_json::to_string(&response).unwrap();

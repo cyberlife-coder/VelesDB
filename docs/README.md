@@ -34,6 +34,7 @@ In-depth technical documentation:
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
 | [VelesQL Specification](./reference/VELESQL_SPEC.md) | Query language grammar and syntax |
+| [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [REST API](./reference/api-reference.md) | HTTP API endpoints |
 | [SIMD Performance](./reference/SIMD_PERFORMANCE.md) | SIMD optimizations and benchmarks |
 
@@ -69,7 +70,7 @@ VelesDB provides a complete ecosystem of SDKs and integrations:
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| [Ecosystem Sync Report](./ecosystem-sync.md) | **Overview** | Feature parity matrix across all components |
+| [Ecosystem Sync Report](./reference/ECOSYSTEM_PARITY.md) | **Overview** | Feature parity matrix across all components |
 | [velesdb-core](../crates/velesdb-core/README.md) | Core | Rust core library |
 | [velesdb-server](../crates/velesdb-server/README.md) | Server | REST API server |
 | [velesdb-cli](../crates/velesdb-cli/README.md) | CLI | Command-line interface & REPL |
