@@ -34,6 +34,7 @@ In-depth technical documentation:
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
 | [VelesQL Specification](./reference/VELESQL_SPEC.md) | Query language grammar and syntax |
+| [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [REST API](./reference/api-reference.md) | HTTP API endpoints |
 | [SIMD Performance](./reference/SIMD_PERFORMANCE.md) | SIMD optimizations and benchmarks |
 

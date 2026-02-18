@@ -730,6 +730,7 @@ LIMIT 10
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `JOIN ... ON` | ✅ Supported | Basic inner join |
+| `JOIN ... USING (...)` | ⚠️ Partial | Parser support; runtime execution not yet supported |
 | `GROUP BY` | ✅ Supported | With aggregates |
 | `HAVING` | ✅ Supported | AND/OR operators |
 | `ORDER BY` | ✅ Supported | Columns, similarity() |
@@ -740,7 +741,7 @@ LIMIT 10
 ### Planned Features (Roadmap)
 
 - `LEFT/RIGHT/FULL OUTER JOIN`
-- `JOIN USING (column)`
+- Full runtime execution for `JOIN USING (column)`
 - `ORDER BY` with aggregates
 - `EXPLAIN` for query analysis
 - Prepared query caching
