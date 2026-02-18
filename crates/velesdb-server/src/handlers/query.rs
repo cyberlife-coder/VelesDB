@@ -81,27 +81,6 @@ pub async fn query(
         select.from.clone()
     };
 
-    let collection = match state.db.get_collection(&collection_name) {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(VelesqlErrorResponse {
-                    error: VelesqlErrorDetail {
-                        code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
-                        message: format!("Collection '{}' not found", collection_name),
-                        hint: "Create the collection first or correct the collection name"
-                            .to_string(),
-                        details: Some(serde_json::json!({
-                            "collection": collection_name
-                        })),
-                    },
-                }),
-            )
-                .into_response()
-        }
-    };
-
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
     let is_aggregation = matches!(
         &select.columns,
@@ -109,6 +88,26 @@ pub async fn query(
     ) || select.group_by.is_some();
 
     if is_aggregation {
+        let collection = match state.db.get_collection(&collection_name) {
+            Some(c) => c,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(VelesqlErrorResponse {
+                        error: VelesqlErrorDetail {
+                            code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
+                            message: format!("Collection '{}' not found", collection_name),
+                            hint: "Create the collection first or correct the collection name"
+                                .to_string(),
+                            details: Some(serde_json::json!({
+                                "collection": collection_name
+                            })),
+                        },
+                    }),
+                )
+                    .into_response()
+            }
+        };
         // Route to aggregation execution
         let result =
             match collection.execute_aggregate(&parsed, &req.params) {
@@ -132,8 +131,8 @@ pub async fn query(
         return Json(AggregationResponse { result, timing_ms }).into_response();
     }
 
-    // Standard query execution
-    let results = match collection.execute_query(&parsed, &req.params) {
+    // Standard query execution (database-level for cross-collection JOIN support)
+    let results = match state.db.execute_query(&parsed, &req.params) {
         Ok(r) => r,
         Err(e) => return (
             StatusCode::UNPROCESSABLE_ENTITY,

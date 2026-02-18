@@ -198,7 +198,7 @@ pub fn execute_join(
 /// path relies on a single primary key lookup.
 fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
     if let Some(condition) = &join.condition {
-        return Some(condition.clone());
+        return Some(normalize_join_condition(condition, join));
     }
 
     let Some(using_columns) = &join.using_columns else {
@@ -229,6 +229,27 @@ fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
             column: join_column,
         },
     })
+}
+
+/// Normalizes ON condition so that `left` refers to the joined table and `right`
+/// refers to the current result set side.
+fn normalize_join_condition(condition: &JoinCondition, join: &JoinClause) -> JoinCondition {
+    let is_join_side = |table: Option<&str>| {
+        table.is_some_and(|t| t == join.table || join.alias.as_deref().is_some_and(|a| a == t))
+    };
+
+    if is_join_side(condition.left.table.as_deref()) {
+        return condition.clone();
+    }
+
+    if is_join_side(condition.right.table.as_deref()) {
+        return JoinCondition {
+            left: condition.right.clone(),
+            right: condition.left.clone(),
+        };
+    }
+
+    condition.clone()
 }
 
 /// Batch get rows from ColumnStore by primary keys.
