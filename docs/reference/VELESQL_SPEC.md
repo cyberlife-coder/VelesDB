@@ -1,6 +1,6 @@
 # VelesQL Language Specification
 
-*Version 2.0.0 — January 2026*
+*Version 2.1.0 — February 2026*
 
 VelesQL is a **SQL-like query language** designed specifically for vector search operations. If you know SQL, you already know VelesQL.
 
@@ -48,6 +48,13 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
 | ORDER BY | ✅ | ✅ Columns & similarity (v2.0) |
 | UNION/INTERSECT/EXCEPT | ✅ | ✅ Set operations (v2.0) |
 | Subqueries | ✅ | ❌ Not supported |
+
+### Contract Alignment Notes
+
+- Canonical REST contract: `docs/reference/VELESQL_CONTRACT.md`
+- Conformance matrix: `docs/reference/VELESQL_CONFORMANCE_CASES.md`
+- Supported hybrid predicate syntax for developer ergonomics:
+  `SELECT ... FROM <collection> WHERE <predicates> AND MATCH (...)`
 
 ---
 

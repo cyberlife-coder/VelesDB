@@ -5,6 +5,10 @@ Canonical contract for VelesQL server endpoints and payloads.
 - Contract version: `2.1.0`
 - Last updated: `2026-02-18`
 
+This document is the normative REST contract baseline for VelesQL.
+When behavior differs between docs and runtime, runtime must be fixed or this
+document must be updated in the same PR.
+
 ## Endpoints
 
 ### `POST /query`
@@ -26,6 +30,8 @@ Rules:
 - `collection` is optional for `SELECT ... FROM <collection> ...`.
 - `collection` is mandatory for top-level `MATCH (...) ...` sent to `/query`.
 - For graph-only execution, `/collections/{name}/match` remains supported.
+- `SELECT ... WHERE ... AND MATCH (...)` is supported and does not require
+  `collection` in body when `FROM <collection>` is present.
 
 Success response shape:
 
@@ -95,6 +101,41 @@ Current codes:
 `/collections/{name}/match` keeps compatibility fields (`error`, `code`) and now also returns `hint` and optional `details`.
 
 Syntax errors still use parser-specific payload (`QueryErrorResponse` with `type/message/position/query`).
+
+## Syntax Profiles (Frozen)
+
+These syntax profiles are frozen for this contract version:
+
+- Top-level query: `SELECT ...` or `MATCH (...) ...`
+- Hybrid WHERE predicate: `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`
+- Text predicate: `<field> MATCH 'text'`
+
+Reference grammar:
+
+- `docs/reference/VELESQL_SPEC.md`
+- `docs/VELESQL_SPEC.md`
+
+## Stable vs Experimental
+
+| Capability | Contract state | Runtime state |
+|------------|----------------|---------------|
+| `SELECT ... FROM ... WHERE ...` | Stable | Stable |
+| `SELECT ... WHERE ... AND MATCH (...)` | Stable | Stable |
+| top-level `MATCH (...) RETURN ...` | Stable | Stable |
+| top-level `MATCH` via `/query` with body `collection` | Stable | Stable |
+| `JOIN ... ON` | Stable | Stable |
+| `JOIN ... USING (...)` | Experimental | Parser only |
+| `LEFT/RIGHT/FULL JOIN` | Experimental | Not runtime-ready |
+| `GROUP BY` / `HAVING` | Stable | Stable |
+| `UNION/INTERSECT/EXCEPT` | Stable | Stable |
+
+## Validation Matrix
+
+Contract test cases are listed in:
+
+- `docs/reference/VELESQL_CONFORMANCE_CASES.md`
+
+Each invalid case maps to an expected HTTP status and an expected error shape.
 
 ## Feature Execution Status
 
