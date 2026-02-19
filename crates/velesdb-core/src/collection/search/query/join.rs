@@ -117,6 +117,14 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
 ///
 /// Vector of JoinedResults containing merged data.
 /// Returns empty vector if the join condition's left column doesn't match the primary key.
+///
+/// # Errors
+///
+/// Returns an error when:
+/// - the JOIN type is not supported at runtime,
+/// - the JOIN condition is missing or invalid,
+/// - the target `ColumnStore` has no primary key,
+/// - the JOIN column does not match the target primary key.
 #[allow(clippy::cognitive_complexity)] // Reason: Linear flow with early returns, splitting would reduce readability
 pub fn execute_join(
     results: &[SearchResult],

@@ -280,7 +280,7 @@ impl Database {
         self.collections.read().get(name).cloned()
     }
 
-    /// Executes a VelesQL query with database-level JOIN resolution.
+    /// Executes a `VelesQL` query with database-level JOIN resolution.
     ///
     /// This method resolves JOIN target collections from the database registry
     /// and executes JOIN runtime in sequence.
