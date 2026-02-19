@@ -91,17 +91,16 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        crate::velesql::QueryValidator::validate(query)
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+
         // Unified VelesQL dispatch: allow Collection::execute_query() to run top-level MATCH queries.
         if let Some(match_clause) = query.match_clause.as_ref() {
             let mut match_results = self.execute_match(match_clause, params)?;
 
             if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
                 for item in order_by.iter().rev() {
-                    Self::order_match_results(
-                        &mut match_results,
-                        &item.expression,
-                        item.descending,
-                    );
+                    self.order_match_results(&mut match_results, &item.expression, item.descending);
                 }
             }
 

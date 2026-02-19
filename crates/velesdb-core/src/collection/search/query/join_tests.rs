@@ -129,7 +129,7 @@ fn test_execute_join_basic() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).unwrap();
 
     assert_eq!(joined.len(), 3);
     assert!(joined[0].column_data.contains_key("price"));
@@ -152,7 +152,7 @@ fn test_execute_join_inner_skips_missing() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).unwrap();
     assert_eq!(joined.len(), 2);
 }
 
@@ -162,7 +162,7 @@ fn test_joined_to_search_results() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).unwrap();
     let search_results = joined_to_search_results(joined);
 
     assert_eq!(search_results.len(), 1);
@@ -288,8 +288,8 @@ fn test_execute_join_validates_pk_column() {
 
     let joined = execute_join(&results, &wrong_join, &column_store);
     assert!(
-        joined.is_empty(),
-        "JOIN on non-PK column should not return results silently"
+        joined.is_err(),
+        "JOIN on non-PK column must return an error"
     );
 }
 
@@ -315,7 +315,7 @@ fn test_execute_join_correct_pk_column_works() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &correct_join, &column_store);
+    let joined = execute_join(&results, &correct_join, &column_store).unwrap();
     assert_eq!(joined.len(), 1);
 }
 
@@ -336,7 +336,7 @@ fn test_execute_join_using_single_column_supported() {
         using_columns: Some(vec!["product_id".to_string()]),
     };
 
-    let joined = execute_join(&results, &using_join, &column_store);
+    let joined = execute_join(&results, &using_join, &column_store).unwrap();
     assert_eq!(joined.len(), 2);
     assert!(joined[0].column_data.contains_key("price"));
 }
@@ -359,7 +359,35 @@ fn test_execute_join_using_rejects_multi_column() {
 
     let joined = execute_join(&results, &using_join, &column_store);
     assert!(
-        joined.is_empty(),
-        "USING with multiple columns should be rejected until composite PK join is implemented"
+        joined.is_err(),
+        "USING with multiple columns must return an error"
+    );
+}
+
+#[test]
+fn test_execute_join_rejects_left_join_runtime() {
+    let results = vec![make_search_result(1, 1)];
+    let column_store = make_column_store();
+    let join = JoinClause {
+        join_type: crate::velesql::JoinType::Left,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let joined = execute_join(&results, &join, &column_store);
+    assert!(
+        joined.is_err(),
+        "LEFT JOIN must error until runtime is implemented"
     );
 }

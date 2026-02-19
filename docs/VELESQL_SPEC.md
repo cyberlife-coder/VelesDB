@@ -20,8 +20,8 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | ORDER BY | ✅ Stable | 2.0 |
 | GROUP BY, HAVING | ✅ Stable | 2.0 |
 | JOIN (INNER ... ON) | ✅ Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL) | ⚠️ Partial (parser/spec) | 2.0 |
-| JOIN USING | ⚠️ Parsed, runtime pending | 2.0 |
+| JOIN (LEFT, RIGHT, FULL) | ⚠️ Parsed + explicit runtime error | 2.0 |
+| JOIN USING | ⚠️ Experimental (single-column runtime support) | 2.0 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | ✅ Stable | 2.0 |
 | USING FUSION | ✅ Stable | 2.0 |
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |

@@ -293,6 +293,8 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+
         let base_name = query.select.from.clone();
         let base_collection = self
             .get_collection(&base_name)
@@ -311,8 +313,11 @@ impl Database {
                 .get_collection(&join.table)
                 .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
             let column_store = Self::build_join_column_store(&join_collection)?;
-            let joined =
-                crate::collection::search::query::join::execute_join(&results, join, &column_store);
+            let joined = crate::collection::search::query::join::execute_join(
+                &results,
+                join,
+                &column_store,
+            )?;
             results = crate::collection::search::query::join::joined_to_search_results(joined);
         }
 
@@ -757,5 +762,89 @@ mod tests {
         assert_eq!(results[0].point.id, 1);
         let payload = results[0].point.payload.as_ref().unwrap();
         assert_eq!(payload.get("nickname").unwrap().as_str(), Some("alpha"));
+    }
+
+    #[test]
+    fn test_database_execute_query_rejects_left_join_runtime() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("orders", 2, DistanceMetric::Cosine)
+            .unwrap();
+        db.create_collection("customers", 2, DistanceMetric::Cosine)
+            .unwrap();
+
+        let query = Parser::parse(
+            "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id",
+        )
+        .unwrap();
+        let err = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported in runtime"));
+    }
+
+    #[test]
+    fn test_database_execute_query_rejects_join_using_multi_column() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("orders", 2, DistanceMetric::Cosine)
+            .unwrap();
+        db.create_collection("customers", 2, DistanceMetric::Cosine)
+            .unwrap();
+
+        let query =
+            Parser::parse("SELECT * FROM orders JOIN customers USING (id, customer_id)").unwrap();
+        let err = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap_err();
+        assert!(err.to_string().contains("USING(single_column)"));
+    }
+
+    #[test]
+    fn test_collection_execute_query_match_order_by_property() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("docs", 2, DistanceMetric::Cosine)
+            .unwrap();
+        let docs = db.get_collection("docs").unwrap();
+
+        docs.upsert(vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Charlie"})),
+            ),
+            Point::new(
+                2,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Alice"})),
+            ),
+            Point::new(
+                3,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Bob"})),
+            ),
+        ])
+        .unwrap();
+
+        let query =
+            Parser::parse("MATCH (d:Doc) RETURN d.name ORDER BY d.name ASC LIMIT 3").unwrap();
+        let results = docs
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+
+        let names: Vec<String> = results
+            .iter()
+            .map(|r| {
+                r.point
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(names, vec!["Alice", "Bob", "Charlie"]);
     }
 }

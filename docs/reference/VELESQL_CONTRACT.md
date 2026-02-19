@@ -124,8 +124,8 @@ Reference grammar:
 | top-level `MATCH (...) RETURN ...` | Stable | Stable |
 | top-level `MATCH` via `/query` with body `collection` | Stable | Stable |
 | `JOIN ... ON` | Stable | Stable |
-| `JOIN ... USING (...)` | Experimental | Parser only |
-| `LEFT/RIGHT/FULL JOIN` | Experimental | Not runtime-ready |
+| `JOIN ... USING (...)` | Experimental | Stable for single-column USING |
+| `LEFT/RIGHT/FULL JOIN` | Experimental | Explicit runtime error (`Unsupported`) |
 | `GROUP BY` / `HAVING` | Stable | Stable |
 | `UNION/INTERSECT/EXCEPT` | Stable | Stable |
 
@@ -142,8 +142,8 @@ Each invalid case maps to an expected HTTP status and an expected error shape.
 | Feature | Parser | Executor |
 |---------|--------|----------|
 | `JOIN ... ON` | Supported | Supported (inner join) |
-| `JOIN ... USING (...)` | Supported | Not supported |
-| `LEFT/RIGHT/FULL JOIN` | Parsed in spec variants | Not supported in runtime |
+| `JOIN ... USING (...)` | Supported | Supported for single-column USING |
+| `LEFT/RIGHT/FULL JOIN` | Parsed in spec variants | Rejected with explicit runtime error |
 | `GROUP BY`, `HAVING` | Supported | Supported |
 | `ORDER BY similarity()` | Supported | Supported |
 | `UNION/INTERSECT/EXCEPT` | Supported | Supported |

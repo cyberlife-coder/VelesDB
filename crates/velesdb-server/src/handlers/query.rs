@@ -53,6 +53,21 @@ pub async fn query(
         }
     };
 
+    if let Err(e) = velesql::QueryValidator::validate(&parsed) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(VelesqlErrorResponse {
+                error: VelesqlErrorDetail {
+                    code: "VELESQL_VALIDATION_ERROR".to_string(),
+                    message: e.to_string(),
+                    hint: e.suggestion,
+                    details: None,
+                },
+            }),
+        )
+            .into_response();
+    }
+
     let select = &parsed.select;
     let collection_name = if parsed.is_match_query() {
         match req.collection.as_ref().filter(|name| !name.is_empty()) {
@@ -131,9 +146,39 @@ pub async fn query(
         return Json(AggregationResponse { result, timing_ms }).into_response();
     }
 
-    // Standard query execution (database-level for cross-collection JOIN support)
-    let results = match state.db.execute_query(&parsed, &req.params) {
+    // Standard query execution:
+    // - top-level MATCH executes in requested collection context
+    // - SELECT executes through database-level dispatcher for cross-collection JOIN support
+    let execute_result = if parsed.is_match_query() {
+        match state.db.get_collection(&collection_name) {
+            Some(c) => c.execute_query(&parsed, &req.params),
+            None => Err(velesdb_core::Error::CollectionNotFound(
+                collection_name.clone(),
+            )),
+        }
+    } else {
+        state.db.execute_query(&parsed, &req.params)
+    };
+
+    let results = match execute_result {
         Ok(r) => r,
+        Err(velesdb_core::Error::CollectionNotFound(name)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(VelesqlErrorResponse {
+                    error: VelesqlErrorDetail {
+                        code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
+                        message: format!("Collection '{}' not found", name),
+                        hint: "Create the collection first or correct the collection name"
+                            .to_string(),
+                        details: Some(serde_json::json!({
+                            "collection": name
+                        })),
+                    },
+                }),
+            )
+                .into_response()
+        }
         Err(e) => return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(VelesqlErrorResponse {

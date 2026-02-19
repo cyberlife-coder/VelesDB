@@ -147,6 +147,9 @@ impl Parser {
                         false,
                     ));
                 }
+                Rule::property_access => {
+                    return Ok((OrderByExpr::Field(inner_pair.as_str().to_string()), false))
+                }
                 Rule::identifier => {
                     return Ok((OrderByExpr::Field(extract_identifier(&inner_pair)), false))
                 }

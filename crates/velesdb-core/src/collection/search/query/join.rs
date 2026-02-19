@@ -2,15 +2,13 @@
 //!
 //! This module implements JOIN execution between graph traversal results
 //! and ColumnStore data with adaptive batch sizing.
-//!
-//! Note: Functions in this module are tested but not yet integrated into
-//! execute_query. Integration is planned for future work.
 
 #![allow(dead_code)]
 
 use crate::column_store::ColumnStore;
+use crate::error::{Error, Result};
 use crate::point::SearchResult;
-use crate::velesql::{ColumnRef, JoinClause, JoinCondition};
+use crate::velesql::{ColumnRef, JoinClause, JoinCondition, JoinType};
 use std::collections::HashMap;
 
 /// Result of a JOIN operation, combining graph result with column data.
@@ -124,9 +122,19 @@ pub fn execute_join(
     results: &[SearchResult],
     join: &JoinClause,
     column_store: &ColumnStore,
-) -> Vec<JoinedResult> {
+) -> Result<Vec<JoinedResult>> {
+    if join.join_type != JoinType::Inner {
+        return Err(Error::Query(format!(
+            "JOIN type '{:?}' is parsed but not supported in runtime execution yet. Use INNER JOIN or JOIN.",
+            join.join_type
+        )));
+    }
+
     let Some(condition) = resolve_join_condition(join) else {
-        return Vec::new();
+        return Err(Error::Query(format!(
+            "JOIN on table '{}' must use ON condition or USING(single_column).",
+            join.table
+        )));
     };
 
     // 1. Validate that join column matches ColumnStore's primary key
@@ -134,28 +142,23 @@ pub fn execute_join(
     let join_column = &condition.left.column;
     if let Some(pk_column) = column_store.primary_key_column() {
         if join_column != pk_column {
-            // BUG-003 FIX: Log non-PK join attempt
-            tracing::warn!(
-                "Cannot join on non-primary-key column '{}' (PK is '{}'). Use PK column for JOIN.",
-                join_column,
-                pk_column
-            );
-            return Vec::new();
+            return Err(Error::Query(format!(
+                "JOIN on table '{}' requires primary key '{}', got '{}'.",
+                join.table, pk_column, join_column
+            )));
         }
     } else {
-        // BUG-003 FIX: Log missing PK configuration
-        tracing::warn!(
-            "ColumnStore '{}' has no primary key configured - cannot perform PK-based join",
+        return Err(Error::Query(format!(
+            "JOIN target '{}' has no primary key configured.",
             join.table
-        );
-        return Vec::new();
+        )));
     }
 
     // 2. Extract join keys from search results
     let join_keys = extract_join_keys(results, &condition);
 
     if join_keys.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // 3. Determine adaptive batch size
@@ -185,7 +188,7 @@ pub fn execute_join(
         }
     }
 
-    joined_results
+    Ok(joined_results)
 }
 
 /// Resolves JOIN condition for execution from either `ON` or `USING` syntax.
@@ -202,19 +205,10 @@ fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
     }
 
     let Some(using_columns) = &join.using_columns else {
-        tracing::warn!(
-            "JOIN on table '{}' has neither ON condition nor USING columns",
-            join.table
-        );
         return None;
     };
 
     if using_columns.len() != 1 {
-        tracing::warn!(
-            "JOIN USING on table '{}' supports exactly one column for execution, got {}",
-            join.table,
-            using_columns.len()
-        );
         return None;
     }
 
