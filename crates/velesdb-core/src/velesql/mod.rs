@@ -37,6 +37,8 @@ mod cache_tests;
 mod complex_parser_tests;
 #[cfg(test)]
 mod distinct_tests;
+#[cfg(test)]
+mod dml_tests;
 mod error;
 #[cfg(test)]
 mod error_tests;

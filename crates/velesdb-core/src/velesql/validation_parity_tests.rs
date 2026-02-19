@@ -30,6 +30,7 @@ mod tests {
             },
             compound: None,
             match_clause: None,
+            dml: None,
         }
     }
 

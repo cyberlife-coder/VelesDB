@@ -295,6 +295,10 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
+        if let Some(dml) = query.dml.as_ref() {
+            return self.execute_dml(dml, params);
+        }
+
         let base_name = query.select.from.clone();
         let base_collection = self
             .get_collection(&base_name)
@@ -439,6 +443,248 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    fn execute_dml(
+        &self,
+        dml: &crate::velesql::DmlStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        match dml {
+            crate::velesql::DmlStatement::Insert(stmt) => self.execute_insert(stmt, params),
+            crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
+        }
+    }
+
+    fn execute_insert(
+        &self,
+        stmt: &crate::velesql::InsertStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let collection = self
+            .get_collection(&stmt.table)
+            .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
+
+        let mut id: Option<u64> = None;
+        let mut payload = serde_json::Map::new();
+        let mut vector: Option<Vec<f32>> = None;
+
+        for (column, value_expr) in stmt.columns.iter().zip(&stmt.values) {
+            let resolved = Self::resolve_dml_value(value_expr, params)?;
+            if column == "id" {
+                id = Some(Self::json_to_u64_id(&resolved)?);
+                continue;
+            }
+            if column == "vector" {
+                vector = Some(Self::json_to_vector(&resolved)?);
+                continue;
+            }
+            payload.insert(column.clone(), resolved);
+        }
+
+        let point_id =
+            id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
+        let point = if collection.is_metadata_only() {
+            if vector.is_some() {
+                return Err(Error::Query(
+                    "INSERT on metadata-only collection cannot set 'vector'".to_string(),
+                ));
+            }
+            crate::Point::metadata_only(point_id, serde_json::Value::Object(payload))
+        } else {
+            let vec_value = vector.ok_or_else(|| {
+                Error::Query("INSERT on vector collection requires 'vector' column".to_string())
+            })?;
+            crate::Point::new(
+                point_id,
+                vec_value,
+                Some(serde_json::Value::Object(payload)),
+            )
+        };
+
+        collection.upsert(vec![point.clone()])?;
+        Ok(vec![SearchResult::new(point, 0.0)])
+    }
+
+    fn execute_update(
+        &self,
+        stmt: &crate::velesql::UpdateStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let collection = self
+            .get_collection(&stmt.table)
+            .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
+
+        let assignments = stmt
+            .assignments
+            .iter()
+            .map(|a| Ok((a.column.clone(), Self::resolve_dml_value(&a.value, params)?)))
+            .collect::<Result<Vec<_>>>()?;
+
+        if assignments.iter().any(|(name, _)| name == "id") {
+            return Err(Error::Query(
+                "UPDATE cannot modify primary key column 'id'".to_string(),
+            ));
+        }
+
+        let all_ids = collection.all_ids();
+        let rows = collection.get(&all_ids);
+        let filter = Self::build_update_filter(stmt.where_clause.as_ref())?;
+
+        let mut updated_points = Vec::new();
+        for point in rows.into_iter().flatten() {
+            if !Self::matches_update_filter(&point, filter.as_ref()) {
+                continue;
+            }
+
+            let mut payload_map = point
+                .payload
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+
+            let mut updated_vector = point.vector.clone();
+
+            for (field, value) in &assignments {
+                if field == "vector" {
+                    if collection.is_metadata_only() {
+                        return Err(Error::Query(
+                            "UPDATE on metadata-only collection cannot set 'vector'".to_string(),
+                        ));
+                    }
+                    updated_vector = Self::json_to_vector(value)?;
+                } else {
+                    payload_map.insert(field.clone(), value.clone());
+                }
+            }
+
+            let updated = if collection.is_metadata_only() {
+                crate::Point::metadata_only(point.id, serde_json::Value::Object(payload_map))
+            } else {
+                crate::Point::new(
+                    point.id,
+                    updated_vector,
+                    Some(serde_json::Value::Object(payload_map)),
+                )
+            };
+            updated_points.push(updated);
+        }
+
+        if updated_points.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        collection.upsert(updated_points.clone())?;
+        Ok(updated_points
+            .into_iter()
+            .map(|p| SearchResult::new(p, 0.0))
+            .collect())
+    }
+
+    fn resolve_dml_value(
+        value: &crate::velesql::Value,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        match value {
+            crate::velesql::Value::Integer(v) => Ok(serde_json::json!(v)),
+            crate::velesql::Value::Float(v) => Ok(serde_json::json!(v)),
+            crate::velesql::Value::String(v) => Ok(serde_json::json!(v)),
+            crate::velesql::Value::Boolean(v) => Ok(serde_json::json!(v)),
+            crate::velesql::Value::Null => Ok(serde_json::Value::Null),
+            crate::velesql::Value::Parameter(name) => params
+                .get(name)
+                .cloned()
+                .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}"))),
+            crate::velesql::Value::Temporal(expr) => Ok(serde_json::json!(expr.to_epoch_seconds())),
+            crate::velesql::Value::Subquery(_) => Err(Error::Query(
+                "Subquery values are not supported in INSERT/UPDATE".to_string(),
+            )),
+        }
+    }
+
+    fn json_to_u64_id(value: &serde_json::Value) -> Result<u64> {
+        value
+            .as_i64()
+            .ok_or_else(|| Error::Query("id must be an integer".to_string()))
+            .and_then(|v| u64::try_from(v).map_err(|_| Error::Query("id must be >= 0".to_string())))
+    }
+
+    fn json_to_vector(value: &serde_json::Value) -> Result<Vec<f32>> {
+        let arr = value
+            .as_array()
+            .ok_or_else(|| Error::Query("'vector' must be an array of numbers".to_string()))?;
+        let mut out = Vec::with_capacity(arr.len());
+        for v in arr {
+            let f = v
+                .as_f64()
+                .ok_or_else(|| Error::Query("vector values must be numeric".to_string()))?;
+            if !f.is_finite() || f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
+                return Err(Error::Query(
+                    "vector values must be finite f32-compatible numbers".to_string(),
+                ));
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let as_f32 = f as f32;
+            out.push(as_f32);
+        }
+        Ok(out)
+    }
+
+    fn build_update_filter(
+        where_clause: Option<&crate::velesql::Condition>,
+    ) -> Result<Option<crate::Filter>> {
+        let Some(condition) = where_clause else {
+            return Ok(None);
+        };
+
+        if Self::contains_non_metadata_condition(condition) {
+            return Err(Error::Query(
+                "UPDATE WHERE supports metadata predicates only (no similarity/NEAR/MATCH)"
+                    .to_string(),
+            ));
+        }
+
+        let filter_condition =
+            crate::Collection::extract_metadata_filter(condition).ok_or_else(|| {
+                Error::Query("UPDATE WHERE produced empty metadata filter".to_string())
+            })?;
+        Ok(Some(crate::Filter::new(crate::Condition::from(
+            filter_condition,
+        ))))
+    }
+
+    fn contains_non_metadata_condition(condition: &crate::velesql::Condition) -> bool {
+        match condition {
+            crate::velesql::Condition::Similarity(_)
+            | crate::velesql::Condition::VectorSearch(_)
+            | crate::velesql::Condition::VectorFusedSearch(_)
+            | crate::velesql::Condition::GraphMatch(_) => true,
+            crate::velesql::Condition::And(left, right)
+            | crate::velesql::Condition::Or(left, right) => {
+                Self::contains_non_metadata_condition(left)
+                    || Self::contains_non_metadata_condition(right)
+            }
+            crate::velesql::Condition::Group(inner) | crate::velesql::Condition::Not(inner) => {
+                Self::contains_non_metadata_condition(inner)
+            }
+            _ => false,
+        }
+    }
+
+    fn matches_update_filter(point: &crate::Point, filter: Option<&crate::Filter>) -> bool {
+        let Some(filter) = filter else {
+            return true;
+        };
+
+        let mut obj = point
+            .payload
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        obj.insert("id".to_string(), serde_json::json!(point.id));
+        filter.matches(&serde_json::Value::Object(obj))
     }
 
     fn build_join_column_store(collection: &Collection) -> Result<ColumnStore> {
@@ -846,5 +1092,76 @@ mod tests {
             })
             .collect();
         assert_eq!(names, vec!["Alice", "Bob", "Charlie"]);
+    }
+
+    #[test]
+    fn test_database_execute_query_insert_metadata_only() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection_typed("products", &CollectionType::MetadataOnly)
+            .unwrap();
+
+        let query = Parser::parse(
+            "INSERT INTO products (id, name, price, active) VALUES (1, 'Notebook', 12.5, true)",
+        )
+        .unwrap();
+        let results = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].point.id, 1);
+        let payload = results[0].point.payload.as_ref().unwrap();
+        assert_eq!(payload["name"], serde_json::json!("Notebook"));
+        assert_eq!(payload["price"], serde_json::json!(12.5));
+        assert_eq!(payload["active"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_database_execute_query_update_metadata_only_where_id() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection_typed("products", &CollectionType::MetadataOnly)
+            .unwrap();
+        let products = db.get_collection("products").unwrap();
+        products
+            .upsert_metadata(vec![Point::metadata_only(
+                1,
+                serde_json::json!({"name": "Notebook", "price": 10.0}),
+            )])
+            .unwrap();
+
+        let query = Parser::parse("UPDATE products SET price = 19.99 WHERE id = 1").unwrap();
+        let results = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+        assert_eq!(results.len(), 1);
+
+        let updated = products.get(&[1]).into_iter().flatten().next().unwrap();
+        let payload = updated.payload.unwrap();
+        assert_eq!(payload["price"], serde_json::json!(19.99));
+    }
+
+    #[test]
+    fn test_database_execute_query_insert_with_params() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection_typed("profiles", &CollectionType::MetadataOnly)
+            .unwrap();
+
+        let query = Parser::parse("INSERT INTO profiles (id, name, age) VALUES ($id, $name, $age)")
+            .unwrap();
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), serde_json::json!(7));
+        params.insert("name".to_string(), serde_json::json!("Alice"));
+        params.insert("age".to_string(), serde_json::json!(30));
+
+        db.execute_query(&query, &params).unwrap();
+
+        let profiles = db.get_collection("profiles").unwrap();
+        let point = profiles.get(&[7]).into_iter().flatten().next().unwrap();
+        let payload = point.payload.unwrap();
+        assert_eq!(payload["name"], serde_json::json!("Alice"));
+        assert_eq!(payload["age"], serde_json::json!(30));
     }
 }

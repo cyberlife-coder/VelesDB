@@ -4,6 +4,7 @@
 
 mod aggregation;
 mod condition;
+mod dml;
 mod fusion;
 mod join;
 mod select;
@@ -22,6 +23,7 @@ pub use condition::{
     IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, VectorFusedSearch,
     VectorSearch,
 };
+pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
@@ -44,6 +46,9 @@ pub struct Query {
     /// MATCH clause for graph pattern matching (EPIC-045 US-001).
     #[serde(default)]
     pub match_clause: Option<crate::velesql::MatchClause>,
+    /// Optional DML statement (INSERT/UPDATE).
+    #[serde(default)]
+    pub dml: Option<DmlStatement>,
 }
 
 impl Query {
@@ -56,7 +61,13 @@ impl Query {
     /// Returns true if this is a SELECT query.
     #[must_use]
     pub fn is_select_query(&self) -> bool {
-        self.match_clause.is_none()
+        self.match_clause.is_none() && self.dml.is_none()
+    }
+
+    /// Returns true if this is a DML query.
+    #[must_use]
+    pub fn is_dml_query(&self) -> bool {
+        self.dml.is_some()
     }
 
     /// Creates a new SELECT query.
@@ -66,6 +77,7 @@ impl Query {
             select,
             compound: None,
             match_clause: None,
+            dml: None,
         }
     }
 
@@ -91,6 +103,33 @@ impl Query {
             select,
             compound: None,
             match_clause: Some(match_clause),
+            dml: None,
+        }
+    }
+
+    /// Creates a new DML query.
+    #[must_use]
+    pub fn new_dml(dml: DmlStatement) -> Self {
+        let select = SelectStatement {
+            distinct: DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: None,
+            joins: Vec::new(),
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        };
+        Self {
+            select,
+            compound: None,
+            match_clause: None,
+            dml: Some(dml),
         }
     }
 }

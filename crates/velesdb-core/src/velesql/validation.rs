@@ -208,6 +208,10 @@ impl QueryValidator {
         query: &Query,
         config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
+        if query.is_dml_query() {
+            return Ok(());
+        }
+
         // Validate main SELECT's WHERE clause if present
         if let Some(ref condition) = query.select.where_clause {
             Self::validate_condition(condition, query.select.limit, config)?;

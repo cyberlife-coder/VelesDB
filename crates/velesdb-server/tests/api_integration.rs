@@ -11,6 +11,7 @@ use common::create_test_app;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
+use velesdb_core::Point;
 
 #[tokio::test]
 async fn test_health_check() {
@@ -1513,6 +1514,132 @@ async fn test_query_match_top_level_with_collection() {
 
     let results = json["results"].as_array().expect("Not an array");
     assert_eq!(results.len(), 1);
+}
+
+#[tokio::test]
+async fn test_query_insert_metadata_only_via_query_endpoint() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "profiles",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "INSERT INTO profiles (id, vector, name, age) VALUES (1, $vec, 'Alice', 30)",
+                        "params": {"vec": [1.0, 0.0, 0.0]}
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    assert_eq!(json["rows_returned"], 1);
+    assert_eq!(json["results"][0]["id"], 1);
+    assert_eq!(json["results"][0]["payload"]["name"], "Alice");
+}
+
+#[tokio::test]
+async fn test_query_update_metadata_only_via_query_endpoint() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "profiles",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/profiles/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [Point::new(1, vec![1.0, 0.0, 0.0], Some(json!({"name": "Alice", "age": 30, "id": 1})))]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "UPDATE profiles SET age = 31 WHERE id = 1",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    assert_eq!(json["rows_returned"], 1);
+    assert_eq!(json["results"][0]["payload"]["age"], 31);
 }
 // =============================================================================
 // Graph E2E Tests (EPIC-011/US-001)

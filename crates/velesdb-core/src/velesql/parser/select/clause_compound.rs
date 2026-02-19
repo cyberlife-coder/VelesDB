@@ -34,6 +34,7 @@ impl Parser {
             select,
             compound,
             match_clause: None,
+            dml: None,
         })
     }
 
