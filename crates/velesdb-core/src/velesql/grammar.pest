@@ -108,7 +108,7 @@ column_ref = @{ identifier ~ "." ~ identifier }
 // ORDER BY clause (EPIC-040 US-002: supports columns, aggregates, similarity)
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
 order_by_item = { order_by_expr ~ sort_direction? }
-order_by_expr = { order_by_similarity | aggregate_function | identifier }
+order_by_expr = { order_by_similarity | aggregate_function | property_access | identifier }
 order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
 sort_direction = { ^"DESC" | ^"ASC" }
 

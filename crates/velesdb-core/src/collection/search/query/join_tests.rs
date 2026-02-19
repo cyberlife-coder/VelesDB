@@ -17,6 +17,17 @@ fn make_search_result(id: u64, payload_id: i64) -> SearchResult {
     }
 }
 
+fn make_search_result_with_payload(id: u64, payload: serde_json::Value) -> SearchResult {
+    SearchResult {
+        point: Point {
+            id,
+            vector: vec![0.1, 0.2, 0.3],
+            payload: Some(payload),
+        },
+        score: 0.9,
+    }
+}
+
 fn make_column_store() -> ColumnStore {
     let mut store = ColumnStore::with_primary_key(
         &[
@@ -118,7 +129,7 @@ fn test_execute_join_basic() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).unwrap();
 
     assert_eq!(joined.len(), 3);
     assert!(joined[0].column_data.contains_key("price"));
@@ -141,7 +152,7 @@ fn test_execute_join_inner_skips_missing() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).unwrap();
     assert_eq!(joined.len(), 2);
 }
 
@@ -151,7 +162,7 @@ fn test_joined_to_search_results() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store);
+    let joined = execute_join(&results, &join, &column_store).unwrap();
     let search_results = joined_to_search_results(joined);
 
     assert_eq!(search_results.len(), 1);
@@ -277,8 +288,8 @@ fn test_execute_join_validates_pk_column() {
 
     let joined = execute_join(&results, &wrong_join, &column_store);
     assert!(
-        joined.is_empty(),
-        "JOIN on non-PK column should not return results silently"
+        joined.is_err(),
+        "JOIN on non-PK column must return an error"
     );
 }
 
@@ -304,6 +315,79 @@ fn test_execute_join_correct_pk_column_works() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &correct_join, &column_store);
+    let joined = execute_join(&results, &correct_join, &column_store).unwrap();
     assert_eq!(joined.len(), 1);
+}
+
+#[test]
+fn test_execute_join_using_single_column_supported() {
+    let results = vec![
+        make_search_result_with_payload(1, serde_json::json!({"product_id": 1})),
+        make_search_result_with_payload(2, serde_json::json!({"product_id": 2})),
+        make_search_result_with_payload(3, serde_json::json!({"product_id": 99})),
+    ];
+    let column_store = make_column_store();
+
+    let using_join = JoinClause {
+        join_type: crate::velesql::JoinType::Inner,
+        table: "prices".to_string(),
+        alias: None,
+        condition: None,
+        using_columns: Some(vec!["product_id".to_string()]),
+    };
+
+    let joined = execute_join(&results, &using_join, &column_store).unwrap();
+    assert_eq!(joined.len(), 2);
+    assert!(joined[0].column_data.contains_key("price"));
+}
+
+#[test]
+fn test_execute_join_using_rejects_multi_column() {
+    let results = vec![make_search_result_with_payload(
+        1,
+        serde_json::json!({"product_id": 1, "region_id": 10}),
+    )];
+    let column_store = make_column_store();
+
+    let using_join = JoinClause {
+        join_type: crate::velesql::JoinType::Inner,
+        table: "prices".to_string(),
+        alias: None,
+        condition: None,
+        using_columns: Some(vec!["product_id".to_string(), "region_id".to_string()]),
+    };
+
+    let joined = execute_join(&results, &using_join, &column_store);
+    assert!(
+        joined.is_err(),
+        "USING with multiple columns must return an error"
+    );
+}
+
+#[test]
+fn test_execute_join_rejects_left_join_runtime() {
+    let results = vec![make_search_result(1, 1)];
+    let column_store = make_column_store();
+    let join = JoinClause {
+        join_type: crate::velesql::JoinType::Left,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let joined = execute_join(&results, &join, &column_store);
+    assert!(
+        joined.is_err(),
+        "LEFT JOIN must error until runtime is implemented"
+    );
 }

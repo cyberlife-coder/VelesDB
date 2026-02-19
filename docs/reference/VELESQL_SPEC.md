@@ -726,7 +726,7 @@ LIMIT 10
 
 | Feature | Status | Workaround |
 |---------|--------|------------|
-| `LEFT/RIGHT/FULL JOIN` | ❌ Not supported | Use basic `JOIN` |
+| `LEFT/RIGHT/FULL JOIN` | ❌ Not supported in executor | Runtime returns explicit error; use `JOIN`/`INNER JOIN` |
 | Subqueries | ❌ Not supported | Use multiple queries |
 | `ORDER BY` aggregates | ❌ Not supported | Sort in application |
 | Nested `GROUP BY` fields | ❌ Not supported | Use simple column names |
@@ -736,7 +736,7 @@ LIMIT 10
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `JOIN ... ON` | ✅ Supported | Basic inner join |
-| `JOIN ... USING (...)` | ⚠️ Partial | Parser support; runtime execution not yet supported |
+| `JOIN ... USING (...)` | ⚠️ Partial | Runtime supports single-column USING only |
 | `GROUP BY` | ✅ Supported | With aggregates |
 | `HAVING` | ✅ Supported | AND/OR operators |
 | `ORDER BY` | ✅ Supported | Columns, similarity() |
@@ -748,7 +748,7 @@ LIMIT 10
 ### Planned Features (Roadmap)
 
 - `LEFT/RIGHT/FULL OUTER JOIN`
-- Full runtime execution for `JOIN USING (column)`
+- Multi-column and composite-key runtime execution for `JOIN USING (...)`
 - `ORDER BY` with aggregates
 - `EXPLAIN` for query analysis
 - Prepared query caching

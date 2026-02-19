@@ -200,7 +200,12 @@ impl Collection {
     /// - `similarity()` - Vector similarity score
     /// - Property path (e.g., `n.name`)
     /// - Depth
-    pub fn order_match_results(results: &mut [MatchResult], order_by: &str, descending: bool) {
+    pub fn order_match_results(
+        &self,
+        results: &mut [MatchResult],
+        order_by: &str,
+        descending: bool,
+    ) {
         match order_by {
             "similarity()" | "similarity" => {
                 results.sort_by(|a, b| {
@@ -223,8 +228,29 @@ impl Collection {
                 });
             }
             _ => {
-                // For property paths, we need payload access
-                // This is a TODO for future enhancement
+                if let Some((alias, property)) = parse_property_path(order_by) {
+                    let payload_storage = self.payload_storage.read();
+                    results.sort_by(|a, b| {
+                        let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
+                            let node_id = *r.bindings.get(alias)?;
+                            let payload = payload_storage.retrieve(node_id).ok().flatten()?;
+                            let object = payload.as_object()?;
+                            Self::get_nested_property(object, property).cloned()
+                        };
+
+                        let a_value = get_value(a);
+                        let b_value = get_value(b);
+                        let cmp =
+                            super::super::compare_json_values(a_value.as_ref(), b_value.as_ref());
+                        if descending {
+                            cmp.reverse()
+                        } else {
+                            cmp
+                        }
+                    });
+                } else {
+                    tracing::warn!("Unsupported MATCH ORDER BY expression '{}'", order_by);
+                }
             }
         }
     }
