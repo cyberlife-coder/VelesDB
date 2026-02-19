@@ -16,7 +16,7 @@ fn test_parse_insert_statement() {
             assert_eq!(insert.values[0], Value::Integer(1));
             assert_eq!(insert.values[1], Value::String("Pen".to_string()));
         }
-        _ => panic!("Expected INSERT statement"),
+        DmlStatement::Update(_) => panic!("Expected INSERT statement"),
     }
 }
 
@@ -34,6 +34,6 @@ fn test_parse_update_statement_with_where() {
             assert_eq!(update.assignments[0].column, "price");
             assert_eq!(update.assignments[1].column, "active");
         }
-        _ => panic!("Expected UPDATE statement"),
+        DmlStatement::Insert(_) => panic!("Expected UPDATE statement"),
     }
 }
