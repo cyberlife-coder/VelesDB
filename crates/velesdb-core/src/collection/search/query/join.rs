@@ -10,7 +10,7 @@
 
 use crate::column_store::ColumnStore;
 use crate::point::SearchResult;
-use crate::velesql::{JoinClause, JoinCondition};
+use crate::velesql::{ColumnRef, JoinClause, JoinCondition};
 use std::collections::HashMap;
 
 /// Result of a JOIN operation, combining graph result with column data.
@@ -125,13 +125,7 @@ pub fn execute_join(
     join: &JoinClause,
     column_store: &ColumnStore,
 ) -> Vec<JoinedResult> {
-    // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
-    let Some(condition) = &join.condition else {
-        // BUG-003 FIX: Log instead of silent return
-        tracing::warn!(
-            "JOIN with USING clause not yet supported for execution on table '{}'",
-            join.table
-        );
+    let Some(condition) = resolve_join_condition(join) else {
         return Vec::new();
     };
 
@@ -158,7 +152,7 @@ pub fn execute_join(
     }
 
     // 2. Extract join keys from search results
-    let join_keys = extract_join_keys(results, condition);
+    let join_keys = extract_join_keys(results, &condition);
 
     if join_keys.is_empty() {
         return Vec::new();
@@ -192,6 +186,70 @@ pub fn execute_join(
     }
 
     joined_results
+}
+
+/// Resolves JOIN condition for execution from either `ON` or `USING` syntax.
+///
+/// Current runtime supports:
+/// - `JOIN ... ON left = right`
+/// - `JOIN ... USING (single_column)`
+///
+/// `USING` with multiple columns is currently not supported because execution
+/// path relies on a single primary key lookup.
+fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
+    if let Some(condition) = &join.condition {
+        return Some(normalize_join_condition(condition, join));
+    }
+
+    let Some(using_columns) = &join.using_columns else {
+        tracing::warn!(
+            "JOIN on table '{}' has neither ON condition nor USING columns",
+            join.table
+        );
+        return None;
+    };
+
+    if using_columns.len() != 1 {
+        tracing::warn!(
+            "JOIN USING on table '{}' supports exactly one column for execution, got {}",
+            join.table,
+            using_columns.len()
+        );
+        return None;
+    }
+
+    let join_column = using_columns[0].clone();
+    Some(JoinCondition {
+        left: ColumnRef {
+            table: Some(join.table.clone()),
+            column: join_column.clone(),
+        },
+        right: ColumnRef {
+            table: None,
+            column: join_column,
+        },
+    })
+}
+
+/// Normalizes ON condition so that `left` refers to the joined table and `right`
+/// refers to the current result set side.
+fn normalize_join_condition(condition: &JoinCondition, join: &JoinClause) -> JoinCondition {
+    let is_join_side = |table: Option<&str>| {
+        table.is_some_and(|t| t == join.table || join.alias.as_deref().is_some_and(|a| a == t))
+    };
+
+    if is_join_side(condition.left.table.as_deref()) {
+        return condition.clone();
+    }
+
+    if is_join_side(condition.right.table.as_deref()) {
+        return JoinCondition {
+            left: condition.right.clone(),
+            right: condition.left.clone(),
+        };
+    }
+
+    condition.clone()
 }
 
 /// Batch get rows from ColumnStore by primary keys.

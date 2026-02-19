@@ -17,6 +17,17 @@ fn make_search_result(id: u64, payload_id: i64) -> SearchResult {
     }
 }
 
+fn make_search_result_with_payload(id: u64, payload: serde_json::Value) -> SearchResult {
+    SearchResult {
+        point: Point {
+            id,
+            vector: vec![0.1, 0.2, 0.3],
+            payload: Some(payload),
+        },
+        score: 0.9,
+    }
+}
+
 fn make_column_store() -> ColumnStore {
     let mut store = ColumnStore::with_primary_key(
         &[
@@ -306,4 +317,49 @@ fn test_execute_join_correct_pk_column_works() {
 
     let joined = execute_join(&results, &correct_join, &column_store);
     assert_eq!(joined.len(), 1);
+}
+
+#[test]
+fn test_execute_join_using_single_column_supported() {
+    let results = vec![
+        make_search_result_with_payload(1, serde_json::json!({"product_id": 1})),
+        make_search_result_with_payload(2, serde_json::json!({"product_id": 2})),
+        make_search_result_with_payload(3, serde_json::json!({"product_id": 99})),
+    ];
+    let column_store = make_column_store();
+
+    let using_join = JoinClause {
+        join_type: crate::velesql::JoinType::Inner,
+        table: "prices".to_string(),
+        alias: None,
+        condition: None,
+        using_columns: Some(vec!["product_id".to_string()]),
+    };
+
+    let joined = execute_join(&results, &using_join, &column_store);
+    assert_eq!(joined.len(), 2);
+    assert!(joined[0].column_data.contains_key("price"));
+}
+
+#[test]
+fn test_execute_join_using_rejects_multi_column() {
+    let results = vec![make_search_result_with_payload(
+        1,
+        serde_json::json!({"product_id": 1, "region_id": 10}),
+    )];
+    let column_store = make_column_store();
+
+    let using_join = JoinClause {
+        join_type: crate::velesql::JoinType::Inner,
+        table: "prices".to_string(),
+        alias: None,
+        condition: None,
+        using_columns: Some(vec!["product_id".to_string(), "region_id".to_string()]),
+    };
+
+    let joined = execute_join(&results, &using_join, &column_store);
+    assert!(
+        joined.is_empty(),
+        "USING with multiple columns should be rejected until composite PK join is implemented"
+    );
 }

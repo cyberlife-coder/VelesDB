@@ -280,6 +280,45 @@ impl Database {
         self.collections.read().get(name).cloned()
     }
 
+    /// Executes a VelesQL query with database-level JOIN resolution.
+    ///
+    /// This method resolves JOIN target collections from the database registry
+    /// and executes JOIN runtime in sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the base collection or any JOIN collection is missing.
+    pub fn execute_query(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let base_name = query.select.from.clone();
+        let base_collection = self
+            .get_collection(&base_name)
+            .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
+
+        if query.select.joins.is_empty() {
+            return base_collection.execute_query(query, params);
+        }
+
+        let mut base_query = query.clone();
+        base_query.select.joins.clear();
+
+        let mut results = base_collection.execute_query(&base_query, params)?;
+        for join in &query.select.joins {
+            let join_collection = self
+                .get_collection(&join.table)
+                .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
+            let column_store = Self::build_join_column_store(&join_collection)?;
+            let joined =
+                crate::collection::search::query::join::execute_join(&results, join, &column_store);
+            results = crate::collection::search::query::join::joined_to_search_results(joined);
+        }
+
+        Ok(results)
+    }
+
     /// Lists all collection names in the database.
     pub fn list_collections(&self) -> Vec<String> {
         self.collections.read().keys().cloned().collect()
@@ -396,11 +435,127 @@ impl Database {
 
         Ok(())
     }
+
+    fn build_join_column_store(collection: &Collection) -> Result<ColumnStore> {
+        use crate::column_store::{ColumnType, ColumnValue};
+
+        let ids = collection.all_ids();
+        let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
+
+        let mut inferred: std::collections::BTreeMap<String, ColumnType> =
+            std::collections::BTreeMap::new();
+        inferred.insert("id".to_string(), ColumnType::Int);
+
+        for point in &points {
+            let Some(payload) = point.payload.as_ref() else {
+                continue;
+            };
+            let Some(obj) = payload.as_object() else {
+                continue;
+            };
+            for (key, value) in obj {
+                if key == "id" {
+                    continue;
+                }
+                let Some(col_type) = Self::json_to_column_type(value) else {
+                    continue;
+                };
+                if let Some(existing) = inferred.get(key) {
+                    if *existing != col_type {
+                        inferred.remove(key);
+                    }
+                } else {
+                    inferred.insert(key.clone(), col_type);
+                }
+            }
+        }
+
+        let schema: Vec<(String, ColumnType)> = inferred.into_iter().collect();
+        let schema_refs: Vec<(&str, ColumnType)> = schema
+            .iter()
+            .map(|(name, ty)| (name.as_str(), *ty))
+            .collect();
+
+        let mut store = ColumnStore::with_primary_key(&schema_refs, "id")
+            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
+        for point in &points {
+            let Ok(pk) = i64::try_from(point.id) else {
+                continue;
+            };
+
+            let mut values: Vec<(String, ColumnValue)> = Vec::with_capacity(schema.len());
+            values.push(("id".to_string(), ColumnValue::Int(pk)));
+
+            if let Some(obj) = point
+                .payload
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+            {
+                for (key, value) in obj {
+                    if key == "id" {
+                        continue;
+                    }
+                    if !schema_refs.iter().any(|(name, _)| *name == key.as_str()) {
+                        continue;
+                    }
+                    if let Some(column_value) = Self::json_to_column_value(value, &mut store) {
+                        values.push((key.clone(), column_value));
+                    }
+                }
+            }
+
+            let row: Vec<(&str, ColumnValue)> = values
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone()))
+                .collect();
+            store
+                .insert_row(&row)
+                .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
+        }
+
+        Ok(store)
+    }
+
+    fn json_to_column_type(value: &serde_json::Value) -> Option<crate::column_store::ColumnType> {
+        use crate::column_store::ColumnType;
+        match value {
+            serde_json::Value::Number(n) if n.is_i64() => Some(ColumnType::Int),
+            serde_json::Value::Number(_) => Some(ColumnType::Float),
+            serde_json::Value::String(_) => Some(ColumnType::String),
+            serde_json::Value::Bool(_) => Some(ColumnType::Bool),
+            _ => None,
+        }
+    }
+
+    fn json_to_column_value(
+        value: &serde_json::Value,
+        store: &mut ColumnStore,
+    ) -> Option<crate::column_store::ColumnValue> {
+        use crate::column_store::ColumnValue;
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(v) = n.as_i64() {
+                    Some(ColumnValue::Int(v))
+                } else {
+                    n.as_f64().map(ColumnValue::Float)
+                }
+            }
+            serde_json::Value::String(s) => {
+                let sid = store.string_table_mut().intern(s);
+                Some(ColumnValue::String(sid))
+            }
+            serde_json::Value::Bool(b) => Some(ColumnValue::Bool(*b)),
+            serde_json::Value::Null => Some(ColumnValue::Null),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(all(test, feature = "persistence"))]
 mod tests {
     use super::*;
+    use crate::collection::graph::GraphEdge;
+    use crate::velesql::Parser;
     use tempfile::tempdir;
 
     #[test]
@@ -494,5 +649,113 @@ mod tests {
         assert!(collections.contains(&"coll1".to_string()));
         assert!(collections.contains(&"coll2".to_string()));
         assert!(collections.contains(&"coll3".to_string()));
+    }
+
+    #[test]
+    fn test_database_execute_query_join_on_end_to_end() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+
+        db.create_collection("orders", 2, DistanceMetric::Cosine)
+            .unwrap();
+        db.create_collection("customers", 2, DistanceMetric::Cosine)
+            .unwrap();
+
+        let orders = db.get_collection("orders").unwrap();
+        let customers = db.get_collection("customers").unwrap();
+
+        orders
+            .upsert(vec![
+                Point::new(
+                    1,
+                    vec![1.0, 0.0],
+                    Some(serde_json::json!({"id": 1, "customer_id": 10, "total": 100})),
+                ),
+                Point::new(
+                    2,
+                    vec![0.0, 1.0],
+                    Some(serde_json::json!({"id": 2, "customer_id": 999, "total": 50})),
+                ),
+            ])
+            .unwrap();
+        customers
+            .upsert(vec![Point::new(
+                10,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"id": 10, "name": "Alice", "tier": "gold"})),
+            )])
+            .unwrap();
+
+        let query = Parser::parse(
+            "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id",
+        )
+        .unwrap();
+        let results = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        let payload = results[0].point.payload.as_ref().unwrap();
+        assert_eq!(payload.get("name").unwrap().as_str(), Some("Alice"));
+    }
+
+    #[test]
+    fn test_database_execute_query_join_using_with_graph_match_filter() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+
+        db.create_collection("orders", 2, DistanceMetric::Cosine)
+            .unwrap();
+        db.create_collection("profiles", 2, DistanceMetric::Cosine)
+            .unwrap();
+
+        let orders = db.get_collection("orders").unwrap();
+        let profiles = db.get_collection("profiles").unwrap();
+
+        orders
+            .upsert(vec![
+                Point::new(
+                    1,
+                    vec![1.0, 0.0],
+                    Some(serde_json::json!({"id": 1, "_labels": ["Doc"], "kind": "source"})),
+                ),
+                Point::new(
+                    2,
+                    vec![0.0, 1.0],
+                    Some(serde_json::json!({"id": 2, "_labels": ["Doc"], "kind": "target"})),
+                ),
+            ])
+            .unwrap();
+        orders
+            .add_edge(GraphEdge::new(100, 1, 2, "REL").unwrap())
+            .unwrap();
+
+        profiles
+            .upsert(vec![
+                Point::new(
+                    1,
+                    vec![1.0, 0.0],
+                    Some(serde_json::json!({"id": 1, "nickname": "alpha"})),
+                ),
+                Point::new(
+                    2,
+                    vec![0.0, 1.0],
+                    Some(serde_json::json!({"id": 2, "nickname": "beta"})),
+                ),
+            ])
+            .unwrap();
+
+        let query = Parser::parse(
+            "SELECT * FROM orders AS o JOIN profiles USING (id) WHERE MATCH (o:Doc)-[:REL]->(x:Doc)",
+        )
+        .unwrap();
+        let results = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].point.id, 1);
+        let payload = results[0].point.payload.as_ref().unwrap();
+        assert_eq!(payload.get("nickname").unwrap().as_str(), Some("alpha"));
     }
 }
