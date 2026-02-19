@@ -50,6 +50,18 @@ impl Collection {
         }
     }
 
+    /// Returns true when condition tree contains any OR node.
+    pub(crate) fn condition_contains_or(condition: &Condition) -> bool {
+        match condition {
+            Condition::Or(_, _) => true,
+            Condition::And(left, right) => {
+                Self::condition_contains_or(left) || Self::condition_contains_or(right)
+            }
+            Condition::Not(inner) | Condition::Group(inner) => Self::condition_contains_or(inner),
+            _ => false,
+        }
+    }
+
     /// Returns true when condition evaluation needs vector values.
     pub(crate) fn condition_requires_vector_eval(condition: &Condition) -> bool {
         match condition {
@@ -213,5 +225,56 @@ impl Collection {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::velesql::{CompareOp, Comparison, Value};
+
+    #[test]
+    fn test_condition_contains_or_detects_nested_or() {
+        let cond = Condition::And(
+            Box::new(Condition::Comparison(Comparison {
+                column: "status".to_string(),
+                operator: CompareOp::Eq,
+                value: Value::String("active".to_string()),
+            })),
+            Box::new(Condition::Group(Box::new(Condition::Or(
+                Box::new(Condition::Comparison(Comparison {
+                    column: "tier".to_string(),
+                    operator: CompareOp::Eq,
+                    value: Value::String("pro".to_string()),
+                })),
+                Box::new(Condition::Comparison(Comparison {
+                    column: "tier".to_string(),
+                    operator: CompareOp::Eq,
+                    value: Value::String("enterprise".to_string()),
+                })),
+            )))),
+        );
+
+        assert!(Collection::condition_contains_or(&cond));
+    }
+
+    #[test]
+    fn test_condition_contains_or_false_without_or() {
+        let cond = Condition::And(
+            Box::new(Condition::Comparison(Comparison {
+                column: "status".to_string(),
+                operator: CompareOp::Eq,
+                value: Value::String("active".to_string()),
+            })),
+            Box::new(Condition::Not(Box::new(Condition::Comparison(
+                Comparison {
+                    column: "deleted".to_string(),
+                    operator: CompareOp::Eq,
+                    value: Value::Boolean(true),
+                },
+            )))),
+        );
+
+        assert!(!Collection::condition_contains_or(&cond));
     }
 }

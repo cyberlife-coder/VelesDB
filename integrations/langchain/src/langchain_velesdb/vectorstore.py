@@ -38,10 +38,10 @@ def _stable_hash_id(value: str) -> int:
     
     Python's hash() is non-deterministic across processes, so we use
     SHA256 for consistent IDs across runs.
-    
-    Uses 32 bits from SHA256 because VelesDB's BM25 index relies on
-    RoaringBitmap document IDs, which are limited to `u32`.
-    For mission-critical deduplication, use explicit UUIDs.
+
+    Uses 63 bits from SHA256 for a very low collision probability in
+    real-world dataset sizes while keeping a positive integer compatible
+    with VelesDB point IDs.
     
     Args:
         value: String to hash.
@@ -50,8 +50,8 @@ def _stable_hash_id(value: str) -> int:
         Positive 63-bit integer ID compatible with VelesDB Core.
     """
     hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 4 bytes (32 bits) to stay compatible with BM25/RoaringBitmap.
-    return int.from_bytes(hash_bytes[:4], byteorder="big")
+    # Use 8 bytes (64 bits) and clear sign bit to stay in positive i64 range.
+    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 class VelesDBVectorStore(VectorStore):

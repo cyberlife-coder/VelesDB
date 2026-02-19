@@ -14,6 +14,7 @@ try:
     from langchain_velesdb import VelesDBVectorStore
     from langchain_core.documents import Document
     from langchain_core.embeddings import Embeddings
+    from langchain_velesdb.vectorstore import _stable_hash_id
 except ImportError:
     pytest.skip("Dependencies not installed", allow_module_level=True)
 
@@ -177,6 +178,17 @@ class TestVelesDBVectorStore:
         # Should return results without error
         results = vectorstore.similarity_search("query", k=5)
         assert isinstance(results, list)
+
+    def test_stable_hash_id_is_deterministic_and_63bit(self):
+        """Stable IDs must remain deterministic with a wide collision space."""
+        first = _stable_hash_id("doc://alpha")
+        second = _stable_hash_id("doc://alpha")
+        other = _stable_hash_id("doc://beta")
+
+        assert first == second
+        assert first != other
+        assert 0 <= first <= 0x7FFFFFFFFFFFFFFF
+        assert first > 0xFFFFFFFF
 
 
 class TestVelesDBVectorStoreAdvanced:

@@ -8,6 +8,7 @@ import pytest
 from llama_index.core.schema import TextNode
 
 from llamaindex_velesdb import VelesDBVectorStore
+from llamaindex_velesdb.vectorstore import _stable_hash_id
 
 
 class TestVelesDBVectorStore:
@@ -124,6 +125,17 @@ class TestVelesDBVectorStore:
         """Test client property returns database."""
         client = vector_store.client
         assert client is not None
+
+    def test_stable_hash_id_is_deterministic_and_63bit(self):
+        """Stable IDs must remain deterministic with a wide collision space."""
+        first = _stable_hash_id("node://alpha")
+        second = _stable_hash_id("node://alpha")
+        other = _stable_hash_id("node://beta")
+
+        assert first == second
+        assert first != other
+        assert 0 <= first <= 0x7FFFFFFFFFFFFFFF
+        assert first > 0xFFFFFFFF
 
 
 class TestVelesDBVectorStoreAdvanced:

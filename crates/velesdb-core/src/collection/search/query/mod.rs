@@ -164,6 +164,11 @@ impl Collection {
         // Get first similarity condition for initial search (if any)
         let first_similarity = similarity_conditions.first().cloned();
         let has_graph_predicates = !graph_match_predicates.is_empty();
+        let skip_metadata_prefilter_for_graph_or = has_graph_predicates
+            && stmt
+                .where_clause
+                .as_ref()
+                .is_some_and(Self::condition_contains_or);
         let execution_limit = if has_graph_predicates {
             MAX_LIMIT
         } else {
@@ -268,20 +273,25 @@ impl Collection {
 
                 // Then apply any additional metadata filters (e.g., AND category = 'tech')
                 if let Some(cond) = filter_cond {
-                    let metadata_filter = Self::extract_metadata_filter(cond);
-                    if let Some(filter_cond) = metadata_filter {
-                        let filter =
-                            crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                    if skip_metadata_prefilter_for_graph_or {
                         filtered
-                            .into_iter()
-                            .filter(|r| match r.point.payload.as_ref() {
-                                Some(p) => filter.matches(p),
-                                None => filter.matches(&serde_json::Value::Null),
-                            })
-                            .take(execution_limit)
-                            .collect()
                     } else {
-                        filtered
+                        let metadata_filter = Self::extract_metadata_filter(cond);
+                        if let Some(filter_cond) = metadata_filter {
+                            let filter = crate::filter::Filter::new(
+                                crate::filter::Condition::from(filter_cond),
+                            );
+                            filtered
+                                .into_iter()
+                                .filter(|r| match r.point.payload.as_ref() {
+                                    Some(p) => filter.matches(p),
+                                    None => filter.matches(&serde_json::Value::Null),
+                                })
+                                .take(execution_limit)
+                                .collect()
+                        } else {
+                            filtered
+                        }
                     }
                 } else {
                     filtered
@@ -333,20 +343,25 @@ impl Collection {
 
                 // 3. Apply additional metadata filters if present
                 if let Some(cond) = filter_cond {
-                    let metadata_filter = Self::extract_metadata_filter(cond);
-                    if let Some(filter_cond) = metadata_filter {
-                        let filter =
-                            crate::filter::Filter::new(crate::filter::Condition::from(filter_cond));
+                    if skip_metadata_prefilter_for_graph_or {
                         filtered
-                            .into_iter()
-                            .filter(|r| match r.point.payload.as_ref() {
-                                Some(p) => filter.matches(p),
-                                None => filter.matches(&serde_json::Value::Null),
-                            })
-                            .take(execution_limit)
-                            .collect()
                     } else {
-                        filtered
+                        let metadata_filter = Self::extract_metadata_filter(cond);
+                        if let Some(filter_cond) = metadata_filter {
+                            let filter = crate::filter::Filter::new(
+                                crate::filter::Condition::from(filter_cond),
+                            );
+                            filtered
+                                .into_iter()
+                                .filter(|r| match r.point.payload.as_ref() {
+                                    Some(p) => filter.matches(p),
+                                    None => filter.matches(&serde_json::Value::Null),
+                                })
+                                .take(execution_limit)
+                                .collect()
+                        } else {
+                            filtered
+                        }
                     }
                 } else {
                     filtered
@@ -359,7 +374,9 @@ impl Collection {
                     self.hybrid_search(vector, &text_query, execution_limit, None)?
                 } else {
                     // Vector search with metadata filter (graph predicates handled separately)
-                    if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+                    if skip_metadata_prefilter_for_graph_or {
+                        self.search(vector, execution_limit)?
+                    } else if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
                         let filter = crate::filter::Filter::new(crate::filter::Condition::from(
                             metadata_cond,
                         ));
@@ -386,7 +403,14 @@ impl Collection {
                 } else {
                     // Generic metadata filter: perform a scan (fallback).
                     // If condition only contains graph predicates, scan all then graph-filter.
-                    if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
+                    if skip_metadata_prefilter_for_graph_or {
+                        self.execute_scan_query(
+                            &crate::filter::Filter::new(crate::filter::Condition::And {
+                                conditions: vec![],
+                            }),
+                            execution_limit,
+                        )
+                    } else if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
                         let filter = crate::filter::Filter::new(crate::filter::Condition::from(
                             metadata_cond,
                         ));
@@ -475,7 +499,8 @@ impl Collection {
                     alias: None,
                 }],
                 order_by: None,
-                limit: Some(MAX_LIMIT as u64),
+                // Internal anchor evaluation must not silently cap MATCH results.
+                limit: Some(u64::MAX),
             },
         };
 
