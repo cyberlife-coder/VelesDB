@@ -200,21 +200,47 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         self.search_dual_precision(query, k, ef_search)
     }
 
-    /// Dual-precision search implementation.
+    /// Dual-precision search implementation (B-04 fix).
     ///
-    /// Currently uses float32 for graph traversal (fast with SIMD) and
-    /// re-ranks with exact float32 distances from stored vectors.
-    ///
-    /// Future optimization: use quantized int8 for traversal to reduce
-    /// memory bandwidth during graph exploration.
+    /// When quantized store is available: int8 traversal + f32 reranking.
+    /// Otherwise: overfetch with f32 + rerank (graceful degradation).
     fn search_dual_precision(
         &self,
         query: &[f32],
         k: usize,
         ef_search: usize,
     ) -> Vec<(NodeId, f32)> {
-        // Step 1: Get more candidates than needed using graph traversal
-        // Future optimization: use quantized distances for traversal (EPIC-055)
+        // B-04 fix: use int8 traversal when quantizer and store are available
+        if let (Some(quantizer), Some(store)) =
+            (self.quantizer.as_ref(), self.quantized_store.as_ref())
+        {
+            // Check minimum index size — int8 overhead not worth it for small indexes
+            if self.inner.len() >= DualPrecisionConfig::default().min_index_size {
+                let query_quantized = quantizer.quantize(query);
+                let oversampling = DualPrecisionConfig::default().oversampling_ratio;
+                let candidates_k = k * oversampling;
+                let coarse_candidates =
+                    self.search_layer_int8(&query_quantized.data, candidates_k, ef_search, store);
+
+                if !coarse_candidates.is_empty() {
+                    // Re-rank with exact f32 distances
+                    let vectors = self.inner.vectors.read();
+                    let mut reranked: Vec<(NodeId, f32)> = coarse_candidates
+                        .into_iter()
+                        .filter_map(|(node_id, _approx_dist)| {
+                            let vec = vectors.get(node_id)?;
+                            let exact_dist = self.inner.compute_distance(query, vec);
+                            Some((node_id, exact_dist))
+                        })
+                        .collect();
+                    reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    reranked.truncate(k);
+                    return reranked;
+                }
+            }
+        }
+
+        // Fallback: overfetch with f32 + rerank
         let rerank_k = (ef_search * 2).max(k * 4);
         let candidates = self.inner.search(query, rerank_k, ef_search);
 
@@ -222,23 +248,16 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             return candidates;
         }
 
-        // Step 2: Re-rank using EXACT float32 distances
-        // This is the key to dual-precision: approximate traversal + exact rerank
         let vectors = self.inner.vectors.read();
         let mut reranked: Vec<(NodeId, f32)> = candidates
             .iter()
             .filter_map(|&(node_id, _approx_dist)| {
-                // Get exact distance from original float32 vectors
                 let vec = vectors.get(node_id)?;
                 let exact_dist = self.inner.compute_distance(query, vec);
                 Some((node_id, exact_dist))
             })
             .collect();
-
-        // Sort by exact distance
         reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        // Return top k
         reranked.truncate(k);
         reranked
     }
