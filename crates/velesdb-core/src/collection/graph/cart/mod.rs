@@ -38,10 +38,8 @@ mod tests;
 use super::degree_router::EdgeIndex;
 use node::CARTNode;
 
-/// Maximum entries per leaf node (horizontal compression).
-// Reason: MAX_LEAF_ENTRIES will be used for leaf splitting when CART implementation is complete
-#[allow(dead_code)]
-const MAX_LEAF_ENTRIES: usize = 256;
+/// Target capacity per leaf node (horizontal compression).
+pub(crate) const MAX_LEAF_ENTRIES: usize = 256;
 
 /// Compressed Adaptive Radix Tree for high-degree vertices.
 ///

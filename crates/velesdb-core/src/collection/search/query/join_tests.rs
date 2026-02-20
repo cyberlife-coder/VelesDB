@@ -365,8 +365,8 @@ fn test_execute_join_using_rejects_multi_column() {
 }
 
 #[test]
-fn test_execute_join_rejects_left_join_runtime() {
-    let results = vec![make_search_result(1, 1)];
+fn test_execute_left_join_keeps_unmatched_left_rows() {
+    let results = vec![make_search_result(1, 1), make_search_result(2, 99)];
     let column_store = make_column_store();
     let join = JoinClause {
         join_type: crate::velesql::JoinType::Left,
@@ -385,9 +385,63 @@ fn test_execute_join_rejects_left_join_runtime() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store);
-    assert!(
-        joined.is_err(),
-        "LEFT JOIN must error until runtime is implemented"
-    );
+    let joined = execute_join(&results, &join, &column_store).unwrap();
+    assert_eq!(joined.len(), 2);
+    assert!(joined[0].column_data.contains_key("price"));
+    assert_eq!(joined[1].column_data.get("price"), Some(&serde_json::Value::Null));
+}
+
+#[test]
+fn test_execute_right_join_includes_unmatched_right_rows() {
+    let results = vec![make_search_result(1, 1)];
+    let column_store = make_column_store();
+    let join = JoinClause {
+        join_type: crate::velesql::JoinType::Right,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let joined = execute_join(&results, &join, &column_store).unwrap();
+    assert_eq!(joined.len(), 3);
+}
+
+#[test]
+fn test_execute_full_join_combines_left_and_right_unmatched() {
+    let results = vec![make_search_result(1, 1), make_search_result(2, 99)];
+    let column_store = make_column_store();
+    let join = JoinClause {
+        join_type: crate::velesql::JoinType::Full,
+        table: "prices".to_string(),
+        alias: None,
+        condition: Some(JoinCondition {
+            left: ColumnRef {
+                table: Some("prices".to_string()),
+                column: "product_id".to_string(),
+            },
+            right: ColumnRef {
+                table: Some("products".to_string()),
+                column: "id".to_string(),
+            },
+        }),
+        using_columns: None,
+    };
+
+    let joined = execute_join(&results, &join, &column_store).unwrap();
+    assert_eq!(joined.len(), 4);
+    let null_join_count = joined
+        .iter()
+        .filter(|row| row.column_data.get("price") == Some(&serde_json::Value::Null))
+        .count();
+    assert_eq!(null_join_count, 1);
 }

@@ -1,0 +1,31 @@
+name: Doc Contract
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'README.md'
+      - 'crates/velesdb-server/src/main.rs'
+      - 'docs/reference/readme-code-truth-matrix.md'
+      - 'scripts/check-doc-contract.sh'
+      - '.github/workflows/doc-contract.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'README.md'
+      - 'crates/velesdb-server/src/main.rs'
+      - 'docs/reference/readme-code-truth-matrix.md'
+      - 'scripts/check-doc-contract.sh'
+      - '.github/workflows/doc-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: README Runtime Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check README/runtime contract
+        run: bash scripts/check-doc-contract.sh

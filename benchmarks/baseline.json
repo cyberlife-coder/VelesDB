@@ -1,21 +1,22 @@
 {
   "version": "1.0.0",
   "description": "VelesDB Performance Baseline (EPIC-026/US-002)",
-  "recorded_at": "2026-02-18",
+  "recorded_at": "2026-02-20",
   "environment": {
-    "rust_version": "1.75.0",
-    "features": "simd"
+    "rust_version": "1.83.0",
+    "features": "simd",
+    "runner": "github-hosted ubuntu-latest"
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 4500000000,
-      "std_ns": 250000000,
-      "threshold_percent": 20
+      "mean_ns": 6730000000,
+      "std_ns": 550000000,
+      "threshold_percent": 15
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 220000,
-      "std_ns": 30000,
-      "threshold_percent": 20
+      "mean_ns": 331820,
+      "std_ns": 45000,
+      "threshold_percent": 15
     },
     "hnsw_insert": {
       "mean_ns": 50000000,
@@ -29,8 +30,8 @@
     }
   },
   "notes": [
-    "Baseline values are initial estimates",
-    "Update after first real benchmark run on reference hardware",
-    "Threshold of 15% allows for normal variance"
+    "Smoke baseline refreshed from main CI run 22241009537",
+    "Threshold of 15% is aligned with docs/reference/PERFORMANCE_SLO.md",
+    "Recalibrate on dedicated performance host before release cut"
   ]
 }
