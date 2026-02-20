@@ -387,12 +387,13 @@ impl GpuAccelerator {
             return Vec::new();
         }
 
-        // CPU fallback using direct SIMD dispatch for optimal performance
+        // C-01 fix: honest CPU SIMD fallback — no GPU shader wired yet.
+        // Real WGSL shader exists (EUCLIDEAN_SHADER) but is not connected to a pipeline.
+        tracing::debug!("batch_euclidean_distance: using CPU SIMD fallback (GPU shader not wired)");
         let mut results = Vec::with_capacity(num_vectors);
         for i in 0..num_vectors {
             let offset = i * dimension;
             let vec = &vectors[offset..offset + dimension];
-            // Use simd_native for SIMD-accelerated Euclidean distance
             let dist = simd_native::euclidean_native(query, vec);
             results.push(dist);
         }
@@ -420,12 +421,12 @@ impl GpuAccelerator {
             return Vec::new();
         }
 
-        // CPU fallback using direct SIMD dispatch for optimal performance
+        // C-01 fix: honest CPU SIMD fallback — no GPU shader wired yet.
+        tracing::debug!("batch_dot_product: using CPU SIMD fallback (GPU shader not wired)");
         let mut results = Vec::with_capacity(num_vectors);
         for i in 0..num_vectors {
             let offset = i * dimension;
             let vec = &vectors[offset..offset + dimension];
-            // Use simd_native for SIMD-accelerated dot product
             let dot = simd_native::dot_product_native(query, vec);
             results.push(dot);
         }
