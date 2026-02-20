@@ -34,6 +34,13 @@ impl GpuAccelerator {
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
     pub fn new() -> Option<Self> {
+        // Some backends can panic during adapter/device discovery on headless hosts.
+        // Treat those as "GPU unavailable" to keep fallback paths functional.
+        std::panic::catch_unwind(Self::new_impl).ok().flatten()
+    }
+
+    #[must_use]
+    fn new_impl() -> Option<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
