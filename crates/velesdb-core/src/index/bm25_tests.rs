@@ -311,29 +311,40 @@ fn test_concurrent_reads() {
 }
 
 // =========================================================================
-// ID validation tests (Flag 1 fix)
+// ID mapping tests (PointId u64 -> BM25 DocId u32)
 // =========================================================================
 
 #[test]
-#[should_panic(expected = "BM25 document ID")]
-fn test_add_document_id_exceeds_u32_max() {
+fn test_add_document_id_exceeds_u32_max_is_supported() {
     let index = Bm25Index::new();
-    // ID exceeds u32::MAX - should panic
-    index.add_document(u64::from(u32::MAX) + 1, "test document");
+    let large_id = u64::from(u32::MAX) + 42;
+    index.add_document(large_id, "test document");
+
+    let results = index.search("test", 10);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, large_id);
 }
 
 #[test]
-fn test_add_document_id_at_u32_max() {
+fn test_remove_document_id_exceeds_u32_max_is_supported() {
     let index = Bm25Index::new();
-    // ID exactly at u32::MAX - should succeed
-    index.add_document(u64::from(u32::MAX), "test document");
-    assert_eq!(index.len(), 1);
+    let large_id = u64::from(u32::MAX) + 7;
+    index.add_document(large_id, "remove me");
+
+    assert!(index.remove_document(large_id));
+    assert!(!index.remove_document(large_id));
 }
 
 #[test]
-#[should_panic(expected = "BM25 document ID")]
-fn test_remove_document_id_exceeds_u32_max() {
+fn test_update_document_removes_old_terms() {
     let index = Bm25Index::new();
-    // ID exceeds u32::MAX - should panic
-    index.remove_document(u64::from(u32::MAX) + 1);
+    index.add_document(1, "alpha beta");
+    index.add_document(1, "gamma delta");
+
+    let old_term_results = index.search("alpha", 10);
+    assert!(old_term_results.is_empty());
+
+    let new_term_results = index.search("gamma", 10);
+    assert_eq!(new_term_results.len(), 1);
+    assert_eq!(new_term_results[0].0, 1);
 }

@@ -40,10 +40,10 @@ def _stable_hash_id(value: str) -> int:
     
     Python's hash() is non-deterministic across processes, so we use
     SHA256 for consistent IDs across runs.
-    
-    Uses 63 bits (fits in i64/u64) from SHA256. For datasets >1M documents,
-    collision probability increases but remains acceptable (<0.01%).
-    For mission-critical deduplication, use explicit UUIDs.
+
+    Uses 63 bits from SHA256 for a very low collision probability in
+    real-world dataset sizes while keeping a positive integer compatible
+    with VelesDB point IDs.
     
     Args:
         value: String to hash.
@@ -52,7 +52,7 @@ def _stable_hash_id(value: str) -> int:
         Positive 63-bit integer ID compatible with VelesDB Core.
     """
     hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 8 bytes (64 bits) and mask sign bit for positive i64
+    # Use 8 bytes (64 bits) and clear sign bit to stay in positive i64 range.
     return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
@@ -740,3 +740,42 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             similarities=similarities,
             ids=ids,
         )
+
+    def explain(
+        self,
+        query_str: str,
+        **kwargs: Any,
+    ) -> dict:
+        """Get the query execution plan for a VelesQL query."""
+        validate_query(query_str)
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+        return self._collection.explain(query_str)
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> VectorStoreQueryResult:
+        """Execute a MATCH query and convert results to VectorStoreQueryResult."""
+        validate_query(query_str)
+        if self._collection is None:
+            return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+
+        results = self._collection.match_query(query_str, params=params, **kwargs)
+        nodes: List[TextNode] = []
+        similarities: List[float] = []
+        ids: List[str] = []
+
+        for result in results:
+            node_id = str(result.get("node_id", ""))
+            projected = result.get("projected", {})
+            bindings = result.get("bindings", {})
+            text = str(projected if projected else bindings)
+            score = float(result.get("score", 0.0) or 0.0)
+            nodes.append(TextNode(text=text, id_=node_id, metadata=result))
+            similarities.append(score)
+            ids.append(node_id)
+
+        return VectorStoreQueryResult(nodes=nodes, similarities=similarities, ids=ids)

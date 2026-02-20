@@ -1,6 +1,6 @@
 # VelesQL Language Specification
 
-*Version 2.0.0 — January 2026*
+*Version 2.1.0 — February 2026*
 
 VelesQL is a **SQL-like query language** designed specifically for vector search operations. If you know SQL, you already know VelesQL.
 
@@ -48,6 +48,13 @@ VelesQL is a query language that combines familiar SQL syntax with vector simila
 | ORDER BY | ✅ | ✅ Columns & similarity (v2.0) |
 | UNION/INTERSECT/EXCEPT | ✅ | ✅ Set operations (v2.0) |
 | Subqueries | ✅ | ❌ Not supported |
+
+### Contract Alignment Notes
+
+- Canonical REST contract: `docs/reference/VELESQL_CONTRACT.md`
+- Conformance matrix: `docs/reference/VELESQL_CONFORMANCE_CASES.md`
+- Supported hybrid predicate syntax for developer ergonomics:
+  `SELECT ... FROM <collection> WHERE <predicates> AND MATCH (...)`
 
 ---
 
@@ -719,9 +726,8 @@ LIMIT 10
 
 | Feature | Status | Workaround |
 |---------|--------|------------|
-| `LEFT/RIGHT/FULL JOIN` | ❌ Not supported | Use basic `JOIN` |
+| `LEFT/RIGHT/FULL JOIN` | ❌ Not supported in executor | Runtime returns explicit error; use `JOIN`/`INNER JOIN` |
 | Subqueries | ❌ Not supported | Use multiple queries |
-| `DISTINCT` | ❌ Not supported | Dedupe in application |
 | `ORDER BY` aggregates | ❌ Not supported | Sort in application |
 | Nested `GROUP BY` fields | ❌ Not supported | Use simple column names |
 
@@ -730,10 +736,11 @@ LIMIT 10
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `JOIN ... ON` | ✅ Supported | Basic inner join |
-| `JOIN ... USING (...)` | ⚠️ Partial | Parser support; runtime execution not yet supported |
+| `JOIN ... USING (...)` | ⚠️ Partial | Runtime supports single-column USING only |
 | `GROUP BY` | ✅ Supported | With aggregates |
 | `HAVING` | ✅ Supported | AND/OR operators |
 | `ORDER BY` | ✅ Supported | Columns, similarity() |
+| `DISTINCT` | ✅ Supported | `SELECT DISTINCT ...` |
 | `UNION/INTERSECT/EXCEPT` | ✅ Supported | Set operations |
 | `COUNT/SUM/AVG/MIN/MAX` | ✅ Supported | Aggregate functions |
 | `WITH (options)` | ✅ Supported | Query-time config |
@@ -741,7 +748,7 @@ LIMIT 10
 ### Planned Features (Roadmap)
 
 - `LEFT/RIGHT/FULL OUTER JOIN`
-- Full runtime execution for `JOIN USING (column)`
+- Multi-column and composite-key runtime execution for `JOIN USING (...)`
 - `ORDER BY` with aggregates
 - `EXPLAIN` for query analysis
 - Prepared query caching

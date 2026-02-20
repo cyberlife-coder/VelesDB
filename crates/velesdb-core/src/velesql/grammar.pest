@@ -5,8 +5,8 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
-// Main entry point - supports compound queries (EPIC-040 US-006) and MATCH queries (EPIC-045)
-query = { SOI ~ (match_query | compound_query) ~ ";"? ~ EOI }
+// Main entry point - supports SELECT, MATCH and DML (INSERT/UPDATE)
+query = { SOI ~ (match_query | compound_query | insert_stmt | update_stmt) ~ ";"? ~ EOI }
 
 // MATCH query for graph pattern matching (EPIC-045 US-001)
 // Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]
@@ -55,6 +55,22 @@ property_access = @{ identifier ~ "." ~ identifier }
 // Compound query: SELECT with optional UNION/INTERSECT/EXCEPT
 compound_query = { select_stmt ~ (set_operator ~ select_stmt)? }
 set_operator = { ^"UNION" ~ ^"ALL" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" }
+
+// INSERT statement: INSERT INTO table (col1, col2) VALUES (v1, v2)
+insert_stmt = {
+    ^"INSERT" ~ ^"INTO" ~ identifier ~
+    "(" ~ identifier ~ ("," ~ identifier)* ~ ")" ~
+    ^"VALUES" ~
+    "(" ~ value ~ ("," ~ value)* ~ ")"
+}
+
+// UPDATE statement: UPDATE table SET col1 = v1, col2 = v2 [WHERE ...]
+update_stmt = {
+    ^"UPDATE" ~ identifier ~
+    ^"SET" ~ assignment ~ ("," ~ assignment)* ~
+    where_clause?
+}
+assignment = { identifier ~ "=" ~ value }
 
 // SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
 // EPIC-052 US-001: Added DISTINCT support
@@ -108,7 +124,7 @@ column_ref = @{ identifier ~ "." ~ identifier }
 // ORDER BY clause (EPIC-040 US-002: supports columns, aggregates, similarity)
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
 order_by_item = { order_by_expr ~ sort_direction? }
-order_by_expr = { order_by_similarity | aggregate_function | identifier }
+order_by_expr = { order_by_similarity | aggregate_function | property_access | identifier }
 order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
 sort_direction = { ^"DESC" | ^"ASC" }
 
@@ -141,9 +157,12 @@ where_clause = { ^"WHERE" ~ or_expr }
 // Conditions with precedence (OR < AND < primary)
 or_expr = { and_expr ~ (^"OR" ~ and_expr)* }
 and_expr = { primary_expr ~ (^"AND" ~ primary_expr)* }
+where_column = { identifier ~ ("." ~ identifier)* }
 
 primary_expr = {
     "(" ~ or_expr ~ ")" |
+    not_expr |
+    graph_match_expr |
     similarity_expr |
     vector_fused_search |
     vector_search |
@@ -154,6 +173,12 @@ primary_expr = {
     is_null_expr |
     compare_expr
 }
+
+not_expr = { ^"NOT" ~ primary_expr }
+
+// Graph predicate inside SELECT WHERE clause:
+// WHERE ... AND MATCH (a)-[:REL]->(b)
+graph_match_expr = { ^"MATCH" ~ graph_pattern }
 
 // Similarity function: similarity(field, vector) op threshold
 // Used in hybrid graph-vector queries
@@ -186,25 +211,25 @@ vector_value = { vector_literal | parameter }
 vector_literal = { "[" ~ float ~ ("," ~ float)* ~ "]" }
 
 // Full-text search: column MATCH 'query'
-match_expr = { identifier ~ ^"MATCH" ~ string }
+match_expr = { where_column ~ ^"MATCH" ~ string }
 
 // IN expression: column IN (value, ...)
-in_expr = { identifier ~ ^"IN" ~ "(" ~ value_list ~ ")" }
+in_expr = { where_column ~ ^"IN" ~ "(" ~ value_list ~ ")" }
 value_list = { value ~ ("," ~ value)* }
 
 // BETWEEN expression: column BETWEEN value AND value
-between_expr = { identifier ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
+between_expr = { where_column ~ ^"BETWEEN" ~ value ~ ^"AND" ~ value }
 
 // LIKE / ILIKE expression: column LIKE 'pattern' or column ILIKE 'pattern'
-like_expr = { identifier ~ like_op ~ string }
+like_expr = { where_column ~ like_op ~ string }
 like_op = { ^"ILIKE" | ^"LIKE" }
 
 // IS NULL / IS NOT NULL
-is_null_expr = { identifier ~ ^"IS" ~ not_kw? ~ ^"NULL" }
+is_null_expr = { where_column ~ ^"IS" ~ not_kw? ~ ^"NULL" }
 not_kw = { ^"NOT" }
 
 // Comparison: column op value
-compare_expr = { identifier ~ compare_op ~ value }
+compare_expr = { where_column ~ compare_op ~ value }
 compare_op = { ">=" | "<=" | "<>" | "!=" | "=" | ">" | "<" }
 
 // LIMIT and OFFSET

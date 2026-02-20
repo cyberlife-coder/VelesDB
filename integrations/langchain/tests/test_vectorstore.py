@@ -14,6 +14,7 @@ try:
     from langchain_velesdb import VelesDBVectorStore
     from langchain_core.documents import Document
     from langchain_core.embeddings import Embeddings
+    from langchain_velesdb.vectorstore import _stable_hash_id
 except ImportError:
     pytest.skip("Dependencies not installed", allow_module_level=True)
 
@@ -177,6 +178,17 @@ class TestVelesDBVectorStore:
         # Should return results without error
         results = vectorstore.similarity_search("query", k=5)
         assert isinstance(results, list)
+
+    def test_stable_hash_id_is_deterministic_and_63bit(self):
+        """Stable IDs must remain deterministic with a wide collision space."""
+        first = _stable_hash_id("doc://alpha")
+        second = _stable_hash_id("doc://alpha")
+        other = _stable_hash_id("doc://beta")
+
+        assert first == second
+        assert first != other
+        assert 0 <= first <= 0x7FFFFFFFFFFFFFFF
+        assert first > 0xFFFFFFFF
 
 
 class TestVelesDBVectorStoreAdvanced:
@@ -623,6 +635,47 @@ class TestMultiQuerySearch:
         )
 
         assert len(results) <= 2
+
+
+class _MockCollectionQuery:
+    def explain(self, query_str):
+        return {"tree": "MockPlan", "estimated_cost_ms": 0.01}
+
+    def match_query(self, query_str, params=None, **kwargs):
+        return [
+            {
+                "node_id": 1,
+                "depth": 0,
+                "path": [],
+                "bindings": {"n": 1},
+                "score": 0.9,
+                "projected": {"n.name": "Alice"},
+            }
+        ]
+
+
+class TestVelesDBVectorStoreQueryAnalysis:
+    def test_explain_delegates_to_collection(self, temp_db_path, embeddings):
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_explain_delegate",
+        )
+        vectorstore._collection = _MockCollectionQuery()
+        plan = vectorstore.explain("SELECT * FROM test_explain_delegate LIMIT 1")
+        assert plan["tree"] == "MockPlan"
+
+    def test_match_query_delegates_and_converts_documents(self, temp_db_path, embeddings):
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_match_delegate",
+        )
+        vectorstore._collection = _MockCollectionQuery()
+        docs = vectorstore.match_query("MATCH (n) RETURN n")
+        assert len(docs) == 1
+        assert isinstance(docs[0], Document)
+        assert docs[0].metadata["node_id"] == 1
 
 
 if __name__ == "__main__":

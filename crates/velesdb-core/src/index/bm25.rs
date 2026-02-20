@@ -83,6 +83,14 @@ pub struct Bm25Index {
     inverted_index: RwLock<FxHashMap<String, PostingList>>,
     /// Document storage: id -> Document
     documents: RwLock<FxHashMap<u64, Document>>,
+    /// Point ID -> internal BM25 doc ID mapping.
+    point_to_doc: RwLock<FxHashMap<u64, u32>>,
+    /// Internal BM25 doc ID -> point ID mapping.
+    doc_to_point: RwLock<FxHashMap<u32, u64>>,
+    /// Recycled internal doc IDs.
+    free_doc_ids: RwLock<Vec<u32>>,
+    /// Next internal doc ID to allocate.
+    next_doc_id: RwLock<u32>,
     /// Total number of documents
     doc_count: RwLock<usize>,
     /// Sum of all document lengths (for avgdl calculation)
@@ -103,6 +111,10 @@ impl Bm25Index {
             params,
             inverted_index: RwLock::new(FxHashMap::default()),
             documents: RwLock::new(FxHashMap::default()),
+            point_to_doc: RwLock::new(FxHashMap::default()),
+            doc_to_point: RwLock::new(FxHashMap::default()),
+            free_doc_ids: RwLock::new(Vec::new()),
+            next_doc_id: RwLock::new(0),
             doc_count: RwLock::new(0),
             total_doc_length: RwLock::new(0),
         }
@@ -123,22 +135,10 @@ impl Bm25Index {
     ///
     /// # Arguments
     ///
-    /// * `id` - Unique document identifier (must be <= u32::MAX)
+    /// * `id` - Unique point identifier
     /// * `text` - Document text to index
     ///
-    /// # Panics
-    ///
-    /// Panics if `id` exceeds `u32::MAX`. The BM25 index uses `RoaringBitmap`
-    /// internally which only supports 32-bit document IDs.
     pub fn add_document(&self, id: u64, text: &str) {
-        assert!(
-            u32::try_from(id).is_ok(),
-            "BM25 document ID {} exceeds u32::MAX ({}). \
-             The BM25 index uses RoaringBitmap which only supports 32-bit IDs.",
-            id,
-            u32::MAX
-        );
-
         let tokens = Self::tokenize(text);
         if tokens.is_empty() {
             return;
@@ -161,11 +161,15 @@ impl Bm25Index {
             length: doc_length,
         };
 
-        // Update inverted index with adaptive PostingList
-        // PostingList auto-promotes to Roaring when cardinality exceeds threshold
-        // SAFETY: id validated above to fit in u32
-        #[allow(clippy::cast_possible_truncation)]
-        let id_u32 = id as u32;
+        // Remove previous version of this point from BM25 postings/doc stats
+        // while keeping the same internal doc-id mapping for stable updates.
+        self.remove_document_internal(id, false);
+
+        // Resolve internal BM25 doc ID (u32) for RoaringBitmap-backed postings.
+        let id_u32 = self.get_or_allocate_doc_id(id);
+
+        // Update inverted index with adaptive PostingList.
+        // PostingList auto-promotes to Roaring when cardinality exceeds threshold.
         {
             let mut inv_idx = self.inverted_index.write();
             for term in doc.term_freqs.keys() {
@@ -201,57 +205,14 @@ impl Bm25Index {
     ///
     /// # Arguments
     ///
-    /// * `id` - Document identifier (must be <= u32::MAX)
+    /// * `id` - Point identifier
     ///
     /// # Returns
     ///
     /// `true` if the document was found and removed.
     ///
-    /// # Panics
-    ///
-    /// Panics if `id` exceeds `u32::MAX`.
     pub fn remove_document(&self, id: u64) -> bool {
-        assert!(
-            u32::try_from(id).is_ok(),
-            "BM25 document ID {id} exceeds u32::MAX"
-        );
-
-        let doc = {
-            let mut docs = self.documents.write();
-            docs.remove(&id)
-        };
-
-        if let Some(doc) = doc {
-            // Remove from inverted index
-            // SAFETY: id validated above to fit in u32
-            #[allow(clippy::cast_possible_truncation)]
-            let id_u32 = id as u32;
-            {
-                let mut inv_idx = self.inverted_index.write();
-                for term in doc.term_freqs.keys() {
-                    if let Some(posting_list) = inv_idx.get_mut(term) {
-                        posting_list.remove(id_u32);
-                        if posting_list.is_empty() {
-                            inv_idx.remove(term);
-                        }
-                    }
-                }
-            }
-
-            // Update counts
-            {
-                let mut count = self.doc_count.write();
-                *count = count.saturating_sub(1);
-            }
-            {
-                let mut total = self.total_doc_length.write();
-                *total = total.saturating_sub(u64::from(doc.length));
-            }
-
-            true
-        } else {
-            false
-        }
+        self.remove_document_internal(id, true)
     }
 
     /// Searches the index for documents matching the query.
@@ -287,6 +248,7 @@ impl Bm25Index {
         let mut scores: Vec<(u64, f32)> = {
             let inv_idx = self.inverted_index.read();
             let docs = self.documents.read();
+            let doc_to_point = self.doc_to_point.read();
             let n = doc_count as f32;
 
             // Build IDF cache
@@ -315,7 +277,7 @@ impl Bm25Index {
             candidate_union
                 .iter()
                 .filter_map(|doc_id_u32| {
-                    let doc_id = u64::from(doc_id_u32);
+                    let doc_id = *doc_to_point.get(&doc_id_u32)?;
                     let doc = docs.get(&doc_id)?;
                     let score =
                         Self::score_document_fast(doc, &query_terms, &idf_cache, k1, b, avgdl);
@@ -390,6 +352,75 @@ impl Bm25Index {
     #[must_use]
     pub fn term_count(&self) -> usize {
         self.inverted_index.read().len()
+    }
+
+    /// Gets existing internal doc-id or allocates a new one.
+    fn get_or_allocate_doc_id(&self, point_id: u64) -> u32 {
+        if let Some(existing) = self.point_to_doc.read().get(&point_id).copied() {
+            return existing;
+        }
+
+        let allocated = if let Some(recycled) = self.free_doc_ids.write().pop() {
+            recycled
+        } else {
+            let mut next = self.next_doc_id.write();
+            let current = *next;
+            *next = next
+                .checked_add(1)
+                .expect("BM25 internal doc-id space exhausted (u32)");
+            current
+        };
+
+        self.point_to_doc.write().insert(point_id, allocated);
+        self.doc_to_point.write().insert(allocated, point_id);
+        allocated
+    }
+
+    /// Removes a point from BM25 internals.
+    /// If `release_mapping` is true, the internal doc-id is recycled.
+    fn remove_document_internal(&self, point_id: u64, release_mapping: bool) -> bool {
+        let Some(doc_id_u32) = self.point_to_doc.read().get(&point_id).copied() else {
+            return false;
+        };
+
+        let doc = {
+            let mut docs = self.documents.write();
+            docs.remove(&point_id)
+        };
+
+        let mut removed = false;
+        if let Some(doc) = doc {
+            {
+                let mut inv_idx = self.inverted_index.write();
+                for term in doc.term_freqs.keys() {
+                    if let Some(posting_list) = inv_idx.get_mut(term) {
+                        posting_list.remove(doc_id_u32);
+                        if posting_list.is_empty() {
+                            inv_idx.remove(term);
+                        }
+                    }
+                }
+            }
+
+            {
+                let mut count = self.doc_count.write();
+                *count = count.saturating_sub(1);
+            }
+            {
+                let mut total = self.total_doc_length.write();
+                *total = total.saturating_sub(u64::from(doc.length));
+            }
+
+            removed = true;
+        }
+
+        if release_mapping {
+            self.point_to_doc.write().remove(&point_id);
+            self.doc_to_point.write().remove(&doc_id_u32);
+            self.free_doc_ids.write().push(doc_id_u32);
+        }
+
+        removed
     }
 }
 

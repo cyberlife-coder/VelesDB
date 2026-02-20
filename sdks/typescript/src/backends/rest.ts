@@ -494,15 +494,15 @@ export class RestBackend implements IVelesDBBackend {
     this.ensureInitialized();
 
     // Note: Server uses POST /query (not /collections/{name}/query)
-    // The collection name is extracted from the VelesQL query string (FROM clause)
-    // The `collection` param here is kept for API compatibility but not used in URL
-    // Server QueryRequest only accepts { query, params }
+    // SELECT queries use FROM clause for collection resolution.
+    // MATCH top-level queries require `collection` in the request body.
     const response = await this.request<QueryResponse>(
       'POST',
       '/query',
       {
         query: queryString,
         params: params ?? {},
+        collection,
       }
     );
 

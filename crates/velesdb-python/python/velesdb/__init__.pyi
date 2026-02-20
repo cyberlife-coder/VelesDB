@@ -182,8 +182,7 @@ class Collection:
         self,
         vector: Union[List[float], np.ndarray],
         top_k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
+    ) -> List[Dict[str, Any]]:
         """Search and return only IDs and scores.
         
         Args:
@@ -194,6 +193,37 @@ class Collection:
         Returns:
             List of (id, score) tuples
         """
+        ...
+
+    def search_with_ef(
+        self,
+        vector: Union[List[float], np.ndarray],
+        top_k: int = 10,
+        ef_search: int = 128,
+    ) -> List[Dict[str, Any]]:
+        """Search with custom HNSW ef_search parameter."""
+        ...
+
+    def query(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query."""
+        ...
+
+    def query_ids(self, velesql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a VelesQL query returning only IDs and scores."""
+        ...
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[Dict[str, Any]] = None,
+        vector: Optional[Union[List[float], np.ndarray]] = None,
+        threshold: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Execute a MATCH graph query."""
+        ...
+
+    def explain(self, query_str: str) -> Dict[str, Any]:
+        """Return execution plan for a VelesQL query."""
         ...
     
     def multi_query_search(
@@ -283,6 +313,14 @@ class Collection:
     
     def flush(self) -> None:
         """Flush pending changes to disk."""
+        ...
+
+    def count(self) -> int:
+        """Return number of points in the collection."""
+        ...
+
+    def get_graph_store(self) -> "GraphStore":
+        """Get a graph store adapter for edge/traversal operations."""
         ...
     
     # Index Management (EPIC-009)
@@ -443,6 +481,54 @@ class Database:
     def flush(self) -> None:
         """Flush all pending changes to disk."""
         ...
+
+
+# =============================================================================
+# VelesQL Classes
+# =============================================================================
+
+class VelesQLSyntaxError(Exception):
+    """Raised when VelesQL parsing fails due to syntax error."""
+    ...
+
+
+class VelesQLParameterError(Exception):
+    """Raised when VelesQL query parameters are invalid."""
+    ...
+
+
+class ParsedStatement:
+    """Parsed VelesQL statement with helper inspectors."""
+
+    table_name: str
+    columns: List[str]
+    limit: Optional[int]
+    offset: Optional[int]
+    group_by: List[str]
+    order_by: List[Tuple[str, str]]
+
+    def is_valid(self) -> bool: ...
+    def is_select(self) -> bool: ...
+    def is_match(self) -> bool: ...
+    def has_where_clause(self) -> bool: ...
+    def has_vector_search(self) -> bool: ...
+    def has_order_by(self) -> bool: ...
+    def has_group_by(self) -> bool: ...
+    def has_distinct(self) -> bool: ...
+    def has_joins(self) -> bool: ...
+    def has_fusion(self) -> bool: ...
+    @property
+    def join_count(self) -> int: ...
+
+
+class VelesQL:
+    """VelesQL parser entrypoint."""
+
+    def __init__(self) -> None: ...
+    @staticmethod
+    def parse(query: str) -> ParsedStatement: ...
+    @staticmethod
+    def is_valid(query: str) -> bool: ...
 
 
 # =============================================================================

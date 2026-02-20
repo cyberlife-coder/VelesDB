@@ -1,0 +1,70 @@
+{
+  "contract_version": "2.1.0",
+  "cases": [
+    {
+      "id": "C001",
+      "description": "SELECT query returns contract metadata",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT * FROM docs_conformance WHERE vector NEAR $v LIMIT 1",
+        "params": { "v": [1.0, 0.0, 0.0, 0.0] }
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C002",
+      "description": "Top-level MATCH via /query requires collection",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "MATCH (d:Doc) RETURN d LIMIT 1",
+        "params": {}
+      },
+      "expected_status": 422,
+      "expected_error_code": "VELESQL_MISSING_COLLECTION"
+    },
+    {
+      "id": "C003",
+      "description": "Unknown collection returns VELESQL_COLLECTION_NOT_FOUND",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELECT * FROM docs_missing_conformance WHERE vector NEAR $v LIMIT 1",
+        "params": { "v": [1.0, 0.0, 0.0, 0.0] }
+      },
+      "expected_status": 404,
+      "expected_error_code": "VELESQL_COLLECTION_NOT_FOUND"
+    },
+    {
+      "id": "C004",
+      "description": "Parse error shape remains parser-specific",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "SELEC * FROM docs_conformance",
+        "params": {}
+      },
+      "expected_status": 400
+    },
+    {
+      "id": "C005",
+      "description": "Top-level MATCH via /query succeeds with explicit collection",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/query",
+      "body": {
+        "query": "MATCH (d:Doc) RETURN d LIMIT 1",
+        "collection": "docs_conformance",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    }
+  ]
+}

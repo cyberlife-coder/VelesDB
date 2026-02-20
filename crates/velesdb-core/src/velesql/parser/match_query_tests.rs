@@ -44,9 +44,7 @@ fn test_parse_match_incoming_relationship() {
 
 #[test]
 fn test_parse_match_with_where() {
-    // TODO: EPIC-045 US-004 - Support property access (n.age) in WHERE
-    // For now, test with simple column comparison
-    let query = Parser::parse("MATCH (n:Person) WHERE age > 18 RETURN n").unwrap();
+    let query = Parser::parse("MATCH (n:Person) WHERE n.age > 18 RETURN n").unwrap();
     assert!(query.is_match_query());
     let mc = query.match_clause.unwrap();
     assert!(mc.where_clause.is_some());

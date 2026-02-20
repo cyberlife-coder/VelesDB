@@ -35,7 +35,7 @@ impl Default for HnswParams {
 impl HnswParams {
     /// Creates optimized parameters based on vector dimension.
     ///
-    /// These defaults are tuned for datasets up to 100K vectors with ≥95% recall.
+    /// These defaults are tuned for datasets up to 100K vectors with high recall targets.
     /// For larger datasets, use [`HnswParams::for_dataset_size`].
     #[must_use]
     pub fn auto(dimension: usize) -> Self {
@@ -46,7 +46,7 @@ impl HnswParams {
                 max_elements: 100_000,
                 storage_mode: StorageMode::Full,
             },
-            // 257+ dimensions: aggressive params for ≥95% recall
+            // 257+ dimensions: aggressive params targeting high recall
             _ => Self {
                 max_connections: 32,
                 ef_construction: 400,
@@ -58,7 +58,7 @@ impl HnswParams {
 
     /// Creates parameters optimized for a specific dataset size.
     ///
-    /// **GUARANTEES ≥95% recall** up to 1M vectors.
+    /// Targets high recall up to 1M vectors under benchmark-calibrated settings.
     ///
     /// # Parameters by Scale
     ///
@@ -95,7 +95,7 @@ impl HnswParams {
                     max_elements: 150_000,
                     storage_mode: StorageMode::Full,
                 },
-                // 768D at 100K: M=128, ef=1600 for ≥95% recall
+                // 768D at 100K: M=128, ef=1600 targeting high recall
                 _ => Self {
                     max_connections: 128,
                     ef_construction: 1600,
@@ -112,7 +112,7 @@ impl HnswParams {
                     max_elements: 750_000,
                     storage_mode: StorageMode::Full,
                 },
-                // 768D at 500K: M=128, ef=2000 for ≥95% recall
+                // 768D at 500K: M=128, ef=2000 targeting high recall
                 _ => Self {
                     max_connections: 128,
                     ef_construction: 2000,
@@ -120,7 +120,7 @@ impl HnswParams {
                     storage_mode: StorageMode::Full,
                 },
             },
-            // Very large datasets (up to 1M): maximum params for ≥95% recall
+            // Very large datasets (up to 1M): maximum params targeting high recall
             _ => match dimension {
                 0..=256 => Self {
                     max_connections: 64,
@@ -148,7 +148,7 @@ impl HnswParams {
         Self::for_dataset_size(dimension, 500_000)
     }
 
-    /// Creates parameters for 1 million vectors with ≥95% recall guarantee.
+    /// Creates parameters for 1 million vectors with high-recall target settings.
     ///
     /// Based on `OpenSearch` 2025 research: M=128, `ef_construction`=1600.
     #[must_use]

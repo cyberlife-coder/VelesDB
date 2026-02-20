@@ -38,10 +38,10 @@ def _stable_hash_id(value: str) -> int:
     
     Python's hash() is non-deterministic across processes, so we use
     SHA256 for consistent IDs across runs.
-    
-    Uses 63 bits (fits in i64/u64) from SHA256. For datasets >1M documents,
-    collision probability increases but remains acceptable (<0.01%).
-    For mission-critical deduplication, use explicit UUIDs.
+
+    Uses 63 bits from SHA256 for a very low collision probability in
+    real-world dataset sizes while keeping a positive integer compatible
+    with VelesDB point IDs.
     
     Args:
         value: String to hash.
@@ -50,7 +50,7 @@ def _stable_hash_id(value: str) -> int:
         Positive 63-bit integer ID compatible with VelesDB Core.
     """
     hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 8 bytes (64 bits) and mask sign bit for positive i64
+    # Use 8 bytes (64 bits) and clear sign bit to stay in positive i64 range.
     return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
@@ -827,6 +827,40 @@ class VelesDBVectorStore(VectorStore):
             doc = Document(page_content=text, metadata=metadata)
             documents.append(doc)
 
+        return documents
+
+    def explain(
+        self,
+        query_str: str,
+        **kwargs: Any,
+    ) -> dict:
+        """Get the query execution plan for a VelesQL query."""
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        return self._collection.explain(query_str)
+
+    def match_query(
+        self,
+        query_str: str,
+        params: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Execute a MATCH query and convert results to LangChain Documents."""
+        validate_query(query_str)
+
+        if self._collection is None:
+            raise ValueError("Collection not initialized. Add documents first.")
+
+        results = self._collection.match_query(query_str, params=params, **kwargs)
+        documents: List[Document] = []
+        for result in results:
+            projected = result.get("projected", {})
+            bindings = result.get("bindings", {})
+            page_content = str(projected if projected else bindings)
+            documents.append(Document(page_content=page_content, metadata=result))
         return documents
 
     def multi_query_search(

@@ -17,6 +17,7 @@
 
 mod grouped;
 
+use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -160,11 +161,22 @@ impl Collection {
             ));
         }
 
-        // BUG-5 FIX: Resolve parameter placeholders in WHERE clause before creating filter
-        let filter = stmt.where_clause.as_ref().map(|cond| {
-            let resolved = Self::resolve_condition_params(cond, params);
-            crate::filter::Filter::new(crate::filter::Condition::from(resolved))
+        let where_clause = stmt.where_clause.as_ref();
+        let use_runtime_where_eval = where_clause.is_some_and(|cond| {
+            Self::condition_contains_graph_match(cond) || Self::condition_requires_vector_eval(cond)
         });
+        let needs_vector_eval = where_clause.is_some_and(Self::condition_requires_vector_eval);
+
+        // BUG-5 FIX: Resolve parameter placeholders in WHERE clause before creating filter.
+        // For graph/vector-aware predicates, use runtime evaluator instead.
+        let filter = if use_runtime_where_eval {
+            None
+        } else {
+            where_clause.as_ref().map(|cond| {
+                let resolved = Self::resolve_condition_params(cond, params);
+                crate::filter::Filter::new(crate::filter::Condition::from(resolved))
+            })
+        };
 
         // Create aggregator
         let mut aggregator = Aggregator::new();
@@ -189,7 +201,7 @@ impl Collection {
         let total_count = ids.len();
 
         // Use parallel aggregation for large datasets
-        let agg_result = if total_count >= PARALLEL_THRESHOLD {
+        let agg_result = if total_count >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
             // PARALLEL: Pre-fetch all payloads (sequential) to avoid lock contention
             let payloads: Vec<Option<serde_json::Value>> = ids
                 .iter()
@@ -248,11 +260,31 @@ impl Collection {
             final_agg.finalize()
         } else {
             // SEQUENTIAL: Original single-pass for small datasets
+            let mut graph_cache = GraphMatchEvalCache::default();
             for id in ids {
                 let payload = payload_storage.retrieve(id).ok().flatten();
 
-                // Apply filter if present
-                if let Some(ref f) = filter {
+                if use_runtime_where_eval {
+                    let vector = if needs_vector_eval {
+                        vector_storage.retrieve(id).ok().flatten()
+                    } else {
+                        None
+                    };
+                    if let Some(cond) = where_clause {
+                        let matches = self.evaluate_where_condition_for_record(
+                            cond,
+                            id,
+                            payload.as_ref(),
+                            vector.as_deref(),
+                            params,
+                            stmt.from_alias.as_deref(),
+                            &mut graph_cache,
+                        )?;
+                        if !matches {
+                            continue;
+                        }
+                    }
+                } else if let Some(ref f) = filter {
                     let matches = match payload {
                         Some(ref p) => f.matches(p),
                         None => f.matches(&serde_json::Value::Null),

@@ -35,6 +35,8 @@ In-depth technical documentation:
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
 | [VelesQL Specification](./reference/VELESQL_SPEC.md) | Query language grammar and syntax |
 | [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
+| [VelesQL Conformance Cases](./reference/VELESQL_CONFORMANCE_CASES.md) | Valid/invalid contract cases and expected error shapes |
+| [Performance SLO](./reference/PERFORMANCE_SLO.md) | CI-enforced performance objectives and budget gates |
 | [REST API](./reference/api-reference.md) | HTTP API endpoints |
 | [SIMD Performance](./reference/SIMD_PERFORMANCE.md) | SIMD optimizations and benchmarks |
 

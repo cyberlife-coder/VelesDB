@@ -2,15 +2,13 @@
 //!
 //! This module implements JOIN execution between graph traversal results
 //! and ColumnStore data with adaptive batch sizing.
-//!
-//! Note: Functions in this module are tested but not yet integrated into
-//! execute_query. Integration is planned for future work.
 
 #![allow(dead_code)]
 
 use crate::column_store::ColumnStore;
+use crate::error::{Error, Result};
 use crate::point::SearchResult;
-use crate::velesql::{JoinClause, JoinCondition};
+use crate::velesql::{ColumnRef, JoinClause, JoinCondition, JoinType};
 use std::collections::HashMap;
 
 /// Result of a JOIN operation, combining graph result with column data.
@@ -119,20 +117,32 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
 ///
 /// Vector of JoinedResults containing merged data.
 /// Returns empty vector if the join condition's left column doesn't match the primary key.
+///
+/// # Errors
+///
+/// Returns an error when:
+/// - the JOIN type is not supported at runtime,
+/// - the JOIN condition is missing or invalid,
+/// - the target `ColumnStore` has no primary key,
+/// - the JOIN column does not match the target primary key.
 #[allow(clippy::cognitive_complexity)] // Reason: Linear flow with early returns, splitting would reduce readability
 pub fn execute_join(
     results: &[SearchResult],
     join: &JoinClause,
     column_store: &ColumnStore,
-) -> Vec<JoinedResult> {
-    // EPIC-040 US-003: Handle Option<JoinCondition> - USING clause not yet supported for execution
-    let Some(condition) = &join.condition else {
-        // BUG-003 FIX: Log instead of silent return
-        tracing::warn!(
-            "JOIN with USING clause not yet supported for execution on table '{}'",
+) -> Result<Vec<JoinedResult>> {
+    if join.join_type != JoinType::Inner {
+        return Err(Error::Query(format!(
+            "JOIN type '{:?}' is parsed but not supported in runtime execution yet. Use INNER JOIN or JOIN.",
+            join.join_type
+        )));
+    }
+
+    let Some(condition) = resolve_join_condition(join) else {
+        return Err(Error::Query(format!(
+            "JOIN on table '{}' must use ON condition or USING(single_column).",
             join.table
-        );
-        return Vec::new();
+        )));
     };
 
     // 1. Validate that join column matches ColumnStore's primary key
@@ -140,28 +150,23 @@ pub fn execute_join(
     let join_column = &condition.left.column;
     if let Some(pk_column) = column_store.primary_key_column() {
         if join_column != pk_column {
-            // BUG-003 FIX: Log non-PK join attempt
-            tracing::warn!(
-                "Cannot join on non-primary-key column '{}' (PK is '{}'). Use PK column for JOIN.",
-                join_column,
-                pk_column
-            );
-            return Vec::new();
+            return Err(Error::Query(format!(
+                "JOIN on table '{}' requires primary key '{}', got '{}'.",
+                join.table, pk_column, join_column
+            )));
         }
     } else {
-        // BUG-003 FIX: Log missing PK configuration
-        tracing::warn!(
-            "ColumnStore '{}' has no primary key configured - cannot perform PK-based join",
+        return Err(Error::Query(format!(
+            "JOIN target '{}' has no primary key configured.",
             join.table
-        );
-        return Vec::new();
+        )));
     }
 
     // 2. Extract join keys from search results
-    let join_keys = extract_join_keys(results, condition);
+    let join_keys = extract_join_keys(results, &condition);
 
     if join_keys.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // 3. Determine adaptive batch size
@@ -191,7 +196,62 @@ pub fn execute_join(
         }
     }
 
-    joined_results
+    Ok(joined_results)
+}
+
+/// Resolves JOIN condition for execution from either `ON` or `USING` syntax.
+///
+/// Current runtime supports:
+/// - `JOIN ... ON left = right`
+/// - `JOIN ... USING (single_column)`
+///
+/// `USING` with multiple columns is currently not supported because execution
+/// path relies on a single primary key lookup.
+fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
+    if let Some(condition) = &join.condition {
+        return Some(normalize_join_condition(condition, join));
+    }
+
+    let Some(using_columns) = &join.using_columns else {
+        return None;
+    };
+
+    if using_columns.len() != 1 {
+        return None;
+    }
+
+    let join_column = using_columns[0].clone();
+    Some(JoinCondition {
+        left: ColumnRef {
+            table: Some(join.table.clone()),
+            column: join_column.clone(),
+        },
+        right: ColumnRef {
+            table: None,
+            column: join_column,
+        },
+    })
+}
+
+/// Normalizes ON condition so that `left` refers to the joined table and `right`
+/// refers to the current result set side.
+fn normalize_join_condition(condition: &JoinCondition, join: &JoinClause) -> JoinCondition {
+    let is_join_side = |table: Option<&str>| {
+        table.is_some_and(|t| t == join.table || join.alias.as_deref().is_some_and(|a| a == t))
+    };
+
+    if is_join_side(condition.left.table.as_deref()) {
+        return condition.clone();
+    }
+
+    if is_join_side(condition.right.table.as_deref()) {
+        return JoinCondition {
+            left: condition.right.clone(),
+            right: condition.left.clone(),
+        };
+    }
+
+    condition.clone()
 }
 
 /// Batch get rows from ColumnStore by primary keys.

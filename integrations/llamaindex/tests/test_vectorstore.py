@@ -8,6 +8,7 @@ import pytest
 from llama_index.core.schema import TextNode
 
 from llamaindex_velesdb import VelesDBVectorStore
+from llamaindex_velesdb.vectorstore import _stable_hash_id
 
 
 class TestVelesDBVectorStore:
@@ -124,6 +125,17 @@ class TestVelesDBVectorStore:
         """Test client property returns database."""
         client = vector_store.client
         assert client is not None
+
+    def test_stable_hash_id_is_deterministic_and_63bit(self):
+        """Stable IDs must remain deterministic with a wide collision space."""
+        first = _stable_hash_id("node://alpha")
+        second = _stable_hash_id("node://alpha")
+        other = _stable_hash_id("node://beta")
+
+        assert first == second
+        assert first != other
+        assert 0 <= first <= 0x7FFFFFFFFFFFFFFF
+        assert first > 0xFFFFFFFF
 
 
 class TestVelesDBVectorStoreAdvanced:
@@ -491,6 +503,40 @@ class TestMultiQuerySearch:
         )
 
         assert len(result.nodes) <= 2
+
+
+class _MockCollectionQuery:
+    def explain(self, query_str):
+        return {"tree": "MockPlan", "estimated_cost_ms": 0.01}
+
+    def match_query(self, query_str, params=None, **kwargs):
+        return [
+            {
+                "node_id": 42,
+                "depth": 1,
+                "path": [1, 2],
+                "bindings": {"n": 42},
+                "score": 0.77,
+                "projected": {"n.name": "Neo"},
+            }
+        ]
+
+
+class TestVelesDBVectorStoreQueryAnalysis:
+    def test_explain_delegates_to_collection(self, tmp_path):
+        store = VelesDBVectorStore(path=str(tmp_path), collection_name="explain_delegate")
+        store._collection = _MockCollectionQuery()
+        plan = store.explain("SELECT * FROM explain_delegate LIMIT 1")
+        assert plan["tree"] == "MockPlan"
+
+    def test_match_query_delegates_and_returns_vectorstore_result(self, tmp_path):
+        store = VelesDBVectorStore(path=str(tmp_path), collection_name="match_delegate")
+        store._collection = _MockCollectionQuery()
+        result = store.match_query("MATCH (n) RETURN n")
+        assert len(result.nodes) == 1
+        assert result.ids == ["42"]
+        assert result.similarities == [0.77]
+        assert isinstance(result.nodes[0], TextNode)
 
 
 if __name__ == "__main__":

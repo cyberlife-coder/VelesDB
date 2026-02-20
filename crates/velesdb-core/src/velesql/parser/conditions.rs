@@ -10,6 +10,25 @@ use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
 impl Parser {
+    fn extract_column_name(pair: &pest::iterators::Pair<'_, Rule>) -> String {
+        if pair.as_rule() != Rule::column_name && pair.as_rule() != Rule::where_column {
+            return extract_identifier(pair);
+        }
+
+        let parts: Vec<String> = pair
+            .clone()
+            .into_inner()
+            .filter(|p| p.as_rule() == Rule::identifier)
+            .map(|p| extract_identifier(&p))
+            .collect();
+
+        if parts.is_empty() {
+            pair.as_str().to_string()
+        } else {
+            parts.join(".")
+        }
+    }
+
     pub(crate) fn parse_where_clause(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
@@ -72,7 +91,16 @@ impl Parser {
                 let cond = Self::parse_or_expr(inner)?;
                 Ok(Condition::Group(Box::new(cond)))
             }
+            Rule::not_expr => {
+                let nested = inner
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| ParseError::syntax(0, "", "Expected expression after NOT"))?;
+                let cond = Self::parse_primary_expr(nested)?;
+                Ok(Condition::Not(Box::new(cond)))
+            }
             Rule::similarity_expr => Self::parse_similarity_expr(inner),
+            Rule::graph_match_expr => Self::parse_graph_match_expr(inner),
             Rule::vector_fused_search => Self::parse_vector_fused_search(inner),
             Rule::vector_search => Self::parse_vector_search(inner),
             Rule::match_expr => Self::parse_match_expr(inner),
@@ -277,7 +305,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let query = inner
             .next()
@@ -289,6 +317,23 @@ impl Parser {
         Ok(Condition::Match(MatchCondition { column, query }))
     }
 
+    pub(crate) fn parse_graph_match_expr(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut graph_pattern = None;
+        for inner in pair.into_inner() {
+            if inner.as_rule() == Rule::graph_pattern {
+                graph_pattern = Some(Self::parse_graph_pattern(inner)?);
+            }
+        }
+
+        let pattern =
+            graph_pattern.ok_or_else(|| ParseError::syntax(0, "", "Expected MATCH pattern"))?;
+        Ok(Condition::GraphMatch(crate::velesql::GraphMatchPredicate {
+            pattern,
+        }))
+    }
+
     pub(crate) fn parse_in_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
@@ -297,7 +342,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let value_list = inner
             .next()
@@ -323,7 +368,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let low = Self::parse_value(
             inner
@@ -348,7 +393,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         // Parse LIKE or ILIKE operator
         let like_op = inner
@@ -380,8 +425,8 @@ impl Parser {
 
         for inner in pair.into_inner() {
             match inner.as_rule() {
-                Rule::identifier => {
-                    column = extract_identifier(&inner);
+                Rule::identifier | Rule::column_name | Rule::where_column => {
+                    column = Self::extract_column_name(&inner);
                 }
                 Rule::not_kw => {
                     has_not = true;
@@ -408,7 +453,7 @@ impl Parser {
         let column_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = extract_identifier(&column_pair);
+        let column = Self::extract_column_name(&column_pair);
 
         let op_pair = inner
             .next()

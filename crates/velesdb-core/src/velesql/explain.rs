@@ -283,6 +283,9 @@ impl QueryPlan {
             Condition::Match(m) => {
                 filter_conditions.push(format!("{} MATCH ?", m.column));
             }
+            Condition::GraphMatch(_) => {
+                filter_conditions.push("MATCH (...)".to_string());
+            }
             Condition::And(left, right) | Condition::Or(left, right) => {
                 Self::analyze_condition(left, has_vector_search, filter_conditions);
                 Self::analyze_condition(right, has_vector_search, filter_conditions);

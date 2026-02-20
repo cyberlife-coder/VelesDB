@@ -180,6 +180,9 @@ fn get_condition_source(
             classify_column(&m.column, graph_vars, join_tables)
         }
 
+        // Graph pattern predicates are executed by graph traversal logic.
+        Condition::GraphMatch(_) => Source::Graph,
+
         // Design: Vector conditions are classified as Graph because VelesDB stores
         // embeddings in the collection/graph layer. If future versions support vector
         // columns in ColumnStore, this classification will need to be extended.

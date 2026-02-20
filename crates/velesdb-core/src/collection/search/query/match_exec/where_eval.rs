@@ -15,22 +15,44 @@ impl Collection {
     pub(crate) fn evaluate_where_condition(
         &self,
         node_id: u64,
+        bindings: Option<&HashMap<String, u64>>,
         condition: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<bool> {
         use crate::velesql::Condition;
 
         let payload_storage = self.payload_storage.read();
-        let payload = payload_storage.retrieve(node_id).ok().flatten();
 
         match condition {
             Condition::Comparison(cmp) => {
-                let Some(ref payload) = payload else {
+                let target_id = if let Some((alias, _rest)) = cmp.column.split_once('.') {
+                    bindings
+                        .and_then(|b| b.get(alias).copied())
+                        .unwrap_or(node_id)
+                } else {
+                    node_id
+                };
+                let Some(target_payload) = payload_storage.retrieve(target_id).ok().flatten()
+                else {
                     return Ok(false);
                 };
 
-                // Get the actual value from payload
-                let actual_value = payload.get(&cmp.column);
+                // Get the actual value from payload.
+                // Supports:
+                // - simple key: age
+                // - alias.property: n.age
+                // - nested key path: metadata.profile.age
+                let column_path = if let Some((alias, rest)) = cmp.column.split_once('.') {
+                    if bindings.and_then(|b| b.get(alias)).is_some() {
+                        rest
+                    } else {
+                        cmp.column.as_str()
+                    }
+                } else {
+                    cmp.column.as_str()
+                };
+
+                let actual_value = Self::json_get_path(&target_payload, column_path);
                 let Some(actual) = actual_value else {
                     return Ok(false);
                 };
@@ -42,24 +64,27 @@ impl Collection {
                 Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
             }
             Condition::And(left, right) => {
-                let left_result = self.evaluate_where_condition(node_id, left, params)?;
+                let left_result = self.evaluate_where_condition(node_id, bindings, left, params)?;
                 if !left_result {
                     return Ok(false);
                 }
-                self.evaluate_where_condition(node_id, right, params)
+                self.evaluate_where_condition(node_id, bindings, right, params)
             }
             Condition::Or(left, right) => {
-                let left_result = self.evaluate_where_condition(node_id, left, params)?;
+                let left_result = self.evaluate_where_condition(node_id, bindings, left, params)?;
                 if left_result {
                     return Ok(true);
                 }
-                self.evaluate_where_condition(node_id, right, params)
+                self.evaluate_where_condition(node_id, bindings, right, params)
             }
             Condition::Not(inner) => {
-                let inner_result = self.evaluate_where_condition(node_id, inner, params)?;
+                let inner_result =
+                    self.evaluate_where_condition(node_id, bindings, inner, params)?;
                 Ok(!inner_result)
             }
-            Condition::Group(inner) => self.evaluate_where_condition(node_id, inner, params),
+            Condition::Group(inner) => {
+                self.evaluate_where_condition(node_id, bindings, inner, params)
+            }
             Condition::Similarity(sim) => {
                 // EPIC-052 US-007: Evaluate similarity condition in WHERE clause
                 self.evaluate_similarity_condition(node_id, sim, params)
@@ -272,5 +297,17 @@ impl Collection {
             // Type mismatch
             _ => Ok(false),
         }
+    }
+
+    fn json_get_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+        if path.is_empty() {
+            return Some(root);
+        }
+
+        let mut current = root;
+        for part in path.split('.') {
+            current = current.get(part)?;
+        }
+        Some(current)
     }
 }
