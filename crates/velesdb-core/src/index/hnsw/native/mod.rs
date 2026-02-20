@@ -52,7 +52,7 @@ pub use distance::{
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub use graph::NativeHnsw;
 pub use layer::{Layer, NodeId};
-pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
+pub use quantization::{QuantizedVectorInt8, QuantizedVectorInt8Store, ScalarQuantizer};
 pub use search::SearchResult;
 
 #[cfg(test)]

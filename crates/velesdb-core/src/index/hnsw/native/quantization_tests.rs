@@ -2,7 +2,7 @@
 
 #![allow(clippy::similar_names)] // q_min, q_max, q_mid are intentionally similar
 
-use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
+use super::quantization::{QuantizedVectorInt8Store, ScalarQuantizer};
 use std::sync::Arc;
 
 // =========================================================================
@@ -175,13 +175,13 @@ fn test_distance_l2_asymmetric_close_to_exact() {
 }
 
 // =========================================================================
-// TDD Tests: QuantizedVectorStore
+// TDD Tests: QuantizedVectorInt8Store
 // =========================================================================
 
 #[test]
 fn test_store_push_and_get() {
     let quantizer = Arc::new(ScalarQuantizer::train(&[&[0.0, 0.0], &[10.0, 10.0]]));
-    let mut store = QuantizedVectorStore::new(quantizer.clone(), 100);
+    let mut store = QuantizedVectorInt8Store::new(quantizer.clone(), 100);
 
     store.push(&[2.0, 3.0]);
     store.push(&[7.0, 8.0]);
@@ -198,7 +198,7 @@ fn test_store_push_and_get() {
 #[test]
 fn test_store_get_out_of_bounds_returns_none() {
     let quantizer = Arc::new(ScalarQuantizer::train(&[&[0.0], &[10.0]]));
-    let store = QuantizedVectorStore::new(quantizer, 100);
+    let store = QuantizedVectorInt8Store::new(quantizer, 100);
 
     assert!(store.get(0).is_none());
     assert!(store.get(100).is_none());
@@ -207,7 +207,7 @@ fn test_store_get_out_of_bounds_returns_none() {
 #[test]
 fn test_store_get_slice_zero_copy() {
     let quantizer = Arc::new(ScalarQuantizer::train(&[&[0.0, 0.0], &[10.0, 10.0]]));
-    let mut store = QuantizedVectorStore::new(quantizer.clone(), 100);
+    let mut store = QuantizedVectorInt8Store::new(quantizer.clone(), 100);
 
     store.push(&[5.0, 5.0]);
 

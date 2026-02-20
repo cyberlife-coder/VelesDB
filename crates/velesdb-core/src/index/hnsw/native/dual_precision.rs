@@ -24,7 +24,7 @@
 use super::distance::DistanceEngine;
 use super::graph::NativeHnsw;
 use super::layer::NodeId;
-use super::quantization::{QuantizedVectorStore, ScalarQuantizer};
+use super::quantization::{QuantizedVectorInt8Store, ScalarQuantizer};
 use std::sync::Arc;
 
 /// Configuration for dual-precision search (EPIC-055/US-003).
@@ -65,7 +65,7 @@ pub struct DualPrecisionHnsw<D: DistanceEngine> {
     /// Scalar quantizer (trained lazily or on first batch)
     quantizer: Option<Arc<ScalarQuantizer>>,
     /// Quantized vector storage (contiguous int8 array)
-    quantized_store: Option<QuantizedVectorStore>,
+    quantized_store: Option<QuantizedVectorInt8Store>,
     /// Dimension of vectors
     dimension: usize,
     /// Training sample size for quantizer
@@ -157,7 +157,8 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         let quantizer = Arc::new(ScalarQuantizer::train(&refs));
 
         // Create quantized store and quantize all existing vectors
-        let mut store = QuantizedVectorStore::new(Arc::clone(&quantizer), self.inner.len() + 1000);
+        let mut store =
+            QuantizedVectorInt8Store::new(Arc::clone(&quantizer), self.inner.len() + 1000);
 
         // Quantize training buffer (already in order)
         for vec in &self.training_buffer {
@@ -330,7 +331,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         query_int8: &[u8],
         k: usize,
         ef_search: usize,
-        store: &QuantizedVectorStore,
+        store: &QuantizedVectorInt8Store,
     ) -> Vec<(NodeId, u32)> {
         use rustc_hash::FxHashSet;
         use std::cmp::Reverse;
@@ -410,7 +411,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         query_int8: &[u8],
         entry: NodeId,
         layer: usize,
-        store: &QuantizedVectorStore,
+        store: &QuantizedVectorInt8Store,
     ) -> NodeId {
         let quantizer = store.quantizer();
         let mut current = entry;
