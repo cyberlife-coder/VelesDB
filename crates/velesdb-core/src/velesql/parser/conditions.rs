@@ -249,8 +249,19 @@ impl Parser {
                                         (fp_inner.next(), fp_inner.next())
                                     {
                                         let key_str = key.as_str().to_string();
-                                        let val_f64 = val.as_str().parse::<f64>().unwrap_or(0.0);
-                                        params.insert(key_str, val_f64);
+                                        let val_str = val.as_str();
+                                        // D-09 fix: reject invalid fusion params instead of silent default
+                                        match val_str.parse::<f64>() {
+                                            Ok(val_f64) => {
+                                                params.insert(key_str, val_f64);
+                                            }
+                                            Err(_) => {
+                                                tracing::warn!(
+                                                    "Invalid fusion parameter '{}' = '{}': expected numeric value, skipping",
+                                                    key_str, val_str
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
