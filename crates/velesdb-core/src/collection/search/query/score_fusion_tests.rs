@@ -132,7 +132,7 @@ fn test_scored_result_with_breakdown() {
 
 #[test]
 fn test_fusion_strategy_as_str() {
-    assert_eq!(FusionStrategy::Rrf.as_str(), "rrf");
+    assert_eq!(FusionStrategy::HarmonicMean.as_str(), "harmonic_mean");
     assert_eq!(FusionStrategy::Weighted.as_str(), "weighted");
     assert_eq!(FusionStrategy::Maximum.as_str(), "maximum");
     assert_eq!(FusionStrategy::Average.as_str(), "average");

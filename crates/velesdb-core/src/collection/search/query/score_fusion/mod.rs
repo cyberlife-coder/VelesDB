@@ -157,14 +157,19 @@ impl ScoreBreakdown {
     }
 }
 
-/// Strategy for combining multiple scores (EPIC-049 US-004).
+/// Strategy for combining multiple score components within a single result (EPIC-049 US-004).
+///
+/// **Not to be confused with `crate::fusion::FusionStrategy`** which combines
+/// results from multiple ranked lists (multi-query fusion).
+/// This enum combines score *components* (vector, graph, path) into a final score.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FusionStrategy {
-    /// Reciprocal Rank Fusion (RRF) - good for combining ranked lists.
+    /// Harmonic mean of scores — balances all components, penalizes low outliers.
+    /// Replaces broken RRF-as-score-proxy (C-04 fix).
     #[default]
-    Rrf,
+    HarmonicMean,
 
-    /// Weighted average of scores.
+    /// Weighted average of scores (equal weights — use CompositeBoost for custom weights).
     Weighted,
 
     /// Take the maximum score.
@@ -206,14 +211,23 @@ impl FusionStrategy {
                 .fold(1.0, |acc, &b| acc * b.max(0.0));
 
         let base_score = match self {
-            Self::Rrf => {
-                // RRF: sum of 1/(k + rank) - here we use score as proxy
-                // Higher scores get lower "ranks"
-                let k = 60.0_f32;
-                scores.iter().map(|&s| 1.0 / (k + (1.0 - s) * 100.0)).sum()
+            Self::HarmonicMean => {
+                // Harmonic mean: n / Σ(1/s_i) — balances components, penalizes low outliers.
+                // C-04 fix: replaces broken RRF-as-score-proxy formula.
+                let reciprocal_sum: f32 = scores
+                    .iter()
+                    .map(|&s| {
+                        let clamped = s.max(1e-6); // Avoid division by zero
+                        1.0 / clamped
+                    })
+                    .sum();
+                // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
+                #[allow(clippy::cast_precision_loss)]
+                let n = scores.len() as f32;
+                n / reciprocal_sum
             }
             Self::Weighted => {
-                // Equal weights for now - could be configurable
+                // Equal weights — use CompositeBoost for custom per-component weights.
                 // SAFETY: scores.len() is typically < 100, fits in f32 with full precision
                 #[allow(clippy::cast_precision_loss)]
                 let weight = 1.0 / scores.len() as f32;
@@ -234,7 +248,7 @@ impl FusionStrategy {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Rrf => "rrf",
+            Self::HarmonicMean => "harmonic_mean",
             Self::Weighted => "weighted",
             Self::Maximum => "maximum",
             Self::Minimum => "minimum",
