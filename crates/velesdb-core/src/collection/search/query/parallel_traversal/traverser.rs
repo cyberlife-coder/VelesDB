@@ -208,8 +208,9 @@ impl ParallelTraverser {
         stack.push((start, Vec::new(), 0));
 
         while let Some((node, path, depth)) = stack.pop() {
+            // M-03 fix: use break (like BFS) for consistent early termination
             if depth >= self.config.max_depth || results.len() >= self.config.limit {
-                continue;
+                break;
             }
 
             let neighbors = adjacency(node);

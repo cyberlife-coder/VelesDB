@@ -201,13 +201,19 @@ impl Iterator for BfsIterator<'_> {
                     continue;
                 }
 
-                // Track visited if not overflowed
-                // Note: When overflow occurs, we trade cycle detection for memory efficiency.
-                // The max_depth limit ensures termination even without visited tracking.
+                // Track visited if not overflowed (B-05 fix).
+                // When overflow occurs, we stop inserting but KEEP the existing visited set.
+                // Clearing would cause previously visited nodes to be re-traversed in cyclic
+                // graphs, producing duplicates and exponential blowup.
+                // The max_depth limit ensures termination even if new nodes can't be tracked.
                 if !self.visited_overflow {
                     if self.visited.len() >= self.config.max_visited_size {
                         self.visited_overflow = true;
-                        self.visited.clear(); // Free memory
+                        tracing::warn!(
+                            "BFS visited set overflow at {} entries — cycle detection degraded",
+                            self.config.max_visited_size
+                        );
+                        // Note: Do NOT clear visited set — keep existing entries for cycle detection
                     } else {
                         self.visited.insert(target);
                     }
