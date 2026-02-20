@@ -34,15 +34,10 @@ impl GpuAccelerator {
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
     pub fn new() -> Option<Self> {
-        // Some backends can panic during adapter/device discovery on headless hosts.
-        // Treat those as "GPU unavailable" to keep fallback paths functional.
-        std::panic::catch_unwind(Self::new_impl).ok().flatten()
-    }
-
-    #[must_use]
-    fn new_impl() -> Option<Self> {
+        // Avoid probing GLES/EGL on headless Linux where some drivers may abort.
+        let backends = Self::preferred_backends();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends,
             ..Default::default()
         });
 
@@ -139,6 +134,20 @@ impl GpuAccelerator {
             queue,
             cosine_pipeline,
         })
+    }
+
+    #[must_use]
+    fn preferred_backends() -> wgpu::Backends {
+        #[cfg(target_os = "linux")]
+        {
+            let has_display = std::env::var_os("DISPLAY").is_some()
+                || std::env::var_os("WAYLAND_DISPLAY").is_some();
+            if !has_display {
+                return wgpu::Backends::VULKAN;
+            }
+        }
+
+        wgpu::Backends::all()
     }
 
     /// Checks if GPU acceleration is available (cached).
