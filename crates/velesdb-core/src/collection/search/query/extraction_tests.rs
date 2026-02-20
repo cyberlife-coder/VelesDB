@@ -209,3 +209,67 @@ fn test_collect_graph_match_predicates_nested() {
     Collection::collect_graph_match_predicates(&cond, &mut predicates);
     assert_eq!(predicates.len(), 2);
 }
+
+// =============================================================================
+// B-01 Regression Tests: NaN/Infinity vector rejection
+// =============================================================================
+
+#[test]
+fn test_resolve_vector_rejects_nan_json_null() {
+    // JSON spec doesn't support NaN — serde_json serializes NaN as null.
+    // The important thing is the value IS rejected, not what error message says.
+    let vector = VectorExpr::Parameter("v".to_string());
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, null, 3.0]));
+    let result = Collection::resolve_vector(&vector, &params);
+    assert!(result.is_err(), "NaN (as JSON null) must be rejected");
+}
+
+#[test]
+fn test_resolve_vector_rejects_infinity_json_null() {
+    // JSON spec doesn't support Infinity — serde_json serializes it as null.
+    let vector = VectorExpr::Parameter("v".to_string());
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, 2.0, null]));
+    let result = Collection::resolve_vector(&vector, &params);
+    assert!(result.is_err(), "Infinity (as JSON null) must be rejected");
+}
+
+#[test]
+fn test_resolve_vector_rejects_string_in_array() {
+    // Non-numeric values in the vector array must be rejected.
+    let vector = VectorExpr::Parameter("v".to_string());
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, "NaN", 3.0]));
+    let result = Collection::resolve_vector(&vector, &params);
+    assert!(result.is_err(), "String 'NaN' in vector must be rejected");
+}
+
+#[test]
+fn test_resolve_vector_accepts_valid_values() {
+    let vector = VectorExpr::Parameter("v".to_string());
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.1, -0.5, 0.99]));
+    let result = Collection::resolve_vector(&vector, &params);
+    assert!(result.is_ok());
+    let vec = result.unwrap();
+    assert_eq!(vec.len(), 3);
+    assert!((vec[0] - 0.1).abs() < 0.001);
+}
+
+#[test]
+fn test_resolve_vector_rejects_non_number() {
+    let vector = VectorExpr::Parameter("v".to_string());
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "v".to_string(),
+        serde_json::json!([1.0, "not_a_number", 3.0]),
+    );
+    let result = Collection::resolve_vector(&vector, &params);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("not a number"),
+        "Error should mention 'not a number': {err_msg}"
+    );
+}

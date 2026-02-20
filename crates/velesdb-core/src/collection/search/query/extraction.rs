@@ -39,28 +39,26 @@ impl Collection {
                         })?;
                         if let serde_json::Value::Array(arr) = val {
                             arr.iter()
-                                .map(|v| {
-                                    v.as_f64()
-                                        .and_then(|f| {
-                                            // Validate f64 value is within f32 representable range
-                                            if f.is_finite()
-                                                && f >= f64::from(f32::MIN)
-                                                && f <= f64::from(f32::MAX)
-                                            {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
-                                            } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            }
-                                        })
-                                        .ok_or_else(|| {
-                                            Error::Config(format!(
-                                                "Invalid vector parameter ${name}: value out of f32 range or not a number"
-                                            ))
-                                        })
+                                .enumerate()
+                                .map(|(i, v)| {
+                                    let f = v.as_f64().ok_or_else(|| {
+                                        Error::Config(format!(
+                                            "Invalid vector parameter ${name}[{i}]: not a number"
+                                        ))
+                                    })?;
+                                    // Reject NaN and Infinity (B-01)
+                                    if !f.is_finite() {
+                                        return Err(Error::Config(format!(
+                                            "Invalid vector parameter ${name}[{i}]: NaN or Infinity values are not allowed"
+                                        )));
+                                    }
+                                    if f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
+                                        return Err(Error::Config(format!(
+                                            "Invalid vector parameter ${name}[{i}]: value {f} out of f32 range"
+                                        )));
+                                    }
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    Ok(f as f32)
                                 })
                                 .collect::<Result<Vec<f32>>>()?
                         } else {
@@ -105,27 +103,26 @@ impl Collection {
                         })?;
                         if let serde_json::Value::Array(arr) = val {
                             arr.iter()
-                                .map(|v| {
-                                    v.as_f64()
-                                        .and_then(|f| {
-                                            if f.is_finite()
-                                                && f >= f64::from(f32::MIN)
-                                                && f <= f64::from(f32::MAX)
-                                            {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
-                                            } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            }
-                                        })
-                                        .ok_or_else(|| {
-                                            Error::Config(format!(
-                                                "Invalid vector parameter ${name}: value out of f32 range or not a number"
-                                            ))
-                                        })
+                                .enumerate()
+                                .map(|(i, v)| {
+                                    let f = v.as_f64().ok_or_else(|| {
+                                        Error::Config(format!(
+                                            "Invalid vector parameter ${name}[{i}]: not a number"
+                                        ))
+                                    })?;
+                                    // Reject NaN and Infinity (B-01)
+                                    if !f.is_finite() {
+                                        return Err(Error::Config(format!(
+                                            "Invalid vector parameter ${name}[{i}]: NaN or Infinity values are not allowed"
+                                        )));
+                                    }
+                                    if f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
+                                        return Err(Error::Config(format!(
+                                            "Invalid vector parameter ${name}[{i}]: value {f} out of f32 range"
+                                        )));
+                                    }
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    Ok(f as f32)
                                 })
                                 .collect::<Result<Vec<f32>>>()?
                         } else {
@@ -240,27 +237,26 @@ impl Collection {
                     .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
                 if let serde_json::Value::Array(arr) = val {
                     arr.iter()
-                        .map(|v| {
-                            v.as_f64()
-                                .and_then(|f| {
-                                    if f.is_finite()
-                                        && f >= f64::from(f32::MIN)
-                                        && f <= f64::from(f32::MAX)
-                                    {
-                                        #[allow(clippy::cast_possible_truncation)]
-                                        Some(f as f32)
-                                    } else if f.is_finite() {
-                                        None
-                                    } else {
-                                        #[allow(clippy::cast_possible_truncation)]
-                                        Some(f as f32)
-                                    }
-                                })
-                                .ok_or_else(|| {
-                                    Error::Config(format!(
-                                        "Invalid vector parameter ${name}: value out of f32 range or not a number"
-                                    ))
-                                })
+                        .enumerate()
+                        .map(|(i, v)| {
+                            let f = v.as_f64().ok_or_else(|| {
+                                Error::Config(format!(
+                                    "Invalid vector parameter ${name}[{i}]: not a number"
+                                ))
+                            })?;
+                            // Reject NaN and Infinity (B-01)
+                            if !f.is_finite() {
+                                return Err(Error::Config(format!(
+                                    "Invalid vector parameter ${name}[{i}]: NaN or Infinity values are not allowed"
+                                )));
+                            }
+                            if f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
+                                return Err(Error::Config(format!(
+                                    "Invalid vector parameter ${name}[{i}]: value {f} out of f32 range"
+                                )));
+                            }
+                            #[allow(clippy::cast_possible_truncation)]
+                            Ok(f as f32)
                         })
                         .collect::<Result<Vec<f32>>>()
                 } else {
