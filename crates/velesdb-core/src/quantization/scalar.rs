@@ -191,12 +191,30 @@ pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -
 
     let dot = dot_product_quantized(query, quantized);
 
-    // Compute norms using direct SIMD dispatch
+    // Compute query norm using SIMD
     let query_norm = simd_native::norm_native(query);
 
-    // Dequantize to compute quantized vector norm (could be cached)
-    let reconstructed = quantized.to_f32();
-    let quantized_norm = simd_native::norm_native(&reconstructed);
+    // B-06 fix: compute quantized norm WITHOUT full dequantization.
+    // Norm = sqrt(Σ (q_i * scale + min)²) where scale = (max-min)/255
+    let range = quantized.max - quantized.min;
+    let quantized_norm = if range < f32::EPSILON {
+        // All values are the same: norm = sqrt(dim) * |min|
+        // Reason: dimension is typically < 16M, fits in f32 mantissa (23 bits)
+        #[allow(clippy::cast_precision_loss)]
+        let dim = quantized.data.len() as f32;
+        dim.sqrt() * quantized.min.abs()
+    } else {
+        let scale = range / 255.0;
+        let sum_sq: f32 = quantized
+            .data
+            .iter()
+            .map(|&q| {
+                let val = f32::from(q) * scale + quantized.min;
+                val * val
+            })
+            .sum();
+        sum_sq.sqrt()
+    };
 
     if query_norm < f32::EPSILON || quantized_norm < f32::EPSILON {
         return 0.0;
