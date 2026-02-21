@@ -193,6 +193,10 @@ impl ColumnStore {
                     }
                 }
                 self.deleted_rows.remove(&row_idx);
+                // D-07 fix: also update RoaringBitmap when undeleting via upsert
+                if let Ok(idx) = u32::try_from(row_idx) {
+                    self.deletion_bitmap.remove(idx);
+                }
                 self.row_expiry.remove(&row_idx);
                 let value_map: std::collections::HashMap<&str, &ColumnValue> =
                     values.iter().map(|(k, v)| (*k, v)).collect();
