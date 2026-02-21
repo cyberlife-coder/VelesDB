@@ -54,6 +54,35 @@ impl Default for DualPrecisionConfig {
     }
 }
 
+impl DualPrecisionConfig {
+    /// D-02 fix: Compute adaptive oversampling ratio based on index size and k.
+    ///
+    /// - Small indexes (10k-50k): higher oversampling (6x) to compensate for quantization noise
+    /// - Medium indexes (50k-500k): default oversampling (4x)
+    /// - Large indexes (500k+): lower oversampling (3x) — int8 is more discriminative
+    ///
+    /// Also scales up when k is large relative to index size (hard queries).
+    #[must_use]
+    pub fn adaptive_oversampling(&self, index_size: usize, k: usize) -> usize {
+        let base = if index_size < 50_000 {
+            6
+        } else if index_size < 500_000 {
+            self.oversampling_ratio
+        } else {
+            3
+        };
+
+        // Scale up when k is large relative to index size (>1% of index)
+        let k_ratio_boost = if index_size > 0 && k * 100 > index_size {
+            2
+        } else {
+            1
+        };
+
+        (base * k_ratio_boost).max(2) // Minimum 2x oversampling
+    }
+}
+
 /// Dual-precision HNSW index with int8 traversal and float32 re-ranking.
 ///
 /// This implementation follows the VSAG paper's dual-precision architecture:
@@ -217,7 +246,9 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             // Check minimum index size — int8 overhead not worth it for small indexes
             if self.inner.len() >= DualPrecisionConfig::default().min_index_size {
                 let query_quantized = quantizer.quantize(query);
-                let oversampling = DualPrecisionConfig::default().oversampling_ratio;
+                // D-02 fix: adaptive oversampling based on index size and k
+                let config = DualPrecisionConfig::default();
+                let oversampling = config.adaptive_oversampling(self.inner.len(), k);
                 let candidates_k = k * oversampling;
                 let coarse_candidates =
                     self.search_layer_int8(&query_quantized.data, candidates_k, ef_search, store);
