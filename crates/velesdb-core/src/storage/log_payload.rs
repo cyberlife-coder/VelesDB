@@ -46,7 +46,7 @@ const DEFAULT_SNAPSHOT_THRESHOLD: u64 = 10 * 1024 * 1024;
 /// Used for snapshot integrity validation.
 #[inline]
 #[allow(clippy::cast_possible_truncation)] // Table index always 0-255
-fn crc32_hash(data: &[u8]) -> u32 {
+pub(crate) fn crc32_hash(data: &[u8]) -> u32 {
     const CRC32_TABLE: [u32; 256] = {
         let mut table = [0u32; 256];
         let mut i = 0;
@@ -91,6 +91,8 @@ pub struct LogPayloadStorage {
     reader: RwLock<File>,
     /// WAL position at last snapshot (0 = no snapshot)
     last_snapshot_wal_pos: RwLock<u64>,
+    /// D-05 fix: in-memory WAL write position to avoid flush+metadata() per store.
+    wal_write_pos: std::sync::atomic::AtomicU64,
 }
 
 impl LogPayloadStorage {
@@ -142,10 +144,14 @@ impl LogPayloadStorage {
             wal: RwLock::new(wal),
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
+            wal_write_pos: std::sync::atomic::AtomicU64::new(wal_len),
         })
     }
 
     /// Replays WAL entries from `start_pos` to `end_pos`, updating the index.
+    ///
+    /// D-04 fix: verifies CRC32 per entry. Stops replay on CRC mismatch
+    /// (truncated/corrupted tail), preserving all valid entries before it.
     fn replay_wal_from(
         log_path: &Path,
         mut index: FxHashMap<u64, u64>,
@@ -172,12 +178,14 @@ impl LogPayloadStorage {
 
             // Read ID (8 bytes)
             let mut id_bytes = [0u8; 8];
-            reader_buf.read_exact(&mut id_bytes)?;
+            if reader_buf.read_exact(&mut id_bytes).is_err() {
+                break;
+            }
             let id = u64::from_le_bytes(id_bytes);
             pos += 8;
 
             if marker[0] == 1 {
-                // Store operation
+                // Store operation: Op(1) | ID(8) | Len(4) | Data(N) | CRC(4)
                 let len_offset = pos;
 
                 // Read Len (4 bytes)
@@ -186,18 +194,74 @@ impl LogPayloadStorage {
                 let payload_len = u64::from(u32::from_le_bytes(len_bytes));
                 pos += 4;
 
-                index.insert(id, len_offset);
-
-                // Skip payload data
-                let skip = i64::try_from(payload_len)
+                // Read payload data for CRC verification
+                let payload_usize = usize::try_from(payload_len)
                     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
-                reader_buf.seek(SeekFrom::Current(skip))?;
+                let mut payload_data = vec![0u8; payload_usize];
+                reader_buf.read_exact(&mut payload_data)?;
                 pos += payload_len;
+
+                // D-04: Read and verify CRC
+                let mut crc_bytes = [0u8; 4];
+                if reader_buf.read_exact(&mut crc_bytes).is_err() {
+                    // Truncated CRC — treat as incomplete entry, stop replay
+                    tracing::warn!("WAL replay: truncated CRC at pos {pos}, stopping");
+                    break;
+                }
+                let stored_crc = u32::from_le_bytes(crc_bytes);
+                pos += 4;
+
+                // Recompute CRC over Op + ID + Len + Data
+                let mut crc_buf = Vec::with_capacity(1 + 8 + 4 + payload_usize);
+                crc_buf.push(marker[0]);
+                crc_buf.extend_from_slice(&id_bytes);
+                crc_buf.extend_from_slice(&len_bytes);
+                crc_buf.extend_from_slice(&payload_data);
+                let computed_crc = crc32_hash(&crc_buf);
+
+                if stored_crc != computed_crc {
+                    tracing::warn!(
+                        "WAL replay: CRC mismatch at pos {}, expected {:#010x}, got {:#010x}. Stopping replay.",
+                        pos - 4, computed_crc, stored_crc
+                    );
+                    break;
+                }
+
+                index.insert(id, len_offset);
             } else if marker[0] == 2 {
-                // Delete operation
+                // Delete operation: Op(1) | ID(8) | CRC(4)
+                // D-04: Read and verify CRC
+                let mut crc_bytes = [0u8; 4];
+                if reader_buf.read_exact(&mut crc_bytes).is_err() {
+                    tracing::warn!("WAL replay: truncated delete CRC at pos {pos}, stopping");
+                    break;
+                }
+                let stored_crc = u32::from_le_bytes(crc_bytes);
+                pos += 4;
+
+                let mut crc_buf = [0u8; 9];
+                crc_buf[0] = marker[0];
+                crc_buf[1..9].copy_from_slice(&id_bytes);
+                let computed_crc = crc32_hash(&crc_buf);
+
+                if stored_crc != computed_crc {
+                    tracing::warn!(
+                        "WAL replay: delete CRC mismatch at pos {}, stopping.",
+                        pos - 4
+                    );
+                    break;
+                }
+
                 index.remove(&id);
             } else {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown marker"));
+                // Unknown marker — possibly legacy WAL without CRC.
+                // Try to handle gracefully by stopping replay.
+                tracing::warn!(
+                    "WAL replay: unknown marker {} at pos {}, stopping.",
+                    marker[0],
+                    pos - 9
+                );
+                break;
             }
         }
 
@@ -381,24 +445,32 @@ impl PayloadStorage for LogPayloadStorage {
         let mut wal = self.wal.write();
         let mut index = self.index.write();
 
-        // Let's force flush to get accurate position or track it manually.
-        wal.flush()?;
-        let pos = wal.get_ref().metadata()?.len();
+        // D-05 fix: use in-memory position tracker instead of flush+metadata().
+        let pos = self
+            .wal_write_pos
+            .load(std::sync::atomic::Ordering::Relaxed);
 
-        // Op: Store (1) | ID | Len | Data
-        // Pos points to start of record (Marker)
-        // We want index to point to Len (Marker(1) + ID(8) = +9 bytes)
-
-        wal.write_all(&[1u8])?;
-        wal.write_all(&id.to_le_bytes())?;
+        // D-04 fix: compute CRC32 over the entire entry (Op + ID + Len + Data).
         let len_u32 = u32::try_from(payload_bytes.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
-        wal.write_all(&len_u32.to_le_bytes())?;
-        wal.write_all(&payload_bytes)?;
+        let mut crc_buf = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len());
+        crc_buf.push(1u8);
+        crc_buf.extend_from_slice(&id.to_le_bytes());
+        crc_buf.extend_from_slice(&len_u32.to_le_bytes());
+        crc_buf.extend_from_slice(&payload_bytes);
+        let crc = crc32_hash(&crc_buf);
 
-        // Flush to ensure reader sees it
+        // Write: Op(1) | ID(8) | Len(4) | Data(N) | CRC(4)
+        wal.write_all(&crc_buf)?;
+        wal.write_all(&crc.to_le_bytes())?;
         wal.flush()?;
 
+        // Entry size: 1 + 8 + 4 + N + 4 = 17 + N
+        let entry_size = 1 + 8 + 4 + payload_bytes.len() as u64 + 4;
+        self.wal_write_pos
+            .store(pos + entry_size, std::sync::atomic::Ordering::Relaxed);
+
+        // Index points to Len field offset (Marker(1) + ID(8) = +9 bytes from entry start)
         index.insert(id, pos + 9);
 
         Ok(())
@@ -431,8 +503,19 @@ impl PayloadStorage for LogPayloadStorage {
         let mut wal = self.wal.write();
         let mut index = self.index.write();
 
-        wal.write_all(&[2u8])?;
-        wal.write_all(&id.to_le_bytes())?;
+        // D-04 fix: compute CRC32 over Op + ID
+        let mut crc_buf = [0u8; 9];
+        crc_buf[0] = 2u8;
+        crc_buf[1..9].copy_from_slice(&id.to_le_bytes());
+        let crc = crc32_hash(&crc_buf);
+
+        // Write: Op(1) | ID(8) | CRC(4)
+        wal.write_all(&crc_buf)?;
+        wal.write_all(&crc.to_le_bytes())?;
+
+        // D-05 fix: update in-memory position (entry size: 1 + 8 + 4 = 13)
+        self.wal_write_pos
+            .fetch_add(13, std::sync::atomic::Ordering::Relaxed);
 
         index.remove(&id);
 
