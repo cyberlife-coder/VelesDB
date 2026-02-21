@@ -43,6 +43,7 @@ struct Args {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)] // Reason: sequential server setup — splitting would hurt readability
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
@@ -135,6 +136,18 @@ async fn main() -> anyhow::Result<()> {
     // Swagger UI (stateless router)
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
 
+    // S-04: Initialize rate limiter from env (disabled if VELESDB_RATE_LIMIT not set)
+    let rate_limiter = velesdb_server::middleware::rate_limit::RateLimiterState::from_env();
+    if let Some(ref rl) = rate_limiter {
+        tracing::info!(
+            "Rate limiting ENABLED: {} requests per {} seconds",
+            rl.max_requests,
+            rl.window_secs
+        );
+    } else {
+        tracing::info!("Rate limiting DISABLED. Set VELESDB_RATE_LIMIT env var to enable.");
+    }
+
     // S-01: Log auth status on startup
     if std::env::var("VELESDB_API_KEY").is_ok() {
         tracing::info!("API key authentication ENABLED (VELESDB_API_KEY is set)");
@@ -144,12 +157,16 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Build main app with Swagger UI + auth middleware
+    // Build main app with Swagger UI + auth + rate limit middleware
     let app = api_router
         .merge(Router::<()>::new().merge(swagger_ui))
         .layer(axum_middleware::from_fn(
             velesdb_server::middleware::auth::api_key_auth,
         ))
+        .layer(axum_middleware::from_fn(
+            velesdb_server::middleware::rate_limit::rate_limit_middleware,
+        ))
+        .layer(axum::Extension(rate_limiter))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
