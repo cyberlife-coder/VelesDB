@@ -356,7 +356,8 @@ impl Bm25Index {
 
     /// Gets existing internal doc-id or allocates a new one.
     fn get_or_allocate_doc_id(&self, point_id: u64) -> u32 {
-        if let Some(existing) = self.point_to_doc.read().get(&point_id).copied() {
+        let mut map = self.point_to_doc.write();
+        if let Some(existing) = map.get(&point_id).copied() {
             return existing;
         }
 
@@ -371,7 +372,7 @@ impl Bm25Index {
             current
         };
 
-        self.point_to_doc.write().insert(point_id, allocated);
+        map.insert(point_id, allocated);
         self.doc_to_point.write().insert(allocated, point_id);
         allocated
     }

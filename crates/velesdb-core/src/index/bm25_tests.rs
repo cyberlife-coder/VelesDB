@@ -310,6 +310,35 @@ fn test_concurrent_reads() {
     }
 }
 
+#[test]
+fn test_concurrent_add_same_point_id_keeps_single_mapping() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let index = Arc::new(Bm25Index::new());
+    let barrier = Arc::new(Barrier::new(8));
+
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            let idx = Arc::clone(&index);
+            let sync = Arc::clone(&barrier);
+            thread::spawn(move || {
+                sync.wait();
+                idx.add_document(42, &format!("thread-{i} document"));
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("Thread panicked");
+    }
+
+    assert_eq!(index.len(), 1);
+    let results = index.search("document", 10);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, 42);
+}
+
 // =========================================================================
 // ID mapping tests (PointId u64 -> BM25 DocId u32)
 // =========================================================================

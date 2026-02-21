@@ -299,6 +299,13 @@ impl Database {
             return self.execute_dml(dml, params);
         }
 
+        if query.is_match_query() {
+            return Err(Error::Query(
+                "Database::execute_query does not support top-level MATCH queries. Use Collection::execute_query or pass the collection name."
+                    .to_string(),
+            ));
+        }
+
         let base_name = query.select.from.clone();
         let base_collection = self
             .get_collection(&base_name)
@@ -1092,6 +1099,22 @@ mod tests {
             })
             .collect();
         assert_eq!(names, vec!["Alice", "Bob", "Charlie"]);
+    }
+
+    #[test]
+    fn test_database_execute_query_rejects_top_level_match_queries() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection("docs", 2, DistanceMetric::Cosine)
+            .unwrap();
+
+        let query = Parser::parse("MATCH (d:Doc) RETURN d LIMIT 10").unwrap();
+        let err = db
+            .execute_query(&query, &std::collections::HashMap::new())
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Database::execute_query does not support top-level MATCH queries"));
     }
 
     #[test]

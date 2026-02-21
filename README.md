@@ -434,6 +434,8 @@ curl -X POST http://localhost:8080/query \
 | `/collections` | `POST` | Create a collection |
 | `/collections/{name}` | `GET` | Get collection info |
 | `/collections/{name}` | `DELETE` | Delete a collection |
+| `/collections/{name}/empty` | `POST` | Remove all points from a collection |
+| `/collections/{name}/flush` | `POST` | Flush collection data to disk |
 
 ### Points
 
@@ -450,6 +452,8 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/search` | `POST` | Vector similarity search |
 | `/collections/{name}/search/batch` | `POST` | Batch search (multiple queries) |
 | `/collections/{name}/search/multi` | `POST` | Multi-query search |
+| `/collections/{name}/search/text` | `POST` | BM25 full-text search |
+| `/collections/{name}/search/hybrid` | `POST` | Hybrid vector + text search |
 
 ### Graph
 
@@ -473,6 +477,7 @@ curl -X POST http://localhost:8080/query \
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/query` | `POST` | Execute VelesQL (Vector + Graph + ColumnStore queries) |
+| `/query/explain` | `POST` | Return query execution plan (EXPLAIN) |
 
 **VelesQL v2.0 Features:**
 - `GROUP BY` / `HAVING` with AND/OR operators
@@ -502,6 +507,7 @@ SELECT * FROM active UNION SELECT * FROM archived
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | `GET` | Health check |
+| `/metrics` | `GET` | Prometheus metrics endpoint |
 
 ### Request/Response Examples
 
