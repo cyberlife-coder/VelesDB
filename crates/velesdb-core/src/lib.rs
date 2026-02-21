@@ -1018,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn test_database_execute_query_rejects_left_join_runtime() {
+    fn test_database_execute_query_supports_left_join_runtime() {
         let dir = tempdir().unwrap();
         let db = Database::open(dir.path()).unwrap();
         db.create_collection("orders", 2, DistanceMetric::Cosine)
@@ -1030,10 +1030,10 @@ mod tests {
             "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id",
         )
         .unwrap();
-        let err = db
+        let results = db
             .execute_query(&query, &std::collections::HashMap::new())
-            .unwrap_err();
-        assert!(err.to_string().contains("not supported in runtime"));
+            .unwrap();
+        assert!(results.is_empty());
     }
 
     #[test]
