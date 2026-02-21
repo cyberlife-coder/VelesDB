@@ -52,8 +52,10 @@ pub(crate) enum CARTNode {
 impl CARTNode {
     /// Creates a new leaf node with a single entry.
     pub(crate) fn new_leaf(value: u64) -> Self {
+        let mut entries = Vec::with_capacity(super::MAX_LEAF_ENTRIES);
+        entries.push(value);
         Self::Leaf {
-            entries: vec![value],
+            entries,
             prefix: Vec::new(),
         }
     }
@@ -144,8 +146,7 @@ impl CARTNode {
                 match entries.binary_search(&value) {
                     Ok(_) => false, // Already exists
                     Err(pos) => {
-                        // Note: Leaf splitting not yet implemented (TODO)
-                        // Insert regardless of capacity for now
+                        // Leaf stores sorted local bucket; internal-node growth handles branching.
                         entries.insert(pos, value);
                         true
                     }

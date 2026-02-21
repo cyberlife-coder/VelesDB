@@ -7,9 +7,9 @@
 
 use crate::column_store::ColumnStore;
 use crate::error::{Error, Result};
-use crate::point::SearchResult;
+use crate::point::{Point, SearchResult};
 use crate::velesql::{ColumnRef, JoinClause, JoinCondition, JoinType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Result of a JOIN operation, combining graph result with column data.
 #[derive(Debug, Clone)]
@@ -131,13 +131,6 @@ pub fn execute_join(
     join: &JoinClause,
     column_store: &ColumnStore,
 ) -> Result<Vec<JoinedResult>> {
-    if join.join_type != JoinType::Inner {
-        return Err(Error::Query(format!(
-            "JOIN type '{:?}' is parsed but not supported in runtime execution yet. Use INNER JOIN or JOIN.",
-            join.join_type
-        )));
-    }
-
     let Some(condition) = resolve_join_condition(join) else {
         return Err(Error::Query(format!(
             "JOIN on table '{}' must use ON condition or USING(single_column).",
@@ -172,8 +165,11 @@ pub fn execute_join(
     // 3. Determine adaptive batch size
     let batch_size = adaptive_batch_size(join_keys.len());
 
-    // 4. Build result map: pk -> (result_idx, row_data)
+    // 4. Build result map: pk -> row_data and merge based on join semantics
     let mut joined_results = Vec::with_capacity(join_keys.len());
+    let mut matched_left_indices = vec![false; results.len()];
+    let mut matched_right_pks: HashSet<i64> = HashSet::with_capacity(join_keys.len());
+    let null_row_data = build_null_row_data(column_store);
 
     // Process in batches
     for chunk in join_keys.chunks(batch_size) {
@@ -191,8 +187,44 @@ pub fn execute_join(
             if let Some(column_data) = row_map.get(pk) {
                 let search_result = results[*result_idx].clone();
                 joined_results.push(JoinedResult::new(search_result, column_data.clone()));
+                matched_left_indices[*result_idx] = true;
+                matched_right_pks.insert(*pk);
+            } else if matches!(join.join_type, JoinType::Left | JoinType::Full) {
+                let search_result = results[*result_idx].clone();
+                joined_results.push(JoinedResult::new(search_result, null_row_data.clone()));
+                matched_left_indices[*result_idx] = true;
             }
-            // Inner JOIN: skip results without matching column data
+        }
+    }
+
+    if matches!(join.join_type, JoinType::Right | JoinType::Full) {
+        for row_idx in column_store.live_row_indices() {
+            let Some(pk_value) = column_store.get_value_as_json(join_column, row_idx) else {
+                continue;
+            };
+            let Some(pk) = pk_value.as_i64() else {
+                continue;
+            };
+            if matched_right_pks.contains(&pk) {
+                continue;
+            }
+
+            let Ok(point_id) = u64::try_from(pk) else {
+                continue;
+            };
+            let row_data = row_as_json_map(column_store, row_idx);
+            let synthetic_result =
+                SearchResult::new(Point::metadata_only(point_id, serde_json::json!({})), 0.0);
+            joined_results.push(JoinedResult::new(synthetic_result, row_data));
+        }
+    }
+
+    // LEFT/FULL should include left rows that had no join key extraction at all.
+    if matches!(join.join_type, JoinType::Left | JoinType::Full) {
+        for (idx, left_result) in results.iter().enumerate() {
+            if !matched_left_indices[idx] {
+                joined_results.push(JoinedResult::new(left_result.clone(), null_row_data.clone()));
+            }
         }
     }
 
@@ -277,6 +309,23 @@ fn batch_get_rows(
     }
 
     result
+}
+
+fn row_as_json_map(column_store: &ColumnStore, row_idx: usize) -> HashMap<String, serde_json::Value> {
+    let mut row_data = HashMap::new();
+    for col_name in column_store.column_names() {
+        if let Some(value) = column_store.get_value_as_json(col_name, row_idx) {
+            row_data.insert(col_name.to_string(), value);
+        }
+    }
+    row_data
+}
+
+fn build_null_row_data(column_store: &ColumnStore) -> HashMap<String, serde_json::Value> {
+    column_store
+        .column_names()
+        .map(|name| (name.to_string(), serde_json::Value::Null))
+        .collect()
 }
 
 /// Converts JoinedResults back to SearchResults with merged payload.
