@@ -89,8 +89,8 @@ pub struct LogPayloadStorage {
     wal: RwLock<io::BufWriter<File>>,
     /// Independent file handle for reading, protected for seeking
     reader: RwLock<File>,
-    /// WAL position at last snapshot (0 = no snapshot)
-    last_snapshot_wal_pos: RwLock<u64>,
+    /// D-06 fix: WAL position at last snapshot (0 = no snapshot). AtomicU64 avoids RwLock overhead.
+    last_snapshot_wal_pos: std::sync::atomic::AtomicU64,
     /// D-05 fix: in-memory WAL write position to avoid flush+metadata() per store.
     wal_write_pos: std::sync::atomic::AtomicU64,
 }
@@ -143,7 +143,7 @@ impl LogPayloadStorage {
             index: RwLock::new(index),
             wal: RwLock::new(wal),
             reader: RwLock::new(reader),
-            last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
+            last_snapshot_wal_pos: std::sync::atomic::AtomicU64::new(last_snapshot_wal_pos),
             wal_write_pos: std::sync::atomic::AtomicU64::new(wal_len),
         })
     }
@@ -414,7 +414,8 @@ impl LogPayloadStorage {
         std::fs::rename(&temp_path, &snapshot_path)?;
 
         // Update last snapshot position
-        *self.last_snapshot_wal_pos.write() = wal_pos;
+        self.last_snapshot_wal_pos
+            .store(wal_pos, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
@@ -425,13 +426,13 @@ impl LogPayloadStorage {
     /// bytes since the last snapshot.
     #[must_use]
     pub fn should_create_snapshot(&self) -> bool {
-        let last_pos = *self.last_snapshot_wal_pos.read();
-
-        // Get current WAL size
-        let current_pos = match self.wal.write().get_ref().metadata() {
-            Ok(m) => m.len(),
-            Err(_) => return false,
-        };
+        let last_pos = self
+            .last_snapshot_wal_pos
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // D-06 fix: use in-memory position instead of wal.write().get_ref().metadata()
+        let current_pos = self
+            .wal_write_pos
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         current_pos.saturating_sub(last_pos) >= DEFAULT_SNAPSHOT_THRESHOLD
     }
