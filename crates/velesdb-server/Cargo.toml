@@ -48,6 +48,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 tokio-test = "0.4"
 tempfile = { workspace = true }
 tower = { workspace = true }
+serial_test = "3"
 
 [lints]
 workspace = true

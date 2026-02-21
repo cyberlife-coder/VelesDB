@@ -3,6 +3,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
+    middleware as axum_middleware,
     routing::{delete, get, post},
     Router,
 };
@@ -134,9 +135,21 @@ async fn main() -> anyhow::Result<()> {
     // Swagger UI (stateless router)
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
 
-    // Build main app with Swagger UI
+    // S-01: Log auth status on startup
+    if std::env::var("VELESDB_API_KEY").is_ok() {
+        tracing::info!("API key authentication ENABLED (VELESDB_API_KEY is set)");
+    } else {
+        tracing::warn!(
+            "API key authentication DISABLED. Set VELESDB_API_KEY env var for production."
+        );
+    }
+
+    // Build main app with Swagger UI + auth middleware
     let app = api_router
         .merge(Router::<()>::new().merge(swagger_ui))
+        .layer(axum_middleware::from_fn(
+            velesdb_server::middleware::auth::api_key_auth,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 

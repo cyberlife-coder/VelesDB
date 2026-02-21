@@ -23,6 +23,7 @@
 //! - OpenAPI JSON: `GET /api-docs/openapi.json`
 
 mod handlers;
+pub mod middleware;
 mod types;
 
 use utoipa::OpenApi;
