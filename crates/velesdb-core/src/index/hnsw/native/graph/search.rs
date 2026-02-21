@@ -93,15 +93,22 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         entry: NodeId,
         layer: usize,
     ) -> NodeId {
+        // D-01 fix: acquire both locks ONCE outside the loop.
+        // Lock order: vectors (rank 10) → layers (rank 20).
+        record_lock_acquire(LockRank::Vectors);
+        let vectors = self.vectors.read();
+        record_lock_acquire(LockRank::Layers);
+        let layers = self.layers.read();
+
         let mut best = entry;
-        let mut best_dist = self.distance.distance(query, &self.get_vector(entry));
+        let mut best_dist = self.distance.distance(query, &vectors[entry]);
 
         loop {
-            let neighbors = self.layers.read()[layer].get_neighbors(best);
+            let neighbors = layers[layer].get_neighbors(best);
             let mut improved = false;
 
             for neighbor in neighbors {
-                let dist = self.distance.distance(query, &self.get_vector(neighbor));
+                let dist = self.distance.distance(query, &vectors[neighbor]);
                 if dist < best_dist {
                     best = neighbor;
                     best_dist = dist;
@@ -113,6 +120,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 break;
             }
         }
+
+        drop(layers);
+        record_lock_release(LockRank::Layers);
+        drop(vectors);
+        record_lock_release(LockRank::Vectors);
 
         best
     }
@@ -132,8 +144,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedFloat, NodeId)> = BinaryHeap::new();
 
+        // D-01 fix: acquire both locks ONCE outside the loop.
+        // Lock order: vectors (rank 10) → layers (rank 20).
         record_lock_acquire(LockRank::Vectors);
         let vectors = self.vectors.read();
+        record_lock_acquire(LockRank::Layers);
+        let layers = self.layers.read();
 
         let dimension = if vectors.is_empty() {
             0
@@ -156,7 +172,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 break;
             }
 
-            let neighbors = self.layers.read()[layer].get_neighbors(c_node);
+            let neighbors = layers[layer].get_neighbors(c_node);
 
             if dimension >= 384 && neighbors.len() > prefetch_distance {
                 for &neighbor_id in neighbors.iter().take(prefetch_distance) {
@@ -190,7 +206,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             }
         }
 
-        // Release vectors lock rank (guard drops at end of scope)
+        // Release locks in reverse order (layers rank 20 → vectors rank 10)
+        drop(layers);
+        record_lock_release(LockRank::Layers);
         drop(vectors);
         record_lock_release(LockRank::Vectors);
 
