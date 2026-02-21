@@ -223,7 +223,10 @@ pub fn execute_join(
     if matches!(join.join_type, JoinType::Left | JoinType::Full) {
         for (idx, left_result) in results.iter().enumerate() {
             if !matched_left_indices[idx] {
-                joined_results.push(JoinedResult::new(left_result.clone(), null_row_data.clone()));
+                joined_results.push(JoinedResult::new(
+                    left_result.clone(),
+                    null_row_data.clone(),
+                ));
             }
         }
     }
@@ -311,7 +314,10 @@ fn batch_get_rows(
     result
 }
 
-fn row_as_json_map(column_store: &ColumnStore, row_idx: usize) -> HashMap<String, serde_json::Value> {
+fn row_as_json_map(
+    column_store: &ColumnStore,
+    row_idx: usize,
+) -> HashMap<String, serde_json::Value> {
     let mut row_data = HashMap::new();
     for col_name in column_store.column_names() {
         if let Some(value) = column_store.get_value_as_json(col_name, row_idx) {
