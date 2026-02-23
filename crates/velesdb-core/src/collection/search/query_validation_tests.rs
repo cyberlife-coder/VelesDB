@@ -4,9 +4,8 @@
 //! - `validate_similarity_query_structure()` - Rejects unsupported patterns
 //! - NEAR + similarity() combination - Supported pattern for agentic memory
 //!
-//! Note: NOT similarity() tests are commented out because VelesQL parser
-//! does not yet support `NOT condition` syntax (only `IS NOT NULL`).
-//! The validation code exists for future parser extension.
+//! NOTE: `NOT <condition>` is now supported by the parser and execution path.
+//! Keep explicit tests here to prevent regressions in NOT handling.
 
 #[cfg(test)]
 mod tests {
@@ -25,15 +24,46 @@ mod tests {
     }
 
     // =========================================================================
-    // Tests for NOT similarity() rejection
-    // NOTE: VelesQL parser does not support `NOT condition` syntax yet.
-    // These tests are disabled until parser is extended (see EPIC-005).
-    // The validation code in query.rs is ready for when parser supports NOT.
+    // Tests for NOT support with similarity and metadata predicates.
     // =========================================================================
 
-    // TODO: Enable when parser supports NOT condition
-    // #[test]
-    // fn test_not_similarity_is_rejected() { ... }
+    #[test]
+    fn test_not_similarity_is_supported() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "tech"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "science"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+
+        let query = "SELECT * FROM test WHERE NOT similarity(vector, $v) > 0.8 LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+
+        let mut params = HashMap::new();
+        params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+
+        let result = collection.execute_query(&parsed, &params);
+        assert!(
+            result.is_ok(),
+            "NOT similarity() should be supported: {:?}",
+            result.err()
+        );
+
+        let results = result.unwrap();
+        assert!(
+            results.iter().all(|r| r.point.id != 1),
+            "Vector too close to query should be excluded by NOT similarity()"
+        );
+    }
 
     // =========================================================================
     // Tests for NEAR + similarity() combination (should work)
@@ -128,10 +158,37 @@ mod tests {
     }
 
     // =========================================================================
-    // Tests for NOT with metadata
-    // NOTE: VelesQL parser does not support `NOT condition` syntax yet.
-    // Use != operator instead for negation.
+    // Tests for NOT with metadata.
     // =========================================================================
+
+    #[test]
+    fn test_not_metadata_equality_is_supported() {
+        let (collection, _temp) = create_test_collection();
+
+        let points = vec![
+            crate::Point {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "tech"})),
+            },
+            crate::Point {
+                id: 2,
+                vector: vec![0.9, 0.1, 0.0, 0.0],
+                payload: Some(serde_json::json!({"category": "science"})),
+            },
+        ];
+        collection.upsert(points).unwrap();
+
+        let query = "SELECT * FROM test WHERE NOT category = 'tech' LIMIT 10";
+        let parsed = Parser::parse(query).unwrap();
+
+        let result = collection.execute_query(&parsed, &HashMap::new());
+        assert!(
+            result.is_ok(),
+            "NOT metadata equality should be supported: {:?}",
+            result.err()
+        );
+    }
 
     #[test]
     fn test_not_equal_metadata_is_supported() {
@@ -151,7 +208,7 @@ mod tests {
         ];
         collection.upsert(points).unwrap();
 
-        // Use != instead of NOT for negation (parser supported)
+        // `!=` remains supported and should behave like a metadata negation shortcut.
         let query = "SELECT * FROM test WHERE category != 'tech' LIMIT 10";
         let parsed = Parser::parse(query).unwrap();
 
