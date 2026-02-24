@@ -401,7 +401,7 @@ impl Collection {
                     // Pure text search - no filter needed
                     self.text_search(&m.query, execution_limit)
                 } else {
-                    // Generic metadata filter: perform a scan (fallback).
+                    // Generic metadata filter with optional secondary index acceleration.
                     // If condition only contains graph predicates, scan all then graph-filter.
                     if skip_metadata_prefilter_for_graph_or {
                         self.execute_scan_query(
@@ -411,10 +411,16 @@ impl Collection {
                             execution_limit,
                         )
                     } else if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
-                        let filter = crate::filter::Filter::new(crate::filter::Condition::from(
-                            metadata_cond,
-                        ));
-                        self.execute_scan_query(&filter, execution_limit)
+                        if let Some(indexed_results) =
+                            self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
+                        {
+                            indexed_results
+                        } else {
+                            let filter = crate::filter::Filter::new(
+                                crate::filter::Condition::from(metadata_cond),
+                            );
+                            self.execute_scan_query(&filter, execution_limit)
+                        }
                     } else {
                         self.execute_scan_query(
                             &crate::filter::Filter::new(crate::filter::Condition::And {
@@ -461,6 +467,43 @@ impl Collection {
         results.truncate(limit);
 
         Ok(results)
+    }
+
+    fn execute_indexed_metadata_query(
+        &self,
+        cond: &crate::velesql::Condition,
+        execution_limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        let (field_name, key) = Self::extract_index_lookup_condition(cond)?;
+        let ids = self.secondary_index_lookup(&field_name, &key)?;
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+        let mut results = Vec::new();
+        for point in self.get(&ids).into_iter().flatten() {
+            let payload = point
+                .payload
+                .as_ref()
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if filter.matches(&payload) {
+                results.push(SearchResult::new(point, 0.0));
+                if results.len() >= execution_limit {
+                    break;
+                }
+            }
+        }
+        Some(results)
+    }
+
+    fn extract_index_lookup_condition(
+        cond: &crate::velesql::Condition,
+    ) -> Option<(String, crate::index::JsonValue)> {
+        if let crate::velesql::Condition::Comparison(cmp) = cond {
+            if cmp.operator == crate::velesql::CompareOp::Eq {
+                return crate::index::JsonValue::from_ast_value(&cmp.value)
+                    .map(|v| (cmp.column.clone(), v));
+            }
+        }
+        None
     }
 
     pub(crate) fn evaluate_graph_match_anchor_ids(

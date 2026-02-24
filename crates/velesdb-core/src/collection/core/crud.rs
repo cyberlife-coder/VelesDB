@@ -3,6 +3,7 @@
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
+use crate::index::{JsonValue, SecondaryIndex};
 use crate::point::Point;
 use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -60,6 +61,7 @@ impl Collection {
         };
 
         for point in points {
+            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             // 1. Store Vector
             vector_storage
                 .store(point.id, &point.vector)
@@ -90,6 +92,12 @@ impl Collection {
             } else {
                 let _ = payload_storage.delete(point.id);
             }
+
+            self.update_secondary_indexes_on_upsert(
+                point.id,
+                old_payload.as_ref(),
+                point.payload.as_ref(),
+            );
 
             // 4. Update Vector Index
             self.index.insert(point.id, &point.vector);
@@ -131,6 +139,7 @@ impl Collection {
         let mut payload_storage = self.payload_storage.write();
 
         for point in &points {
+            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             // Store Payload (metadata-only points must have payload)
             if let Some(payload) = &point.payload {
                 payload_storage
@@ -146,6 +155,12 @@ impl Collection {
                 let _ = payload_storage.delete(point.id);
                 self.text_index.remove_document(point.id);
             }
+
+            self.update_secondary_indexes_on_upsert(
+                point.id,
+                old_payload.as_ref(),
+                point.payload.as_ref(),
+            );
         }
 
         // Update point count
@@ -298,8 +313,10 @@ impl Collection {
         if is_metadata_only {
             // For metadata-only collections, only delete from payload storage
             for &id in ids {
+                let old_payload = payload_storage.retrieve(id).ok().flatten();
                 payload_storage.delete(id).map_err(Error::Io)?;
                 self.text_index.remove_document(id);
+                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
 
             let mut config = self.config.write();
@@ -309,10 +326,12 @@ impl Collection {
             let mut vector_storage = self.vector_storage.write();
 
             for &id in ids {
+                let old_payload = payload_storage.retrieve(id).ok().flatten();
                 vector_storage.delete(id).map_err(Error::Io)?;
                 payload_storage.delete(id).map_err(Error::Io)?;
                 self.index.remove(id);
                 self.text_index.remove_document(id);
+                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }
 
             let mut config = self.config.write();
@@ -320,6 +339,67 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    fn update_secondary_indexes_on_upsert(
+        &self,
+        id: u64,
+        old_payload: Option<&serde_json::Value>,
+        new_payload: Option<&serde_json::Value>,
+    ) {
+        let indexes = self.secondary_indexes.read();
+        for (field, index) in indexes.iter() {
+            if let Some(old_value) = old_payload
+                .and_then(|p| p.get(field))
+                .and_then(JsonValue::from_json)
+            {
+                self.remove_from_secondary_index(index, &old_value, id);
+            }
+            if let Some(new_value) = new_payload
+                .and_then(|p| p.get(field))
+                .and_then(JsonValue::from_json)
+            {
+                self.insert_into_secondary_index(index, new_value, id);
+            }
+        }
+    }
+
+    fn update_secondary_indexes_on_delete(&self, id: u64, old_payload: Option<&serde_json::Value>) {
+        let Some(payload) = old_payload else {
+            return;
+        };
+        let indexes = self.secondary_indexes.read();
+        for (field, index) in indexes.iter() {
+            if let Some(old_value) = payload.get(field).and_then(JsonValue::from_json) {
+                self.remove_from_secondary_index(index, &old_value, id);
+            }
+        }
+    }
+
+    fn insert_into_secondary_index(&self, index: &SecondaryIndex, key: JsonValue, id: u64) {
+        match index {
+            SecondaryIndex::BTree(tree) => {
+                let mut tree = tree.write();
+                let ids = tree.entry(key).or_default();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+
+    fn remove_from_secondary_index(&self, index: &SecondaryIndex, key: &JsonValue, id: u64) {
+        match index {
+            SecondaryIndex::BTree(tree) => {
+                let mut tree = tree.write();
+                if let Some(ids) = tree.get_mut(key) {
+                    ids.retain(|existing| *existing != id);
+                    if ids.is_empty() {
+                        tree.remove(key);
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the number of points in the collection.

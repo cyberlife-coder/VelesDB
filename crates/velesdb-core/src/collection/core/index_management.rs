@@ -2,6 +2,9 @@
 
 use crate::collection::types::Collection;
 use crate::error::Result;
+use crate::index::{JsonValue, SecondaryIndex};
+use parking_lot::RwLock;
+use std::collections::BTreeMap;
 
 /// Index information response for API.
 #[derive(Debug, Clone)]
@@ -19,6 +22,35 @@ pub struct IndexInfo {
 }
 
 impl Collection {
+    /// Creates a secondary metadata index for a payload field.
+    ///
+    /// # Errors
+    ///
+    /// Returns Ok(()) on success. Index creation is idempotent.
+    pub fn create_index(&self, field_name: &str) -> Result<()> {
+        let mut indexes = self.secondary_indexes.write();
+        indexes
+            .entry(field_name.to_string())
+            .or_insert_with(|| SecondaryIndex::BTree(RwLock::new(BTreeMap::new())));
+        Ok(())
+    }
+
+    /// Checks whether a secondary metadata index exists for a field.
+    #[must_use]
+    pub fn has_secondary_index(&self, field_name: &str) -> bool {
+        self.secondary_indexes.read().contains_key(field_name)
+    }
+
+    /// Looks up matching point IDs for an indexed field value.
+    #[must_use]
+    pub fn secondary_index_lookup(&self, field_name: &str, value: &JsonValue) -> Option<Vec<u64>> {
+        let indexes = self.secondary_indexes.read();
+        let index = indexes.get(field_name)?;
+        match index {
+            SecondaryIndex::BTree(tree) => tree.read().get(value).cloned(),
+        }
+    }
+
     /// Create a property index for O(1) equality lookups.
     ///
     /// # Arguments

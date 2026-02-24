@@ -15,6 +15,7 @@
 mod formatter;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use super::ast::{Condition, SelectStatement};
 use crate::collection::search::query::match_planner::{
@@ -181,15 +182,26 @@ impl QueryPlan {
     /// Creates a new query plan from a SELECT statement.
     #[must_use]
     pub fn from_select(stmt: &SelectStatement) -> Self {
+        Self::from_select_with_indexed_fields(stmt, &HashSet::new())
+    }
+
+    /// Creates a new query plan from SELECT with known indexed metadata fields.
+    #[must_use]
+    pub fn from_select_with_indexed_fields(
+        stmt: &SelectStatement,
+        indexed_fields: &HashSet<String>,
+    ) -> Self {
         let mut nodes = Vec::new();
         let mut has_vector_search = false;
         let mut filter_conditions = Vec::new();
         let mut filter_strategy = FilterStrategy::None;
         let mut index_used = None;
+        let mut index_lookup = None;
 
         // Analyze WHERE clause
         if let Some(ref condition) = stmt.where_clause {
             Self::analyze_condition(condition, &mut has_vector_search, &mut filter_conditions);
+            index_lookup = Self::extract_index_lookup(condition, indexed_fields);
         }
 
         // Build plan nodes
@@ -200,6 +212,13 @@ impl QueryPlan {
                 collection: stmt.from.clone(),
                 ef_search: 100, // Default HNSW parameter
                 candidates,
+            }));
+        } else if let Some((property, value)) = index_lookup {
+            index_used = Some(IndexType::Property);
+            nodes.push(PlanNode::IndexLookup(IndexLookupPlan {
+                label: stmt.from.clone(),
+                property,
+                value,
             }));
         } else {
             nodes.push(PlanNode::TableScan(TableScanPlan {
@@ -294,6 +313,19 @@ impl QueryPlan {
                 Self::analyze_condition(inner, has_vector_search, filter_conditions);
             }
         }
+    }
+
+    fn extract_index_lookup(
+        condition: &Condition,
+        indexed_fields: &HashSet<String>,
+    ) -> Option<(String, String)> {
+        if let Condition::Comparison(cmp) = condition {
+            if cmp.operator == crate::velesql::CompareOp::Eq && indexed_fields.contains(&cmp.column)
+            {
+                return Some((cmp.column.clone(), format!("{:?}", cmp.value)));
+            }
+        }
+        None
     }
 
     /// Estimates selectivity (placeholder - would need statistics in production).

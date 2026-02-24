@@ -86,6 +86,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         };
 
         collection.save_config()?;
@@ -173,6 +174,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(PropertyIndex::new())),
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         };
 
         collection.save_config()?;
@@ -282,6 +284,7 @@ impl Collection {
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 

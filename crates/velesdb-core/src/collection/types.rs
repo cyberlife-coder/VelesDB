@@ -2,7 +2,7 @@
 
 use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
 use crate::distance::DistanceMetric;
-use crate::index::{Bm25Index, HnswIndex};
+use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage};
 use parking_lot::RwLock;
@@ -162,6 +162,9 @@ pub struct Collection {
 
     /// Edge store for knowledge graph relationships (EPIC-015).
     pub(super) edge_store: Arc<RwLock<EdgeStore>>,
+
+    /// Secondary indexes for metadata payload fields.
+    pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
 }
 
 impl Collection {
