@@ -13,8 +13,8 @@ if command -v cargo >/dev/null 2>&1 && cargo deny --version >/dev/null 2>&1; the
   fi
 fi
 
-UNSAFE_COUNT="$(rg -n "\bunsafe\b" crates/velesdb-core/src | wc -l | tr -d ' ')"
-FUZZ_TARGETS="$(rg --files fuzz | wc -l | tr -d ' ')"
+UNSAFE_COUNT="$( (rg -n "\bunsafe\b" crates/velesdb-core/src 2>/dev/null || true) | wc -l | tr -d ' ' )"
+FUZZ_TARGETS="$( (rg --files fuzz 2>/dev/null || true) | wc -l | tr -d ' ' )"
 
 cat > "$OUT" <<MD
 # Security Evidence Pack
