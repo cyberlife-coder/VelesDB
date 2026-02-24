@@ -3,7 +3,6 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
 use super::super::ordered_float::OrderedFloat;
-use super::locking::{record_lock_acquire, record_lock_release, LockRank};
 use super::NativeHnsw;
 use std::collections::BinaryHeap;
 use std::sync::atomic::Ordering;
@@ -24,8 +23,31 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             current_ep = self.search_layer_single(query, current_ep, layer_idx);
         }
 
+        let count = self.count.load(Ordering::Relaxed);
+        let probes = self.adaptive_num_probes(count, ef_search, k);
+
+        if probes > 1 {
+            return self.search_multi_entry(query, k, ef_search, probes);
+        }
+
         let candidates = self.search_layer(query, vec![current_ep], ef_search, 0);
         candidates.into_iter().take(k).collect()
+    }
+
+    /// Adaptive number of entry-point probes for high-recall searches.
+    #[inline]
+    fn adaptive_num_probes(&self, count: usize, ef_search: usize, k: usize) -> usize {
+        if count < 10_000 || ef_search <= (k * 4).max(64) {
+            return 1;
+        }
+
+        if ef_search >= 1024 {
+            4
+        } else if ef_search >= 512 {
+            3
+        } else {
+            2
+        }
     }
 
     /// Multi-entry point search for improved recall on hard queries.
@@ -93,28 +115,30 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         entry: NodeId,
         layer: usize,
     ) -> NodeId {
-        let mut best = entry;
-        let mut best_dist = self.distance.distance(query, &self.get_vector(entry));
+        self.with_vectors_read(|vectors| {
+            let mut best = entry;
+            let mut best_dist = self.distance.distance(query, &vectors[entry]);
 
-        loop {
-            let neighbors = self.layers.read()[layer].get_neighbors(best);
-            let mut improved = false;
+            loop {
+                let neighbors = self.with_layers_read(|layers| layers[layer].get_neighbors(best));
+                let mut improved = false;
 
-            for neighbor in neighbors {
-                let dist = self.distance.distance(query, &self.get_vector(neighbor));
-                if dist < best_dist {
-                    best = neighbor;
-                    best_dist = dist;
-                    improved = true;
+                for neighbor in neighbors {
+                    let dist = self.distance.distance(query, &vectors[neighbor]);
+                    if dist < best_dist {
+                        best = neighbor;
+                        best_dist = dist;
+                        improved = true;
+                    }
+                }
+
+                if !improved {
+                    break;
                 }
             }
 
-            if !improved {
-                break;
-            }
-        }
-
-        best
+            best
+        })
     }
 
     /// Search a single layer with ef candidates.
@@ -132,67 +156,62 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, NodeId)>> = BinaryHeap::new();
         let mut results: BinaryHeap<(OrderedFloat, NodeId)> = BinaryHeap::new();
 
-        record_lock_acquire(LockRank::Vectors);
-        let vectors = self.vectors.read();
+        self.with_vectors_read(|vectors| {
+            let dimension = if vectors.is_empty() {
+                0
+            } else {
+                vectors[0].len()
+            };
+            let prefetch_distance = crate::simd_native::calculate_prefetch_distance(dimension);
 
-        let dimension = if vectors.is_empty() {
-            0
-        } else {
-            vectors[0].len()
-        };
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(dimension);
-
-        for ep in entry_points {
-            let dist = self.distance.distance(query, &vectors[ep]);
-            candidates.push(Reverse((OrderedFloat(dist), ep)));
-            results.push((OrderedFloat(dist), ep));
-            visited.insert(ep);
-        }
-
-        while let Some(Reverse((OrderedFloat(c_dist), c_node))) = candidates.pop() {
-            let furthest_dist = results.peek().map_or(f32::MAX, |r| r.0 .0);
-
-            if c_dist > furthest_dist && results.len() >= ef {
-                break;
+            for ep in entry_points {
+                let dist = self.distance.distance(query, &vectors[ep]);
+                candidates.push(Reverse((OrderedFloat(dist), ep)));
+                results.push((OrderedFloat(dist), ep));
+                visited.insert(ep);
             }
 
-            let neighbors = self.layers.read()[layer].get_neighbors(c_node);
+            while let Some(Reverse((OrderedFloat(c_dist), c_node))) = candidates.pop() {
+                let furthest_dist = results.peek().map_or(f32::MAX, |r| r.0 .0);
 
-            if dimension >= 384 && neighbors.len() > prefetch_distance {
-                for &neighbor_id in neighbors.iter().take(prefetch_distance) {
-                    if neighbor_id < vectors.len() {
-                        crate::simd_native::prefetch_vector(&vectors[neighbor_id]);
-                    }
+                if c_dist > furthest_dist && results.len() >= ef {
+                    break;
                 }
-            }
 
-            for (i, neighbor) in neighbors.iter().enumerate() {
-                if dimension >= 384 && i + prefetch_distance < neighbors.len() {
-                    let prefetch_id = neighbors[i + prefetch_distance];
-                    if prefetch_id < vectors.len() {
-                        crate::simd_native::prefetch_vector(&vectors[prefetch_id]);
+                let neighbors = self.with_layers_read(|layers| layers[layer].get_neighbors(c_node));
+
+                if dimension >= 384 && neighbors.len() > prefetch_distance {
+                    for &neighbor_id in neighbors.iter().take(prefetch_distance) {
+                        if neighbor_id < vectors.len() {
+                            crate::simd_native::prefetch_vector(&vectors[neighbor_id]);
+                        }
                     }
                 }
 
-                if visited.insert(*neighbor) {
-                    let dist = self.distance.distance(query, &vectors[*neighbor]);
-                    let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
+                for (i, neighbor) in neighbors.iter().enumerate() {
+                    if dimension >= 384 && i + prefetch_distance < neighbors.len() {
+                        let prefetch_id = neighbors[i + prefetch_distance];
+                        if prefetch_id < vectors.len() {
+                            crate::simd_native::prefetch_vector(&vectors[prefetch_id]);
+                        }
+                    }
 
-                    if dist < furthest || results.len() < ef {
-                        candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
-                        results.push((OrderedFloat(dist), *neighbor));
+                    if visited.insert(*neighbor) {
+                        let dist = self.distance.distance(query, &vectors[*neighbor]);
+                        let furthest = results.peek().map_or(f32::MAX, |r| r.0 .0);
 
-                        if results.len() > ef {
-                            results.pop();
+                        if dist < furthest || results.len() < ef {
+                            candidates.push(Reverse((OrderedFloat(dist), *neighbor)));
+                            results.push((OrderedFloat(dist), *neighbor));
+
+                            if results.len() > ef {
+                                results.pop();
+                            }
                         }
                     }
                 }
             }
-        }
-
-        // Release vectors lock rank (guard drops at end of scope)
-        drop(vectors);
-        record_lock_release(LockRank::Vectors);
+        });
 
         let mut result_vec: Vec<(NodeId, f32)> =
             results.into_iter().map(|(d, n)| (n, d.0)).collect();

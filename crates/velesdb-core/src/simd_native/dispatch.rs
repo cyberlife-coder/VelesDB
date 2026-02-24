@@ -56,6 +56,42 @@ pub fn simd_level() -> SimdLevel {
     *SIMD_LEVEL.get_or_init(detect_simd_level)
 }
 
+/// Returns true when AVX-512VL extension is available on x86_64.
+#[inline]
+#[must_use]
+pub fn has_avx512vl() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return is_x86_feature_detected!("avx512vl");
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
+/// Returns true when AVX-512BW extension is available on x86_64.
+#[inline]
+#[must_use]
+pub fn has_avx512bw() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return is_x86_feature_detected!("avx512bw");
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
+/// Returns true when AVX-512VNNI extension is available on x86_64.
+#[inline]
+#[must_use]
+pub fn has_avx512vnni() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return is_x86_feature_detected!("avx512vnni");
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
 /// Warms up SIMD caches to eliminate cold-start latency.
 ///
 /// Call this at application startup to ensure the first SIMD operations
@@ -422,9 +458,11 @@ pub struct DistanceEngine {
 
 impl std::fmt::Debug for DistanceEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let avx512_ext = (has_avx512vl(), has_avx512bw(), has_avx512vnni());
         f.debug_struct("DistanceEngine")
             .field("dimension", &self.dimension)
             .field("simd_level", &simd_level())
+            .field("avx512_ext(vl,bw,vnni)", &avx512_ext)
             .finish_non_exhaustive()
     }
 }

@@ -37,6 +37,62 @@ impl HnswIndex {
         }
     }
 
+    #[inline]
+    fn search_hnsw_only(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(u64, f32)> {
+        let inner = self.inner.read();
+        let neighbours = inner.search(query, k, ef_search);
+        let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
+
+        for n in &neighbours {
+            if let Some(id) = self.mappings.get_id(n.d_id) {
+                let score = inner.transform_score(n.distance);
+                results.push((id, score));
+            }
+        }
+
+        results
+    }
+
+    #[inline]
+    fn should_two_stage_rerank(
+        &self,
+        quality: SearchQuality,
+        k: usize,
+        ef_search: usize,
+    ) -> Option<usize> {
+        if !self.enable_vector_storage || self.vectors.is_empty() {
+            return None;
+        }
+
+        let len = self.len();
+
+        let rerank_k = match quality {
+            SearchQuality::Accurate => {
+                let mut v = (k * 8).max(128);
+                if len >= 100_000 {
+                    v = v.max(k * 12);
+                }
+                if ef_search >= 1024 {
+                    v = v.max(k * 16);
+                }
+                v
+            }
+            SearchQuality::Balanced if len >= 250_000 => (k * 6).max(96),
+            SearchQuality::Custom(ef) if ef >= 256 => {
+                if ef >= 1024 {
+                    (k * 12).max(128)
+                } else if ef >= 512 {
+                    (k * 8).max(96)
+                } else {
+                    (k * 6).max(64)
+                }
+            }
+            _ => return None,
+        };
+
+        Some(rerank_k.min(len.max(k)))
+    }
+
     /// Searches for the k nearest neighbors with a specific quality profile.
     ///
     /// # Arguments
@@ -77,20 +133,13 @@ impl HnswIndex {
         }
 
         let ef_search = quality.ef_search(k);
-        let inner = self.inner.read();
 
-        // RF-1: Using HnswInner methods for search and score transformation
-        let neighbours = inner.search(query, k, ef_search);
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
-
-        for n in &neighbours {
-            if let Some(id) = self.mappings.get_id(n.d_id) {
-                let score = inner.transform_score(n.distance);
-                results.push((id, score));
-            }
+        // Two-stage mode: larger candidate pool + exact SIMD reranking.
+        if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
+            return self.search_with_rerank_with_ef(query, k, rerank_k, ef_search);
         }
 
-        results
+        self.search_hnsw_only(query, k, ef_search)
     }
 
     /// Searches with SIMD-based re-ranking for improved precision.
@@ -116,10 +165,24 @@ impl HnswIndex {
     /// Panics if the query dimension doesn't match the index dimension.
     #[must_use]
     pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_k: usize) -> Vec<(u64, f32)> {
+        let ef_search = SearchQuality::Accurate.ef_search(rerank_k);
+        let adaptive_rerank_k = self
+            .should_two_stage_rerank(SearchQuality::Accurate, k, ef_search)
+            .unwrap_or(rerank_k.min(self.len().max(k)));
+        self.search_with_rerank_with_ef(query, k, adaptive_rerank_k, ef_search)
+    }
+
+    fn search_with_rerank_with_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        rerank_k: usize,
+        ef_search: usize,
+    ) -> Vec<(u64, f32)> {
         self.validate_dimension(query, "Query");
 
         // 1. Get candidates from HNSW (fast approximate search)
-        let candidates = self.search_with_quality(query, rerank_k, SearchQuality::Accurate);
+        let candidates = self.search_hnsw_only(query, rerank_k, ef_search);
 
         if candidates.is_empty() {
             return Vec::new();

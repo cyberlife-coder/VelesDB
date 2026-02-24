@@ -24,29 +24,30 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 layer.ensure_capacity(node_id);
             }
         }
+
         let entry_point = *self.entry_point.read();
         if let Some(ep) = entry_point {
             let mut current_ep = ep;
             let max_layer = self.max_layer.load(Ordering::Relaxed);
+
+            let query = self.with_vectors_read(|vectors| vectors[node_id].clone());
+
             for layer_idx in (node_layer + 1..=max_layer).rev() {
-                current_ep =
-                    self.search_layer_single(&self.get_vector(node_id), current_ep, layer_idx);
+                current_ep = self.search_layer_single(&query, current_ep, layer_idx);
             }
+
             for layer_idx in (0..=node_layer).rev() {
-                let neighbors = self.search_layer(
-                    &self.get_vector(node_id),
-                    vec![current_ep],
-                    self.ef_construction,
-                    layer_idx,
-                );
+                let neighbors =
+                    self.search_layer(&query, vec![current_ep], self.ef_construction, layer_idx);
                 let max_conn = if layer_idx == 0 {
                     self.max_connections_0
                 } else {
                     self.max_connections
                 };
-                let selected =
-                    self.select_neighbors(&self.get_vector(node_id), &neighbors, max_conn);
-                self.layers.read()[layer_idx].set_neighbors(node_id, selected.clone());
+                let selected = self.select_neighbors(&neighbors, max_conn);
+                self.with_layers_read(|layers| {
+                    layers[layer_idx].set_neighbors(node_id, selected.clone())
+                });
                 for &neighbor in &selected {
                     self.add_bidirectional_connection(node_id, neighbor, layer_idx, max_conn);
                 }
@@ -57,6 +58,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         } else {
             *self.entry_point.write() = Some(node_id);
         }
+
         if node_layer > self.max_layer.load(Ordering::Relaxed) {
             self.max_layer.store(node_layer, Ordering::Relaxed);
             *self.entry_point.write() = Some(node_id);

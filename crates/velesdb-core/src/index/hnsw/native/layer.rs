@@ -45,6 +45,20 @@ impl Layer {
         }
     }
 
+    /// Mutates the neighbors for a node in-place under a single write lock.
+    pub(crate) fn with_neighbors_mut<R>(
+        &self,
+        node_id: NodeId,
+        f: impl FnOnce(&mut Vec<NodeId>) -> R,
+    ) -> Option<R> {
+        if node_id < self.neighbors.len() {
+            let mut guard = self.neighbors[node_id].write();
+            Some(f(&mut guard))
+        } else {
+            None
+        }
+    }
+
     /// Adds a neighbor to a node's adjacency list.
     #[allow(dead_code)]
     pub(super) fn add_neighbor(&self, node_id: NodeId, neighbor: NodeId) {

@@ -1157,6 +1157,42 @@ fn test_recall_quality_minimum_threshold() {
     );
 }
 
+#[test]
+fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression() {
+    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+
+    for i in 0u64..2000 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i + j as u64) as f32 * 0.001).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.013).cos()).collect();
+    let results = index.search_with_quality(&query, 20, SearchQuality::Custom(512));
+
+    assert!(!results.is_empty());
+    assert!(results.len() <= 20);
+}
+
+#[test]
+fn test_search_with_quality_accurate_stays_stable_on_medium_dataset() {
+    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+
+    for i in 0u64..5000 {
+        let v: Vec<f32> = (0..128)
+            .map(|j| ((i * 3 + j as u64) as f32 * 0.0007).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.007).sin()).collect();
+    let results = index.search_with_quality(&query, 15, SearchQuality::Accurate);
+
+    assert!(!results.is_empty());
+    assert!(results.len() <= 15);
+}
+
 // =========================================================================
 // RF-3: Tests for search_brute_force_buffered (buffer reuse optimization)
 // =========================================================================

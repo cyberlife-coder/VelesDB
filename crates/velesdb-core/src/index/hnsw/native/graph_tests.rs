@@ -53,10 +53,9 @@ fn test_heuristic_selection_empty_candidates() {
     // Insert a single vector to have valid query
     hnsw.insert(vec![0.0; 32]);
 
-    let query = vec![0.0; 32];
     let candidates: Vec<(NodeId, f32)> = vec![];
 
-    let selected = hnsw.select_neighbors(&query, &candidates, 10);
+    let selected = hnsw.select_neighbors(&candidates, 10);
     assert!(selected.is_empty(), "Empty candidates should return empty");
 }
 
@@ -71,10 +70,9 @@ fn test_heuristic_selection_fewer_than_max() {
         hnsw.insert(vec![i as f32; 32]);
     }
 
-    let query = vec![0.0; 32];
     let candidates: Vec<(NodeId, f32)> = vec![(0, 0.0), (1, 1.0), (2, 2.0)];
 
-    let selected = hnsw.select_neighbors(&query, &candidates, 10);
+    let selected = hnsw.select_neighbors(&candidates, 10);
     assert_eq!(
         selected.len(),
         3,
@@ -93,10 +91,9 @@ fn test_heuristic_selection_respects_max() {
         hnsw.insert(vec![i as f32; 32]);
     }
 
-    let query = vec![0.0; 32];
     let candidates: Vec<(NodeId, f32)> = (0..15).map(|i| (i, i as f32)).collect();
 
-    let selected = hnsw.select_neighbors(&query, &candidates, 5);
+    let selected = hnsw.select_neighbors(&candidates, 5);
     assert_eq!(selected.len(), 5, "Should respect max_neighbors limit");
 }
 
@@ -124,7 +121,6 @@ fn test_heuristic_selection_prefers_diverse_neighbors() {
     v4[1] = 10.0;
     hnsw.insert(v4); // 4
 
-    let query = vec![0.0; 32];
     // Candidates: all close to query in euclidean terms
     let candidates: Vec<(NodeId, f32)> = vec![
         (1, 10.0), // Cluster A
@@ -133,7 +129,7 @@ fn test_heuristic_selection_prefers_diverse_neighbors() {
         (4, 10.0), // Diverse (perpendicular direction)
     ];
 
-    let selected = hnsw.select_neighbors(&query, &candidates, 2);
+    let selected = hnsw.select_neighbors(&candidates, 2);
 
     // Heuristic should prefer diverse selection
     // Should include node 1 (first closest) and node 4 (diverse direction)
@@ -153,10 +149,9 @@ fn test_heuristic_fills_quota_with_closest_if_needed() {
         hnsw.insert(vec![i as f32; 32]);
     }
 
-    let query = vec![0.0; 32];
     let candidates: Vec<(NodeId, f32)> = (0..10).map(|i| (i, i as f32)).collect();
 
-    let selected = hnsw.select_neighbors(&query, &candidates, 8);
+    let selected = hnsw.select_neighbors(&candidates, 8);
 
     // Should fill up to max even if heuristic rejects some
     assert_eq!(

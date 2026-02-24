@@ -17,6 +17,7 @@ mod search;
 
 use super::distance::DistanceEngine;
 use super::layer::{Layer, NodeId};
+use locking::{record_lock_acquire, record_lock_release, LockRank};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -131,8 +132,32 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.distance.distance(a, b)
     }
 
-    fn get_vector(&self, node_id: NodeId) -> Vec<f32> {
-        self.vectors.read()[node_id].clone()
+    /// Executes a closure with a vectors read snapshot and tracked lock rank.
+    #[inline]
+    pub(in crate::index::hnsw::native) fn with_vectors_read<R>(
+        &self,
+        f: impl FnOnce(&[Vec<f32>]) -> R,
+    ) -> R {
+        record_lock_acquire(LockRank::Vectors);
+        let vectors = self.vectors.read();
+        let result = f(&vectors);
+        drop(vectors);
+        record_lock_release(LockRank::Vectors);
+        result
+    }
+
+    /// Executes a closure with a layers read snapshot and tracked lock rank.
+    #[inline]
+    pub(in crate::index::hnsw::native) fn with_layers_read<R>(
+        &self,
+        f: impl FnOnce(&[Layer]) -> R,
+    ) -> R {
+        record_lock_acquire(LockRank::Layers);
+        let layers = self.layers.read();
+        let result = f(&layers);
+        drop(layers);
+        record_lock_release(LockRank::Layers);
+        result
     }
 
     // SAFETY: Layer selection uses exponential distribution capped at 15.
