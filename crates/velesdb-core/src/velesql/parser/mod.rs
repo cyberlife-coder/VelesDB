@@ -13,6 +13,8 @@ mod match_clause_tests;
 #[cfg(test)]
 mod match_query_tests;
 #[cfg(test)]
+mod robustness_tests;
+#[cfg(test)]
 mod subquery_tests;
 #[cfg(test)]
 mod temporal_tests;

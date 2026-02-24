@@ -2,7 +2,7 @@
 
 use super::super::{extract_identifier, Rule};
 use crate::velesql::ast::{ColumnRef, JoinClause, JoinCondition};
-use crate::velesql::error::ParseError;
+use crate::velesql::error::{ParseError, ParseErrorKind};
 use crate::velesql::Parser;
 
 impl Parser {
@@ -106,6 +106,8 @@ impl Parser {
     pub(crate) fn parse_join_condition(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<JoinCondition, ParseError> {
+        let pair_start = pair.as_span().start();
+        let pair_text = pair.as_str().to_string();
         let mut refs: Vec<ColumnRef> = Vec::new();
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::column_ref {
@@ -119,8 +121,22 @@ impl Parser {
                 "JOIN condition requires exactly two column references",
             ));
         }
-        let right = refs.pop().expect("right ref validated by len check");
-        let left = refs.pop().expect("left ref validated by len check");
+        let right = refs.pop().ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                pair_start,
+                pair_text.clone(),
+                "Expected right-side column reference in JOIN condition.".to_string(),
+            )
+        })?;
+        let left = refs.pop().ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                pair_start,
+                pair_text.clone(),
+                "Expected left-side column reference in JOIN condition.".to_string(),
+            )
+        })?;
         Ok(JoinCondition { left, right })
     }
 
