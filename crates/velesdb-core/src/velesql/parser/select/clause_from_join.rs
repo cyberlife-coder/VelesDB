@@ -2,7 +2,7 @@
 
 use super::super::{extract_identifier, Rule};
 use crate::velesql::ast::{ColumnRef, JoinClause, JoinCondition};
-use crate::velesql::error::ParseError;
+use crate::velesql::error::{ParseError, ParseErrorKind};
 use crate::velesql::Parser;
 
 impl Parser {
@@ -106,21 +106,40 @@ impl Parser {
     pub(crate) fn parse_join_condition(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<JoinCondition, ParseError> {
-        let mut refs: Vec<ColumnRef> = Vec::new();
-        for inner_pair in pair.into_inner() {
-            if inner_pair.as_rule() == Rule::column_ref {
-                refs.push(Self::parse_column_ref(&inner_pair)?);
-            }
-        }
-        if refs.len() != 2 {
-            return Err(ParseError::syntax(
-                0,
-                "",
-                "JOIN condition requires exactly two column references",
+        let pair_start = pair.as_span().start();
+        let pair_text = pair.as_str().to_string();
+        let mut refs = pair
+            .into_inner()
+            .filter(|inner_pair| inner_pair.as_rule() == Rule::column_ref)
+            .map(|inner_pair| Self::parse_column_ref(&inner_pair));
+
+        let left = refs.next().transpose()?.ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                pair_start,
+                pair_text.clone(),
+                "Expected left-side column reference in JOIN condition.".to_string(),
+            )
+        })?;
+
+        let right = refs.next().transpose()?.ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                pair_start,
+                pair_text.clone(),
+                "Expected right-side column reference in JOIN condition.".to_string(),
+            )
+        })?;
+
+        if refs.next().is_some() {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                pair_start,
+                pair_text,
+                "JOIN condition must contain exactly two column references.".to_string(),
             ));
         }
-        let right = refs.pop().expect("right ref validated by len check");
-        let left = refs.pop().expect("left ref validated by len check");
+
         Ok(JoinCondition { left, right })
     }
 
@@ -128,17 +147,85 @@ impl Parser {
         pair: &pest::iterators::Pair<Rule>,
     ) -> Result<ColumnRef, ParseError> {
         let s = pair.as_str();
-        let parts: Vec<&str> = s.split('.').collect();
-        if parts.len() != 2 {
-            return Err(ParseError::syntax(
-                0,
+        let (table, column) = Self::split_column_ref(s).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                pair.as_span().start(),
                 s,
-                "Column reference must be in format 'table.column'",
-            ));
-        }
+                "Column reference must be in format 'table.column'.".to_string(),
+            )
+        })?;
+
         Ok(ColumnRef {
-            table: Some(parts[0].to_string()),
-            column: parts[1].to_string(),
+            table: Some(table),
+            column,
         })
+    }
+
+    fn split_column_ref(input: &str) -> Option<(String, String)> {
+        let mut separator_index = None;
+        let mut chars = input.char_indices().peekable();
+        let mut in_backtick = false;
+        let mut in_double_quotes = false;
+
+        while let Some((index, ch)) = chars.next() {
+            if in_backtick {
+                if ch == '`' {
+                    in_backtick = false;
+                }
+                continue;
+            }
+
+            if in_double_quotes {
+                if ch == '"' {
+                    if matches!(chars.peek(), Some((_, '"'))) {
+                        chars.next();
+                    } else {
+                        in_double_quotes = false;
+                    }
+                }
+                continue;
+            }
+
+            match ch {
+                '`' => in_backtick = true,
+                '"' => in_double_quotes = true,
+                '.' => {
+                    if separator_index.replace(index).is_some() {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if in_backtick || in_double_quotes {
+            return None;
+        }
+
+        let dot_index = separator_index?;
+        let (left, right_with_dot) = input.split_at(dot_index);
+        let right = right_with_dot.strip_prefix('.')?;
+
+        if left.is_empty() || right.is_empty() {
+            return None;
+        }
+
+        Some((
+            Self::normalize_identifier(left),
+            Self::normalize_identifier(right),
+        ))
+    }
+
+    fn normalize_identifier(identifier: &str) -> String {
+        if identifier.starts_with('`') && identifier.ends_with('`') && identifier.len() >= 2 {
+            return identifier[1..identifier.len() - 1].to_string();
+        }
+
+        if identifier.starts_with('"') && identifier.ends_with('"') && identifier.len() >= 2 {
+            return identifier[1..identifier.len() - 1].replace("\"\"", "\"");
+        }
+
+        identifier.to_string()
     }
 }
