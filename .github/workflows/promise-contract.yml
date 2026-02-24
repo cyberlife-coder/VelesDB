@@ -1,0 +1,28 @@
+name: Promise Contract
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'README.md'
+      - 'crates/velesdb-core/README.md'
+      - 'docs/reference/promise-contract.json'
+      - 'scripts/check-promise-contract.py'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'README.md'
+      - 'crates/velesdb-core/README.md'
+      - 'docs/reference/promise-contract.json'
+      - 'scripts/check-promise-contract.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate promise contract registry
+        run: python3 scripts/check-promise-contract.py

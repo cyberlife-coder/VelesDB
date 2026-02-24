@@ -40,6 +40,10 @@ In-depth technical documentation:
 | [REST API](./reference/api-reference.md) | HTTP API endpoints |
 | [SIMD Performance](./reference/SIMD_PERFORMANCE.md) | SIMD optimizations and benchmarks |
 | [VelesDB Core Production Readiness](./reference/velesdb-core-production-readiness.md) | Current status, gaps, and production hardening plan for `velesdb-core` |
+| [VelesDB Core Improvement Research](./reference/velesdb-core-improvement-research.md) | Expert roadmap and completed priority implementation plan |
+| [Performance SLO Proof-Pack](./reference/performance-proofpack.md) | p50/p95/p99 + Recall report artifact (generated) |
+| [Workload Profile Catalog](./reference/workload-profile-catalog.md) | Standard benchmark profiles by use-case |
+| [Security Evidence Pack](./reference/security-evidence-pack.md) | Release-time security evidence snapshot and checklist |
 
 ---
 

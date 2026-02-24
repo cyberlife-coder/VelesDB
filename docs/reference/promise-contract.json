@@ -1,0 +1,35 @@
+{
+  "last_updated": "2026-02-24",
+  "claims": [
+    {
+      "id": "root_readme_hnsw_latency_microseconds",
+      "file": "README.md",
+      "must_contain": "HNSW Search (10K vectors)",
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark"
+    },
+    {
+      "id": "root_readme_simd_dot",
+      "file": "README.md",
+      "must_contain": "SIMD Dot Product (768D)",
+      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark"
+    },
+    {
+      "id": "root_readme_ci_quality_gate",
+      "file": "README.md",
+      "must_contain": "cargo test --workspace",
+      "validation_command": "cargo test --workspace"
+    },
+    {
+      "id": "core_readme_blazing_fast",
+      "file": "crates/velesdb-core/README.md",
+      "must_contain": "Blazing Fast",
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark"
+    },
+    {
+      "id": "core_readme_columnstore_claim",
+      "file": "crates/velesdb-core/README.md",
+      "must_contain": "ColumnStore filtering",
+      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark"
+    }
+  ]
+}

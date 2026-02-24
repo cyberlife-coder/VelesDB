@@ -1,0 +1,26 @@
+name: Production Gates
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'scripts/run-production-gates.sh'
+      - 'scripts/check-doc-contract.sh'
+      - 'scripts/check-promise-contract.py'
+      - 'crates/velesdb-core/tests/velesql_planner_golden.rs'
+      - 'crates/velesdb-core/tests/crash_recovery/**'
+      - 'crates/velesdb-core/src/storage/wal_recovery_tests.rs'
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run production gates
+        run: bash scripts/run-production-gates.sh

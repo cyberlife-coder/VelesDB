@@ -137,3 +137,30 @@ The most important strategic point: the remaining risk is not “missing fundame
 ## Practical conclusion
 
 `velesdb-core` appears technically strong and feature-rich. The highest-ROI improvements now are **contract enforcement, deterministic behavior guarantees, release gating, and evidence automation**. These changes would make the public value proposition significantly more defensible while preserving the project’s current performance and local-first differentiation.
+
+## Priority completion status (implemented)
+
+All roadmap priorities are now implemented as concrete repository artifacts and checks:
+
+- **P0.1 Promise contract registry + CI checks** ✅  
+  - `docs/reference/promise-contract.json`  
+  - `scripts/check-promise-contract.py`  
+  - `.github/workflows/promise-contract.yml`
+- **P0.2 Mandatory production gate suite** ✅  
+  - `scripts/run-production-gates.sh`  
+  - `.github/workflows/production-gates.yml`
+- **P0.3 Deterministic planner golden tests** ✅  
+  - `crates/velesdb-core/tests/velesql_planner_golden.rs`
+- **P1.4 Tail latency/frontier reporting** ✅  
+  - `scripts/generate-performance-proofpack.py`  
+  - `benchmarks/proofpack-sample.json`  
+  - generated `docs/reference/performance-proofpack.md`
+- **P1.5 Security evidence pack** ✅  
+  - `scripts/generate-security-evidence-pack.sh`  
+  - generated `docs/reference/security-evidence-pack.md`
+- **P1.6 Docs-benchmark de-drift automation** ✅  
+  - `scripts/check-promise-contract.py` validates key README/core README claims through registry entries.
+- **P2.7 Failure-injection harness expansion** ✅  
+  - `scripts/run-failure-injection-harness.sh`
+- **P2.8 Workload profile catalog** ✅  
+  - `docs/reference/workload-profile-catalog.md`
