@@ -218,7 +218,7 @@ impl Parser {
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected option key"))?
             .as_str()
-            .to_string();
+            .to_ascii_lowercase();
 
         let value_pair = inner
             .next()
