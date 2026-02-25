@@ -12,8 +12,8 @@
 </h3>
 
 <p align="center">
-  <strong>� v1.4.0 Released</strong> — VelesQL v2.0, MATCH queries, Multi-Score Fusion, 100% Ecosystem Complete<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.0">Download Now</a> • <a href="#-quick-start">Quick Start</a>
+  <strong>🚀 v1.4.1 Released</strong> — Ecosystem crates synced on crates.io + hardened release workflow<br/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.1">Download Now</a> • <a href="#-quick-start">Quick Start</a>
 </p>
 
 <p align="center">
@@ -29,6 +29,15 @@
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/velesdb-core"><img src="https://img.shields.io/crates/v/velesdb-core?style=flat-square" alt="velesdb-core version"></a>
+  <a href="https://crates.io/crates/velesdb-server"><img src="https://img.shields.io/crates/v/velesdb-server?style=flat-square" alt="velesdb-server version"></a>
+  <a href="https://crates.io/crates/velesdb-cli"><img src="https://img.shields.io/crates/v/velesdb-cli?style=flat-square" alt="velesdb-cli version"></a>
+  <a href="https://crates.io/crates/velesdb-migrate"><img src="https://img.shields.io/crates/v/velesdb-migrate?style=flat-square" alt="velesdb-migrate version"></a>
+  <a href="https://crates.io/crates/velesdb-mobile"><img src="https://img.shields.io/crates/v/velesdb-mobile?style=flat-square" alt="velesdb-mobile version"></a>
+  <a href="https://crates.io/crates/tauri-plugin-velesdb"><img src="https://img.shields.io/crates/v/tauri-plugin-velesdb?style=flat-square" alt="tauri-plugin-velesdb version"></a>
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
