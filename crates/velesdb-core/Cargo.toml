@@ -300,3 +300,7 @@ optional = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "pq_hnsw_benchmark"
+harness = false

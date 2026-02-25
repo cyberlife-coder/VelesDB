@@ -13,10 +13,12 @@
 use serde::{Deserialize, Serialize};
 
 mod binary;
+mod pq;
 mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
+pub use pq::{distance_pq, PQCodebook, PQVector, ProductQuantizer};
 
 // Re-export scalar quantization
 pub use scalar::{
@@ -37,4 +39,6 @@ pub enum StorageMode {
     /// 1-bit binary quantization for 32x memory reduction.
     /// Best for edge/IoT devices with limited RAM.
     Binary,
+    /// Product Quantization (PQ) for aggressive lossy compression (8x-16x typical).
+    ProductQuantization,
 }

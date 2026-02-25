@@ -5,7 +5,9 @@ use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::index::{JsonValue, SecondaryIndex};
 use crate::point::Point;
-use crate::quantization::{BinaryQuantizedVector, QuantizedVector, StorageMode};
+use crate::quantization::{
+    BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
+};
 use crate::storage::{PayloadStorage, VectorStorage};
 
 impl Collection {
@@ -59,6 +61,10 @@ impl Collection {
             StorageMode::Binary => Some(self.binary_cache.write()),
             _ => None,
         };
+        let mut pq_cache = match storage_mode {
+            StorageMode::ProductQuantization => Some(self.pq_cache.write()),
+            _ => None,
+        };
 
         for point in points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
@@ -79,6 +85,39 @@ impl Collection {
                     if let Some(ref mut cache) = binary_cache {
                         let quantized = BinaryQuantizedVector::from_f32(&point.vector);
                         cache.insert(point.id, quantized);
+                    }
+                }
+                StorageMode::ProductQuantization => {
+                    let maybe_code: Option<PQVector> = {
+                        let mut quantizer_guard = self.pq_quantizer.write();
+                        if quantizer_guard.is_none() {
+                            let mut buffer = self.pq_training_buffer.write();
+                            buffer.push_back(point.vector.clone());
+                            const PQ_TRAINING_SAMPLES: usize = 128;
+                            if buffer.len() >= PQ_TRAINING_SAMPLES {
+                                let training: Vec<Vec<f32>> = buffer.iter().cloned().collect();
+                                let dimension = point.vector.len();
+                                let mut num_subspaces = 8usize;
+                                while num_subspaces > 1 && !dimension.is_multiple_of(num_subspaces)
+                                {
+                                    num_subspaces /= 2;
+                                }
+                                let num_centroids = 256usize.min(training.len().max(2));
+                                *quantizer_guard = Some(ProductQuantizer::train(
+                                    &training,
+                                    num_subspaces.max(1),
+                                    num_centroids,
+                                ));
+                            }
+                        }
+
+                        quantizer_guard
+                            .as_ref()
+                            .map(|quantizer| quantizer.quantize(&point.vector))
+                    };
+
+                    if let (Some(ref mut cache), Some(code)) = (&mut pq_cache, maybe_code) {
+                        cache.insert(point.id, code);
                     }
                 }
                 StorageMode::Full => {}
@@ -330,6 +369,9 @@ impl Collection {
                 vector_storage.delete(id).map_err(Error::Io)?;
                 payload_storage.delete(id).map_err(Error::Io)?;
                 self.index.remove(id);
+                self.sq8_cache.write().remove(&id);
+                self.binary_cache.write().remove(&id);
+                self.pq_cache.write().remove(&id);
                 self.text_index.remove_document(id);
                 self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             }

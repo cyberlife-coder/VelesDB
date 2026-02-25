@@ -4,7 +4,51 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
+use crate::quantization::{distance_pq, StorageMode};
 use crate::storage::{PayloadStorage, VectorStorage};
+
+impl Collection {
+    fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+        let config = self.config.read();
+        let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
+        let higher_is_better = config.metric.higher_is_better();
+        drop(config);
+
+        if !is_pq {
+            return self.index.search(query, k);
+        }
+
+        let candidates_k = k.saturating_mul(8).max(k + 32);
+        let index_results = self.index.search(query, candidates_k);
+
+        let pq_cache = self.pq_cache.read();
+        let quantizer = self.pq_quantizer.read();
+        let Some(quantizer) = quantizer.as_ref() else {
+            return index_results.into_iter().take(k).collect();
+        };
+
+        let mut rescored: Vec<(u64, f32)> = index_results
+            .into_iter()
+            .map(|(id, fallback_score)| {
+                let score = pq_cache
+                    .get(&id)
+                    .map(|pq_vec| distance_pq(query, pq_vec, &quantizer.codebook))
+                    .unwrap_or(fallback_score);
+                (id, score)
+            })
+            .collect();
+
+        rescored.sort_by(|a, b| {
+            if higher_is_better {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+        rescored.truncate(k);
+        rescored
+    }
+}
 
 impl Collection {
     /// Searches for the k nearest neighbors of the query vector.
@@ -32,7 +76,7 @@ impl Collection {
         drop(config);
 
         // Use HNSW index for fast ANN search
-        let index_results = self.index.search(query, k);
+        let index_results = self.search_ids_with_adc_if_pq(query, k);
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
@@ -143,7 +187,7 @@ impl Collection {
         drop(config);
 
         // Perf: Direct HNSW search without vector/payload retrieval
-        let results = self.index.search(query, k);
+        let results = self.search_ids_with_adc_if_pq(query, k);
         Ok(results)
     }
 
@@ -180,7 +224,7 @@ impl Collection {
         // Post-filtering strategy: retrieve more candidates than k, then filter
         // Heuristic: retrieve 4x candidates to account for filtered-out results
         let candidates_k = k.saturating_mul(4).max(k + 10);
-        let index_results = self.index.search(query, candidates_k);
+        let index_results = self.search_ids_with_adc_if_pq(query, candidates_k);
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
