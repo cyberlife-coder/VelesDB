@@ -8,6 +8,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use common::create_test_app;
+use reqwest::header::CONTENT_TYPE;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -1988,6 +1989,66 @@ async fn test_graph_traverse_invalid_strategy() {
         .expect("Request failed");
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_graph_traverse_stream_sse() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (base_url, shutdown_tx) = common::spawn_test_server(&temp_dir).await;
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("Failed to build HTTP client");
+
+    // Build a graph: 1 -> 2 -> 3
+    for (id, src, tgt) in [(1, 1, 2), (2, 2, 3)] {
+        let response = client
+            .post(format!("{base_url}/collections/stream_test/graph/edges"))
+            .json(&json!({
+                "id": id,
+                "source": src,
+                "target": tgt,
+                "label": "KNOWS"
+            }))
+            .send()
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    }
+
+    let mut response = client
+        .get(format!(
+            "{base_url}/collections/stream_test/graph/traverse/stream?start_node=1&algorithm=bfs&max_depth=5&limit=10"
+        ))
+        .send()
+        .await
+        .expect("SSE request failed");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let mut payload = String::new();
+    while let Some(chunk) = response.chunk().await.expect("SSE chunk read failed") {
+        payload.push_str(&String::from_utf8_lossy(&chunk));
+        if payload.contains("event: done") {
+            break;
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+
+    assert!(payload.contains("event: node"));
+    assert!(payload.contains("\"id\":2"));
+    assert!(payload.contains("\"id\":3"));
+    assert!(payload.contains("event: done"));
+    assert!(payload.contains("\"total_nodes\":2"));
 }
 
 #[tokio::test]

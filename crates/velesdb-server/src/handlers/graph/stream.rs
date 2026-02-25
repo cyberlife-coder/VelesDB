@@ -8,7 +8,6 @@ use axum::{
 };
 use futures::stream::{self, Stream};
 use std::convert::Infallible;
-use std::sync::Arc;
 use std::time::Instant;
 
 use super::service::GraphService;
@@ -25,7 +24,7 @@ use super::types::{
 /// - `error`: If an error occurs
 #[allow(clippy::unused_async)]
 pub async fn stream_traverse(
-    State(graph_service): State<Arc<GraphService>>,
+    State(graph_service): State<GraphService>,
     Path(collection): Path<String>,
     Query(params): Query<StreamTraverseParams>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
