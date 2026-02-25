@@ -360,15 +360,18 @@ fn test_storage_mode_enum() {
     let full = StorageMode::Full;
     let sq8 = StorageMode::SQ8;
     let binary = StorageMode::Binary;
+    let pq = StorageMode::ProductQuantization;
     let default = StorageMode::default();
 
     // Assert
     assert_eq!(full, StorageMode::Full);
     assert_eq!(sq8, StorageMode::SQ8);
     assert_eq!(binary, StorageMode::Binary);
+    assert_eq!(pq, StorageMode::ProductQuantization);
     assert_eq!(default, StorageMode::Full);
     assert_ne!(full, sq8);
     assert_ne!(sq8, binary);
+    assert_ne!(binary, pq);
 }
 
 // =========================================================================
