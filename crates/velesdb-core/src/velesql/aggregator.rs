@@ -93,10 +93,8 @@ impl Aggregator {
     /// Updates SUM, MIN, MAX, and count for AVG calculation.
     /// Optimized to avoid String allocation in hot path when column already exists.
     ///
-    /// # Panics
-    ///
-    /// This function will not panic under normal operation. The internal `expect()`
-    /// calls are guarded by invariant that all HashMaps are kept in sync.
+    /// HashMap synchronization invariants are checked with `debug_assert!`;
+    /// inconsistent state is handled by returning early in release builds.
     pub fn process_value(&mut self, column: &str, value: &serde_json::Value) {
         if let Some(num) = Self::extract_number(value) {
             // Fast path: column already tracked - no allocation
@@ -104,15 +102,31 @@ impl Aggregator {
                 *sum += num;
                 // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
                 // together in the slow path below — missing key here is a logic bug.
-                *self
-                    .counts
-                    .get_mut(column)
-                    .expect("counts synced with sums") += 1;
-                let min = self.mins.get_mut(column).expect("mins synced with sums");
+                let Some(count) = self.counts.get_mut(column) else {
+                    debug_assert!(
+                        false,
+                        "Invariant violated: counts must contain all keys present in sums"
+                    );
+                    return;
+                };
+                *count += 1;
+                let Some(min) = self.mins.get_mut(column) else {
+                    debug_assert!(
+                        false,
+                        "Invariant violated: mins must contain all keys present in sums"
+                    );
+                    return;
+                };
                 if num < *min {
                     *min = num;
                 }
-                let max = self.maxs.get_mut(column).expect("maxs synced with sums");
+                let Some(max) = self.maxs.get_mut(column) else {
+                    debug_assert!(
+                        false,
+                        "Invariant violated: maxs must contain all keys present in sums"
+                    );
+                    return;
+                };
                 if num > *max {
                     *max = num;
                 }
@@ -145,10 +159,8 @@ impl Aggregator {
     /// * `column` - Column name for the aggregation
     /// * `values` - Slice of f64 values to aggregate
     ///
-    /// # Panics
-    ///
-    /// This function will not panic under normal operation. The internal `expect()`
-    /// calls are guarded by invariant that all HashMaps are kept in sync.
+    /// HashMap synchronization invariants are checked with `debug_assert!`;
+    /// inconsistent state is handled by returning early in release builds.
     pub fn process_batch(&mut self, column: &str, values: &[f64]) {
         if values.is_empty() {
             return;
@@ -165,15 +177,31 @@ impl Aggregator {
             *sum += batch_sum;
             // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
             // together in the slow path below — missing key here is a logic bug.
-            *self
-                .counts
-                .get_mut(column)
-                .expect("counts synced with sums") += batch_count;
-            let min = self.mins.get_mut(column).expect("mins synced with sums");
+            let Some(count) = self.counts.get_mut(column) else {
+                debug_assert!(
+                    false,
+                    "Invariant violated: counts must contain all keys present in sums"
+                );
+                return;
+            };
+            *count += batch_count;
+            let Some(min) = self.mins.get_mut(column) else {
+                debug_assert!(
+                    false,
+                    "Invariant violated: mins must contain all keys present in sums"
+                );
+                return;
+            };
             if batch_min < *min {
                 *min = batch_min;
             }
-            let max = self.maxs.get_mut(column).expect("maxs synced with sums");
+            let Some(max) = self.maxs.get_mut(column) else {
+                debug_assert!(
+                    false,
+                    "Invariant violated: maxs must contain all keys present in sums"
+                );
+                return;
+            };
             if batch_max > *max {
                 *max = batch_max;
             }

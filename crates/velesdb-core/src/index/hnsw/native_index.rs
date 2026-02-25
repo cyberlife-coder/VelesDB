@@ -228,16 +228,21 @@ impl NativeHnswIndex {
 
     /// Inserts a single vector.
     ///
-    /// # Panics
-    ///
-    /// Panics if internal ID allocation fails (should never happen in practice).
+    /// Internal mapping races are handled defensively: if a concurrent
+    /// registration race violates the mapping invariant, insertion is skipped.
     pub fn insert(&self, id: u64, vector: &[f32]) {
         // Register ID and get internal index (or get existing)
-        let internal_idx = self.mappings.register(id).unwrap_or_else(|| {
-            self.mappings
-                .get_idx(id)
-                .expect("ID should exist after register attempt")
-        });
+        let internal_idx = self
+            .mappings
+            .register(id)
+            .or_else(|| self.mappings.get_idx(id));
+        let Some(internal_idx) = internal_idx else {
+            debug_assert!(
+                false,
+                "Invariant violated: register returned None but ID missing from mappings"
+            );
+            return;
+        };
         self.inner.read().insert((vector, internal_idx));
 
         if self.enable_vector_storage {
@@ -247,18 +252,24 @@ impl NativeHnswIndex {
 
     /// Batch insert multiple vectors.
     ///
-    /// # Panics
-    ///
-    /// Panics if internal ID allocation fails (should never happen in practice).
+    /// Internal mapping races are handled defensively: if a concurrent
+    /// registration race violates the mapping invariant, insertion is skipped.
     pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) {
         let data: Vec<(Vec<f32>, usize)> = items
             .iter()
-            .map(|(id, vec)| {
+            .filter_map(|(id, vec)| {
                 let idx = self
                     .mappings
                     .register(*id)
-                    .unwrap_or_else(|| self.mappings.get_idx(*id).expect("ID should exist"));
-                (vec.clone(), idx)
+                    .or_else(|| self.mappings.get_idx(*id));
+                let Some(idx) = idx else {
+                    debug_assert!(
+                        false,
+                        "Invariant violated: register returned None but ID missing from mappings"
+                    );
+                    return None;
+                };
+                Some((vec.clone(), idx))
             })
             .collect();
 

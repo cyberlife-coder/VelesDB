@@ -99,7 +99,9 @@ impl VectorSliceGuard<'_> {
 impl AsRef<[f32]> for VectorSliceGuard<'_> {
     #[inline]
     fn as_ref(&self) -> &[f32] {
-        self.as_slice().expect("epoch mismatch in AsRef")
+        self.as_slice().expect(
+            "Invariant: VectorSliceGuard::as_ref is only called while epoch is stable; stale guards must use as_slice() and handle Error::EpochMismatch",
+        )
     }
 }
 
@@ -108,6 +110,8 @@ impl std::ops::Deref for VectorSliceGuard<'_> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_slice().expect("epoch mismatch in Deref")
+        self.as_slice().expect(
+            "Invariant: VectorSliceGuard::deref is only used while mmap epoch matches creation; callers that tolerate remap must call as_slice() and handle the Result",
+        )
     }
 }

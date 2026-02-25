@@ -154,10 +154,12 @@ impl VectorStorage for MmapStorage {
                     // write to offset 0 (corrupting the first vector) if the invariant
                     // ever broke. Every new ID is added to `new_vector_offsets` above,
                     // so this should always succeed.
-                    new_vector_offsets.get(&id).copied().expect(
-                        "BUG: ID not found in new_vector_offsets — \
-                         every ID not in index must have a pre-computed offset",
-                    )
+                    new_vector_offsets.get(&id).copied().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "ID not found in new_vector_offsets",
+                        )
+                    })?
                 };
 
                 mmap[offset..offset + vector_size].copy_from_slice(vector_bytes);
@@ -214,9 +216,12 @@ impl VectorStorage for MmapStorage {
             let vector_size = self.dimension * std::mem::size_of::<f32>();
             // Best-effort: ignore errors (space will be reclaimed on compact())
             // Reason: offset and vector_size are bounded by file size, always fit in u64 on 64-bit
-            let offset_u64 = u64::try_from(offset).expect("offset fits in u64");
-            let size_u64 = u64::try_from(vector_size).expect("vector_size fits in u64");
-            let _ = crate::storage::compaction::punch_hole(&self.data_file, offset_u64, size_u64);
+            let offset_u64 = u64::try_from(offset).unwrap_or(u64::MAX);
+            let size_u64 = u64::try_from(vector_size).unwrap_or(u64::MAX);
+            if offset_u64 != u64::MAX && size_u64 != u64::MAX {
+                let _ =
+                    crate::storage::compaction::punch_hole(&self.data_file, offset_u64, size_u64);
+            }
         }
 
         Ok(())

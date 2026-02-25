@@ -288,8 +288,15 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         ef_search: usize,
         config: &DualPrecisionConfig,
     ) -> Vec<(NodeId, f32)> {
-        let quantizer = self.quantizer.as_ref().expect("quantizer must be trained");
-        let store = self.quantized_store.as_ref().expect("store must exist");
+        let (Some(quantizer), Some(store)) =
+            (self.quantizer.as_ref(), self.quantized_store.as_ref())
+        else {
+            debug_assert!(
+                false,
+                "Invariant violated: int8 traversal requires trained quantizer and store"
+            );
+            return self.inner.search(query, k, ef_search);
+        };
 
         // Quantize query for int8 traversal
         let query_quantized = quantizer.quantize(query);

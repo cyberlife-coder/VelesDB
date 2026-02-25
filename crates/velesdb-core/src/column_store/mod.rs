@@ -400,7 +400,7 @@ impl ColumnStore {
             let col = self
                 .columns
                 .get_mut(*col_name)
-                .expect("column existence validated above");
+                .ok_or_else(|| ColumnStoreError::ColumnNotFound((*col_name).to_string()))?;
             Self::set_column_value(col, row_idx, value.clone())?;
         }
 

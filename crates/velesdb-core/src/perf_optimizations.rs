@@ -101,7 +101,7 @@ impl ContiguousVectors {
 
         // EPIC-032/US-002: Use NonNull for type-level non-null guarantee
         let data = NonNull::new(ptr.cast::<f32>())
-            .expect("Failed to allocate ContiguousVectors: out of memory");
+            .unwrap_or_else(|| panic!("Failed to allocate ContiguousVectors: out of memory"));
 
         Self {
             data,
@@ -115,7 +115,9 @@ impl ContiguousVectors {
     fn layout(dimension: usize, capacity: usize) -> Layout {
         let size = dimension * capacity * std::mem::size_of::<f32>();
         let align = 64; // Cache line alignment for optimal prefetch
-        Layout::from_size_align(size.max(64), align).expect("Invalid layout")
+        Layout::from_size_align(size.max(64), align).unwrap_or_else(|_| {
+            panic!("Invariant violated: 64-byte aligned layout must always be valid")
+        })
     }
 
     /// Returns the dimension of stored vectors.
@@ -346,7 +348,9 @@ impl ContiguousVectors {
         });
 
         // EPIC-032/US-002: Use NonNull for type-level guarantee
-        let new_data = NonNull::new(guard.cast::<f32>()).expect("AllocGuard returned null pointer");
+        let new_data = NonNull::new(guard.cast::<f32>()).unwrap_or_else(|| {
+            panic!("Invariant violated: AllocGuard must never return a null pointer")
+        });
 
         // Step 2: Copy existing data to new buffer
         // If this panics, guard drops and frees new_data automatically

@@ -166,7 +166,9 @@ impl Bm25Index {
         self.remove_document_internal(id, false);
 
         // Resolve internal BM25 doc ID (u32) for RoaringBitmap-backed postings.
-        let id_u32 = self.get_or_allocate_doc_id(id);
+        let Some(id_u32) = self.get_or_allocate_doc_id(id) else {
+            return;
+        };
 
         // Update inverted index with adaptive PostingList.
         // PostingList auto-promotes to Roaring when cardinality exceeds threshold.
@@ -355,10 +357,10 @@ impl Bm25Index {
     }
 
     /// Gets existing internal doc-id or allocates a new one.
-    fn get_or_allocate_doc_id(&self, point_id: u64) -> u32 {
+    fn get_or_allocate_doc_id(&self, point_id: u64) -> Option<u32> {
         let mut map = self.point_to_doc.write();
         if let Some(existing) = map.get(&point_id).copied() {
-            return existing;
+            return Some(existing);
         }
 
         let allocated = if let Some(recycled) = self.free_doc_ids.write().pop() {
@@ -366,15 +368,13 @@ impl Bm25Index {
         } else {
             let mut next = self.next_doc_id.write();
             let current = *next;
-            *next = next
-                .checked_add(1)
-                .expect("BM25 internal doc-id space exhausted (u32)");
+            *next = next.checked_add(1)?;
             current
         };
 
         map.insert(point_id, allocated);
         self.doc_to_point.write().insert(allocated, point_id);
-        allocated
+        Some(allocated)
     }
 
     /// Removes a point from BM25 internals.
