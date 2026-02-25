@@ -28,7 +28,7 @@ pub use collections::{
 };
 pub use health::health_check;
 pub use indexes::{create_index, delete_index, list_indexes};
-pub use points::{delete_point, get_point, upsert_points};
+pub use points::{delete_point, get_point, stream_upsert_points, upsert_points};
 // EPIC-058 US-007: match_query handler for /collections/{name}/match
 pub use match_query::match_query;
 pub use query::{explain, query};

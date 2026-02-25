@@ -8,6 +8,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use common::create_test_app;
+use futures::stream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -215,6 +216,168 @@ async fn test_upsert_and_search() {
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
 
     assert!(json["results"].is_array());
+}
+
+#[tokio::test]
+async fn test_stream_upsert_ndjson() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "stream_vectors",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let ndjson_lines = vec![
+        r#"{"id": 10, "vector": [1.0, 0.0, 0.0], "payload": {"source":"a"}}
+"#,
+        "not-a-json-line
+",
+        r#"{"id": 11, "vector": [0.0, 1.0, 0.0]}
+"#,
+        r#"{"id": 12, "vector": [0.0, 0.0, 1.0]}
+"#,
+    ];
+
+    let stream_body = Body::from_stream(stream::iter(
+        ndjson_lines
+            .into_iter()
+            .map(|line| Ok::<_, std::io::Error>(line.to_string())),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/stream_vectors/points/stream")
+                .header("Content-Type", "application/x-ndjson")
+                .body(stream_body)
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert_eq!(json["inserted"], 3);
+    assert_eq!(json["malformed"], 1);
+
+    for point_id in [10_u64, 11, 12] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/collections/stream_vectors/points/{point_id}"))
+                    .body(Body::empty())
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn test_stream_upsert_ndjson_chunked_without_trailing_newline() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "stream_chunked",
+                        "dimension": 2,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let chunks = vec![
+        r#"{"id":101,"vector":[1.0,0.0]"#,
+        r#","payload":{"source":"chunk"}}
+{"id":102,"#,
+        r#""vector":[0.0,1.0]}"#,
+    ];
+
+    let stream_body = Body::from_stream(stream::iter(
+        chunks
+            .into_iter()
+            .map(|chunk| Ok::<_, std::io::Error>(chunk.to_string())),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/stream_chunked/points/stream")
+                .header("Content-Type", "application/x-ndjson")
+                .body(stream_body)
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert_eq!(json["inserted"], 2);
+    assert_eq!(json["malformed"], 0);
+
+    for point_id in [101_u64, 102] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/collections/stream_chunked/points/{point_id}"))
+                    .body(Body::empty())
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
 
 #[tokio::test]

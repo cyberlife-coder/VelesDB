@@ -11,7 +11,8 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, batch_search, create_collection, delete_collection, delete_point, get_collection,
     get_edges, get_node_degree, get_point, health_check, hybrid_search, list_collections, query,
-    search, text_search, traverse_graph, upsert_points, AppState, GraphService,
+    search, stream_upsert_points, text_search, traverse_graph, upsert_points, AppState,
+    GraphService,
 };
 
 /// Helper to create test app with all routes
@@ -31,6 +32,10 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/{name}/points", post(upsert_points))
+        .route(
+            "/collections/{name}/points/stream",
+            post(stream_upsert_points),
+        )
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),

@@ -35,8 +35,8 @@ pub use types::*;
 pub use handlers::{
     batch_search, create_collection, create_index, delete_collection, delete_index, delete_point,
     explain, flush_collection, get_collection, get_point, health_check, hybrid_search, is_empty,
-    list_collections, list_indexes, match_query, multi_query_search, query, search, text_search,
-    upsert_points,
+    list_collections, list_indexes, match_query, multi_query_search, query, search,
+    stream_upsert_points, text_search, upsert_points,
 };
 
 // FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
@@ -83,6 +83,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::collections::get_collection,
         handlers::collections::delete_collection,
         handlers::points::upsert_points,
+        handlers::points::stream_upsert_points,
         handlers::points::get_point,
         handlers::points::delete_point,
         handlers::search::search,
@@ -171,6 +172,10 @@ mod tests {
             "Should document collections by name"
         );
         assert!(json.contains("/points"), "Should document points endpoint");
+        assert!(
+            json.contains(r"/collections/{name}/points/stream"),
+            "Should document points stream endpoint"
+        );
         assert!(json.contains("/search"), "Should document search endpoint");
         assert!(json.contains("/query"), "Should document /query");
     }
