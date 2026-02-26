@@ -97,21 +97,39 @@ impl VectorSliceGuard<'_> {
 }
 
 impl AsRef<[f32]> for VectorSliceGuard<'_> {
+    /// # Panics
+    ///
+    /// Panics if the underlying mmap was remapped after this guard was created
+    /// (epoch mismatch). Callers that tolerate remap must use
+    /// [`as_slice()`](Self::as_slice) and handle the `Result` instead.
     #[inline]
     fn as_ref(&self) -> &[f32] {
-        self.as_slice().expect(
-            "Invariant: VectorSliceGuard::as_ref is only called while epoch is stable; stale guards must use as_slice() and handle Error::EpochMismatch",
-        )
+        match self.as_slice() {
+            Ok(slice) => slice,
+            Err(e) => panic!(
+                "VectorSliceGuard::as_ref: epoch mismatch — the mmap was remapped. \
+                 Use as_slice() to handle this gracefully. Error: {e}"
+            ),
+        }
     }
 }
 
 impl std::ops::Deref for VectorSliceGuard<'_> {
     type Target = [f32];
 
+    /// # Panics
+    ///
+    /// Panics if the underlying mmap was remapped after this guard was created
+    /// (epoch mismatch). Callers that tolerate remap must use
+    /// [`as_slice()`](VectorSliceGuard::as_slice) and handle the `Result` instead.
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_slice().expect(
-            "Invariant: VectorSliceGuard::deref is only used while mmap epoch matches creation; callers that tolerate remap must call as_slice() and handle the Result",
-        )
+        match self.as_slice() {
+            Ok(slice) => slice,
+            Err(e) => panic!(
+                "VectorSliceGuard::deref: epoch mismatch — the mmap was remapped. \
+                 Use as_slice() to handle this gracefully. Error: {e}"
+            ),
+        }
     }
 }

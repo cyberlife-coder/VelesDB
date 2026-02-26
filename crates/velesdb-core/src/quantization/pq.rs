@@ -41,6 +41,10 @@ impl ProductQuantizer {
         assert!(!vectors.is_empty(), "Cannot train PQ with empty dataset");
         assert!(num_subspaces > 0, "num_subspaces must be > 0");
         assert!(num_centroids > 0, "num_centroids must be > 0");
+        assert!(
+            num_centroids <= usize::from(u16::MAX),
+            "num_centroids must fit in u16 (max 65535)"
+        );
 
         let dimension = vectors[0].len();
         assert!(
@@ -84,7 +88,10 @@ impl ProductQuantizer {
             let start = subspace * self.codebook.subspace_dim;
             let end = start + self.codebook.subspace_dim;
             let code = nearest_centroid(&vector[start..end], &self.codebook.centroids[subspace]);
-            codes.push(u16::try_from(code).expect("centroid index must fit u16"));
+            // SAFETY: `num_centroids` is validated to fit in u16 during `train()`.
+            // `nearest_centroid` returns an index < num_centroids, so it always fits.
+            #[allow(clippy::cast_possible_truncation)]
+            codes.push(code as u16);
         }
 
         PQVector { codes }
