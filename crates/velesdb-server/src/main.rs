@@ -19,8 +19,8 @@ use velesdb_server::{
     add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
     delete_point, flush_collection, get_collection, get_edges, get_node_degree, get_point,
     health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, search, stream_upsert_points, text_search, traverse_graph,
-    upsert_points, ApiDoc, AppState, GraphService,
+    multi_query_search, query, search, stream_traverse, stream_upsert_points, text_search,
+    traverse_graph, upsert_points, ApiDoc, AppState, GraphService,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -79,6 +79,10 @@ async fn main() -> anyhow::Result<()> {
             get(get_edges).post(add_edge),
         )
         .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/traverse/stream",
+            get(stream_traverse),
+        )
         .route(
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
