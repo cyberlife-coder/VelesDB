@@ -6,6 +6,7 @@
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
+use std::hash::{BuildHasher, Hasher};
 
 use super::ast::Query;
 use super::error::ParseError;
@@ -30,9 +31,7 @@ impl CacheStats {
         if total == 0 {
             0.0
         } else {
-            #[allow(clippy::cast_precision_loss)]
-            let rate = (self.hits as f64 / total as f64) * 100.0;
-            rate
+            (self.hits as f64 / total as f64) * 100.0
         }
     }
 }
@@ -41,26 +40,36 @@ impl CacheStats {
 ///
 /// Thread-safe implementation using `parking_lot::RwLock`.
 ///
-/// # Example
+/// # Design notes
 ///
-/// ```ignore
-/// use velesdb_core::velesql::QueryCache;
-///
-/// let cache = QueryCache::new(1000);
-/// let query = cache.parse("SELECT * FROM documents LIMIT 10")?;
-/// // Second call returns cached AST
-/// let query2 = cache.parse("SELECT * FROM documents LIMIT 10")?;
-/// assert!(cache.stats().hits >= 1);
-/// ```
+/// - Canonical query text is hashed for compact bucketing.
+/// - Hash collisions are handled explicitly via a per-bucket vector.
+/// - A strict equality check on original query text is required before reuse.
+/// - LRU order stores unique cache keys and is kept in sync with entry count.
 pub struct QueryCache {
-    /// Cache storage: full query string -> Query
-    cache: RwLock<FxHashMap<String, Query>>,
-    /// LRU order: front = oldest query string, back = newest
-    order: RwLock<VecDeque<String>>,
-    /// Maximum cache size
+    /// Cache storage: canonical-hash -> collision-safe entries.
+    cache: RwLock<FxHashMap<u64, Vec<CacheEntry>>>,
+    /// LRU order: front = oldest key, back = most recently used.
+    order: RwLock<VecDeque<CacheKey>>,
+    /// Maximum cache size.
     max_size: usize,
-    /// Cache statistics
+    /// Hash function for canonical query text.
+    hash_fn: fn(&str) -> u64,
+    /// Cache statistics.
     stats: RwLock<CacheStats>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
+    hash: u64,
+    original_query: String,
+}
+
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    original_query: String,
+    canonical_query: String,
+    parsed: Query,
 }
 
 impl QueryCache {
@@ -68,13 +77,18 @@ impl QueryCache {
     ///
     /// # Arguments
     ///
-    /// * `max_size` - Maximum number of queries to cache (minimum 1)
+    /// * `max_size` - Maximum number of queries to cache (minimum 1).
     #[must_use]
     pub fn new(max_size: usize) -> Self {
+        Self::new_with_hasher(max_size, default_query_hash)
+    }
+
+    fn new_with_hasher(max_size: usize, hash_fn: fn(&str) -> u64) -> Self {
         Self {
             cache: RwLock::new(FxHashMap::default()),
-            order: RwLock::new(VecDeque::with_capacity(max_size)),
+            order: RwLock::new(VecDeque::with_capacity(max_size.max(1))),
             max_size: max_size.max(1),
+            hash_fn,
             stats: RwLock::new(CacheStats::default()),
         }
     }
@@ -85,31 +99,46 @@ impl QueryCache {
     ///
     /// Returns `ParseError` if the query is invalid.
     pub fn parse(&self, query: &str) -> Result<Query, ParseError> {
-        // Fast-path read
-        let cached = { self.cache.read().get(query).cloned() };
+        let canonical_query = canonicalize_query(query);
+        let hash = (self.hash_fn)(&canonical_query);
+
+        let cached = {
+            self.cache.read().get(&hash).and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| {
+                        // Strict equality check on hit to avoid query confusion.
+                        entry.original_query == query && entry.canonical_query == canonical_query
+                    })
+                    .cloned()
+            })
+        };
 
         if let Some(cached) = cached {
-            let cache = self.cache.write();
+            let cache = self.cache.read();
             let mut order = self.order.write();
             let mut stats = self.stats.write();
 
             stats.hits += 1;
 
-            // Keep strict LRU invariant (no duplicates + move-to-MRU)
-            if cache.contains_key(query) {
-                if let Some(pos) = order.iter().position(|q| q == query) {
+            let key = CacheKey {
+                hash,
+                original_query: query.to_string(),
+            };
+
+            // Move to MRU, keeping order duplicate-free.
+            if cache.get(&hash).is_some() {
+                if let Some(pos) = order.iter().position(|existing| existing == &key) {
                     order.remove(pos);
                 }
-                order.push_back(query.to_string());
+                order.push_back(key);
             }
 
-            return Ok(cached);
+            return Ok(cached.parsed);
         }
 
-        // Cache miss - parse the query
         let parsed = Parser::parse(query)?;
 
-        // Insert into cache
         {
             let mut cache = self.cache.write();
             let mut order = self.order.write();
@@ -117,21 +146,44 @@ impl QueryCache {
 
             stats.misses += 1;
 
-            // Evict oldest if at capacity
-            while cache.len() >= self.max_size {
+            while Self::entry_count(&cache) >= self.max_size {
                 if let Some(oldest) = order.pop_front() {
-                    cache.remove(&oldest);
+                    if let Some(bucket) = cache.get_mut(&oldest.hash) {
+                        bucket.retain(|entry| entry.original_query != oldest.original_query);
+                        if bucket.is_empty() {
+                            cache.remove(&oldest.hash);
+                        }
+                    }
                     stats.evictions += 1;
                 }
             }
 
-            // Prevent duplicate order entries for same query
-            if let Some(pos) = order.iter().position(|q| q == query) {
+            let key = CacheKey {
+                hash,
+                original_query: query.to_string(),
+            };
+
+            if let Some(pos) = order.iter().position(|existing| existing == &key) {
                 order.remove(pos);
             }
 
-            cache.insert(query.to_string(), parsed.clone());
-            order.push_back(query.to_string());
+            let new_entry = CacheEntry {
+                original_query: query.to_string(),
+                canonical_query,
+                parsed: parsed.clone(),
+            };
+
+            cache
+                .entry(hash)
+                .and_modify(|bucket| {
+                    bucket.retain(|entry| entry.original_query != query);
+                    bucket.push(new_entry.clone());
+                })
+                .or_insert_with(|| vec![new_entry]);
+
+            order.push_back(key);
+
+            debug_assert_eq!(Self::entry_count(&cache), order.len());
         }
 
         Ok(parsed)
@@ -146,13 +198,13 @@ impl QueryCache {
     /// Returns the current number of cached queries.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.cache.read().len()
+        Self::entry_count(&self.cache.read())
     }
 
     /// Returns true if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.cache.read().is_empty()
+        self.len() == 0
     }
 
     /// Clears all cached queries and resets statistics.
@@ -165,12 +217,26 @@ impl QueryCache {
         order.clear();
         *stats = CacheStats::default();
     }
+
+    fn entry_count(cache: &FxHashMap<u64, Vec<CacheEntry>>) -> usize {
+        cache.values().map(std::vec::Vec::len).sum()
+    }
 }
 
 impl Default for QueryCache {
     fn default() -> Self {
         Self::new(1000)
     }
+}
+
+fn default_query_hash(query: &str) -> u64 {
+    let mut hasher = rustc_hash::FxBuildHasher::default().build_hasher();
+    hasher.write(query.as_bytes());
+    hasher.finish()
+}
+
+fn canonicalize_query(query: &str) -> String {
+    query.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -221,13 +287,11 @@ mod tests {
         let cache = QueryCache::new(10);
         let query = "SELECT * FROM docs LIMIT 5";
 
-        // First parse - miss
         let result1 = cache.parse(query);
         assert!(result1.is_ok());
         assert_eq!(cache.stats().misses, 1);
         assert_eq!(cache.stats().hits, 0);
 
-        // Second parse - hit
         let result2 = cache.parse(query);
         assert!(result2.is_ok());
         assert_eq!(cache.stats().hits, 1);
@@ -249,12 +313,10 @@ mod tests {
     fn test_query_cache_eviction() {
         let cache = QueryCache::new(2);
 
-        // Fill cache
         let _ = cache.parse("SELECT * FROM docs LIMIT 1");
         let _ = cache.parse("SELECT * FROM docs LIMIT 2");
         assert_eq!(cache.len(), 2);
 
-        // Add third query - should evict oldest
         let _ = cache.parse("SELECT * FROM docs LIMIT 3");
         assert_eq!(cache.len(), 2);
         assert!(cache.stats().evictions >= 1);
@@ -270,12 +332,18 @@ mod tests {
         let _ = cache.parse(q1);
         let _ = cache.parse(q2);
         let _ = cache.parse(q3);
-        let _ = cache.parse(q1); // refresh MRU
+        let _ = cache.parse(q1);
 
         let order = cache.order.read();
         assert_eq!(order.len(), cache.len());
-        assert_eq!(order.iter().filter(|v| v.as_str() == q1).count(), 1);
-        assert_eq!(order.back().map(std::string::String::as_str), Some(q1));
+        assert_eq!(
+            order
+                .iter()
+                .filter(|v| v.original_query.as_str() == q1)
+                .count(),
+            1
+        );
+        assert_eq!(order.back().map(|v| v.original_query.as_str()), Some(q1));
     }
 
     #[test]
@@ -309,15 +377,29 @@ mod tests {
 
         let order = cache.order.read();
         let mut uniq = std::collections::HashSet::new();
-        for q in order.iter() {
-            assert!(uniq.insert(q.clone()), "duplicate query in LRU order: {q}");
+        for key in order.iter() {
+            assert!(uniq.insert(key.clone()), "duplicate query in LRU order");
         }
         assert_eq!(order.len(), cache.len());
     }
 
     #[test]
+    fn test_query_cache_collision_safe_with_forced_hash_collision() {
+        let cache = QueryCache::new_with_hasher(10, |_| 42);
+        let q1 = "SELECT * FROM docs LIMIT 1";
+        let q2 = "SELECT id FROM docs LIMIT 2";
+
+        let r1 = cache.parse(q1).expect("q1 should parse");
+        let r2 = cache.parse(q2).expect("q2 should parse");
+        let r1_again = cache.parse(q1).expect("q1 should be cache hit");
+
+        assert_eq!(r1, r1_again);
+        assert_ne!(r1, r2);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
     fn test_query_cache_min_size() {
-        // Even with 0, should have minimum size of 1
         let cache = QueryCache::new(0);
         let _ = cache.parse("SELECT * FROM docs LIMIT 1");
         assert!(!cache.is_empty());

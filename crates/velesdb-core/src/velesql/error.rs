@@ -109,6 +109,8 @@ pub enum ParseErrorKind {
     MissingParameter,
     /// Type mismatch (E006).
     TypeMismatch,
+    /// Query complexity guardrail exceeded (E007).
+    ComplexityLimit,
 }
 
 impl ParseErrorKind {
@@ -122,6 +124,7 @@ impl ParseErrorKind {
             Self::DimensionMismatch => "E004",
             Self::MissingParameter => "E005",
             Self::TypeMismatch => "E006",
+            Self::ComplexityLimit => "E007",
         }
     }
 }
