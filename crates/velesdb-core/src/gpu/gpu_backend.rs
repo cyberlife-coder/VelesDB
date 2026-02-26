@@ -1,6 +1,9 @@
-//! GPU backend implementation using wgpu.
+//! GPU-accelerated batch distance calculations via wgpu (WebGPU).
 //!
 //! Provides batch distance calculations on GPU for large datasets.
+//! WGSL shader sources are in `shaders.rs`.
+
+mod shaders;
 
 use std::sync::OnceLock;
 use wgpu::util::DeviceExt;
@@ -61,7 +64,7 @@ impl GpuAccelerator {
         // Create compute shader for cosine similarity
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cosine Similarity Shader"),
-            source: wgpu::ShaderSource::Wgsl(COSINE_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shaders::COSINE_SHADER.into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -158,21 +161,11 @@ impl GpuAccelerator {
 
     /// Computes batch cosine similarities between a query and multiple vectors.
     ///
-    /// # Arguments
-    ///
-    /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
-    /// * `query` - Query vector
-    /// * `dimension` - Vector dimension (must be <= `u32::MAX`)
-    ///
-    /// # Returns
-    ///
-    /// Vector of cosine similarities, one per input vector.
-    ///
     /// # Errors
     ///
     /// Returns `Error::GpuError` if `dimension` or `num_vectors` exceeds `u32::MAX`,
     /// or if the GPU map-async operation fails.
-    #[allow(clippy::too_many_lines)] // Reason: GPU batch operations require sequential setup steps
+    #[allow(clippy::too_many_lines)]
     pub fn batch_cosine_similarity(
         &self,
         vectors: &[f32],
@@ -315,63 +308,10 @@ impl GpuAccelerator {
 
         Ok(results)
     }
-}
 
-/// WGSL compute shader for batch cosine similarity.
-const COSINE_SHADER: &str = r"
-struct Params {
-    dimension: u32,
-    num_vectors: u32,
-}
-
-@group(0) @binding(0) var<storage, read> query: array<f32>;
-@group(0) @binding(1) var<storage, read> vectors: array<f32>;
-@group(0) @binding(2) var<storage, read_write> results: array<f32>;
-@group(0) @binding(3) var<uniform> params: Params;
-
-@compute @workgroup_size(256)
-fn batch_cosine(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if (idx >= params.num_vectors) {
-        return;
-    }
-    
-    let dim = params.dimension;
-    let offset = idx * dim;
-    
-    var dot: f32 = 0.0;
-    var norm_q: f32 = 0.0;
-    var norm_v: f32 = 0.0;
-    
-    for (var i: u32 = 0u; i < dim; i = i + 1u) {
-        let q = query[i];
-        let v = vectors[offset + i];
-        dot = dot + q * v;
-        norm_q = norm_q + q * q;
-        norm_v = norm_v + v * v;
-    }
-    
-    let denom = sqrt(norm_q) * sqrt(norm_v);
-    if (denom > 0.0) {
-        results[idx] = dot / denom;
-    } else {
-        results[idx] = 0.0;
-    }
-}
-";
-
-impl GpuAccelerator {
     /// Computes batch Euclidean distances between a query and multiple vectors.
     ///
-    /// # Arguments
-    ///
-    /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
-    /// * `query` - Query vector
-    /// * `dimension` - Vector dimension
-    ///
-    /// # Returns
-    ///
-    /// Vector of Euclidean distances, one per input vector.
+    /// Currently uses CPU SIMD fallback; GPU pipeline ready via `EUCLIDEAN_SHADER`.
     #[must_use]
     pub fn batch_euclidean_distance(
         &self,
@@ -392,7 +332,6 @@ impl GpuAccelerator {
         for i in 0..num_vectors {
             let offset = i * dimension;
             let vec = &vectors[offset..offset + dimension];
-            // Use simd_native for SIMD-accelerated Euclidean distance
             let dist = simd_native::euclidean_native(query, vec);
             results.push(dist);
         }
@@ -401,15 +340,7 @@ impl GpuAccelerator {
 
     /// Computes batch dot products between a query and multiple vectors.
     ///
-    /// # Arguments
-    ///
-    /// * `vectors` - Flat array of vectors (`num_vectors` * `dimension`)
-    /// * `query` - Query vector
-    /// * `dimension` - Vector dimension
-    ///
-    /// # Returns
-    ///
-    /// Vector of dot products, one per input vector.
+    /// Currently uses CPU SIMD fallback; GPU pipeline ready via `DOT_PRODUCT_SHADER`.
     #[must_use]
     pub fn batch_dot_product(&self, vectors: &[f32], query: &[f32], dimension: usize) -> Vec<f32> {
         if dimension == 0 || vectors.is_empty() {
@@ -425,77 +356,9 @@ impl GpuAccelerator {
         for i in 0..num_vectors {
             let offset = i * dimension;
             let vec = &vectors[offset..offset + dimension];
-            // Use simd_native for SIMD-accelerated dot product
             let dot = simd_native::dot_product_native(query, vec);
             results.push(dot);
         }
         results
     }
 }
-
-/// WGSL compute shader for batch euclidean distance (ready for GPU pipeline).
-#[allow(dead_code)]
-const EUCLIDEAN_SHADER: &str = r"
-struct Params {
-    dimension: u32,
-    num_vectors: u32,
-}
-
-@group(0) @binding(0) var<storage, read> query: array<f32>;
-@group(0) @binding(1) var<storage, read> vectors: array<f32>;
-@group(0) @binding(2) var<storage, read_write> results: array<f32>;
-@group(0) @binding(3) var<uniform> params: Params;
-
-@compute @workgroup_size(256)
-fn batch_euclidean(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if (idx >= params.num_vectors) {
-        return;
-    }
-    
-    let dim = params.dimension;
-    let offset = idx * dim;
-    
-    var sum_sq: f32 = 0.0;
-    
-    for (var i: u32 = 0u; i < dim; i = i + 1u) {
-        let diff = query[i] - vectors[offset + i];
-        sum_sq = sum_sq + diff * diff;
-    }
-    
-    results[idx] = sqrt(sum_sq);
-}
-";
-
-/// WGSL compute shader for batch dot product (P2-GPU-2).
-#[allow(dead_code)]
-const DOT_PRODUCT_SHADER: &str = r"
-struct Params {
-    dimension: u32,
-    num_vectors: u32,
-}
-
-@group(0) @binding(0) var<storage, read> query: array<f32>;
-@group(0) @binding(1) var<storage, read> vectors: array<f32>;
-@group(0) @binding(2) var<storage, read_write> results: array<f32>;
-@group(0) @binding(3) var<uniform> params: Params;
-
-@compute @workgroup_size(256)
-fn batch_dot(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if (idx >= params.num_vectors) {
-        return;
-    }
-    
-    let dim = params.dimension;
-    let offset = idx * dim;
-    
-    var dot: f32 = 0.0;
-    
-    for (var i: u32 = 0u; i < dim; i = i + 1u) {
-        dot = dot + query[i] * vectors[offset + i];
-    }
-    
-    results[idx] = dot;
-}
-";

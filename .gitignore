@@ -125,3 +125,10 @@ tmp/
 tarpaulin-report.html
 tarpaulin-report.json
 cobertura.xml
+
+# Analysis reports
+acceptance_criteria.md
+all_non_premium_prompts*.md
+code_review_velesdb.md
+gap_analysis_and_prompts.md
+todo_analysis_report_updated.md
