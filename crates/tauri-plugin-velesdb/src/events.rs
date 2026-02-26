@@ -174,7 +174,10 @@ mod tests {
             operation: "created".to_string(),
             count: None,
         };
-        let json = serde_json::to_string(&payload).unwrap();
+        let json = match serde_json::to_string(&payload) {
+            Ok(json) => json,
+            Err(err) => panic!("payload serialization should succeed: {err}"),
+        };
         assert!(json.contains("\"collection\":\"test\""));
         assert!(json.contains("\"operation\":\"created\""));
         assert!(!json.contains("count")); // skip_serializing_if
@@ -189,7 +192,10 @@ mod tests {
             processed: 50,
             message: Some("Processing...".to_string()),
         };
-        let json = serde_json::to_string(&payload).unwrap();
+        let json = match serde_json::to_string(&payload) {
+            Ok(json) => json,
+            Err(err) => panic!("payload serialization should succeed: {err}"),
+        };
         assert!(json.contains("\"operationId\":\"op-123\""));
         assert!(json.contains("\"progress\":50"));
     }

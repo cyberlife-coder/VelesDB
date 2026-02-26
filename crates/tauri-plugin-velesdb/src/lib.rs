@@ -196,9 +196,10 @@ pub trait VelesDbExt<R: Runtime> {
 
 impl<R: Runtime, T: Manager<R>> VelesDbExt<R> for T {
     fn velesdb(&self) -> SimpleIndexHandle {
-        let state = self
-            .try_state::<SimpleIndexState>()
-            .expect("SimpleIndexState not initialized. Did you call init()?");
+        let state = match self.try_state::<SimpleIndexState>() {
+            Some(state) => state,
+            None => panic!("SimpleIndexState not initialized. Did you call init()?"),
+        };
         SimpleIndexHandle(Arc::clone(&state.0))
     }
 }
@@ -213,11 +214,12 @@ impl SimpleIndexHandle {
     ///
     /// Returns an error if the vector dimension doesn't match the index dimension.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     pub fn insert(&self, id: u64, vector: &[f32]) -> Result<()> {
-        self.0.lock().unwrap().insert(id, vector)
+        let mut index = self
+            .0
+            .lock()
+            .map_err(|err| Error::InvalidConfig(format!("SimpleIndex lock poisoned: {err}")))?;
+        index.insert(id, vector)
     }
 
     /// Searches for the k most similar vectors.
@@ -226,50 +228,51 @@ impl SimpleIndexHandle {
     ///
     /// Returns an error if the query dimension doesn't match the index dimension.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
-        self.0.lock().unwrap().search(query, k)
+        let index = self
+            .0
+            .lock()
+            .map_err(|err| Error::InvalidConfig(format!("SimpleIndex lock poisoned: {err}")))?;
+        index.search(query, k)
     }
 
     /// Returns the number of vectors in the index.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.lock().unwrap().len()
+        match self.0.lock() {
+            Ok(index) => index.len(),
+            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
+        }
     }
 
     /// Returns true if the index is empty.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.lock().unwrap().is_empty()
+        match self.0.lock() {
+            Ok(index) => index.is_empty(),
+            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
+        }
     }
 
     /// Returns the dimension of vectors in this index.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn dimension(&self) -> usize {
-        self.0.lock().unwrap().dimension()
+        match self.0.lock() {
+            Ok(index) => index.dimension(),
+            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
+        }
     }
 
     /// Clears all vectors from the index.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     pub fn clear(&self) {
-        self.0.lock().unwrap().clear();
+        match self.0.lock() {
+            Ok(mut index) => index.clear(),
+            Err(err) => panic!("SimpleIndex lock poisoned: {err}"),
+        }
     }
 }
 
@@ -400,9 +403,10 @@ pub fn init_with_app_data<R: Runtime>(app_name: &str) -> TauriPlugin<R> {
 /// Panics if the app data directory cannot be determined.
 #[must_use]
 pub fn get_app_data_dir(app_name: &str) -> std::path::PathBuf {
-    let base_dir = dirs::data_dir()
-        .or_else(dirs::config_dir)
-        .expect("Could not determine app data directory for this platform");
+    let base_dir = match dirs::data_dir().or_else(dirs::config_dir) {
+        Some(base_dir) => base_dir,
+        None => panic!("Could not determine app data directory for this platform"),
+    };
 
     base_dir.join(app_name).join("velesdb")
 }

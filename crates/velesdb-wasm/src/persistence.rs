@@ -21,10 +21,17 @@ async fn open_db(db_name: &str) -> Result<IdbDatabase, JsValue> {
     // Set up upgrade handler to create object store
     let request_clone = request.clone();
     let onupgradeneeded = Closure::once(move |_event: Event| {
-        let db: IdbDatabase = request_clone
-            .result()
-            .expect("Failed to get result")
-            .unchecked_into();
+        let result = match request_clone.result() {
+            Ok(result) => result,
+            Err(err) => {
+                web_sys::console::error_2(
+                    &JsValue::from_str("Failed to access IndexedDB result"),
+                    &err,
+                );
+                return;
+            }
+        };
+        let db: IdbDatabase = result.unchecked_into();
 
         // Create object store if it doesn't exist
         let store_names = db.object_store_names();
@@ -38,8 +45,12 @@ async fn open_db(db_name: &str) -> Result<IdbDatabase, JsValue> {
             }
         }
         if !found {
-            db.create_object_store(STORE_NAME)
-                .expect("Failed to create object store");
+            if let Err(err) = db.create_object_store(STORE_NAME) {
+                web_sys::console::error_2(
+                    &JsValue::from_str("Failed to create object store"),
+                    &err,
+                );
+            }
         }
     });
     request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
@@ -55,15 +66,13 @@ async fn wait_for_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let resolve_clone = resolve.clone();
         let onsuccess = Closure::once(move |_event: Event| {
-            resolve_clone.call0(&JsValue::UNDEFINED).unwrap();
+            let _ = resolve_clone.call0(&JsValue::UNDEFINED);
         });
         request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
         onsuccess.forget();
 
         let onerror = Closure::once(move |_event: Event| {
-            reject
-                .call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"))
-                .unwrap();
+            let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"));
         });
         request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         onerror.forget();

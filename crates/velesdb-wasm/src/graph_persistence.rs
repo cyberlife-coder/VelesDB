@@ -246,29 +246,42 @@ async fn open_graph_db() -> Result<IdbDatabase, JsValue> {
     // Set up upgrade handler to create object stores
     let request_clone = request.clone();
     let onupgradeneeded = Closure::once(move |_event: Event| {
-        let db: IdbDatabase = request_clone
-            .result()
-            .expect("Failed to get result")
-            .unchecked_into();
+        let result = match request_clone.result() {
+            Ok(result) => result,
+            Err(err) => {
+                web_sys::console::error_2(
+                    &JsValue::from_str("Failed to access graph DB result"),
+                    &err,
+                );
+                return;
+            }
+        };
+        let db: IdbDatabase = result.unchecked_into();
 
         let store_names = db.object_store_names();
 
         // Create nodes store
         if !contains_store(&store_names, NODES_STORE) {
-            db.create_object_store(NODES_STORE)
-                .expect("Failed to create nodes store");
+            if let Err(err) = db.create_object_store(NODES_STORE) {
+                web_sys::console::error_2(&JsValue::from_str("Failed to create nodes store"), &err);
+            }
         }
 
         // Create edges store
         if !contains_store(&store_names, EDGES_STORE) {
-            db.create_object_store(EDGES_STORE)
-                .expect("Failed to create edges store");
+            if let Err(err) = db.create_object_store(EDGES_STORE) {
+                web_sys::console::error_2(&JsValue::from_str("Failed to create edges store"), &err);
+            }
         }
 
         // Create metadata store
         if !contains_store(&store_names, META_STORE) {
-            db.create_object_store(META_STORE)
-                .expect("Failed to create metadata store");
+            if let Err(err) = db.create_object_store(META_STORE) {
+                web_sys::console::error_2(
+                    &JsValue::from_str("Failed to create metadata store"),
+                    &err,
+                );
+            }
         }
     });
     request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
@@ -295,15 +308,13 @@ async fn wait_for_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let resolve_clone = resolve.clone();
         let onsuccess = Closure::once(move |_event: Event| {
-            resolve_clone.call0(&JsValue::UNDEFINED).unwrap();
+            let _ = resolve_clone.call0(&JsValue::UNDEFINED);
         });
         request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
         onsuccess.forget();
 
         let onerror = Closure::once(move |_event: Event| {
-            reject
-                .call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"))
-                .unwrap();
+            let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"));
         });
         request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         onerror.forget();
