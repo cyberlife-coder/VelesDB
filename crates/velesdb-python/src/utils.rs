@@ -110,7 +110,10 @@ pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> PyObject
 where
     T: IntoPyObjectExt<'py>,
 {
-    value.into_py_any(py).expect("infallible conversion")
+    match value.into_py_any(py) {
+        Ok(obj) => obj,
+        Err(err) => panic!("failed converting value to Python object: {err}"),
+    }
 }
 
 /// Convert a serde_json::Value to a Python object.
