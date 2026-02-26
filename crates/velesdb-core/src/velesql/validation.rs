@@ -1,43 +1,30 @@
 //! Query validation for VelesQL (EPIC-044 US-007).
-//!
-//! This module provides parse-time validation to detect VelesQL limitations
-//! and provide helpful error messages before query execution.
-//!
-//! # Limitations Detected
-//!
-//! - **Multiple `similarity()`**: Only one similarity condition per query is supported
-//! - **`similarity()` with OR**: OR operators with similarity conditions are not supported
-//! - **NOT `similarity()`**: Negated similarity requires full scan (performance warning)
-//!
-//! # Example
-//!
-//! ```ignore
-//! use velesdb_core::velesql::{Parser, QueryValidator};
-//!
-//! let query = Parser::parse("SELECT * FROM docs WHERE similarity(v,$v)>0.8")?;
-//! QueryValidator::validate(&query)?;
-//! ```
-
-use std::fmt;
 
 use super::ast::{Condition, Query};
+use super::error::{ParseError, ParseErrorKind};
+use std::fmt;
 
-/// Error that occurred during query validation.
+const DEFAULT_MAX_QUERY_LENGTH: usize = 16_384;
+const DEFAULT_MAX_AST_DEPTH: usize = 64;
+const DEFAULT_MAX_LIKE_ILIKE_TERMS: usize = 8;
+const DEFAULT_MAX_GRAPH_EXPANSION: u32 = 32;
+
 #[derive(Debug, Clone, PartialEq)]
+/// Validation error returned by parse-time semantic checks.
 pub struct ValidationError {
-    /// Kind of validation error.
+    /// Machine-readable validation error kind.
     pub kind: ValidationErrorKind,
-    /// Position in the original query (if available).
+    /// Optional byte position in the input query.
     pub position: Option<usize>,
-    /// The problematic query fragment.
+    /// Fragment of input associated with the failure.
     pub fragment: String,
-    /// Human-readable suggestion for fixing the issue.
+    /// Human-readable remediation hint.
     pub suggestion: String,
 }
 
 impl ValidationError {
-    /// Creates a new validation error.
     #[must_use]
+    /// Constructs a new validation error value.
     pub fn new(
         kind: ValidationErrorKind,
         position: Option<usize>,
@@ -52,19 +39,19 @@ impl ValidationError {
         }
     }
 
-    /// Creates a multiple similarity error.
     #[must_use]
+    /// Builds an error for unsupported multiple similarity predicates in OR branches.
     pub fn multiple_similarity(fragment: impl Into<String>) -> Self {
         Self::new(
             ValidationErrorKind::MultipleSimilarity,
             None,
             fragment,
-            "Use sequential queries instead of multiple similarity() conditions in one query",
+            "Use AND instead of OR with similarity(), or split into separate queries",
         )
     }
 
-    /// Creates a similarity with OR error.
     #[must_use]
+    /// Builds an error for OR usage with similarity in strict modes.
     pub fn similarity_with_or(fragment: impl Into<String>) -> Self {
         Self::new(
             ValidationErrorKind::SimilarityWithOr,
@@ -74,8 +61,8 @@ impl ValidationError {
         )
     }
 
-    /// Creates a NOT similarity error.
     #[must_use]
+    /// Builds an error for NOT similarity in strict modes.
     pub fn not_similarity(fragment: impl Into<String>) -> Self {
         Self::new(
             ValidationErrorKind::NotSimilarity,
@@ -111,24 +98,24 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Kind of validation error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Validation error categories.
 pub enum ValidationErrorKind {
-    /// Multiple similarity() conditions in one query (V001).
+    /// Multiple similarity predicates combined in unsupported patterns.
     MultipleSimilarity,
-    /// similarity() used with OR operator (V002).
+    /// OR usage with similarity where strict mode forbids it.
     SimilarityWithOr,
-    /// NOT similarity() detected - performance warning (V003).
+    /// NOT similarity usage where strict mode forbids it.
     NotSimilarity,
-    /// Reserved keyword used without escaping (V004).
+    /// Reserved keyword misuse.
     ReservedKeyword,
-    /// String escaping issue (V005).
+    /// Invalid string escaping.
     StringEscaping,
 }
 
 impl ValidationErrorKind {
-    /// Returns the error code.
     #[must_use]
+    /// Stable error code.
     pub const fn code(&self) -> &'static str {
         match self {
             Self::MultipleSimilarity => "V001",
@@ -139,8 +126,8 @@ impl ValidationErrorKind {
         }
     }
 
-    /// Returns a human-readable message for this error kind.
     #[must_use]
+    /// Human-readable default message.
     pub const fn message(&self) -> &'static str {
         match self {
             Self::MultipleSimilarity => "Multiple similarity() conditions not supported",
@@ -152,58 +139,71 @@ impl ValidationErrorKind {
     }
 }
 
-/// Configuration for query validation.
 #[derive(Debug, Clone, PartialEq)]
+/// Validation and complexity limits applied at parse-time.
 pub struct ValidationConfig {
-    /// If true, NOT similarity() without LIMIT is an error.
-    /// If false, NOT similarity() with LIMIT is allowed.
+    /// If true, keeps strict semantics for NOT similarity checks.
     pub strict_not_similarity: bool,
+    /// Maximum accepted raw query length in bytes.
+    pub max_query_length: usize,
+    /// Maximum boolean-condition AST depth.
+    pub max_ast_depth: usize,
+    /// Maximum number of LIKE/ILIKE terms allowed in WHERE trees.
+    pub max_like_ilike_terms: usize,
+    /// Maximum graph expansion hops inferred from MATCH relationship ranges.
+    pub max_graph_expansion: u32,
 }
 
 impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
             strict_not_similarity: true,
+            max_query_length: DEFAULT_MAX_QUERY_LENGTH,
+            max_ast_depth: DEFAULT_MAX_AST_DEPTH,
+            max_like_ilike_terms: DEFAULT_MAX_LIKE_ILIKE_TERMS,
+            max_graph_expansion: DEFAULT_MAX_GRAPH_EXPANSION,
         }
     }
 }
 
 impl ValidationConfig {
-    /// Creates a strict validation config (NOT similarity always errors).
     #[must_use]
+    /// Strict profile used in production by default.
     pub fn strict() -> Self {
-        Self {
-            strict_not_similarity: true,
-        }
+        Self::default()
     }
 
-    /// Creates a lenient validation config (allow NOT similarity with LIMIT).
     #[must_use]
+    /// Lenient profile disabling strict NOT similarity checks.
     pub fn lenient() -> Self {
         Self {
             strict_not_similarity: false,
+            ..Self::default()
         }
     }
 }
 
-/// Query validator for detecting VelesQL limitations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Computed complexity features for a query.
+pub struct ComplexityStats {
+    /// Maximum condition AST depth.
+    pub ast_depth: usize,
+    /// Number of LIKE/ILIKE terms in all validated WHERE branches.
+    pub like_ilike_terms: usize,
+    /// Maximum hop upper bound extracted from MATCH range expressions.
+    pub max_graph_hops: u32,
+}
+
+/// Stateless validator for semantic and complexity checks.
 pub struct QueryValidator;
 
 impl QueryValidator {
-    /// Validates a query using default configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ValidationError` if the query uses unsupported features.
+    /// Validates a query with default configuration.
     pub fn validate(query: &Query) -> Result<(), ValidationError> {
         Self::validate_with_config(query, &ValidationConfig::default())
     }
 
-    /// Validates a query using custom configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ValidationError` if the query uses unsupported features.
+    /// Validates a query with custom semantic configuration.
     pub fn validate_with_config(
         query: &Query,
         config: &ValidationConfig,
@@ -212,12 +212,9 @@ impl QueryValidator {
             return Ok(());
         }
 
-        // Validate main SELECT's WHERE clause if present
         if let Some(ref condition) = query.select.where_clause {
             Self::validate_condition(condition, query.select.limit, config)?;
         }
-
-        // Validate compound query's WHERE clause if present (UNION, INTERSECT, EXCEPT)
         if let Some(ref compound) = query.compound {
             if let Some(ref condition) = compound.right.where_clause {
                 Self::validate_condition(condition, compound.right.limit, config)?;
@@ -227,47 +224,134 @@ impl QueryValidator {
         Ok(())
     }
 
-    /// Validates a condition tree.
-    ///
-    /// # EPIC-044 US-001: Multiple similarity() with AND is supported
-    ///
-    /// Multiple similarity() conditions are allowed when combined with AND
-    /// (cascade filtering). Only OR combinations are rejected.
+    /// Enforces complexity budgets and returns parse errors on overflow.
+    pub fn enforce_query_complexity(
+        query: &Query,
+        raw_query: &str,
+        config: &ValidationConfig,
+    ) -> Result<(), ParseError> {
+        if raw_query.len() > config.max_query_length {
+            return Err(ParseError::new(
+                ParseErrorKind::ComplexityLimit,
+                config.max_query_length,
+                raw_query.chars().take(128).collect::<String>(),
+                format!(
+                    "Query length exceeded: max={}, actual={}",
+                    config.max_query_length,
+                    raw_query.len()
+                ),
+            ));
+        }
+
+        let stats = Self::analyze_query_complexity(query);
+        if stats.ast_depth > config.max_ast_depth {
+            return Err(ParseError::new(
+                ParseErrorKind::ComplexityLimit,
+                0,
+                "WHERE",
+                format!(
+                    "AST depth exceeded: max={}, actual={}",
+                    config.max_ast_depth, stats.ast_depth
+                ),
+            ));
+        }
+        if stats.like_ilike_terms > config.max_like_ilike_terms {
+            return Err(ParseError::new(
+                ParseErrorKind::ComplexityLimit,
+                0,
+                "LIKE/ILIKE",
+                format!(
+                    "LIKE/ILIKE budget exceeded: max={}, actual={}",
+                    config.max_like_ilike_terms, stats.like_ilike_terms
+                ),
+            ));
+        }
+        if stats.max_graph_hops > config.max_graph_expansion {
+            return Err(ParseError::new(
+                ParseErrorKind::ComplexityLimit,
+                0,
+                "MATCH",
+                format!(
+                    "Graph expansion exceeded: max={}, actual={}",
+                    config.max_graph_expansion, stats.max_graph_hops
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[must_use]
+    /// Extracts complexity statistics from a parsed query.
+    pub fn analyze_query_complexity(query: &Query) -> ComplexityStats {
+        let mut stats = ComplexityStats {
+            ast_depth: 0,
+            like_ilike_terms: 0,
+            max_graph_hops: 0,
+        };
+
+        if let Some(ref condition) = query.select.where_clause {
+            let (depth, like_count) = Self::analyze_condition(condition);
+            stats.ast_depth = stats.ast_depth.max(depth);
+            stats.like_ilike_terms += like_count;
+        }
+
+        if let Some(ref compound) = query.compound {
+            if let Some(ref condition) = compound.right.where_clause {
+                let (depth, like_count) = Self::analyze_condition(condition);
+                stats.ast_depth = stats.ast_depth.max(depth);
+                stats.like_ilike_terms += like_count;
+            }
+        }
+
+        if let Some(ref m) = query.match_clause {
+            for rel in m.patterns.iter().flat_map(|p| p.relationships.iter()) {
+                if let Some((_, max)) = rel.range {
+                    stats.max_graph_hops = stats.max_graph_hops.max(max);
+                }
+            }
+        }
+
+        stats
+    }
+
     fn validate_condition(
         condition: &Condition,
         _limit: Option<u64>,
         _config: &ValidationConfig,
     ) -> Result<(), ValidationError> {
-        // Count similarity conditions
         let similarity_count = Self::count_similarity_conditions(condition);
-
-        // EPIC-044 US-001: Multiple similarity() in OR is rejected (requires union of vector searches)
-        // Multiple similarity() in AND is allowed (cascade filtering)
         if similarity_count > 1 && Self::has_multiple_similarity_in_or(condition) {
             return Err(ValidationError::multiple_similarity(
                 "Multiple similarity() in OR are not supported. Use AND instead.",
             ));
         }
-
-        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
-        // has_similarity_with_or check removed - union execution handles this
-
-        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
-        // Only warn if no LIMIT is present (performance concern)
-        // Validation passes - execution handles the scan
-
         Ok(())
     }
 
-    /// Counts the number of vector search conditions in a condition tree.
-    /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
+    fn analyze_condition(condition: &Condition) -> (usize, usize) {
+        match condition {
+            Condition::Like(_) => (1, 1),
+            Condition::And(l, r) | Condition::Or(l, r) => {
+                let (ld, ll) = Self::analyze_condition(l);
+                let (rd, rl) = Self::analyze_condition(r);
+                (1 + ld.max(rd), ll + rl)
+            }
+            Condition::Not(inner) | Condition::Group(inner) => {
+                let (d, l) = Self::analyze_condition(inner);
+                (1 + d, l)
+            }
+            _ => (1, 0),
+        }
+    }
+
     pub(crate) fn count_similarity_conditions(condition: &Condition) -> usize {
         match condition {
             Condition::Similarity(_)
             | Condition::VectorSearch(_)
             | Condition::VectorFusedSearch(_) => 1,
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::count_similarity_conditions(left) + Self::count_similarity_conditions(right)
+            Condition::And(l, r) | Condition::Or(l, r) => {
+                Self::count_similarity_conditions(l) + Self::count_similarity_conditions(r)
             }
             Condition::Not(inner) | Condition::Group(inner) => {
                 Self::count_similarity_conditions(inner)
@@ -276,55 +360,34 @@ impl QueryValidator {
         }
     }
 
-    // EPIC-044 US-002: has_similarity_with_or removed - no longer blocking similarity() OR metadata
-
-    /// Checks if a condition tree contains any vector search condition.
-    /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
-    #[allow(dead_code)] // Keep for potential future validation rules
+    #[cfg(test)]
     pub(crate) fn contains_similarity(condition: &Condition) -> bool {
-        match condition {
-            Condition::Similarity(_)
-            | Condition::VectorSearch(_)
-            | Condition::VectorFusedSearch(_) => true,
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::contains_similarity(left) || Self::contains_similarity(right)
-            }
-            Condition::Not(inner) | Condition::Group(inner) => Self::contains_similarity(inner),
-            _ => false,
-        }
+        Self::count_similarity_conditions(condition) > 0
     }
 
-    /// Checks if the condition tree has NOT applied to similarity.
-    #[allow(dead_code)] // Keep for potential future validation rules
+    #[cfg(test)]
     pub(crate) fn has_not_similarity(condition: &Condition) -> bool {
         match condition {
             Condition::Not(inner) => Self::contains_similarity(inner),
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::has_not_similarity(left) || Self::has_not_similarity(right)
+            Condition::And(l, r) | Condition::Or(l, r) => {
+                Self::has_not_similarity(l) || Self::has_not_similarity(r)
             }
             Condition::Group(inner) => Self::has_not_similarity(inner),
             _ => false,
         }
     }
 
-    /// EPIC-044 US-001: Check if multiple similarity() appear under same OR.
-    /// Multiple similarity in AND is allowed (cascade), but OR requires union (unsupported).
     fn has_multiple_similarity_in_or(condition: &Condition) -> bool {
         match condition {
-            Condition::Or(left, right) => {
-                let left_sim = Self::count_similarity_conditions(left);
-                let right_sim = Self::count_similarity_conditions(right);
-                // Both sides have similarity = union required (unsupported)
-                (left_sim > 0 && right_sim > 0)
-                    || Self::has_multiple_similarity_in_or(left)
-                    || Self::has_multiple_similarity_in_or(right)
+            Condition::Or(l, r) => {
+                Self::count_similarity_conditions(l) > 0 && Self::count_similarity_conditions(r) > 0
+                    || Self::has_multiple_similarity_in_or(l)
+                    || Self::has_multiple_similarity_in_or(r)
             }
-            Condition::And(left, right) => {
-                // AND is fine, but check nested ORs
-                Self::has_multiple_similarity_in_or(left)
-                    || Self::has_multiple_similarity_in_or(right)
+            Condition::And(l, r) => {
+                Self::has_multiple_similarity_in_or(l) || Self::has_multiple_similarity_in_or(r)
             }
-            Condition::Group(inner) | Condition::Not(inner) => {
+            Condition::Not(inner) | Condition::Group(inner) => {
                 Self::has_multiple_similarity_in_or(inner)
             }
             _ => false,

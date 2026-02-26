@@ -25,6 +25,7 @@ use pest_derive::Parser;
 
 use super::ast::Query;
 use super::error::{ParseError, ParseErrorKind};
+use super::{QueryValidator, ValidationConfig};
 
 #[derive(Parser)]
 #[grammar = "velesql/grammar.pest"]
@@ -103,6 +104,8 @@ impl Parser {
             .next()
             .ok_or_else(|| ParseError::syntax(0, input, "Empty query"))?;
 
-        Self::parse_query(query_pair)
+        let query = Self::parse_query(query_pair)?;
+        QueryValidator::enforce_query_complexity(&query, input, &ValidationConfig::default())?;
+        Ok(query)
     }
 }
