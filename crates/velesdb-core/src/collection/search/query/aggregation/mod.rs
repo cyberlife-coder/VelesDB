@@ -16,6 +16,7 @@
 #![allow(clippy::cast_sign_loss)]
 
 mod grouped;
+mod having;
 
 use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;

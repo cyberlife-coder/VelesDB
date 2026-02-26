@@ -1,4 +1,6 @@
-//! Search methods for HnswIndex.
+//! HNSW search methods: quality-based, reranking, and latency adaptation.
+//!
+//! Brute-force and GPU search methods are in `brute_force.rs`.
 
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
@@ -59,112 +61,99 @@ impl HnswIndex {
         }
     }
 
-    #[inline]
+    /// Performs HNSW-only search (no reranking).
     fn search_hnsw_only(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(u64, f32)> {
         let inner = self.inner.read();
         let neighbours = inner.search(query, k, ef_search);
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
 
+        let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
         for n in &neighbours {
             if let Some(id) = self.mappings.get_id(n.d_id) {
                 let score = inner.transform_score(n.distance);
                 results.push((id, score));
             }
         }
-
         results
     }
 
-    #[inline]
+    /// Determines whether two-stage reranking should be used.
+    ///
+    /// Returns `Some(rerank_k)` if reranking is beneficial, `None` otherwise.
     fn should_two_stage_rerank(
         &self,
         quality: SearchQuality,
         k: usize,
         ef_search: usize,
     ) -> Option<usize> {
-        if !self.enable_vector_storage || self.vectors.is_empty() {
+        // Skip reranking for Fast quality or if vector storage is disabled
+        if matches!(quality, SearchQuality::Fast) || !self.enable_vector_storage {
             return None;
         }
 
-        let len = self.len();
-
-        let rerank_k = match quality {
-            SearchQuality::Accurate => {
-                let mut v = (k * 8).max(128);
-                if len >= 100_000 {
-                    v = v.max(k * 12);
-                }
-                if ef_search >= 1024 {
-                    v = v.max(k * 16);
-                }
-                v
-            }
-            SearchQuality::Balanced if len >= 250_000 => (k * 6).max(96),
-            SearchQuality::Custom(ef) if ef >= 256 => {
-                if ef >= 1024 {
-                    (k * 12).max(128)
-                } else if ef >= 512 {
-                    (k * 8).max(96)
-                } else {
-                    (k * 6).max(64)
-                }
-            }
-            _ => return None,
+        // Two-stage reranking: use a larger candidate pool for initial HNSW search,
+        // then rerank with exact SIMD distances for better precision.
+        let min_rerank_k = match quality {
+            SearchQuality::Fast => return None,
+            SearchQuality::Balanced => k * 2,
+            SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
+            SearchQuality::Perfect => return None, // Perfect uses brute-force
         };
 
-        let bounded = rerank_k.min(len.max(k));
-        Some(self.adapt_rerank_k_to_latency(bounded, k))
+        let rerank_k = min_rerank_k.max(ef_search / 2);
+
+        // Only rerank if we have enough vectors and rerank_k > k
+        if rerank_k > k && self.len() > k * 2 {
+            // Latency-aware adaptation
+            let adapted = self.adapt_rerank_k_to_latency(rerank_k, k);
+            Some(adapted)
+        } else {
+            None
+        }
     }
 
-    #[inline]
+    /// Adapts `rerank_k` based on observed latency vs target.
     fn adapt_rerank_k_to_latency(&self, rerank_k: usize, k: usize) -> usize {
-        let target_us = self.rerank_latency_target_us.load(Ordering::Relaxed);
-        if target_us == 0 || rerank_k <= k {
-            return rerank_k;
+        let target = self.rerank_latency_target_us.load(Ordering::Relaxed);
+        if target == 0 {
+            return rerank_k; // Adaptation disabled
         }
 
-        let ema_us = self.rerank_latency_ema_us.load(Ordering::Relaxed);
-        if ema_us == 0 {
-            return rerank_k;
+        let ema = self.rerank_latency_ema_us.load(Ordering::Relaxed);
+        if ema == 0 {
+            return rerank_k; // No data yet
         }
 
-        if ema_us > target_us + (target_us / 4) {
-            ((rerank_k * 3) / 4).max(k)
-        } else if ema_us + (target_us / 5) < target_us {
-            (rerank_k + (rerank_k / 5)).max(k)
+        // If we're over budget, reduce rerank_k proportionally
+        if ema > target {
+            let ratio = target as f64 / ema as f64;
+            let adapted = (rerank_k as f64 * ratio) as usize;
+            adapted.max(k) // Never go below k
         } else {
             rerank_k
         }
     }
 
-    #[inline]
+    /// Updates the exponential moving average of reranking latency.
     fn update_rerank_latency_ema(&self, sample_us: u64) {
-        const ALPHA_NUM: u64 = 1;
-        const ALPHA_DEN: u64 = 8;
-
         let current = self.rerank_latency_ema_us.load(Ordering::Relaxed);
-        let next = if current == 0 {
-            sample_us
+        if current == 0 {
+            self.rerank_latency_ema_us
+                .store(sample_us, Ordering::Relaxed);
         } else {
-            ((ALPHA_DEN - ALPHA_NUM) * current + (ALPHA_NUM * sample_us)) / ALPHA_DEN
-        };
-        self.rerank_latency_ema_us.store(next, Ordering::Relaxed);
+            // EMA with alpha=0.3 for responsiveness
+            // SAFETY: u64 arithmetic cannot overflow here because:
+            // - current and sample_us are microsecond durations (bounded by u64::MAX)
+            // - The weighted average is always between the two values
+            let new_ema = (current * 7 + sample_us * 3) / 10;
+            self.rerank_latency_ema_us
+                .store(new_ema, Ordering::Relaxed);
+        }
     }
 
-    /// Searches for the k nearest neighbors with a specific quality profile.
+    /// Searches with adaptive quality using two-stage reranking.
     ///
-    /// # Arguments
-    ///
-    /// * `query` - The query vector
-    /// * `k` - Number of nearest neighbors to return
-    /// * `quality` - Search quality profile controlling recall/latency tradeoff
-    ///
-    /// # Quality Profiles
-    ///
-    /// - `Fast`: ~92% recall, lowest latency
-    /// - `Balanced`: ~99% recall, good tradeoff (default)
-    /// - `Accurate`: ~100% recall, high precision
-    /// - `Perfect`: 100% recall guaranteed via SIMD re-ranking
+    /// Uses the specified `SearchQuality` to determine ef_search and
+    /// whether to apply two-stage SIMD reranking for improved precision.
     ///
     /// # Panics
     ///
@@ -206,18 +195,6 @@ impl HnswIndex {
     /// then re-ranks them using our SIMD-optimized distance functions for
     /// exact distance computation, returning the top `k` results.
     ///
-    /// # Arguments
-    ///
-    /// * `query` - The query vector
-    /// * `k` - Number of nearest neighbors to return
-    /// * `rerank_k` - Number of candidates to retrieve before re-ranking (should be > k)
-    ///
-    /// # Returns
-    ///
-    /// Vector of (id, distance) tuples, sorted by similarity.
-    /// For Cosine/DotProduct: higher is better (descending order).
-    /// For Euclidean: lower is better (ascending order).
-    ///
     /// # Panics
     ///
     /// Panics if the query dimension doesn't match the index dimension.
@@ -249,176 +226,20 @@ impl HnswIndex {
         let rerank_start = Instant::now();
 
         // 2. Re-rank using SIMD-optimized exact distance computation
-        // EPIC-A.2: Collect candidate vectors from ShardedVectors for re-ranking
-        let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
-            .iter()
-            .filter_map(|(id, _)| {
-                let idx = self.mappings.get_idx(*id)?;
-                let vec = self.vectors.get(idx)?;
-                Some((*id, idx, vec))
-            })
-            .collect();
+        let reranked = self.rerank_candidates(query, &candidates);
 
-        // Perf TS-CORE-001: Adaptive prefetch distance based on vector size
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-        let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
-
-        for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
-            // Prefetch upcoming vectors (P1 optimization on local snapshot)
-            if i + prefetch_distance < candidate_vectors.len() {
-                crate::simd_native::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
-            }
-
-            // Compute exact distance using SIMD-optimized function
-            let exact_dist = self.compute_distance(query, v);
-
-            reranked.push((*id, exact_dist));
-        }
-
-        // 3. Sort by distance (metric-dependent ordering)
+        // 3. Sort, truncate, and update latency EMA
+        let mut reranked = reranked;
         self.metric.sort_results(&mut reranked);
-
         reranked.truncate(k);
+
         let elapsed_micros = rerank_start.elapsed().as_micros();
         let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
         self.update_rerank_latency_ema(elapsed);
         reranked
     }
 
-    /// Performs brute-force SIMD search for guaranteed 100% recall.
-    ///
-    /// This method computes exact distances to all vectors using SIMD-optimized
-    /// functions and returns the top k results.
-    ///
-    /// # Performance
-    ///
-    /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
-    /// or when perfect recall is required.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn search_brute_force(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
-        self.validate_dimension(query, "Query");
-
-        // If vector storage is disabled, return empty (can't do brute-force)
-        if !self.enable_vector_storage || self.vectors.is_empty() {
-            // Fallback to regular HNSW search with high ef
-            let inner = self.inner.read();
-            let ef_search = SearchQuality::Accurate.ef_search(k);
-            let neighbours = inner.search(query, k, ef_search);
-
-            let mut results: Vec<(u64, f32)> = Vec::with_capacity(neighbours.len());
-            for n in &neighbours {
-                if let Some(id) = self.mappings.get_id(n.d_id) {
-                    let score = inner.transform_score(n.distance);
-                    results.push((id, score));
-                }
-            }
-            return results;
-        }
-
-        // Compute distances to all vectors
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
-        let vectors_snapshot: Vec<(usize, Vec<f32>)> = self.vectors.collect_for_parallel();
-
-        let mut results: Vec<(u64, f32)> = Vec::with_capacity(vectors_snapshot.len());
-
-        for (i, (idx, v)) in vectors_snapshot.iter().enumerate() {
-            // Prefetch upcoming vectors
-            if i + prefetch_distance < vectors_snapshot.len() {
-                crate::simd_native::prefetch_vector(&vectors_snapshot[i + prefetch_distance].1);
-            }
-
-            if let Some(id) = self.mappings.get_id(*idx) {
-                let score = self.compute_distance(query, v);
-                results.push((id, score));
-            }
-        }
-
-        // Sort by distance (metric-dependent ordering)
-        self.metric.sort_results(&mut results);
-
-        results.truncate(k);
-        results
-    }
-
-    /// Performs GPU-accelerated brute-force search if available.
-    ///
-    /// Returns `None` if GPU feature is not enabled or GPU is not available.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn search_brute_force_gpu(&self, query: &[f32], k: usize) -> Option<Vec<(u64, f32)>> {
-        self.validate_dimension(query, "Query");
-
-        #[cfg(feature = "gpu")]
-        {
-            use crate::gpu::GpuAccelerator;
-
-            let gpu = GpuAccelerator::new()?;
-
-            // Collect vectors for GPU processing
-            let vectors_snapshot = self.vectors.collect_for_parallel();
-
-            if vectors_snapshot.is_empty() {
-                return Some(Vec::new());
-            }
-
-            // Flatten vectors for GPU (contiguous memory layout)
-            let mut flat_vectors: Vec<f32> =
-                Vec::with_capacity(vectors_snapshot.len() * self.dimension);
-            let mut id_map: Vec<u64> = Vec::with_capacity(vectors_snapshot.len());
-
-            for (idx, vec) in &vectors_snapshot {
-                if let Some(id) = self.mappings.get_id(*idx) {
-                    flat_vectors.extend(vec);
-                    id_map.push(id);
-                }
-            }
-
-            if id_map.is_empty() {
-                return Some(Vec::new());
-            }
-
-            // GPU batch cosine similarity
-            let Ok(similarities) =
-                gpu.batch_cosine_similarity(&flat_vectors, query, self.dimension)
-            else {
-                return None;
-            };
-
-            // Combine IDs with similarities
-            let mut results: Vec<(u64, f32)> = id_map.into_iter().zip(similarities).collect();
-
-            // Sort by similarity (descending for cosine)
-            self.metric.sort_results(&mut results);
-
-            results.truncate(k);
-            Some(results)
-        }
-
-        #[cfg(not(feature = "gpu"))]
-        {
-            let _ = (query, k); // Suppress unused warnings
-            None
-        }
-    }
-
     /// Searches with SIMD-based re-ranking using a custom quality for initial search.
-    ///
-    /// Similar to `search_with_rerank` but allows specifying the quality profile
-    /// for the initial HNSW search phase.
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - The query vector
-    /// * `k` - Number of nearest neighbors to return
-    /// * `rerank_k` - Number of candidates to retrieve before re-ranking
-    /// * `initial_quality` - Quality profile for initial HNSW search
     ///
     /// # Panics
     ///
@@ -449,7 +270,24 @@ impl HnswIndex {
         let rerank_start = Instant::now();
 
         // 2. Re-rank using SIMD-optimized exact distance computation
-        // EPIC-A.2: Collect candidate vectors from ShardedVectors
+        let mut reranked = self.rerank_candidates(query, &candidates);
+
+        // 3. Sort, truncate, and update latency EMA
+        self.metric.sort_results(&mut reranked);
+        reranked.truncate(k);
+
+        let elapsed_micros = rerank_start.elapsed().as_micros();
+        let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
+        self.update_rerank_latency_ema(elapsed);
+        reranked
+    }
+
+    /// Re-ranks candidates using SIMD-optimized exact distance computation.
+    ///
+    /// Extracted helper to eliminate duplication between `search_with_rerank_with_ef`
+    /// and `search_with_rerank_quality` (Martin Fowler — Extract Method).
+    fn rerank_candidates(&self, query: &[f32], candidates: &[(u64, f32)]) -> Vec<(u64, f32)> {
+        // EPIC-A.2: Collect candidate vectors from ShardedVectors for re-ranking
         let candidate_vectors: Vec<(u64, usize, Vec<f32>)> = candidates
             .iter()
             .filter_map(|(id, _)| {
@@ -459,48 +297,22 @@ impl HnswIndex {
             })
             .collect();
 
+        // Perf TS-CORE-001: Adaptive prefetch distance based on vector size
         let prefetch_distance = crate::simd_native::calculate_prefetch_distance(self.dimension);
         let mut reranked: Vec<(u64, f32)> = Vec::with_capacity(candidate_vectors.len());
 
         for (i, (id, _idx, v)) in candidate_vectors.iter().enumerate() {
-            // Prefetch upcoming vectors
+            // Prefetch upcoming vectors (P1 optimization on local snapshot)
             if i + prefetch_distance < candidate_vectors.len() {
                 crate::simd_native::prefetch_vector(&candidate_vectors[i + prefetch_distance].2);
             }
 
-            // Compute exact distance
+            // Compute exact distance using SIMD-optimized function
             let exact_dist = self.compute_distance(query, v);
-
             reranked.push((*id, exact_dist));
         }
 
-        // 3. Sort by distance (metric-dependent ordering)
-        self.metric.sort_results(&mut reranked);
-
-        reranked.truncate(k);
-        let elapsed_micros = rerank_start.elapsed().as_micros();
-        let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
-        self.update_rerank_latency_ema(elapsed);
         reranked
-    }
-
-    /// Performs brute-force SIMD search with buffer reuse optimization.
-    ///
-    /// This is functionally identical to `search_brute_force` but may reuse
-    /// internal buffers for better performance in repeated calls.
-    ///
-    /// # Performance
-    ///
-    /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
-    /// or when perfect recall is required.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the query dimension doesn't match the index dimension.
-    #[must_use]
-    pub fn search_brute_force_buffered(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
-        // Currently identical to search_brute_force - buffer reuse is internal optimization
-        self.search_brute_force(query, k)
     }
 
     /// Sets the index to searching mode after bulk insertions.
@@ -508,9 +320,6 @@ impl HnswIndex {
     /// This is required by `hnsw_rs` after parallel insertions to ensure
     /// correct search results. Call this after finishing all insertions
     /// and before performing searches.
-    ///
-    /// For single-threaded sequential insertions, this is typically not needed,
-    /// but it's good practice to call it anyway before benchmarks.
     pub fn set_searching_mode(&self) {
         // RF-1: Using HnswInner method
         let mut inner = self.inner.write();

@@ -21,6 +21,7 @@
 #![allow(clippy::doc_markdown)] // API names and parameter labels are kept verbatim in docs.
 
 mod batch;
+mod brute_force;
 mod constructors;
 mod search;
 mod trait_impl;
