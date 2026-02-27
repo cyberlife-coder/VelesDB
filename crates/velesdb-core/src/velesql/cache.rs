@@ -31,7 +31,9 @@ impl CacheStats {
         if total == 0 {
             0.0
         } else {
-            (self.hits as f64 / total as f64) * 100.0
+            (self.hits.to_string().parse::<f64>().unwrap_or(0.0)
+                / total.to_string().parse::<f64>().unwrap_or(1.0))
+                * 100.0
         }
     }
 }
@@ -230,7 +232,7 @@ impl Default for QueryCache {
 }
 
 fn default_query_hash(query: &str) -> u64 {
-    let mut hasher = rustc_hash::FxBuildHasher::default().build_hasher();
+    let mut hasher = rustc_hash::FxBuildHasher.build_hasher();
     hasher.write(query.as_bytes());
     hasher.finish()
 }

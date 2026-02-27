@@ -46,7 +46,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 };
                 let selected = self.select_neighbors(&neighbors, max_conn);
                 self.with_layers_read(|layers| {
-                    layers[layer_idx].set_neighbors(node_id, selected.clone())
+                    layers[layer_idx].set_neighbors(node_id, selected.clone());
                 });
                 for &neighbor in &selected {
                     self.add_bidirectional_connection(node_id, neighbor, layer_idx, max_conn);

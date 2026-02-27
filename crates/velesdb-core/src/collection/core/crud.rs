@@ -10,6 +10,16 @@ use crate::quantization::{
 };
 use crate::storage::{PayloadStorage, VectorStorage};
 
+const PQ_TRAINING_SAMPLES: usize = 128;
+
+fn auto_num_subspaces(dimension: usize) -> usize {
+    let mut num_subspaces = 8usize;
+    while num_subspaces > 1 && dimension % num_subspaces != 0 {
+        num_subspaces /= 2;
+    }
+    num_subspaces.max(1)
+}
+
 impl Collection {
     /// Inserts or updates points in the collection.
     ///
@@ -28,18 +38,15 @@ impl Collection {
         let name = config.name.clone();
         drop(config);
 
-        // Reject vectors on metadata-only collections
         if metadata_only {
             for point in &points {
                 if !point.vector.is_empty() {
                     return Err(Error::VectorNotAllowed(name));
                 }
             }
-            // Delegate to upsert_metadata for metadata-only collections
             return self.upsert_metadata(points);
         }
 
-        // Validate dimensions first
         for point in &points {
             if point.dimension() != dimension {
                 return Err(Error::DimensionMismatch {
@@ -52,7 +59,6 @@ impl Collection {
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
 
-        // Get quantized caches if needed
         let mut sq8_cache = match storage_mode {
             StorageMode::SQ8 => Some(self.sq8_cache.write()),
             _ => None,
@@ -68,62 +74,18 @@ impl Collection {
 
         for point in points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            // 1. Store Vector
             vector_storage
                 .store(point.id, &point.vector)
                 .map_err(Error::Io)?;
 
-            // 2. Store quantized vector based on storage_mode
-            match storage_mode {
-                StorageMode::SQ8 => {
-                    if let Some(ref mut cache) = sq8_cache {
-                        let quantized = QuantizedVector::from_f32(&point.vector);
-                        cache.insert(point.id, quantized);
-                    }
-                }
-                StorageMode::Binary => {
-                    if let Some(ref mut cache) = binary_cache {
-                        let quantized = BinaryQuantizedVector::from_f32(&point.vector);
-                        cache.insert(point.id, quantized);
-                    }
-                }
-                StorageMode::ProductQuantization => {
-                    let maybe_code: Option<PQVector> = {
-                        let mut quantizer_guard = self.pq_quantizer.write();
-                        if quantizer_guard.is_none() {
-                            let mut buffer = self.pq_training_buffer.write();
-                            buffer.push_back(point.vector.clone());
-                            const PQ_TRAINING_SAMPLES: usize = 128;
-                            if buffer.len() >= PQ_TRAINING_SAMPLES {
-                                let training: Vec<Vec<f32>> = buffer.iter().cloned().collect();
-                                let dimension = point.vector.len();
-                                let mut num_subspaces = 8usize;
-                                while num_subspaces > 1 && !dimension.is_multiple_of(num_subspaces)
-                                {
-                                    num_subspaces /= 2;
-                                }
-                                let num_centroids = 256usize.min(training.len().max(2));
-                                *quantizer_guard = Some(ProductQuantizer::train(
-                                    &training,
-                                    num_subspaces.max(1),
-                                    num_centroids,
-                                ));
-                            }
-                        }
+            self.cache_quantized_vector(
+                &point,
+                storage_mode,
+                sq8_cache.as_deref_mut(),
+                binary_cache.as_deref_mut(),
+                pq_cache.as_deref_mut(),
+            );
 
-                        quantizer_guard
-                            .as_ref()
-                            .map(|quantizer| quantizer.quantize(&point.vector))
-                    };
-
-                    if let (Some(ref mut cache), Some(code)) = (&mut pq_cache, maybe_code) {
-                        cache.insert(point.id, code);
-                    }
-                }
-                StorageMode::Full => {}
-            }
-
-            // 3. Store Payload (if present)
             if let Some(payload) = &point.payload {
                 payload_storage
                     .store(point.id, payload)
@@ -138,10 +100,8 @@ impl Collection {
                 point.payload.as_ref(),
             );
 
-            // 4. Update Vector Index
             self.index.insert(point.id, &point.vector);
 
-            // 5. Update BM25 Text Index
             if let Some(payload) = &point.payload {
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
@@ -162,6 +122,57 @@ impl Collection {
         self.index.save(&self.path).map_err(Error::Io)?;
 
         Ok(())
+    }
+
+    fn cache_quantized_vector(
+        &self,
+        point: &Point,
+        storage_mode: StorageMode,
+        sq8_cache: Option<&mut std::collections::HashMap<u64, QuantizedVector>>,
+        binary_cache: Option<&mut std::collections::HashMap<u64, BinaryQuantizedVector>>,
+        pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
+    ) {
+        match storage_mode {
+            StorageMode::SQ8 => {
+                if let Some(cache) = sq8_cache {
+                    let quantized = QuantizedVector::from_f32(&point.vector);
+                    cache.insert(point.id, quantized);
+                }
+            }
+            StorageMode::Binary => {
+                if let Some(cache) = binary_cache {
+                    let quantized = BinaryQuantizedVector::from_f32(&point.vector);
+                    cache.insert(point.id, quantized);
+                }
+            }
+            StorageMode::ProductQuantization => {
+                let maybe_code: Option<PQVector> = {
+                    let mut quantizer_guard = self.pq_quantizer.write();
+                    if quantizer_guard.is_none() {
+                        let mut buffer = self.pq_training_buffer.write();
+                        buffer.push_back(point.vector.clone());
+                        if buffer.len() >= PQ_TRAINING_SAMPLES {
+                            let training: Vec<Vec<f32>> = buffer.iter().cloned().collect();
+                            let num_centroids = 256usize.min(training.len().max(2));
+                            *quantizer_guard = Some(ProductQuantizer::train(
+                                &training,
+                                auto_num_subspaces(point.vector.len()),
+                                num_centroids,
+                            ));
+                        }
+                    }
+
+                    quantizer_guard
+                        .as_ref()
+                        .map(|quantizer| quantizer.quantize(&point.vector))
+                };
+
+                if let (Some(cache), Some(code)) = (pq_cache, maybe_code) {
+                    cache.insert(point.id, code);
+                }
+            }
+            StorageMode::Full => {}
+        }
     }
 
     /// Inserts or updates metadata-only points (no vectors).
@@ -235,7 +246,6 @@ impl Collection {
         let dimension = config.dimension;
         drop(config);
 
-        // Validate dimensions first
         for point in points {
             if point.dimension() != dimension {
                 return Err(Error::DimensionMismatch {

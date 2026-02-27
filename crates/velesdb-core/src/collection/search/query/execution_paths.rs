@@ -11,11 +11,7 @@ impl Collection {
         let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
         let mut results = Vec::new();
         for point in self.get(&ids).into_iter().flatten() {
-            let payload = point
-                .payload
-                .as_ref()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
             if filter.matches(&payload) {
                 results.push(SearchResult::new(point, 0.0));
                 if results.len() >= execution_limit {
