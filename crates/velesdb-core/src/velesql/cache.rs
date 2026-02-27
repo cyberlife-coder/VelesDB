@@ -31,9 +31,7 @@ impl CacheStats {
         if total == 0 {
             0.0
         } else {
-            (self.hits.to_string().parse::<f64>().unwrap_or(0.0)
-                / total.to_string().parse::<f64>().unwrap_or(1.0))
-                * 100.0
+            (self.hits as f64 / total as f64) * 100.0
         }
     }
 }
@@ -117,7 +115,6 @@ impl QueryCache {
         };
 
         if let Some(cached) = cached {
-            let cache = self.cache.read();
             let mut order = self.order.write();
             let mut stats = self.stats.write();
 
@@ -129,12 +126,10 @@ impl QueryCache {
             };
 
             // Move to MRU, keeping order duplicate-free.
-            if cache.get(&hash).is_some() {
-                if let Some(pos) = order.iter().position(|existing| existing == &key) {
-                    order.remove(pos);
-                }
-                order.push_back(key);
+            if let Some(pos) = order.iter().position(|existing| existing == &key) {
+                order.remove(pos);
             }
+            order.push_back(key);
 
             return Ok(cached.parsed);
         }

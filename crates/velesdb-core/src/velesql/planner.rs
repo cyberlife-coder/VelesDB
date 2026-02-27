@@ -46,6 +46,14 @@ pub struct Cost {
     pub cpu_cost: f64,
 }
 
+const FILTER_SCAN_IO_WEIGHT: f64 = 0.2;
+const FILTER_SCAN_CPU_WEIGHT: f64 = 0.8;
+const HNSW_IO_WEIGHT: f64 = 0.5;
+const HNSW_CPU_WEIGHT: f64 = 1.0;
+const VECTOR_FIRST_FILTER_PENALTY: f64 = 1.5;
+const PARALLEL_MERGE_OVERHEAD: f64 = 25.0;
+const GRAPH_TO_VECTOR_SCALING: f64 = 100.0;
+
 impl Cost {
     #[must_use]
     /// Creates a new cost value from I/O and CPU components.
@@ -79,7 +87,10 @@ impl<'a> CostEstimator<'a> {
         let selectivity = self.estimate_condition_selectivity(filter).clamp(0.0, 1.0);
         let total = self.stats.total_points.max(self.stats.row_count) as f64;
         let scan_rows = (total * selectivity).max(1.0);
-        Cost::new(scan_rows * 0.2, scan_rows * 0.8)
+        Cost::new(
+            scan_rows * FILTER_SCAN_IO_WEIGHT,
+            scan_rows * FILTER_SCAN_CPU_WEIGHT,
+        )
     }
 
     #[must_use]
@@ -87,7 +98,7 @@ impl<'a> CostEstimator<'a> {
     pub fn estimate_hnsw_search_cost(&self, k: usize) -> Cost {
         let total = self.stats.total_points.max(self.stats.row_count).max(1) as f64;
         let probe = (k.max(1) as f64) * total.log2().max(1.0);
-        Cost::new(probe * 0.5, probe)
+        Cost::new(probe * HNSW_IO_WEIGHT, probe * HNSW_CPU_WEIGHT)
     }
 
     #[must_use]
@@ -312,18 +323,22 @@ impl QueryPlanner {
         let filter_cost = filter.map_or(Cost::new(0.0, 0.0), |f| estimator.estimate_filter_cost(f));
         let vector_cost = estimator.estimate_hnsw_search_cost(k.max(1));
 
-        let vector_first = vector_cost.total() + (filter_cost.total() * 1.5);
-        let graph_first =
-            filter_cost.total() + (vector_cost.total() * filter_cost.io_cost.max(1.0) / 100.0);
-        let parallel = vector_cost.total().max(filter_cost.total()) + 25.0;
+        let vector_first =
+            vector_cost.total() + (filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
+        let graph_first = filter_cost.total()
+            + (vector_cost.total() * filter_cost.io_cost.max(1.0) / GRAPH_TO_VECTOR_SCALING);
+        let parallel = vector_cost.total().max(filter_cost.total()) + PARALLEL_MERGE_OVERHEAD;
 
-        let mut plans = [
+        let candidates = [
             (ExecutionStrategy::VectorFirst, vector_first),
             (ExecutionStrategy::GraphFirst, graph_first),
             (ExecutionStrategy::Parallel, parallel),
         ];
-        plans.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        plans[0].0
+
+        candidates
+            .into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or(ExecutionStrategy::Parallel, |(strategy, _)| strategy)
     }
 
     /// Returns a reference to the query statistics.
