@@ -50,10 +50,8 @@ impl Ord for JsonValue {
             (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
             (Self::Number(a), Self::Number(b)) => a.cmp(b),
             (Self::String(a), Self::String(b)) => a.cmp(b),
-            (Self::Bool(_), _) => Ordering::Less,
-            (Self::Number(_), Self::String(_)) => Ordering::Less,
-            (Self::Number(_), Self::Bool(_)) => Ordering::Greater,
-            (Self::String(_), _) => Ordering::Greater,
+            (Self::Bool(_), _) | (Self::Number(_), Self::String(_)) => Ordering::Less,
+            (Self::Number(_), Self::Bool(_)) | (Self::String(_), _) => Ordering::Greater,
         }
     }
 }
@@ -75,7 +73,11 @@ impl JsonValue {
     pub fn from_ast_value(value: &crate::velesql::Value) -> Option<Self> {
         match value {
             crate::velesql::Value::String(s) => Some(Self::String(s.clone())),
-            crate::velesql::Value::Integer(i) => Some(Self::Number(F64Key::from(*i as f64))),
+            crate::velesql::Value::Integer(i) => i
+                .to_string()
+                .parse::<f64>()
+                .ok()
+                .map(|v| Self::Number(F64Key::from(v))),
             crate::velesql::Value::Float(f) => Some(Self::Number(F64Key::from(*f))),
             crate::velesql::Value::Boolean(b) => Some(Self::Bool(*b)),
             _ => None,

@@ -3,6 +3,7 @@
 use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
 use super::NativeHnsw;
+use rustc_hash::FxHashSet;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// VAMANA-style neighbor selection with alpha diversification.
@@ -18,8 +19,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         if candidates.len() <= max_neighbors {
             return candidates.iter().map(|(id, _)| *id).collect();
         }
-
-        use rustc_hash::FxHashSet;
 
         let mut selected: Vec<NodeId> = Vec::with_capacity(max_neighbors);
         let mut selected_set: FxHashSet<NodeId> = FxHashSet::default();

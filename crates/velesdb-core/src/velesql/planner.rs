@@ -134,7 +134,7 @@ impl<'a> CostEstimator<'a> {
             .field_stats
             .get(column)
             .and_then(|s| s.histogram.as_ref())
-            .map_or(0.3, |h| histogram_range_selectivity(h))
+            .map_or(0.3, histogram_range_selectivity)
     }
 }
 

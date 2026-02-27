@@ -93,10 +93,9 @@ impl HnswIndex {
         // Two-stage reranking: use a larger candidate pool for initial HNSW search,
         // then rerank with exact SIMD distances for better precision.
         let min_rerank_k = match quality {
-            SearchQuality::Fast => return None,
             SearchQuality::Balanced => k * 2,
             SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
-            SearchQuality::Perfect => return None, // Perfect uses brute-force
+            SearchQuality::Fast | SearchQuality::Perfect => return None,
         };
 
         let rerank_k = min_rerank_k.max(ef_search / 2);
@@ -125,8 +124,8 @@ impl HnswIndex {
 
         // If we're over budget, reduce rerank_k proportionally
         if ema > target {
-            let ratio = target as f64 / ema as f64;
-            let adapted = (rerank_k as f64 * ratio) as usize;
+            let scaled = (rerank_k as u128).saturating_mul(target as u128) / (ema as u128);
+            let adapted = usize::try_from(scaled).unwrap_or(usize::MAX);
             adapted.max(k) // Never go below k
         } else {
             rerank_k
@@ -145,8 +144,7 @@ impl HnswIndex {
             // - current and sample_us are microsecond durations (bounded by u64::MAX)
             // - The weighted average is always between the two values
             let new_ema = (current * 7 + sample_us * 3) / 10;
-            self.rerank_latency_ema_us
-                .store(new_ema, Ordering::Relaxed);
+            self.rerank_latency_ema_us.store(new_ema, Ordering::Relaxed);
         }
     }
 

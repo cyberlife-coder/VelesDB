@@ -42,7 +42,7 @@ impl ProductQuantizer {
         assert!(num_subspaces > 0, "num_subspaces must be > 0");
         assert!(num_centroids > 0, "num_centroids must be > 0");
         assert!(
-            num_centroids <= usize::from(u16::MAX),
+            u16::try_from(num_centroids).is_ok(),
             "num_centroids must fit in u16 (max 65535)"
         );
 
@@ -52,7 +52,7 @@ impl ProductQuantizer {
             "All vectors must share the same dimension"
         );
         assert!(
-            dimension.is_multiple_of(num_subspaces),
+            dimension % num_subspaces == 0,
             "Dimension must be divisible by num_subspaces"
         );
 
@@ -200,11 +200,12 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
         for cluster in 0..k {
             if counts[cluster] == 0 {
                 // Re-seed empty cluster deterministically.
-                new_centroids[cluster] = samples[cluster % samples.len()].clone();
+                new_centroids[cluster].clone_from(&samples[cluster % samples.len()]);
             } else {
-                let inv = 1.0 / counts[cluster] as f32;
-                for d in 0..dim {
-                    new_centroids[cluster][d] *= inv;
+                let count = counts[cluster].to_string().parse::<f32>().unwrap_or(1.0);
+                let inv = 1.0_f32 / count;
+                for value in new_centroids[cluster].iter_mut().take(dim) {
+                    *value *= inv;
                 }
             }
         }

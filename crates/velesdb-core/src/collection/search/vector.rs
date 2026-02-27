@@ -30,10 +30,9 @@ impl Collection {
         let mut rescored: Vec<(u64, f32)> = index_results
             .into_iter()
             .map(|(id, fallback_score)| {
-                let score = pq_cache
-                    .get(&id)
-                    .map(|pq_vec| distance_pq(query, pq_vec, &quantizer.codebook))
-                    .unwrap_or(fallback_score);
+                let score = pq_cache.get(&id).map_or(fallback_score, |pq_vec| {
+                    distance_pq(query, pq_vec, &quantizer.codebook)
+                });
                 (id, score)
             })
             .collect();
