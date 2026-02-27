@@ -219,6 +219,32 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 
 ---
 
+## 🧭 New to `velesdb-core` and VelesQL? Quick diagnosis (first-hour issues)
+
+If you're new to VelesDB, most "it doesn't work" moments come from a **model mismatch**, not from runtime bugs.
+
+### Symptom → probable cause → immediate fix
+
+| Symptom | Probable cause | Immediate fix |
+|---|---|---|
+| `MATCH` query fails or behaves unlike SQL | VelesQL is SQL-like, not PostgreSQL/MySQL-compatible SQL | Start from VelesQL examples, then adapt queries incrementally |
+| Query returns 0 rows | Vector dimension mismatch, strict threshold, or empty collection | Verify dimension first, remove strict filters, retest |
+| Can't change metric/dimension after create | Collection schema is intentionally immutable for HNSW/SIMD performance | Create a new collection and reindex data |
+| Installed `velesdb-core` but no HTTP endpoint/REPL | `velesdb-core` is embedded engine only | Add `velesdb-server` (HTTP) and/or `velesdb-cli` (REPL) |
+| Benchmarks don't match your machine | Hardware/workload/config differences (`ef_search`, payload, filters) | Benchmark with your real dataset and query distribution |
+
+### Fast sanity sequence (recommended)
+
+1. Confirm embedding dimension == collection dimension.
+2. Run a permissive nearest-neighbor query (no strict filters).
+3. Validate at least one known inserted vector is retrievable.
+4. Add thresholds and metadata filters progressively.
+5. Tune `ef_search` after functional correctness is validated.
+
+For an actionable bilingual checklist (EN + FR), see **[docs/NEW_USER_TROUBLESHOOTING.md](docs/NEW_USER_TROUBLESHOOTING.md)**.
+
+---
+
 ## 🎪 Demos & Examples
 
 > **See VelesDB in action** with production-ready examples demonstrating real-world use cases.
