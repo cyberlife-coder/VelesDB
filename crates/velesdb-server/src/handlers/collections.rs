@@ -121,7 +121,8 @@ pub async fn create_collection(
     match result {
         Ok(()) => {
             let mut warnings = Vec::new();
-            if req.collection_type.eq_ignore_ascii_case("vector") {
+            let is_vector = matches!(req.collection_type.to_lowercase().as_str(), "vector" | "");
+            if is_vector {
                 warnings.push("Collection dimension and metric are immutable after creation. If your embedding model changes, create a new collection and reindex data.");
                 warnings.push("For first queries, start without strict filters/thresholds, then tighten progressively.");
             }

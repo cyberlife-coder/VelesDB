@@ -2300,6 +2300,46 @@ async fn test_create_collection_returns_preflight_warnings() {
 }
 
 #[tokio::test]
+async fn test_create_collection_with_empty_type_returns_preflight_warnings() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "warn_collection_empty_type",
+                        "collection_type": "",
+                        "dimension": 128,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+
+    assert!(json["warnings"].is_array());
+    assert_eq!(
+        json["warnings"]
+            .as_array()
+            .map_or(0, |warnings| warnings.len()),
+        2
+    );
+}
+
+#[tokio::test]
 async fn test_collection_sanity_reports_empty_collection() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
