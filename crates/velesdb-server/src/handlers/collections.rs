@@ -119,15 +119,24 @@ pub async fn create_collection(
     };
 
     match result {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "message": "Collection created",
-                "name": req.name,
-                "type": req.collection_type
-            })),
-        )
-            .into_response(),
+        Ok(()) => {
+            let mut warnings = Vec::new();
+            if req.collection_type.eq_ignore_ascii_case("vector") {
+                warnings.push("Collection dimension and metric are immutable after creation. If your embedding model changes, create a new collection and reindex data.");
+                warnings.push("For first queries, start without strict filters/thresholds, then tighten progressively.");
+            }
+
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "message": "Collection created",
+                    "name": req.name,
+                    "type": req.collection_type,
+                    "warnings": warnings
+                })),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -165,6 +174,67 @@ pub async fn get_collection(
                 point_count: config.point_count,
                 storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
             })
+            .into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Collection '{}' not found", name),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Run a quick sanity check for onboarding and troubleshooting.
+#[utoipa::path(
+    get,
+    path = "/collections/{name}/sanity",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Collection sanity status", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+pub async fn collection_sanity(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.db.get_collection(&name) {
+        Some(collection) => {
+            let config = collection.config();
+            let has_data = config.point_count > 0;
+            Json(serde_json::json!({
+                "collection": config.name,
+                "dimension": config.dimension,
+                "metric": format!("{:?}", config.metric).to_lowercase(),
+                "point_count": config.point_count,
+                "is_empty": collection.is_empty(),
+                "checks": {
+                    "has_vectors": has_data,
+                    "search_ready": has_data,
+                    "dimension_configured": config.dimension > 0
+                },
+                "diagnostics": {
+                    "search_requests_total": state.onboarding_metrics.search_requests_total.load(std::sync::atomic::Ordering::Relaxed),
+                    "dimension_mismatch_total": state.onboarding_metrics.dimension_mismatch_total.load(std::sync::atomic::Ordering::Relaxed),
+                    "empty_search_results_total": state.onboarding_metrics.empty_search_results_total.load(std::sync::atomic::Ordering::Relaxed),
+                    "filter_parse_errors_total": state.onboarding_metrics.filter_parse_errors_total.load(std::sync::atomic::Ordering::Relaxed)
+                },
+                "hints": if has_data {
+                    vec![
+                        "Run a search without strict filters first, then tighten filters progressively."
+                    ]
+                } else {
+                    vec![
+                        "Insert at least one known vector before evaluating search quality.",
+                        "Verify you are querying the intended collection."
+                    ]
+                }
+            }))
             .into_response()
         }
         None => (

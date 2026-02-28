@@ -16,11 +16,11 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 use velesdb_server::{
-    add_edge, batch_search, create_collection, create_index, delete_collection, delete_index,
-    delete_point, flush_collection, get_collection, get_edges, get_node_degree, get_point,
-    health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
+    add_edge, batch_search, collection_sanity, create_collection, create_index, delete_collection,
+    delete_index, delete_point, flush_collection, get_collection, get_edges, get_node_degree,
+    get_point, health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
     multi_query_search, query, search, stream_traverse, stream_upsert_points, text_search,
-    traverse_graph, upsert_points, ApiDoc, AppState, GraphService,
+    traverse_graph, upsert_points, ApiDoc, AppState, GraphService, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -59,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database
     let db = Database::open(&args.data_dir)?;
-    let state = Arc::new(AppState { db });
+    let state = Arc::new(AppState {
+        db,
+        onboarding_metrics: OnboardingMetrics::default(),
+    });
 
     // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
     // WARNING: GraphService is in-memory only and NOT persisted to disk.
@@ -101,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/{name}/empty", get(is_empty))
+        .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/flush", post(flush_collection))
         // 100MB limit for batch vector uploads (1000 vectors × 768D × 4 bytes = ~3MB typical)
         .route("/collections/{name}/points", post(upsert_points))

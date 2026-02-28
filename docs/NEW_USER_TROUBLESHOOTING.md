@@ -93,3 +93,45 @@ Normal : dépend du CPU, de `ef_search`, des filtres/payloads et du dataset.
 - [ ] At least one known vector is inserted and retrievable
 - [ ] Query works without strict filters first
 - [ ] Thresholds/filters are added progressively
+
+---
+
+## Priorités d'amélioration code (basées sur les incidents "first-hour")
+
+### P0 — Réduire les erreurs silencieuses et les "empty results" incompris
+
+1. **Validation explicite de dimension dans les handlers HTTP/CLI avant exécution de recherche**
+   - Problème visé: requêtes qui retournent 0 résultat alors que la vraie cause est un mismatch de dimension.
+   - Amélioration: vérifier `query.len()` vs dimension collection et renvoyer une erreur guidée avec suggestion corrective.
+2. **Messages d'erreur actionnables pour seuil/filtre trop strict**
+   - Problème visé: "0 résultat" sans feedback.
+   - Amélioration: enrichir les erreurs/réponses avec hints (ex: "testez sans threshold", "élargissez filter").
+3. **Endpoint/check de diagnostic rapide pour nouvelle collection**
+   - Problème visé: données absentes ou mauvaise collection ciblée.
+   - Amélioration: endpoint "sanity" (dimension, metric, point_count, exemple de recherche simple).
+
+### P1 — Mieux guider la configuration figée (dimension/métrique)
+
+1. **Préflight au `create_collection` avec avertissements orientés usage**
+   - Problème visé: incompréhension du caractère immuable dimension/métrique.
+   - Amélioration: warnings/documentation inline à la création + conseils de migration/reindex.
+2. **Commande/outillage de reindex simplifié**
+   - Problème visé: friction quand l'utilisateur change de modèle d'embedding.
+   - Amélioration: utilitaire guidé pour copier payloads + recalcul embeddings + création nouvelle collection.
+
+### P2 — Observabilité et onboarding
+
+1. **Logs/metrics orientés "new user"**
+   - Compteurs pour: mismatch dimension, recherches sans données, seuils éliminant tous les hits.
+2. **Exemples exécutables "de zéro à premier résultat"**
+   - Script unique: create → insert known vector → search sans filtre → search avec filtre.
+3. **Messages d'installation plus explicites entre core/server/cli**
+   - Clarifier plus tôt que `velesdb-core` n'expose ni HTTP API ni REPL.
+
+### Ordre d'implémentation recommandé
+
+1. P0.1 + P0.2 (impact immédiat sur DX)
+2. P0.3 (diagnostic automatique)
+3. P1.1 (prévention)
+4. P1.2 (workflow de migration)
+5. P2.* (observabilité et docs onboarding)

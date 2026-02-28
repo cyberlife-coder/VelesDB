@@ -25,6 +25,7 @@
 mod handlers;
 mod types;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use utoipa::OpenApi;
 use velesdb_core::Database;
 
@@ -33,10 +34,10 @@ pub use types::*;
 
 // Re-export handlers for routing
 pub use handlers::{
-    batch_search, create_collection, create_index, delete_collection, delete_index, delete_point,
-    explain, flush_collection, get_collection, get_point, health_check, hybrid_search, is_empty,
-    list_collections, list_indexes, match_query, multi_query_search, query, search,
-    stream_upsert_points, text_search, upsert_points,
+    batch_search, collection_sanity, create_collection, create_index, delete_collection,
+    delete_index, delete_point, explain, flush_collection, get_collection, get_point, health_check,
+    hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
+    query, search, stream_upsert_points, text_search, upsert_points,
 };
 
 // FLAG-2 FIX: Re-export graph handlers for routing (EPIC-016/US-031, US-050)
@@ -82,6 +83,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::collections::create_collection,
         handlers::collections::get_collection,
         handlers::collections::delete_collection,
+        handlers::collections::collection_sanity,
         handlers::points::upsert_points,
         handlers::points::stream_upsert_points,
         handlers::points::get_point,
@@ -138,6 +140,38 @@ pub struct ApiDoc;
 pub struct AppState {
     /// The `VelesDB` database instance.
     pub db: Database,
+    /// New-user onboarding diagnostics counters.
+    pub onboarding_metrics: OnboardingMetrics,
+}
+
+/// Lightweight counters for first-hour troubleshooting diagnostics.
+#[derive(Default)]
+pub struct OnboardingMetrics {
+    pub search_requests_total: AtomicU64,
+    pub dimension_mismatch_total: AtomicU64,
+    pub empty_search_results_total: AtomicU64,
+    pub filter_parse_errors_total: AtomicU64,
+}
+
+impl OnboardingMetrics {
+    pub fn record_search_request(&self) {
+        self.search_requests_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_dimension_mismatch(&self) {
+        self.dimension_mismatch_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_empty_search_results(&self) {
+        self.empty_search_results_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_filter_parse_error(&self) {
+        self.filter_parse_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 // ============================================================================
