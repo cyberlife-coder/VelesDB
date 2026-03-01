@@ -21,7 +21,7 @@ name = "velesdb-server"
 path = "src/main.rs"
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core", version = "1.4.0" }
+velesdb-core = { path = "../velesdb-core", version = "1.4.0", default-features = false }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -39,8 +39,12 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 [features]
-default = []
+default = ["velesdb-core/default"]
+gpu = ["velesdb-core/gpu"]
+loom = ["velesdb-core/loom"]
+persistence = ["velesdb-core/persistence"]
 prometheus = []
+update-check = ["velesdb-core/update-check"]
 
 [dev-dependencies]
 # Use native-tls to avoid ring compilation issues on aarch64-apple-darwin
@@ -48,6 +52,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 tokio-test = "0.4"
 tempfile = { workspace = true }
 tower = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true
