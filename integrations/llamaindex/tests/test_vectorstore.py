@@ -1,11 +1,24 @@
 """Tests for VelesDB LlamaIndex VectorStore."""
 
+import sys
 import tempfile
 import shutil
-from pathlib import Path
+import types
 
 import pytest
 from llama_index.core.schema import TextNode
+
+if "velesdb" not in sys.modules:
+    sys.modules["velesdb"] = types.SimpleNamespace(
+        Database=object,
+        Collection=object,
+        FusionStrategy=types.SimpleNamespace(
+            rrf=lambda **kwargs: None,
+            average=lambda: None,
+            maximum=lambda: None,
+            weighted=lambda **kwargs: None,
+        ),
+    )
 
 from llamaindex_velesdb import VelesDBVectorStore
 from llamaindex_velesdb.vectorstore import _stable_hash_id
@@ -537,6 +550,90 @@ class TestVelesDBVectorStoreQueryAnalysis:
         assert result.ids == ["42"]
         assert result.similarities == [0.77]
         assert isinstance(result.nodes[0], TextNode)
+
+
+class _RecordingCollection:
+    def __init__(self):
+        self.search_called_with = None
+        self.search_with_filter_called_with = None
+
+    def search(self, vector, top_k):
+        self.search_called_with = {"vector": vector, "top_k": top_k}
+        return []
+
+    def search_with_filter(self, vector, top_k, filter):
+        self.search_with_filter_called_with = {
+            "vector": vector,
+            "top_k": top_k,
+            "filter": filter,
+        }
+        return []
+
+
+class _RecordingDatabase:
+    def __init__(self):
+        self.calls = []
+        self.collection = _RecordingCollection()
+
+    def get_collection(self, name):
+        self.calls.append(("get_collection", name))
+        return None
+
+    def create_collection(self, name, dimension, metric, storage_mode):
+        self.calls.append(
+            (
+                "create_collection",
+                {
+                    "name": name,
+                    "dimension": dimension,
+                    "metric": metric,
+                    "storage_mode": storage_mode,
+                },
+            )
+        )
+        return self.collection
+
+
+class TestVelesDBVectorStoreFeatureParity:
+    def test_query_uses_core_filter_format_when_metadata_filters_are_provided(self, tmp_path):
+        from llama_index.core.vector_stores.types import (
+            MetadataFilter,
+            MetadataFilters,
+            VectorStoreQuery,
+        )
+
+        store = VelesDBVectorStore(path=str(tmp_path), collection_name="filters")
+        recording_collection = _RecordingCollection()
+        store._get_collection = lambda dimension: recording_collection
+
+        query = VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3],
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[MetadataFilter(key="category", value="A")]),
+        )
+
+        store.query(query)
+
+        assert recording_collection.search_called_with is None
+        assert recording_collection.search_with_filter_called_with is not None
+        assert recording_collection.search_with_filter_called_with["filter"] == {
+            "must": [{"key": "category", "match": {"value": "A"}}]
+        }
+
+    def test_create_collection_forwards_storage_mode_to_core(self, tmp_path):
+        store = VelesDBVectorStore(
+            path=str(tmp_path),
+            collection_name="storage_mode",
+            storage_mode="sq8",
+        )
+
+        recording_db = _RecordingDatabase()
+        store._db = recording_db
+
+        store._get_collection(3)
+
+        create_call = next(call for call in recording_db.calls if call[0] == "create_collection")
+        assert create_call[1]["storage_mode"] == "sq8"
 
 
 if __name__ == "__main__":
