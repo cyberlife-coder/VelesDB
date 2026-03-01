@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "1.4.1"
+version = "1.4.5"
 dependencies = [
  "arc-swap",
  "bincode",
