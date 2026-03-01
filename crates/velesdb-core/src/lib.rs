@@ -62,6 +62,7 @@ pub mod compression;
 pub mod config;
 #[cfg(test)]
 mod config_tests;
+#[cfg(feature = "persistence")]
 pub mod database;
 pub mod distance;
 #[cfg(test)]
@@ -140,6 +141,7 @@ pub use collection::{
     Collection, CollectionType, ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge,
     GraphNode, GraphSchema, IndexInfo, NodeType, TraversalResult, ValueType,
 };
+#[cfg(feature = "persistence")]
 pub use database::Database;
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};

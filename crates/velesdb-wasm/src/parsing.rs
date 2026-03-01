@@ -5,8 +5,8 @@
 
 use wasm_bindgen::prelude::*;
 
-use velesdb_core::DistanceMetric;
 use crate::StorageMode;
+use velesdb_core::DistanceMetric;
 
 /// Parses a metric string into a DistanceMetric.
 ///
@@ -24,14 +24,9 @@ pub fn parse_metric(metric: &str) -> Result<DistanceMetric, JsValue> {
 }
 
 fn parse_metric_inner(metric: &str) -> Result<DistanceMetric, String> {
-    match metric.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceMetric::Cosine),
-        "euclidean" | "l2" => Ok(DistanceMetric::Euclidean),
-        "dot" | "dotproduct" | "inner" => Ok(DistanceMetric::DotProduct),
-        "hamming" => Ok(DistanceMetric::Hamming),
-        "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err("Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard".to_string()),
-    }
+    use std::str::FromStr;
+
+    DistanceMetric::from_str(metric).map_err(std::string::ToString::to_string)
 }
 
 /// Parses a storage mode string into a StorageMode.
@@ -57,69 +52,40 @@ fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
     }
 }
 
-/// Validates that a vector has the expected dimension.
-///
-/// # Errors
-/// Returns a JsValue error with a descriptive message if dimensions don't match.
-pub fn validate_dimension(
-    actual: usize,
-    expected: usize,
-    context: &str,
-) -> Result<(), JsValue> {
-    if actual != expected {
-        Err(JsValue::from_str(&format!(
-            "{} dimension mismatch: expected {}, got {}",
-            context, expected, actual
-        )))
-    } else {
-        Ok(())
-    }
-}
-
-/// Converts a metric byte to DistanceMetric (for import).
-///
-/// # Errors
-/// Returns a JsValue error if the byte is invalid.
-pub fn metric_from_byte(byte: u8) -> Result<DistanceMetric, JsValue> {
-    metric_from_byte_inner(byte).map_err(|e| JsValue::from_str(&e))
-}
-
-fn metric_from_byte_inner(byte: u8) -> Result<DistanceMetric, String> {
-    match byte {
-        0 => Ok(DistanceMetric::Cosine),
-        1 => Ok(DistanceMetric::Euclidean),
-        2 => Ok(DistanceMetric::DotProduct),
-        3 => Ok(DistanceMetric::Hamming),
-        4 => Ok(DistanceMetric::Jaccard),
-        _ => Err("Invalid metric byte".to_string()),
-    }
-}
-
-/// Converts a DistanceMetric to byte (for export).
-#[must_use]
-pub const fn metric_to_byte(metric: DistanceMetric) -> u8 {
-    match metric {
-        DistanceMetric::Cosine => 0,
-        DistanceMetric::Euclidean => 1,
-        DistanceMetric::DotProduct => 2,
-        DistanceMetric::Hamming => 3,
-        DistanceMetric::Jaccard => 4,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_metric_valid() {
-        assert!(matches!(parse_metric_inner("cosine"), Ok(DistanceMetric::Cosine)));
-        assert!(matches!(parse_metric_inner("EUCLIDEAN"), Ok(DistanceMetric::Euclidean)));
-        assert!(matches!(parse_metric_inner("l2"), Ok(DistanceMetric::Euclidean)));
-        assert!(matches!(parse_metric_inner("dot"), Ok(DistanceMetric::DotProduct)));
-        assert!(matches!(parse_metric_inner("dotproduct"), Ok(DistanceMetric::DotProduct)));
-        assert!(matches!(parse_metric_inner("hamming"), Ok(DistanceMetric::Hamming)));
-        assert!(matches!(parse_metric_inner("jaccard"), Ok(DistanceMetric::Jaccard)));
+        assert!(matches!(
+            parse_metric_inner("cosine"),
+            Ok(DistanceMetric::Cosine)
+        ));
+        assert!(matches!(
+            parse_metric_inner("EUCLIDEAN"),
+            Ok(DistanceMetric::Euclidean)
+        ));
+        assert!(matches!(
+            parse_metric_inner("l2"),
+            Ok(DistanceMetric::Euclidean)
+        ));
+        assert!(matches!(
+            parse_metric_inner("dot"),
+            Ok(DistanceMetric::DotProduct)
+        ));
+        assert!(matches!(
+            parse_metric_inner("dotproduct"),
+            Ok(DistanceMetric::DotProduct)
+        ));
+        assert!(matches!(
+            parse_metric_inner("hamming"),
+            Ok(DistanceMetric::Hamming)
+        ));
+        assert!(matches!(
+            parse_metric_inner("jaccard"),
+            Ok(DistanceMetric::Jaccard)
+        ));
     }
 
     #[test]
@@ -128,29 +94,38 @@ mod tests {
     }
 
     #[test]
+    fn test_metric_parsing_is_delegated_to_core_source_of_truth() {
+        use std::str::FromStr;
+
+        for alias in ["cosine", "l2", "dot", "inner", "hamming", "jaccard"] {
+            let parsed = parse_metric_inner(alias).unwrap();
+            let from_core = DistanceMetric::from_str(alias).unwrap();
+            assert_eq!(parsed, from_core);
+        }
+    }
+
+    #[test]
     fn test_parse_storage_mode_valid() {
-        assert!(matches!(parse_storage_mode_inner("full"), Ok(StorageMode::Full)));
-        assert!(matches!(parse_storage_mode_inner("SQ8"), Ok(StorageMode::SQ8)));
-        assert!(matches!(parse_storage_mode_inner("binary"), Ok(StorageMode::Binary)));
-        assert!(matches!(parse_storage_mode_inner("pq"), Ok(StorageMode::ProductQuantization)));
+        assert!(matches!(
+            parse_storage_mode_inner("full"),
+            Ok(StorageMode::Full)
+        ));
+        assert!(matches!(
+            parse_storage_mode_inner("SQ8"),
+            Ok(StorageMode::SQ8)
+        ));
+        assert!(matches!(
+            parse_storage_mode_inner("binary"),
+            Ok(StorageMode::Binary)
+        ));
+        assert!(matches!(
+            parse_storage_mode_inner("pq"),
+            Ok(StorageMode::ProductQuantization)
+        ));
     }
 
     #[test]
     fn test_parse_storage_mode_invalid() {
         assert!(parse_storage_mode_inner("unknown").is_err());
-    }
-
-    #[test]
-    fn test_metric_byte_roundtrip() {
-        for metric in [
-            DistanceMetric::Cosine,
-            DistanceMetric::Euclidean,
-            DistanceMetric::DotProduct,
-            DistanceMetric::Hamming,
-            DistanceMetric::Jaccard,
-        ] {
-            let byte = metric_to_byte(metric);
-            assert_eq!(metric_from_byte_inner(byte).unwrap(), metric);
-        }
     }
 }

@@ -48,6 +48,7 @@ mod fusion;
 mod graph;
 mod graph_persistence;
 mod graph_worker;
+mod parsing;
 mod persistence;
 mod serialization;
 mod simd;
@@ -92,6 +93,8 @@ pub enum StorageMode {
     SQ8,
     /// Binary: 1-bit quantization (1 bit per dimension, 32x compression)
     Binary,
+    /// Product Quantization (currently mapped to SQ8 path in WASM runtime)
+    ProductQuantization,
 }
 
 /// A vector store for in-memory vector search.
@@ -133,7 +136,7 @@ impl VectorStore {
     /// Creates a new vector store. Metrics: cosine, euclidean, dot, hamming, jaccard.
     #[wasm_bindgen(constructor)]
     pub fn new(dimension: usize, metric: &str) -> Result<VectorStore, JsValue> {
-        let metric = store_new::parse_metric(metric)?;
+        let metric = parsing::parse_metric(metric)?;
         Ok(store_new::create_store(
             dimension,
             metric,
@@ -161,8 +164,8 @@ impl VectorStore {
         metric: &str,
         mode: &str,
     ) -> Result<VectorStore, JsValue> {
-        let metric = store_new::parse_metric(metric)?;
-        let storage_mode = store_new::parse_storage_mode(mode)?;
+        let metric = parsing::parse_metric(metric)?;
+        let storage_mode = parsing::parse_storage_mode(mode)?;
         Ok(store_new::create_store(dimension, metric, storage_mode))
     }
 
@@ -174,6 +177,7 @@ impl VectorStore {
             StorageMode::Full => "full".to_string(),
             StorageMode::SQ8 => "sq8".to_string(),
             StorageMode::Binary => "binary".to_string(),
+            StorageMode::ProductQuantization => "pq".to_string(),
         }
     }
 
@@ -515,6 +519,9 @@ impl VectorStore {
                 id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
             }
             StorageMode::Binary => id_bytes + self.data_binary.len(),
+            StorageMode::ProductQuantization => {
+                id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
+            }
         }
     }
 
@@ -525,7 +532,7 @@ impl VectorStore {
         metric: &str,
         capacity: usize,
     ) -> Result<VectorStore, JsValue> {
-        let metric = store_new::parse_metric(metric)?;
+        let metric = parsing::parse_metric(metric)?;
         Ok(store_new::create_with_capacity(
             dimension,
             metric,

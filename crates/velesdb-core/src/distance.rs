@@ -12,6 +12,7 @@
 
 use crate::simd_native;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Distance metric for vector similarity calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,38 @@ pub enum DistanceMetric {
 }
 
 impl DistanceMetric {
+    /// Returns the canonical metric name used by user-facing APIs.
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Cosine => "cosine",
+            Self::Euclidean => "euclidean",
+            Self::DotProduct => "dot",
+            Self::Hamming => "hamming",
+            Self::Jaccard => "jaccard",
+        }
+    }
+
+    /// Parses a metric name/alias into a [`DistanceMetric`].
+    ///
+    /// Supported aliases:
+    /// - cosine
+    /// - euclidean, l2
+    /// - dot, dotproduct, inner
+    /// - hamming
+    /// - jaccard
+    #[must_use]
+    pub fn parse_alias(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "cosine" => Some(Self::Cosine),
+            "euclidean" | "l2" => Some(Self::Euclidean),
+            "dot" | "dotproduct" | "inner" => Some(Self::DotProduct),
+            "hamming" => Some(Self::Hamming),
+            "jaccard" => Some(Self::Jaccard),
+            _ => None,
+        }
+    }
+
     /// Calculates the distance between two vectors using the specified metric.
     ///
     /// # Arguments
@@ -102,5 +135,13 @@ impl DistanceMetric {
             // Distance metrics: ascending order (lower = better)
             results.sort_by(|a, b| a.1.total_cmp(&b.1));
         }
+    }
+}
+
+impl FromStr for DistanceMetric {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_alias(s).ok_or("Unknown metric. Use: cosine, euclidean, dot, hamming, jaccard")
     }
 }

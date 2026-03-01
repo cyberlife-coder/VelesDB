@@ -229,3 +229,45 @@ fn test_sort_results_empty() {
     DistanceMetric::Cosine.sort_results(&mut results);
     assert!(results.is_empty());
 }
+
+#[test]
+fn test_parse_aliases() {
+    assert_eq!(
+        DistanceMetric::parse_alias("cosine"),
+        Some(DistanceMetric::Cosine)
+    );
+    assert_eq!(
+        DistanceMetric::parse_alias("L2"),
+        Some(DistanceMetric::Euclidean)
+    );
+    assert_eq!(
+        DistanceMetric::parse_alias("inner"),
+        Some(DistanceMetric::DotProduct)
+    );
+    assert_eq!(
+        DistanceMetric::parse_alias("hamming"),
+        Some(DistanceMetric::Hamming)
+    );
+    assert_eq!(
+        DistanceMetric::parse_alias("jaccard"),
+        Some(DistanceMetric::Jaccard)
+    );
+    assert_eq!(DistanceMetric::parse_alias("unknown"), None);
+}
+
+#[test]
+fn test_canonical_names_and_from_str() {
+    use std::str::FromStr;
+
+    assert_eq!(DistanceMetric::Cosine.canonical_name(), "cosine");
+    assert_eq!(DistanceMetric::Euclidean.canonical_name(), "euclidean");
+    assert_eq!(DistanceMetric::DotProduct.canonical_name(), "dot");
+    assert_eq!(DistanceMetric::Hamming.canonical_name(), "hamming");
+    assert_eq!(DistanceMetric::Jaccard.canonical_name(), "jaccard");
+
+    assert_eq!(
+        DistanceMetric::from_str("dotproduct").unwrap(),
+        DistanceMetric::DotProduct
+    );
+    assert!(DistanceMetric::from_str("invalid").is_err());
+}

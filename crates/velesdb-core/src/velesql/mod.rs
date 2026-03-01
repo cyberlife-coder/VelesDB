@@ -70,8 +70,9 @@ mod parallel_aggregation_tests;
 mod parser;
 #[cfg(test)]
 mod parser_tests;
+#[cfg(feature = "persistence")]
 mod planner;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod planner_tests;
 mod validation;
 #[cfg(test)]
@@ -111,5 +112,6 @@ pub use explain::{
 };
 pub use parser::match_clause;
 pub use parser::Parser;
+#[cfg(feature = "persistence")]
 pub use planner::{Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};
