@@ -207,6 +207,42 @@ describe('VelesDB Client', () => {
     });
   });
 
+
+  describe('query diagnostics', () => {
+    let db: VelesDB;
+    let mockBackend: any;
+
+    beforeEach(() => {
+      db = new VelesDB({ backend: 'wasm' });
+      mockBackend = {
+        queryExplain: vi.fn(),
+        collectionSanity: vi.fn(),
+      };
+      (db as any).backend = mockBackend;
+      (db as any).initialized = true;
+    });
+
+    it('should validate queryExplain input', async () => {
+      await expect(db.queryExplain('')).rejects.toThrow(ValidationError);
+    });
+
+    it('should call backend queryExplain', async () => {
+      mockBackend.queryExplain.mockResolvedValue({ queryType: 'SELECT', plan: [] });
+      await db.queryExplain('SELECT * FROM docs', {});
+      expect(mockBackend.queryExplain).toHaveBeenCalledWith('SELECT * FROM docs', {});
+    });
+
+    it('should validate collectionSanity input', async () => {
+      await expect(db.collectionSanity('')).rejects.toThrow(ValidationError);
+    });
+
+    it('should call backend collectionSanity', async () => {
+      mockBackend.collectionSanity.mockResolvedValue({ collection: 'docs' });
+      await db.collectionSanity('docs');
+      expect(mockBackend.collectionSanity).toHaveBeenCalledWith('docs');
+    });
+  });
+
   describe('multiQuerySearch', () => {
     let db: VelesDB;
     let mockBackend: any;

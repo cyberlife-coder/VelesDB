@@ -22,6 +22,8 @@ import type {
   DegreeResponse,
   QueryOptions,
   QueryResponse,
+  ExplainResponse,
+  CollectionSanityResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -370,6 +372,23 @@ export class WasmBackend implements IVelesDBBackend {
     // Use REST backend for MQF capabilities
     throw new VelesDBError(
       'Multi-query fusion is not supported in WASM backend. Use REST backend for MQF search.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+
+  async queryExplain(_queryString: string, _params?: Record<string, unknown>): Promise<ExplainResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Query explain is not supported in WASM backend. Use REST backend for EXPLAIN support.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async collectionSanity(_collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Collection sanity endpoint is not supported in WASM backend. Use REST backend for diagnostics.',
       'NOT_SUPPORTED'
     );
   }

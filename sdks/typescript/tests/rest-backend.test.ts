@@ -449,5 +449,84 @@ describe('RestBackend', () => {
         })
       );
     });
+
+    it('should call /query/explain and return explain payload', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          query: 'SELECT * FROM docs LIMIT 10',
+          query_type: 'SELECT',
+          collection: 'docs',
+          plan: [{ step: 1, operation: 'FullScan', description: 'Scan collection', estimated_rows: null }],
+          estimated_cost: {
+            uses_index: false,
+            index_name: null,
+            selectivity: 1,
+            complexity: 'O(n)',
+          },
+          features: {
+            has_vector_search: false,
+            has_filter: false,
+            has_order_by: false,
+            has_group_by: false,
+            has_aggregation: false,
+            has_join: false,
+            has_fusion: false,
+            limit: 10,
+            offset: null,
+          },
+        }),
+      });
+
+      const explain = await backend.queryExplain('SELECT * FROM docs LIMIT 10', {});
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/query/explain',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            query: 'SELECT * FROM docs LIMIT 10',
+            params: {},
+          }),
+        })
+      );
+      expect(explain.queryType).toBe('SELECT');
+      expect(explain.plan[0]?.operation).toBe('FullScan');
+    });
+
+    it('should call /collections/{name}/sanity and map response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          collection: 'docs',
+          dimension: 768,
+          metric: 'cosine',
+          point_count: 42,
+          is_empty: false,
+          checks: {
+            has_vectors: true,
+            search_ready: true,
+            dimension_configured: true,
+          },
+          diagnostics: {
+            search_requests_total: 3,
+            dimension_mismatch_total: 0,
+            empty_search_results_total: 1,
+            filter_parse_errors_total: 0,
+          },
+          hints: ['hint-1'],
+        }),
+      });
+
+      const sanity = await backend.collectionSanity('docs');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/docs/sanity',
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(sanity.pointCount).toBe(42);
+      expect(sanity.checks.searchReady).toBe(true);
+      expect(sanity.diagnostics.searchRequestsTotal).toBe(3);
+    });
   });
 });

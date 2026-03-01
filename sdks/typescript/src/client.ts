@@ -21,6 +21,8 @@ import type {
   DegreeResponse,
   QueryOptions,
   QueryResponse,
+  ExplainResponse,
+  CollectionSanityResponse,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -426,6 +428,27 @@ export class VelesDB {
    * });
    * ```
    */
+
+  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
+    this.ensureInitialized();
+
+    if (!queryString || typeof queryString !== 'string') {
+      throw new ValidationError('Query string must be a non-empty string');
+    }
+
+    return this.backend.queryExplain(queryString, params);
+  }
+
+  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+
+    if (!collection || typeof collection !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+
+    return this.backend.collectionSanity(collection);
+  }
+
   async multiQuerySearch(
     collection: string,
     vectors: Array<number[] | Float32Array>,

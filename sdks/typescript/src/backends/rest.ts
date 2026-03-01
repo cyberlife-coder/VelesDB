@@ -22,6 +22,8 @@ import type {
   DegreeResponse,
   QueryOptions,
   QueryResponse,
+  ExplainResponse,
+  CollectionSanityResponse,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -37,6 +39,50 @@ interface ApiResponse<T> {
 /** Batch search response structure */
 interface BatchSearchResponse {
   results: Array<{ results: SearchResult[] }>;
+}
+
+interface QueryExplainApiResponse {
+  query: string;
+  query_type: string;
+  collection: string;
+  plan: Array<{ step: number; operation: string; description: string; estimated_rows: number | null }>;
+  estimated_cost: {
+    uses_index: boolean;
+    index_name: string | null;
+    selectivity: number;
+    complexity: string;
+  };
+  features: {
+    has_vector_search: boolean;
+    has_filter: boolean;
+    has_order_by: boolean;
+    has_group_by: boolean;
+    has_aggregation: boolean;
+    has_join: boolean;
+    has_fusion: boolean;
+    limit: number | null;
+    offset: number | null;
+  };
+}
+
+interface CollectionSanityApiResponse {
+  collection: string;
+  dimension: number;
+  metric: string;
+  point_count: number;
+  is_empty: boolean;
+  checks: {
+    has_vectors: boolean;
+    search_ready: boolean;
+    dimension_configured: boolean;
+  };
+  diagnostics: {
+    search_requests_total: number;
+    dimension_mismatch_total: number;
+    empty_search_results_total: number;
+    filter_parse_errors_total: number;
+  };
+  hints: string[];
 }
 
 /**
@@ -537,6 +583,91 @@ export class RestBackend implements IVelesDBBackend {
         strategy: 'select',
         scannedNodes: rawData?.rows_returned ?? 0,
       },
+    };
+  }
+
+
+  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<QueryExplainApiResponse>(
+      'POST',
+      '/query/explain',
+      {
+        query: queryString,
+        params: params ?? {},
+      }
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data!;
+    return {
+      query: data.query,
+      queryType: data.query_type,
+      collection: data.collection,
+      plan: data.plan.map(step => ({
+        step: step.step,
+        operation: step.operation,
+        description: step.description,
+        estimatedRows: step.estimated_rows,
+      })),
+      estimatedCost: {
+        usesIndex: data.estimated_cost.uses_index,
+        indexName: data.estimated_cost.index_name,
+        selectivity: data.estimated_cost.selectivity,
+        complexity: data.estimated_cost.complexity,
+      },
+      features: {
+        hasVectorSearch: data.features.has_vector_search,
+        hasFilter: data.features.has_filter,
+        hasOrderBy: data.features.has_order_by,
+        hasGroupBy: data.features.has_group_by,
+        hasAggregation: data.features.has_aggregation,
+        hasJoin: data.features.has_join,
+        hasFusion: data.features.has_fusion,
+        limit: data.features.limit,
+        offset: data.features.offset,
+      },
+    };
+  }
+
+  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<CollectionSanityApiResponse>(
+      'GET',
+      `/collections/${encodeURIComponent(collection)}/sanity`
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data!;
+    return {
+      collection: data.collection,
+      dimension: data.dimension,
+      metric: data.metric,
+      pointCount: data.point_count,
+      isEmpty: data.is_empty,
+      checks: {
+        hasVectors: data.checks.has_vectors,
+        searchReady: data.checks.search_ready,
+        dimensionConfigured: data.checks.dimension_configured,
+      },
+      diagnostics: {
+        searchRequestsTotal: data.diagnostics.search_requests_total,
+        dimensionMismatchTotal: data.diagnostics.dimension_mismatch_total,
+        emptySearchResultsTotal: data.diagnostics.empty_search_results_total,
+        filterParseErrorsTotal: data.diagnostics.filter_parse_errors_total,
+      },
+      hints: data.hints ?? [],
     };
   }
 
