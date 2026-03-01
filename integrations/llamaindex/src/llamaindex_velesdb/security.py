@@ -16,6 +16,7 @@ MAX_DIMENSION = 65_536  # Max vector dimension (reasonable for any model)
 MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096  # Max path length
 ALLOWED_METRICS = {"cosine", "euclidean", "dot", "hamming", "jaccard"}
+ALLOWED_STORAGE_MODES = {"full", "sq8", "binary"}
 DEFAULT_TIMEOUT_MS = 30_000  # 30 seconds max timeout
 
 
@@ -186,6 +187,30 @@ def validate_metric(metric: str) -> str:
         )
     
     return metric_lower
+
+
+def validate_storage_mode(mode: str) -> str:
+    """Validate vector storage mode.
+
+    Args:
+        mode: Storage mode name.
+
+    Returns:
+        Validated storage mode (lowercase).
+
+    Raises:
+        SecurityError: If storage mode is not allowed.
+    """
+    if not isinstance(mode, str):
+        raise SecurityError(f"Storage mode must be a string, got {type(mode).__name__}")
+
+    mode_lower = mode.lower()
+    if mode_lower not in ALLOWED_STORAGE_MODES:
+        raise SecurityError(
+            f"Invalid storage mode '{mode}'. Allowed: {', '.join(sorted(ALLOWED_STORAGE_MODES))}"
+        )
+
+    return mode_lower
 
 
 def validate_batch_size(size: int) -> int:
