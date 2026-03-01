@@ -26,6 +26,7 @@ from llamaindex_velesdb.security import (
     validate_text,
     validate_query,
     validate_metric,
+    validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
     validate_weight,
@@ -132,14 +133,50 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         validated_path = validate_path(path)
         validated_collection = validate_collection_name(collection_name)
         validated_metric = validate_metric(metric)
+        validated_storage_mode = validate_storage_mode(storage_mode)
         
         super().__init__(
             path=validated_path,
-            storage_mode=storage_mode,
+            storage_mode=validated_storage_mode,
             collection_name=validated_collection,
             metric=validated_metric,
             **kwargs,
         )
+
+    @staticmethod
+    def _metadata_from_payload(payload: dict) -> dict:
+        """Extract metadata from a VelesDB payload."""
+        return {k: v for k, v in payload.items() if k not in ("text", "node_id")}
+
+    @classmethod
+    def _node_from_result(cls, result: dict) -> TextNode:
+        """Convert a VelesDB search result to a TextNode."""
+        payload = result.get("payload", {})
+        text = payload.get("text", "")
+        node_id = payload.get("node_id", str(result.get("id", "")))
+        metadata = cls._metadata_from_payload(payload)
+        return TextNode(text=text, id_=node_id, metadata=metadata)
+
+    @classmethod
+    def _result_to_parts(cls, result: dict) -> tuple[TextNode, float, str]:
+        """Convert a VelesDB result into (node, score, node_id)."""
+        node = cls._node_from_result(result)
+        return node, result.get("score", 0.0), node.node_id
+
+    @classmethod
+    def _build_query_result(cls, results: list[dict]) -> VectorStoreQueryResult:
+        """Build a VectorStoreQueryResult from raw VelesDB result dictionaries."""
+        nodes: List[TextNode] = []
+        similarities: List[float] = []
+        ids: List[str] = []
+
+        for result in results:
+            node, score, node_id = cls._result_to_parts(result)
+            nodes.append(node)
+            similarities.append(score)
+            ids.append(node_id)
+
+        return VectorStoreQueryResult(nodes=nodes, similarities=similarities, ids=ids)
 
     def _get_db(self) -> velesdb.Database:
         """Get or create the database connection."""
@@ -167,6 +204,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                     self.collection_name,
                     dimension=dimension,
                     metric=self.metric,
+                    storage_mode=self.storage_mode,
                 )
                 self._collection = db.get_collection(self.collection_name)
             else:
@@ -298,37 +336,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         results = collection.search(query.query_embedding, top_k=k)
 
-        nodes: List[TextNode] = []
-        similarities: List[float] = []
-        ids: List[str] = []
-
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            node_id = payload.get("node_id", str(result.get("id", "")))
-            score = result.get("score", 0.0)
-
-            # Build metadata from remaining payload
-            metadata = {
-                k: v for k, v in payload.items()
-                if k not in ("text", "node_id")
-            }
-
-            node = TextNode(
-                text=text,
-                id_=node_id,
-                metadata=metadata,
-            )
-
-            nodes.append(node)
-            similarities.append(score)
-            ids.append(node_id)
-
-        return VectorStoreQueryResult(
-            nodes=nodes,
-            similarities=similarities,
-            ids=ids,
-        )
+        return self._build_query_result(results)
 
     def query_with_score_threshold(
         self,
@@ -415,36 +423,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             vector_weight=vector_weight,
         )
 
-        nodes: List[TextNode] = []
-        similarities: List[float] = []
-        ids: List[str] = []
-
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            node_id = payload.get("node_id", str(result.get("id", "")))
-            score = result.get("score", 0.0)
-
-            metadata = {
-                k: v for k, v in payload.items()
-                if k not in ("text", "node_id")
-            }
-
-            node = TextNode(
-                text=text,
-                id_=node_id,
-                metadata=metadata,
-            )
-
-            nodes.append(node)
-            similarities.append(score)
-            ids.append(node_id)
-
-        return VectorStoreQueryResult(
-            nodes=nodes,
-            similarities=similarities,
-            ids=ids,
-        )
+        return self._build_query_result(results)
 
     def text_query(
         self,
@@ -474,36 +453,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         results = self._collection.text_search(query_str, top_k=similarity_top_k)
 
-        nodes: List[TextNode] = []
-        similarities: List[float] = []
-        ids: List[str] = []
-
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            node_id = payload.get("node_id", str(result.get("id", "")))
-            score = result.get("score", 0.0)
-
-            metadata = {
-                k: v for k, v in payload.items()
-                if k not in ("text", "node_id")
-            }
-
-            node = TextNode(
-                text=text,
-                id_=node_id,
-                metadata=metadata,
-            )
-
-            nodes.append(node)
-            similarities.append(score)
-            ids.append(node_id)
-
-        return VectorStoreQueryResult(
-            nodes=nodes,
-            similarities=similarities,
-            ids=ids,
-        )
+        return self._build_query_result(results)
 
     def batch_query(
         self,
@@ -534,18 +484,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         batch_results = collection.batch_search(searches)
 
-        all_results: List[VectorStoreQueryResult] = []
-        for res_list in batch_results:
-            n_list, s_list, i_list = [], [], []
-            for r in res_list:
-                p = r.get("payload", {})
-                nid = p.get("node_id", str(r.get("id", "")))
-                n_list.append(TextNode(text=p.get("text", ""), id_=nid,
-                    metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
-                s_list.append(r.get("score", 0.0))
-                i_list.append(nid)
-            all_results.append(VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list))
-        return all_results
+        return [self._build_query_result(res_list) for res_list in batch_results]
 
     def add_bulk(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
         """Bulk insert optimized for large batches.
@@ -590,8 +529,13 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         for pt in points:
             if pt:
                 p = pt.get("payload", {})
-                result.append(TextNode(text=p.get("text", ""), id_=p.get("node_id", ""),
-                    metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
+                result.append(
+                    TextNode(
+                        text=p.get("text", ""),
+                        id_=p.get("node_id", ""),
+                        metadata=self._metadata_from_payload(p),
+                    )
+                )
         return result
 
     def get_collection_info(self) -> dict:
@@ -636,15 +580,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
         results = self._collection.query(query_str, params)
-        n_list, s_list, i_list = [], [], []
-        for r in results:
-            p = r.get("payload", {})
-            nid = p.get("node_id", str(r.get("id", "")))
-            n_list.append(TextNode(text=p.get("text", ""), id_=nid,
-                metadata={k: v for k, v in p.items() if k not in ("text", "node_id")}))
-            s_list.append(r.get("score", 0.0))
-            i_list.append(nid)
-        return VectorStoreQueryResult(nodes=n_list, similarities=s_list, ids=i_list)
+        return self._build_query_result(results)
 
     def multi_query_search(
         self,
@@ -710,36 +646,7 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             fusion=fusion_strategy,
         )
 
-        nodes: List[TextNode] = []
-        similarities: List[float] = []
-        ids: List[str] = []
-
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            node_id = payload.get("node_id", str(result.get("id", "")))
-            score = result.get("score", 0.0)
-
-            metadata = {
-                k: v for k, v in payload.items()
-                if k not in ("text", "node_id")
-            }
-
-            node = TextNode(
-                text=text,
-                id_=node_id,
-                metadata=metadata,
-            )
-
-            nodes.append(node)
-            similarities.append(score)
-            ids.append(node_id)
-
-        return VectorStoreQueryResult(
-            nodes=nodes,
-            similarities=similarities,
-            ids=ids,
-        )
+        return self._build_query_result(results)
 
     def explain(
         self,
