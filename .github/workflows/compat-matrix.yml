@@ -1,0 +1,98 @@
+name: Compatibility Matrix
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-matrix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux all features
+            os: ubuntu-latest
+            command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
+          - name: Linux no default features
+            os: ubuntu-latest
+            command: cargo check --workspace --all-targets --no-default-features --exclude velesdb-python
+          - name: Windows all features
+            os: windows-latest
+            command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        with:
+          packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          version: 1.0
+
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "velesdb-compat-${{ matrix.os }}"
+
+      - name: Run compatibility check
+        shell: bash
+        run: ${{ matrix.command }}
+
+  wasm-no-default:
+    name: WASM no default features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "velesdb-compat-wasm"
+
+      - name: Check velesdb-core on wasm32 no-default-features
+        run: cargo check -p velesdb-core --target wasm32-unknown-unknown --no-default-features
+
+  loom-check:
+    name: Loom check (nightly optional)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "velesdb-compat-loom"
+
+      - name: Check loom feature build
+        env:
+          RUSTFLAGS: "--cfg loom"
+        run: cargo +nightly check -p velesdb-core --features loom,persistence

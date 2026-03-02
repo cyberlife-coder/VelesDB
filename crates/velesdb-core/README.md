@@ -132,6 +132,12 @@ println!("Inserted {} vectors", inserted);
 collection.flush()?;
 ```
 
+### Durability semantics
+
+- `store`/`upsert` update in-memory/WAL state for performance.
+- `flush()` is the explicit durability barrier for crash-consistent persistence.
+- Destructor-based cleanup is best-effort and should not be used as a commit boundary.
+
 ## Memory-Efficient Storage (Quantization)
 
 ```rust

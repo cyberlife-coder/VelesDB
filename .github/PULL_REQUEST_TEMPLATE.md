@@ -50,6 +50,15 @@ Please describe the tests that you ran to verify your changes. Provide instructi
 - [ ] Edge cases tested (empty, boundary values, alignment)
 - [ ] Miri tests pass (if applicable): `cargo +nightly miri test <test_name>`
 
+## High-Risk Change Checklist
+
+> Required when touching `hnsw`, `storage`, `Drop`, `unsafe`, or SIMD dispatch paths.
+
+- [ ] I listed the invariants impacted by this change.
+- [ ] I documented crash/durability semantics (`flush` vs shutdown best-effort) when relevant.
+- [ ] I added/updated tests for concurrency or lifecycle (`drop`, remap, restart) where applicable.
+- [ ] I requested review from at least 2 maintainers/reviewers for this risky path.
+
 ## Screenshots (if applicable)
 
 Add screenshots to help explain your changes.

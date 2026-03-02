@@ -115,6 +115,34 @@ fn test_vacuum_preserves_search_results() {
 }
 
 #[test]
+fn test_drop_after_vacuum_and_reload_is_safe() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().expect("Failed to create temp dir");
+    {
+        let index = HnswIndex::new(32, DistanceMetric::Euclidean);
+
+        for i in 0u64..120 {
+            let vector: Vec<f32> = (0..32).map(|j| (i + j as u64) as f32 * 0.01).collect();
+            index.insert(i, &vector);
+        }
+        for i in 0u64..40 {
+            index.remove(i);
+        }
+
+        let rebuilt = index.vacuum().expect("vacuum should succeed");
+        assert_eq!(rebuilt, 80);
+        index.save(dir.path()).expect("Failed to save");
+    } // drop after ManuallyDrop replacement path
+
+    let loaded = HnswIndex::load(dir.path(), 32, DistanceMetric::Euclidean)
+        .expect("Failed to load after vacuum+drop");
+    let query = vec![0.42; 32];
+    let results = loaded.search(&query, 10);
+    assert!(!results.is_empty(), "Loaded index should remain searchable");
+}
+
+#[test]
 fn test_vacuum_fails_with_fast_insert_mode() {
     // Arrange
     let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine);

@@ -382,8 +382,15 @@ impl MmapStorage {
         // Now acquire mmap read lock and validate bounds
         let mmap = self.mmap.read();
         let vector_size = self.dimension * std::mem::size_of::<f32>();
+        let end = offset.checked_add(vector_size).ok_or_else(|| {
+            global_guardrails_metrics().record_invalid_offset_read_error();
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Offset arithmetic overflow while reading vector",
+            )
+        })?;
 
-        if offset + vector_size > mmap.len() {
+        if end > mmap.len() {
             global_guardrails_metrics().record_invalid_offset_read_error();
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -411,6 +418,12 @@ impl MmapStorage {
             ));
         }
         #[allow(clippy::cast_ptr_alignment)]
+        // SAFETY: We validated bounds/alignment above and keep the mmap read lock
+        // in `VectorSliceGuard`, so `ptr` stays valid for the guard lifetime.
+        // - Condition 1: `end <= mmap.len()` guarantees the addressed range exists.
+        // - Condition 2: `offset` is aligned to `align_of::<f32>()`.
+        // - Condition 3: `mmap` read lock pins the mapping while guard is alive.
+        // Reason: Zero-copy read path needs raw pointer conversion to `[f32]`.
         let ptr = unsafe { mmap.as_ptr().add(offset).cast::<f32>() };
 
         let epoch_at_creation = self.remap_epoch.load(Ordering::Acquire);
@@ -422,29 +435,43 @@ impl MmapStorage {
             epoch_at_creation,
         }))
     }
-}
 
-// -----------------------------------------------------------------------------
-// Drop implementation – guarantees durability on graceful shutdown
-// -----------------------------------------------------------------------------
-impl Drop for MmapStorage {
-    #[allow(clippy::cognitive_complexity)] // Reason: Drop must handle WAL+mmap flush atomically, splitting risks data loss
-    fn drop(&mut self) {
-        // 1. Flush WAL first (durability of operation log)
+    /// Attempts a best-effort durability sync during shutdown.
+    ///
+    /// This method never returns an error and never blocks on lock contention:
+    /// if the WAL/mmap lock cannot be acquired immediately, the flush step is
+    /// skipped and shutdown continues.
+    ///
+    /// Use explicit [`VectorStorage::flush`](crate::storage::traits::VectorStorage::flush)
+    /// to obtain a deterministic durability barrier.
+    pub(crate) fn flush_on_shutdown_best_effort(&self) {
+        // 1. Flush WAL first (operation log)
         if let Some(mut wal) = self.wal.try_write() {
             if let Err(e) = wal.flush() {
-                error!(?e, "Failed to flush WAL in MmapStorage::drop");
+                error!(?e, "Failed to flush WAL in MmapStorage shutdown path");
             }
             if let Err(e) = wal.get_ref().sync_all() {
-                error!(?e, "Failed to fsync WAL in MmapStorage::drop");
+                error!(?e, "Failed to fsync WAL in MmapStorage shutdown path");
             }
         }
 
         // 2. Flush mmap to persist vector bytes
         if let Some(mmap) = self.mmap.try_write() {
             if let Err(e) = mmap.flush() {
-                error!(?e, "Failed to flush mmap in MmapStorage::drop");
+                error!(?e, "Failed to flush mmap in MmapStorage shutdown path");
             }
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Drop implementation – best-effort sync on graceful shutdown.
+//
+// Important: `drop` is not a transactional durability boundary.
+// Call `flush()` explicitly when the caller requires deterministic durability.
+// -----------------------------------------------------------------------------
+impl Drop for MmapStorage {
+    fn drop(&mut self) {
+        self.flush_on_shutdown_best_effort();
     }
 }

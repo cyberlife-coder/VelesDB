@@ -2,6 +2,12 @@
 //!
 //! Extracted from `mmap.rs` for maintainability (04-05 module splitting).
 //! Handles store, retrieve, delete, flush, and batch operations.
+//!
+//! # Durability Contract
+//!
+//! `store`/`store_batch` append to WAL and update mmap, but callers must invoke
+//! `flush()` when they need a deterministic durability barrier.
+//! `Drop` only performs best-effort sync and must not be relied on as a commit point.
 
 use super::MmapStorage;
 use crate::storage::traits::VectorStorage;
@@ -27,7 +33,7 @@ impl VectorStorage for MmapStorage {
 
         let vector_bytes = vector_to_bytes(vector);
 
-        // 1. Write to WAL
+        // 1. Write to WAL (append only; durability barrier is `flush()`)
         {
             let mut wal = self.wal.write();
             // Op: Store (1) | ID | Len | Data
@@ -112,7 +118,7 @@ impl VectorStorage for MmapStorage {
                 .fetch_add(total_new_size, Ordering::Relaxed);
         }
 
-        // 3. Single WAL write for entire batch (Op: BatchStore = 3)
+        // 3. Single WAL append for entire batch (Op: BatchStore = 3)
         {
             let mut wal = self.wal.write();
             // Batch header: Op(1) | Count(4)
@@ -134,7 +140,7 @@ impl VectorStorage for MmapStorage {
                 wal.write_all(&len_u32.to_le_bytes())?;
                 wal.write_all(vector_bytes)?;
             }
-            // Note: No flush here - caller controls fsync timing
+            // Note: no fsync here, caller controls durability via `flush()`.
         }
 
         // 4. Write all vectors to mmap contiguously
@@ -195,7 +201,7 @@ impl VectorStorage for MmapStorage {
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
-        // 1. Write to WAL
+        // 1. Write to WAL (durability barrier remains `flush()`)
         {
             let mut wal = self.wal.write();
             // Op: Delete (2) | ID
@@ -228,6 +234,9 @@ impl VectorStorage for MmapStorage {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        // Explicit durability barrier:
+        // 1) flush mmap bytes, 2) flush+fsync WAL, 3) persist+fsync index file.
+        // Callers requiring durable state across crashes should call this method.
         // 1. Flush Mmap
         self.mmap.write().flush()?;
 

@@ -55,6 +55,60 @@ fn test_storage_persistence() {
 }
 
 #[test]
+fn test_drop_reopen_after_flush_preserves_vectors() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 4;
+
+    {
+        let mut storage = MmapStorage::new(&path, dim).unwrap();
+        for i in 0u64..16 {
+            let vector = vec![i as f32, i as f32 + 1.0, i as f32 + 2.0, i as f32 + 3.0];
+            storage.store(i, &vector).unwrap();
+        }
+        storage.flush().unwrap();
+    } // drop after explicit durability barrier
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    for i in 0u64..16 {
+        let expected = vec![i as f32, i as f32 + 1.0, i as f32 + 2.0, i as f32 + 3.0];
+        assert_eq!(storage.retrieve(i).unwrap(), Some(expected));
+    }
+}
+
+#[test]
+fn test_drop_best_effort_mmap_lock_contention_non_blocking() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+    storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+
+    let _mmap_guard = storage.mmap.read();
+    let start = std::time::Instant::now();
+    storage.flush_on_shutdown_best_effort();
+
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "best-effort shutdown flush should not block under mmap lock contention"
+    );
+}
+
+#[test]
+fn test_drop_best_effort_wal_lock_contention_non_blocking() {
+    let dir = tempdir().unwrap();
+    let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
+    storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
+
+    let _wal_guard = storage.wal.write();
+    let start = std::time::Instant::now();
+    storage.flush_on_shutdown_best_effort();
+
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "best-effort shutdown flush should not block under WAL lock contention"
+    );
+}
+
+#[test]
 fn test_storage_delete() {
     let dir = tempdir().unwrap();
     let mut storage = MmapStorage::new(dir.path(), 3).unwrap();

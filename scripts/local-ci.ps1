@@ -40,7 +40,7 @@ Write-Host "══════════════════════�
 # ============================================================================
 # Check 1: Formatting
 # ============================================================================
-Write-Step "Check 1/5: Formatting (rustfmt)"
+Write-Step "Check 1: Formatting (rustfmt)"
 try {
     cargo fmt --all -- --check
     Write-Success "Formatting OK"
@@ -53,7 +53,7 @@ try {
 # ============================================================================
 # Check 2: Linting (Clippy)
 # ============================================================================
-Write-Step "Check 2/5: Linting (clippy)"
+Write-Step "Check 2: Linting (clippy)"
 try {
     cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }
@@ -63,6 +63,76 @@ try {
     $errors += "Clippy"
 }
 
+Write-Step "Check 3: Clippy undocumented unsafe blocks"
+try {
+    cargo clippy -p velesdb-core --lib --bins -- -A warnings -D clippy::undocumented_unsafe_blocks 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Undocumented unsafe blocks check failed" }
+    Write-Success "Undocumented unsafe blocks OK"
+} catch {
+    Write-Fail "Undocumented unsafe blocks check failed!"
+    $errors += "UndocumentedUnsafe"
+}
+
+# ============================================================================
+# Check 3: Unsafe SAFETY template
+# ============================================================================
+Write-Step "Check 4: Unsafe SAFETY template"
+try {
+    $changedFiles = @(
+        git diff --name-only --diff-filter=ACM
+        git diff --cached --name-only --diff-filter=ACM
+    ) | Where-Object { $_ } | Sort-Object -Unique
+
+    $unsafeFiles = $changedFiles |
+        Where-Object {
+            $_ -match '^crates/velesdb-core/src/.*\.rs$' -and
+            $_ -notmatch '/tests/' -and
+            $_ -notmatch '/benches/' -and
+            $_ -notmatch '_tests?\.rs$'
+        }
+
+    if ($unsafeFiles.Count -gt 0) {
+        python scripts/verify_unsafe_safety_template.py --files $unsafeFiles --strict 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Unsafe SAFETY template check failed" }
+    } else {
+        Write-Host "   No changed production Rust files to validate." -ForegroundColor Yellow
+    }
+    Write-Success "Unsafe SAFETY template OK"
+} catch {
+    Write-Fail "Unsafe SAFETY template check failed!"
+    $errors += "Unsafe-SAFETY"
+}
+
+# ============================================================================
+# Check 4: TODO/FIXME/HACK governance
+# ============================================================================
+Write-Step "Check 5: TODO/FIXME/HACK governance"
+try {
+    $changedFiles = @(
+        git diff --name-only --diff-filter=ACM
+        git diff --cached --name-only --diff-filter=ACM
+    ) | Where-Object { $_ } | Sort-Object -Unique
+
+    $todoFiles = $changedFiles |
+        Where-Object {
+            $_ -match '^crates/velesdb-core/src/.*\.rs$' -and
+            $_ -notmatch '/tests/' -and
+            $_ -notmatch '/benches/' -and
+            $_ -notmatch '_tests?\.rs$'
+        }
+
+    if ($todoFiles.Count -gt 0) {
+        python scripts/check-todo-annotations.py --files $todoFiles 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "TODO/FIXME/HACK governance failed" }
+    } else {
+        Write-Host "   No changed production Rust files to validate." -ForegroundColor Yellow
+    }
+    Write-Success "TODO/FIXME/HACK governance OK"
+} catch {
+    Write-Fail "TODO/FIXME/HACK governance failed!"
+    $errors += "TODO-Governance"
+}
+
 if ($Quick) {
     Write-Warn "Quick mode - skipping tests and security audit"
 } else {
@@ -70,7 +140,7 @@ if ($Quick) {
     # Check 3: Tests
     # ============================================================================
     if (-not $SkipTests) {
-        Write-Step "Check 3/5: Tests"
+        Write-Step "Check 6: Tests"
         try {
             cargo test --all-features --workspace 2>&1 | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
@@ -87,7 +157,7 @@ if ($Quick) {
     # Check 4: Security Audit
     # ============================================================================
     if (-not $SkipSecurity) {
-        Write-Step "Check 4/5: Security Audit (cargo deny)"
+        Write-Step "Check 7: Security Audit (cargo deny)"
         try {
             cargo deny check 2>&1 | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Security audit failed" }
@@ -103,7 +173,7 @@ if ($Quick) {
     # Check 5: Miri (optional, EPIC-032/US-004)
     # ============================================================================
     if ($Miri) {
-        Write-Step "Check 5/6: Miri - Undefined Behavior Detection"
+        Write-Step "Check 8: Miri - Undefined Behavior Detection"
         try {
             # Check if nightly is available
             $nightlyCheck = rustup run nightly rustc --version 2>&1
@@ -139,7 +209,7 @@ if ($Quick) {
     # ============================================================================
     # Check 6: File size validation
     # ============================================================================
-    Write-Step "Check 6/6: File size validation (< 500 lines)"
+    Write-Step "Check: File size validation (< 500 lines)"
     $largeFiles = Get-ChildItem -Path "crates" -Recurse -Filter "*.rs" | 
         Where-Object { (Get-Content $_.FullName | Measure-Object -Line).Lines -gt 500 } |
         Select-Object FullName, @{N='Lines';E={(Get-Content $_.FullName | Measure-Object -Line).Lines}}

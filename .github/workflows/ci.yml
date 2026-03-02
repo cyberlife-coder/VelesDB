@@ -83,6 +83,62 @@ jobs:
             --exclude velesdb-python \
             -- -D warnings -D clippy::pedantic
 
+      - name: Run Clippy undocumented unsafe blocks (core)
+        run: |
+          cargo clippy -p velesdb-core --lib --bins \
+            --features persistence,gpu,update-check \
+            -- -A warnings -D clippy::undocumented_unsafe_blocks
+
+      - name: Verify SAFETY template (production code)
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          mapfile -t CORE_RS_FILES < <(
+            git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
+              | grep '\.rs$' \
+              | grep '^crates/velesdb-core/src/' \
+              | grep -v '/tests/' \
+              | grep -v '/benches/' \
+              | grep -Ev '_tests?\.rs$'
+          )
+          if [[ ${#CORE_RS_FILES[@]} -eq 0 ]]; then
+            echo "No changed production Rust files to validate."
+            exit 0
+          fi
+          python3 scripts/verify_unsafe_safety_template.py --files "${CORE_RS_FILES[@]}" --strict
+
+      - name: Check TODO/FIXME/HACK governance (production code)
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          mapfile -t CORE_RS_FILES < <(
+            git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
+              | grep '\.rs$' \
+              | grep '^crates/velesdb-core/src/' \
+              | grep -v '/tests/' \
+              | grep -v '/benches/' \
+              | grep -Ev '_tests?\.rs$'
+          )
+          if [[ ${#CORE_RS_FILES[@]} -eq 0 ]]; then
+            echo "No changed production Rust files to validate."
+            exit 0
+          fi
+          python3 scripts/check-todo-annotations.py --files "${CORE_RS_FILES[@]}"
+
       - name: Check doctests compile
         run: |
           cargo test --doc --package velesdb-core

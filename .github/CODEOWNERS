@@ -1,0 +1,14 @@
+# Global ownership
+* @cyberlife-coder
+
+# High-risk memory safety and durability areas
+/crates/velesdb-core/src/index/hnsw/ @cyberlife-coder
+/crates/velesdb-core/src/storage/ @cyberlife-coder
+/crates/velesdb-core/src/simd_native/dispatch/ @cyberlife-coder
+
+# Quality gates and governance
+/.github/workflows/ @cyberlife-coder
+/.githooks/pre-commit @cyberlife-coder
+/scripts/local-ci.ps1 @cyberlife-coder
+/scripts/verify_unsafe_safety_template.py @cyberlife-coder
+/scripts/check-todo-annotations.py @cyberlife-coder

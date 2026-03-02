@@ -8,6 +8,9 @@ use std::io;
 pub trait VectorStorage: Send + Sync {
     /// Stores a vector with the given ID.
     ///
+    /// Durability note: implementations may buffer writes. Call [`flush`](Self::flush)
+    /// to obtain an explicit durability barrier.
+    ///
     /// # Errors
     ///
     /// Returns an error if the write operation fails.
@@ -18,7 +21,9 @@ pub trait VectorStorage: Send + Sync {
     /// This is optimized for bulk imports:
     /// - Single WAL write for the entire batch
     /// - Contiguous memory writes
-    /// - Single fsync at the end
+    ///
+    /// Durability note: batch writes may be buffered. Call [`flush`](Self::flush)
+    /// after `store_batch` to force persistence guarantees.
     ///
     /// # Errors
     ///
@@ -41,6 +46,9 @@ pub trait VectorStorage: Send + Sync {
 
     /// Flushes pending writes to disk.
     ///
+    /// This is the explicit durability barrier. Callers that require
+    /// deterministic crash consistency must call this method.
+    ///
     /// # Errors
     ///
     /// Returns an error if the flush operation fails.
@@ -62,6 +70,9 @@ pub trait VectorStorage: Send + Sync {
 pub trait PayloadStorage: Send + Sync {
     /// Stores a payload with the given ID.
     ///
+    /// Durability note: implementations may buffer writes. Call [`flush`](Self::flush)
+    /// to obtain an explicit durability barrier.
+    ///
     /// # Errors
     ///
     /// Returns an error if the write operation fails.
@@ -82,6 +93,9 @@ pub trait PayloadStorage: Send + Sync {
     fn delete(&mut self, id: u64) -> io::Result<()>;
 
     /// Flushes pending writes to disk.
+    ///
+    /// This is the explicit durability barrier. Callers that require
+    /// deterministic crash consistency must call this method.
     ///
     /// # Errors
     ///

@@ -145,7 +145,11 @@ impl HnswIndex {
             .enumerate()
             .map(|(idx, (id, vec))| {
                 // Register in new mappings
-                new_mappings.register(*id);
+                let mapped = new_mappings.register(*id);
+                debug_assert!(
+                    mapped.is_some(),
+                    "Vacuum invariant violated: active_vectors contains duplicate id {id}"
+                );
                 // Store in new vectors
                 new_vectors.insert(idx, vec);
                 (vec, idx)
@@ -179,6 +183,11 @@ impl HnswIndex {
         for (id, vec) in active_vectors {
             if let Some(idx) = self.mappings.register(id) {
                 self.vectors.insert(idx, &vec);
+            } else {
+                debug_assert!(
+                    false,
+                    "Vacuum invariant violated: duplicate id encountered while rebuilding mappings"
+                );
             }
         }
 
