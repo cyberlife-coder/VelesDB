@@ -388,7 +388,10 @@ fn test_execute_left_join_keeps_unmatched_left_rows() {
     let joined = execute_join(&results, &join, &column_store).unwrap();
     assert_eq!(joined.len(), 2);
     assert!(joined[0].column_data.contains_key("price"));
-    assert_eq!(joined[1].column_data.get("price"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        joined[1].column_data.get("price"),
+        Some(&serde_json::Value::Null)
+    );
 }
 
 #[test]

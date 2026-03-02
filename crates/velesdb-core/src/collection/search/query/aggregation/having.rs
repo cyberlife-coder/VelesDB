@@ -16,8 +16,7 @@
 
 use crate::collection::types::Collection;
 use crate::velesql::{
-    AggregateArg, AggregateFunction, AggregateResult, AggregateType, CompareOp, HavingClause,
-    Value,
+    AggregateArg, AggregateFunction, AggregateResult, AggregateType, CompareOp, HavingClause, Value,
 };
 use std::collections::HashMap;
 
@@ -99,10 +98,7 @@ impl Collection {
 
     /// Evaluate HAVING clause against aggregation result.
     /// Supports both AND and OR logical operators between conditions.
-    pub(super) fn evaluate_having(
-        having: &HavingClause,
-        agg_result: &AggregateResult,
-    ) -> bool {
+    pub(super) fn evaluate_having(having: &HavingClause, agg_result: &AggregateResult) -> bool {
         if having.conditions.is_empty() {
             return true;
         }

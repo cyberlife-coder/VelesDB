@@ -158,7 +158,12 @@ mod tests {
 
     #[test]
     fn test_storage_mode_roundtrip() {
-        for mode in [StorageMode::Full, StorageMode::SQ8, StorageMode::Binary, StorageMode::ProductQuantization] {
+        for mode in [
+            StorageMode::Full,
+            StorageMode::SQ8,
+            StorageMode::Binary,
+            StorageMode::ProductQuantization,
+        ] {
             let s = storage_mode_to_string(mode);
             assert_eq!(parse_storage_mode(&s).unwrap(), mode);
         }

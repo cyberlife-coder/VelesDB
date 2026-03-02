@@ -214,15 +214,18 @@ impl HnswIndex {
         );
 
         // Load vectors used for brute-force fallback and reranking.
-        let vectors_data = match persistence::load_vectors(path) {
-            Ok(vectors) => vectors,
+        let (vectors_data, enable_vector_storage) = match persistence::load_vectors(path) {
+            Ok(vectors) => (vectors, meta.enable_vector_storage),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 tracing::debug!(
-                    "native_vectors.bin missing during HNSW load; continuing without stored vectors"
+                    "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
                 );
-                persistence::HnswVectorsData {
-                    vectors: Vec::new(),
-                }
+                (
+                    persistence::HnswVectorsData {
+                        vectors: Vec::new(),
+                    },
+                    false,
+                )
             }
             Err(err) => return Err(err),
         };
@@ -235,7 +238,7 @@ impl HnswIndex {
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
             vectors,
-            enable_vector_storage: meta.enable_vector_storage,
+            enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,

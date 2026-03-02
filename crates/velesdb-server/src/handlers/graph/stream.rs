@@ -92,8 +92,7 @@ fn build_success_events(
             depth: item.depth,
             path: item.path,
         };
-        let event_data =
-            serde_json::to_string(&node_event).unwrap_or_else(|_| "{}".to_string());
+        let event_data = serde_json::to_string(&node_event).unwrap_or_else(|_| "{}".to_string());
         events.push(Ok(Event::default().event("node").data(event_data)));
 
         if (i + 1) % STATS_INTERVAL == 0 {
@@ -112,8 +111,7 @@ fn build_success_events(
         max_depth_reached: max_depth,
         elapsed_ms: elapsed_ms(start_time),
     };
-    let done_data =
-        serde_json::to_string(&done_event).unwrap_or_else(|_| "{}".to_string());
+    let done_data = serde_json::to_string(&done_event).unwrap_or_else(|_| "{}".to_string());
     events.push(Ok(Event::default().event("done").data(done_data)));
 
     events
@@ -121,8 +119,7 @@ fn build_success_events(
 
 fn build_error_events(error: String) -> Vec<Result<Event, Infallible>> {
     let error_event = StreamErrorEvent { error };
-    let error_data =
-        serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());
+    let error_data = serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());
     vec![Ok(Event::default().event("error").data(error_data))]
 }
 

@@ -950,11 +950,8 @@ fn test_complexity_rejects_graph_expansion_budget() {
         max_graph_expansion: 3,
         ..ValidationConfig::default()
     };
-    let err = QueryValidator::enforce_query_complexity(
-        &parsed,
-        "MATCH (a)-[*1..5]->(b) RETURN a",
-        &cfg,
-    )
-    .expect_err("must reject graph expansion");
+    let err =
+        QueryValidator::enforce_query_complexity(&parsed, "MATCH (a)-[*1..5]->(b) RETURN a", &cfg)
+            .expect_err("must reject graph expansion");
     assert!(err.message.contains("Graph expansion exceeded"));
 }

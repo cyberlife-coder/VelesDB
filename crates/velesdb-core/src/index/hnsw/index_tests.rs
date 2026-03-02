@@ -438,6 +438,32 @@ fn test_hnsw_persistence() {
 }
 
 #[test]
+fn test_hnsw_load_legacy_snapshot_without_vectors_disables_vacuum() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    // Arrange: create a valid snapshot then remove vector sidecar to simulate legacy format.
+    let dir = tempdir().unwrap();
+    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+    index.save(dir.path()).unwrap();
+    fs::remove_file(dir.path().join("native_vectors.bin")).unwrap();
+
+    // Act: load snapshot missing vectors.
+    let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+
+    // Assert: keep queryability but block vacuum that would otherwise rebuild from missing vectors.
+    assert_eq!(loaded_index.len(), 2);
+    assert!(!loaded_index.has_vector_storage());
+    assert_eq!(
+        loaded_index.vacuum(),
+        Err(VacuumError::VectorStorageDisabled)
+    );
+    assert_eq!(loaded_index.len(), 2);
+}
+
+#[test]
 fn test_hnsw_insert_batch_parallel() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine);

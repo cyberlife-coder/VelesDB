@@ -240,7 +240,10 @@ fn test_storage_mode_to_string() {
     assert_eq!(storage_mode_to_string(StorageMode::Full), "full");
     assert_eq!(storage_mode_to_string(StorageMode::SQ8), "sq8");
     assert_eq!(storage_mode_to_string(StorageMode::Binary), "binary");
-    assert_eq!(storage_mode_to_string(StorageMode::ProductQuantization), "pq");
+    assert_eq!(
+        storage_mode_to_string(StorageMode::ProductQuantization),
+        "pq"
+    );
 }
 
 #[test]
