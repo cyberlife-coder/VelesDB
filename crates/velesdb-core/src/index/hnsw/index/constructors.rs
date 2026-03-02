@@ -214,23 +214,24 @@ impl HnswIndex {
         );
 
         // Load vectors used for brute-force fallback and reranking.
-        let (vectors_data, enable_vector_storage) = match persistence::load_vectors(path) {
-            Ok(vectors) => (vectors, meta.enable_vector_storage),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                tracing::debug!(
-                    "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
-                );
-                (
-                    persistence::HnswVectorsData {
-                        vectors: Vec::new(),
-                    },
-                    false,
-                )
+        let (vectors, enable_vector_storage) = if meta.enable_vector_storage {
+            match persistence::load_vectors(path) {
+                Ok(vectors_data) => {
+                    let vectors = ShardedVectors::new(meta.dimension);
+                    vectors.insert_batch(vectors_data.vectors);
+                    (vectors, true)
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::debug!(
+                        "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
+                    );
+                    (ShardedVectors::new(meta.dimension), false)
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
+        } else {
+            (ShardedVectors::new(meta.dimension), false)
         };
-        let vectors = ShardedVectors::new(meta.dimension);
-        vectors.insert_batch(vectors_data.vectors);
 
         Ok(Self {
             dimension: meta.dimension,
@@ -275,13 +276,21 @@ impl HnswIndex {
             },
         )?;
 
-        // Save vectors for brute-force fallback and reranking after reload.
-        persistence::save_vectors(
-            path,
-            &HnswVectorsData {
-                vectors: self.vectors.collect_for_parallel(),
-            },
-        )?;
+        if self.enable_vector_storage {
+            // Save vectors for brute-force fallback and reranking after reload.
+            persistence::save_vectors(
+                path,
+                &HnswVectorsData {
+                    vectors: self.vectors.collect_for_parallel(),
+                },
+            )?;
+        } else {
+            // Avoid stale vectors from previous runs in fast-insert snapshots.
+            let vectors_path = path.join("native_vectors.bin");
+            if vectors_path.exists() {
+                std::fs::remove_file(vectors_path)?;
+            }
+        }
 
         // Save metadata
         persistence::save_meta(

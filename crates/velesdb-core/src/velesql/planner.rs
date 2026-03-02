@@ -320,12 +320,19 @@ impl QueryPlanner {
         k: usize,
     ) -> ExecutionStrategy {
         let estimator = CostEstimator::new(stats);
+        let filter_selectivity = filter.map_or(1.0, |f| {
+            estimator
+                .estimate_condition_selectivity(f)
+                .clamp(0.001, 1.0)
+        });
         let filter_cost = filter.map_or(Cost::new(0.0, 0.0), |f| estimator.estimate_filter_cost(f));
         let vector_cost = estimator.estimate_hnsw_search_cost(k.max(1));
+        let total_rows = stats.total_points.max(stats.row_count).max(1) as f64;
 
-        // Vector-first evaluates metadata predicates on a bounded candidate set rather than
-        // scanning the full filtered population. Model this as a small over-fetch window.
-        let candidate_rows = (k.max(1) as f64) * 4.0;
+        // Vector-first evaluates metadata predicates on over-fetched ANN candidates.
+        // Required over-fetch scales inversely with filter selectivity.
+        let over_fetch = (1.0 / filter_selectivity).clamp(1.0, 64.0);
+        let candidate_rows = ((k.max(1) as f64) * over_fetch).min(total_rows);
         let candidate_filter_cost = Cost::new(
             candidate_rows * FILTER_SCAN_IO_WEIGHT,
             candidate_rows * FILTER_SCAN_CPU_WEIGHT,

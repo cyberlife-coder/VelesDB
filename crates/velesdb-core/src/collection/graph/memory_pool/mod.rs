@@ -39,6 +39,8 @@ pub(crate) const DEFAULT_CHUNK_SIZE: usize = 1024;
 pub struct MemoryPool<T> {
     chunks: Vec<Box<[MaybeUninit<T>]>>,
     free_indices: Vec<usize>,
+    /// O(1) membership check for free slots to keep deallocate idempotent.
+    free_lookup: HashSet<usize>,
     /// Tracks which slots have been initialized via `store()`.
     /// Only initialized slots should be dropped.
     initialized: HashSet<usize>,
@@ -53,6 +55,7 @@ impl<T> MemoryPool<T> {
         Self {
             chunks: Vec::new(),
             free_indices: Vec::new(),
+            free_lookup: HashSet::new(),
             initialized: HashSet::new(),
             chunk_size: chunk_size.max(1),
             total_allocated: 0,
@@ -70,6 +73,7 @@ impl<T> MemoryPool<T> {
     /// If no free slots are available, grows the pool by one chunk.
     pub fn allocate(&mut self) -> PoolIndex {
         if let Some(index) = self.free_indices.pop() {
+            self.free_lookup.remove(&index);
             return PoolIndex(index);
         }
 
@@ -140,7 +144,7 @@ impl<T> MemoryPool<T> {
                 }
             }
             // Idempotency guard: avoid duplicate free-list entries on double deallocate.
-            if !self.free_indices.contains(&index.0) {
+            if self.free_lookup.insert(index.0) {
                 self.free_indices.push(index.0);
             }
         }
@@ -181,6 +185,7 @@ impl<T> MemoryPool<T> {
         let from_free = count.min(self.free_indices.len());
         for _ in 0..from_free {
             if let Some(idx) = self.free_indices.pop() {
+                self.free_lookup.remove(&idx);
                 result.push(PoolIndex(idx));
             }
         }
@@ -197,6 +202,7 @@ impl<T> MemoryPool<T> {
             // Now allocate from free list
             for _ in 0..remaining {
                 if let Some(idx) = self.free_indices.pop() {
+                    self.free_lookup.remove(&idx);
                     result.push(PoolIndex(idx));
                 }
             }
@@ -245,6 +251,7 @@ impl<T> MemoryPool<T> {
         let start = self.total_allocated - self.chunk_size;
         for i in start..(self.total_allocated - 1) {
             self.free_indices.push(i);
+            self.free_lookup.insert(i);
         }
     }
 
@@ -265,6 +272,7 @@ impl<T> MemoryPool<T> {
         let start = self.total_allocated - self.chunk_size;
         for i in start..self.total_allocated {
             self.free_indices.push(i);
+            self.free_lookup.insert(i);
         }
     }
 

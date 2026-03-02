@@ -31,7 +31,12 @@ impl CacheStats {
         if total == 0 {
             0.0
         } else {
-            let basis_points = self.hits.saturating_mul(10_000).saturating_div(total);
+            // Rounded fixed-point ratio to avoid systematic truncation bias.
+            let basis_points = self
+                .hits
+                .saturating_mul(10_000)
+                .saturating_add(total / 2)
+                .saturating_div(total);
             let basis_points = u32::try_from(basis_points).unwrap_or(u32::MAX);
             f64::from(basis_points) / 100.0
         }

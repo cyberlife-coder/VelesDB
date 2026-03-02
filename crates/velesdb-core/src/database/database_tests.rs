@@ -231,6 +231,9 @@ fn test_database_execute_query_supports_left_join_runtime() {
         .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].point.id, 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload.get("customer_id"), Some(&serde_json::json!(999)));
+    assert_eq!(payload.get("id"), Some(&serde_json::Value::Null));
 }
 
 #[test]

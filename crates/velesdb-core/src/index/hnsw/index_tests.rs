@@ -464,6 +464,42 @@ fn test_hnsw_load_legacy_snapshot_without_vectors_disables_vacuum() {
 }
 
 #[test]
+fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let index = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+
+    index.save(dir.path()).unwrap();
+    assert!(!dir.path().join("native_vectors.bin").exists());
+
+    let loaded = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+    assert!(!loaded.has_vector_storage());
+}
+
+#[test]
+fn test_hnsw_fast_insert_save_removes_stale_vectors_file() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    // Write a regular snapshot first (with vectors sidecar).
+    let regular = HnswIndex::new(3, DistanceMetric::Cosine);
+    regular.insert(1, &[1.0, 0.0, 0.0]);
+    regular.save(dir.path()).unwrap();
+    assert!(dir.path().join("native_vectors.bin").exists());
+
+    // Overwrite with fast-insert snapshot; stale vectors file must be removed.
+    let fast = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    fast.insert(2, &[0.0, 1.0, 0.0]);
+    fast.save(dir.path()).unwrap();
+
+    assert!(!dir.path().join("native_vectors.bin").exists());
+}
+
+#[test]
 fn test_hnsw_insert_batch_parallel() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine);

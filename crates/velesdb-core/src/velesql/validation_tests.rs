@@ -946,6 +946,14 @@ fn test_complexity_rejects_like_budget() {
 #[test]
 fn test_complexity_rejects_graph_expansion_budget() {
     let parsed = super::Parser::parse("MATCH (a)-[*1..5]->(b) RETURN a").expect("valid");
+    let mc = parsed
+        .match_clause
+        .as_ref()
+        .expect("graph query should include match clause");
+    assert_eq!(mc.patterns.len(), 1);
+    assert_eq!(mc.patterns[0].relationships.len(), 1);
+    assert_eq!(mc.patterns[0].relationships[0].range, Some((1, 5)));
+
     let cfg = ValidationConfig {
         max_graph_expansion: 3,
         ..ValidationConfig::default()
