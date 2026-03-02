@@ -42,13 +42,13 @@ fn benchmark_hnsw_latency(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("hnsw_latency_full_sq8_pq");
     group.bench_function("full", |b| {
-        b.iter(|| full.search_ids(black_box(&query), black_box(20)))
+        b.iter(|| full.search_ids(black_box(&query), black_box(20)));
     });
     group.bench_function("sq8", |b| {
-        b.iter(|| sq8.search_ids(black_box(&query), black_box(20)))
+        b.iter(|| sq8.search_ids(black_box(&query), black_box(20)));
     });
     group.bench_function("pq", |b| {
-        b.iter(|| pq.search_ids(black_box(&query), black_box(20)))
+        b.iter(|| pq.search_ids(black_box(&query), black_box(20)));
     });
     group.finish();
 }
@@ -88,7 +88,7 @@ fn benchmark_hnsw_recall(c: &mut Criterion) {
         / 50.0;
 
     c.bench_function("hnsw_recall_report_full_sq8_pq", |b| {
-        b.iter(|| black_box((sq8_recall, pq_recall)))
+        b.iter(|| black_box((sq8_recall, pq_recall)));
     });
 
     println!("Recall@50 vs full: SQ8={sq8_recall:.3}, PQ={pq_recall:.3}");

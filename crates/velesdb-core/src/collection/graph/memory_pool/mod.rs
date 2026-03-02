@@ -139,14 +139,17 @@ impl<T> MemoryPool<T> {
                     std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());
                 }
             }
-            self.free_indices.push(index.0);
+            // Idempotency guard: avoid duplicate free-list entries on double deallocate.
+            if !self.free_indices.contains(&index.0) {
+                self.free_indices.push(index.0);
+            }
         }
     }
 
     /// Returns the number of allocated (in-use) slots.
     #[must_use]
     pub fn allocated_count(&self) -> usize {
-        self.total_allocated - self.free_indices.len()
+        self.total_allocated.saturating_sub(self.free_indices.len())
     }
 
     /// Returns the total capacity of the pool.

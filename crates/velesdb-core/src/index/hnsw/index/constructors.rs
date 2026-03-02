@@ -213,12 +213,28 @@ impl HnswIndex {
             mappings_data.next_idx,
         );
 
+        // Load vectors used for brute-force fallback and reranking.
+        let vectors_data = match persistence::load_vectors(path) {
+            Ok(vectors) => vectors,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!(
+                    "native_vectors.bin missing during HNSW load; continuing without stored vectors"
+                );
+                persistence::HnswVectorsData {
+                    vectors: Vec::new(),
+                }
+            }
+            Err(err) => return Err(err),
+        };
+        let vectors = ShardedVectors::new(meta.dimension);
+        vectors.insert_batch(vectors_data.vectors);
+
         Ok(Self {
             dimension: meta.dimension,
             metric: meta.metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
-            vectors: ShardedVectors::new(meta.dimension),
+            vectors,
             enable_vector_storage: meta.enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
@@ -236,7 +252,7 @@ impl HnswIndex {
     ///
     /// Returns an error if the write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
-        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta};
+        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta, HnswVectorsData};
 
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
@@ -253,6 +269,14 @@ impl HnswIndex {
                 id_to_idx,
                 idx_to_id,
                 next_idx,
+            },
+        )?;
+
+        // Save vectors for brute-force fallback and reranking after reload.
+        persistence::save_vectors(
+            path,
+            &HnswVectorsData {
+                vectors: self.vectors.collect_for_parallel(),
             },
         )?;
 

@@ -323,8 +323,15 @@ impl QueryPlanner {
         let filter_cost = filter.map_or(Cost::new(0.0, 0.0), |f| estimator.estimate_filter_cost(f));
         let vector_cost = estimator.estimate_hnsw_search_cost(k.max(1));
 
+        // Vector-first evaluates metadata predicates on a bounded candidate set rather than
+        // scanning the full filtered population. Model this as a small over-fetch window.
+        let candidate_rows = (k.max(1) as f64) * 4.0;
+        let candidate_filter_cost = Cost::new(
+            candidate_rows * FILTER_SCAN_IO_WEIGHT,
+            candidate_rows * FILTER_SCAN_CPU_WEIGHT,
+        );
         let vector_first =
-            vector_cost.total() + (filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
+            vector_cost.total() + (candidate_filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
         let graph_first = filter_cost.total()
             + (vector_cost.total() * filter_cost.io_cost.max(1.0) / GRAPH_TO_VECTOR_SCALING);
         let parallel = vector_cost.total().max(filter_cost.total()) + PARALLEL_MERGE_OVERHEAD;
