@@ -1247,6 +1247,31 @@ fn test_rerank_latency_ema_updates_after_two_stage_search() {
 }
 
 #[test]
+fn test_update_rerank_latency_ema_large_current_does_not_overflow() {
+    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+
+    for i in 0u64..400 {
+        let v: Vec<f32> = (0..64)
+            .map(|j| ((i * 3 + j as u64) as f32 * 0.0021).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    index
+        .rerank_latency_ema_us
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+
+    let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.011).cos()).collect();
+    let results = index.search_with_quality(&query, 20, SearchQuality::Accurate);
+
+    assert!(!results.is_empty());
+
+    let ema = index.rerank_latency_ema_us();
+    let expected_min = (u64::MAX / 10) * 7;
+    assert!(ema >= expected_min, "EMA underflow/wrap detected: {ema}");
+}
+
+#[test]
 fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression() {
     let index = HnswIndex::new(64, DistanceMetric::Cosine);
 

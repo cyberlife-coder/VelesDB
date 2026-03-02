@@ -140,10 +140,9 @@ impl HnswIndex {
                 .store(sample_us, Ordering::Relaxed);
         } else {
             // EMA with alpha=0.3 for responsiveness
-            // SAFETY: u64 arithmetic cannot overflow here because:
-            // - current and sample_us are microsecond durations (bounded by u64::MAX)
-            // - The weighted average is always between the two values
-            let new_ema = (current * 7 + sample_us * 3) / 10;
+            // Compute in u128 to avoid overflow in weighted sum.
+            let weighted_sum = u128::from(current) * 7 + u128::from(sample_us) * 3;
+            let new_ema = u64::try_from(weighted_sum / 10).unwrap_or(u64::MAX);
             self.rerank_latency_ema_us.store(new_ema, Ordering::Relaxed);
         }
     }
