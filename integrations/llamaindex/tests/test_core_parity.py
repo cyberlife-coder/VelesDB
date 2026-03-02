@@ -45,7 +45,7 @@ def vectorstore_module(monkeypatch):
     fake_velesdb = types.SimpleNamespace(Database=FakeDatabase, Collection=FakeCollection)
     monkeypatch.setitem(sys.modules, "velesdb", fake_velesdb)
 
-    sys.path.insert(0, "integrations/llamaindex/src")
+    monkeypatch.syspath_prepend("integrations/llamaindex/src")
     sys.modules.pop("llamaindex_velesdb.vectorstore", None)
     return importlib.import_module("llamaindex_velesdb.vectorstore")
 

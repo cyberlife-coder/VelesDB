@@ -2,13 +2,20 @@
 
 import tempfile
 import shutil
-from pathlib import Path
 
 import pytest
 from llama_index.core.schema import TextNode
+from llama_index.core.vector_stores.types import (
+    MetadataFilter,
+    MetadataFilters,
+    VectorStoreQuery,
+)
 
-from llamaindex_velesdb import VelesDBVectorStore
-from llamaindex_velesdb.vectorstore import _stable_hash_id
+try:
+    from llamaindex_velesdb import VelesDBVectorStore
+    from llamaindex_velesdb.vectorstore import _stable_hash_id
+except ImportError:
+    pytest.skip("Dependencies not installed", allow_module_level=True)
 
 
 class TestVelesDBVectorStore:
@@ -68,7 +75,6 @@ class TestVelesDBVectorStore:
 
     def test_query(self, vector_store):
         """Test querying the store."""
-        from llama_index.core.vector_stores.types import VectorStoreQuery
 
         # Add nodes first
         nodes = [
@@ -98,7 +104,6 @@ class TestVelesDBVectorStore:
 
     def test_query_empty_embedding(self, vector_store):
         """Test query with no embedding returns empty."""
-        from llama_index.core.vector_stores.types import VectorStoreQuery
 
         query = VectorStoreQuery(query_embedding=None)
         result = vector_store.query(query)
@@ -136,6 +141,90 @@ class TestVelesDBVectorStore:
         assert first != other
         assert 0 <= first <= 0x7FFFFFFFFFFFFFFF
         assert first > 0xFFFFFFFF
+
+
+class _RecordingCollection:
+    def __init__(self):
+        self.search_called = False
+        self.search_with_filter_called = False
+        self.search_filter = None
+
+    def search(self, vector, top_k=10):
+        self.search_called = True
+        return []
+
+    def search_with_filter(self, vector, top_k=10, filter=None):
+        self.search_with_filter_called = True
+        self.search_filter = filter
+        return []
+
+
+class _SearchOnlyCollection:
+    def search(self, vector, top_k=10):
+        return []
+
+
+class _RecordingDatabase:
+    def __init__(self, collection_to_create):
+        self.collection = None
+        self.collection_to_create = collection_to_create
+        self.get_collection_calls = 0
+        self.create_collection_calls = 0
+
+    def get_collection(self, _name):
+        self.get_collection_calls += 1
+        return self.collection
+
+    def create_collection(self, name, dimension, metric, storage_mode="full"):
+        self.create_collection_calls += 1
+        self.collection = self.collection_to_create
+        return self.collection
+
+
+class TestQueryFilterTranslation:
+    @pytest.fixture
+    def temp_dir(self):
+        path = tempfile.mkdtemp()
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    def test_query_translates_metadata_filters_to_core_filter(self, temp_dir):
+        store = VelesDBVectorStore(path=temp_dir, collection_name="filter_translation")
+        recording_collection = _RecordingCollection()
+        store._db = _RecordingDatabase(recording_collection)
+        store._collection = None
+        store._dimension = None
+
+        query = VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3],
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[MetadataFilter(key="language", value="python")]),
+        )
+
+        store.query(query)
+
+        assert store._db.create_collection_calls == 1
+        assert store._db.get_collection_calls >= 2
+        assert recording_collection.search_with_filter_called is True
+        assert recording_collection.search_called is False
+        assert recording_collection.search_filter == {
+            "condition": {"type": "eq", "field": "language", "value": "python"}
+        }
+
+    def test_query_with_filters_fails_if_search_with_filter_is_missing(self, temp_dir):
+        store = VelesDBVectorStore(path=temp_dir, collection_name="filter_missing_method")
+        store._db = _RecordingDatabase(_SearchOnlyCollection())
+        store._collection = None
+        store._dimension = None
+
+        query = VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3],
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[MetadataFilter(key="language", value="python")]),
+        )
+
+        with pytest.raises(NotImplementedError, match="search_with_filter"):
+            store.query(query)
 
 
 class TestVelesDBVectorStoreAdvanced:
