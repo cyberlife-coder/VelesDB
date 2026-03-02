@@ -8,6 +8,7 @@
 //! Both index types share the same binary format:
 //! - `native_meta.bin`: `(dimension: usize, metric: u8, enable_vector_storage: bool)`
 //! - `native_mappings.bin`: `(id_to_idx: HashMap<u64, usize>, idx_to_id: HashMap<usize, u64>, next_idx: usize)`
+//! - `native_vectors.bin`: `Vec<(internal_idx: usize, vector: Vec<f32>)>`
 
 use crate::distance::DistanceMetric;
 use std::collections::HashMap;
@@ -25,6 +26,11 @@ pub(crate) struct HnswMappingsData {
     pub id_to_idx: HashMap<u64, usize>,
     pub idx_to_id: HashMap<usize, u64>,
     pub next_idx: usize,
+}
+
+/// HNSW vectors payload as stored on disk.
+pub(crate) struct HnswVectorsData {
+    pub vectors: Vec<(usize, Vec<f32>)>,
 }
 
 /// Saves HNSW metadata to `native_meta.bin` in the given directory.
@@ -101,6 +107,32 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
         idx_to_id,
         next_idx,
     })
+}
+
+/// Saves HNSW vectors to `native_vectors.bin` in the given directory.
+///
+/// # Errors
+///
+/// Returns `io::Error` if file creation or serialization fails.
+pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Result<()> {
+    let vectors_path = path.join("native_vectors.bin");
+    let file = std::fs::File::create(vectors_path)?;
+    let writer = std::io::BufWriter::new(file);
+    bincode::serialize_into(writer, &data.vectors).map_err(std::io::Error::other)
+}
+
+/// Loads HNSW vectors from `native_vectors.bin` in the given directory.
+///
+/// # Errors
+///
+/// Returns `io::Error` if the file doesn't exist or is corrupted.
+pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
+    let vectors_path = path.join("native_vectors.bin");
+    let file = std::fs::File::open(vectors_path)?;
+    let reader = std::io::BufReader::new(file);
+    let vectors: Vec<(usize, Vec<f32>)> =
+        bincode::deserialize_from(reader).map_err(std::io::Error::other)?;
+    Ok(HnswVectorsData { vectors })
 }
 
 /// Converts a u8 discriminant to a `DistanceMetric`.

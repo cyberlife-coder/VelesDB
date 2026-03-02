@@ -31,7 +31,9 @@ impl CacheStats {
         if total == 0 {
             0.0
         } else {
-            (self.hits as f64 / total as f64) * 100.0
+            let basis_points = self.hits.saturating_mul(10_000).saturating_div(total);
+            let basis_points = u32::try_from(basis_points).unwrap_or(u32::MAX);
+            f64::from(basis_points) / 100.0
         }
     }
 }
