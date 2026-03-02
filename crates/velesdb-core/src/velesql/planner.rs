@@ -319,12 +319,31 @@ impl QueryPlanner {
         filter: Option<&Condition>,
         k: usize,
     ) -> ExecutionStrategy {
+        // Without metadata/graph filter, vector-first is the only meaningful strategy.
+        if filter.is_none() {
+            return ExecutionStrategy::VectorFirst;
+        }
+
         let estimator = CostEstimator::new(stats);
+        let filter_selectivity = filter.map_or(1.0, |f| {
+            estimator
+                .estimate_condition_selectivity(f)
+                .clamp(0.001, 1.0)
+        });
         let filter_cost = filter.map_or(Cost::new(0.0, 0.0), |f| estimator.estimate_filter_cost(f));
         let vector_cost = estimator.estimate_hnsw_search_cost(k.max(1));
+        let total_rows = stats.total_points.max(stats.row_count).max(1) as f64;
 
+        // Vector-first evaluates metadata predicates on over-fetched ANN candidates.
+        // Required over-fetch scales inversely with filter selectivity.
+        let over_fetch = (1.0 / filter_selectivity).clamp(1.0, 64.0);
+        let candidate_rows = ((k.max(1) as f64) * over_fetch).min(total_rows);
+        let candidate_filter_cost = Cost::new(
+            candidate_rows * FILTER_SCAN_IO_WEIGHT,
+            candidate_rows * FILTER_SCAN_CPU_WEIGHT,
+        );
         let vector_first =
-            vector_cost.total() + (filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
+            vector_cost.total() + (candidate_filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
         let graph_first = filter_cost.total()
             + (vector_cost.total() * filter_cost.io_cost.max(1.0) / GRAPH_TO_VECTOR_SCALING);
         let parallel = vector_cost.total().max(filter_cost.total()) + PARALLEL_MERGE_OVERHEAD;

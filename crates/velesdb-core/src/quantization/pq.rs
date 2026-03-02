@@ -266,7 +266,7 @@ mod tests {
                 d * d
             })
             .sum::<f32>()
-            / input.len() as f32;
+            / f32::from(u16::try_from(input.len()).expect("test input length fits in u16"));
         assert!(mse < 0.2, "reconstruction MSE too high: {mse}");
     }
 

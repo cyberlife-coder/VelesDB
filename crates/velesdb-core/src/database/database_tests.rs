@@ -205,7 +205,7 @@ fn test_database_execute_query_join_using_with_graph_match_filter() {
 }
 
 #[test]
-fn test_database_execute_query_rejects_left_join_runtime() {
+fn test_database_execute_query_supports_left_join_runtime() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
     db.create_collection("orders", 2, DistanceMetric::Cosine)
@@ -213,14 +213,27 @@ fn test_database_execute_query_rejects_left_join_runtime() {
     db.create_collection("customers", 2, DistanceMetric::Cosine)
         .unwrap();
 
+    let orders = db.get_collection("orders").unwrap();
+    orders
+        .upsert(vec![Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(serde_json::json!({"customer_id": 999})),
+        )])
+        .unwrap();
+
     let query = Parser::parse(
-        "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id",
+        "SELECT * FROM orders LEFT JOIN customers ON customers.id = orders.customer_id",
     )
     .unwrap();
-    let err = db
+    let results = db
         .execute_query(&query, &std::collections::HashMap::new())
-        .unwrap_err();
-    assert!(err.to_string().contains("not supported in runtime"));
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].point.id, 1);
+    let payload = results[0].point.payload.as_ref().unwrap();
+    assert_eq!(payload.get("customer_id"), Some(&serde_json::json!(999)));
+    assert_eq!(payload.get("id"), Some(&serde_json::Value::Null));
 }
 
 #[test]

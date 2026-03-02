@@ -637,7 +637,7 @@ fn test_validation_error_display() {
     let err = ValidationError::multiple_similarity("test");
     let display = format!("{err}");
     assert!(display.contains("V001"));
-    assert!(display.contains("sequential queries"));
+    assert!(display.contains("Use AND instead of OR with similarity()"));
 }
 
 #[test]
@@ -945,16 +945,21 @@ fn test_complexity_rejects_like_budget() {
 
 #[test]
 fn test_complexity_rejects_graph_expansion_budget() {
-    let parsed = super::Parser::parse("MATCH path = (a)-[*1..5]->(b) RETURN path").expect("valid");
+    let parsed = super::Parser::parse("MATCH (a)-[*1..5]->(b) RETURN a").expect("valid");
+    let mc = parsed
+        .match_clause
+        .as_ref()
+        .expect("graph query should include match clause");
+    assert_eq!(mc.patterns.len(), 1);
+    assert_eq!(mc.patterns[0].relationships.len(), 1);
+    assert_eq!(mc.patterns[0].relationships[0].range, Some((1, 5)));
+
     let cfg = ValidationConfig {
         max_graph_expansion: 3,
         ..ValidationConfig::default()
     };
-    let err = QueryValidator::enforce_query_complexity(
-        &parsed,
-        "MATCH path = (a)-[*1..5]->(b) RETURN path",
-        &cfg,
-    )
-    .expect_err("must reject graph expansion");
+    let err =
+        QueryValidator::enforce_query_complexity(&parsed, "MATCH (a)-[*1..5]->(b) RETURN a", &cfg)
+            .expect_err("must reject graph expansion");
     assert!(err.message.contains("Graph expansion exceeded"));
 }

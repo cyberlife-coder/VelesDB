@@ -438,6 +438,68 @@ fn test_hnsw_persistence() {
 }
 
 #[test]
+fn test_hnsw_load_legacy_snapshot_without_vectors_disables_vacuum() {
+    use std::fs;
+    use tempfile::tempdir;
+
+    // Arrange: create a valid snapshot then remove vector sidecar to simulate legacy format.
+    let dir = tempdir().unwrap();
+    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+    index.save(dir.path()).unwrap();
+    fs::remove_file(dir.path().join("native_vectors.bin")).unwrap();
+
+    // Act: load snapshot missing vectors.
+    let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+
+    // Assert: keep queryability but block vacuum that would otherwise rebuild from missing vectors.
+    assert_eq!(loaded_index.len(), 2);
+    assert!(!loaded_index.has_vector_storage());
+    assert_eq!(
+        loaded_index.vacuum(),
+        Err(VacuumError::VectorStorageDisabled)
+    );
+    assert_eq!(loaded_index.len(), 2);
+}
+
+#[test]
+fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let index = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.insert(2, &[0.0, 1.0, 0.0]);
+
+    index.save(dir.path()).unwrap();
+    assert!(!dir.path().join("native_vectors.bin").exists());
+
+    let loaded = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+    assert!(!loaded.has_vector_storage());
+}
+
+#[test]
+fn test_hnsw_fast_insert_save_removes_stale_vectors_file() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    // Write a regular snapshot first (with vectors sidecar).
+    let regular = HnswIndex::new(3, DistanceMetric::Cosine);
+    regular.insert(1, &[1.0, 0.0, 0.0]);
+    regular.save(dir.path()).unwrap();
+    assert!(dir.path().join("native_vectors.bin").exists());
+
+    // Overwrite with fast-insert snapshot; stale vectors file must be removed.
+    let fast = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    fast.insert(2, &[0.0, 1.0, 0.0]);
+    fast.save(dir.path()).unwrap();
+
+    assert!(!dir.path().join("native_vectors.bin").exists());
+}
+
+#[test]
 fn test_hnsw_insert_batch_parallel() {
     // Arrange
     let index = HnswIndex::new(3, DistanceMetric::Cosine);

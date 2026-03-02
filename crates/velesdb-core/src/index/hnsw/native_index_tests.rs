@@ -70,6 +70,45 @@ fn test_native_index_persistence() {
 
     let results = loaded.search(&vec![0.0; 32], 5);
     assert!(!results.is_empty());
+
+    // Ensure vector sidecar survives reload for brute-force APIs.
+    let brute_force = loaded.brute_force_search_parallel(&vec![0.0; 32], 5);
+    assert_eq!(brute_force.len(), 5);
+}
+
+#[test]
+fn test_native_index_fast_insert_save_does_not_persist_vectors() {
+    let dir = tempdir().unwrap();
+
+    let index = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine);
+    for i in 0..10 {
+        index.insert(i, &vec![i as f32 * 0.1; 16]);
+    }
+
+    index.save(dir.path()).unwrap();
+    assert!(!dir.path().join("native_vectors.bin").exists());
+
+    let loaded = NativeHnswIndex::load(dir.path(), 16, DistanceMetric::Cosine).unwrap();
+    assert!(!loaded.has_vector_storage());
+    assert!(loaded
+        .brute_force_search_parallel(&vec![0.0; 16], 5)
+        .is_empty());
+}
+
+#[test]
+fn test_native_index_fast_insert_save_removes_stale_vectors_file() {
+    let dir = tempdir().unwrap();
+
+    let regular = NativeHnswIndex::new(16, DistanceMetric::Cosine);
+    regular.insert(1, &vec![0.1; 16]);
+    regular.save(dir.path()).unwrap();
+    assert!(dir.path().join("native_vectors.bin").exists());
+
+    let fast = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine);
+    fast.insert(2, &vec![0.2; 16]);
+    fast.save(dir.path()).unwrap();
+
+    assert!(!dir.path().join("native_vectors.bin").exists());
 }
 
 #[test]

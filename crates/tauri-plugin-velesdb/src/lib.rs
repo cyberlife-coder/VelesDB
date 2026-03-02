@@ -196,9 +196,8 @@ pub trait VelesDbExt<R: Runtime> {
 
 impl<R: Runtime, T: Manager<R>> VelesDbExt<R> for T {
     fn velesdb(&self) -> SimpleIndexHandle {
-        let state = match self.try_state::<SimpleIndexState>() {
-            Some(state) => state,
-            None => panic!("SimpleIndexState not initialized. Did you call init()?"),
+        let Some(state) = self.try_state::<SimpleIndexState>() else {
+            panic!("SimpleIndexState not initialized. Did you call init()?");
         };
         SimpleIndexHandle(Arc::clone(&state.0))
     }
@@ -238,6 +237,10 @@ impl SimpleIndexHandle {
 
     /// Returns the number of vectors in the index.
     ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned.
+    ///
     #[must_use]
     pub fn len(&self) -> usize {
         match self.0.lock() {
@@ -247,6 +250,10 @@ impl SimpleIndexHandle {
     }
 
     /// Returns true if the index is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned.
     ///
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -258,6 +265,10 @@ impl SimpleIndexHandle {
 
     /// Returns the dimension of vectors in this index.
     ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned.
+    ///
     #[must_use]
     pub fn dimension(&self) -> usize {
         match self.0.lock() {
@@ -267,6 +278,10 @@ impl SimpleIndexHandle {
     }
 
     /// Clears all vectors from the index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal lock is poisoned.
     ///
     pub fn clear(&self) {
         match self.0.lock() {
@@ -403,9 +418,8 @@ pub fn init_with_app_data<R: Runtime>(app_name: &str) -> TauriPlugin<R> {
 /// Panics if the app data directory cannot be determined.
 #[must_use]
 pub fn get_app_data_dir(app_name: &str) -> std::path::PathBuf {
-    let base_dir = match dirs::data_dir().or_else(dirs::config_dir) {
-        Some(base_dir) => base_dir,
-        None => panic!("Could not determine app data directory for this platform"),
+    let Some(base_dir) = dirs::data_dir().or_else(dirs::config_dir) else {
+        panic!("Could not determine app data directory for this platform");
     };
 
     base_dir.join(app_name).join("velesdb")

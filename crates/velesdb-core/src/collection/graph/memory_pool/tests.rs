@@ -185,3 +185,20 @@ fn test_deallocate_uninitialized_slot() {
     pool.store(idx2, "test".to_string());
     assert_eq!(pool.get(idx2), Some(&"test".to_string()));
 }
+
+/// Regression test: double deallocate must be idempotent and not corrupt free list accounting.
+#[test]
+fn test_deallocate_same_slot_twice_is_idempotent() {
+    let mut pool: MemoryPool<u64> = MemoryPool::new(4);
+    let idx = pool.allocate();
+    pool.store(idx, 42);
+
+    pool.deallocate(idx);
+    pool.deallocate(idx);
+
+    assert_eq!(pool.allocated_count(), 0);
+
+    let idx2 = pool.allocate();
+    pool.store(idx2, 7);
+    assert_eq!(pool.get(idx2), Some(&7));
+}

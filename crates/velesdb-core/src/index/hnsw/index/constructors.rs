@@ -213,13 +213,33 @@ impl HnswIndex {
             mappings_data.next_idx,
         );
 
+        // Load vectors used for brute-force fallback and reranking.
+        let (vectors, enable_vector_storage) = if meta.enable_vector_storage {
+            match persistence::load_vectors(path) {
+                Ok(vectors_data) => {
+                    let vectors = ShardedVectors::new(meta.dimension);
+                    vectors.insert_batch(vectors_data.vectors);
+                    (vectors, true)
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::debug!(
+                        "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
+                    );
+                    (ShardedVectors::new(meta.dimension), false)
+                }
+                Err(err) => return Err(err),
+            }
+        } else {
+            (ShardedVectors::new(meta.dimension), false)
+        };
+
         Ok(Self {
             dimension: meta.dimension,
             metric: meta.metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
-            vectors: ShardedVectors::new(meta.dimension),
-            enable_vector_storage: meta.enable_vector_storage,
+            vectors,
+            enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
@@ -236,7 +256,7 @@ impl HnswIndex {
     ///
     /// Returns an error if the write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
-        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta};
+        use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta, HnswVectorsData};
 
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
@@ -255,6 +275,22 @@ impl HnswIndex {
                 next_idx,
             },
         )?;
+
+        if self.enable_vector_storage {
+            // Save vectors for brute-force fallback and reranking after reload.
+            persistence::save_vectors(
+                path,
+                &HnswVectorsData {
+                    vectors: self.vectors.collect_for_parallel(),
+                },
+            )?;
+        } else {
+            // Avoid stale vectors from previous runs in fast-insert snapshots.
+            let vectors_path = path.join("native_vectors.bin");
+            if vectors_path.exists() {
+                std::fs::remove_file(vectors_path)?;
+            }
+        }
 
         // Save metadata
         persistence::save_meta(

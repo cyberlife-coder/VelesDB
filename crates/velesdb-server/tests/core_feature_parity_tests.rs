@@ -1,4 +1,8 @@
-use std::{collections::{BTreeMap, BTreeSet}, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use toml::Value;
 
