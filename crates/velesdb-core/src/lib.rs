@@ -153,11 +153,6 @@ pub use collection::{
     // Public user-facing types
     Collection,
     CollectionType,
-    // ConcurrentEdgeStore still needed by server handlers — remove in WP-6
-    ConcurrentEdgeStore,
-    // EdgeStore kept public (used by server GraphService + Python SDK)
-    // Reason: server GraphService still uses EdgeStore directly — demote to pub(crate) after server migration
-    EdgeStore,
     // Graph API types (user-visible)
     EdgeType,
     GraphCollection,

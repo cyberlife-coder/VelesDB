@@ -1,29 +1,45 @@
 //! Graph HTTP handlers for VelesDB REST API.
 //!
-//! Provides endpoints for graph operations including edge queries, traversal, and degree.
+//! All graph operations are routed through `AppState.db.get_graph_collection()`.
+//! No separate GraphService state — graph data persists via GraphCollection/GraphEngine.
+
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
-use velesdb_core::collection::graph::GraphEdge;
+use velesdb_core::collection::graph::{GraphEdge, TraversalConfig};
 
 use crate::types::ErrorResponse;
+use crate::AppState;
 
-use super::service::GraphService;
 use super::types::{
     AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse, TraversalStats,
     TraverseRequest, TraverseResponse,
 };
 
+/// Resolves a `GraphCollection` or returns a 404.
+fn get_graph_collection_or_404(
+    state: &AppState,
+    name: &str,
+) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
+    state.db.get_graph_collection(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!(
+                    "Collection '{}' not found or is not a graph collection. \
+                     Create it with collection_type='graph' first.",
+                    name
+                ),
+            }),
+        )
+    })
+}
+
 /// Get edges from a collection's graph filtered by label.
-///
-/// Returns edges matching the specified label. The `label` query parameter is required.
-///
-/// # Errors
-///
-/// Returns an error tuple with status code and error response if the operation fails.
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/edges",
@@ -42,7 +58,7 @@ use super::types::{
 pub async fn get_edges(
     Path(name): Path<String>,
     Query(params): Query<EdgeQueryParams>,
-    State(graph_service): State<GraphService>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<EdgesResponse>, (StatusCode, Json<ErrorResponse>)> {
     let label = params.label.ok_or_else(|| {
         (
@@ -53,16 +69,10 @@ pub async fn get_edges(
         )
     })?;
 
-    let edges: Vec<EdgeResponse> = graph_service
-        .get_edges_by_label(&name, &label)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to get edges: {e}"),
-                }),
-            )
-        })?
+    let coll = get_graph_collection_or_404(&state, &name)?;
+
+    let edges: Vec<EdgeResponse> = coll
+        .get_edges(Some(&label))
         .into_iter()
         .map(|e| EdgeResponse {
             id: e.id(),
@@ -78,12 +88,6 @@ pub async fn get_edges(
 }
 
 /// Add an edge to a collection's graph.
-///
-/// # Errors
-///
-/// Returns an error tuple with status code and error response if:
-/// - The request properties are invalid
-/// - The edge creation fails
 #[utoipa::path(
     post,
     path = "/collections/{name}/graph/edges",
@@ -91,16 +95,16 @@ pub async fn get_edges(
     responses(
         (status = 201, description = "Edge added successfully"),
         (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
 )]
 pub async fn add_edge(
     Path(name): Path<String>,
-    State(graph_service): State<GraphService>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<AddEdgeRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    // Convert properties from Value to HashMap<String, Value>
     let properties: std::collections::HashMap<String, serde_json::Value> = match request.properties
     {
         serde_json::Value::Object(map) => map.into_iter().collect(),
@@ -126,7 +130,9 @@ pub async fn add_edge(
         })?
         .with_properties(properties);
 
-    graph_service.add_edge(&name, edge).map_err(|e| {
+    let coll = get_graph_collection_or_404(&state, &name)?;
+
+    coll.add_edge(edge).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -139,10 +145,6 @@ pub async fn add_edge(
 }
 
 /// Traverse the graph using BFS or DFS from a source node.
-///
-/// # Errors
-///
-/// Returns an error tuple with status code and error response if traversal fails.
 #[utoipa::path(
     post,
     path = "/collections/{name}/graph/traverse",
@@ -150,30 +152,25 @@ pub async fn add_edge(
     responses(
         (status = 200, description = "Traversal completed successfully", body = TraverseResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
 )]
 pub async fn traverse_graph(
     Path(name): Path<String>,
-    State(graph_service): State<GraphService>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<TraverseRequest>,
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let results = match request.strategy.to_lowercase().as_str() {
-        "bfs" => graph_service.traverse_bfs(
-            &name,
-            request.source,
-            request.max_depth,
-            request.limit,
-            &request.rel_types,
-        ),
-        "dfs" => graph_service.traverse_dfs(
-            &name,
-            request.source,
-            request.max_depth,
-            request.limit,
-            &request.rel_types,
-        ),
+    let coll = get_graph_collection_or_404(&state, &name)?;
+
+    let config = TraversalConfig::with_range(1, request.max_depth)
+        .with_limit(request.limit)
+        .with_rel_types(request.rel_types);
+
+    let raw_results = match request.strategy.to_lowercase().as_str() {
+        "bfs" => coll.traverse_bfs(request.source, &config),
+        "dfs" => coll.traverse_dfs(request.source, &config),
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -185,23 +182,25 @@ pub async fn traverse_graph(
                 }),
             ));
         }
-    }
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Traversal failed: {e}"),
-            }),
-        )
-    })?;
+    };
+
+    // Convert TraversalResult -> TraversalResultItem
+    let results: Vec<super::types::TraversalResultItem> = raw_results
+        .into_iter()
+        .map(|r| super::types::TraversalResultItem {
+            target_id: r.target_id,
+            depth: r.depth,
+            path: r.path,
+        })
+        .collect();
 
     let depth_reached = results.iter().map(|r| r.depth).max().unwrap_or(0);
     let visited = results.len();
-    let has_more = results.len() >= request.limit;
+    let has_more = visited >= request.limit;
 
     Ok(Json(TraverseResponse {
         results,
-        next_cursor: None, // Cursor pagination not implemented yet
+        next_cursor: None,
         has_more,
         stats: TraversalStats {
             visited,
@@ -211,10 +210,6 @@ pub async fn traverse_graph(
 }
 
 /// Get the degree (in and out) of a specific node.
-///
-/// # Errors
-///
-/// Returns an error tuple with status code and error response if the query fails.
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/nodes/{node_id}/degree",
@@ -224,23 +219,17 @@ pub async fn traverse_graph(
     ),
     responses(
         (status = 200, description = "Degree retrieved successfully", body = DegreeResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
 )]
 pub async fn get_node_degree(
     Path((name, node_id)): Path<(String, u64)>,
-    State(graph_service): State<GraphService>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<DegreeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let (in_degree, out_degree) = graph_service.get_node_degree(&name, node_id).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get node degree: {e}"),
-            }),
-        )
-    })?;
-
+    let coll = get_graph_collection_or_404(&state, &name)?;
+    let (in_degree, out_degree) = coll.node_degree(node_id);
     Ok(Json(DegreeResponse {
         in_degree,
         out_degree,

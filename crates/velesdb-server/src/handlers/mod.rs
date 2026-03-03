@@ -37,8 +37,8 @@ pub use search::{batch_search, hybrid_search, multi_query_search, search, text_s
 // Graph handlers (EPIC-016) - exported via lib.rs
 #[allow(unused_imports)]
 pub use graph::{
-    add_edge, get_edges, get_node_degree, traverse_graph, DegreeResponse, GraphService,
-    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    add_edge, get_edges, get_node_degree, traverse_graph, DegreeResponse, TraversalResultItem,
+    TraversalStats, TraverseRequest, TraverseResponse,
 };
 
 // Metrics handlers - conditional on prometheus feature
