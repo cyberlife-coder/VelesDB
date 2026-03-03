@@ -7,12 +7,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use crate::collection::stats::CollectionStats;
-use crate::collection::types::CollectionConfig;
+use crate::collection::types::{Collection, CollectionConfig};
 use crate::distance::DistanceMetric;
 use crate::engine::payload::PayloadEngine;
 use crate::engine::vector::VectorEngine;
@@ -21,7 +19,7 @@ use crate::guardrails::GuardRails;
 use crate::index::SecondaryIndex;
 use crate::point::{Point, SearchResult};
 use crate::quantization::StorageMode;
-use crate::velesql::{QueryCache, QueryPlanner};
+use crate::velesql::QueryPlanner;
 
 /// A vector collection combining HNSW search, payload storage, and full-text search.
 ///
@@ -65,10 +63,9 @@ pub struct VectorCollection {
     /// Cost-based query planner (adaptive statistics).
     #[allow(dead_code)]
     pub(crate) query_planner: Arc<QueryPlanner>,
-    /// Query parse cache (amortizes repeated VelesQL parsing).
-    pub(crate) query_cache: Arc<QueryCache>,
-    /// Cached CBO statistics with TTL (avoids O(n) scan per query).
-    pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, Instant)>>>,
+    /// Legacy executor — shared Arc with the engines above, zero extra I/O.
+    /// Used by execute_query; drives guard-rails, CBO, and VelesQL dispatch.
+    pub(crate) inner: Collection,
 }
 
 impl VectorCollection {
@@ -99,21 +96,23 @@ impl VectorCollection {
             metadata_only: false,
         };
 
-        let vector = VectorEngine::create(&path, dimension, metric, storage_mode)?;
-        let payload = PayloadEngine::create(&path)?;
+        let self_path = path;
+        let vector = VectorEngine::create(&self_path, dimension, metric, storage_mode)?;
+        let payload = PayloadEngine::create(&self_path)?;
+
+        let inner =
+            Collection::create_with_options(self_path.clone(), dimension, metric, storage_mode)?;
 
         let coll = Self {
-            path,
+            path: self_path,
             config: Arc::new(RwLock::new(config)),
             vector,
             payload,
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
+            inner,
         };
-        coll.save_config()?;
         Ok(coll)
     }
 
@@ -131,6 +130,7 @@ impl VectorCollection {
         let vector =
             VectorEngine::open(&path, config.dimension, config.metric, config.storage_mode)?;
         let payload = PayloadEngine::open(&path)?;
+        let inner = Collection::open(path.clone())?;
 
         Ok(Self {
             path,
@@ -140,19 +140,13 @@ impl VectorCollection {
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
+            inner,
         })
     }
 
     /// Saves the collection configuration to disk.
     pub(crate) fn save_config(&self) -> Result<()> {
-        let config = self.config.read();
-        let config_path = self.path.join("config.json");
-        let config_data = serde_json::to_string_pretty(&*config)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-        std::fs::write(config_path, config_data)?;
-        Ok(())
+        self.inner.save_config()
     }
 
     /// Flushes all engines to disk and saves the config.
@@ -250,7 +244,7 @@ impl VectorCollection {
 
         let new_count = self.vector.len();
         self.config.write().point_count = new_count;
-        *self.cached_stats.lock() = None;
+        *self.inner.cached_stats.lock() = None;
         Ok(())
     }
 
@@ -282,7 +276,7 @@ impl VectorCollection {
         }
         let new_count = self.vector.len();
         self.config.write().point_count = new_count;
-        *self.cached_stats.lock() = None;
+        *self.inner.cached_stats.lock() = None;
         Ok(())
     }
 
@@ -343,10 +337,7 @@ impl VectorCollection {
             .collect()
     }
 
-    /// Executes a `VelesQL` query (delegates to the existing executor on `Collection`).
-    ///
-    /// This method bridges `VectorCollection` to the legacy `Collection::execute_query`
-    /// during the migration period. It will be replaced by a native executor in WP-4.
+    /// Executes a `VelesQL` query via the shared `Collection` executor.
     ///
     /// # Errors
     ///
@@ -356,10 +347,7 @@ impl VectorCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        // During migration: convert to legacy Collection and delegate.
-        // Reason: native VectorCollection executor will replace this bridge in a future refactoring phase.
-        let legacy = self.as_legacy_collection()?;
-        legacy.execute_query(query, params)
+        self.inner.execute_query(query, params)
     }
 
     /// Executes a raw VelesQL string (uses the query cache).
@@ -373,23 +361,10 @@ impl VectorCollection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         let query = self
+            .inner
             .query_cache
             .parse(sql)
             .map_err(|e| Error::Query(e.to_string()))?;
-        self.execute_query(&query, params)
-    }
-
-    // -------------------------------------------------------------------------
-    // Migration bridge (temporary, removed in WP-5)
-    // -------------------------------------------------------------------------
-
-    /// Converts this `VectorCollection` into a legacy `Collection` for methods not yet migrated.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if conversion fails.
-    #[doc(hidden)]
-    pub(crate) fn as_legacy_collection(&self) -> Result<crate::collection::Collection> {
-        crate::collection::Collection::open(self.path.clone())
+        self.inner.execute_query(&query, params)
     }
 }

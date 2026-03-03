@@ -9,14 +9,14 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::collection::types::CollectionConfig;
+use crate::collection::types::{Collection, CollectionConfig};
 use crate::distance::DistanceMetric;
 use crate::engine::payload::PayloadEngine;
 use crate::error::{Error, Result};
 use crate::guardrails::GuardRails;
 use crate::point::{Point, SearchResult};
 use crate::quantization::StorageMode;
-use crate::velesql::{QueryCache, QueryPlanner};
+use crate::velesql::QueryPlanner;
 
 /// A metadata-only collection storing structured payloads without vector indexes.
 ///
@@ -47,8 +47,8 @@ pub struct MetadataCollection {
     /// Query planner (reserved for future native executor).
     #[allow(dead_code)]
     pub(crate) query_planner: Arc<QueryPlanner>,
-    /// Query parse cache.
-    pub(crate) query_cache: Arc<QueryCache>,
+    /// Shared executor for VelesQL queries.
+    pub(crate) inner: Collection,
 }
 
 impl MetadataCollection {
@@ -74,6 +74,7 @@ impl MetadataCollection {
         };
 
         let payload = PayloadEngine::create(&path)?;
+        let inner = Collection::create_metadata_only(path.clone(), name)?;
 
         let coll = Self {
             path,
@@ -81,9 +82,8 @@ impl MetadataCollection {
             payload,
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
+            inner,
         };
-        coll.save_config()?;
         Ok(coll)
     }
 
@@ -99,6 +99,7 @@ impl MetadataCollection {
             serde_json::from_str(&config_data).map_err(|e| Error::Serialization(e.to_string()))?;
 
         let payload = PayloadEngine::open(&path)?;
+        let inner = Collection::open(path.clone())?;
 
         Ok(Self {
             path,
@@ -106,17 +107,12 @@ impl MetadataCollection {
             payload,
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
+            inner,
         })
     }
 
     pub(crate) fn save_config(&self) -> Result<()> {
-        let config = self.config.read();
-        let config_path = self.path.join("config.json");
-        let config_data = serde_json::to_string_pretty(&*config)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-        std::fs::write(config_path, config_data)?;
-        Ok(())
+        self.inner.save_config()
     }
 
     /// Flushes the payload engine to disk.
@@ -270,9 +266,10 @@ impl MetadataCollection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         let query = self
+            .inner
             .query_cache
             .parse(sql)
             .map_err(|e| Error::Query(e.to_string()))?;
-        self.execute_query(&query, params)
+        self.inner.execute_query(&query, params)
     }
 }

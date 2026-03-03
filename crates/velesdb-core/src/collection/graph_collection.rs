@@ -6,13 +6,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
-use crate::collection::stats::CollectionStats;
-use crate::collection::types::CollectionConfig;
+use crate::collection::types::{Collection, CollectionConfig};
 use crate::distance::DistanceMetric;
 use crate::engine::graph::GraphEngine;
 use crate::engine::payload::PayloadEngine;
@@ -21,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::guardrails::GuardRails;
 use crate::point::{Point, SearchResult};
 use crate::quantization::StorageMode;
-use crate::velesql::{QueryCache, QueryPlanner};
+use crate::velesql::QueryPlanner;
 
 /// A graph collection storing typed relationships between nodes.
 ///
@@ -56,20 +54,16 @@ pub struct GraphCollection {
     pub(crate) embeddings: Option<VectorEngine>,
     /// Payload engine: node property storage + BM25.
     pub(crate) payload: PayloadEngine,
-    /// Guard-rails (used by execute_query_with_client in future migration).
+    /// Guard-rails (reserved for future native executor).
     #[allow(dead_code)]
     pub(crate) guard_rails: Arc<GuardRails>,
-    /// Query planner (used by execute_query in future migration).
+    /// Query planner (reserved for future native executor).
     #[allow(dead_code)]
     pub(crate) query_planner: Arc<QueryPlanner>,
-    /// Query parse cache (used by execute_query_str — kept for future native executor).
-    #[allow(dead_code)]
-    pub(crate) query_cache: Arc<QueryCache>,
-    /// Cached CBO statistics (used by analyze in future migration).
-    #[allow(dead_code)]
-    pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, Instant)>>>,
     /// Graph schema (schemaless or strict).
     pub(crate) schema: GraphSchema,
+    /// Shared executor for VelesQL queries.
+    pub(crate) inner: Collection,
 }
 
 impl GraphCollection {
@@ -108,6 +102,10 @@ impl GraphCollection {
             None
         };
 
+        // Build inner AFTER engines create the directory and files.
+        // Use create_metadata_only so config.json is written once.
+        let inner = Collection::create_metadata_only(path.clone(), name)?;
+
         let coll = Self {
             path,
             config: Arc::new(RwLock::new(config)),
@@ -116,11 +114,9 @@ impl GraphCollection {
             payload,
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
             schema,
+            inner,
         };
-        coll.save_config()?;
         Ok(coll)
     }
 
@@ -151,6 +147,8 @@ impl GraphCollection {
         // Schema: currently read from config; future work will persist schema separately.
         let schema = GraphSchema::schemaless();
 
+        let inner = Collection::open(path.clone())?;
+
         Ok(Self {
             path,
             config: Arc::new(RwLock::new(config)),
@@ -159,19 +157,13 @@ impl GraphCollection {
             payload,
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
             schema,
+            inner,
         })
     }
 
     pub(crate) fn save_config(&self) -> Result<()> {
-        let config = self.config.read();
-        let config_path = self.path.join("config.json");
-        let config_data = serde_json::to_string_pretty(&*config)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-        std::fs::write(config_path, config_data)?;
-        Ok(())
+        self.inner.save_config()
     }
 
     /// Flushes all engines and saves the config.
@@ -337,7 +329,6 @@ impl GraphCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let legacy = crate::collection::Collection::open(self.path.clone())?;
-        legacy.execute_query(query, params)
+        self.inner.execute_query(query, params)
     }
 }
