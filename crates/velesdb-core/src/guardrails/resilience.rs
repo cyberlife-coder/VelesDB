@@ -155,13 +155,17 @@ impl CircuitBreaker {
 
     /// Records a failed request.
     pub fn record_failure(&self) {
+        // Acquire the state write-lock BEFORE incrementing the counter to close the TOCTOU
+        // window. Without this, a thread could compute count >= threshold, be preempted, and
+        // then resume after the circuit has already gone through Open → HalfOpen — incorrectly
+        // resetting opened_at and extending the recovery window.
+        let mut state = self.state.write();
         let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if count >= u64::from(self.failure_threshold) {
-            let mut state = self.state.write();
-            if *state == CircuitState::Closed || *state == CircuitState::HalfOpen {
-                *state = CircuitState::Open;
-                *self.opened_at.write() = Some(Instant::now());
-            }
+        if count >= u64::from(self.failure_threshold)
+            && (*state == CircuitState::Closed || *state == CircuitState::HalfOpen)
+        {
+            *state = CircuitState::Open;
+            *self.opened_at.write() = Some(Instant::now());
         }
     }
 

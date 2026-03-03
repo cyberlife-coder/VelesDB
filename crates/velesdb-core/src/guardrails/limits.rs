@@ -34,6 +34,10 @@ pub struct QueryLimits {
     /// Memory limit per query in bytes (US-004).
     pub memory_limit_bytes: usize,
     /// Query timeout in milliseconds (US-001).
+    ///
+    /// A value of `0` disables the timeout check entirely (no timeout fired).
+    /// The default is `30_000` (30 seconds). Use `0` only for offline/batch workloads
+    /// where unbounded execution time is acceptable.
     pub timeout_ms: u64,
     /// Rate limit: max queries per second per client (US-005).
     pub rate_limit_qps: u32,
