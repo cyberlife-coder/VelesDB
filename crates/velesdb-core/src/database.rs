@@ -238,8 +238,12 @@ impl Database {
         }
 
         let base_name = query.select.from.clone();
+        // Priority: collections registry first (contains live instances for both legacy
+        // create_collection and new create_vector_collection via shared inner Arc<>).
+        // Fallback to opening from disk via get_vector_collection for any missed case.
         let base_collection = self
             .get_collection(&base_name)
+            .or_else(|| self.get_vector_collection(&base_name).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
 
         if query.select.joins.is_empty() {
@@ -253,6 +257,7 @@ impl Database {
         for join in &query.select.joins {
             let join_collection = self
                 .get_collection(&join.table)
+                .or_else(|| self.get_vector_collection(&join.table).map(|vc| vc.inner))
                 .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
             let column_store = Self::build_join_column_store(&join_collection)?;
             let joined = crate::collection::search::query::join::execute_join(
@@ -331,20 +336,13 @@ impl Database {
         }
         let path = self.data_dir.join(name);
         let coll = VectorCollection::create(path, name, dimension, metric, storage_mode)?;
-        self.vector_colls
+        // Register the inner Collection in the legacy registry so that both
+        // get_collection() and get_vector_collection() use the same live instance.
+        // Collection is Clone and all heavy fields are Arc<> so this is zero-copy.
+        self.collections
             .write()
-            .insert(name.to_string(), coll.clone());
-
-        // Also register in legacy registry for backward compatibility
-        let legacy = Collection::create_with_options(
-            self.data_dir.join(name),
-            dimension,
-            metric,
-            storage_mode,
-        );
-        if let Ok(c) = legacy {
-            self.collections.write().insert(name.to_string(), c);
-        }
+            .insert(name.to_string(), coll.inner.clone());
+        self.vector_colls.write().insert(name.to_string(), coll);
 
         if let Some(ref obs) = self.observer {
             let kind = CollectionType::Vector {
@@ -573,6 +571,7 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let collection = self
             .get_collection(&stmt.table)
+            .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
 
         let mut id: Option<u64> = None;
@@ -624,6 +623,7 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let collection = self
             .get_collection(&stmt.table)
+            .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
 
         let assignments = stmt

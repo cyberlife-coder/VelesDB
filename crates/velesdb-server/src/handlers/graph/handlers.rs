@@ -20,20 +20,36 @@ use super::types::{
     TraverseRequest, TraverseResponse,
 };
 
-/// Resolves a `GraphCollection` or returns a 404.
+/// Resolves a `GraphCollection`, creating it on demand if it doesn't exist.
+///
+/// Graph collections are auto-created on first edge operation.
+/// This preserves backward compatibility with workflows that use graph ops
+/// on collections created as vector or metadata collections.
 fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(c) = state.db.get_graph_collection(name) {
+        return Ok(c);
+    }
+    // Auto-create a graph collection on first graph operation (backward compat).
+    use velesdb_core::GraphSchema;
+    state
+        .db
+        .create_graph_collection(name, GraphSchema::schemaless())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create graph collection '{}': {e}", name),
+                }),
+            )
+        })?;
     state.db.get_graph_collection(name).ok_or_else(|| {
         (
-            StatusCode::NOT_FOUND,
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!(
-                    "Collection '{}' not found or is not a graph collection. \
-                     Create it with collection_type='graph' first.",
-                    name
-                ),
+                error: format!("Graph collection '{}' not found after creation.", name),
             }),
         )
     })
