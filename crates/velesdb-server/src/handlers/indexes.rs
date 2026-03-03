@@ -31,7 +31,7 @@ pub async fn create_index(
     Path(name): Path<String>,
     Json(req): Json<CreateIndexRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -45,8 +45,12 @@ pub async fn create_index(
     };
 
     let result = match req.index_type.to_lowercase().as_str() {
-        "hash" => collection.create_property_index(&req.label, &req.property),
-        "range" => collection.create_range_index(&req.label, &req.property),
+        "hash" => collection
+            .as_collection()
+            .create_property_index(&req.label, &req.property),
+        "range" => collection
+            .as_collection()
+            .create_range_index(&req.label, &req.property),
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -97,7 +101,7 @@ pub async fn list_indexes(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -110,7 +114,7 @@ pub async fn list_indexes(
         }
     };
 
-    let core_indexes = collection.list_indexes();
+    let core_indexes = collection.as_collection().list_indexes();
     let indexes: Vec<IndexResponse> = core_indexes
         .into_iter()
         .map(|i| IndexResponse {
@@ -145,7 +149,7 @@ pub async fn delete_index(
     State(state): State<Arc<AppState>>,
     Path((name, label, property)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -158,7 +162,7 @@ pub async fn delete_index(
         }
     };
 
-    match collection.drop_index(&label, &property) {
+    match collection.as_collection().drop_index(&label, &property) {
         Ok(dropped) => {
             if dropped {
                 Json(serde_json::json!({

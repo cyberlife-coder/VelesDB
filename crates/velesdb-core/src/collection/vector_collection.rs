@@ -217,6 +217,15 @@ impl VectorCollection {
     // CRUD
     // -------------------------------------------------------------------------
 
+    /// Bulk insert optimized for high-throughput import (delegates to inner executor).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any point has a mismatched dimension.
+    pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
+        self.inner.upsert_bulk(points)
+    }
+
     /// Inserts or updates points.
     ///
     /// # Errors
@@ -281,7 +290,7 @@ impl VectorCollection {
     }
 
     // -------------------------------------------------------------------------
-    // Search
+    // Search — all delegate to inner (shares HNSW index, BM25, storage)
     // -------------------------------------------------------------------------
 
     /// Performs kNN vector search.
@@ -335,6 +344,116 @@ impl VectorCollection {
                 ))
             })
             .collect()
+    }
+
+    /// kNN search with explicit ef_search override.
+    /// # Errors
+    pub fn search_with_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.search_with_ef(query, k, ef_search)
+    }
+
+    /// kNN search with metadata filter.
+    /// # Errors
+    pub fn search_with_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.search_with_filter(query, k, filter)
+    }
+
+    /// Returns `(id, score)` pairs without payload hydration.
+    /// # Errors
+    pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
+        self.inner.search_ids(query, k)
+    }
+
+    /// Full-text search with metadata filter.
+    #[must_use]
+    pub fn text_search_with_filter(
+        &self,
+        query: &str,
+        k: usize,
+        filter: &crate::filter::Filter,
+    ) -> Vec<SearchResult> {
+        self.inner.text_search_with_filter(query, k, filter)
+    }
+
+    /// Hybrid search (vector + BM25 with RRF fusion).
+    /// # Errors
+    pub fn hybrid_search(
+        &self,
+        vector: &[f32],
+        text: &str,
+        k: usize,
+        alpha: Option<f32>,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.hybrid_search(vector, text, k, alpha)
+    }
+
+    /// Hybrid search with metadata filter.
+    /// # Errors
+    pub fn hybrid_search_with_filter(
+        &self,
+        vector: &[f32],
+        text: &str,
+        k: usize,
+        alpha: Option<f32>,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner
+            .hybrid_search_with_filter(vector, text, k, alpha, filter)
+    }
+
+    /// Batch search with per-query filters.
+    /// # Errors
+    pub fn search_batch_with_filters(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        filters: &[Option<crate::filter::Filter>],
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        self.inner.search_batch_with_filters(queries, k, filters)
+    }
+
+    /// Multi-query search (multiple vectors fused).
+    /// # Errors
+    pub fn multi_query_search(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        strategy: crate::fusion::FusionStrategy,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.multi_query_search(queries, k, strategy, filter)
+    }
+
+    /// Returns CBO statistics.
+    #[must_use]
+    pub fn get_stats(&self) -> crate::collection::stats::CollectionStats {
+        self.inner.get_stats()
+    }
+
+    /// Returns `true` if the collection is a metadata-only collection.
+    #[must_use]
+    pub fn is_metadata_only(&self) -> bool {
+        self.inner.is_metadata_only()
+    }
+
+    /// Returns a reference to the inner `Collection` executor.
+    ///
+    /// Used by handlers that need methods not yet wrapped on `VectorCollection`.
+    /// This will be removed once all callers are migrated.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn as_collection(&self) -> &crate::collection::Collection {
+        &self.inner
     }
 
     /// Executes a `VelesQL` query via the shared `Collection` executor.

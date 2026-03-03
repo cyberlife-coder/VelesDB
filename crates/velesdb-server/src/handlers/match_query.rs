@@ -122,17 +122,20 @@ pub async fn match_query(
     };
 
     // Get collection
-    let collection = state.db.get_collection(&collection_name).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            mk_error(
-                format!("Collection '{}' not found", collection_name),
-                "COLLECTION_NOT_FOUND",
-                "Create the collection first or correct the collection name in the route",
-                Some(serde_json::json!({ "collection": collection_name })),
-            ),
-        )
-    })?;
+    let collection = state
+        .db
+        .get_vector_collection(&collection_name)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                mk_error(
+                    format!("Collection '{}' not found", collection_name),
+                    "COLLECTION_NOT_FOUND",
+                    "Create the collection first or correct the collection name in the route",
+                    Some(serde_json::json!({ "collection": collection_name })),
+                ),
+            )
+        })?;
 
     // Parse MATCH query
     let query = velesdb_core::velesql::Parser::parse(&request.query).map_err(|e| {
@@ -182,6 +185,7 @@ pub async fn match_query(
     let results = if let Some(ref vector) = request.vector {
         let threshold = request.threshold.unwrap_or(0.0);
         collection
+            .as_collection()
             .execute_match_with_similarity(&match_clause, vector, threshold, &request.params)
             .map_err(|e| {
                 (
@@ -196,6 +200,7 @@ pub async fn match_query(
             })?
     } else {
         collection
+            .as_collection()
             .execute_match(&match_clause, &request.params)
             .map_err(|e| {
                 (

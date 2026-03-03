@@ -86,7 +86,7 @@ pub async fn search(
 ) -> impl IntoResponse {
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -175,7 +175,7 @@ pub async fn batch_search(
     let start = std::time::Instant::now();
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -277,7 +277,7 @@ pub async fn multi_query_search(
     use velesdb_core::FusionStrategy;
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -375,7 +375,7 @@ pub async fn text_search(
 ) -> impl IntoResponse {
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -444,7 +444,7 @@ pub async fn hybrid_search(
 ) -> impl IntoResponse {
     state.onboarding_metrics.record_search_request();
 
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (

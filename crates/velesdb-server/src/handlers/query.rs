@@ -103,7 +103,7 @@ pub async fn query(
     ) || select.group_by.is_some();
 
     if is_aggregation {
-        let collection = match state.db.get_collection(&collection_name) {
+        let collection = match state.db.get_vector_collection(&collection_name) {
             Some(c) => c,
             None => {
                 return (
@@ -125,7 +125,10 @@ pub async fn query(
         };
         // Route to aggregation execution
         let result =
-            match collection.execute_aggregate(&parsed, &req.params) {
+            match collection
+                .as_collection()
+                .execute_aggregate(&parsed, &req.params)
+            {
                 Ok(r) => r,
                 Err(e) => return (
                     StatusCode::UNPROCESSABLE_ENTITY,
@@ -150,7 +153,7 @@ pub async fn query(
     // - top-level MATCH executes in requested collection context
     // - SELECT executes through database-level dispatcher for cross-collection JOIN support
     let execute_result = if parsed.is_match_query() {
-        match state.db.get_collection(&collection_name) {
+        match state.db.get_vector_collection(&collection_name) {
             Some(c) => c.execute_query(&parsed, &req.params),
             None => Err(velesdb_core::Error::CollectionNotFound(
                 collection_name.clone(),
@@ -261,7 +264,7 @@ pub async fn explain(
     let select = &parsed.select;
 
     // Check collection exists
-    let collection_exists = state.db.get_collection(&select.from).is_some();
+    let collection_exists = state.db.get_vector_collection(&select.from).is_some();
     if !collection_exists && !select.from.is_empty() {
         return (
             StatusCode::NOT_FOUND,
