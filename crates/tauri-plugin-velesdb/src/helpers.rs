@@ -31,6 +31,8 @@ pub fn metric_to_string(metric: velesdb_core::distance::DistanceMetric) -> Strin
         DistanceMetric::DotProduct => "dot",
         DistanceMetric::Hamming => "hamming",
         DistanceMetric::Jaccard => "jaccard",
+        // Reason: DistanceMetric is #[non_exhaustive] — future variants default to "unknown".
+        _ => "unknown",
     }
     .to_string()
 }
@@ -58,6 +60,8 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> String {
         StorageMode::SQ8 => "sq8",
         StorageMode::Binary => "binary",
         StorageMode::ProductQuantization => "pq",
+        // Reason: StorageMode is #[non_exhaustive] — future variants default to "unknown".
+        _ => "unknown",
     }
     .to_string()
 }

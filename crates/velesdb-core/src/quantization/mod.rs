@@ -30,6 +30,7 @@ pub use scalar::{
 /// Storage mode for vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum StorageMode {
     /// Full precision f32 storage (default).
     #[default]

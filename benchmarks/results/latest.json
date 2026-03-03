@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "source": "criterion/smoke_test",
+  "benchmarks": {
+    "smoke_insert/10k_128d": {
+      "mean_ns": 8473152230.0
+    },
+    "smoke_search/10k_128d_k10": {
+      "mean_ns": 455588.52729575185
+    }
+  }
+}

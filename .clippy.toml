@@ -7,9 +7,9 @@
 # =============================================================================
 # Complexity thresholds
 # =============================================================================
-cognitive-complexity-threshold = 25
+cognitive-complexity-threshold = 15
 too-many-arguments-threshold = 7
-too-many-lines-threshold = 100
+too-many-lines-threshold = 80
 
 # =============================================================================
 # Type complexity

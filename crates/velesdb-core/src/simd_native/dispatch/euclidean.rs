@@ -1,6 +1,10 @@
 use super::{dot::dot_product_native, simd_level, SimdLevel};
 
 /// Squared L2 distance with runtime SIMD dispatch.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`.
 #[allow(clippy::inline_always)]
 #[inline(always)]
 #[must_use]

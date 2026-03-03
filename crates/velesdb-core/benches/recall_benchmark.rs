@@ -46,9 +46,7 @@ fn brute_force_knn(
             let dist = match metric {
                 DistanceMetric::Euclidean => simd_native::euclidean_native(query, vec),
                 DistanceMetric::DotProduct => simd_native::dot_product_native(query, vec),
-                DistanceMetric::Cosine | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
-                    simd_native::cosine_similarity_native(query, vec)
-                }
+                _ => simd_native::cosine_similarity_native(query, vec),
             };
             #[allow(clippy::cast_possible_truncation)]
             (idx as u64, dist)

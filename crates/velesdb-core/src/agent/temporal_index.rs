@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Temporal index for efficient time-based queries in `EpisodicMemory`.
 //!
 //! Replaces the naive O(N) scan with an indexed structure that provides:

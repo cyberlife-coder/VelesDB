@@ -389,8 +389,9 @@ impl Database {
             )
         };
 
-        collection.upsert(vec![point.clone()])?;
-        Ok(vec![SearchResult::new(point, 0.0)])
+        let result = SearchResult::new(point.clone(), 0.0);
+        collection.upsert(vec![point])?;
+        Ok(vec![result])
     }
 
     fn execute_update(
@@ -462,11 +463,12 @@ impl Database {
             return Ok(Vec::new());
         }
 
-        collection.upsert(updated_points.clone())?;
-        Ok(updated_points
-            .into_iter()
-            .map(|p| SearchResult::new(p, 0.0))
-            .collect())
+        let results = updated_points
+            .iter()
+            .map(|p| SearchResult::new(p.clone(), 0.0))
+            .collect();
+        collection.upsert(updated_points)?;
+        Ok(results)
     }
 }
 

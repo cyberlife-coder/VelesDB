@@ -48,8 +48,12 @@ impl QueryContext {
     /// Returns [`GuardRailViolation::Timeout`] when elapsed time exceeds
     /// the configured timeout.
     pub fn check_timeout(&self) -> Result<(), GuardRailViolation> {
+        // timeout_ms == 0 means "disabled" — never fire.
+        if self.limits.timeout_ms == 0 {
+            return Ok(());
+        }
         let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
-        if elapsed_ms > self.limits.timeout_ms {
+        if elapsed_ms >= self.limits.timeout_ms {
             return Err(GuardRailViolation::Timeout {
                 max_ms: self.limits.timeout_ms,
                 elapsed_ms,
@@ -82,6 +86,14 @@ impl QueryContext {
     ///
     /// Returns [`GuardRailViolation::CardinalityExceeded`] when cumulative
     /// intermediate result count exceeds the configured maximum.
+    ///
+    /// # Known Limitation
+    ///
+    /// This method is called on the final result set (post-filter, post-ORDER BY,
+    /// pre-LIMIT). It does **not** track intermediate over-fetched candidate sets
+    /// (e.g., `candidates_k = execution_limit * 10 * N` during similarity search).
+    /// Those are bounded by `MAX_LIMIT` internally and therefore do not escape.
+    /// Future work: thread `QueryContext` into ANN search to track intermediates.
     pub fn check_cardinality(&self, count: usize) -> Result<(), GuardRailViolation> {
         let current = self.current_cardinality.fetch_add(count, Ordering::Relaxed) + count;
         if current > self.limits.max_cardinality {

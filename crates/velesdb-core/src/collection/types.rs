@@ -1,13 +1,16 @@
 //! Collection types and configuration.
 
 use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
+use crate::collection::stats::CollectionStats;
 use crate::distance::DistanceMetric;
+use crate::guardrails::GuardRails;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
 use crate::storage::{LogPayloadStorage, MmapStorage};
-use parking_lot::RwLock;
+use crate::velesql::{QueryCache, QueryPlanner};
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -131,6 +134,20 @@ pub struct CollectionConfig {
     pub metadata_only: bool,
 }
 
+// === LOCK ORDERING ===
+// All code acquiring multiple locks on Collection MUST follow this order.
+// Acquiring in any other order risks deadlock under concurrent access.
+//
+// Canonical order (acquire lower numbers first):
+//   1. config
+//   2. vector_storage
+//   3. payload_storage
+//   4. sq8_cache / binary_cache / pq_cache  (any order among themselves)
+//   5. pq_quantizer → pq_training_buffer
+//   6. secondary_indexes
+//   7. property_index / range_index         (any order among themselves)
+//   8. edge_store
+
 /// A collection of vectors with associated metadata.
 #[derive(Clone)]
 pub struct Collection {
@@ -179,6 +196,18 @@ pub struct Collection {
 
     /// Secondary indexes for metadata payload fields.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
+
+    /// Guard-rails for query execution (EPIC-048).
+    pub(crate) guard_rails: Arc<GuardRails>,
+
+    /// Query planner for cost-based optimization (EPIC-046).
+    pub(crate) query_planner: Arc<QueryPlanner>,
+
+    /// Query parse cache for amortizing repeated query parsing (P1-A).
+    pub(crate) query_cache: Arc<QueryCache>,
+
+    /// Cached CBO statistics with TTL (avoids O(n) scan per query).
+    pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
 }
 
 impl Collection {

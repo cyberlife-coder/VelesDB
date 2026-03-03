@@ -9,6 +9,10 @@ pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Cosine similarity with runtime SIMD dispatch.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`.
 #[allow(clippy::inline_always)]
 #[inline(always)]
 #[must_use]

@@ -4,13 +4,15 @@ use crate::collection::graph::{EdgeStore, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
+use crate::guardrails::GuardRails;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
+use crate::velesql::{QueryCache, QueryPlanner};
 
 use std::collections::{HashMap, VecDeque};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -90,6 +92,10 @@ impl Collection {
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
         };
 
         collection.save_config()?;
@@ -181,6 +187,10 @@ impl Collection {
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
         };
 
         collection.save_config()?;
@@ -238,45 +248,9 @@ impl Collection {
             }
         }
 
-        // Load PropertyIndex if it exists (EPIC-009 US-005)
-        let property_index = {
-            let index_path = path.join("property_index.bin");
-            if index_path.exists() {
-                match PropertyIndex::load_from_file(&index_path) {
-                    Ok(idx) => idx,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
-                            index_path,
-                            e
-                        );
-                        PropertyIndex::new()
-                    }
-                }
-            } else {
-                PropertyIndex::new()
-            }
-        };
-
-        // Load RangeIndex if it exists (EPIC-009 US-005)
-        let range_index = {
-            let index_path = path.join("range_index.bin");
-            if index_path.exists() {
-                match RangeIndex::load_from_file(&index_path) {
-                    Ok(idx) => idx,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
-                            index_path,
-                            e
-                        );
-                        RangeIndex::new()
-                    }
-                }
-            } else {
-                RangeIndex::new()
-            }
-        };
+        // Load PropertyIndex and RangeIndex if they exist (EPIC-009 US-005)
+        let property_index = Self::load_property_index(&path);
+        let range_index = Self::load_range_index(&path);
 
         Ok(Self {
             path,
@@ -294,7 +268,41 @@ impl Collection {
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
         })
+    }
+
+    fn load_property_index(path: &std::path::Path) -> PropertyIndex {
+        let index_path = path.join("property_index.bin");
+        if index_path.exists() {
+            match PropertyIndex::load_from_file(&index_path) {
+                Ok(idx) => return idx,
+                Err(e) => tracing::warn!(
+                    "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
+                    index_path,
+                    e
+                ),
+            }
+        }
+        PropertyIndex::new()
+    }
+
+    fn load_range_index(path: &std::path::Path) -> RangeIndex {
+        let index_path = path.join("range_index.bin");
+        if index_path.exists() {
+            match RangeIndex::load_from_file(&index_path) {
+                Ok(idx) => return idx,
+                Err(e) => tracing::warn!(
+                    "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
+                    index_path,
+                    e
+                ),
+            }
+        }
+        RangeIndex::new()
     }
 
     /// Returns the collection configuration.

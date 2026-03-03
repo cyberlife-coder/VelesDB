@@ -56,55 +56,35 @@ type HnswIo = ();
 /// ```
 /// HNSW index for efficient approximate nearest neighbor search.
 ///
-/// # Safety Invariants (Self-Referential Pattern)
+/// # Implementation Notes (v1.0+)
 ///
-/// When loaded from disk via [`HnswIndex::load`], this struct uses a
-/// self-referential pattern where `inner` (the HNSW graph) borrows from
-/// `io_holder` (the memory-mapped file). This requires careful lifetime
-/// management:
+/// Since v1.0, `HnswInner` is `NativeHnswInner` — a fully owned, native
+/// implementation with no mmap borrowing and no self-referential lifetimes.
+/// `io_holder` is now `Option<Box<()>>` (always `None`) and is retained only
+/// to preserve the field layout tested by `test_field_order_io_holder_after_inner`.
 ///
-/// 1. **Field Order**: `io_holder` must be declared AFTER `inner` so Rust's
-///    default drop order drops `inner` first (fields drop in declaration order).
+/// `ManuallyDrop` and the custom `Drop` are also kept for forward-compatibility:
+/// if a future backend reintroduces borrowed data from disk, the invariant is
+/// already enforced structurally without code changes.
 ///
-/// 2. **`ManuallyDrop`**: `inner` is wrapped in `ManuallyDrop` so we can
-///    explicitly control when it's dropped in our `Drop` impl.
+/// # Drop Order Invariant
 ///
-/// 3. **Custom Drop**: Our `Drop` impl explicitly drops `inner` before
-///    returning, ensuring `io_holder` (dropped automatically after) outlives it.
-///
-/// 4. **Lifetime Extension**: We use `'static` lifetime in `HnswInner` which is
-///    technically a lie - the actual lifetime is tied to `io_holder`. This is
-///    safe because we guarantee `io_holder` outlives `inner` via the above.
-///
-/// **Note**: The `ouroboros` crate cannot be used here because `hnsw_rs::Hnsw`
-/// has an invariant lifetime parameter, which is incompatible with self-referential
-/// struct crates that require covariant lifetimes.
-///
-/// # Feature Flags (v0.8.12+)
-///
-/// - `native-hnsw` (default): Uses native HNSW implementation (faster, no deps)
-/// - `legacy-hnsw`: Uses `hnsw_rs` library for compatibility
-///
-/// # Why Not Unsafe Alternatives?
-///
-/// - `ouroboros`/`self_cell`: Require covariant lifetimes (Hnsw is invariant)
-/// - `rental`: Deprecated and unmaintained
-/// - `owning_ref`: Doesn't support this pattern
-///
-/// The current approach is a well-documented Rust pattern for handling libraries
-/// that return borrowed data from owned resources.
+/// `inner` (HNSW graph) **must** be dropped before `io_holder`.
+/// This is guaranteed by:
+/// 1. `ManuallyDrop<HnswInner>` preventing automatic drop of `inner`.
+/// 2. The explicit `Drop` impl calling `ManuallyDrop::drop` first.
+/// 3. `io_holder` being declared **after** `inner` (enforced by the safety test).
 pub struct HnswIndex {
     /// Vector dimension
     pub(crate) dimension: usize,
     /// Distance metric
     pub(crate) metric: DistanceMetric,
-    /// Internal HNSW index (type-erased for flexibility).
-    ///
-    /// # Safety
+    /// Internal HNSW index.
     ///
     /// Wrapped in `ManuallyDrop` to control drop order. MUST be dropped
-    /// BEFORE `io_holder` because it contains references into `io_holder`'s
-    /// memory-mapped data (when loaded from disk).
+    /// BEFORE `io_holder` (see Drop Order Invariant in struct-level doc).
+    /// Currently `NativeHnswInner` owns all its data, so no borrowing occurs;
+    /// `ManuallyDrop` is retained for forward-compatibility.
     pub(crate) inner: RwLock<ManuallyDrop<HnswInner>>,
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
@@ -125,29 +105,23 @@ pub struct HnswIndex {
     pub(crate) rerank_latency_target_us: AtomicU64,
     /// Exponential moving average of two-stage rerank latency (microseconds).
     pub(crate) rerank_latency_ema_us: AtomicU64,
-    /// Holds the `HnswIo` for loaded indices.
+    /// Reserved for future backends that may borrow from disk-mapped data.
     ///
-    /// # Safety
-    ///
-    /// This field MUST be declared AFTER `inner` and MUST outlive `inner`.
-    /// The `Hnsw` in `inner` borrows from the memory-mapped data owned by `HnswIo`.
-    /// Our `Drop` impl ensures `inner` is dropped first.
-    ///
-    /// - `Some(Box<HnswIo>)`: Index was loaded from disk, `inner` borrows from this
-    /// - `None`: Index was created in memory, no borrowing relationship
-    #[allow(dead_code)] // Read implicitly via lifetime - dropped after inner
+    /// Always `None` with the native implementation. Declared AFTER `inner`
+    /// so that if a borrowing backend is ever reintroduced, the drop-order
+    /// invariant is already structurally enforced.
+    #[allow(dead_code)] // Retained for field-layout invariant; dropped after inner
     pub(crate) io_holder: Option<Box<HnswIo>>,
 }
 
 impl Drop for HnswIndex {
     fn drop(&mut self) {
-        // SAFETY: We must drop inner BEFORE io_holder because inner (HnswInner)
-        // borrows from io_holder. ManuallyDrop lets us control this order.
-        // - Condition 1: inner is wrapped in ManuallyDrop to prevent automatic drop.
-        // - Condition 2: We acquire a write lock before dropping to ensure exclusive access.
-        // - Condition 3: ManuallyDrop::drop is only called once in this Drop impl.
-        // - Condition 4: For loaded indices, io_holder outlives inner; for new indices, io_holder is None.
-        // Reason: Self-referential struct pattern requires manual drop order control to prevent use-after-free.
+        // SAFETY: ManuallyDrop::drop requires exclusive ownership and a single call.
+        // - Condition 1: `inner` is wrapped in ManuallyDrop to suppress automatic drop.
+        // - Condition 2: Write lock guarantees no concurrent access during drop.
+        // - Condition 3: This Drop impl is the only site that calls ManuallyDrop::drop.
+        // Reason: Drop order invariant — `inner` must be destroyed before `io_holder`
+        // to remain forward-compatible with backends that borrow from io_holder.
         unsafe {
             ManuallyDrop::drop(&mut *self.inner.write());
         }

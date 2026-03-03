@@ -37,6 +37,8 @@ mod cache_tests;
 mod cbo_tests;
 #[cfg(test)]
 mod complex_parser_tests;
+#[cfg(feature = "persistence")]
+mod cost_estimator;
 #[cfg(test)]
 mod distinct_tests;
 #[cfg(test)]
@@ -74,6 +76,8 @@ mod parser_tests;
 mod planner;
 #[cfg(all(test, feature = "persistence"))]
 mod planner_tests;
+#[cfg(feature = "persistence")]
+mod query_stats;
 mod validation;
 #[cfg(test)]
 mod validation_parity_tests;

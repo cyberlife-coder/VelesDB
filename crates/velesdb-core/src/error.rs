@@ -138,6 +138,13 @@ pub enum Error {
     /// This is not recoverable — the guard must be re-acquired.
     #[error("[VELES-026] Epoch mismatch: {0}")]
     EpochMismatch(String),
+
+    /// Guard-rail violation (VELES-027).
+    ///
+    /// A query exceeded a configured limit (timeout, depth, cardinality,
+    /// memory, rate limit, or circuit breaker).
+    #[error("[VELES-027] Guard-rail violation: {0}")]
+    GuardRail(String),
 }
 
 impl Error {
@@ -171,6 +178,7 @@ impl Error {
             Self::ColumnStoreError(_) => "VELES-024",
             Self::GpuError(_) => "VELES-025",
             Self::EpochMismatch(_) => "VELES-026",
+            Self::GuardRail(_) => "VELES-027",
         }
     }
 
@@ -190,5 +198,13 @@ impl Error {
 impl From<crate::velesql::ParseError> for Error {
     fn from(err: crate::velesql::ParseError) -> Self {
         Self::Query(err.to_string())
+    }
+}
+
+/// Conversion from `GuardRailViolation` — surfaces limit violations as query errors.
+#[cfg(feature = "persistence")]
+impl From<crate::guardrails::GuardRailViolation> for Error {
+    fn from(v: crate::guardrails::GuardRailViolation) -> Self {
+        Self::GuardRail(v.to_string())
     }
 }

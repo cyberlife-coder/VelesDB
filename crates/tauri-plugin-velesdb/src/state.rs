@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 /// to the `VelesDB` database from all commands.
 pub struct VelesDbState {
     /// The database instance wrapped in Arc<RwLock> for thread-safe access.
-    db: Arc<RwLock<Option<Database>>>,
+    db: Arc<RwLock<Option<Arc<Database>>>>,
     /// Path to the database directory.
     path: PathBuf,
 }
@@ -48,7 +48,7 @@ impl VelesDbState {
     pub fn open(&self) -> Result<()> {
         let mut db_guard = self.db.write();
         if db_guard.is_none() {
-            let db = Database::open(&self.path)?;
+            let db = Arc::new(Database::open(&self.path)?);
             *db_guard = Some(db);
             tracing::info!("VelesDB opened at {:?}", self.path);
         }
@@ -60,7 +60,7 @@ impl VelesDbState {
     /// # Errors
     ///
     /// Returns an error if the database cannot be accessed.
-    pub fn get_db(&self) -> Result<Arc<RwLock<Option<Database>>>> {
+    pub fn get_db(&self) -> Result<Arc<RwLock<Option<Arc<Database>>>>> {
         // Ensure database is open
         {
             let db_guard = self.db.read();
@@ -79,14 +79,14 @@ impl VelesDbState {
     /// Returns an error if the database is not available.
     pub fn with_db<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&Database) -> Result<T>,
+        F: FnOnce(Arc<Database>) -> Result<T>,
     {
         self.open()?;
         let db_guard = self.db.read();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| Error::InvalidConfig("Database not initialized".to_string()))?;
-        f(db)
+        f(Arc::clone(db))
     }
 
     /// Returns the database path.
@@ -153,6 +153,7 @@ mod tests {
             let collections = db.list_collections();
             Ok(collections.len())
         });
+        // Note: db is Arc<Database> — list_collections() is reachable via Deref
 
         // Assert
         assert!(result.is_ok());

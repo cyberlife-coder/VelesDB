@@ -1,5 +1,4 @@
 //! Episodic Memory - Event timeline storage (US-003)
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //!
 //! Records events with timestamps and contextual information.
 //! Supports temporal queries and similarity-based retrieval.
@@ -17,15 +16,15 @@ use super::ttl::MemoryTtl;
 ///
 /// Records events with timestamps, descriptions, and embeddings.
 /// Supports similarity-based retrieval and time-range queries.
-pub struct EpisodicMemory<'a> {
+pub struct EpisodicMemory {
     collection_name: String,
-    db: &'a Database,
+    db: Arc<Database>,
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     temporal_index: Arc<TemporalIndex>,
 }
 
-impl<'a> EpisodicMemory<'a> {
+impl EpisodicMemory {
     const COLLECTION_NAME: &'static str = "_episodic_memory";
 
     /// Creates or opens the episodic memory collection.
@@ -33,7 +32,7 @@ impl<'a> EpisodicMemory<'a> {
     /// # Errors
     ///
     /// Returns an error when collection creation/opening fails or dimensions mismatch.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
+    pub fn new_from_db(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(
             db,
             dimension,
@@ -43,7 +42,7 @@ impl<'a> EpisodicMemory<'a> {
     }
 
     pub(crate) fn new(
-        db: &'a Database,
+        db: Arc<Database>,
         dimension: usize,
         ttl: Arc<MemoryTtl>,
         temporal_index: Arc<TemporalIndex>,
@@ -90,6 +89,7 @@ impl<'a> EpisodicMemory<'a> {
         }
     }
 
+    /// Returns the name of the underlying VelesDB collection.
     #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name

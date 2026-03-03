@@ -120,6 +120,7 @@ fn bench_bloom_filter_baseline(c: &mut Criterion) {
 
 // ========== Multi-Thread Scaling Benchmarks ==========
 
+#[allow(clippy::too_many_lines)] // Reason: benchmark harness with multiple group configurations; splitting would hurt readability.
 fn bench_lru_cache_concurrent(c: &mut Criterion) {
     let mut group = c.benchmark_group("LruCache-Concurrent");
 

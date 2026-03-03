@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Snapshot and versioning support for `AgentMemory`.
 //!
 //! Provides serialization/deserialization of `AgentMemory` state for:
@@ -104,7 +103,12 @@ pub enum SnapshotError {
     /// Unsupported version.
     UnsupportedVersion(u8),
     /// CRC checksum mismatch.
-    ChecksumMismatch { expected: u32, actual: u32 },
+    ChecksumMismatch {
+        /// Expected CRC32 value stored in the snapshot.
+        expected: u32,
+        /// Actual CRC32 value computed from the data.
+        actual: u32,
+    },
     /// Data corruption or truncation.
     CorruptedData(String),
 }
