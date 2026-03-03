@@ -32,6 +32,12 @@ mod tests;
 #[cfg(test)]
 mod metadata_only_tests;
 
+#[cfg(test)]
+mod guardrails_integration_tests;
+
+#[cfg(test)]
+mod e2e_integration_tests;
+
 pub use core::{IndexInfo, TraversalResult};
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,

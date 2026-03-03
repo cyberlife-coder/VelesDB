@@ -4,13 +4,15 @@ use crate::collection::graph::{EdgeStore, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig, CollectionType};
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
+use crate::guardrails::GuardRails;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
+use crate::velesql::{QueryCache, QueryPlanner};
 
 use std::collections::{HashMap, VecDeque};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -90,6 +92,10 @@ impl Collection {
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
         };
 
         collection.save_config()?;
@@ -181,6 +187,10 @@ impl Collection {
             range_index: Arc::new(RwLock::new(RangeIndex::new())),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
         };
 
         collection.save_config()?;
@@ -258,6 +268,10 @@ impl Collection {
             range_index: Arc::new(RwLock::new(range_index)),
             edge_store: Arc::new(RwLock::new(EdgeStore::new())),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
         })
     }
 
