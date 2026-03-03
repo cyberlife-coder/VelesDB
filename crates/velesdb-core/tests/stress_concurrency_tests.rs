@@ -62,14 +62,16 @@ fn run_collection_stress(
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("stress");
 
-    let collection = Arc::new(VectorCollection::create(
-        path,
-        "stress",
-        dimension,
-        DistanceMetric::Cosine,
-        velesdb_core::StorageMode::Full,
-    ))
-    .expect("create");
+    let collection = Arc::new(
+        VectorCollection::create(
+            path,
+            "stress",
+            dimension,
+            DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
+        )
+        .expect("create"),
+    );
 
     // Seed
     let initial: Vec<Point> = (0..initial_points as u64)
