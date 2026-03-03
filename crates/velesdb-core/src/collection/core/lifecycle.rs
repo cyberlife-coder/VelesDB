@@ -268,7 +268,8 @@ impl Collection {
                 Ok(idx) => return idx,
                 Err(e) => tracing::warn!(
                     "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
-                    index_path, e
+                    index_path,
+                    e
                 ),
             }
         }
@@ -282,7 +283,8 @@ impl Collection {
                 Ok(idx) => return idx,
                 Err(e) => tracing::warn!(
                     "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
-                    index_path, e
+                    index_path,
+                    e
                 ),
             }
         }

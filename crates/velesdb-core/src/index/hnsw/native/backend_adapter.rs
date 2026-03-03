@@ -383,7 +383,14 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             layers.push(layer);
         }
 
-        Ok(LoadedGraph { layers, max_connections, max_connections_0, ef_construction, entry_point, max_layer })
+        Ok(LoadedGraph {
+            layers,
+            max_connections,
+            max_connections_0,
+            ef_construction,
+            entry_point,
+            max_layer,
+        })
     }
 }
 

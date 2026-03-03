@@ -345,17 +345,40 @@ impl<'a> ProceduralMemory<'a> {
             .ok_or_else(|| AgentMemoryError::CollectionError("Missing payload".to_string()))?;
 
         Ok(ProcedureState {
-            name: payload.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            name: payload
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             steps: payload
                 .get("steps")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default(),
-            confidence: payload.get("confidence").and_then(serde_json::Value::as_f64).unwrap_or(0.5) as f32,
-            usage_count: payload.get("usage_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
-            created_at: payload.get("created_at").and_then(serde_json::Value::as_i64).unwrap_or(0),
-            success_count: payload.get("success_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
-            failure_count: payload.get("failure_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+            confidence: payload
+                .get("confidence")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.5) as f32,
+            usage_count: payload
+                .get("usage_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            created_at: payload
+                .get("created_at")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
+            success_count: payload
+                .get("success_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            failure_count: payload
+                .get("failure_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
         })
     }
 
