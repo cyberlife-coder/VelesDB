@@ -150,8 +150,10 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
 pub use collection::{
-    // Public user-facing types
+    // Collection kept for backward compatibility with external crates
+    // that still access it directly (velesdb-cli repl, async_ops docs, etc.)
     Collection,
+    // Public user-facing types
     CollectionType,
     // Graph API types (user-visible)
     EdgeType,
