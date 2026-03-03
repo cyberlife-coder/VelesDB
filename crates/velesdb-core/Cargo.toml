@@ -102,7 +102,7 @@ version = "2.7"
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
-update-check = ["dep:reqwest", "dep:tokio"]
+update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
 loom = ["dep:loom"]
 
 [dev-dependencies]
@@ -280,18 +280,22 @@ optional = true
 workspace = true
 optional = true
 
-# Update check dependencies (non-WASM only)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.sha2]
+# Update check dependencies (optional, gated behind update-check feature)
+[dependencies.sha2]
 version = "0.10"
+optional = true
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.hex]
+[dependencies.hex]
 version = "0.4"
+optional = true
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.hostname]
+[dependencies.hostname]
 version = "0.4"
+optional = true
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.whoami]
+[dependencies.whoami]
 version = "1.5"
+optional = true
 
 [dependencies.reqwest]
 version = "0.11"

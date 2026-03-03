@@ -131,7 +131,7 @@ mod simd_tests;
 #[cfg(feature = "persistence")]
 pub mod storage;
 pub mod sync;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub mod update_check;
 pub mod vector_ref;
 #[cfg(test)]
@@ -140,7 +140,7 @@ pub mod velesql;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub use update_check::{check_for_updates, spawn_update_check};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 
 #[cfg(feature = "persistence")]
@@ -167,9 +167,11 @@ pub use column_store::{
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,
 };
 pub use config::{
-    ConfigError, HnswConfig, LimitsConfig, LoggingConfig, QuantizationConfig, SearchConfig,
-    SearchMode, ServerConfig, StorageConfig, VelesConfig,
+    ConfigError, HnswConfig, LimitsConfig, QuantizationConfig, SearchConfig, SearchMode,
+    VelesConfig,
 };
+#[cfg(feature = "persistence")]
+pub use config::{LoggingConfig, ServerConfig, StorageConfig};
 pub use fusion::{FusionError, FusionStrategy};
 pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,

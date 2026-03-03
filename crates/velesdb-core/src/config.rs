@@ -110,30 +110,95 @@ pub struct HnswConfig {
     pub max_layers: usize,
 }
 
-/// Storage configuration section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct StorageConfig {
-    /// Data directory path.
-    pub data_dir: String,
-    /// Storage mode: "mmap" or "memory".
-    pub storage_mode: String,
-    /// Mmap cache size in megabytes.
-    pub mmap_cache_mb: usize,
-    /// Vector alignment in bytes.
-    pub vector_alignment: usize,
-}
+/// Server-layer configuration types (HTTP transport, logging, storage paths).
+///
+/// These types are intentionally separated from the core engine configuration
+/// (`SearchConfig`, `HnswConfig`, `LimitsConfig`) to enforce layer boundaries.
+/// Import via `config::server::ServerConfig` or use the crate-root re-exports.
+pub mod server {
+    use serde::{Deserialize, Serialize};
 
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            data_dir: "./velesdb_data".to_string(),
-            storage_mode: "mmap".to_string(),
-            mmap_cache_mb: 1024,
-            vector_alignment: 64,
+    /// Storage configuration section.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(default)]
+    pub struct StorageConfig {
+        /// Data directory path.
+        pub data_dir: String,
+        /// Storage mode: `"mmap"` or `"memory"`.
+        pub storage_mode: String,
+        /// Mmap cache size in megabytes.
+        pub mmap_cache_mb: usize,
+        /// Vector alignment in bytes.
+        pub vector_alignment: usize,
+    }
+
+    impl Default for StorageConfig {
+        fn default() -> Self {
+            Self {
+                data_dir: "./velesdb_data".to_string(),
+                storage_mode: "mmap".to_string(),
+                mmap_cache_mb: 1024,
+                vector_alignment: 64,
+            }
+        }
+    }
+
+    /// Server configuration section.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(default)]
+    pub struct ServerConfig {
+        /// Host address.
+        pub host: String,
+        /// Port number.
+        pub port: u16,
+        /// Number of worker threads (0 = auto).
+        pub workers: usize,
+        /// Maximum HTTP body size in bytes.
+        pub max_body_size: usize,
+        /// Enable CORS.
+        pub cors_enabled: bool,
+        /// CORS allowed origins.
+        pub cors_origins: Vec<String>,
+    }
+
+    impl Default for ServerConfig {
+        fn default() -> Self {
+            Self {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                workers: 0,
+                max_body_size: 104_857_600,
+                cors_enabled: false,
+                cors_origins: vec!["*".to_string()],
+            }
+        }
+    }
+
+    /// Logging configuration section.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(default)]
+    pub struct LoggingConfig {
+        /// Log level: `error`, `warn`, `info`, `debug`, `trace`.
+        pub level: String,
+        /// Log format: `text` or `json`.
+        pub format: String,
+        /// Log file path (empty = stdout).
+        pub file: String,
+    }
+
+    impl Default for LoggingConfig {
+        fn default() -> Self {
+            Self {
+                level: "info".to_string(),
+                format: "text".to_string(),
+                file: String::new(),
+            }
         }
     }
 }
+
+// Backward-compatible re-exports at module level.
+pub use server::{LoggingConfig, ServerConfig, StorageConfig};
 
 /// Limits configuration section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,59 +224,6 @@ impl Default for LimitsConfig {
             max_collections: 1000,
             max_payload_size: 1_048_576, // 1 MB
             max_perfect_mode_vectors: 500_000,
-        }
-    }
-}
-
-/// Server configuration section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ServerConfig {
-    /// Host address.
-    pub host: String,
-    /// Port number.
-    pub port: u16,
-    /// Number of worker threads (0 = auto).
-    pub workers: usize,
-    /// Maximum HTTP body size in bytes.
-    pub max_body_size: usize,
-    /// Enable CORS.
-    pub cors_enabled: bool,
-    /// CORS allowed origins.
-    pub cors_origins: Vec<String>,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            workers: 0,                 // Auto
-            max_body_size: 104_857_600, // 100 MB
-            cors_enabled: false,
-            cors_origins: vec!["*".to_string()],
-        }
-    }
-}
-
-/// Logging configuration section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LoggingConfig {
-    /// Log level: error, warn, info, debug, trace.
-    pub level: String,
-    /// Log format: text or json.
-    pub format: String,
-    /// Log file path (empty = stdout).
-    pub file: String,
-}
-
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            level: "info".to_string(),
-            format: "text".to_string(),
-            file: String::new(),
         }
     }
 }
