@@ -20,7 +20,7 @@ use velesdb_server::{
     delete_index, delete_point, flush_collection, get_collection, get_edges, get_node_degree,
     get_point, health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
     multi_query_search, query, search, stream_traverse, stream_upsert_points, text_search,
-    traverse_graph, upsert_points, ApiDoc, AppState, GraphService, OnboardingMetrics,
+    traverse_graph, upsert_points, ApiDoc, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -63,32 +63,7 @@ fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
     }))
 }
 
-fn init_graph_service() -> GraphService {
-    let graph_service = GraphService::new();
-    tracing::warn!(
-        "GraphService initialized (PREVIEW): Graph data is in-memory only and will NOT persist across restarts. \
-         Use the Python/Rust SDK for persistent graph storage."
-    );
-    graph_service
-}
-
-fn build_router(state: Arc<AppState>, graph_service: GraphService) -> Router {
-    let graph_router = Router::new()
-        .route(
-            "/collections/{name}/graph/edges",
-            get(get_edges).post(add_edge),
-        )
-        .route("/collections/{name}/graph/traverse", post(traverse_graph))
-        .route(
-            "/collections/{name}/graph/traverse/stream",
-            get(stream_traverse),
-        )
-        .route(
-            "/collections/{name}/graph/nodes/{node_id}/degree",
-            get(get_node_degree),
-        )
-        .with_state(graph_service);
-
+fn build_router(state: Arc<AppState>) -> Router {
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route(
@@ -132,8 +107,20 @@ fn build_router(state: Arc<AppState>, graph_service: GraphService) -> Router {
         )
         .route("/query", post(query))
         .route("/collections/{name}/match", post(match_query))
-        .with_state(state)
-        .merge(graph_router);
+        .route(
+            "/collections/{name}/graph/edges",
+            get(get_edges).post(add_edge),
+        )
+        .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/traverse/stream",
+            get(stream_traverse),
+        )
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/degree",
+            get(get_node_degree),
+        )
+        .with_state(state);
 
     #[cfg(feature = "prometheus")]
     let api_router = {
@@ -165,8 +152,7 @@ async fn main() -> anyhow::Result<()> {
     log_startup(&args);
 
     let state = init_app_state(&args.data_dir)?;
-    let graph_service = init_graph_service();
-    let app = build_router(state, graph_service);
+    let app = build_router(state);
 
     serve(&args.host, args.port, app).await
 }

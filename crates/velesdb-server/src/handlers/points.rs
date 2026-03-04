@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::types::{ErrorResponse, UpsertPointsRequest};
 use crate::AppState;
-use velesdb_core::{Collection, Point};
+use velesdb_core::{Point, VectorCollection};
 
 const STREAM_BATCH_SIZE: usize = 100;
 const STREAM_BATCH_MAX_WAIT: Duration = Duration::from_millis(100);
@@ -40,7 +40,7 @@ fn parse_ndjson_line(line: &str, batch: &mut Vec<Point>, stats: &mut StreamUpser
 }
 
 async fn flush_point_batch(
-    collection: Collection,
+    collection: VectorCollection,
     batch: &mut Vec<Point>,
     stats: &mut StreamUpsertStats,
 ) {
@@ -92,13 +92,16 @@ pub async fn upsert_points(
     Path(name): Path<String>,
     Json(req): Json<UpsertPointsRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
+                    error: format!(
+                        "Collection '{}' not found or is not a vector collection",
+                        name
+                    ),
                 }),
             )
                 .into_response()
@@ -116,11 +119,14 @@ pub async fn upsert_points(
     let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
     match result {
-        Ok(Ok(inserted)) => Json(serde_json::json!({
-            "message": "Points upserted",
-            "count": inserted
-        }))
-        .into_response(),
+        Ok(Ok(inserted)) => {
+            state.db.notify_upsert(&name, inserted);
+            Json(serde_json::json!({
+                "message": "Points upserted",
+                "count": inserted
+            }))
+            .into_response()
+        }
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -157,13 +163,16 @@ pub async fn stream_upsert_points(
     Path(name): Path<String>,
     body: Body,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
+                    error: format!(
+                        "Collection '{}' not found or is not a vector collection",
+                        name
+                    ),
                 }),
             )
                 .into_response()
@@ -207,6 +216,10 @@ pub async fn stream_upsert_points(
 
     flush_point_batch(collection, &mut batch, &mut stats).await;
 
+    if stats.inserted > 0 {
+        state.db.notify_upsert(&name, stats.inserted);
+    }
+
     Json(serde_json::json!({
         "message": "Stream processed",
         "inserted": stats.inserted,
@@ -234,13 +247,16 @@ pub async fn get_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
+                    error: format!(
+                        "Collection '{}' not found or is not a vector collection",
+                        name
+                    ),
                 }),
             )
                 .into_response()
@@ -285,13 +301,16 @@ pub async fn delete_point(
     State(state): State<Arc<AppState>>,
     Path((name, id)): Path<(String, u64)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("Collection '{}' not found", name),
+                    error: format!(
+                        "Collection '{}' not found or is not a vector collection",
+                        name
+                    ),
                 }),
             )
                 .into_response()

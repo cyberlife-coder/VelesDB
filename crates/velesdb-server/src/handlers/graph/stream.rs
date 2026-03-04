@@ -11,7 +11,10 @@ use futures::stream::{self, Stream};
 use std::convert::Infallible;
 use std::time::Instant;
 
-use super::service::GraphService;
+use std::sync::Arc;
+
+use crate::AppState;
+
 use super::types::{
     StreamDoneEvent, StreamErrorEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams,
     TraversalResultItem,
@@ -29,10 +32,12 @@ const STATS_INTERVAL: usize = 100;
 /// - `error`: If an error occurs
 #[allow(clippy::unused_async)]
 pub async fn stream_traverse(
-    State(graph_service): State<GraphService>,
+    State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
     Query(params): Query<StreamTraverseParams>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    use velesdb_core::collection::graph::TraversalConfig;
+
     let start_time = Instant::now();
 
     let rel_types: Vec<String> = params
@@ -40,22 +45,32 @@ pub async fn stream_traverse(
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
         .unwrap_or_default();
 
-    let traversal_result = match params.algorithm.to_lowercase().as_str() {
-        "dfs" => graph_service.traverse_dfs(
-            &collection,
-            params.start_node,
-            params.max_depth,
-            params.limit,
-            &rel_types,
-        ),
-        _ => graph_service.traverse_bfs(
-            &collection,
-            params.start_node,
-            params.max_depth,
-            params.limit,
-            &rel_types,
-        ),
-    };
+    let traversal_result: Result<Vec<TraversalResultItem>, String> =
+        match state.db.get_graph_collection(&collection) {
+            None => Err(format!(
+                "Collection '{}' not found or is not a graph collection.",
+                collection
+            )),
+            Some(coll) => {
+                let config = TraversalConfig::with_range(1, params.max_depth)
+                    .with_limit(params.limit)
+                    .with_rel_types(rel_types);
+
+                let raw = match params.algorithm.to_lowercase().as_str() {
+                    "dfs" => coll.traverse_dfs(params.start_node, &config),
+                    _ => coll.traverse_bfs(params.start_node, &config),
+                };
+
+                Ok(raw
+                    .into_iter()
+                    .map(|r| TraversalResultItem {
+                        target_id: r.target_id,
+                        depth: r.depth,
+                        path: r.path,
+                    })
+                    .collect())
+            }
+        };
 
     let events = build_sse_events(traversal_result, start_time);
     Sse::new(stream::iter(events)).keep_alive(KeepAlive::default())

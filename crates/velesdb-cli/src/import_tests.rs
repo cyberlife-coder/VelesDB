@@ -131,7 +131,7 @@ fn test_import_jsonl_basic() {
     assert_eq!(stats.imported, 3);
     assert_eq!(stats.errors, 0);
 
-    let col = db.get_collection("test").unwrap();
+    let col = db.get_vector_collection("test").unwrap();
     assert_eq!(col.len(), 3);
 }
 
@@ -164,7 +164,7 @@ fn test_import_jsonl_with_payload() {
 
     assert_eq!(stats.imported, 2);
 
-    let col = db.get_collection("test").unwrap();
+    let col = db.get_vector_collection("test").unwrap();
     let points = col.get(&[1, 2]);
     assert!(points[0].as_ref().unwrap().payload.is_some());
 }
@@ -294,7 +294,7 @@ fn test_import_csv_with_extra_columns() {
     assert_eq!(stats.imported, 2);
 
     // Extra columns should be stored as payload
-    let col = db.get_collection("test").unwrap();
+    let col = db.get_vector_collection("test").unwrap();
     let points = col.get(&[1]);
     let payload = points[0].as_ref().unwrap().payload.as_ref().unwrap();
     assert_eq!(payload["title"], "Document 1");
@@ -369,7 +369,7 @@ fn test_scenario_rag_document_import() {
     assert!(stats.records_per_sec() > 0.0);
 
     // Verify search works
-    let col = db.get_collection("documents").unwrap();
+    let col = db.get_vector_collection("documents").unwrap();
     let query: Vec<f32> = (0..768).map(|i| i as f32 / 100.0).collect();
     let results = col.search(&query, 10).unwrap();
     assert_eq!(results.len(), 10);
@@ -411,7 +411,7 @@ fn test_scenario_product_catalog_import() {
     assert_eq!(stats.imported, 50);
 
     // Verify metadata is preserved
-    let col = db.get_collection("products").unwrap();
+    let col = db.get_vector_collection("products").unwrap();
     let points = col.get(&[0]);
     let payload = points[0].as_ref().unwrap().payload.as_ref().unwrap();
     assert_eq!(payload["name"], "Product 0");
@@ -458,7 +458,7 @@ fn test_scenario_incremental_import() {
     assert_eq!(stats2.imported, 50);
 
     // Verify final state
-    let col = db.get_collection("data").unwrap();
+    let col = db.get_vector_collection("data").unwrap();
     assert_eq!(col.len(), 100);
 
     // Verify random access works across both batches
@@ -491,6 +491,6 @@ fn test_scenario_large_dimension_vectors() {
 
     assert_eq!(stats.imported, 20);
 
-    let col = db.get_collection("gpt_embeddings").unwrap();
+    let col = db.get_vector_collection("gpt_embeddings").unwrap();
     assert_eq!(col.config().dimension, 1536);
 }

@@ -23,9 +23,9 @@ use clap::Parser;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::path::PathBuf;
-use velesdb_core::collection::Collection;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::point::Point;
+use velesdb_core::VectorCollection;
 
 #[derive(Parser, Debug)]
 #[command(name = "crash_driver")]
@@ -103,13 +103,15 @@ fn log_reproduction_info(args: &Args) {
 fn run_insert(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // Create or open collection
     let collection = if args.data_dir.join("config.json").exists() {
-        Collection::open(args.data_dir.clone())?
+        VectorCollection::open(args.data_dir.clone())?
     } else {
         std::fs::create_dir_all(&args.data_dir)?;
-        Collection::create(
+        VectorCollection::create(
             args.data_dir.clone(),
+            "crash_driver",
             args.dimension,
             DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
         )?
     };
 
@@ -150,7 +152,7 @@ fn run_insert(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_query(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let collection = Collection::open(args.data_dir.clone())?;
+    let collection = VectorCollection::open(args.data_dir.clone())?;
 
     let mut rng = StdRng::seed_from_u64(args.seed);
     let mut successful = 0;
@@ -185,7 +187,7 @@ fn run_integrity_check(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Opening collection for integrity check...");
 
     // Try to open the collection (this triggers WAL replay)
-    let collection = Collection::open(args.data_dir.clone())?;
+    let collection = VectorCollection::open(args.data_dir.clone())?;
 
     let recovered_count = collection.len();
     eprintln!("Recovered {recovered_count} documents");
@@ -265,7 +267,7 @@ fn run_integrity_check(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_delete(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let collection = Collection::open(args.data_dir.clone())?;
+    let collection = VectorCollection::open(args.data_dir.clone())?;
 
     let delete_count = args.count.min(collection.len());
     // delete() takes a slice of IDs

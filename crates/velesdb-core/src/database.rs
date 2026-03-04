@@ -1,5 +1,7 @@
 //! Database facade and orchestration layer for collection lifecycle and query routing.
 
+use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
+use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
 use crate::{
     Collection, CollectionType, ColumnStore, DistanceMetric, Error, Result, SearchResult,
@@ -7,30 +9,70 @@ use crate::{
 };
 
 /// Database instance managing collections and storage.
+///
+/// # Lifecycle
+///
+/// `Database::open()` automatically loads all previously created collections from disk.
+/// There is no need to call `load_collections()` separately.
+///
+/// # Extension (Premium)
+///
+/// Use [`Database::open_with_observer`] to inject a [`DatabaseObserver`] implementation
+/// from `velesdb-premium` without modifying this crate.
 #[cfg(feature = "persistence")]
 pub struct Database {
     /// Path to the data directory
     data_dir: std::path::PathBuf,
-    /// Collections managed by this database
+    /// Legacy registry (Collection god-object) — kept for backward compatibility during migration.
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
+    /// New registry: vector collections.
+    vector_colls: parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
+    /// New registry: graph collections.
+    graph_colls: parking_lot::RwLock<std::collections::HashMap<String, GraphCollection>>,
+    /// New registry: metadata-only collections.
+    metadata_colls: parking_lot::RwLock<std::collections::HashMap<String, MetadataCollection>>,
     /// Cached collection statistics for CBO planning.
     collection_stats: parking_lot::RwLock<
         std::collections::HashMap<String, crate::collection::stats::CollectionStats>,
     >,
+    /// Optional lifecycle observer (used by velesdb-premium for RBAC, audit, multi-tenant).
+    observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
 }
 
 #[cfg(feature = "persistence")]
 impl Database {
-    /// Opens or creates a database at the specified path.
+    /// Opens or creates a database, **automatically loading all existing collections**.
     ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the data directory
+    /// This replaces the previous `open()` + `load_collections()` two-step pattern.
+    /// The new `open()` is a strict auto-load: all `config.json` directories under
+    /// `path` are loaded on startup.
     ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or accessed.
     pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        Self::open_impl(path, None)
+    }
+
+    /// Opens a database with a [`DatabaseObserver`] (used by velesdb-premium).
+    ///
+    /// The observer receives lifecycle hooks for every collection operation,
+    /// enabling RBAC, audit logging, multi-tenant routing, etc.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or accessed.
+    pub fn open_with_observer<P: AsRef<std::path::Path>>(
+        path: P,
+        observer: std::sync::Arc<dyn DatabaseObserver>,
+    ) -> Result<Self> {
+        Self::open_impl(path, Some(observer))
+    }
+
+    fn open_impl<P: AsRef<std::path::Path>>(
+        path: P,
+        observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
+    ) -> Result<Self> {
         let data_dir = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
 
@@ -42,11 +84,20 @@ impl Database {
             "SIMD features detected - direct dispatch enabled"
         );
 
-        Ok(Self {
+        let db = Self {
             data_dir,
             collections: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            vector_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            graph_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            metadata_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             collection_stats: parking_lot::RwLock::new(std::collections::HashMap::new()),
-        })
+            observer,
+        };
+
+        // Auto-load all existing collections from disk (replaces manual load_collections()).
+        db.load_collections()?;
+
+        Ok(db)
     }
 
     /// Creates a new collection with the specified parameters.
@@ -88,18 +139,27 @@ impl Database {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) -> Result<()> {
-        let mut collections = self.collections.write();
-
-        if collections.contains_key(name) {
+        if self.collections.read().contains_key(name) || self.vector_colls.read().contains_key(name)
+        {
             return Err(Error::CollectionExists(name.to_string()));
         }
 
         let collection_path = self.data_dir.join(name);
-        let collection =
-            Collection::create_with_options(collection_path, dimension, metric, storage_mode)?;
-        collections.insert(name.to_string(), collection);
+        let coll =
+            VectorCollection::create(collection_path, name, dimension, metric, storage_mode)?;
+        // Keep legacy and typed registries in sync (same Arc<> — zero copy).
+        self.collections
+            .write()
+            .insert(name.to_string(), coll.inner.clone());
+        self.vector_colls.write().insert(name.to_string(), coll);
 
         Ok(())
+    }
+
+    /// Returns the path to the data directory.
+    #[must_use]
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     /// Gets a reference to a collection by name.
@@ -187,8 +247,12 @@ impl Database {
         }
 
         let base_name = query.select.from.clone();
+        // Priority: collections registry first (contains live instances for both legacy
+        // create_collection and new create_vector_collection via shared inner Arc<>).
+        // Fallback to opening from disk via get_vector_collection for any missed case.
         let base_collection = self
             .get_collection(&base_name)
+            .or_else(|| self.get_vector_collection(&base_name).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
 
         if query.select.joins.is_empty() {
@@ -202,6 +266,7 @@ impl Database {
         for join in &query.select.joins {
             let join_collection = self
                 .get_collection(&join.table)
+                .or_else(|| self.get_vector_collection(&join.table).map(|vc| vc.inner))
                 .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
             let column_store = Self::build_join_column_store(&join_collection)?;
             let joined = crate::collection::search::query::join::execute_join(
@@ -216,8 +281,28 @@ impl Database {
     }
 
     /// Lists all collection names in the database.
+    ///
+    /// Includes collections created via any typed API (vector, graph, metadata).
     pub fn list_collections(&self) -> Vec<String> {
-        self.collections.read().keys().cloned().collect()
+        // BUG-7: acquire all locks together for a consistent point-in-time snapshot.
+        let collections = self.collections.read();
+        let vector_colls = self.vector_colls.read();
+        let graph_colls = self.graph_colls.read();
+        let metadata_colls = self.metadata_colls.read();
+
+        let mut names: std::collections::HashSet<String> = collections.keys().cloned().collect();
+        for k in vector_colls.keys() {
+            names.insert(k.clone());
+        }
+        for k in graph_colls.keys() {
+            names.insert(k.clone());
+        }
+        for k in metadata_colls.keys() {
+            names.insert(k.clone());
+        }
+        let mut result: Vec<String> = names.into_iter().collect();
+        result.sort();
+        result
     }
 
     /// Deletes a collection by name.
@@ -228,21 +313,307 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection does not exist.
+    /// Returns an error if the collection does not exist in any registry.
+    ///
+    /// # Concurrency
+    ///
+    /// The existence check and the registry removals are not a single atomic
+    /// operation. Under concurrent deletion of the same collection, at most one
+    /// caller receives `CollectionNotFound`; subsequent callers perform no-op
+    /// `remove()` calls which are safe and idempotent. `remove_dir_all` is
+    /// guarded by an `exists()` check and is therefore also safe.
     pub fn delete_collection(&self, name: &str) -> Result<()> {
-        let mut collections = self.collections.write();
+        // Check existence across all registries before taking any write lock.
+        let exists = self.collections.read().contains_key(name)
+            || self.vector_colls.read().contains_key(name)
+            || self.graph_colls.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name);
 
-        if collections.remove(name).is_none() {
+        if !exists {
             return Err(Error::CollectionNotFound(name.to_string()));
         }
 
+        // Remove from all registries and delete directory.
+        // Remove directory BEFORE purging registries so that, on failure, the
+        // in-memory state is still consistent (collection remains accessible).
         let collection_path = self.data_dir.join(name);
         if collection_path.exists() {
-            std::fs::remove_dir_all(collection_path)?;
+            std::fs::remove_dir_all(&collection_path)?;
+        }
+
+        // Directory is gone (or never existed) — now purge registries (BUG-6).
+        self.collections.write().remove(name);
+        self.vector_colls.write().remove(name);
+        self.graph_colls.write().remove(name);
+        self.metadata_colls.write().remove(name);
+        self.collection_stats.write().remove(name);
+
+        if let Some(ref obs) = self.observer {
+            obs.on_collection_deleted(name);
         }
 
         Ok(())
     }
+
+    // =========================================================================
+    // New typed API (WP-4) — preferred over the legacy `create_collection` methods
+    // =========================================================================
+
+    /// Creates a new vector collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_vector_collection(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+    ) -> Result<()> {
+        self.create_vector_collection_with_options(name, dimension, metric, StorageMode::default())
+    }
+
+    /// Creates a new vector collection with custom storage options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_vector_collection_with_options(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+    ) -> Result<()> {
+        if self.collections.read().contains_key(name) || self.vector_colls.read().contains_key(name)
+        {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+        let path = self.data_dir.join(name);
+        let coll = VectorCollection::create(path, name, dimension, metric, storage_mode)?;
+        // Register the inner Collection in the legacy registry so that both
+        // get_collection() and get_vector_collection() use the same live instance.
+        // Collection is Clone and all heavy fields are Arc<> so this is zero-copy.
+        self.collections
+            .write()
+            .insert(name.to_string(), coll.inner.clone());
+        self.vector_colls.write().insert(name.to_string(), coll);
+
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Vector {
+                dimension,
+                metric,
+                storage_mode,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+        Ok(())
+    }
+
+    /// Creates a new graph collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_graph_collection(
+        &self,
+        name: &str,
+        schema: crate::collection::GraphSchema,
+    ) -> Result<()> {
+        if self.collections.read().contains_key(name) || self.graph_colls.read().contains_key(name)
+        {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+        let path = self.data_dir.join(name);
+        let coll =
+            GraphCollection::create(path, name, None, DistanceMetric::Cosine, schema.clone())?;
+        // Register in legacy registry so get_collection() and execute_query() work (BUG-2).
+        self.collections
+            .write()
+            .insert(name.to_string(), coll.inner.clone());
+        self.graph_colls.write().insert(name.to_string(), coll);
+
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Graph {
+                dimension: None,
+                metric: DistanceMetric::Cosine,
+                schema,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+        Ok(())
+    }
+
+    /// Creates a new metadata-only collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_metadata_collection(&self, name: &str) -> Result<()> {
+        if self.collections.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name)
+        {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+        let path = self.data_dir.join(name);
+        let coll = MetadataCollection::create(path, name)?;
+        // Share the same inner Collection instance in the legacy registry so that
+        // get_collection() and execute_query() see the same live data.
+        self.collections
+            .write()
+            .insert(name.to_string(), coll.inner.clone());
+        self.metadata_colls.write().insert(name.to_string(), coll);
+
+        if let Some(ref obs) = self.observer {
+            obs.on_collection_created(name, &CollectionType::MetadataOnly);
+        }
+        Ok(())
+    }
+
+    // =========================================================================
+    // Observer notification helpers (called by server handlers after operations)
+    // =========================================================================
+
+    /// Notifies the observer that points were upserted into a collection.
+    ///
+    /// **Caller contract**: this method is NOT called automatically by
+    /// [`Database`] internals. HTTP handlers and SDK bindings are responsible
+    /// for calling it after a successful upsert, passing the number of points
+    /// written. Forgetting to call it means the observer receives no upsert
+    /// events for that operation.
+    ///
+    /// No-op when no observer is registered.
+    pub fn notify_upsert(&self, collection: &str, point_count: usize) {
+        if let Some(ref obs) = self.observer {
+            obs.on_upsert(collection, point_count);
+        }
+    }
+
+    /// Notifies the observer that a query was executed, with its duration.
+    ///
+    /// **Caller contract**: this method is NOT called automatically by
+    /// [`Database::execute_query`]. Callers must measure the wall-clock
+    /// duration themselves (e.g. `std::time::Instant::now()` before the call)
+    /// and invoke this method afterwards with the elapsed microseconds.
+    ///
+    /// No-op when no observer is registered.
+    pub fn notify_query(&self, collection: &str, duration_us: u64) {
+        if let Some(ref obs) = self.observer {
+            obs.on_query(collection, duration_us);
+        }
+    }
+
+    /// Returns a `VectorCollection` by name.
+    ///
+    /// Checks the typed registry first.  If not found there, falls back to
+    /// opening the collection directory from disk (e.g. for collections created
+    /// via the legacy `create_collection` API that were not registered in the
+    /// typed registry).  The opened instance is cached back into the registry
+    /// so subsequent calls avoid the disk round-trip.
+    ///
+    /// Returns `None` if the collection does not exist on disk.
+    #[must_use]
+    pub fn get_vector_collection(&self, name: &str) -> Option<VectorCollection> {
+        if let Some(c) = self.vector_colls.read().get(name).cloned() {
+            return Some(c);
+        }
+        // Fallback: open from disk (e.g. collections created via legacy API).
+        // Intentional: supports mixed-mode databases that were not fully migrated.
+        // BUG-3: verify this is actually a vector collection before caching it.
+        let path = self.data_dir.join(name);
+        let config_path = path.join("config.json");
+        if config_path.exists() {
+            // Read config to confirm this is not a graph or metadata-only collection.
+            if let Ok(data) = std::fs::read_to_string(&config_path) {
+                if let Ok(cfg) = serde_json::from_str::<crate::collection::CollectionConfig>(&data)
+                {
+                    if cfg.graph_schema.is_some() || cfg.metadata_only {
+                        return None;
+                    }
+                }
+            }
+            if let Ok(coll) = VectorCollection::open(path) {
+                self.vector_colls
+                    .write()
+                    .insert(name.to_string(), coll.clone());
+                return Some(coll);
+            }
+        }
+        None
+    }
+
+    /// Returns a `GraphCollection` by name.
+    ///
+    /// Checks the typed registry first.  Falls back to opening from disk if the
+    /// collection was not registered in-memory (e.g. after a restart or when
+    /// the collection was auto-created by a graph handler).  The instance is
+    /// cached into the registry so subsequent calls are free.
+    ///
+    /// Returns `None` if the collection does not exist on disk.
+    #[must_use]
+    pub fn get_graph_collection(&self, name: &str) -> Option<GraphCollection> {
+        if let Some(c) = self.graph_colls.read().get(name).cloned() {
+            return Some(c);
+        }
+        // Fallback: open from disk and cache to avoid repeated I/O.
+        // BUG-3: verify this is actually a graph collection before caching it.
+        let path = self.data_dir.join(name);
+        let config_path = path.join("config.json");
+        if config_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&config_path) {
+                if let Ok(cfg) = serde_json::from_str::<crate::collection::CollectionConfig>(&data)
+                {
+                    cfg.graph_schema.as_ref()?;
+                }
+            }
+            if let Ok(coll) = GraphCollection::open(path) {
+                self.graph_colls
+                    .write()
+                    .insert(name.to_string(), coll.clone());
+                return Some(coll);
+            }
+        }
+        None
+    }
+
+    /// Returns a `MetadataCollection` by name.
+    ///
+    /// Checks the typed registry first.  Falls back to opening from disk for
+    /// collections created before the typed API existed or after a restart.
+    /// The instance is cached to avoid repeated disk reads.
+    ///
+    /// Returns `None` if the collection does not exist on disk.
+    #[must_use]
+    pub fn get_metadata_collection(&self, name: &str) -> Option<MetadataCollection> {
+        if let Some(c) = self.metadata_colls.read().get(name).cloned() {
+            return Some(c);
+        }
+        // Fallback: open from disk and cache.
+        // BUG-3: verify this is actually a metadata-only collection before caching it.
+        let path = self.data_dir.join(name);
+        let config_path = path.join("config.json");
+        if config_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&config_path) {
+                if let Ok(cfg) = serde_json::from_str::<crate::collection::CollectionConfig>(&data)
+                {
+                    if !cfg.metadata_only {
+                        return None;
+                    }
+                }
+            }
+            if let Ok(coll) = MetadataCollection::open(path) {
+                self.metadata_colls
+                    .write()
+                    .insert(name.to_string(), coll.clone());
+                return Some(coll);
+            }
+        }
+        None
+    }
+
+    // =========================================================================
+    // Legacy typed creation (kept for backward compatibility)
+    // =========================================================================
 
     /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
     ///
@@ -277,53 +648,130 @@ impl Database {
         name: &str,
         collection_type: &CollectionType,
     ) -> Result<()> {
-        let mut collections = self.collections.write();
-
-        if collections.contains_key(name) {
-            return Err(Error::CollectionExists(name.to_string()));
+        // Delegate to the typed APIs so all registries stay in sync.
+        match collection_type {
+            CollectionType::Vector {
+                dimension,
+                metric,
+                storage_mode,
+            } => {
+                self.create_vector_collection_with_options(name, *dimension, *metric, *storage_mode)
+            }
+            CollectionType::MetadataOnly => self.create_metadata_collection(name),
+            CollectionType::Graph {
+                dimension,
+                metric,
+                schema,
+            } => {
+                // Graph with optional embeddings: delegate to the graph API if schema given.
+                if self.collections.read().contains_key(name)
+                    || self.graph_colls.read().contains_key(name)
+                {
+                    return Err(Error::CollectionExists(name.to_string()));
+                }
+                let path = self.data_dir.join(name);
+                let coll =
+                    GraphCollection::create(path, name, *dimension, *metric, schema.clone())?;
+                self.collections
+                    .write()
+                    .insert(name.to_string(), coll.inner.clone());
+                self.graph_colls.write().insert(name.to_string(), coll);
+                if let Some(ref obs) = self.observer {
+                    obs.on_collection_created(name, collection_type);
+                }
+                Ok(())
+            }
         }
-
-        let collection_path = self.data_dir.join(name);
-        let collection = Collection::create_typed(collection_path, name, collection_type)?;
-        collections.insert(name.to_string(), collection);
-
-        Ok(())
     }
 
     /// Loads existing collections from disk.
     ///
-    /// Call this after opening a database to load previously created collections.
+    /// # Deprecation note
+    ///
+    /// **This method is called automatically by [`Database::open`].**
+    /// There is no need to call it manually. It is kept public only for
+    /// backward compatibility with code that relied on the old two-step pattern.
     ///
     /// # Errors
     ///
     /// Returns an error if collection directories cannot be read.
     pub fn load_collections(&self) -> Result<()> {
-        let mut collections = self.collections.write();
-
         for entry in std::fs::read_dir(&self.data_dir)? {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_dir() {
-                let config_path = path.join("config.json");
-                if config_path.exists() {
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
+            if !path.is_dir() {
+                continue;
+            }
+            let config_path = path.join("config.json");
+            if !config_path.exists() {
+                continue;
+            }
 
-                    if let std::collections::hash_map::Entry::Vacant(entry) =
-                        collections.entry(name)
-                    {
-                        match Collection::open(path) {
-                            Ok(collection) => {
-                                entry.insert(collection);
-                            }
-                            Err(err) => {
-                                tracing::warn!(error = %err, "Failed to load collection");
-                            }
-                        }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Skip names already present in the legacy registry.
+            if self.collections.read().contains_key(&name) {
+                continue;
+            }
+
+            // Read config to determine the concrete type before opening.
+            let cfg_data = match std::fs::read_to_string(&config_path) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(error = %e, name, "Cannot read config.json — skipping");
+                    continue;
+                }
+            };
+            let cfg = match serde_json::from_str::<crate::collection::CollectionConfig>(&cfg_data) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(error = %e, name, "Cannot parse config.json — skipping");
+                    continue;
+                }
+            };
+
+            if cfg.graph_schema.is_some() {
+                // Graph collection
+                match GraphCollection::open(path.clone()) {
+                    Ok(coll) => {
+                        self.collections
+                            .write()
+                            .insert(name.clone(), coll.inner.clone());
+                        self.graph_colls.write().insert(name, coll);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, name = %path.display(), "Failed to load graph collection");
+                    }
+                }
+            } else if cfg.metadata_only {
+                // Metadata-only collection
+                match MetadataCollection::open(path.clone()) {
+                    Ok(coll) => {
+                        self.collections
+                            .write()
+                            .insert(name.clone(), coll.inner.clone());
+                        self.metadata_colls.write().insert(name, coll);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, name = %path.display(), "Failed to load metadata collection");
+                    }
+                }
+            } else {
+                // Vector collection
+                match VectorCollection::open(path.clone()) {
+                    Ok(coll) => {
+                        self.collections
+                            .write()
+                            .insert(name.clone(), coll.inner.clone());
+                        self.vector_colls.write().insert(name, coll);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, name = %path.display(), "Failed to load vector collection");
                     }
                 }
             }
@@ -350,6 +798,7 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let collection = self
             .get_collection(&stmt.table)
+            .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
 
         let mut id: Option<u64> = None;
@@ -401,6 +850,7 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let collection = self
             .get_collection(&stmt.table)
+            .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
 
         let assignments = stmt

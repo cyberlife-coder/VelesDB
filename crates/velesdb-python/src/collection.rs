@@ -14,7 +14,9 @@ use crate::collection_helpers::{
 };
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 use crate::FusionStrategy;
-use velesdb_core::{FusionStrategy as CoreFusionStrategy, Point};
+use velesdb_core::{
+    FusionStrategy as CoreFusionStrategy, Point, VectorCollection as CoreVectorCollection,
+};
 
 /// A vector collection in VelesDB.
 ///
@@ -22,13 +24,13 @@ use velesdb_core::{FusionStrategy as CoreFusionStrategy, Point};
 /// efficient similarity search.
 #[pyclass]
 pub struct Collection {
-    pub(crate) inner: Arc<velesdb_core::Collection>,
+    pub(crate) inner: Arc<CoreVectorCollection>,
     pub(crate) name: String,
 }
 
 impl Collection {
     /// Create a new Collection wrapper.
-    pub fn new(inner: Arc<velesdb_core::Collection>, name: String) -> Self {
+    pub fn new(inner: Arc<CoreVectorCollection>, name: String) -> Self {
         Self { inner, name }
     }
 }

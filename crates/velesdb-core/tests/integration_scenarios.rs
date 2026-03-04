@@ -11,7 +11,7 @@
 
 use serde_json::json;
 use tempfile::TempDir;
-use velesdb_core::{Database, DistanceMetric, Point};
+use velesdb_core::{Database, DistanceMetric, Point, VectorCollection};
 
 /// Helper to create a collection and get it back
 fn create_and_get_collection(
@@ -19,10 +19,11 @@ fn create_and_get_collection(
     name: &str,
     dimension: usize,
     metric: DistanceMetric,
-) -> velesdb_core::Collection {
-    db.create_collection(name, dimension, metric)
+) -> VectorCollection {
+    db.create_vector_collection(name, dimension, metric)
         .expect("Failed to create collection");
-    db.get_collection(name).expect("Failed to get collection")
+    db.get_vector_collection(name)
+        .expect("Failed to get collection")
 }
 
 // =============================================================================

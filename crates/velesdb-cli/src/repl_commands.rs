@@ -71,7 +71,7 @@ fn cmd_schema(db: &Database, parts: &[&str]) -> CommandResult {
         return CommandResult::Continue;
     }
     let name = parts[1];
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let cfg = col.config();
             println!("{} {}", "Collection:".bold(), cfg.name.green());
@@ -142,7 +142,7 @@ fn cmd_describe(db: &Database, parts: &[&str]) -> CommandResult {
         return CommandResult::Continue;
     }
     let name = parts[1];
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let cfg = col.config();
             println!("\n{}", "Collection Details".bold().underline());
@@ -175,7 +175,7 @@ fn cmd_count(db: &Database, parts: &[&str]) -> CommandResult {
         return CommandResult::Continue;
     }
     let name = parts[1];
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let count = col.config().point_count;
             println!("Count: {} records\n", count.to_string().green());
@@ -195,7 +195,7 @@ fn cmd_sample(db: &Database, parts: &[&str]) -> CommandResult {
     let name = parts[1];
     let count: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
 
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let ids: Vec<u64> = (1..=(count as u64)).collect();
             let points = col.get(&ids);
@@ -243,7 +243,7 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
         .max(1);
     let page_size = 10;
 
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let total = col.config().point_count;
             let total_pages = total.div_ceil(page_size);
@@ -305,7 +305,7 @@ fn cmd_stats(db: &Database, parts: &[&str]) -> CommandResult {
         return CommandResult::Continue;
     }
     let name = parts[1];
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let cfg = col.config();
             println!("\n{}", "Collection Statistics".bold().underline());
@@ -338,7 +338,7 @@ fn cmd_bench(db: &Database, config: &ReplConfig, parts: &[&str]) -> CommandResul
     let n_queries: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
     let k: usize = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
 
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let cfg = col.config();
             println!(
@@ -396,7 +396,7 @@ fn cmd_export(db: &Database, parts: &[&str]) -> CommandResult {
         .get(2)
         .map_or_else(|| format!("{name}.json"), std::string::ToString::to_string);
 
-    match db.get_collection(name) {
+    match db.get_vector_collection(name) {
         Some(col) => {
             let total = col.config().point_count;
             println!("Exporting {} records from {}...", total, name.green());

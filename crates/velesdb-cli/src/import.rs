@@ -328,12 +328,12 @@ fn get_or_create_collection(
     dimension: usize,
     metric: DistanceMetric,
     storage_mode: StorageMode,
-) -> Result<velesdb_core::Collection> {
-    if let Some(col) = db.get_collection(name) {
+) -> Result<velesdb_core::VectorCollection> {
+    if let Some(col) = db.get_vector_collection(name) {
         Ok(col)
     } else {
-        db.create_collection_with_options(name, dimension, metric, storage_mode)?;
-        db.get_collection(name)
+        db.create_vector_collection_with_options(name, dimension, metric, storage_mode)?;
+        db.get_vector_collection(name)
             .context("Failed to get created collection")
     }
 }

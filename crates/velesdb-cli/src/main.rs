@@ -722,7 +722,7 @@ fn main() -> anyhow::Result<()> {
             use colored::Colorize;
 
             let db = velesdb_core::Database::open(&path)?;
-            db.create_collection_typed(&name, &velesdb_core::CollectionType::MetadataOnly)?;
+            db.create_metadata_collection(&name)?;
 
             println!(
                 "{} Collection '{}' created (metadata-only)",

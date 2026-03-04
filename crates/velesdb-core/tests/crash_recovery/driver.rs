@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::error::Result;
 use velesdb_core::point::Point;
-use velesdb_core::Collection;
+use velesdb_core::VectorCollection;
 
 /// Configuration for the crash test driver.
 #[derive(Clone, Debug)]
@@ -78,12 +78,14 @@ impl CrashTestDriver {
         self.log_reproduction_info();
 
         let collection = if self.config.data_dir.join("config.json").exists() {
-            Collection::open(self.config.data_dir.clone())?
+            VectorCollection::open(self.config.data_dir.clone())?
         } else {
-            Collection::create(
+            VectorCollection::create(
                 self.config.data_dir.clone(),
+                "crash_test",
                 self.config.dimension,
                 DistanceMetric::Cosine,
+                velesdb_core::StorageMode::Full,
             )?
         };
 
@@ -129,7 +131,7 @@ impl CrashTestDriver {
     ///
     /// Returns an error if collection operations fail.
     pub fn run_delete(&self, count: usize) -> Result<usize> {
-        let collection = Collection::open(self.config.data_dir.clone())?;
+        let collection = VectorCollection::open(self.config.data_dir.clone())?;
 
         let mut deleted = 0;
         for i in 0..count {
@@ -147,7 +149,7 @@ impl CrashTestDriver {
     ///
     /// Returns an error if flush fails.
     pub fn flush(&self) -> Result<()> {
-        let collection = Collection::open(self.config.data_dir.clone())?;
+        let collection = VectorCollection::open(self.config.data_dir.clone())?;
         collection.flush()
     }
 
@@ -159,7 +161,7 @@ impl CrashTestDriver {
     ///
     /// Returns an error if collection operations fail.
     pub fn run_query(&self) -> Result<usize> {
-        let collection = Collection::open(self.config.data_dir.clone())?;
+        let collection = VectorCollection::open(self.config.data_dir.clone())?;
 
         let mut rng = StdRng::seed_from_u64(self.config.seed);
         let mut successful = 0;
@@ -217,7 +219,7 @@ mod tests {
         assert_eq!(inserted, 100);
 
         // Verify data exists by reopening collection
-        let collection = Collection::open(config.data_dir).expect("Open failed");
+        let collection = VectorCollection::open(config.data_dir).expect("Open failed");
         assert_eq!(collection.len(), 100);
     }
 
@@ -249,8 +251,8 @@ mod tests {
         driver2.run_insert().expect("Insert 2 failed");
 
         // Both collections should have identical data
-        let collection1 = Collection::open(config1.data_dir).expect("Open 1 failed");
-        let collection2 = Collection::open(config2.data_dir).expect("Open 2 failed");
+        let collection1 = VectorCollection::open(config1.data_dir).expect("Open 1 failed");
+        let collection2 = VectorCollection::open(config2.data_dir).expect("Open 2 failed");
 
         assert_eq!(collection1.len(), collection2.len());
     }

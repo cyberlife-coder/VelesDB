@@ -21,10 +21,14 @@ mod async_ops_tests;
 pub mod auto_reindex;
 mod core;
 pub mod graph;
+mod graph_collection;
+mod metadata_collection;
 pub mod query_cost;
 pub mod search;
 pub mod stats;
+pub(crate) mod text_utils;
 mod types;
+mod vector_collection;
 
 #[cfg(test)]
 mod tests;
@@ -38,9 +42,12 @@ mod guardrails_integration_tests;
 #[cfg(test)]
 mod e2e_integration_tests;
 
-pub use core::{IndexInfo, TraversalResult};
+pub use core::IndexInfo;
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
-    PropertyIndex, RangeIndex, ValueType,
+    PropertyIndex, RangeIndex, TraversalResult, ValueType,
 };
+pub use graph_collection::GraphCollection;
+pub use metadata_collection::MetadataCollection;
 pub use types::{Collection, CollectionConfig, CollectionType};
+pub use vector_collection::VectorCollection;

@@ -148,8 +148,23 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
 pub use collection::{
-    Collection, CollectionType, ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge,
-    GraphNode, GraphSchema, IndexInfo, NodeType, TraversalResult, ValueType,
+    // Collection: internal executor kept pub for backward compat and internal modules.
+    // Suppression de l'export = PR dédiée (requiert ~40 corrections de références internes).
+    Collection,
+    // Public user-facing types — 3 typed collections replace Collection as primary API
+    CollectionType,
+    // Graph API types (user-visible)
+    EdgeType,
+    GraphCollection,
+    GraphEdge,
+    GraphNode,
+    GraphSchema,
+    IndexInfo,
+    MetadataCollection,
+    NodeType,
+    TraversalResult,
+    ValueType,
+    VectorCollection,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
@@ -180,6 +195,10 @@ pub use metrics::{
 
 #[cfg(feature = "persistence")]
 mod database;
+#[cfg(feature = "persistence")]
+pub mod observer;
 
 #[cfg(feature = "persistence")]
 pub use database::Database;
+#[cfg(feature = "persistence")]
+pub use observer::DatabaseObserver;
