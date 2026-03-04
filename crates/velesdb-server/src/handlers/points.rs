@@ -119,11 +119,14 @@ pub async fn upsert_points(
     let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
     match result {
-        Ok(Ok(inserted)) => Json(serde_json::json!({
-            "message": "Points upserted",
-            "count": inserted
-        }))
-        .into_response(),
+        Ok(Ok(inserted)) => {
+            state.db.notify_upsert(&name, inserted);
+            Json(serde_json::json!({
+                "message": "Points upserted",
+                "count": inserted
+            }))
+            .into_response()
+        }
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -212,6 +215,10 @@ pub async fn stream_upsert_points(
     }
 
     flush_point_batch(collection, &mut batch, &mut stats).await;
+
+    if stats.inserted > 0 {
+        state.db.notify_upsert(&name, stats.inserted);
+    }
 
     Json(serde_json::json!({
         "message": "Stream processed",

@@ -20,19 +20,38 @@ use super::types::{
     TraverseRequest, TraverseResponse,
 };
 
-/// Resolves a `GraphCollection`, creating it on demand if it doesn't exist.
+/// Resolves a `GraphCollection` by name.
 ///
-/// Graph collections are auto-created on first edge operation.
-/// This preserves backward compatibility with workflows that use graph ops
-/// on collections created as vector or metadata collections.
+/// Returns 404 if no collection with that name exists at all.
+/// Returns 409 if a collection exists but is not a graph collection (type mismatch).
+/// Auto-creates a schemaless graph collection on first use if no collection exists yet,
+/// preserving backward compatibility with workflows that drive graph ops without
+/// an explicit `create_graph_collection` call.
 fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,
 ) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
+    // Fast path: already registered as a graph collection.
     if let Some(c) = state.db.get_graph_collection(name) {
         return Ok(c);
     }
-    // Auto-create a graph collection on first graph operation (backward compat).
+
+    // Check if a collection with this name exists but with a different type.
+    // Attempting to create over it would return CollectionExists — surface as 409.
+    if state.db.get_collection(name).is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: format!(
+                    "Collection '{}' exists but is not a graph collection. \
+                     Use /collections/{}/graph only on graph-typed collections.",
+                    name, name
+                ),
+            }),
+        ));
+    }
+
+    // No collection at all — auto-create a schemaless graph collection.
     use velesdb_core::GraphSchema;
     state
         .db
@@ -41,10 +60,11 @@ fn get_graph_collection_or_404(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("Failed to create graph collection '{}': {e}", name),
+                    error: format!("Failed to auto-create graph collection '{}': {e}", name),
                 }),
             )
         })?;
+
     state.db.get_graph_collection(name).ok_or_else(|| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

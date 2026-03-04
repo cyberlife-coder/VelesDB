@@ -143,6 +143,12 @@ pub async fn query(
             };
 
         let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let duration_us = start.elapsed().as_micros();
+        #[allow(clippy::cast_possible_truncation)]
+        state.db.notify_query(
+            &collection_name,
+            duration_us.min(u128::from(u64::MAX)) as u64,
+        );
         return Json(AggregationResponse { result, timing_ms }).into_response();
     }
 
@@ -197,6 +203,12 @@ pub async fn query(
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
     let took_ms = timing_ms.round() as u64;
+    let duration_us = start.elapsed().as_micros();
+    #[allow(clippy::cast_possible_truncation)]
+    state.db.notify_query(
+        &collection_name,
+        duration_us.min(u128::from(u64::MAX)) as u64,
+    );
     let rows_returned = results.len();
 
     Json(QueryResponse {

@@ -116,7 +116,7 @@ pub struct CollectionConfig {
     /// Name of the collection.
     pub name: String,
 
-    /// Vector dimension (0 for metadata-only collections).
+    /// Vector dimension (0 for metadata-only or graph-without-embeddings collections).
     pub dimension: usize,
 
     /// Distance metric.
@@ -132,6 +132,16 @@ pub struct CollectionConfig {
     /// Whether this is a metadata-only collection.
     #[serde(default)]
     pub metadata_only: bool,
+
+    /// Graph schema — `Some` iff this is a graph collection.
+    /// Persisted to config.json; `None` for vector and metadata collections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_schema: Option<GraphSchema>,
+
+    /// Embedding dimension for graph node vectors (None = no embeddings).
+    /// Only meaningful when `graph_schema` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dimension: Option<usize>,
 }
 
 // === LOCK ORDERING ===
@@ -213,26 +223,6 @@ pub struct Collection {
 impl Collection {
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
-        let mut texts = Vec::new();
-        Self::collect_strings(payload, &mut texts);
-        texts.join(" ")
-    }
-
-    /// Recursively collects all string values from a JSON value.
-    fn collect_strings(value: &serde_json::Value, texts: &mut Vec<String>) {
-        match value {
-            serde_json::Value::String(s) => texts.push(s.clone()),
-            serde_json::Value::Array(arr) => {
-                for item in arr {
-                    Self::collect_strings(item, texts);
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                for v in obj.values() {
-                    Self::collect_strings(v, texts);
-                }
-            }
-            _ => {}
-        }
+        crate::collection::text_utils::extract_text(payload)
     }
 }

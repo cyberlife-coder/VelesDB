@@ -84,6 +84,7 @@ pub async fn search(
     Path(name): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> impl IntoResponse {
+    let start = std::time::Instant::now();
     state.onboarding_metrics.record_search_request();
 
     let collection = match state.db.get_vector_collection(&name) {
@@ -134,6 +135,11 @@ pub async fn search(
             if results.is_empty() {
                 state.onboarding_metrics.record_empty_search_results();
             }
+            let duration_us = start.elapsed().as_micros();
+            #[allow(clippy::cast_possible_truncation)]
+            state
+                .db
+                .notify_query(&name, duration_us.min(u128::from(u64::MAX)) as u64);
 
             let response = SearchResponse {
                 results: results
@@ -259,6 +265,11 @@ pub async fn batch_search(
     };
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let duration_us = start.elapsed().as_micros();
+    #[allow(clippy::cast_possible_truncation)]
+    state
+        .db
+        .notify_query(&name, duration_us.min(u128::from(u64::MAX)) as u64);
 
     Json(BatchSearchResponse {
         results: all_results,

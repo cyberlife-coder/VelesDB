@@ -152,11 +152,28 @@ impl VelesDatabase {
     /// Gets a collection by name.
     ///
     /// Returns `None` if the collection does not exist.
+    /// Checks vector, metadata, and graph registries in order.
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
-        match self.inner.get_vector_collection(&name) {
-            Some(collection) => Ok(Some(Arc::new(VelesCollection { inner: collection }))),
-            None => Ok(None),
+        // Try typed vector collection first (most common case).
+        if let Some(coll) = self.inner.get_vector_collection(&name) {
+            return Ok(Some(Arc::new(VelesCollection { inner: coll })));
         }
+        // For metadata-only and graph collections, the legacy registry holds the
+        // same shared inner Collection. VectorCollection wraps Collection 1:1
+        // (same Arc<> fields) so opening it from the same on-disk path is
+        // equivalent — but cheaper: just ask get_vector_collection which falls
+        // back to disk and checks config type. The disk fallback in
+        // get_vector_collection already guards against non-vector types, so we
+        // need to open directly from disk for metadata/graph.
+        // Simplest correct path: VectorCollection::open the path, which loads all
+        // Collection fields regardless of collection type.
+        let path = self.inner.data_dir().join(&name);
+        if path.join("config.json").exists() {
+            if let Ok(coll) = velesdb_core::VectorCollection::open(path) {
+                return Ok(Some(Arc::new(VelesCollection { inner: coll })));
+            }
+        }
+        Ok(None)
     }
 
     /// Lists all collection names.

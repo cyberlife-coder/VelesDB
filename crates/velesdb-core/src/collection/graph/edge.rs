@@ -116,7 +116,7 @@ impl GraphEdge {
 ///
 /// - `by_label`: Secondary index for O(k) label-based queries
 /// - `outgoing_by_label`: Composite index (source, label) for O(k) filtered traversal
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct EdgeStore {
     /// All edges indexed by ID
     edges: HashMap<u64, GraphEdge>,
@@ -421,6 +421,47 @@ impl EdgeStore {
                 ids.retain(|&id| id != edge_id);
             }
         }
+    }
+
+    // =========================================================================
+    // Persistence
+    // =========================================================================
+
+    /// Serializes the edge store to bytes using `bincode`.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn to_bytes(&self) -> std::result::Result<Vec<u8>, Box<bincode::ErrorKind>> {
+        bincode::serialize(self)
+    }
+
+    /// Deserializes an edge store from bytes.
+    ///
+    /// # Errors
+    /// Returns an error if deserialization fails (e.g., corrupted data).
+    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, Box<bincode::ErrorKind>> {
+        bincode::deserialize(bytes)
+    }
+
+    /// Saves the edge store to a file.
+    ///
+    /// # Errors
+    /// Returns an error if serialization or file I/O fails.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let bytes = self
+            .to_bytes()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        std::fs::write(path, bytes)
+    }
+
+    /// Loads an edge store from a file.
+    ///
+    /// # Errors
+    /// Returns an error if file I/O or deserialization fails.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Self::from_bytes(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 
     /// Removes all edges connected to a node (cascade delete).

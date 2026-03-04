@@ -59,6 +59,8 @@ impl Collection {
             point_count: 0,
             storage_mode,
             metadata_only: false,
+            graph_schema: None,
+            embedding_dimension: None,
         };
 
         // Initialize persistent storages
@@ -155,6 +157,8 @@ impl Collection {
             point_count: 0,
             storage_mode: StorageMode::Full, // Default, not used
             metadata_only: true,
+            graph_schema: None,
+            embedding_dimension: None,
         };
 
         // For metadata-only, we only need payload storage
@@ -251,6 +255,8 @@ impl Collection {
         // Load PropertyIndex and RangeIndex if they exist (EPIC-009 US-005)
         let property_index = Self::load_property_index(&path);
         let range_index = Self::load_range_index(&path);
+        // Load EdgeStore if present (graph collections — D-02)
+        let edge_store = Self::load_edge_store(&path);
 
         Ok(Self {
             path,
@@ -266,13 +272,91 @@ impl Collection {
             pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
             property_index: Arc::new(RwLock::new(property_index)),
             range_index: Arc::new(RwLock::new(range_index)),
-            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            edge_store: Arc::new(RwLock::new(edge_store)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Creates a new graph collection (with optional node embeddings).
+    ///
+    /// Persists `graph_schema` and `embedding_dimension` in `config.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_graph_collection(
+        path: PathBuf,
+        name: &str,
+        schema: crate::collection::graph::GraphSchema,
+        embedding_dim: Option<usize>,
+        metric: DistanceMetric,
+    ) -> Result<Self> {
+        let dim = embedding_dim.unwrap_or(0);
+        std::fs::create_dir_all(&path)?;
+
+        let config = CollectionConfig {
+            name: name.to_string(),
+            dimension: dim,
+            metric,
+            point_count: 0,
+            storage_mode: StorageMode::Full,
+            metadata_only: false,
+            graph_schema: Some(schema),
+            embedding_dimension: embedding_dim,
+        };
+
+        let vector_storage = Arc::new(RwLock::new(
+            MmapStorage::new(&path, dim).map_err(Error::Io)?,
+        ));
+        let payload_storage = Arc::new(RwLock::new(
+            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+        ));
+        let index = Arc::new(HnswIndex::new(dim, metric));
+        let text_index = Arc::new(Bm25Index::new());
+
+        let collection = Self {
+            path,
+            config: Arc::new(RwLock::new(config)),
+            vector_storage,
+            payload_storage,
+            index,
+            text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
+            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
+            range_index: Arc::new(RwLock::new(RangeIndex::new())),
+            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
+        };
+
+        collection.save_config()?;
+        Ok(collection)
+    }
+
+    fn load_edge_store(path: &std::path::Path) -> EdgeStore {
+        let edge_path = path.join("edge_store.bin");
+        if edge_path.exists() {
+            match EdgeStore::load_from_file(&edge_path) {
+                Ok(store) => return store,
+                Err(e) => tracing::warn!(
+                    "Failed to load EdgeStore from {:?}: {}. Starting empty.",
+                    edge_path,
+                    e
+                ),
+            }
+        }
+        EdgeStore::new()
     }
 
     fn load_property_index(path: &std::path::Path) -> PropertyIndex {
@@ -335,6 +419,15 @@ impl Collection {
             .read()
             .save_to_file(&range_index_path)
             .map_err(Error::Io)?;
+
+        // Save EdgeStore for graph collections (BUG-1: was never persisted)
+        if self.config.read().graph_schema.is_some() {
+            let edge_store_path = self.path.join("edge_store.bin");
+            self.edge_store
+                .read()
+                .save_to_file(&edge_store_path)
+                .map_err(Error::Io)?;
+        }
 
         Ok(())
     }

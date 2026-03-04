@@ -10,6 +10,7 @@ use crate::types::{
     TraversalOutput, TraverseGraphRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
+use velesdb_core::collection::graph::TraversalConfig;
 
 /// Adds an edge to the knowledge graph.
 #[command]
@@ -21,7 +22,7 @@ pub async fn add_edge<R: Runtime>(
     state
         .with_db(|db| {
             let coll = db
-                .get_collection(&request.collection)
+                .get_graph_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
             // Convert properties to HashMap
@@ -57,17 +58,17 @@ pub async fn get_edges<R: Runtime>(
     state
         .with_db(|db| {
             let coll = db
-                .get_collection(&request.collection)
+                .get_graph_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
             let edges = if let Some(label) = &request.label {
-                coll.get_edges_by_label(label)
+                coll.get_edges(Some(label.as_str()))
             } else if let Some(source) = request.source {
-                coll.get_outgoing_edges(source)
+                coll.get_outgoing(source)
             } else if let Some(target) = request.target {
-                coll.get_incoming_edges(target)
+                coll.get_incoming(target)
             } else {
-                coll.get_all_edges()
+                coll.get_edges(None)
             };
 
             Ok(edges
@@ -94,30 +95,18 @@ pub async fn traverse_graph<R: Runtime>(
     state
         .with_db(|db| {
             let coll = db
-                .get_collection(&request.collection)
+                .get_graph_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let rel_types: Option<Vec<&str>> = request
-                .rel_types
-                .as_ref()
-                .map(|v| v.iter().map(String::as_str).collect());
+            let config = TraversalConfig::with_range(1, request.max_depth)
+                .with_limit(request.limit)
+                .with_rel_types(request.rel_types.unwrap_or_default());
 
             let results = if request.algorithm == "dfs" {
-                coll.traverse_dfs(
-                    request.source,
-                    request.max_depth,
-                    rel_types.as_deref(),
-                    request.limit,
-                )
+                coll.traverse_dfs(request.source, &config)
             } else {
-                coll.traverse_bfs(
-                    request.source,
-                    request.max_depth,
-                    rel_types.as_deref(),
-                    request.limit,
-                )
-            }
-            .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+                coll.traverse_bfs(request.source, &config)
+            };
 
             Ok(results
                 .into_iter()
@@ -141,10 +130,10 @@ pub async fn get_node_degree<R: Runtime>(
     state
         .with_db(|db| {
             let coll = db
-                .get_collection(&request.collection)
+                .get_graph_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let (in_degree, out_degree) = coll.get_node_degree(request.node_id);
+            let (in_degree, out_degree) = coll.node_degree(request.node_id);
 
             Ok(NodeDegreeOutput {
                 node_id: request.node_id,

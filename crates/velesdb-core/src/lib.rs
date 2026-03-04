@@ -77,8 +77,6 @@ mod config_tests;
 pub mod distance;
 #[cfg(test)]
 mod distance_tests;
-#[cfg(feature = "persistence")]
-pub(crate) mod engine;
 pub mod error;
 #[cfg(test)]
 mod error_tests;
