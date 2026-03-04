@@ -20,7 +20,7 @@ use velesdb_server::{
     delete_index, delete_point, flush_collection, get_collection, get_edges, get_node_degree,
     get_point, health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
     multi_query_search, query, search, stream_traverse, stream_upsert_points, text_search,
-    traverse_graph, upsert_points, ApiDoc, AppState, GraphService, OnboardingMetrics,
+    traverse_graph, upsert_points, ApiDoc, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -41,58 +41,29 @@ struct Args {
     port: u16,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::registry()
+fn configure_tracing() {
+    let _ = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=debug".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
-        .init();
+        .try_init();
+}
 
-    // Parse command line arguments
-    let args = Args::parse();
-
+fn log_startup(args: &Args) {
     tracing::info!("Starting VelesDB server...");
     tracing::info!("Data directory: {}", args.data_dir);
+}
 
-    // Initialize database
-    let db = Database::open(&args.data_dir)?;
-    let state = Arc::new(AppState {
+fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
+    let db = Database::open(data_dir)?;
+    Ok(Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
-    });
+    }))
+}
 
-    // Initialize graph service (FLAG-2 FIX: EPIC-016/US-031)
-    // WARNING: GraphService is in-memory only and NOT persisted to disk.
-    // Graph data will be lost on server restart. This is a preview feature.
-    // Full persistence will be implemented in EPIC-004.
-    let graph_service = GraphService::new();
-    tracing::warn!(
-        "GraphService initialized (PREVIEW): Graph data is in-memory only and will NOT persist across restarts. \
-         Use the Python/Rust SDK for persistent graph storage."
-    );
-
-    // Graph routes with GraphService state (separate router)
-    // EPIC-016/US-050: Added traverse and degree endpoints
-    let graph_router = Router::new()
-        .route(
-            "/collections/{name}/graph/edges",
-            get(get_edges).post(add_edge),
-        )
-        .route("/collections/{name}/graph/traverse", post(traverse_graph))
-        .route(
-            "/collections/{name}/graph/traverse/stream",
-            get(stream_traverse),
-        )
-        .route(
-            "/collections/{name}/graph/nodes/{node_id}/degree",
-            get(get_node_degree),
-        )
-        .with_state(graph_service);
-
-    // Build API router with AppState
+fn build_router(state: Arc<AppState>) -> Router {
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route(
@@ -106,13 +77,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/collections/{name}/empty", get(is_empty))
         .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/flush", post(flush_collection))
-        // 100MB limit for batch vector uploads (1000 vectors × 768D × 4 bytes = ~3MB typical)
-        .route("/collections/{name}/points", post(upsert_points))
-        .route(
-            "/collections/{name}/points/stream",
-            post(stream_upsert_points),
+        // 100MB limit scoped to batch vector upload routes only
+        // (1000 vectors × 768D × 4 bytes = ~3MB typical; 100MB covers extreme cases)
+        .merge(
+            Router::new()
+                .route("/collections/{name}/points", post(upsert_points))
+                .route(
+                    "/collections/{name}/points/stream",
+                    post(stream_upsert_points),
+                )
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
@@ -132,33 +107,52 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/query", post(query))
         .route("/collections/{name}/match", post(match_query))
-        .with_state(state)
-        // FLAG-2 FIX: Merge graph router with its own state
-        .merge(graph_router);
+        .route(
+            "/collections/{name}/graph/edges",
+            get(get_edges).post(add_edge),
+        )
+        .route("/collections/{name}/graph/traverse", post(traverse_graph))
+        .route(
+            "/collections/{name}/graph/traverse/stream",
+            get(stream_traverse),
+        )
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/degree",
+            get(get_node_degree),
+        )
+        .with_state(state);
 
-    // FLAG-3 FIX: Add metrics endpoint conditionally (EPIC-016/US-034,035)
     #[cfg(feature = "prometheus")]
     let api_router = {
         use velesdb_server::prometheus_metrics;
         api_router.route("/metrics", get(prometheus_metrics))
     };
 
-    // Swagger UI (stateless router)
     let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
 
-    // Build main app with Swagger UI
-    let app = api_router
+    api_router
         .merge(Router::<()>::new().merge(swagger_ui))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+}
 
-    // Start server
-    let addr = format!("{}:{}", args.host, args.port);
+async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
+    let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-
     tracing::info!("VelesDB server listening on http://{}", addr);
-
     axum::serve(listener, app).await?;
-
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    configure_tracing();
+
+    let args = Args::parse();
+    log_startup(&args);
+
+    let state = init_app_state(&args.data_dir)?;
+    let app = build_router(state);
+
+    serve(&args.host, args.port, app).await
 }

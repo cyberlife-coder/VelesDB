@@ -7,6 +7,7 @@
 //!   `list_indexes`, `drop_index`
 
 mod crud;
+mod crud_helpers;
 #[cfg(test)]
 mod crud_tests;
 mod graph_api;
@@ -16,7 +17,6 @@ mod index_management_tests;
 mod lifecycle;
 mod statistics;
 
-pub use graph_api::TraversalResult;
 pub use index_management::IndexInfo;
 
 // All implementations are in submodules, no re-exports needed here

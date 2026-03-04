@@ -41,6 +41,7 @@ fn brute_force_knn(query: &[f32], dataset: &[Vec<f32>], k: usize) -> Vec<u64> {
 }
 
 /// Comprehensive benchmark with stats output
+#[allow(clippy::too_many_lines)] // Reason: benchmark harness iterating over multiple configurations; splitting would harm readability.
 fn bench_comprehensive(c: &mut Criterion) {
     let configs = [(10_000, 128, "10K/128D"), (100_000, 768, "100K/768D")];
 

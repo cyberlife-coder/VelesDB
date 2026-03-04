@@ -3,20 +3,12 @@
 //! Exposes Knowledge Graph operations on Collection for use by
 //! Tauri plugin, REST API, and other consumers.
 
-use crate::collection::graph::GraphEdge;
+use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
 use crate::collection::types::Collection;
-use crate::error::Result;
-
-/// Traversal result for graph operations.
-#[derive(Debug, Clone)]
-pub struct TraversalResult {
-    /// Target node ID reached.
-    pub target_id: u64,
-    /// Depth of traversal.
-    pub depth: u32,
-    /// Path taken (node IDs).
-    pub path: Vec<u64>,
-}
+use crate::error::{Error, Result};
+use crate::index::VectorIndex;
+use crate::point::{Point, SearchResult};
+use crate::storage::{PayloadStorage, VectorStorage};
 
 impl Collection {
     /// Adds an edge to the collection's knowledge graph.
@@ -297,7 +289,188 @@ impl Collection {
     /// Returns the total number of edges in the graph.
     #[must_use]
     pub fn edge_count(&self) -> usize {
+        self.edge_store.read().len()
+    }
+
+    // -------------------------------------------------------------------------
+    // Graph schema
+    // -------------------------------------------------------------------------
+
+    /// Returns the graph schema stored in the collection config, if any.
+    #[must_use]
+    pub fn graph_schema(&self) -> Option<GraphSchema> {
+        self.config.read().graph_schema.clone()
+    }
+
+    /// Returns `true` if this collection was created as a graph collection.
+    #[must_use]
+    pub fn is_graph(&self) -> bool {
+        self.config.read().graph_schema.is_some()
+    }
+
+    /// Returns `true` if this graph collection stores node embeddings.
+    #[must_use]
+    pub fn has_embeddings(&self) -> bool {
+        self.config.read().embedding_dimension.is_some()
+    }
+
+    // -------------------------------------------------------------------------
+    // Node payload (graph node properties)
+    // -------------------------------------------------------------------------
+
+    /// Stores a JSON payload for a graph node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails.
+    pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
+        let mut storage = self.payload_storage.write();
+        storage.store(node_id, payload).map_err(Error::Io)
+    }
+
+    /// Retrieves the JSON payload for a graph node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if retrieval fails.
+    pub fn get_node_payload(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
+        self.payload_storage
+            .read()
+            .retrieve(node_id)
+            .map_err(Error::Io)
+    }
+
+    // -------------------------------------------------------------------------
+    // Graph traversal with TraversalConfig
+    // -------------------------------------------------------------------------
+
+    /// BFS traversal using the core `bfs_stream` iterator.
+    #[must_use]
+    pub fn traverse_bfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        use crate::collection::graph::{bfs_stream, StreamingConfig};
         let store = self.edge_store.read();
-        store.len()
+        let streaming = StreamingConfig {
+            max_depth: config.max_depth,
+            rel_types: config.rel_types.clone(),
+            limit: Some(config.limit),
+            max_visited_size: 100_000,
+        };
+        bfs_stream(&store, source_id, streaming)
+            .take(config.limit)
+            .collect()
+    }
+
+    /// DFS traversal (iterative) using `TraversalConfig`.
+    #[must_use]
+    pub fn traverse_dfs_config(
+        &self,
+        source_id: u64,
+        config: &TraversalConfig,
+    ) -> Vec<TraversalResult> {
+        use std::collections::HashSet;
+        let store = self.edge_store.read();
+        let rel_filter: HashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
+
+        let mut results = Vec::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+        let mut stack: Vec<(u64, u32, Vec<u64>)> = vec![(source_id, 0, Vec::new())];
+
+        while let Some((node_id, depth, path)) = stack.pop() {
+            if results.len() >= config.limit {
+                break;
+            }
+            if !visited.insert(node_id) {
+                continue;
+            }
+            if depth >= config.min_depth && depth > 0 {
+                results.push(TraversalResult::new(node_id, path.clone(), depth));
+                if results.len() >= config.limit {
+                    break;
+                }
+            }
+            if depth < config.max_depth {
+                for edge in store.get_outgoing(node_id).into_iter().rev() {
+                    if !rel_filter.is_empty() && !rel_filter.contains(edge.label()) {
+                        continue;
+                    }
+                    if visited.contains(&edge.target()) {
+                        continue;
+                    }
+                    let mut new_path = path.clone();
+                    // BUG-5: path tracks node IDs (not edge IDs), consistent with
+                    // traverse_bfs, traverse_bfs_config (bfs_stream), and traverse_dfs.
+                    new_path.push(edge.target());
+                    stack.push((edge.target(), depth + 1, new_path));
+                }
+            }
+        }
+        results
+    }
+
+    // -------------------------------------------------------------------------
+    // Embedding search on graph nodes
+    // -------------------------------------------------------------------------
+
+    /// Searches for similar graph nodes by embedding vector.
+    ///
+    /// Only available if `has_embeddings()` returns `true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::VectorNotAllowed` if no embeddings are configured,
+    /// or `Error::DimensionMismatch` if the query dimension is wrong.
+    pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        let emb_dim = config
+            .embedding_dimension
+            .ok_or_else(|| Error::VectorNotAllowed(config.name.clone()))?;
+        drop(config);
+
+        if query.len() != emb_dim {
+            return Err(Error::DimensionMismatch {
+                expected: emb_dim,
+                actual: query.len(),
+            });
+        }
+
+        // Reason: we reuse the existing HNSW index (dimension == emb_dim when created
+        // via create_graph_collection_with_embeddings). For graph-without-embeddings
+        // the HNSW has dimension 0 and the guard above already rejected the call.
+        let ids = self.index.search(query, k);
+
+        // BUG-4: acquire each lock once for all results instead of holding
+        // vector_storage while repeatedly locking payload_storage per item.
+        let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
+            let vector_storage = self.vector_storage.read();
+            ids.into_iter()
+                .map(|(id, score)| {
+                    let vec = vector_storage.retrieve(id).ok().flatten();
+                    (id, score, vec)
+                })
+                .collect()
+        };
+        let results = {
+            let payload_storage = self.payload_storage.read();
+            vectors
+                .into_iter()
+                .filter_map(|(id, score, vector)| {
+                    let vector = vector?;
+                    let payload = payload_storage.retrieve(id).ok().flatten();
+                    Some(SearchResult::new(
+                        Point {
+                            id,
+                            vector,
+                            payload,
+                        },
+                        score,
+                    ))
+                })
+                .collect()
+        };
+        Ok(results)
     }
 }

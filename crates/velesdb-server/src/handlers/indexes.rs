@@ -31,7 +31,7 @@ pub async fn create_index(
     Path(name): Path<String>,
     Json(req): Json<CreateIndexRequest>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -97,7 +97,7 @@ pub async fn list_indexes(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (
@@ -145,7 +145,7 @@ pub async fn delete_index(
     State(state): State<Arc<AppState>>,
     Path((name, label, property)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let collection = match state.db.get_collection(&name) {
+    let collection = match state.db.get_vector_collection(&name) {
         Some(c) => c,
         None => {
             return (

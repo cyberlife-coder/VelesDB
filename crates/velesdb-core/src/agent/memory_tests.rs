@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::Database;
+use std::sync::Arc;
 use tempfile::tempdir;
 
 // ============================================================================
@@ -12,9 +13,9 @@ use tempfile::tempdir;
 #[test]
 fn test_agent_memory_new() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
 
-    let memory = AgentMemory::new(&db);
+    let memory = AgentMemory::new(Arc::clone(&db));
     assert!(memory.is_ok(), "AgentMemory::new should succeed");
 }
 
@@ -22,8 +23,8 @@ fn test_agent_memory_new() {
 #[test]
 fn test_agent_memory_semantic_access() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::new(&db).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::new(Arc::clone(&db)).unwrap();
 
     let semantic = memory.semantic();
     assert!(semantic.collection_name().starts_with("_semantic"));
@@ -33,8 +34,8 @@ fn test_agent_memory_semantic_access() {
 #[test]
 fn test_agent_memory_episodic_access() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::new(&db).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::new(Arc::clone(&db)).unwrap();
 
     let episodic = memory.episodic();
     assert!(episodic.collection_name().starts_with("_episodic"));
@@ -44,8 +45,8 @@ fn test_agent_memory_episodic_access() {
 #[test]
 fn test_agent_memory_procedural_access() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::new(&db).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::new(Arc::clone(&db)).unwrap();
 
     let procedural = memory.procedural();
     assert!(procedural.collection_name().starts_with("_procedural"));
@@ -55,10 +56,10 @@ fn test_agent_memory_procedural_access() {
 #[test]
 fn test_agent_memory_shared_collections() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
 
-    let memory1 = AgentMemory::new(&db).unwrap();
-    let memory2 = AgentMemory::new(&db).unwrap();
+    let memory1 = AgentMemory::new(Arc::clone(&db)).unwrap();
+    let memory2 = AgentMemory::new(Arc::clone(&db)).unwrap();
 
     assert_eq!(
         memory1.semantic().collection_name(),
@@ -74,8 +75,8 @@ fn test_agent_memory_shared_collections() {
 #[test]
 fn test_semantic_store_and_query() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     // Store a fact
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
@@ -95,8 +96,8 @@ fn test_semantic_store_and_query() {
 #[test]
 fn test_semantic_dimension_mismatch() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     // Wrong dimension should fail
     let bad_embedding = vec![1.0, 0.0]; // Only 2 dims
@@ -108,10 +109,10 @@ fn test_semantic_dimension_mismatch() {
 #[test]
 fn test_dimension_mismatch_on_existing_collection() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
 
     // Create memory with dimension 4
-    let memory1 = AgentMemory::with_dimension(&db, 4).unwrap();
+    let memory1 = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
     assert_eq!(memory1.semantic().dimension(), 4);
 
     // Store something to ensure collection is created
@@ -119,11 +120,11 @@ fn test_dimension_mismatch_on_existing_collection() {
     memory1.semantic().store(1, "test", &embedding).unwrap();
 
     // Try to create memory with different dimension - should fail
-    let result = AgentMemory::with_dimension(&db, 8);
+    let result = AgentMemory::with_dimension(Arc::clone(&db), 8);
     assert!(result.is_err());
 
     // Creating with same dimension should succeed
-    let memory2 = AgentMemory::with_dimension(&db, 4);
+    let memory2 = AgentMemory::with_dimension(Arc::clone(&db), 4);
     assert!(memory2.is_ok());
 }
 
@@ -135,8 +136,8 @@ fn test_dimension_mismatch_on_existing_collection() {
 #[test]
 fn test_episodic_record_and_recent() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     // Record events with timestamps
     memory.episodic().record(1, "Event A", 1000, None).unwrap();
@@ -154,8 +155,8 @@ fn test_episodic_record_and_recent() {
 #[test]
 fn test_episodic_recall_similar() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     // Record events with embeddings
     let emb1 = vec![1.0, 0.0, 0.0, 0.0];
@@ -183,8 +184,8 @@ fn test_episodic_recall_similar() {
 #[test]
 fn test_procedural_learn_and_recall() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     // Learn a procedure
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
@@ -207,8 +208,8 @@ fn test_procedural_learn_and_recall() {
 #[test]
 fn test_procedural_reinforce() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     // Learn a procedure with initial confidence
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
@@ -230,8 +231,8 @@ fn test_procedural_reinforce() {
 #[test]
 fn test_procedural_min_confidence_filter() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    let memory = AgentMemory::with_dimension(&db, 4).unwrap();
+    let db = Arc::new(Database::open(dir.path()).unwrap());
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
     let steps = vec!["Step".to_string()];

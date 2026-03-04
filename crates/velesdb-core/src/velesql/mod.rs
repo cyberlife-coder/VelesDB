@@ -37,6 +37,8 @@ mod cache_tests;
 mod cbo_tests;
 #[cfg(test)]
 mod complex_parser_tests;
+#[cfg(feature = "persistence")]
+mod cost_estimator;
 #[cfg(test)]
 mod distinct_tests;
 #[cfg(test)]
@@ -74,6 +76,8 @@ mod parser_tests;
 mod planner;
 #[cfg(all(test, feature = "persistence"))]
 mod planner_tests;
+#[cfg(feature = "persistence")]
+mod query_stats;
 mod validation;
 #[cfg(test)]
 mod validation_parity_tests;
@@ -100,7 +104,69 @@ mod velesql_v2_integration_tests;
 mod with_options_tests;
 
 pub use aggregator::{AggregateResult, Aggregator};
-pub use ast::*;
+// Explicit AST exports (replaces `pub use ast::*` — prevents accidental internal type leakage)
+pub use ast::{
+    // Aggregation
+    AggregateArg,
+    AggregateFunction,
+    AggregateType,
+    // Conditions (used by server, python, wasm, cli)
+    BetweenCondition,
+    // SELECT
+    Column,
+    // JOIN
+    ColumnRef,
+    CompareOp,
+    Comparison,
+    // Top-level query types
+    CompoundQuery,
+    Condition,
+    // Values (used by cli, wasm)
+    CorrelatedColumn,
+    DistinctMode,
+    // DML (used by database execute_dml)
+    DmlStatement,
+    // Fusion
+    FusionClause,
+    FusionConfig,
+    FusionStrategyType,
+    GraphMatchPredicate,
+    GroupByClause,
+    HavingClause,
+    HavingCondition,
+    InCondition,
+    InsertStatement,
+    IntervalUnit,
+    IntervalValue,
+    IsNullCondition,
+    JoinClause,
+    JoinCondition,
+    JoinType,
+    LikeCondition,
+    LogicalOp,
+    MatchCondition,
+    OrderByExpr,
+    // WITH clause
+    QuantizationMode,
+    Query,
+    SelectColumns,
+    SelectOrderBy,
+    SelectStatement,
+    SetOperator,
+    SimilarityCondition,
+    SimilarityOrderBy,
+    Subquery,
+    TemporalExpr,
+    UpdateAssignment,
+    UpdateStatement,
+    Value,
+    VectorExpr,
+    VectorFusedSearch,
+    VectorSearch,
+    WithClause,
+    WithOption,
+    WithValue,
+};
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
 pub use cache::{CacheStats, QueryCache};

@@ -102,7 +102,9 @@ impl TraversalMetrics {
     }
 }
 
-/// Types of limits that can be exceeded.
+/// Types of resource limits that can be exceeded.
+///
+/// Note: rate-limit rejections are tracked separately via [`GuardRailsMetrics::record_rate_limit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimitType {
     /// Query timeout exceeded
@@ -113,8 +115,6 @@ pub enum LimitType {
     Cardinality,
     /// Memory limit exceeded
     Memory,
-    /// Rate limit exceeded
-    RateLimit,
 }
 
 impl LimitType {
@@ -126,7 +126,6 @@ impl LimitType {
             Self::Depth => "depth",
             Self::Cardinality => "cardinality",
             Self::Memory => "memory",
-            Self::RateLimit => "rate_limit",
         }
     }
 }
@@ -163,18 +162,20 @@ impl GuardRailsMetrics {
         Self::default()
     }
 
-    /// Records a limit exceeded event.
+    /// Records a resource limit exceeded event.
     pub fn record_limit_exceeded(&self, limit_type: LimitType) {
         match limit_type {
             LimitType::Timeout => self.timeout_exceeded.fetch_add(1, Ordering::Relaxed),
             LimitType::Depth => self.depth_exceeded.fetch_add(1, Ordering::Relaxed),
             LimitType::Cardinality => self.cardinality_exceeded.fetch_add(1, Ordering::Relaxed),
             LimitType::Memory => self.memory_exceeded.fetch_add(1, Ordering::Relaxed),
-            LimitType::RateLimit => self.rate_limit_rejected.fetch_add(1, Ordering::Relaxed),
         };
     }
 
     /// Records a rate limit decision.
+    ///
+    /// Use this (not `record_limit_exceeded`) for rate-limit events to avoid double-counting
+    /// `rate_limit_rejected`.
     pub fn record_rate_limit(&self, allowed: bool) {
         if allowed {
             self.rate_limit_allowed.fetch_add(1, Ordering::Relaxed);
@@ -209,9 +210,16 @@ impl GuardRailsMetrics {
     /// Exports guard-rails metrics in Prometheus format.
     #[must_use]
     pub fn export_prometheus(&self) -> String {
-        use std::fmt::Write;
         let mut output = String::new();
+        self.write_limits_metrics(&mut output);
+        self.write_rate_limit_metrics(&mut output);
+        self.write_specialized_metrics(&mut output);
+        self.write_storage_metrics(&mut output);
+        output
+    }
 
+    fn write_limits_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(
             output,
             "# HELP velesdb_limits_exceeded_total Guard-rail limits exceeded"
@@ -238,7 +246,10 @@ impl GuardRailsMetrics {
             self.memory_exceeded.load(Ordering::Relaxed)
         );
         let _ = writeln!(output);
+    }
 
+    fn write_rate_limit_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(
             output,
             "# HELP velesdb_rate_limit_requests_total Rate limit decisions"
@@ -254,8 +265,11 @@ impl GuardRailsMetrics {
             "velesdb_rate_limit_requests_total{{decision=\"rejected\"}} {}",
             self.rate_limit_rejected.load(Ordering::Relaxed)
         );
-
         let _ = writeln!(output);
+    }
+
+    fn write_specialized_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(
             output,
             "# HELP velesdb_like_guardrail_rejected_total LIKE/ILIKE guardrail rejections"
@@ -269,7 +283,6 @@ impl GuardRailsMetrics {
             "velesdb_like_guardrail_rejected_total {}",
             self.like_guardrail_rejected.load(Ordering::Relaxed)
         );
-
         let _ = writeln!(output);
         let _ = writeln!(
             output,
@@ -284,8 +297,11 @@ impl GuardRailsMetrics {
             "velesdb_parser_depth_limit_rejected_total {}",
             self.parser_depth_limit_rejected.load(Ordering::Relaxed)
         );
-
         let _ = writeln!(output);
+    }
+
+    fn write_storage_metrics(&self, output: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(
             output,
             "# HELP velesdb_invalid_offset_read_errors_total Invalid storage offset read errors"
@@ -299,7 +315,6 @@ impl GuardRailsMetrics {
             "velesdb_invalid_offset_read_errors_total {}",
             self.invalid_offset_read_errors.load(Ordering::Relaxed)
         );
-
         let _ = writeln!(output);
         let _ = writeln!(
             output,
@@ -314,8 +329,6 @@ impl GuardRailsMetrics {
             "velesdb_cache_collision_fallback_total {}",
             self.cache_collision_fallback_total.load(Ordering::Relaxed)
         );
-
-        output
     }
 }
 
@@ -425,6 +438,5 @@ mod tests {
         assert_eq!(LimitType::Depth.as_str(), "depth");
         assert_eq!(LimitType::Cardinality.as_str(), "cardinality");
         assert_eq!(LimitType::Memory.as_str(), "memory");
-        assert_eq!(LimitType::RateLimit.as_str(), "rate_limit");
     }
 }

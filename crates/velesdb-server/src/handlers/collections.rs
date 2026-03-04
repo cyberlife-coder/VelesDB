@@ -81,11 +81,14 @@ pub async fn create_collection(
     };
 
     let result = match req.collection_type.to_lowercase().as_str() {
-        "metadata_only" | "metadata-only" => {
-            use velesdb_core::CollectionType;
+        "metadata_only" | "metadata-only" | "metadata" => {
+            state.db.create_metadata_collection(&req.name)
+        }
+        "graph" | "knowledge_graph" | "kg" => {
+            use velesdb_core::GraphSchema;
             state
                 .db
-                .create_collection_typed(&req.name, &CollectionType::MetadataOnly)
+                .create_graph_collection(&req.name, GraphSchema::schemaless())
         }
         "vector" | "" => {
             let dimension = match req.dimension {
@@ -100,16 +103,19 @@ pub async fn create_collection(
                         .into_response()
                 }
             };
-            state
-                .db
-                .create_collection_with_options(&req.name, dimension, metric, storage_mode)
+            state.db.create_vector_collection_with_options(
+                &req.name,
+                dimension,
+                metric,
+                storage_mode,
+            )
         }
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: format!(
-                        "Invalid collection_type: {}. Valid: vector, metadata_only",
+                        "Invalid collection_type: {}. Valid: vector, graph, metadata_only",
                         req.collection_type
                     ),
                 }),
@@ -165,7 +171,7 @@ pub async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
+    match state.db.get_vector_collection(&name) {
         Some(collection) => {
             let config = collection.config();
             Json(CollectionResponse {
@@ -204,7 +210,7 @@ pub async fn collection_sanity(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
+    match state.db.get_vector_collection(&name) {
         Some(collection) => {
             let config = collection.config();
             let has_data = config.point_count > 0;
@@ -298,7 +304,7 @@ pub async fn is_empty(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
+    match state.db.get_vector_collection(&name) {
         Some(collection) => Json(serde_json::json!({
             "is_empty": collection.is_empty()
         }))
@@ -331,7 +337,7 @@ pub async fn flush_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
+    match state.db.get_vector_collection(&name) {
         Some(collection) => match collection.flush() {
             Ok(()) => Json(serde_json::json!({
                 "message": "Flushed successfully",

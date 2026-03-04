@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Semantic Memory - Long-term knowledge storage (US-002)
 //!
 //! Stores facts and knowledge as vectors with similarity search.
@@ -13,15 +12,19 @@ use std::sync::Arc;
 use super::error::AgentMemoryError;
 use super::ttl::MemoryTtl;
 
-pub struct SemanticMemory<'a> {
+/// Long-term semantic memory for storing knowledge facts with vector similarity search.
+///
+/// Each fact is stored as an embedding vector with associated text content.
+/// Supports TTL-based expiration and snapshot serialization.
+pub struct SemanticMemory {
     collection_name: String,
-    db: &'a Database,
+    db: Arc<Database>,
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     stored_ids: RwLock<HashSet<u64>>,
 }
 
-impl<'a> SemanticMemory<'a> {
+impl SemanticMemory {
     const COLLECTION_NAME: &'static str = "_semantic_memory";
 
     /// Creates or opens semantic memory.
@@ -29,12 +32,12 @@ impl<'a> SemanticMemory<'a> {
     /// # Errors
     ///
     /// Returns an error when collection creation/opening fails or dimensions mismatch.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
+    pub fn new_from_db(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
 
     pub(crate) fn new(
-        db: &'a Database,
+        db: Arc<Database>,
         dimension: usize,
         ttl: Arc<MemoryTtl>,
     ) -> Result<Self, AgentMemoryError> {
@@ -73,11 +76,13 @@ impl<'a> SemanticMemory<'a> {
         })
     }
 
+    /// Returns the name of the underlying VelesDB collection.
     #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name
     }
 
+    /// Returns the embedding dimension for this collection.
     #[must_use]
     pub fn dimension(&self) -> usize {
         self.dimension

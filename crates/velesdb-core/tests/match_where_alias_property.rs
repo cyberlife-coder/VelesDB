@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use serde_json::json;
 use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Collection, Database, DistanceMetric, Point};
+use velesdb_core::{velesql::Parser, Database, DistanceMetric, Point, VectorCollection};
 
-fn setup_collection() -> (TempDir, Collection) {
+fn setup_collection() -> (TempDir, VectorCollection) {
     let dir = TempDir::new().expect("tempdir");
     let db = Database::open(dir.path()).expect("open db");
-    db.create_collection("people", 4, DistanceMetric::Cosine)
+    db.create_vector_collection("people", 4, DistanceMetric::Cosine)
         .expect("create collection");
-    let collection = db.get_collection("people").expect("get collection");
+    let collection = db.get_vector_collection("people").expect("get collection");
 
     collection
         .upsert(vec![

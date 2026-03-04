@@ -236,12 +236,12 @@ impl Database {
         let mode = parse_storage_mode(storage_mode)?;
 
         self.inner
-            .create_collection_with_options(name, dimension, distance_metric, mode)
+            .create_vector_collection_with_options(name, dimension, distance_metric, mode)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create collection: {}", e)))?;
 
         let collection = self
             .inner
-            .get_collection(name)
+            .get_vector_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(Arc::new(collection), name.to_string()))
@@ -259,7 +259,7 @@ impl Database {
     ///     >>> collection = db.get_collection("documents")
     #[pyo3(signature = (name))]
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
-        match self.inner.get_collection(name) {
+        match self.inner.get_vector_collection(name) {
             Some(collection) => Ok(Some(Collection::new(
                 Arc::new(collection),
                 name.to_string(),
@@ -313,17 +313,15 @@ impl Database {
     ///     ... ])
     #[pyo3(signature = (name))]
     fn create_metadata_collection(&self, name: &str) -> PyResult<Collection> {
-        use velesdb_core::CollectionType;
+        self.inner.create_metadata_collection(name).map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
+        })?;
 
-        self.inner
-            .create_collection_typed(name, &CollectionType::MetadataOnly)
-            .map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
-            })?;
-
+        // For metadata collections, we use get_vector_collection as a bridge
+        // (MetadataCollection shares the same on-disk format)
         let collection = self
             .inner
-            .get_collection(name)
+            .get_vector_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(Arc::new(collection), name.to_string()))

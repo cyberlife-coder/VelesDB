@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Expert Rust Review Fixes
+
+- **R-1 — `# Panics` documentation in SIMD dispatch** (`simd_native/dispatch/{cosine,dot,euclidean,hamming}.rs`):
+  Added missing `# Panics` rustdoc sections to all four public dispatch functions documenting
+  the dimension-mismatch panic contract. The `assert_eq!` guards are intentionally kept (not
+  downgraded to `debug_assert_eq!`) because the project's `.cargo/config.toml` applies
+  `-C opt-level=3` to all targets including tests, which would silently disable `debug_assert_eq!`
+  and break the existing mismatch regression tests.
+- **R-2 — `// SAFETY:` on non-unsafe code** (`fusion/strategy.rs`, `collection/query_cost/cost_model.rs`):
+  Replaced all `// SAFETY:` comments on non-`unsafe` cast sites with `// Reason:`, following
+  the project convention that `// SAFETY:` is reserved exclusively for `unsafe {}` blocks.
+  Expanded justifications to include exact bounds and precision-loss acceptability rationale.
+- **R-3 — Per-site cast annotations in `compaction.rs`** (`storage/compaction.rs`):
+  Removed file-level `#![allow(clippy::cast_possible_truncation)]`. Each `as` cast site now
+  carries a scoped `#[allow]` with a `// Reason:` comment explaining platform bounds
+  (`usize == u64` on 64-bit, struct size fits u32, usize→u64 widens only).
+- **R-4 — Idiomatic pointer casts** (`simd_neon_prefetch.rs`):
+  Replaced `as *const u8` with `.cast::<u8>()` throughout (function body + module doc example).
+  `.cast()` cannot accidentally change pointer mutability, avoids implicit clippy suppressions.
+- **R-5 — File size refactoring** (300-line rule):
+  Split three oversized files into focused modules:
+  - `velesql/planner.rs` (572 → 339 lines): extracted `QueryStats` → `query_stats.rs` and
+    `CostEstimator`/`Cost` → `cost_estimator.rs`; both re-exported via `pub use` in `planner.rs`.
+  - `collection/search/query/mod.rs` (642 → 445 lines): extracted the large `match (vector_search,
+    similarity, filter)` dispatch block into `dispatch_vector_query()` in `execution_paths.rs`.
+  - `collection/core/crud.rs` (521 → 396 lines): extracted `cache_quantized_vector` and all
+    secondary-index helpers into `crud_helpers.rs`. Zero API or behavioural change.
+- **R-6 — `HnswIndex` stale `'static` lie doc removed** (`index/hnsw/index/mod.rs`):
+  Updated struct-level, field-level, and `Drop` documentation to reflect the v1.0+ native
+  implementation reality: `NativeHnswInner` owns all its data, no mmap borrowing occurs,
+  no `'static` lifetime lie exists. `ManuallyDrop` and `io_holder` are retained for
+  forward-compatibility with potential future backends, with this intent now clearly documented.
+
+### Architecture Review Fixes
+
+- **A-1 — Python bindings** (`velesdb-python/src/agent.rs`): Removed `unsafe { &*Arc::as_ptr(...) }`
+  lifetime workaround from `PySemanticMemory`, `PyEpisodicMemory`, and `PyProceduralMemory`.
+  `get_core_memory()` now passes `Arc::clone(&self.db)` directly to `new_from_db()`, matching
+  the current `Arc<Database>` API. `AgentMemory::new` no longer double-opens the database.
+- **A-2 — Tauri plugin state** (`tauri-plugin-velesdb/src/state.rs`): Changed `VelesDbState.db`
+  from `Arc<RwLock<Option<Database>>>` to `Arc<RwLock<Option<Arc<Database>>>>`. `open()` now
+  wraps the opened `Database` in `Arc`; `with_db()` passes `Arc<Database>` to its closure,
+  making `SemanticMemory::new_from_db` call-sites in `commands.rs` compile without changes.
+- **B-1 — Concurrency regression test** (`collection/core/crud_tests.rs`): Added
+  `test_concurrent_upsert_and_search_no_deadlock` — 4 threads interleaving upserts and searches
+  on a shared `Arc<Collection>` to guard against lock-ordering regressions.
+- **C-1/C-2 — `update-check` feature gating** (`Cargo.toml`, `lib.rs`): `sha2`, `hex`,
+  `hostname`, and `whoami` moved from unconditional target-scoped deps to optional deps gated
+  behind the `update-check` feature. `pub mod update_check` and its re-exports in `lib.rs` now
+  require `all(not(target_arch = "wasm32"), feature = "update-check")`.
+- **D-1 — Agent doc example** (`agent/mod.rs`): Updated `//! # Example` to use
+  `Arc::new(Database::open(...))` and `AgentMemory::new(Arc::clone(&db))` matching the current API.
+- **D-2 — Similarity filter cast allows** (`collection/search/query/similarity_filter.rs`):
+  Removed file-level `#![allow(cast_precision_loss/cast_possible_truncation)]`; both cast sites
+  now carry scoped `#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]`
+  with `// Reason:` comments.
+- **D-3 — Query planner cast rationale** (`velesql/planner.rs`): Replaced `// SAFETY:` header
+  (incorrect — not an unsafe block) with `// Reason:` covering all three cast types
+  (`cast_precision_loss`, `cast_possible_truncation`, `cast_sign_loss`) with per-type bounds.
+- **D-4 — Lock order annotations** (`collection/core/index_management.rs`): Added
+  `// LOCK ORDER:` comments before dual-read-lock sites in `list_indexes()` and
+  `indexes_memory_usage()` documenting the canonical `property_index → range_index` read order.
+- **D-5 — Hybrid fusion TODO tracking** (`velesql/hybrid.rs`): Added `// TODO(EPIC-017):`
+  comment above `#![allow(dead_code)]` to link the suppression to the integration epic.
+
 ### EPIC-074/075: SIMD Architecture Consolidation ✅
 
 - **Removed `simd_explicit.rs`** - All functions migrated to `simd_native.rs`

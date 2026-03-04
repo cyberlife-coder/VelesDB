@@ -2,6 +2,8 @@
 
 use crate::{distance::DistanceMetric, point::Point, quantization::StorageMode, Collection};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread;
 
 #[test]
 fn test_upsert_product_quantization_after_training_backfills_cache() {
@@ -48,4 +50,46 @@ fn test_upsert_product_quantization_after_training_backfills_cache() {
         128,
         "all training samples should be backfilled in PQ cache"
     );
+}
+
+#[test]
+fn test_concurrent_upsert_and_search_no_deadlock() {
+    // ARRANGE: shared collection accessible from multiple threads.
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let col = Arc::new(
+        Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+            .expect("collection should be created"),
+    );
+
+    // Seed with enough points so HNSW search is exercised.
+    #[allow(clippy::cast_precision_loss)] // Reason: i in [0,20); u64→f32 exact for small values.
+    let seeds: Vec<Point> = (0u64..20)
+        .map(|i| Point::without_payload(i, vec![i as f32 / 20.0, 0.1, 0.1, 0.1]))
+        .collect();
+    col.upsert(seeds).expect("seed upsert should succeed");
+
+    // ACT: 4 threads each interleave upsert + search 50 times.
+    let handles: Vec<_> = (0u64..4)
+        .map(|t| {
+            let col = Arc::clone(&col);
+            thread::spawn(move || {
+                for i in 0u64..50 {
+                    let id = t * 1_000 + i;
+                    #[allow(clippy::cast_precision_loss)] // Reason: i in [0,50); u64→f32 exact.
+                    col.upsert(vec![Point::without_payload(
+                        id,
+                        vec![i as f32 / 50.0, 0.2, 0.2, 0.2],
+                    )])
+                    .expect("concurrent upsert should not fail");
+                    let _ = col.search(&[0.5_f32, 0.1, 0.1, 0.1], 5);
+                }
+            })
+        })
+        .collect();
+
+    // ASSERT: no thread panicked (panic = deadlock or data race).
+    for h in handles {
+        h.join()
+            .expect("thread panicked — possible deadlock or data race");
+    }
 }

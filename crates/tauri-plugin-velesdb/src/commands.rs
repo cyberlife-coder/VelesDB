@@ -32,7 +32,7 @@ pub async fn create_collection<R: Runtime>(
 
     let result = state
         .with_db(|db| {
-            db.create_collection_with_options(
+            db.create_vector_collection_with_options(
                 &request.name,
                 request.dimension,
                 metric,
@@ -62,7 +62,7 @@ pub async fn create_metadata_collection<R: Runtime>(
 ) -> std::result::Result<CollectionInfo, CommandError> {
     let result = state
         .with_db(|db| {
-            db.create_collection_typed(&request.name, &velesdb_core::CollectionType::MetadataOnly)?;
+            db.create_metadata_collection(&request.name)?;
             Ok(CollectionInfo {
                 name: request.name.clone(),
                 dimension: 0,

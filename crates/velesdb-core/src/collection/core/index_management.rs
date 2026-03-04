@@ -100,7 +100,8 @@ impl Collection {
     pub fn list_indexes(&self) -> Vec<IndexInfo> {
         let mut indexes = Vec::new();
 
-        // List property (hash) indexes
+        // LOCK ORDER: property_index(7) read — then range_index(7) read.
+        // Same level, reads-only; canonical order prevents deadlock.
         let prop_index = self.property_index.read();
         for (label, property) in prop_index.indexed_properties() {
             let cardinality = prop_index.cardinality(&label, &property).unwrap_or(0);
@@ -157,6 +158,8 @@ impl Collection {
     /// Get total memory usage of all indexes.
     #[must_use]
     pub fn indexes_memory_usage(&self) -> usize {
+        // LOCK ORDER: property_index(7) read — then range_index(7) read.
+        // Same level, reads-only; canonical order prevents deadlock.
         let prop_mem = self.property_index.read().memory_usage();
         let range_mem = self.range_index.read().memory_usage();
         prop_mem + range_mem

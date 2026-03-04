@@ -16,11 +16,11 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use velesdb_core::{Collection, Point};
+//! use velesdb_core::{VectorCollection, Point};
 //! use velesdb_core::collection::async_ops;
 //! use std::sync::Arc;
 //!
-//! async fn bulk_import(collection: Arc<Collection>) -> Result<usize, Error> {
+//! async fn bulk_import(collection: Arc<VectorCollection>) -> Result<usize, Error> {
 //!     let points: Vec<Point> = generate_points();
 //!     async_ops::upsert_bulk_async(collection, points).await
 //! }

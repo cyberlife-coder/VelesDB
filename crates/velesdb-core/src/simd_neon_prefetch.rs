@@ -21,7 +21,7 @@
 //!
 //! let data = vec![0.0f32; 1024];
 //! // Prefetch upcoming data before accessing it
-//! prefetch_read_l1(data.as_ptr() as *const u8);
+//! prefetch_read_l1(data.as_ptr().cast::<u8>());
 //! ```
 
 /// Prefetch data for reading into L1 cache.
@@ -127,7 +127,7 @@ pub fn prefetch_write_l1(ptr: *const u8) {
 #[inline(always)]
 pub fn prefetch_vector_neon(vector: &[f32]) {
     if !vector.is_empty() {
-        prefetch_read_l1(vector.as_ptr() as *const u8);
+        prefetch_read_l1(vector.as_ptr().cast::<u8>());
 
         // Prefetch additional cache lines for larger vectors
         let cache_line_size = 64; // bytes
@@ -139,7 +139,7 @@ pub fn prefetch_vector_neon(vector: &[f32]) {
             // - Condition 1: This branch only runs when at least one full extra cache line exists (>64 bytes).
             // - Condition 2: The offset is exactly one cache line (64 bytes) from the start.
             // Reason: Prefetch second cache line for large vectors.
-            let ptr = unsafe { (vector.as_ptr() as *const u8).add(cache_line_size) };
+            let ptr = unsafe { vector.as_ptr().cast::<u8>().add(cache_line_size) };
             prefetch_read_l2(ptr);
         }
 
@@ -149,7 +149,7 @@ pub fn prefetch_vector_neon(vector: &[f32]) {
             // - Condition 1: This branch only runs when at least two full extra cache lines exist (>128 bytes).
             // - Condition 2: The offset is exactly two cache lines (128 bytes) from the start.
             // Reason: Prefetch third cache line for very large vectors.
-            let ptr = unsafe { (vector.as_ptr() as *const u8).add(cache_line_size * 2) };
+            let ptr = unsafe { vector.as_ptr().cast::<u8>().add(cache_line_size * 2) };
             prefetch_read_l3(ptr);
         }
     }

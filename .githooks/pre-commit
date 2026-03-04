@@ -60,21 +60,37 @@ else
     fi
     echo -e "${GREEN}✅ Tests OK${NC}"
 
+    # Resolve a working Python interpreter (skip Windows Store stubs)
+    PYTHON_CMD=""
+    for _py in python3 python py; do
+        _bin=$(command -v "$_py" 2>/dev/null || true)
+        if [ -n "$_bin" ] && "$_bin" -c "import sys; sys.exit(0)" 2>/dev/null; then
+            PYTHON_CMD="$_bin"
+            break
+        fi
+    done
+
     # 4. Unsafe SAFETY template enforcement (changed Rust files)
     echo -e "\n${YELLOW}🛡️  Checking SAFETY comments for unsafe blocks...${NC}"
-    if ! python3 scripts/verify_unsafe_safety_template.py --files "${STAGED_RS_FILES[@]}" --strict; then
+    if [ -z "$PYTHON_CMD" ]; then
+        echo -e "${YELLOW}⚠️  Python not found, skipping SAFETY template check${NC}"
+    elif ! "$PYTHON_CMD" scripts/verify_unsafe_safety_template.py --files "${STAGED_RS_FILES[@]}" --strict; then
         echo -e "${RED}❌ Unsafe SAFETY template check failed.${NC}"
         exit 1
+    else
+        echo -e "${GREEN}✅ SAFETY comments OK${NC}"
     fi
-    echo -e "${GREEN}✅ SAFETY comments OK${NC}"
 
     # 5. TODO/FIXME/HACK governance for production code
     echo -e "\n${YELLOW}🧭 Checking TODO/FIXME/HACK issue tags...${NC}"
-    if ! python3 scripts/check-todo-annotations.py --files "${STAGED_RS_FILES[@]}"; then
+    if [ -z "$PYTHON_CMD" ]; then
+        echo -e "${YELLOW}⚠️  Python not found, skipping TODO/FIXME/HACK governance check${NC}"
+    elif ! "$PYTHON_CMD" scripts/check-todo-annotations.py --files "${STAGED_RS_FILES[@]}"; then
         echo -e "${RED}❌ Orphan TODO/FIXME/HACK found in production code.${NC}"
         exit 1
+    else
+        echo -e "${GREEN}✅ TODO/FIXME/HACK governance OK${NC}"
     fi
-    echo -e "${GREEN}✅ TODO/FIXME/HACK governance OK${NC}"
 fi
 
 # 6. Python integration checks (if Python files staged)

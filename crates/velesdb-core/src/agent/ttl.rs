@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! TTL (Time-To-Live) and eviction management for `AgentMemory`.
 //!
 //! Provides automatic expiration and eviction policies for memory entries:

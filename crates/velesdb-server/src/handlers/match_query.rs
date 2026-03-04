@@ -122,17 +122,20 @@ pub async fn match_query(
     };
 
     // Get collection
-    let collection = state.db.get_collection(&collection_name).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            mk_error(
-                format!("Collection '{}' not found", collection_name),
-                "COLLECTION_NOT_FOUND",
-                "Create the collection first or correct the collection name in the route",
-                Some(serde_json::json!({ "collection": collection_name })),
-            ),
-        )
-    })?;
+    let collection = state
+        .db
+        .get_vector_collection(&collection_name)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                mk_error(
+                    format!("Collection '{}' not found", collection_name),
+                    "COLLECTION_NOT_FOUND",
+                    "Create the collection first or correct the collection name in the route",
+                    Some(serde_json::json!({ "collection": collection_name })),
+                ),
+            )
+        })?;
 
     // Parse MATCH query
     let query = velesdb_core::velesql::Parser::parse(&request.query).map_err(|e| {

@@ -46,12 +46,10 @@ pub const DEFAULT_DIMENSION: usize = 384;
 /// - Snapshot/restore for state persistence
 /// - Temporal indexing for efficient time-based queries
 /// - Configurable eviction policies
-///
-/// Uses lifetime `'a` to borrow the Database without cloning.
-pub struct AgentMemory<'a> {
-    semantic: SemanticMemory<'a>,
-    episodic: EpisodicMemory<'a>,
-    procedural: ProceduralMemory<'a>,
+pub struct AgentMemory {
+    semantic: SemanticMemory,
+    episodic: EpisodicMemory,
+    procedural: ProceduralMemory,
     ttl: Arc<MemoryTtl>,
     // Reason: temporal_index will be used for time-based queries in future implementation
     #[allow(dead_code)]
@@ -60,7 +58,7 @@ pub struct AgentMemory<'a> {
     snapshot_manager: Option<SnapshotManager>,
 }
 
-impl<'a> AgentMemory<'a> {
+impl AgentMemory {
     /// Creates a new `AgentMemory` instance from a `Database`.
     ///
     /// Initializes or connects to the three memory subsystem collections:
@@ -73,7 +71,7 @@ impl<'a> AgentMemory<'a> {
     /// # Errors
     ///
     /// Returns an error when one of the underlying memory subsystems cannot be initialized.
-    pub fn new(db: &'a Database) -> Result<Self, AgentMemoryError> {
+    pub fn new(db: Arc<Database>) -> Result<Self, AgentMemoryError> {
         Self::with_dimension(db, DEFAULT_DIMENSION)
     }
 
@@ -82,13 +80,17 @@ impl<'a> AgentMemory<'a> {
     /// # Errors
     ///
     /// Returns an error when one of the underlying memory subsystems cannot be initialized.
-    pub fn with_dimension(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
+    pub fn with_dimension(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
         let ttl = Arc::new(MemoryTtl::new());
         let temporal_index = Arc::new(TemporalIndex::new());
 
-        let semantic = SemanticMemory::new(db, dimension, Arc::clone(&ttl))?;
-        let episodic =
-            EpisodicMemory::new(db, dimension, Arc::clone(&ttl), Arc::clone(&temporal_index))?;
+        let semantic = SemanticMemory::new(Arc::clone(&db), dimension, Arc::clone(&ttl))?;
+        let episodic = EpisodicMemory::new(
+            Arc::clone(&db),
+            dimension,
+            Arc::clone(&ttl),
+            Arc::clone(&temporal_index),
+        )?;
         let procedural = ProceduralMemory::new(db, dimension, Arc::clone(&ttl))?;
 
         Ok(Self {
@@ -123,19 +125,19 @@ impl<'a> AgentMemory<'a> {
 
     /// Returns a reference to the semantic memory subsystem.
     #[must_use]
-    pub fn semantic(&self) -> &SemanticMemory<'a> {
+    pub fn semantic(&self) -> &SemanticMemory {
         &self.semantic
     }
 
     /// Returns a reference to the episodic memory subsystem.
     #[must_use]
-    pub fn episodic(&self) -> &EpisodicMemory<'a> {
+    pub fn episodic(&self) -> &EpisodicMemory {
         &self.episodic
     }
 
     /// Returns a reference to the procedural memory subsystem.
     #[must_use]
-    pub fn procedural(&self) -> &ProceduralMemory<'a> {
+    pub fn procedural(&self) -> &ProceduralMemory {
         &self.procedural
     }
 

@@ -15,10 +15,11 @@
 //! # Example
 //!
 //! ```ignore
+//! use std::sync::Arc;
 //! use velesdb_core::{Database, agent::AgentMemory};
 //!
-//! let db = Database::open("agent.db")?;
-//! let memory = AgentMemory::new(&db)?;
+//! let db = Arc::new(Database::open("agent.db")?);
+//! let memory = AgentMemory::new(Arc::clone(&db))?;
 //!
 //! // Store semantic knowledge
 //! memory.semantic().store("Paris is the capital of France", embedding)?;
@@ -31,15 +32,21 @@
 //! ```
 
 mod episodic_memory;
+#[cfg(test)]
+mod episodic_memory_tests;
 mod error;
 mod memory;
 #[cfg(test)]
 mod memory_tests;
 mod procedural_memory;
+#[cfg(test)]
+mod procedural_memory_tests;
 pub mod reinforcement;
 #[cfg(test)]
 mod reinforcement_tests;
 mod semantic_memory;
+#[cfg(test)]
+mod semantic_memory_tests;
 pub mod snapshot;
 #[cfg(test)]
 mod snapshot_tests;

@@ -11,7 +11,7 @@
 
 use serde_json::json;
 use tempfile::TempDir;
-use velesdb_core::{velesql::Parser, Database, DistanceMetric, Point};
+use velesdb_core::{velesql::Parser, Database, DistanceMetric, Point, VectorCollection};
 
 fn create_mock_embedding(seed: u64, dim: usize) -> Vec<f32> {
     (0..dim)
@@ -33,10 +33,11 @@ fn create_and_get_collection(
     name: &str,
     dimension: usize,
     metric: DistanceMetric,
-) -> velesdb_core::Collection {
-    db.create_collection(name, dimension, metric)
+) -> VectorCollection {
+    db.create_vector_collection(name, dimension, metric)
         .expect("Failed to create collection");
-    db.get_collection(name).expect("Failed to get collection")
+    db.get_vector_collection(name)
+        .expect("Failed to get collection")
 }
 
 // =============================================================================

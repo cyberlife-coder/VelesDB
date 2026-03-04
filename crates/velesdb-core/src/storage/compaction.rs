@@ -13,11 +13,8 @@
 //! - Linux: `fallocate(FALLOC_FL_PUNCH_HOLE)`
 //! - Windows: `FSCTL_SET_ZERO_DATA`
 
-// SAFETY: Numeric casts in compaction are intentional:
-// - usize->u32 for Windows API: struct sizes are small and bounded
-// - u64->usize for length calculations: lengths bounded by file size
-// - All values are validated against buffer/file bounds
-#![allow(clippy::cast_possible_truncation)]
+// Reason: Numeric casts in this file are intentional and bounded.
+// Each cast site carries an inline #[allow] with a per-site justification.
 
 use super::sharded_index::ShardedIndex;
 use memmap2::MmapMut;
@@ -149,7 +146,11 @@ fn punch_hole_windows(file: &File, offset: u64, len: u64) -> io::Result<bool> {
             handle,
             FSCTL_SET_ZERO_DATA,
             std::ptr::addr_of!(info).cast(),
-            std::mem::size_of::<FileZeroDataInformation>() as u32,
+            // Reason: FileZeroDataInformation struct size is always <= 16 bytes; fits in u32.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                std::mem::size_of::<FileZeroDataInformation>() as u32
+            },
             std::ptr::null_mut(),
             0,
             std::ptr::addr_of_mut!(bytes_returned),
@@ -182,6 +183,10 @@ fn punch_hole_fallback(file: &File, offset: u64, len: u64) -> io::Result<bool> {
 
     // Write zeros in chunks to avoid large allocations
     let zeros = vec![0u8; FALLBACK_CHUNK_SIZE];
+    // Reason: `len` represents a byte range within a single file; on supported
+    // platforms (64-bit Linux/Windows) usize == u64, so no truncation occurs.
+    // On 32-bit targets this function is only reachable for lengths <= usize::MAX.
+    #[allow(clippy::cast_possible_truncation)]
     let mut remaining = len as usize;
 
     while remaining > 0 {
@@ -302,6 +307,9 @@ impl CompactionContext<'_> {
             .open(&temp_path)?;
 
         // Size the temp file for active vectors
+        // Reason: active_size = active_count * vector_size; both are bounded by
+        // available memory (usize), so usize -> u64 widens and never truncates.
+        #[allow(clippy::cast_possible_truncation)]
         let new_size = (active_size as u64).max(self.initial_size);
         temp_file.set_len(new_size)?;
 

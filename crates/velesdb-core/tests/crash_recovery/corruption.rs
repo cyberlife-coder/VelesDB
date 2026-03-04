@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::point::Point;
-use velesdb_core::Collection;
+use velesdb_core::VectorCollection;
 
 /// File mutator for controlled corruption testing.
 ///
@@ -117,9 +117,15 @@ impl FileMutator {
 }
 
 /// Helper to create a test collection with data.
-fn create_test_collection(dir: &Path, count: usize, dimension: usize) -> Collection {
-    let collection =
-        Collection::create(dir.to_path_buf(), dimension, DistanceMetric::Cosine).unwrap();
+fn create_test_collection(dir: &Path, count: usize, dimension: usize) -> VectorCollection {
+    let collection = VectorCollection::create(
+        dir.to_path_buf(),
+        "corruption_test",
+        dimension,
+        DistanceMetric::Cosine,
+        velesdb_core::StorageMode::Full,
+    )
+    .unwrap();
 
     for i in 0..count {
         #[allow(clippy::cast_precision_loss)]
@@ -155,7 +161,7 @@ fn test_truncation_50_percent_vectors_file() {
         eprintln!("Truncated vectors.bin to {new_size} bytes");
 
         // Attempt to open - should handle gracefully
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         // Either returns error OR opens with partial data (both are acceptable)
         match result {
@@ -197,7 +203,7 @@ fn test_truncation_payloads_log() {
         eprintln!("Truncated payloads.log to {new_size} bytes");
 
         // Attempt to open
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         match result {
             Ok(coll) => {
@@ -231,10 +237,10 @@ fn test_truncation_to_zero() {
         mutator.truncate_to_percent(0.0).expect("Truncate failed");
 
         // Attempt to open - should fail gracefully
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         // Empty file should cause an error
-        assert!(result.is_err() || result.as_ref().map(Collection::len).unwrap_or(0) == 0);
+        assert!(result.is_err() || result.as_ref().map(VectorCollection::len).unwrap_or(0) == 0);
     }
 }
 
@@ -257,7 +263,7 @@ fn test_bitflip_in_vectors_header() {
         mutator.corrupt_header(16).expect("Corrupt failed");
 
         // Attempt to open
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         match result {
             Ok(coll) => {
@@ -305,7 +311,7 @@ fn test_bitflip_in_payload_data() {
         mutator.bitflip_at(middle, 8).expect("Corrupt failed");
 
         // Attempt to open
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         match result {
             Ok(coll) => {
@@ -347,7 +353,7 @@ fn test_bitflip_in_snapshot() {
         mutator.corrupt_header(8).expect("Corrupt failed");
 
         // Attempt to open - should fall back to WAL replay
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         match result {
             Ok(coll) => {
@@ -382,7 +388,7 @@ fn test_empty_config_file() {
     File::create(&config_file).expect("Failed to empty config");
 
     // Attempt to open - should fail
-    let result = Collection::open(temp.path().to_path_buf());
+    let result = VectorCollection::open(temp.path().to_path_buf());
 
     assert!(result.is_err(), "Should fail with empty config");
     if let Err(e) = result {
@@ -406,7 +412,7 @@ fn test_missing_vectors_file() {
     }
 
     // Attempt to open
-    let result = Collection::open(temp.path().to_path_buf());
+    let result = VectorCollection::open(temp.path().to_path_buf());
 
     // Should either fail or create new empty storage
     match result {
@@ -440,7 +446,7 @@ fn test_corrupted_hnsw_index() {
         mutator.corrupt_header(32).expect("Corrupt failed");
 
         // Attempt to open
-        let result = Collection::open(temp.path().to_path_buf());
+        let result = VectorCollection::open(temp.path().to_path_buf());
 
         match result {
             Ok(coll) => {
@@ -493,7 +499,7 @@ fn test_multiple_corruptions() {
     }
 
     // Attempt to open - should not panic
-    let result = Collection::open(temp.path().to_path_buf());
+    let result = VectorCollection::open(temp.path().to_path_buf());
 
     // Any result is acceptable as long as no panic
     match result {

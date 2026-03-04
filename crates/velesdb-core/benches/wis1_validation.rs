@@ -108,6 +108,7 @@ fn brute_force_knn(
                         1.0 - (intersection as f32 / union as f32)
                     }
                 }
+                _ => 0.0,
             };
             (*id, dist)
         })

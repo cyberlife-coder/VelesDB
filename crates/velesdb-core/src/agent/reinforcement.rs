@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Adaptive reinforcement strategies for `ProceduralMemory`.
 //!
 //! Provides extensible strategies for updating procedure confidence:

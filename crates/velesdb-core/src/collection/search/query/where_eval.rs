@@ -113,6 +113,9 @@ impl Collection {
 
     /// Evaluate WHERE condition for one record.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    // Reason: Recursive AST dispatch with 7 contextual params — extraction
+    // would require a wrapper struct and add more lines than it removes.
     pub(crate) fn evaluate_where_condition_for_record(
         &self,
         condition: &Condition,

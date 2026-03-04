@@ -16,6 +16,15 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+struct LoadedGraph {
+    layers: Vec<Layer>,
+    max_connections: usize,
+    max_connections_0: usize,
+    ef_construction: usize,
+    entry_point: usize,
+    max_layer: usize,
+}
+
 // ============================================================================
 // NativeHnswBackend Trait - Independent of hnsw_rs
 // ============================================================================
@@ -272,14 +281,35 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     ///
     /// Returns `io::Error` if file operations fail or data is corrupted.
     pub fn file_load(path: &Path, basename: &str, distance: D) -> std::io::Result<Self> {
-        // Load vectors
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let mut reader = BufReader::new(File::open(&vectors_path)?);
+        let (vectors, count) = Self::load_vectors_file(&vectors_path)?;
 
+        let graph_path = path.join(format!("{basename}.graph"));
+        let graph = Self::load_graph_file(&graph_path)?;
+
+        let level_mult = 1.0 / (graph.max_connections as f64).ln();
+
+        Ok(Self {
+            distance,
+            vectors: parking_lot::RwLock::new(vectors),
+            layers: parking_lot::RwLock::new(graph.layers),
+            entry_point: parking_lot::RwLock::new(Some(graph.entry_point)),
+            max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
+            count: std::sync::atomic::AtomicUsize::new(count),
+            rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
+            max_connections: graph.max_connections,
+            max_connections_0: graph.max_connections_0,
+            ef_construction: graph.ef_construction,
+            level_mult,
+            alpha: 1.0,
+        })
+    }
+
+    fn load_vectors_file(path: &Path) -> std::io::Result<(Vec<Vec<f32>>, usize)> {
+        let mut reader = BufReader::new(File::open(path)?);
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
 
-        // Read header
         reader.read_exact(&mut buf4)?;
         let version = u32::from_le_bytes(buf4);
         if version != 1 {
@@ -291,11 +321,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
         reader.read_exact(&mut buf8)?;
         let count = u64::from_le_bytes(buf8) as usize;
-
         reader.read_exact(&mut buf4)?;
         let dimension = u32::from_le_bytes(buf4) as usize;
 
-        // Read vectors
         let mut vectors = Vec::with_capacity(count);
         for _ in 0..count {
             let mut vec = Vec::with_capacity(dimension);
@@ -305,10 +333,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             }
             vectors.push(vec);
         }
+        Ok((vectors, count))
+    }
 
-        // Load graph structure
-        let graph_path = path.join(format!("{basename}.graph"));
-        let mut reader = BufReader::new(File::open(&graph_path)?);
+    fn load_graph_file(path: &Path) -> std::io::Result<LoadedGraph> {
+        let mut reader = BufReader::new(File::open(path)?);
+        let mut buf4 = [0u8; 4];
+        let mut buf8 = [0u8; 8];
 
         reader.read_exact(&mut buf4)?;
         let version = u32::from_le_bytes(buf4);
@@ -321,36 +352,27 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
         reader.read_exact(&mut buf4)?;
         let num_layers = u32::from_le_bytes(buf4) as usize;
-
         reader.read_exact(&mut buf4)?;
         let max_connections = u32::from_le_bytes(buf4) as usize;
-
         reader.read_exact(&mut buf4)?;
         let max_connections_0 = u32::from_le_bytes(buf4) as usize;
-
         reader.read_exact(&mut buf4)?;
         let ef_construction = u32::from_le_bytes(buf4) as usize;
-
         reader.read_exact(&mut buf8)?;
         let entry_point = u64::from_le_bytes(buf8) as usize;
-
         reader.read_exact(&mut buf4)?;
         let max_layer = u32::from_le_bytes(buf4) as usize;
-
         reader.read_exact(&mut buf8)?;
         let _count_check = u64::from_le_bytes(buf8) as usize;
 
-        // Read layers
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
             reader.read_exact(&mut buf8)?;
             let num_nodes = u64::from_le_bytes(buf8) as usize;
-
             let layer = Layer::new(num_nodes);
             for node_id in 0..num_nodes {
                 reader.read_exact(&mut buf4)?;
                 let num_neighbors = u32::from_le_bytes(buf4) as usize;
-
                 let mut neighbors = Vec::with_capacity(num_neighbors);
                 for _ in 0..num_neighbors {
                     reader.read_exact(&mut buf4)?;
@@ -361,21 +383,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             layers.push(layer);
         }
 
-        let level_mult = 1.0 / (max_connections as f64).ln();
-
-        Ok(Self {
-            distance,
-            vectors: parking_lot::RwLock::new(vectors),
-            layers: parking_lot::RwLock::new(layers),
-            entry_point: parking_lot::RwLock::new(Some(entry_point)),
-            max_layer: std::sync::atomic::AtomicUsize::new(max_layer),
-            count: std::sync::atomic::AtomicUsize::new(count),
-            rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
+        Ok(LoadedGraph {
+            layers,
             max_connections,
             max_connections_0,
             ef_construction,
-            level_mult,
-            alpha: 1.0, // Default: standard HNSW behavior for loaded indices
+            entry_point,
+            max_layer,
         })
     }
 }

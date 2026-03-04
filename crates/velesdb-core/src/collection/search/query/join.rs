@@ -353,8 +353,8 @@ pub fn joined_to_search_results(joined: Vec<JoinedResult>) -> Vec<SearchResult> 
                 .and_then(|p| p.as_object().cloned())
                 .unwrap_or_default();
 
-            for (key, value) in &jr.column_data {
-                payload.insert(key.clone(), value.clone());
+            for (key, value) in jr.column_data {
+                payload.insert(key, value);
             }
 
             result.point.payload = Some(serde_json::Value::Object(payload));

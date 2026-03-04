@@ -55,18 +55,20 @@ impl AgentMemory {
     pub fn new(db: &crate::Database, dimension: Option<usize>) -> PyResult<Self> {
         let dim = dimension.unwrap_or(DEFAULT_DIMENSION);
 
-        // Initialize memory subsystems by creating a temporary CoreAgentMemory
-        // This ensures collections are created
-        let core_db = db.inner();
-        CoreAgentMemory::with_dimension(core_db, dim).map_err(to_py_err)?;
+        // Open the database once and wrap in Arc for shared ownership.
+        // PyO3 classes cannot hold lifetime parameters, so we open an owned
+        // instance here rather than borrowing from the Python-side Database.
+        let owned_db = Arc::new(
+            CoreDatabase::open(db.path())
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {e}")))?,
+        );
 
-        // Reopen database to get an owned instance
-        // This is necessary because PyO3 classes can't have lifetime parameters
-        let owned_db = CoreDatabase::open(db.path())
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to reopen database: {e}")))?;
+        // Initialize memory subsystems — this creates the underlying collections
+        // if they do not already exist.
+        CoreAgentMemory::with_dimension(Arc::clone(&owned_db), dim).map_err(to_py_err)?;
 
         Ok(Self {
-            db: Arc::new(owned_db),
+            db: owned_db,
             dimension: dim,
         })
     }
@@ -174,10 +176,8 @@ impl PySemanticMemory {
 }
 
 impl PySemanticMemory {
-    fn get_core_memory(&self) -> PyResult<CoreSemanticMemory<'_>> {
-        // SAFETY: We own the Arc, so the pointer is valid for the lifetime of self
-        let db_ref = unsafe { &*Arc::as_ptr(&self.db) };
-        CoreSemanticMemory::new_from_db(db_ref, self.dimension).map_err(to_py_err)
+    fn get_core_memory(&self) -> PyResult<CoreSemanticMemory> {
+        CoreSemanticMemory::new_from_db(Arc::clone(&self.db), self.dimension).map_err(to_py_err)
     }
 }
 
@@ -287,9 +287,8 @@ impl PyEpisodicMemory {
 }
 
 impl PyEpisodicMemory {
-    fn get_core_memory(&self) -> PyResult<CoreEpisodicMemory<'_>> {
-        let db_ref = unsafe { &*Arc::as_ptr(&self.db) };
-        CoreEpisodicMemory::new_from_db(db_ref, self.dimension).map_err(to_py_err)
+    fn get_core_memory(&self) -> PyResult<CoreEpisodicMemory> {
+        CoreEpisodicMemory::new_from_db(Arc::clone(&self.db), self.dimension).map_err(to_py_err)
     }
 }
 
@@ -395,8 +394,7 @@ impl PyProceduralMemory {
 }
 
 impl PyProceduralMemory {
-    fn get_core_memory(&self) -> PyResult<CoreProceduralMemory<'_>> {
-        let db_ref = unsafe { &*Arc::as_ptr(&self.db) };
-        CoreProceduralMemory::new_from_db(db_ref, self.dimension).map_err(to_py_err)
+    fn get_core_memory(&self) -> PyResult<CoreProceduralMemory> {
+        CoreProceduralMemory::new_from_db(Arc::clone(&self.db), self.dimension).map_err(to_py_err)
     }
 }

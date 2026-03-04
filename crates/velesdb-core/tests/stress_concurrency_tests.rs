@@ -13,7 +13,7 @@ use tempfile::tempdir;
 use velesdb_core::collection::graph::{ConcurrentEdgeStore, GraphEdge};
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::point::Point;
-use velesdb_core::Collection;
+use velesdb_core::VectorCollection;
 
 #[allow(clippy::cast_precision_loss)]
 fn generate_vector(dimension: usize, seed: u64) -> Vec<f32> {
@@ -62,8 +62,16 @@ fn run_collection_stress(
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("stress");
 
-    let collection =
-        Arc::new(Collection::create(path, dimension, DistanceMetric::Cosine).expect("create"));
+    let collection = Arc::new(
+        VectorCollection::create(
+            path,
+            "stress",
+            dimension,
+            DistanceMetric::Cosine,
+            velesdb_core::StorageMode::Full,
+        )
+        .expect("create"),
+    );
 
     // Seed
     let initial: Vec<Point> = (0..initial_points as u64)

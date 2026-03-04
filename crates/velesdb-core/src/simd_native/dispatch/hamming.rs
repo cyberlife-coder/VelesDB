@@ -1,6 +1,10 @@
 use super::SimdLevel;
 
 /// Hamming distance with runtime SIMD dispatch.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`.
 #[inline]
 #[must_use]
 pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
@@ -15,6 +19,10 @@ pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Jaccard similarity with runtime SIMD dispatch.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`.
 #[inline]
 #[must_use]
 pub fn jaccard_similarity_native(a: &[f32], b: &[f32]) -> f32 {

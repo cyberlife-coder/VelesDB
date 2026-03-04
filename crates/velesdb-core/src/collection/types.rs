@@ -1,13 +1,16 @@
 //! Collection types and configuration.
 
 use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
+use crate::collection::stats::CollectionStats;
 use crate::distance::DistanceMetric;
+use crate::guardrails::GuardRails;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
 use crate::storage::{LogPayloadStorage, MmapStorage};
-use parking_lot::RwLock;
+use crate::velesql::{QueryCache, QueryPlanner};
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -113,7 +116,7 @@ pub struct CollectionConfig {
     /// Name of the collection.
     pub name: String,
 
-    /// Vector dimension (0 for metadata-only collections).
+    /// Vector dimension (0 for metadata-only or graph-without-embeddings collections).
     pub dimension: usize,
 
     /// Distance metric.
@@ -129,7 +132,31 @@ pub struct CollectionConfig {
     /// Whether this is a metadata-only collection.
     #[serde(default)]
     pub metadata_only: bool,
+
+    /// Graph schema — `Some` iff this is a graph collection.
+    /// Persisted to config.json; `None` for vector and metadata collections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_schema: Option<GraphSchema>,
+
+    /// Embedding dimension for graph node vectors (None = no embeddings).
+    /// Only meaningful when `graph_schema` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dimension: Option<usize>,
 }
+
+// === LOCK ORDERING ===
+// All code acquiring multiple locks on Collection MUST follow this order.
+// Acquiring in any other order risks deadlock under concurrent access.
+//
+// Canonical order (acquire lower numbers first):
+//   1. config
+//   2. vector_storage
+//   3. payload_storage
+//   4. sq8_cache / binary_cache / pq_cache  (any order among themselves)
+//   5. pq_quantizer → pq_training_buffer
+//   6. secondary_indexes
+//   7. property_index / range_index         (any order among themselves)
+//   8. edge_store
 
 /// A collection of vectors with associated metadata.
 #[derive(Clone)]
@@ -179,31 +206,23 @@ pub struct Collection {
 
     /// Secondary indexes for metadata payload fields.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
+
+    /// Guard-rails for query execution (EPIC-048).
+    pub(crate) guard_rails: Arc<GuardRails>,
+
+    /// Query planner for cost-based optimization (EPIC-046).
+    pub(crate) query_planner: Arc<QueryPlanner>,
+
+    /// Query parse cache for amortizing repeated query parsing (P1-A).
+    pub(crate) query_cache: Arc<QueryCache>,
+
+    /// Cached CBO statistics with TTL (avoids O(n) scan per query).
+    pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
 }
 
 impl Collection {
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
-        let mut texts = Vec::new();
-        Self::collect_strings(payload, &mut texts);
-        texts.join(" ")
-    }
-
-    /// Recursively collects all string values from a JSON value.
-    fn collect_strings(value: &serde_json::Value, texts: &mut Vec<String>) {
-        match value {
-            serde_json::Value::String(s) => texts.push(s.clone()),
-            serde_json::Value::Array(arr) => {
-                for item in arr {
-                    Self::collect_strings(item, texts);
-                }
-            }
-            serde_json::Value::Object(obj) => {
-                for v in obj.values() {
-                    Self::collect_strings(v, texts);
-                }
-            }
-            _ => {}
-        }
+        crate::collection::text_utils::extract_text(payload)
     }
 }

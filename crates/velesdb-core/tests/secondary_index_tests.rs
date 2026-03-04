@@ -5,12 +5,18 @@ use std::collections::HashSet;
 use serde_json::json;
 use tempfile::tempdir;
 use velesdb_core::velesql::{IndexType, Parser, PlanNode, QueryPlan};
-use velesdb_core::{Collection, DistanceMetric, Point, Result};
+use velesdb_core::{DistanceMetric, Point, Result, StorageMode, VectorCollection};
 
 #[test]
 fn secondary_index_accelerates_metadata_query_and_explain() -> Result<()> {
     let dir = tempdir()?;
-    let collection = Collection::create(dir.path().join("docs"), 2, DistanceMetric::Cosine)?;
+    let collection = VectorCollection::create(
+        dir.path().join("docs"),
+        "docs",
+        2,
+        DistanceMetric::Cosine,
+        StorageMode::Full,
+    )?;
     collection.create_index("category")?;
 
     collection.upsert(vec![
@@ -49,7 +55,13 @@ fn secondary_index_accelerates_metadata_query_and_explain() -> Result<()> {
 #[test]
 fn secondary_index_is_updated_on_delete() -> Result<()> {
     let dir = tempdir()?;
-    let collection = Collection::create(dir.path().join("docs"), 2, DistanceMetric::Cosine)?;
+    let collection = VectorCollection::create(
+        dir.path().join("docs"),
+        "docs",
+        2,
+        DistanceMetric::Cosine,
+        StorageMode::Full,
+    )?;
     collection.create_index("category")?;
 
     collection.upsert(vec![

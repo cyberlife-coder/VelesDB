@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // Documentation will be added in follow-up PR
 //! Procedural Memory - Learned patterns storage (US-004)
 //!
 //! Stores action sequences and learned procedures with confidence scoring.
@@ -25,38 +24,83 @@ use super::error::AgentMemoryError;
 use super::reinforcement::{FixedRate, ReinforcementContext, ReinforcementStrategy};
 use super::ttl::MemoryTtl;
 
+struct ProcedureState {
+    name: String,
+    steps: Vec<String>,
+    confidence: f32,
+    usage_count: u64,
+    created_at: i64,
+    success_count: u64,
+    failure_count: u64,
+}
+
+impl ProcedureState {
+    fn build_reinforcement_context(&self, now: i64) -> ReinforcementContext {
+        let total_uses = self.success_count + self.failure_count;
+        let success_rate = if total_uses > 0 {
+            self.success_count as f32 / total_uses as f32
+        } else {
+            0.5
+        };
+        ReinforcementContext {
+            usage_count: self.usage_count,
+            created_at: self.created_at as u64,
+            last_used: now as u64,
+            current_time: now as u64,
+            recent_success_rate: Some(success_rate),
+            custom: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// A procedure match result returned by [`ProceduralMemory::recall`].
 #[derive(Debug, Clone)]
 pub struct ProcedureMatch {
+    /// Unique identifier for the procedure.
     pub id: u64,
+    /// Human-readable name for the procedure.
     pub name: String,
+    /// Ordered sequence of steps that constitute the procedure.
     pub steps: Vec<String>,
+    /// Confidence score of this procedure (0.0 - 1.0).
     pub confidence: f32,
+    /// Similarity score from the vector search.
     pub score: f32,
 }
 
-pub struct ProceduralMemory<'a> {
+/// Procedural memory for storing learned action sequences with confidence scoring.
+///
+/// Stores procedures as embedding vectors with associated metadata.
+/// Supports confidence-based recall, reinforcement learning, and TTL expiration.
+pub struct ProceduralMemory {
     collection_name: String,
-    db: &'a Database,
+    db: Arc<Database>,
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     reinforcement_strategy: Arc<dyn ReinforcementStrategy>,
     stored_ids: RwLock<HashSet<u64>>,
 }
 
-impl<'a> ProceduralMemory<'a> {
+impl ProceduralMemory {
     const COLLECTION_NAME: &'static str = "_procedural_memory";
+
+    /// Returns the name of the underlying VelesDB collection.
+    #[must_use]
+    pub fn collection_name(&self) -> &str {
+        &self.collection_name
+    }
 
     /// Creates or opens procedural memory.
     ///
     /// # Errors
     ///
     /// Returns an error when collection creation/opening fails or dimensions mismatch.
-    pub fn new_from_db(db: &'a Database, dimension: usize) -> Result<Self, AgentMemoryError> {
+    pub fn new_from_db(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
 
     pub(crate) fn new(
-        db: &'a Database,
+        db: Arc<Database>,
         dimension: usize,
         ttl: Arc<MemoryTtl>,
     ) -> Result<Self, AgentMemoryError> {
@@ -96,15 +140,11 @@ impl<'a> ProceduralMemory<'a> {
         })
     }
 
+    /// Overrides the default reinforcement strategy with a custom implementation.
     #[must_use]
     pub fn with_reinforcement_strategy(mut self, strategy: Arc<dyn ReinforcementStrategy>) -> Self {
         self.reinforcement_strategy = strategy;
         self
-    }
-
-    #[must_use]
-    pub fn collection_name(&self) -> &str {
-        &self.collection_name
     }
 
     /// Learns a procedure and stores it in memory.
@@ -273,84 +313,29 @@ impl<'a> ProceduralMemory<'a> {
             .next()
             .ok_or_else(|| AgentMemoryError::NotFound(format!("Procedure {procedure_id}")))?;
 
-        let payload = point
-            .payload
-            .as_ref()
-            .ok_or_else(|| AgentMemoryError::CollectionError("Missing payload".to_string()))?;
-
-        let name = payload
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let steps: Vec<String> = payload
-            .get("steps")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let old_confidence = payload
-            .get("confidence")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.5) as f32;
-        let usage_count = payload
-            .get("usage_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let created_at = payload
-            .get("created_at")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
-        let success_count = payload
-            .get("success_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let failure_count = payload
-            .get("failure_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-
+        let state = Self::extract_procedure_state(&point)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        let total_uses = success_count + failure_count;
-        let success_rate = if total_uses > 0 {
-            success_count as f32 / total_uses as f32
-        } else {
-            0.5
-        };
-
-        let context = ReinforcementContext {
-            usage_count,
-            created_at: created_at as u64,
-            last_used: now as u64,
-            current_time: now as u64,
-            recent_success_rate: Some(success_rate),
-            custom: std::collections::HashMap::new(),
-        };
-
-        let new_confidence = strategy.update_confidence(old_confidence, success, &context);
-
+        let context = state.build_reinforcement_context(now);
+        let new_confidence = strategy.update_confidence(state.confidence, success, &context);
         let (new_success, new_failure) = if success {
-            (success_count + 1, failure_count)
+            (state.success_count + 1, state.failure_count)
         } else {
-            (success_count, failure_count + 1)
+            (state.success_count, state.failure_count + 1)
         };
 
         let updated_point = Point::new(
             procedure_id,
             point.vector.clone(),
             Some(json!({
-                "name": name,
-                "steps": steps,
+                "name": state.name,
+                "steps": state.steps,
                 "confidence": new_confidence,
-                "usage_count": usage_count + 1,
-                "created_at": created_at,
+                "usage_count": state.usage_count + 1,
+                "created_at": state.created_at,
                 "last_used_at": now,
                 "success_count": new_success,
                 "failure_count": new_failure
@@ -362,6 +347,50 @@ impl<'a> ProceduralMemory<'a> {
             .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
 
         Ok(())
+    }
+
+    fn extract_procedure_state(point: &Point) -> Result<ProcedureState, AgentMemoryError> {
+        let payload = point
+            .payload
+            .as_ref()
+            .ok_or_else(|| AgentMemoryError::CollectionError("Missing payload".to_string()))?;
+
+        Ok(ProcedureState {
+            name: payload
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            steps: payload
+                .get("steps")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            confidence: payload
+                .get("confidence")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.5) as f32,
+            usage_count: payload
+                .get("usage_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            created_at: payload
+                .get("created_at")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
+            success_count: payload
+                .get("success_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            failure_count: payload
+                .get("failure_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        })
     }
 
     /// Lists all tracked procedures.

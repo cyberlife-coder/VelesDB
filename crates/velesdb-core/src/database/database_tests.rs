@@ -154,6 +154,8 @@ fn test_database_execute_query_join_using_with_graph_match_filter() {
     db.create_collection("profiles", 2, DistanceMetric::Cosine)
         .unwrap();
 
+    // Use get_collection() here to get the shared instance that supports both
+    // vector operations and graph operations (add_edge) on the same Collection.
     let orders = db.get_collection("orders").unwrap();
     let profiles = db.get_collection("profiles").unwrap();
 
@@ -259,7 +261,7 @@ fn test_collection_execute_query_match_order_by_property() {
     let db = Database::open(dir.path()).unwrap();
     db.create_collection("docs", 2, DistanceMetric::Cosine)
         .unwrap();
-    let docs = db.get_collection("docs").unwrap();
+    let docs = db.get_vector_collection("docs").unwrap();
 
     docs.upsert(vec![
         Point::new(
@@ -370,6 +372,8 @@ fn test_database_execute_query_insert_with_params() {
     let db = Database::open(dir.path()).unwrap();
     db.create_collection_typed("profiles", &CollectionType::MetadataOnly)
         .unwrap();
+    // get_collection() returns the shared registry instance for INSERT to be visible
+    let _profiles = db.get_collection("profiles").unwrap();
 
     let query =
         Parser::parse("INSERT INTO profiles (id, name, age) VALUES ($id, $name, $age)").unwrap();

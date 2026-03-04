@@ -48,13 +48,7 @@ impl Collection {
             let similarity_conditions =
                 self.extract_all_similarity_conditions(&sim_cond, params)?;
             if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
-                if field != "vector" {
-                    return Err(crate::error::Error::Config(format!(
-                        "similarity() field '{}' not found. Only 'vector' field is supported.",
-                        field
-                    )));
-                }
-
+                // Multi-vector (P1-A): field may be "vector" or a named payload vector.
                 let overfetch_factor = 10;
                 let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
                 let candidates = self.search(vec, candidates_k)?;

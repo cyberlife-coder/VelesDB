@@ -16,6 +16,7 @@ use std::str::FromStr;
 
 /// Distance metric for vector similarity calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DistanceMetric {
     /// Cosine similarity (1 - `cosine_distance`).
     /// Best for normalized vectors, commonly used with text embeddings.
