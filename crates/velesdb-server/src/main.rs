@@ -12,15 +12,19 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(feature = "swagger-ui")]
 use utoipa::OpenApi;
+#[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
+#[cfg(feature = "swagger-ui")]
+use velesdb_server::ApiDoc;
 use velesdb_server::{
-    add_edge, batch_search, collection_sanity, create_collection, create_index, delete_collection,
-    delete_index, delete_point, flush_collection, get_collection, get_edges, get_node_degree,
-    get_point, health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
-    multi_query_search, query, search, stream_traverse, stream_upsert_points, text_search,
-    traverse_graph, upsert_points, ApiDoc, AppState, OnboardingMetrics,
+    add_edge, aggregate, batch_search, collection_sanity, create_collection, create_index,
+    delete_collection, delete_index, delete_point, explain, flush_collection, get_collection,
+    get_edges, get_node_degree, get_point, health_check, hybrid_search, is_empty, list_collections,
+    list_indexes, match_query, multi_query_search, query, search, stream_traverse,
+    stream_upsert_points, text_search, traverse_graph, upsert_points, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -106,6 +110,8 @@ fn build_router(state: Arc<AppState>) -> Router {
             delete(delete_index),
         )
         .route("/query", post(query))
+        .route("/aggregate", post(aggregate))
+        .route("/query/explain", post(explain))
         .route("/collections/{name}/match", post(match_query))
         .route(
             "/collections/{name}/graph/edges",
@@ -128,10 +134,14 @@ fn build_router(state: Arc<AppState>) -> Router {
         api_router.route("/metrics", get(prometheus_metrics))
     };
 
-    let swagger_ui = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+    #[cfg(feature = "swagger-ui")]
+    let api_router = {
+        let swagger_ui =
+            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+        api_router.merge(Router::<()>::new().merge(swagger_ui))
+    };
 
     api_router
-        .merge(Router::<()>::new().merge(swagger_ui))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }

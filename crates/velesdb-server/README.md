@@ -163,6 +163,22 @@ curl -X POST http://localhost:8080/query \
     "query": "SELECT * FROM documents WHERE content MATCH '\''rust'\'' LIMIT 10",
     "params": {}
   }'
+
+# Aggregation-only VelesQL endpoint
+curl -X POST http://localhost:8080/aggregate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT category, COUNT(*) FROM documents GROUP BY category",
+    "params": {}
+  }'
+
+# Explain query plan
+curl -X POST http://localhost:8080/query/explain \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM documents WHERE VECTOR NEAR $v LIMIT 5",
+    "params": {"v": [0.15, 0.25, 0.35, 0.45]}
+  }'
 ```
 
 ### Health & OpenAPI

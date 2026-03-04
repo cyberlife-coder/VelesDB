@@ -1,0 +1,186 @@
+name: Propagation Guard
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "crates/**"
+      - "sdks/typescript/**"
+      - "integrations/**"
+      - "demos/**"
+      - "examples/**"
+      - "conformance/**"
+      - "docs/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/propagation-guard.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "crates/**"
+      - "sdks/typescript/**"
+      - "integrations/**"
+      - "demos/**"
+      - "examples/**"
+      - "conformance/**"
+      - "docs/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/propagation-guard.yml"
+
+concurrency:
+  group: propagation-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-cross-crate:
+    name: Rust Cross-Crate Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.83"
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo check propagated crates
+        run: |
+          cargo check \
+            -p velesdb-core \
+            -p velesdb-server \
+            -p velesdb-cli \
+            -p tauri-plugin-velesdb \
+            -p velesdb-wasm \
+            -p velesdb-mobile \
+            -p velesdb-migrate
+
+  python-sdk:
+    name: Python SDK Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.83"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo check velesdb-python
+        env:
+          PYO3_PYTHON: python3
+        run: cargo check -p velesdb-python
+      - name: Python packaging smoke
+        run: |
+          python -m py_compile crates/velesdb-python/python/velesdb/*.py
+
+  typescript-sdk:
+    name: TypeScript SDK Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+      - name: Typecheck
+        working-directory: sdks/typescript
+        run: npm run typecheck
+      - name: Run contract + wasm parity tests
+        working-directory: sdks/typescript
+        run: |
+          npm test -- velesql-contract-fixtures.test.ts
+          npm test -- wasm-backend.test.ts
+
+  integrations-python:
+    name: Python Integrations Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Static integration checks
+        run: bash scripts/check-python.sh
+      - name: LangChain parity tests
+        working-directory: integrations/langchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pytest tests/test_core_feature_parity.py -q
+      - name: LlamaIndex parity tests
+        working-directory: integrations/llamaindex
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pytest tests/test_core_parity.py -q
+
+  demos-examples-smoke:
+    name: Demos and Examples Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.83"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            demos/tauri-rag-app/package-lock.json
+            sdks/typescript/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust examples compile smoke
+        run: cargo check --manifest-path examples/rust/Cargo.toml
+      - name: Python examples syntax smoke
+        run: |
+          python -m py_compile examples/python_example.py
+          python -m py_compile examples/python/*.py
+      - name: Tauri demo frontend build smoke
+        working-directory: demos/tauri-rag-app
+        run: |
+          npm ci
+          npm run build
+
+  contract-doc-guards:
+    name: Contract and Doc Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: TODO/FIXME/HACK governance
+        run: python scripts/check-todo-annotations.py
+      - name: Promise contract
+        run: python scripts/check-promise-contract.py
+      - name: Doc contract
+        run: bash scripts/check-doc-contract.sh
+
+  core-regressions:
+    name: Core Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.83"
+      - uses: Swatinem/rust-cache@v2
+      - name: Traversal and create-guard regressions
+        run: |
+          cargo test -p velesdb-core test_create_collection_rejects_existing_on_disk_dir_not_loaded
+          cargo test -p velesdb-core test_traverse_bfs_config_respects_min_depth
+          cargo test -p velesdb-core test_legacy_traverse_paths_use_edge_ids

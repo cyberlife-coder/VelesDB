@@ -1412,3 +1412,66 @@ fn test_multi_query_search_ids() {
     assert!(ids.contains(&2));
     assert!(ids.contains(&3));
 }
+
+#[test]
+fn test_traverse_bfs_config_respects_min_depth() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("graph_collection");
+    let collection = Collection::create_graph_collection(
+        path,
+        "graph_collection",
+        crate::collection::graph::GraphSchema::schemaless(),
+        None,
+        DistanceMetric::Cosine,
+    )
+    .unwrap();
+
+    collection
+        .add_edge(crate::collection::graph::GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+        .unwrap();
+    collection
+        .add_edge(crate::collection::graph::GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
+        .unwrap();
+
+    let cfg = crate::collection::graph::TraversalConfig::with_range(2, 3).with_limit(10);
+    let results = collection.traverse_bfs_config(1, &cfg);
+
+    assert!(!results.is_empty());
+    assert!(results.iter().all(|r| r.depth >= 2));
+    assert!(results.iter().any(|r| r.target_id == 3 && r.depth == 2));
+}
+
+#[test]
+fn test_legacy_traverse_paths_use_edge_ids() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("graph_collection");
+    let collection = Collection::create_graph_collection(
+        path,
+        "graph_collection",
+        crate::collection::graph::GraphSchema::schemaless(),
+        None,
+        DistanceMetric::Cosine,
+    )
+    .unwrap();
+
+    collection
+        .add_edge(crate::collection::graph::GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
+        .unwrap();
+    collection
+        .add_edge(crate::collection::graph::GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
+        .unwrap();
+
+    let bfs = collection.traverse_bfs(1, 3, None, 10).unwrap();
+    let bfs_to_3 = bfs
+        .iter()
+        .find(|r| r.target_id == 3 && r.depth == 2)
+        .expect("BFS must reach node 3 at depth 2");
+    assert_eq!(bfs_to_3.path, vec![100, 101]);
+
+    let dfs = collection.traverse_dfs(1, 3, None, 10).unwrap();
+    let dfs_to_3 = dfs
+        .iter()
+        .find(|r| r.target_id == 3 && r.depth == 2)
+        .expect("DFS must reach node 3 at depth 2");
+    assert_eq!(dfs_to_3.path, vec![100, 101]);
+}

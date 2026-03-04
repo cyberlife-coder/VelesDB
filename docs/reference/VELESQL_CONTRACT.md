@@ -3,7 +3,7 @@
 Canonical contract for VelesQL server endpoints and payloads.
 
 - Contract version: `2.1.0`
-- Last updated: `2026-02-18`
+- Last updated: `2026-03-04`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
@@ -22,6 +22,42 @@ Request body:
   "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
   "params": { "v": [0.1, 0.2, 0.3] },
   "collection": "docs"
+}
+```
+
+Aggregation queries are accepted on `/query` for backward compatibility, but
+`/aggregate` is the explicit endpoint for aggregation workloads.
+
+### `POST /aggregate`
+
+Aggregation-only endpoint for `GROUP BY`/`HAVING`/aggregate queries.
+
+Request body:
+
+```json
+{
+  "query": "SELECT category, COUNT(*) FROM docs GROUP BY category",
+  "params": {},
+  "collection": "docs"
+}
+```
+
+Rules:
+
+- Query must be aggregation-shaped (`GROUP BY` or aggregate functions in `SELECT`).
+- Non-aggregation queries return `422` with `VELESQL_AGGREGATION_ERROR`.
+- Collection is resolved from `FROM <collection>` first, then optional body `collection`.
+
+Success response shape:
+
+```json
+{
+  "result": [{ "category": "tech", "count": 42 }],
+  "timing_ms": 1.12,
+  "meta": {
+    "velesql_contract_version": "2.1.0",
+    "count": 1
+  }
 }
 ```
 
@@ -123,9 +159,10 @@ Reference grammar:
 | `SELECT ... WHERE ... AND MATCH (...)` | Stable | Stable |
 | top-level `MATCH (...) RETURN ...` | Stable | Stable |
 | top-level `MATCH` via `/query` with body `collection` | Stable | Stable |
+| aggregation via `/aggregate` | Stable | Stable |
 | `JOIN ... ON` | Stable | Stable |
-| `JOIN ... USING (...)` | Experimental | Stable for single-column USING |
-| `LEFT/RIGHT/FULL JOIN` | Experimental | Explicit runtime error (`Unsupported`) |
+| `JOIN ... USING (...)` | Stable | Stable for single-column USING |
+| `LEFT/RIGHT/FULL JOIN` | Stable | Stable |
 | `GROUP BY` / `HAVING` | Stable | Stable |
 | `UNION/INTERSECT/EXCEPT` | Stable | Stable |
 
@@ -143,7 +180,7 @@ Each invalid case maps to an expected HTTP status and an expected error shape.
 |---------|--------|----------|
 | `JOIN ... ON` | Supported | Supported (inner join) |
 | `JOIN ... USING (...)` | Supported | Supported for single-column USING |
-| `LEFT/RIGHT/FULL JOIN` | Parsed in spec variants | Rejected with explicit runtime error |
+| `LEFT/RIGHT/FULL JOIN` | Supported | Supported |
 | `GROUP BY`, `HAVING` | Supported | Supported |
 | `ORDER BY similarity()` | Supported | Supported |
 | `UNION/INTERSECT/EXCEPT` | Supported | Supported |

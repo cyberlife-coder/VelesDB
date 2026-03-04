@@ -34,7 +34,7 @@ pub use types::*;
 
 // Re-export handlers for routing
 pub use handlers::{
-    batch_search, collection_sanity, create_collection, create_index, delete_collection,
+    aggregate, batch_search, collection_sanity, create_collection, create_index, delete_collection,
     delete_index, delete_point, explain, flush_collection, get_collection, get_point, health_check,
     hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
     query, search, stream_upsert_points, text_search, upsert_points,
@@ -93,6 +93,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::search::text_search,
         handlers::search::hybrid_search,
         handlers::query::query,
+        handlers::query::aggregate,
         handlers::query::explain,
         handlers::indexes::create_index,
         handlers::indexes::list_indexes,
@@ -115,6 +116,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             QueryRequest,
             QueryResponse,
             QueryResponseMeta,
+            AggregationResponse,
             QueryErrorResponse,
             QueryErrorDetail,
             VelesqlErrorResponse,
@@ -212,6 +214,11 @@ mod tests {
         );
         assert!(json.contains("/search"), "Should document search endpoint");
         assert!(json.contains("/query"), "Should document /query");
+        assert!(json.contains("/aggregate"), "Should document /aggregate");
+        assert!(
+            json.contains("/query/explain"),
+            "Should document /query/explain"
+        );
     }
 
     #[test]

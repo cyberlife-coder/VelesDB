@@ -390,3 +390,16 @@ fn test_database_execute_query_insert_with_params() {
     assert_eq!(payload["name"], serde_json::json!("Alice"));
     assert_eq!(payload["age"], serde_json::json!(30));
 }
+
+#[test]
+fn test_create_collection_rejects_existing_on_disk_dir_not_loaded() {
+    let dir = tempdir().unwrap();
+    let coll_dir = dir.path().join("orphaned");
+    std::fs::create_dir_all(&coll_dir).unwrap();
+    // Simulate a corrupted collection that load_collections() skips.
+    std::fs::write(coll_dir.join("config.json"), "{invalid json").unwrap();
+
+    let db = Database::open(dir.path()).unwrap();
+    let result = db.create_collection("orphaned", 8, DistanceMetric::Cosine);
+    assert!(matches!(result, Err(Error::CollectionExists(_))));
+}

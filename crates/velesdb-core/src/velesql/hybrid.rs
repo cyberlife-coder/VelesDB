@@ -5,8 +5,8 @@
 //! - Weighted fusion for score-based merging
 //! - Parallel and sequential execution strategies
 
-// TODO [EPIC-017/US-001]: Integrate hybrid fusion functions into main query executor.
-// Remove dead_code allow once wired into VelesQL execution pipeline.
+// Hybrid fusion helpers used by VelesQL hybrid scoring tests and utility paths.
+// Kept as a dedicated module to preserve deterministic fusion behavior.
 #![allow(dead_code)]
 // SAFETY: Numeric casts in result fusion are intentional:
 // - usize->f32 for rank calculations: ranks are small (< 1M results)

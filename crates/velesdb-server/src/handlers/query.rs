@@ -12,6 +12,88 @@ use crate::types::{
 use crate::AppState;
 use velesdb_core::velesql::{self, Condition, Query, SelectColumns};
 
+fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
+    matches!(
+        &select.columns,
+        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
+    ) || select.group_by.is_some()
+}
+
+fn aggregation_result_count(result: &serde_json::Value) -> usize {
+    match result {
+        serde_json::Value::Array(rows) => rows.len(),
+        serde_json::Value::Object(_) => 1,
+        _ => 0,
+    }
+}
+
+fn execute_aggregation_query(
+    state: &Arc<AppState>,
+    collection_name: &str,
+    parsed: &Query,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+    start: std::time::Instant,
+) -> axum::response::Response {
+    let collection = match state.db.get_collection(collection_name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(VelesqlErrorResponse {
+                    error: VelesqlErrorDetail {
+                        code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
+                        message: format!("Collection '{}' not found", collection_name),
+                        hint: "Create the collection first or correct the collection name"
+                            .to_string(),
+                        details: Some(serde_json::json!({
+                            "collection": collection_name
+                        })),
+                    },
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let result = match collection.execute_aggregate(parsed, params) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(VelesqlErrorResponse {
+                    error: VelesqlErrorDetail {
+                        code: "VELESQL_AGGREGATION_ERROR".to_string(),
+                        message: e.to_string(),
+                        hint: "Verify GROUP BY/HAVING clauses and aggregate function arguments"
+                            .to_string(),
+                        details: None,
+                    },
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let duration_us = start.elapsed().as_micros();
+    #[allow(clippy::cast_possible_truncation)]
+    state.db.notify_query(
+        collection_name,
+        duration_us.min(u128::from(u64::MAX)) as u64,
+    );
+    let count = aggregation_result_count(&result);
+
+    Json(AggregationResponse {
+        result,
+        timing_ms,
+        meta: QueryResponseMeta {
+            velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
+            count,
+        },
+    })
+    .into_response()
+}
+
 /// Execute a VelesQL query.
 ///
 /// BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
@@ -97,66 +179,17 @@ pub async fn query(
     };
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
-    let is_aggregation = matches!(
-        &select.columns,
-        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
-    ) || select.group_by.is_some();
+    let is_aggregation = is_aggregation_query(select);
 
     if is_aggregation {
-        let collection = match state.db.get_vector_collection(&collection_name) {
-            Some(c) => c,
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(VelesqlErrorResponse {
-                        error: VelesqlErrorDetail {
-                            code: "VELESQL_COLLECTION_NOT_FOUND".to_string(),
-                            message: format!("Collection '{}' not found", collection_name),
-                            hint: "Create the collection first or correct the collection name"
-                                .to_string(),
-                            details: Some(serde_json::json!({
-                                "collection": collection_name
-                            })),
-                        },
-                    }),
-                )
-                    .into_response()
-            }
-        };
-        // Route to aggregation execution
-        let result =
-            match collection.execute_aggregate(&parsed, &req.params) {
-                Ok(r) => r,
-                Err(e) => return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(VelesqlErrorResponse {
-                        error: VelesqlErrorDetail {
-                            code: "VELESQL_AGGREGATION_ERROR".to_string(),
-                            message: e.to_string(),
-                            hint: "Verify GROUP BY/HAVING clauses and aggregate function arguments"
-                                .to_string(),
-                            details: None,
-                        },
-                    }),
-                )
-                    .into_response(),
-            };
-
-        let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-        let duration_us = start.elapsed().as_micros();
-        #[allow(clippy::cast_possible_truncation)]
-        state.db.notify_query(
-            &collection_name,
-            duration_us.min(u128::from(u64::MAX)) as u64,
-        );
-        return Json(AggregationResponse { result, timing_ms }).into_response();
+        return execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start);
     }
 
     // Standard query execution:
     // - top-level MATCH executes in requested collection context
     // - SELECT executes through database-level dispatcher for cross-collection JOIN support
     let execute_result = if parsed.is_match_query() {
-        match state.db.get_vector_collection(&collection_name) {
+        match state.db.get_collection(&collection_name) {
             Some(c) => c.execute_query(&parsed, &req.params),
             None => Err(velesdb_core::Error::CollectionNotFound(
                 collection_name.clone(),
@@ -231,6 +264,106 @@ pub async fn query(
     .into_response()
 }
 
+/// Execute an aggregation-only VelesQL query.
+///
+/// This endpoint is explicit and stable for GROUP BY / HAVING / aggregate workloads.
+#[utoipa::path(
+    post,
+    path = "/aggregate",
+    tag = "query",
+    request_body = QueryRequest,
+    responses(
+        (status = 200, description = "Aggregation results", body = AggregationResponse),
+        (status = 400, description = "Query syntax error", body = QueryErrorResponse),
+        (status = 422, description = "Aggregation validation/execution error", body = VelesqlErrorResponse),
+        (status = 404, description = "Collection not found", body = VelesqlErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn aggregate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<QueryRequest>,
+) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+
+    let parsed = match velesql::Parser::parse(&req.query) {
+        Ok(q) => q,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(QueryErrorResponse {
+                    error: QueryErrorDetail {
+                        error_type: format!("{:?}", e.kind),
+                        message: e.message.clone(),
+                        position: e.position,
+                        query: e.fragment.clone(),
+                    },
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    if let Err(e) = velesql::QueryValidator::validate(&parsed) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(VelesqlErrorResponse {
+                error: VelesqlErrorDetail {
+                    code: "VELESQL_VALIDATION_ERROR".to_string(),
+                    message: e.to_string(),
+                    hint: e.suggestion,
+                    details: None,
+                },
+            }),
+        )
+            .into_response();
+    }
+
+    if parsed.is_match_query() || !is_aggregation_query(&parsed.select) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(VelesqlErrorResponse {
+                error: VelesqlErrorDetail {
+                    code: "VELESQL_AGGREGATION_ERROR".to_string(),
+                    message: "Only aggregation queries are accepted on /aggregate".to_string(),
+                    hint: "Use /query for row/search/graph queries; use /aggregate for GROUP BY/aggregate workloads.".to_string(),
+                    details: Some(serde_json::json!({
+                        "endpoint": "/aggregate"
+                    })),
+                },
+            }),
+        )
+            .into_response();
+    }
+
+    let collection_name = if parsed.select.from.is_empty() {
+        match req.collection.as_ref().filter(|name| !name.is_empty()) {
+            Some(name) => name.clone(),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(VelesqlErrorResponse {
+                        error: VelesqlErrorDetail {
+                            code: "VELESQL_MISSING_COLLECTION".to_string(),
+                            message: "Aggregation query requires a FROM collection or request-body `collection`".to_string(),
+                            hint: "Add FROM <collection> to query or set `collection` in request JSON".to_string(),
+                            details: Some(serde_json::json!({
+                                "field": "collection",
+                                "endpoint": "/aggregate"
+                            })),
+                        },
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        parsed.select.from.clone()
+    };
+
+    execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start)
+}
+
 /// Explain a VelesQL query without executing it (EPIC-058 US-002).
 ///
 /// Returns the query plan, estimated costs, and detected features.
@@ -273,7 +406,7 @@ pub async fn explain(
     let select = &parsed.select;
 
     // Check collection exists
-    let collection_exists = state.db.get_vector_collection(&select.from).is_some();
+    let collection_exists = state.db.get_collection(&select.from).is_some();
     if !collection_exists && !select.from.is_empty() {
         return (
             StatusCode::NOT_FOUND,

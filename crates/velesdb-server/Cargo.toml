@@ -37,7 +37,7 @@ parking_lot = "0.12"
 
 # OpenAPI/Swagger documentation
 utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
 [features]
 default = ["velesdb-core/default"]
@@ -46,6 +46,7 @@ loom = ["velesdb-core/loom"]
 persistence = ["velesdb-core/persistence"]
 prometheus = []
 update-check = ["velesdb-core/update-check"]
+swagger-ui = ["dep:utoipa-swagger-ui"]
 
 [dev-dependencies]
 # Use native-tls to avoid ring compilation issues on aarch64-apple-darwin

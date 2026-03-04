@@ -241,7 +241,7 @@ impl Database {
 
         let collection = self
             .inner
-            .get_vector_collection(name)
+            .get_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(Arc::new(collection), name.to_string()))
@@ -259,7 +259,7 @@ impl Database {
     ///     >>> collection = db.get_collection("documents")
     #[pyo3(signature = (name))]
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
-        match self.inner.get_vector_collection(name) {
+        match self.inner.get_collection(name) {
             Some(collection) => Ok(Some(Collection::new(
                 Arc::new(collection),
                 name.to_string(),
@@ -317,11 +317,11 @@ impl Database {
             PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))
         })?;
 
-        // For metadata collections, we use get_vector_collection as a bridge
-        // (MetadataCollection shares the same on-disk format)
+        // Metadata collections are registered in the legacy `collections`
+        // registry, so resolve from there after creation.
         let collection = self
             .inner
-            .get_vector_collection(name)
+            .get_collection(name)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
 
         Ok(Collection::new(Arc::new(collection), name.to_string()))

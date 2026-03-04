@@ -1,6 +1,6 @@
 # VelesQL Conformance Cases (Contract v2.1.0)
 
-Last updated: 2026-02-18
+Last updated: 2026-03-04
 
 Canonical reference cases for parser + REST contract assertions.
 
@@ -13,6 +13,7 @@ Canonical reference cases for parser + REST contract assertions.
 | V003 | `SELECT * FROM docs WHERE category = 'tech' AND MATCH (d:Doc)-[:REL]->(x) LIMIT 10` | `200`, filtered results |
 | V004 | `/query` with `MATCH (d:Doc) RETURN d LIMIT 1` + body `collection` | `200` |
 | V005 | `/collections/{name}/match` with `MATCH (a)-[:REL]->(b) RETURN a,b` | `200`, `count`, `meta.velesql_contract_version` |
+| V006 | `/aggregate` with `SELECT category, COUNT(*) ... GROUP BY category` | `200`, `result`, `meta.velesql_contract_version` |
 
 ## Invalid Cases
 
@@ -23,6 +24,7 @@ Canonical reference cases for parser + REST contract assertions.
 | I003 | `/query` with parse error (`SELEC * FROM docs`) | `400` | parser payload (`error.type/message/position/query`) |
 | I004 | `/query` with semantic/runtime mismatch | `422` | `error.code = VELESQL_EXECUTION_ERROR` |
 | I005 | `/query` invalid aggregation | `422` | `error.code = VELESQL_AGGREGATION_ERROR` |
+| I006 | `/aggregate` with non-aggregation query | `422` | `error.code = VELESQL_AGGREGATION_ERROR` |
 
 ## Error Shape Assertions
 

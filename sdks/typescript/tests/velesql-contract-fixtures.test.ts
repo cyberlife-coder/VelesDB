@@ -117,4 +117,35 @@ describe('VelesQL contract fixtures (TypeScript runtime)', () => {
       })
     );
   });
+
+  it('routes aggregation fixture case to /aggregate endpoint', async () => {
+    const aggregateCase = fixture.cases.find((c) => c.id === 'C006');
+    expect(aggregateCase).toBeDefined();
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          result: [{ category: 'tech', count: 1 }],
+          timing_ms: 0.4,
+          meta: {
+            velesql_contract_version: fixture.contract_version,
+            count: 1,
+          },
+        }),
+    });
+
+    await backend.query(
+      aggregateCase!.body.collection ?? 'docs_conformance',
+      aggregateCase!.body.query,
+      aggregateCase!.body.params ?? {}
+    );
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:8080/aggregate',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    );
+  });
 });

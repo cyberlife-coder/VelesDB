@@ -9,10 +9,10 @@ use tempfile::TempDir;
 
 use velesdb_core::Database;
 use velesdb_server::{
-    add_edge, batch_search, collection_sanity, create_collection, delete_collection, delete_point,
-    get_collection, get_edges, get_node_degree, get_point, health_check, hybrid_search,
-    list_collections, query, search, stream_upsert_points, text_search, traverse_graph,
-    upsert_points, AppState, OnboardingMetrics,
+    add_edge, aggregate, batch_search, collection_sanity, create_collection, delete_collection,
+    delete_point, explain, get_collection, get_edges, get_node_degree, get_point, health_check,
+    hybrid_search, list_collections, query, search, stream_upsert_points, text_search,
+    traverse_graph, upsert_points, AppState, OnboardingMetrics,
 };
 
 /// Helper to create test app with all routes.
@@ -49,6 +49,8 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/query", post(query))
+        .route("/aggregate", post(aggregate))
+        .route("/query/explain", post(explain))
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),

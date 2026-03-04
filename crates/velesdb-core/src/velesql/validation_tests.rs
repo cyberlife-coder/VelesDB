@@ -176,8 +176,7 @@ fn test_validation_error_kind_is_set() {
     // Then: Error kind is correctly set
     let err = result.unwrap_err();
     assert_eq!(err.kind, ValidationErrorKind::MultipleSimilarity);
-    // Note: Position tracking not yet implemented (always None)
-    // TODO: Implement position tracking in EPIC-044 US-008
+    // Note: Position tracking is not wired yet in this validation path (always None).
     assert!(err.position.is_none());
 }
 

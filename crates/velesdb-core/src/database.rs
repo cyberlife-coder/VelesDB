@@ -41,6 +41,27 @@ pub struct Database {
 
 #[cfg(feature = "persistence")]
 impl Database {
+    /// Ensures a collection name is free in memory and on disk.
+    ///
+    /// This prevents re-creating over a skipped/corrupted on-disk collection
+    /// that was not loaded into registries.
+    fn ensure_collection_name_available(&self, name: &str) -> Result<()> {
+        let exists_in_registry = self.collections.read().contains_key(name)
+            || self.vector_colls.read().contains_key(name)
+            || self.graph_colls.read().contains_key(name)
+            || self.metadata_colls.read().contains_key(name);
+        if exists_in_registry {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+
+        let collection_path = self.data_dir.join(name);
+        if collection_path.exists() {
+            return Err(Error::CollectionExists(name.to_string()));
+        }
+
+        Ok(())
+    }
+
     /// Opens or creates a database, **automatically loading all existing collections**.
     ///
     /// This replaces the previous `open()` + `load_collections()` two-step pattern.
@@ -139,10 +160,7 @@ impl Database {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) -> Result<()> {
-        if self.collections.read().contains_key(name) || self.vector_colls.read().contains_key(name)
-        {
-            return Err(Error::CollectionExists(name.to_string()));
-        }
+        self.ensure_collection_name_available(name)?;
 
         let collection_path = self.data_dir.join(name);
         let coll =
@@ -385,10 +403,7 @@ impl Database {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) -> Result<()> {
-        if self.collections.read().contains_key(name) || self.vector_colls.read().contains_key(name)
-        {
-            return Err(Error::CollectionExists(name.to_string()));
-        }
+        self.ensure_collection_name_available(name)?;
         let path = self.data_dir.join(name);
         let coll = VectorCollection::create(path, name, dimension, metric, storage_mode)?;
         // Register the inner Collection in the legacy registry so that both
@@ -420,10 +435,7 @@ impl Database {
         name: &str,
         schema: crate::collection::GraphSchema,
     ) -> Result<()> {
-        if self.collections.read().contains_key(name) || self.graph_colls.read().contains_key(name)
-        {
-            return Err(Error::CollectionExists(name.to_string()));
-        }
+        self.ensure_collection_name_available(name)?;
         let path = self.data_dir.join(name);
         let coll =
             GraphCollection::create(path, name, None, DistanceMetric::Cosine, schema.clone())?;
@@ -450,11 +462,7 @@ impl Database {
     ///
     /// Returns an error if a collection with the same name already exists.
     pub fn create_metadata_collection(&self, name: &str) -> Result<()> {
-        if self.collections.read().contains_key(name)
-            || self.metadata_colls.read().contains_key(name)
-        {
-            return Err(Error::CollectionExists(name.to_string()));
-        }
+        self.ensure_collection_name_available(name)?;
         let path = self.data_dir.join(name);
         let coll = MetadataCollection::create(path, name)?;
         // Share the same inner Collection instance in the legacy registry so that
@@ -523,14 +531,11 @@ impl Database {
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if config_path.exists() {
-            // Read config to confirm this is not a graph or metadata-only collection.
-            if let Ok(data) = std::fs::read_to_string(&config_path) {
-                if let Ok(cfg) = serde_json::from_str::<crate::collection::CollectionConfig>(&data)
-                {
-                    if cfg.graph_schema.is_some() || cfg.metadata_only {
-                        return None;
-                    }
-                }
+            // Read config to confirm this is a vector collection.
+            let data = std::fs::read_to_string(&config_path).ok()?;
+            let cfg = serde_json::from_str::<crate::collection::CollectionConfig>(&data).ok()?;
+            if cfg.graph_schema.is_some() || cfg.metadata_only {
+                return None;
             }
             if let Ok(coll) = VectorCollection::open(path) {
                 self.vector_colls
@@ -560,12 +565,9 @@ impl Database {
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if config_path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&config_path) {
-                if let Ok(cfg) = serde_json::from_str::<crate::collection::CollectionConfig>(&data)
-                {
-                    cfg.graph_schema.as_ref()?;
-                }
-            }
+            let data = std::fs::read_to_string(&config_path).ok()?;
+            let cfg = serde_json::from_str::<crate::collection::CollectionConfig>(&data).ok()?;
+            cfg.graph_schema.as_ref()?;
             if let Ok(coll) = GraphCollection::open(path) {
                 self.graph_colls
                     .write()
@@ -593,13 +595,10 @@ impl Database {
         let path = self.data_dir.join(name);
         let config_path = path.join("config.json");
         if config_path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&config_path) {
-                if let Ok(cfg) = serde_json::from_str::<crate::collection::CollectionConfig>(&data)
-                {
-                    if !cfg.metadata_only {
-                        return None;
-                    }
-                }
+            let data = std::fs::read_to_string(&config_path).ok()?;
+            let cfg = serde_json::from_str::<crate::collection::CollectionConfig>(&data).ok()?;
+            if !cfg.metadata_only {
+                return None;
             }
             if let Ok(coll) = MetadataCollection::open(path) {
                 self.metadata_colls
@@ -664,11 +663,7 @@ impl Database {
                 schema,
             } => {
                 // Graph with optional embeddings: delegate to the graph API if schema given.
-                if self.collections.read().contains_key(name)
-                    || self.graph_colls.read().contains_key(name)
-                {
-                    return Err(Error::CollectionExists(name.to_string()));
-                }
+                self.ensure_collection_name_available(name)?;
                 let path = self.data_dir.join(name);
                 let coll =
                     GraphCollection::create(path, name, *dimension, *metric, schema.clone())?;

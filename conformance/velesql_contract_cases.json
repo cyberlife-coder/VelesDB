@@ -65,6 +65,32 @@
       },
       "expected_status": 200,
       "expect_contract_meta": true
+    },
+    {
+      "id": "C006",
+      "description": "Aggregation query succeeds via /aggregate",
+      "runtimes": ["server", "typescript"],
+      "method": "POST",
+      "path": "/aggregate",
+      "body": {
+        "query": "SELECT category, COUNT(*) FROM docs_conformance GROUP BY category",
+        "params": {}
+      },
+      "expected_status": 200,
+      "expect_contract_meta": true
+    },
+    {
+      "id": "C007",
+      "description": "/aggregate rejects non-aggregation query",
+      "runtimes": ["server"],
+      "method": "POST",
+      "path": "/aggregate",
+      "body": {
+        "query": "SELECT * FROM docs_conformance LIMIT 1",
+        "params": {}
+      },
+      "expected_status": 422,
+      "expected_error_code": "VELESQL_AGGREGATION_ERROR"
     }
   ]
 }

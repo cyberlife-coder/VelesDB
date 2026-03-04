@@ -171,7 +171,7 @@ pub async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_vector_collection(&name) {
+    match state.db.get_collection(&name) {
         Some(collection) => {
             let config = collection.config();
             Json(CollectionResponse {
@@ -210,7 +210,7 @@ pub async fn collection_sanity(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_vector_collection(&name) {
+    match state.db.get_collection(&name) {
         Some(collection) => {
             let config = collection.config();
             let has_data = config.point_count > 0;
@@ -304,7 +304,7 @@ pub async fn is_empty(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_vector_collection(&name) {
+    match state.db.get_collection(&name) {
         Some(collection) => Json(serde_json::json!({
             "is_empty": collection.is_empty()
         }))
@@ -337,7 +337,7 @@ pub async fn flush_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_vector_collection(&name) {
+    match state.db.get_collection(&name) {
         Some(collection) => match collection.flush() {
             Ok(()) => Json(serde_json::json!({
                 "message": "Flushed successfully",

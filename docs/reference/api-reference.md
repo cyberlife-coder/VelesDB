@@ -303,7 +303,7 @@ All errors return a JSON object with an `error` field:
 }
 ```
 
-For VelesQL semantic/runtime errors (`/query`, `/query/explain`), payload is standardized:
+For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized:
 
 ```json
 {
@@ -443,6 +443,29 @@ Execute a VelesQL query.
 **Contract note:** top-level `MATCH` on `/query` requires `collection` in request body.  
 Canonical reference: [`VELESQL_CONTRACT.md`](./VELESQL_CONTRACT.md)
 
+### POST /aggregate
+
+Execute aggregation-only VelesQL queries.
+
+`/aggregate` accepts GROUP BY/HAVING/aggregate workloads and rejects row/search/graph queries.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| query | string | Yes | Aggregation VelesQL query string |
+| params | object | No | Named parameters |
+| collection | string | Conditional | Optional fallback when query omits `FROM <collection>` |
+
+**Example:**
+
+```json
+{
+  "query": "SELECT category, COUNT(*) FROM documents GROUP BY category",
+  "params": {}
+}
+```
+
 ### VelesQL Syntax Reference
 
 | Feature | Syntax | Example |
@@ -544,14 +567,14 @@ Execute collection-scoped graph `MATCH` queries.
 
 ## EXPLAIN (Query Plan)
 
-### POST /query with EXPLAIN
+### POST /query/explain
 
 Analyze query execution plan without running the query.
 
 **Request Body:**
 ```json
 {
-  "query": "EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
   "params": {"v": [0.1, 0.2, 0.3]}
 }
 ```

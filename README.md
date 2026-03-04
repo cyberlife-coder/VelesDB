@@ -513,6 +513,7 @@ curl -X POST http://localhost:8080/query \
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/query` | `POST` | Execute VelesQL (Vector + Graph + ColumnStore queries) |
+| `/aggregate` | `POST` | Execute aggregation-only VelesQL queries (`GROUP BY`/`HAVING`) |
 | `/query/explain` | `POST` | Return query execution plan (EXPLAIN) |
 
 **VelesQL v2.0 Features:**

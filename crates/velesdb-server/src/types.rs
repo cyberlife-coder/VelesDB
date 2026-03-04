@@ -346,6 +346,8 @@ pub struct AggregationResponse {
     pub result: serde_json::Value,
     /// Query execution time in milliseconds.
     pub timing_ms: f64,
+    /// Query response metadata (contract version + count).
+    pub meta: QueryResponseMeta,
 }
 
 /// VelesQL query error response.

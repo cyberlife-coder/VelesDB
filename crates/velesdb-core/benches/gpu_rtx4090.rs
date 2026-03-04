@@ -29,7 +29,7 @@ fn gpu_vs_cpu_rtx4090(c: &mut Criterion) {
             &(a.clone(), b.clone()),
             |bench, (a, b)| {
                 bench.iter(|| {
-                    // TODO: Implement GPU dot product benchmark
+                    // Placeholder path until dedicated GPU dot-product benchmark wiring is added.
                     black_box(velesdb_core::simd_native::dot_product_native(a, b))
                 });
             },

@@ -199,12 +199,10 @@ fn test_bug_2_having_or_not_treated_as_and() {
 }
 
 // =============================================================================
-// BUG 1: GROUP BY/HAVING unreachable from /query
-// This is a DESIGN LIMITATION, not a bug:
+// BUG 1 historical note:
 // - execute_query() returns Vec<SearchResult> (for vector/text search)
 // - execute_aggregate() returns serde_json::Value (for GROUP BY/HAVING)
-// The server /query endpoint uses execute_query, so aggregations need a dedicated endpoint.
-// TODO: Create /aggregate endpoint in velesdb-server (EPIC-042)
+// Runtime now exposes dedicated `/aggregate` endpoint in velesdb-server.
 // =============================================================================
 
 #[test]

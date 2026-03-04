@@ -31,7 +31,7 @@ pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{delete_point, get_point, stream_upsert_points, upsert_points};
 // EPIC-058 US-007: match_query handler for /collections/{name}/match
 pub use match_query::match_query;
-pub use query::{explain, query};
+pub use query::{aggregate, explain, query};
 pub use search::{batch_search, hybrid_search, multi_query_search, search, text_search};
 
 // Graph handlers (EPIC-016) - exported via lib.rs

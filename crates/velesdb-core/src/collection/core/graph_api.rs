@@ -136,7 +136,7 @@ impl Collection {
         let mut results = Vec::new();
 
         visited.insert(source);
-        queue.push_back((source, 0u32, vec![source]));
+        queue.push_back((source, 0u32, Vec::new()));
 
         while let Some((node, depth, path)) = queue.pop_front() {
             if results.len() >= limit {
@@ -159,7 +159,7 @@ impl Collection {
                 if !visited.contains(&target) {
                     visited.insert(target);
                     let mut new_path = path.clone();
-                    new_path.push(target);
+                    new_path.push(edge.id());
 
                     results.push(TraversalResult {
                         target_id: target,
@@ -208,7 +208,7 @@ impl Collection {
         let mut results = Vec::new();
 
         visited.insert(source);
-        stack.push((source, 0u32, vec![source]));
+        stack.push((source, 0u32, Vec::new()));
 
         while let Some((node, depth, path)) = stack.pop() {
             if results.len() >= limit {
@@ -231,7 +231,7 @@ impl Collection {
                 if !visited.contains(&target) {
                     visited.insert(target);
                     let mut new_path = path.clone();
-                    new_path.push(target);
+                    new_path.push(edge.id());
 
                     results.push(TraversalResult {
                         target_id: target,
@@ -360,6 +360,7 @@ impl Collection {
             max_visited_size: 100_000,
         };
         bfs_stream(&store, source_id, streaming)
+            .filter(|result| result.depth >= config.min_depth)
             .take(config.limit)
             .collect()
     }
@@ -401,9 +402,8 @@ impl Collection {
                         continue;
                     }
                     let mut new_path = path.clone();
-                    // BUG-5: path tracks node IDs (not edge IDs), consistent with
-                    // traverse_bfs, traverse_bfs_config (bfs_stream), and traverse_dfs.
-                    new_path.push(edge.target());
+                    // Use edge IDs in path, consistent with bfs_traverse/bfs_stream.
+                    new_path.push(edge.id());
                     stack.push((edge.target(), depth + 1, new_path));
                 }
             }

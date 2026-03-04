@@ -47,8 +47,18 @@ if ! grep -Fq '`/query/explain`' "$README_FILE"; then
   exit 1
 fi
 
+if ! grep -Fq '`/aggregate`' "$README_FILE"; then
+  echo "README must document /aggregate"
+  exit 1
+fi
+
 if ! grep -Fq '| `/query` | yes | yes |' "$MATRIX_FILE"; then
   echo "Matrix must assert /query parity (runtime/readme)."
+  exit 1
+fi
+
+if ! grep -Fq '| `/aggregate` | yes | yes |' "$MATRIX_FILE"; then
+  echo "Matrix must assert /aggregate parity (runtime/readme)."
   exit 1
 fi
 

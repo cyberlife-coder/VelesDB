@@ -1,39 +1,39 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-02-18
+Last updated: 2026-03-04
 
-This matrix tracks implementation parity of VelesQL contracts and features across the VelesDB ecosystem.
+This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
 ## Contract Baseline
 
 - Canonical REST contract: `docs/reference/VELESQL_CONTRACT.md`
-- Canonical conformance cases: `docs/reference/VELESQL_CONFORMANCE_CASES.md`
+- Canonical conformance fixture: `conformance/velesql_contract_cases.json`
 - Contract version: `2.1.0`
 
 ## Endpoint and Payload Parity
 
-| Surface | `/query` | `/collections/{name}/match` | VelesQL Error Model | Contract Version Metadata |
-|---------|----------|------------------------------|---------------------|---------------------------|
-| `velesdb-server` | ✅ | ✅ | ✅ (`code`, `message/error`, `hint`, `details`) | ✅ (`meta.velesql_contract_version`) |
-| TypeScript SDK (REST backend) | ✅ | N/A direct endpoint wrapper | ✅ nested error parsing | ✅ consumes response without break |
-| WASM SDK | ❌ (`/query` unsupported by design) | ❌ | N/A | N/A |
-| CLI (`velesdb-cli`) | ✅ via server/core query path | Indirect | ⚠️ depends on server payload passthrough | ⚠️ no explicit contract assertion yet |
-| Python bindings (`velesdb-python`) | Core path (non-REST) | Core path (non-REST) | N/A REST | N/A REST |
-| LangChain integration | Via Python binding | Via Python binding | N/A REST | N/A REST |
-| LlamaIndex integration | Via Python binding | Via Python binding | N/A REST | N/A REST |
+| Surface | `/query` | `/aggregate` | `/collections/{name}/match` | Error model (`code/message/hint/details`) | Contract meta |
+|---------|----------|--------------|------------------------------|-------------------------------------------|---------------|
+| `velesdb-server` | yes | yes | yes | yes | yes (`meta.velesql_contract_version`) |
+| TypeScript SDK (REST backend) | yes | yes (auto-routed for aggregate queries) | indirect | yes (nested error parsing) | yes |
+| WASM SDK | no (`/query` unsupported by design) | no | no | n/a | n/a |
+| CLI (`velesdb-cli`) | yes via server/core path | yes via server/core path | indirect | partial passthrough | partial assertion |
+| Python bindings (`velesdb-python`) | core path (non-REST) | core path (non-REST) | core path (non-REST) | n/a REST | n/a REST |
+| LangChain integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
+| LlamaIndex integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
 
 ## Feature Execution Parity (Core Runtime)
 
 | Feature | Parser | Executor | Status |
 |---------|--------|----------|--------|
-| `SELECT ... FROM ... WHERE ...` | ✅ | ✅ | Stable |
-| `MATCH (...) RETURN ...` | ✅ | ✅ | Stable |
-| `MATCH` via `/query` with `collection` | ✅ | ✅ | Stable |
-| `JOIN ... ON` (inner) | ✅ | ✅ | Stable |
-| `JOIN ... USING (...)` | ✅ | ❌ | Parser-only |
-| `LEFT/RIGHT/FULL JOIN` | ⚠️ partial/spec | ❌ | Not runtime-ready |
-| `GROUP BY`, `HAVING` | ✅ | ✅ | Stable |
-| `UNION/INTERSECT/EXCEPT` | ✅ | ✅ | Stable |
+| `SELECT ... FROM ... WHERE ...` | yes | yes | stable |
+| `MATCH (...) RETURN ...` | yes | yes | stable |
+| `MATCH` via `/query` with `collection` | yes | yes | stable |
+| `JOIN ... ON` | yes | yes | stable |
+| `JOIN ... USING (...)` | yes | yes (single-column) | stable |
+| `LEFT/RIGHT/FULL JOIN` | yes | yes | stable |
+| `GROUP BY`, `HAVING` | yes | yes | stable |
+| `UNION/INTERSECT/EXCEPT` | yes | yes | stable |
 
 ## Conformance Test Coverage
 
@@ -45,9 +45,8 @@ This matrix tracks implementation parity of VelesQL contracts and features acros
 | CLI parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-cli/tests/velesql_parser_conformance.rs` |
 | WASM parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-wasm/tests/velesql_parser_conformance.rs` |
 
-## Current Gaps and Action Items
+## Remaining Gaps and Action Items
 
-1. Extend CLI runtime assertions from parser-level conformance to end-to-end REST contract checks (`code/hint/details`).
-2. Extend WASM conformance from parser-level fixture checks to feature-level execution assertions where applicable.
-3. Implement runtime support for `JOIN ... USING (...)` before claiming full JOIN parity.
-4. Keep docs/README/API examples synchronized whenever contract version changes.
+1. Add explicit CLI end-to-end assertions for REST error shape (`code/hint/details`) beyond parser conformance.
+2. Extend WASM conformance from parser-only to executable feature checks where applicable.
+3. Keep docs, fixtures, and examples synchronized on every contract version change.

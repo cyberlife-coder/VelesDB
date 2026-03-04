@@ -230,6 +230,12 @@ export class RestBackend implements IVelesDBBackend {
     return id;
   }
 
+  private isLikelyAggregationQuery(query: string): boolean {
+    return /\bGROUP\s+BY\b|\bHAVING\b|\bCOUNT\s*\(|\bSUM\s*\(|\bAVG\s*\(|\bMIN\s*\(|\bMAX\s*\(/i.test(
+      query
+    );
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -562,12 +568,13 @@ export class RestBackend implements IVelesDBBackend {
   ): Promise<QueryApiResponse> {
     this.ensureInitialized();
 
-    // Note: Server uses POST /query (not /collections/{name}/query)
+    // Note: Server uses POST /query or POST /aggregate (not /collections/{name}/query)
     // SELECT queries use FROM clause for collection resolution.
     // MATCH top-level queries require `collection` in the request body.
+    const endpoint = this.isLikelyAggregationQuery(queryString) ? '/aggregate' : '/query';
     const response = await this.request<Record<string, unknown>>(
       'POST',
-      '/query',
+      endpoint,
       {
         query: queryString,
         params: params ?? {},

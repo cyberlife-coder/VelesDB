@@ -2,7 +2,7 @@
 
 Source of truth for live server routes: `crates/velesdb-server/src/main.rs`.
 
-Last verification: 2026-02-20.
+Last verification: 2026-03-04.
 
 ## Route Coverage Matrix
 
@@ -23,6 +23,7 @@ Last verification: 2026-02-20.
 | `/collections/{name}/indexes` | yes | yes |
 | `/collections/{name}/indexes/{label}/{property}` | yes | yes |
 | `/query` | yes | yes |
+| `/aggregate` | yes | yes |
 | `/query/explain` | yes | yes |
 | `/collections/{name}/match` | yes | yes |
 | `/collections/{name}/graph/edges` | yes | yes |
@@ -33,6 +34,7 @@ Last verification: 2026-02-20.
 ## Contract Notes
 
 - Top-level `MATCH` via `/query` requires `collection` in request body.
+- Aggregation workloads have an explicit `/aggregate` endpoint; `/query` keeps backward-compatible aggregation support.
 - Top-level `MATCH` is supported by `Collection::execute_query`; `Database::execute_query` rejects top-level `MATCH` by design.
 - `JOIN` runtime supports `INNER`, `LEFT`, `RIGHT`, and `FULL`.
 - `LEFT/RIGHT/FULL` JOIN paths are covered by the core runtime executor.
