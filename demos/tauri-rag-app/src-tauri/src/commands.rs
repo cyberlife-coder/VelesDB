@@ -176,9 +176,18 @@ pub async fn ingest_text(
     let embeddings = embeddings::embed_batch(chunks.clone()).await?;
     
     let db = app.velesdb();
+    // NOTE: SimpleIndexHandle is in-memory only. Vectors are lost on restart.
+    // For production persistence, use VelesDbState with a persistent VectorCollection.
     let mut result = Vec::new();
 
     for (chunk_text, embedding) in chunks.iter().zip(embeddings.iter()) {
+        if embedding.len() != embeddings::EMBEDDING_DIM {
+            return Err(format!(
+                "Embedding dimension mismatch: expected {}, got {}",
+                embeddings::EMBEDDING_DIM,
+                embedding.len()
+            ));
+        }
         let id = get_next_chunk_id();
 
         db.insert(id, embedding)

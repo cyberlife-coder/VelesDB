@@ -7,7 +7,6 @@
 #![allow(clippy::bool_to_int_with_if)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
-#![allow(clippy::match_same_arms)]
 #![allow(clippy::too_many_lines)]
 
 use velesdb_core::simd_dispatch::{
@@ -64,6 +63,7 @@ fn hamming_scalar(a: &[f32], b: &[f32]) -> u32 {
 }
 
 /// Generate test vectors with various patterns
+#[allow(clippy::match_same_arms)]
 fn generate_vector(dim: usize, pattern: &str) -> Vec<f32> {
     match pattern {
         "ones" => vec![1.0f32; dim],
@@ -81,6 +81,7 @@ fn generate_vector(dim: usize, pattern: &str) -> Vec<f32> {
 }
 
 /// Generate binary vector
+#[allow(clippy::match_same_arms)]
 fn generate_binary_vector(dim: usize, pattern: &str) -> Vec<f32> {
     match pattern {
         "all_ones" => vec![1.0f32; dim],
@@ -123,6 +124,7 @@ fn main() {
 
     // Test Dot Product
     println!("▶ Testing Dot Product...");
+    let mut dot_passed = true;
     for dim in &dims {
         for pattern in &patterns {
             let a = generate_vector(*dim, pattern);
@@ -137,11 +139,12 @@ fn main() {
                     "  ✗ FAILED: dim={}, pattern={}, scalar={:.10}, simd={:.10}, diff={:.10}",
                     dim, pattern, scalar_result, simd_result, diff
                 );
+                dot_passed = false;
                 all_passed = false;
             }
         }
     }
-    if all_passed {
+    if dot_passed {
         println!("  ✓ All dot product tests passed\n");
     }
 

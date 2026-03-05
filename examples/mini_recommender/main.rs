@@ -1,7 +1,9 @@
 //! Mini Recommender Example
 //!
 //! Demonstrates building a product recommendation engine with `VelesDB`.
-//! See the full tutorial: docs/guides/TUTORIALS/MINI_RECOMMENDER.md
+//! See the full tutorial: `docs/guides/TUTORIALS/MINI_RECOMMENDER.md`
+
+#![allow(clippy::cast_precision_loss)] // demo: small integer indices cast to f32 for sin wave
 
 use serde_json::json;
 use std::collections::HashMap;
@@ -20,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let products = db.get_collection("products").ok_or("Collection not found")?;
 
     // Step 2: Ingest products
-    let product_data = vec![
-        (101u64, "Wireless Headphones Pro", "electronics", 79.99f32),
+    let product_data = [
+        (101u64, "Wireless Headphones Pro", "electronics", 79.99f64),
         (102, "Bluetooth Speaker", "electronics", 49.99),
         (103, "Running Shoes X1", "sports", 129.99),
         (104, "Yoga Mat Premium", "sports", 39.99),
@@ -98,14 +100,14 @@ fn find_similar_products(
 
     let results = products.search(&liked.vector, top_k + 1)?;
 
-    println!("🔍 Products similar to ID {}:", liked_product_id);
+    println!("🔍 Products similar to ID {liked_product_id}:");
     for result in results.iter().skip(1) {
         if let Some(payload) = &result.point.payload {
             println!(
-                "  - {} (score: {:.3}) - ${}",
+                "  - {} (score: {:.3}) - ${:.2}",
                 payload["title"].as_str().unwrap_or("?"),
                 result.score,
-                payload["price"]
+                payload["price"].as_f64().unwrap_or(0.0)
             );
         }
     }
@@ -118,7 +120,7 @@ fn recommend_in_category(
     products: &velesdb_core::Collection,
     user_preferences: &[f32],
     category: &str,
-    max_price: f32,
+    max_price: f64,
     top_k: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let results = products.search(user_preferences, 20)?;
@@ -128,7 +130,7 @@ fn recommend_in_category(
         .filter(|r| {
             if let Some(payload) = &r.point.payload {
                 let cat = payload["category"].as_str().unwrap_or("");
-                let price = payload["price"].as_f64().unwrap_or(f64::MAX) as f32;
+                let price = payload["price"].as_f64().unwrap_or(f64::MAX);
                 cat == category && price <= max_price
             } else {
                 false
@@ -137,17 +139,14 @@ fn recommend_in_category(
         .take(top_k)
         .collect();
 
-    println!(
-        "\n🎯 Recommendations in '{}' under ${:.2}:",
-        category, max_price
-    );
+    println!("\n🎯 Recommendations in '{category}' under ${max_price:.2}:");
     for result in filtered {
         if let Some(payload) = &result.point.payload {
             println!(
-                "  - {} (score: {:.3}) - ${}",
+                "  - {} (score: {:.3}) - ${:.2}",
                 payload["title"].as_str().unwrap_or("?"),
                 result.score,
-                payload["price"]
+                payload["price"].as_f64().unwrap_or(0.0)
             );
         }
     }
@@ -155,7 +154,7 @@ fn recommend_in_category(
     Ok(())
 }
 
-/// Demonstrate VelesQL query parsing
+/// Demonstrate `VelesQL` query parsing
 fn demo_velesql_queries() {
     println!("\n📝 VelesQL Query Parsing:");
 
@@ -176,8 +175,8 @@ fn demo_velesql_queries() {
 
     for (name, query) in queries {
         match Parser::parse(query) {
-            Ok(_) => println!("  ✅ {}: parses correctly", name),
-            Err(e) => println!("  ❌ {}: {:?}", name, e),
+            Ok(_) => println!("  ✅ {name}: parses correctly"),
+            Err(e) => println!("  ❌ {name}: {e:?}"),
         }
     }
 }
@@ -212,8 +211,10 @@ fn analyze_catalog(products: &velesdb_core::Collection) {
 
     for cat in cats {
         let count = category_counts.get(cat).unwrap_or(&0);
+        // Reason: count is small (at most 8 in this demo), no precision loss.
+        #[allow(clippy::cast_precision_loss)]
         let avg = category_totals.get(cat).unwrap_or(&0.0) / *count as f64;
-        println!("  {:11} | {:5} | ${:.2}", cat, count, avg);
+        println!("  {cat:11} | {count:5} | ${avg:.2}");
     }
 }
 
@@ -237,7 +238,7 @@ mod tests {
         ];
 
         for query in queries {
-            assert!(Parser::parse(query).is_ok(), "Query should parse: {}", query);
+            assert!(Parser::parse(query).is_ok(), "Query should parse: {query}");
         }
     }
 }

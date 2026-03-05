@@ -1,11 +1,14 @@
 //! Multi-Model Search Example
 //!
-//! Demonstrates VelesDB's multi-model query capabilities:
+//! Demonstrates `VelesDB`'s multi-model query capabilities:
 //! - Vector similarity search
-//! - VelesQL queries with filters
+//! - `VelesQL` queries with filters
 //! - Hybrid search (vector + text)
 //!
-//! Run with: cargo run --example multimodel_search
+//! Run with: `cargo run --example multimodel_search`
+
+#![allow(clippy::too_many_lines)] // main() is intentionally a self-contained demo
+#![allow(clippy::cast_precision_loss)] // demo: small usize indices cast to f32 for sin wave
 
 use std::collections::HashMap;
 use velesdb_core::{Database, DistanceMetric, Point};
@@ -70,8 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ];
 
-    collection.upsert(points.clone())?;
-    println!("Inserted {} documents\n", points.len());
+    let count = points.len();
+    collection.upsert(points)?;
+    println!("Inserted {count} documents\n");
 
     // 4. Example 1: Basic vector search
     println!("--- Example 1: Basic Vector Search ---");
@@ -98,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Example 2: VelesQL with Similarity ---");
 
     let query = velesdb_core::velesql::Parser::parse(
-        "SELECT * FROM documents WHERE similarity(vector, $v) > 0.5 AND category = 'programming' LIMIT 5",
+        "SELECT * FROM documents WHERE similarity(vector, $v) > 0.05 AND category = 'programming' LIMIT 5",
     )?;
 
     let mut params = HashMap::new();
@@ -119,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let query = velesdb_core::velesql::Parser::parse(
         "SELECT * FROM documents \
-         WHERE similarity(vector, $v) > 0.3 \
+         WHERE similarity(vector, $v) > 0.05 \
          ORDER BY similarity(vector, $v) DESC \
          LIMIT 5",
     )?;
@@ -178,9 +182,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Generate a deterministic embedding for demo purposes
+/// Generate a deterministic normalized embedding for demo purposes.
+/// Vectors are L2-normalized so cosine similarity is meaningful.
 fn generate_embedding(dim: usize, seed: f32) -> Vec<f32> {
-    (0..dim)
-        .map(|i| ((i as f32 * seed).sin() + seed) / 2.0)
-        .collect()
+    // Reason: `i` is a small loop index (max ~768); the cast to f32 is exact
+    // for all values used here. The `midpoint` lint does not apply: this is
+    // not computing a midpoint of two values — it is blending a sine component
+    // with the seed offset to produce a varied, deterministic signal.
+    let mut v: Vec<f32> = (0..dim)
+        .map(|i| f32::midpoint((i as f32 * seed).sin(), seed))
+        .collect();
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in &mut v {
+            *x /= norm;
+        }
+    }
+    v
 }

@@ -138,15 +138,13 @@ fn run_insert(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         // Periodic flush to create intermediate state
         if i > 0 && i % args.flush_interval == 0 {
             collection.flush()?;
-            let count = args.count;
-            eprintln!("Progress: {i}/{count} (flushed)");
+            eprintln!("Progress: {i}/{} (flushed)", args.count);
         }
     }
 
     // Final flush
     collection.flush()?;
-    let count = args.count;
-    eprintln!("Completed: {count} vectors inserted");
+    eprintln!("Completed: {} vectors inserted", args.count);
 
     Ok(())
 }
@@ -164,9 +162,9 @@ fn run_query(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             .map(|_| rng.gen_range(-1.0..1.0))
             .collect();
 
-        // Query should find the vector (search takes 2 args: query, k)
-        let results = collection.search(&vector, 1)?;
-        if !results.is_empty() && results[0].point.id == i as u64 {
+        // recall@5: HNSW is approximate — top-1 exact match is not guaranteed
+        let results = collection.search(&vector, 5)?;
+        if results.iter().any(|r| r.point.id == i as u64) {
             successful += 1;
         }
     }

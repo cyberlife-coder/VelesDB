@@ -108,7 +108,7 @@
             </div>
 
             <!-- Search Panel -->
-            <div className="glass-card p-6">
+            <div class="glass-card p-6">
                 <h2 class="text-xl font-semibold mb-4 flex items-center">
                     <span class="mr-2">🔍</span> Search Vectors
                 </h2>
@@ -169,8 +169,8 @@
 
     <script type="module">
         // WASM module - using latest version with fallback
-        const WASM_CDN_PRIMARY = 'https://unpkg.com/velesdb-wasm@latest/velesdb_wasm.js';
-        const WASM_CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/velesdb-wasm@latest/velesdb_wasm.js';
+        const WASM_CDN_PRIMARY = 'https://unpkg.com/velesdb-wasm@1.4.5/velesdb_wasm.js';
+        const WASM_CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/velesdb-wasm@1.4.5/velesdb_wasm.js';
         
         let init, VectorStore;
         
@@ -219,8 +219,7 @@
 
             const elapsed = performance.now() - startTime;
 
-            // Note: store.len might be a property or method depending on WASM bindings
-            const vectorCount = typeof store.len === 'function' ? store.len() : store.len;
+            const vectorCount = store.len();
             document.getElementById('statVectors').textContent = vectorCount.toLocaleString();
             document.getElementById('statDimensions').textContent = dims;
             document.getElementById('statInsertTime').textContent = elapsed.toFixed(2) + 'ms';

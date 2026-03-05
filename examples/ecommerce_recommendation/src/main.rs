@@ -1,6 +1,6 @@
-//! # E-commerce Recommendation Engine with VelesDB
+//! # E-commerce Recommendation Engine with `VelesDB`
 //!
-//! This example demonstrates VelesDB's combined capabilities:
+//! This example demonstrates `VelesDB`'s combined capabilities:
 //! - **Vector Search**: Product similarity via embeddings
 //! - **Multi-Column Filtering**: Price, category, brand, stock, ratings
 //! - **Graph-like relationships**: Co-purchase patterns via metadata
@@ -9,15 +9,15 @@
 //! A product recommendation system for an e-commerce platform combining
 //! semantic similarity with business rules.
 
+#![allow(clippy::too_many_lines)] // main() is intentionally long as a self-contained demo
+
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tempfile::TempDir;
-use velesdb_core::collection::Collection;
-use velesdb_core::distance::DistanceMetric;
-use velesdb_core::Point;
+use velesdb_core::{Database, DistanceMetric, Point};
 
 // ============================================================================
 // DATA MODELS
@@ -66,8 +66,9 @@ const ADJECTIVES: &[&str] = &[
     "Wireless", "Portable", "Ergonomic", "Lightweight", "Heavy-Duty",
 ];
 
-fn generate_products(count: usize) -> Vec<Product> {
-    let mut rng = rand::thread_rng();
+/// Generate a reproducible product catalog seeded from `seed`.
+fn generate_products(count: usize, seed: u64) -> Vec<Product> {
+    let mut rng = StdRng::seed_from_u64(seed);
     let mut products = Vec::with_capacity(count);
 
     for id in 0..count {
@@ -89,8 +90,10 @@ fn generate_products(count: usize) -> Vec<Product> {
         };
 
         let price = (base_price * 100.0).round() / 100.0;
-        let rating: f64 = rng.gen_range(2.5..5.0);
-        let rating = ((rating * 10.0).round() / 10.0) as f32;
+        let rating_f64: f64 = rng.gen_range(2.5..5.0);
+        // Reason: rating is in [2.5, 5.0] — well within f32 precision for a 1-dp display value.
+        #[allow(clippy::cast_possible_truncation)]
+        let rating = ((rating_f64 * 10.0).round() / 10.0) as f32;
         let review_count = rng.gen_range(0..5000);
         let in_stock = rng.gen_bool(0.85);
         let stock_quantity = if in_stock { rng.gen_range(1..500) } else { 0 };
@@ -112,7 +115,7 @@ fn generate_products(count: usize) -> Vec<Product> {
 
         products.push(Product {
             id: id as u64,
-            name: format!("{} {} {} {}", brand, adjective, subcategory, id),
+            name: format!("{brand} {adjective} {subcategory} {id}"),
             category: category.to_string(),
             subcategory: subcategory.to_string(),
             brand: brand.to_string(),
@@ -130,34 +133,37 @@ fn generate_products(count: usize) -> Vec<Product> {
 }
 
 fn generate_product_embedding(product: &Product, dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
     let mut embedding = vec![0.0f32; dim];
 
     // Category influence (first 32 dims)
-    let category_seed = product.category.bytes().map(|b| b as u64).sum::<u64>();
+    let category_seed = product.category.bytes().map(u64::from).sum::<u64>();
     let mut cat_rng = StdRng::seed_from_u64(category_seed);
-    for i in 0..32.min(dim) {
-        embedding[i] = cat_rng.gen_range(-1.0..1.0);
+    for x in &mut embedding[..32.min(dim)] {
+        *x = cat_rng.gen_range(-1.0..1.0);
     }
 
     // Subcategory influence (next 32 dims)
-    let subcat_seed = product.subcategory.bytes().map(|b| b as u64).sum::<u64>();
+    let subcat_seed = product.subcategory.bytes().map(u64::from).sum::<u64>();
     let mut subcat_rng = StdRng::seed_from_u64(subcat_seed);
-    for i in 32..64.min(dim) {
-        embedding[i] = subcat_rng.gen_range(-1.0..1.0);
+    for x in &mut embedding[32.min(dim)..64.min(dim)] {
+        *x = subcat_rng.gen_range(-1.0..1.0);
     }
 
     // Brand influence (next 16 dims)
-    let brand_seed = product.brand.bytes().map(|b| b as u64).sum::<u64>();
+    let brand_seed = product.brand.bytes().map(u64::from).sum::<u64>();
     let mut brand_rng = StdRng::seed_from_u64(brand_seed);
-    for i in 64..80.min(dim) {
-        embedding[i] = brand_rng.gen_range(-1.0..1.0);
+    for x in &mut embedding[64.min(dim)..80.min(dim)] {
+        *x = brand_rng.gen_range(-1.0..1.0);
     }
 
-    // Price tier influence
+    // Price tier influence — clamped to [0, 1] so the f64→f32 cast is exact.
     let price_tier = (product.price / 100.0).min(10.0) / 10.0;
     if dim > 80 {
-        embedding[80] = price_tier as f32;
+        // Reason: price_tier is in [0.0, 1.0] — losslessly representable in f32.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            embedding[80] = price_tier as f32;
+        }
     }
 
     // Rating influence
@@ -165,9 +171,10 @@ fn generate_product_embedding(product: &Product, dim: usize) -> Vec<f32> {
         embedding[81] = product.rating / 5.0;
     }
 
-    // Random noise for uniqueness
-    for i in 82..dim {
-        embedding[i] = rng.gen_range(-0.1..0.1);
+    // Deterministic noise for uniqueness (seeded from product ID)
+    let mut noise_rng = StdRng::seed_from_u64(product.id.wrapping_add(0xDEAD_BEEF));
+    for x in &mut embedding[82.min(dim)..] {
+        *x = noise_rng.gen_range(-0.1..0.1);
     }
 
     // Normalize
@@ -201,12 +208,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("━━━ Step 1: Generating E-commerce Data ━━━\n");
 
     let start = Instant::now();
-    let products = generate_products(5000);
+    // Seeded RNG ensures reproducible output across runs.
+    let products = generate_products(5000, 0xCAFE_BABE);
     println!("✓ Generated {} products", products.len());
 
     // Count relationships
     let total_relations: usize = products.iter().map(|p| p.related_products.len()).sum();
-    println!("✓ Generated {} co-purchase relationships", total_relations);
+    println!("✓ Generated {total_relations} co-purchase relationships");
     println!("  Time: {:?}\n", start.elapsed());
 
     // ========================================================================
@@ -215,11 +223,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("━━━ Step 2: Building Vector Index (Product Embeddings) ━━━\n");
 
     let start = Instant::now();
-    let collection = Collection::create(
-        data_path.join("products"),
-        128,                    // dimension
-        DistanceMetric::Cosine, // metric
-    )?;
+    let db = Database::open(&data_path)?;
+    db.create_collection("products", 128, DistanceMetric::Cosine)?;
+    let collection = db.get_collection("products").ok_or("Collection not found")?;
 
     // Insert products with embeddings and metadata
     let points: Vec<Point> = products
@@ -257,7 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sample_product = &products[42];
     println!("📱 User is viewing: {} (ID: {})", sample_product.name, sample_product.id);
     println!("   Category: {} > {}", sample_product.category, sample_product.subcategory);
-    println!("   Price: ${:.2} | Rating: {}/5 | Reviews: {}", 
+    println!("   Price: ${:.2} | Rating: {}/5 | Reviews: {}",
              sample_product.price, sample_product.rating, sample_product.review_count);
     println!("   Related Products: {:?}\n", sample_product.related_products);
 
@@ -270,7 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Pre-generate embedding (not part of search latency)
     let query_embedding = generate_product_embedding(sample_product, 128);
-    
+
     // Measure pure search latency
     let start = Instant::now();
     let results = collection.search(&query_embedding, 10)?;
@@ -301,17 +307,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("│ QUERY 2: Vector + Filter - \"Similar, in-stock, under $500\"     │");
     println!("└─────────────────────────────────────────────────────────────────┘");
 
+    // Equivalent VelesQL (shown for reference, executed as Rust filter on vector results):
+    // SELECT * FROM products WHERE similarity(embedding, ?) > 0.7
+    //   AND in_stock = true AND price < 500
+    //   ORDER BY similarity DESC LIMIT 10
     let start = Instant::now();
-    
-    // Showing what VelesQL can do
-    let query = r#"SELECT * FROM products 
-           WHERE similarity(embedding, ?) > 0.7
-             AND in_stock = true 
-             AND price < 500
-           ORDER BY similarity DESC
-           LIMIT 10"#;
-
-    // Apply filters on vector results
     let filtered_results: Vec<_> = results
         .iter()
         .filter(|r| {
@@ -326,9 +326,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .take(5)
         .collect();
 
-    println!("  VelesQL: {}", query.split_whitespace().collect::<Vec<_>>().join(" "));
     println!("  Found {} filtered results in {:?}\n", filtered_results.len(), start.elapsed());
-    
+
     for (i, result) in filtered_results.iter().enumerate() {
         if let Some(payload) = &result.point.payload {
             println!(
@@ -353,10 +352,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("└─────────────────────────────────────────────────────────────────┘");
 
     let start = Instant::now();
-    
+
     // Get related products from the metadata
     let related_ids: &Vec<u64> = &sample_product.related_products;
-    
+
     println!("  Graph Query: MATCH (p:Product)-[:BOUGHT_TOGETHER]-(other)");
     println!("               WHERE p.id = {}", sample_product.id);
     println!("  Found {} co-purchased products in {:?}\n", related_ids.len(), start.elapsed());
@@ -379,11 +378,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("└─────────────────────────────────────────────────────────────────┘");
 
     let start = Instant::now();
-    
+
     println!("  Strategy: Union of:");
     println!("    1. Semantically similar (vector)");
     println!("    2. Frequently bought together (graph)");
-    println!("    3. Filtered by: in_stock=true, rating>=4.0, price<${:.0}\n", 
+    println!("    3. Filtered by: in_stock=true, rating>=4.0, price<${:.0}\n",
              sample_product.price * 1.5);
 
     // Get graph neighbors (related products)
@@ -417,17 +416,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    final_recommendations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    final_recommendations.sort_by(|a, b| b.1.total_cmp(&a.1));
 
     println!("  Found {} recommendations in {:?}\n", final_recommendations.len(), start.elapsed());
-    
+
     for (i, (product, score)) in final_recommendations.iter().take(10).enumerate() {
         let source = if graph_neighbors.contains(&product.id) {
             "📊 Graph+Vector"
         } else {
             "🔍 Vector"
         };
-        
+
         println!(
             "  {}. {} [score: {:.3}] {}",
             i + 1,
@@ -446,7 +445,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ========================================================================
     println!("\n━━━ Performance Summary ━━━\n");
     println!("  📦 Products indexed:        {:>6}", products.len());
-    println!("  🔗 Co-purchase relations:   {:>6}", total_relations);
+    println!("  🔗 Co-purchase relations:   {total_relations:>6}");
     println!("  📐 Vector dimensions:       {:>6}", 128);
     println!("  🏷️  Metadata fields/product: {:>6}", 11);
     println!("\n  VelesDB combines Vector + Graph + Filter in microseconds!");
@@ -464,10 +463,17 @@ mod tests {
 
     #[test]
     fn test_product_generation() {
-        let products = generate_products(100);
+        let products = generate_products(100, 42);
         assert_eq!(products.len(), 100);
         assert!(products.iter().all(|p| p.price > 0.0));
         assert!(products.iter().all(|p| p.rating >= 2.5 && p.rating <= 5.0));
+    }
+
+    #[test]
+    fn test_product_generation_reproducible() {
+        let a = generate_products(10, 42);
+        let b = generate_products(10, 42);
+        assert!(a.iter().zip(b.iter()).all(|(x, y)| x.name == y.name && x.price == y.price));
     }
 
     #[test]
@@ -497,8 +503,8 @@ mod tests {
 
     #[test]
     fn test_related_products() {
-        let products = generate_products(100);
-        
+        let products = generate_products(100, 42);
+
         // At least some products should have related products
         let has_related = products.iter().filter(|p| !p.related_products.is_empty()).count();
         assert!(has_related > 50);

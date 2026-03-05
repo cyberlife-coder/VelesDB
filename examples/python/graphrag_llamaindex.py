@@ -4,19 +4,23 @@ VelesDB GraphRAG Example with LlamaIndex
 
 Demonstrates Graph-enhanced RAG using LlamaIndex's query engine:
 1. Build a knowledge graph from documents
-2. Use GraphRetriever for context expansion
-3. Generate answers with expanded context
+2. Use VelesDBGraphLoader to store citation edges via the VelesDB REST graph API
+3. Use VelesDBGraphRetriever for context expansion
+4. Generate answers with expanded context
 
 Requirements:
-    pip install llama-index-vector-stores-velesdb llama-index-llms-openai
+    pip install llama-index-vector-stores-velesdb llama-index-llms-openai requests
 
 Usage:
+    # Start VelesDB server first: velesdb-server --port 8080
     export OPENAI_API_KEY=your-key
     python graphrag_llamaindex.py
 """
 
 import os
-from typing import List
+from typing import List, Optional
+
+import requests
 
 # LlamaIndex imports
 from llama_index.core import VectorStoreIndex, Settings
@@ -24,8 +28,96 @@ from llama_index.core.schema import TextNode, NodeRelationship, RelatedNodeInfo
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
-# VelesDB LlamaIndex integration
-from llamaindex_velesdb import VelesDBVectorStore, GraphLoader, GraphRetriever
+# VelesDB LlamaIndex vector store integration
+# Install: pip install llama-index-vector-stores-velesdb
+from llama_index.vector_stores.velesdb import VelesDBVectorStore
+
+
+class VelesDBGraphLoader:
+    """Loads graph edges into VelesDB via its REST graph API."""
+
+    def __init__(self, server_url: str, collection: str = "research_papers"):
+        self.server_url = server_url.rstrip("/")
+        self.collection = collection
+
+    def add_edge(self, source_id: str, target_id: str, label: str,
+                 properties: Optional[dict] = None) -> None:
+        """Add a directed edge between two nodes."""
+        payload = {
+            "collection": self.collection,
+            "source_id": source_id,
+            "target_id": target_id,
+            "label": label,
+            "properties": properties or {},
+        }
+        resp = requests.post(
+            f"{self.server_url}/api/graph/edges",
+            json=payload,
+            timeout=5,
+        )
+        resp.raise_for_status()
+
+
+class VelesDBGraphRetriever:
+    """Retrieves nodes with graph expansion via the VelesDB REST API."""
+
+    def __init__(self, index: VectorStoreIndex, server_url: str,
+                 collection: str = "research_papers",
+                 seed_k: int = 2, expand_k: int = 4, max_depth: int = 2,
+                 low_latency: bool = False):
+        self.index = index
+        self.server_url = server_url.rstrip("/")
+        self.collection = collection
+        self.seed_k = seed_k
+        self.expand_k = expand_k
+        self.max_depth = max_depth
+        self.low_latency = low_latency
+
+    def retrieve(self, query: str) -> list:
+        """Retrieve seed nodes by vector search then expand via graph traversal."""
+        # Step 1: seed retrieval via standard vector search
+        retriever = self.index.as_retriever(similarity_top_k=self.seed_k)
+        seed_nodes = retriever.retrieve(query)
+
+        if self.low_latency:
+            return seed_nodes
+
+        # Step 2: graph expansion for each seed node
+        expanded = list(seed_nodes)
+        seen_ids = {n.node.node_id for n in seed_nodes}
+
+        for seed in seed_nodes:
+            seed_id = seed.node.node_id
+            try:
+                resp = requests.post(
+                    f"{self.server_url}/api/graph/traverse",
+                    json={
+                        "collection": self.collection,
+                        "start_node": seed_id,
+                        "max_depth": self.max_depth,
+                        "limit": self.expand_k,
+                    },
+                    timeout=5,
+                )
+                resp.raise_for_status()
+                neighbor_ids = resp.json().get("node_ids", [])
+
+                for nid in neighbor_ids:
+                    if nid not in seen_ids:
+                        seen_ids.add(nid)
+                        # Fetch the node from the index by ID
+                        node_retriever = self.index.as_retriever(similarity_top_k=1)
+                        neighbors = node_retriever.retrieve(nid)
+                        for n in neighbors:
+                            n.node.metadata["graph_depth"] = 1
+                            n.node.metadata["retrieval_mode"] = "graph"
+                            expanded.append(n)
+
+            except requests.RequestException:
+                # Graph expansion is best-effort; fall back gracefully
+                pass
+
+        return expanded
 
 
 def create_knowledge_graph() -> tuple[VelesDBVectorStore, VectorStoreIndex]:
@@ -97,14 +189,14 @@ def create_knowledge_graph() -> tuple[VelesDBVectorStore, VectorStoreIndex]:
     for node in nodes:
         vector_store.add([node])
     
-    # Load graph relationships
-    loader = GraphLoader(vector_store)
-    
-    # Add edges based on citations
-    loader.add_edge(id=1, source=2, target=1, label="CITES")  # BERT cites Transformer
-    loader.add_edge(id=2, source=3, target=1, label="CITES")  # GPT-3 cites Transformer
-    loader.add_edge(id=3, source=4, target=2, label="EXTENDS")  # RAG extends BERT ideas
-    loader.add_edge(id=4, source=5, target=4, label="EXTENDS")  # GraphRAG extends RAG
+    # Load graph relationships via VelesDB REST graph API
+    loader = VelesDBGraphLoader(server_url="http://localhost:8080")
+
+    # Add edges based on citations (use node IDs matching TextNode id_ fields)
+    loader.add_edge(source_id="paper_2", target_id="paper_1", label="CITES")    # BERT cites Transformer
+    loader.add_edge(source_id="paper_3", target_id="paper_1", label="CITES")    # GPT-3 cites Transformer
+    loader.add_edge(source_id="paper_4", target_id="paper_2", label="EXTENDS")  # RAG extends BERT ideas
+    loader.add_edge(source_id="paper_5", target_id="paper_4", label="EXTENDS")  # GraphRAG extends RAG
     
     print("✅ Knowledge graph created: 5 papers, 4 citation relationships")
     return vector_store, index
@@ -118,7 +210,7 @@ def query_with_graph_expansion(
     """Query using GraphRetriever for context expansion."""
     
     # Create graph-enhanced retriever
-    retriever = GraphRetriever(
+    retriever = VelesDBGraphRetriever(
         index=index,
         server_url="http://localhost:8080",  # VelesDB server for graph ops
         seed_k=2,
