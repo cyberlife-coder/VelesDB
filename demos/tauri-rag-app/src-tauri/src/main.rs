@@ -2,6 +2,8 @@
 
 mod commands;
 mod embeddings;
+#[cfg(test)]
+mod tests;
 
 fn main() {
     tauri::Builder::default()

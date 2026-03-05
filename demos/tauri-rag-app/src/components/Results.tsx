@@ -23,9 +23,9 @@ export function Results({ results }: ResultsProps) {
         <span>
           Found {results.chunks.length} relevant chunks for "{results.query}"
         </span>
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1" title="VelesDB vector search latency (embedding excluded)">
           <Zap className="w-4 h-4 text-yellow-300" />
-          {results.time_ms.toFixed(2)}ms
+          {results.time_ms.toFixed(2)}ms (vector search)
         </span>
       </div>
 

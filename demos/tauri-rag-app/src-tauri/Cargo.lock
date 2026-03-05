@@ -1733,17 +1733,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hostname"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
-dependencies = [
- "cfg-if",
- "libc",
- "windows-link 0.2.1",
-]
-
-[[package]]
 name = "html5ever"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4893,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "1.4.1"
+version = "1.4.5"
 dependencies = [
  "dirs 5.0.1",
  "parking_lot",
@@ -4918,6 +4907,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-velesdb",
  "tokio",
+ "velesdb-core",
 ]
 
 [[package]]
@@ -5628,7 +5618,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-core"
-version = "1.4.1"
+version = "1.4.5"
 dependencies = [
  "arc-swap",
  "bincode",
@@ -5636,8 +5626,6 @@ dependencies = [
  "dashmap",
  "figment",
  "half",
- "hex",
- "hostname",
  "indexmap 2.12.1",
  "libc",
  "memmap2",
@@ -5649,13 +5637,11 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.17",
  "tokio",
  "toml 0.8.2",
  "tracing",
  "uuid",
- "whoami",
  "windows-sys 0.59.0",
 ]
 
@@ -5730,12 +5716,6 @@ checksum = "0562428422c63773dad2c345a1882263bbf4d65cf3f42e90921f787ef5ad58e7"
 dependencies = [
  "wit-bindgen",
 ]
-
-[[package]]
-name = "wasite"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8dad83b4f25e74f184f64c43b150b91efe7647395b42289f38e50566d82855b"
 
 [[package]]
 name = "wasm-bindgen"
@@ -5931,17 +5911,6 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
-
-[[package]]
-name = "whoami"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d4a4db5077702ca3015d3d02d74974948aba2ad9e12ab7df718ee64ccd7e97d"
-dependencies = [
- "libredox",
- "wasite",
- "web-sys",
-]
 
 [[package]]
 name = "winapi"

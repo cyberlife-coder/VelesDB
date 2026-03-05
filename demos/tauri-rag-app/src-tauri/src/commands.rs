@@ -1,119 +1,33 @@
-//! Tauri commands for RAG operations
-
-#[cfg(test)]
-mod tests;
+//! Tauri commands for RAG operations.
+//!
+//! Uses the full `VelesDbState` from `tauri-plugin-velesdb` for persistent vector storage.
+//! Text chunks are stored directly in each `Point`'s payload — no separate JSON file needed.
 
 use crate::embeddings;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Mutex;
-use tauri_plugin_velesdb::VelesDbExt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_velesdb::{Error as PluginError, VelesDbState};
+use velesdb_core::{Database, DistanceMetric, Point};
 
-/// Counter for unique chunk IDs (persists across ingestions)
-static NEXT_CHUNK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Name of the persistent VectorCollection used for RAG.
+const COLLECTION: &str = "rag-docs";
 
-fn get_next_chunk_id() -> u64 {
-    NEXT_CHUNK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+/// Monotonic chunk-ID counter.
+///
+/// Seeded from the persisted collection's max ID on first use (see `ensure_collection`),
+/// so IDs never collide across app restarts. Reset to 0 only by `clear_index`.
+static NEXT_CHUNK_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_id() -> u64 {
+    // Relaxed is sufficient: we only need uniqueness, not synchronisation with other data.
+    NEXT_CHUNK_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-fn reset_chunk_id_counter() {
-    NEXT_CHUNK_ID.store(0, std::sync::atomic::Ordering::SeqCst);
-}
+// ─── DTOs ────────────────────────────────────────────────────────────────────
 
-/// Persistent storage for chunk texts
-#[derive(Serialize, Deserialize, Default)]
-struct ChunkStore {
-    chunks: HashMap<u64, String>,
-    next_id: u64,
-}
-
-/// In-memory storage for chunk texts (synced to disk)
-static CHUNK_TEXTS: Mutex<Option<HashMap<u64, String>>> = Mutex::new(None);
-static DATA_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-fn get_data_path() -> PathBuf {
-    let guard = DATA_PATH.lock().unwrap_or_else(|p| p.into_inner());
-    guard.clone().unwrap_or_else(|| PathBuf::from("./velesdb_data/chunks.json"))
-}
-
-fn set_data_path(path: PathBuf) {
-    let mut guard = DATA_PATH.lock().unwrap_or_else(|p| p.into_inner());
-    *guard = Some(path);
-}
-
-fn get_chunk_texts() -> std::sync::MutexGuard<'static, Option<HashMap<u64, String>>> {
-    CHUNK_TEXTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Load chunks from disk on startup
-fn load_chunks_from_disk() -> HashMap<u64, String> {
-    let path = get_data_path();
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(store) = serde_json::from_str::<ChunkStore>(&content) {
-                // Restore the ID counter
-                NEXT_CHUNK_ID.store(store.next_id, std::sync::atomic::Ordering::SeqCst);
-                return store.chunks;
-            }
-        }
-    }
-    HashMap::new()
-}
-
-/// Save chunks to disk
-fn save_chunks_to_disk() {
-    let guard = get_chunk_texts();
-    if let Some(chunks) = guard.as_ref() {
-        let store = ChunkStore {
-            chunks: chunks.clone(),
-            next_id: NEXT_CHUNK_ID.load(std::sync::atomic::Ordering::SeqCst),
-        };
-        
-        let path = get_data_path();
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        
-        if let Ok(json) = serde_json::to_string_pretty(&store) {
-            let _ = fs::write(&path, json);
-        }
-    }
-}
-
-fn store_chunk_text(id: u64, text: String) {
-    let mut guard = get_chunk_texts();
-    if guard.is_none() {
-        *guard = Some(load_chunks_from_disk());
-    }
-    if let Some(map) = guard.as_mut() {
-        map.insert(id, text);
-    }
-    drop(guard);
-    save_chunks_to_disk();
-}
-
-fn get_chunk_text(id: u64) -> String {
-    let mut guard = get_chunk_texts();
-    if guard.is_none() {
-        *guard = Some(load_chunks_from_disk());
-    }
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&id))
-        .cloned()
-        .unwrap_or_else(|| format!("Chunk {id}"))
-}
-
-fn clear_chunk_texts() {
-    let mut guard = get_chunk_texts();
-    *guard = Some(HashMap::new());
-    drop(guard);
-    save_chunks_to_disk();
-}
-
-/// Document chunk with text and embedding
+/// A text chunk, returned to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub id: u64,
@@ -121,22 +35,26 @@ pub struct Chunk {
     pub score: Option<f32>,
 }
 
-/// Search result from VelesDB
+/// Full search response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub chunks: Vec<Chunk>,
     pub query: String,
+    /// VelesDB vector-search latency only (embedding time excluded).
     pub time_ms: f64,
 }
 
-/// Index statistics
+/// Index-level statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
     pub total_chunks: usize,
     pub dimension: usize,
 }
 
-/// Simple text chunking (split by paragraphs)
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Split `text` into chunks no larger than `chunk_size` bytes, breaking on paragraph
+/// boundaries (`\n\n`).
 fn chunk_text(text: &str, chunk_size: usize) -> Vec<String> {
     let paragraphs: Vec<&str> = text.split("\n\n").collect();
     let mut chunks = Vec::new();
@@ -158,118 +76,198 @@ fn chunk_text(text: &str, chunk_size: usize) -> Vec<String> {
     chunks
 }
 
-/// Ingest text and create embeddings using ML model
+/// Ensure the RAG collection exists, creating it if needed.
+///
+/// When the collection already exists, the ID counter is seeded from the persisted
+/// max ID so that new chunks never overwrite existing ones across restarts.
+fn ensure_collection(state: &VelesDbState) -> Result<(), String> {
+    state
+        .with_db(|db: Arc<Database>| {
+            if let Some(coll) = db.get_vector_collection(COLLECTION) {
+                // Advance counter past any IDs already on disk to prevent overwrites.
+                let persisted_max = coll.all_ids().into_iter().max().unwrap_or(0);
+                let needed_next = persisted_max.saturating_add(1);
+                let current = NEXT_CHUNK_ID.load(Ordering::Relaxed);
+                if needed_next > current {
+                    NEXT_CHUNK_ID.store(needed_next, Ordering::Relaxed);
+                }
+            } else {
+                db.create_vector_collection(
+                    COLLECTION,
+                    embeddings::EMBEDDING_DIM,
+                    DistanceMetric::Cosine,
+                )
+                .map_err(PluginError::Database)?;
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("DB error: {e}"))
+}
+
+// ─── Tauri commands ───────────────────────────────────────────────────────────
+
+/// Chunk `text`, embed each chunk with the ML model, and persist to VelesDB.
+///
+/// The raw text is stored inside each `Point`'s JSON payload (`{"text": "…"}`),
+/// so no external file storage is needed.
 #[tauri::command]
 pub async fn ingest_text(
-    app: tauri::AppHandle,
+    app: AppHandle,
     text: String,
     chunk_size: Option<usize>,
 ) -> Result<Vec<Chunk>, String> {
     let chunk_size = chunk_size.unwrap_or(500);
-    let chunks = chunk_text(&text, chunk_size);
-    
-    if chunks.is_empty() {
+    let chunk_texts = chunk_text(&text, chunk_size);
+
+    if chunk_texts.is_empty() {
         return Ok(vec![]);
     }
-    
-    // Generate embeddings for all chunks using ML model
-    let embeddings = embeddings::embed_batch(chunks.clone()).await?;
-    
-    let db = app.velesdb();
-    // NOTE: SimpleIndexHandle is in-memory only. Vectors are lost on restart.
-    // For production persistence, use VelesDbState with a persistent VectorCollection.
-    let mut result = Vec::new();
 
-    for (chunk_text, embedding) in chunks.iter().zip(embeddings.iter()) {
-        if embedding.len() != embeddings::EMBEDDING_DIM {
-            return Err(format!(
-                "Embedding dimension mismatch: expected {}, got {}",
-                embeddings::EMBEDDING_DIM,
-                embedding.len()
-            ));
-        }
-        let id = get_next_chunk_id();
+    // Embed all chunks in one batch (efficient).
+    let embeddings = embeddings::embed_batch(chunk_texts.clone()).await?;
 
-        db.insert(id, embedding)
-            .map_err(|e| format!("Insert error: {e}"))?;
+    let state = app.state::<VelesDbState>();
+    ensure_collection(&state)?;
 
-        store_chunk_text(id, chunk_text.clone());
+    // Build IDs and Points together so we can return the Chunk list after insertion.
+    let mut ids = Vec::with_capacity(chunk_texts.len());
+    let points: Vec<Point> = chunk_texts
+        .iter()
+        .zip(embeddings.iter())
+        .map(|(chunk, embedding)| {
+            let id = next_id();
+            ids.push(id);
+            let payload = serde_json::json!({ "text": chunk });
+            Point::new(id, embedding.clone(), Some(payload))
+        })
+        .collect();
 
-        result.push(Chunk {
-            id,
-            text: chunk_text.clone(),
-            score: None,
-        });
-    }
+    state
+        .with_db(|db: Arc<Database>| {
+            let coll = db
+                .get_vector_collection(COLLECTION)
+                .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
+            coll.upsert_bulk(&points)
+                .map(|_| ())
+                .map_err(PluginError::Database)
+        })
+        .map_err(|e| format!("Insert error: {e}"))?;
+
+    let result = chunk_texts
+        .into_iter()
+        .zip(ids)
+        .map(|(text, id)| Chunk { id, text, score: None })
+        .collect();
 
     Ok(result)
 }
 
-/// Search for similar chunks using semantic embeddings
+/// Embed `query`, search the VectorCollection, and return the top-k chunks with scores.
+///
+/// `time_ms` reflects VelesDB search latency only — embedding is excluded so the
+/// frontend shows an accurate picture of the DB's performance.
 #[tauri::command]
 pub async fn search(
-    app: tauri::AppHandle,
+    app: AppHandle,
     query: String,
     k: Option<usize>,
 ) -> Result<SearchResult, String> {
-    let start = std::time::Instant::now();
     let k = k.unwrap_or(5);
 
-    // Generate query embedding using ML model
+    // Embedding runs outside the timer — it's ML inference, not VelesDB latency.
     let query_embedding = embeddings::embed_text(&query).await?;
-    let db = app.velesdb();
 
-    let results = db
-        .search(&query_embedding, k)
+    let state = app.state::<VelesDbState>();
+    ensure_collection(&state)?;
+
+    // Time only the vector search itself.
+    let search_start = std::time::Instant::now();
+    let raw = state
+        .with_db(|db: Arc<Database>| {
+            let coll = db
+                .get_vector_collection(COLLECTION)
+                .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
+            coll.search(&query_embedding, k).map_err(PluginError::Database)
+        })
         .map_err(|e| format!("Search error: {e}"))?;
+    let search_ms = search_start.elapsed().as_secs_f64() * 1000.0;
 
-    let chunks: Vec<Chunk> = results
-        .iter()
-        .map(|(id, score)| Chunk {
-            id: *id,
-            text: get_chunk_text(*id),  // Retrieve actual text from storage
-            score: Some(*score),
+    let chunks = raw
+        .into_iter()
+        .map(|sr| {
+            // Text was stored in the payload at ingest time.
+            let text = sr
+                .point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Chunk {
+                id: sr.point.id,
+                text,
+                score: Some(sr.score),
+            }
         })
         .collect();
-
-    let time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     Ok(SearchResult {
         chunks,
         query,
-        time_ms,
+        time_ms: search_ms,
     })
 }
 
-/// Get index statistics
+/// Return the number of indexed chunks and the vector dimension.
 #[tauri::command]
-pub async fn get_stats(app: tauri::AppHandle) -> Result<IndexStats, String> {
-    let db = app.velesdb();
+pub async fn get_stats(app: AppHandle) -> Result<IndexStats, String> {
+    let state = app.state::<VelesDbState>();
+    let total_chunks = state
+        .with_db(|db: Arc<Database>| {
+            Ok(db
+                .get_vector_collection(COLLECTION)
+                .map_or(0, |c| c.len()))
+        })
+        .map_err(|e| format!("Stats error: {e}"))?;
 
     Ok(IndexStats {
-        total_chunks: db.len(),
+        total_chunks,
         dimension: embeddings::EMBEDDING_DIM,
     })
 }
 
-/// Get embedding model status
+/// Drop and recreate the RAG collection, clearing all indexed vectors.
+#[tauri::command]
+pub async fn clear_index(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<VelesDbState>();
+    state
+        .with_db(|db: Arc<Database>| {
+            if db.get_vector_collection(COLLECTION).is_some() {
+                db.delete_collection(COLLECTION)
+                    .map_err(PluginError::Database)?;
+            }
+            db.create_vector_collection(
+                COLLECTION,
+                embeddings::EMBEDDING_DIM,
+                DistanceMetric::Cosine,
+            )
+            .map_err(PluginError::Database)
+        })
+        .map_err(|e| format!("Clear error: {e}"))?;
+
+    NEXT_CHUNK_ID.store(0, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Return the current embedding model status (loaded / model name / dimension).
 #[tauri::command]
 pub async fn get_model_status() -> Result<embeddings::ModelStatus, String> {
     Ok(embeddings::get_status().await)
 }
 
-/// Preload the embedding model (call at startup)
+/// Trigger model download/initialisation at startup for better UX.
 #[tauri::command]
 pub async fn preload_model() -> Result<(), String> {
     embeddings::preload().await
-}
-
-/// Clear the index
-#[tauri::command]
-pub async fn clear_index(app: tauri::AppHandle) -> Result<(), String> {
-    let db = app.velesdb();
-    db.clear();
-    clear_chunk_texts();  // Also clear stored texts
-    reset_chunk_id_counter();  // Reset ID counter
-    Ok(())
 }

@@ -2421,16 +2421,34 @@
           "markdownDescription": "Denies the stdin_write command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-upsert`\n- `allow-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-query`",
+          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`",
           "type": "string",
           "const": "velesdb:default",
-          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-upsert`\n- `allow-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-query`"
+          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`"
+        },
+        {
+          "description": "Enables the add_edge command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-add-edge",
+          "markdownDescription": "Enables the add_edge command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the batch_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-batch-search",
+          "markdownDescription": "Enables the batch_search command without any pre-configured scope."
         },
         {
           "description": "Enables the create_collection command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-create-collection",
           "markdownDescription": "Enables the create_collection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_metadata_collection command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-create-metadata-collection",
+          "markdownDescription": "Enables the create_metadata_collection command without any pre-configured scope."
         },
         {
           "description": "Enables the delete_collection command without any pre-configured scope.",
@@ -2445,10 +2463,28 @@
           "markdownDescription": "Enables the delete_points command without any pre-configured scope."
         },
         {
+          "description": "Enables the flush command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-flush",
+          "markdownDescription": "Enables the flush command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_collection command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-get-collection",
           "markdownDescription": "Enables the get_collection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_edges command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-get-edges",
+          "markdownDescription": "Enables the get_edges command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_node_degree command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-get-node-degree",
+          "markdownDescription": "Enables the get_node_degree command without any pre-configured scope."
         },
         {
           "description": "Enables the get_points command without any pre-configured scope.",
@@ -2463,10 +2499,22 @@
           "markdownDescription": "Enables the hybrid_search command without any pre-configured scope."
         },
         {
+          "description": "Enables the is_empty command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-is-empty",
+          "markdownDescription": "Enables the is_empty command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_collections command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-list-collections",
           "markdownDescription": "Enables the list_collections command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the multi_query_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-multi-query-search",
+          "markdownDescription": "Enables the multi_query_search command without any pre-configured scope."
         },
         {
           "description": "Enables the query command without any pre-configured scope.",
@@ -2481,10 +2529,28 @@
           "markdownDescription": "Enables the search command without any pre-configured scope."
         },
         {
+          "description": "Enables the semantic_query command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-query",
+          "markdownDescription": "Enables the semantic_query command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the semantic_store command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-store",
+          "markdownDescription": "Enables the semantic_store command without any pre-configured scope."
+        },
+        {
           "description": "Enables the text_search command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-text-search",
           "markdownDescription": "Enables the text_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the traverse_graph command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-traverse-graph",
+          "markdownDescription": "Enables the traverse_graph command without any pre-configured scope."
         },
         {
           "description": "Enables the upsert command without any pre-configured scope.",
@@ -2493,10 +2559,34 @@
           "markdownDescription": "Enables the upsert command without any pre-configured scope."
         },
         {
+          "description": "Enables the upsert_metadata command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-upsert-metadata",
+          "markdownDescription": "Enables the upsert_metadata command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_edge command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-add-edge",
+          "markdownDescription": "Denies the add_edge command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the batch_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-batch-search",
+          "markdownDescription": "Denies the batch_search command without any pre-configured scope."
+        },
+        {
           "description": "Denies the create_collection command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-create-collection",
           "markdownDescription": "Denies the create_collection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_metadata_collection command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-create-metadata-collection",
+          "markdownDescription": "Denies the create_metadata_collection command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_collection command without any pre-configured scope.",
@@ -2511,10 +2601,28 @@
           "markdownDescription": "Denies the delete_points command without any pre-configured scope."
         },
         {
+          "description": "Denies the flush command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-flush",
+          "markdownDescription": "Denies the flush command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_collection command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-get-collection",
           "markdownDescription": "Denies the get_collection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_edges command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-get-edges",
+          "markdownDescription": "Denies the get_edges command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_node_degree command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-get-node-degree",
+          "markdownDescription": "Denies the get_node_degree command without any pre-configured scope."
         },
         {
           "description": "Denies the get_points command without any pre-configured scope.",
@@ -2529,10 +2637,22 @@
           "markdownDescription": "Denies the hybrid_search command without any pre-configured scope."
         },
         {
+          "description": "Denies the is_empty command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-is-empty",
+          "markdownDescription": "Denies the is_empty command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_collections command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-list-collections",
           "markdownDescription": "Denies the list_collections command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the multi_query_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-multi-query-search",
+          "markdownDescription": "Denies the multi_query_search command without any pre-configured scope."
         },
         {
           "description": "Denies the query command without any pre-configured scope.",
@@ -2547,16 +2667,40 @@
           "markdownDescription": "Denies the search command without any pre-configured scope."
         },
         {
+          "description": "Denies the semantic_query command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-query",
+          "markdownDescription": "Denies the semantic_query command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the semantic_store command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-store",
+          "markdownDescription": "Denies the semantic_store command without any pre-configured scope."
+        },
+        {
           "description": "Denies the text_search command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-text-search",
           "markdownDescription": "Denies the text_search command without any pre-configured scope."
         },
         {
+          "description": "Denies the traverse_graph command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-traverse-graph",
+          "markdownDescription": "Denies the traverse_graph command without any pre-configured scope."
+        },
+        {
           "description": "Denies the upsert command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-upsert",
           "markdownDescription": "Denies the upsert command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_metadata command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-upsert-metadata",
+          "markdownDescription": "Denies the upsert_metadata command without any pre-configured scope."
         }
       ]
     },
