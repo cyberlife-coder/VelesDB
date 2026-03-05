@@ -182,21 +182,21 @@ curl -X POST http://localhost:8080/query/explain \
 ### Graph API
 
 ```bash
-# List edges in a collection
-curl http://localhost:8080/collections/documents/graph/edges
+# List edges filtered by label (label is required)
+curl http://localhost:8080/collections/documents/graph/edges?label=related
 
-# Add an edge
+# Add an edge (id, source, target, label are required)
 curl -X POST http://localhost:8080/collections/documents/graph/edges \
   -H "Content-Type: application/json" \
-  -d '{"from": 1, "to": 2, "label": "related"}'
+  -d '{"id": 1, "source": 1, "target": 2, "label": "related"}'
 
-# Traverse graph from a node
+# Traverse graph from a node (source is required)
 curl -X POST http://localhost:8080/collections/documents/graph/traverse \
   -H "Content-Type: application/json" \
-  -d '{"start": 1, "depth": 3}'
+  -d '{"source": 1, "max_depth": 3}'
 
-# Stream graph traversal
-curl http://localhost:8080/collections/documents/graph/traverse/stream
+# Stream graph traversal (start_node is required)
+curl "http://localhost:8080/collections/documents/graph/traverse/stream?start_node=1"
 
 # Get node degree
 curl http://localhost:8080/collections/documents/graph/nodes/1/degree
