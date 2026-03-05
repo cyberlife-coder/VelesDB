@@ -17,10 +17,16 @@ name = "velesdb"
 crate-type = ["cdylib"]
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core", version = "1.4.0" }
+velesdb-core = { workspace = true }
 pyo3 = { version = "0.24", features = ["extension-module"] }
 serde_json = { workspace = true }
 numpy = "0.24"
+
+[features]
+default = ["velesdb-core/default"]
+gpu = ["velesdb-core/gpu"]
+update-check = ["velesdb-core/update-check"]
+loom = ["velesdb-core/loom"]
 
 [build-dependencies]
 pyo3-build-config = "0.24"

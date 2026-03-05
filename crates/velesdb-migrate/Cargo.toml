@@ -57,7 +57,7 @@ async-trait = "0.1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 
 # VelesDB client (for destination)
-velesdb-core = { version = "1.4.0", path = "../velesdb-core" }
+velesdb-core = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -70,9 +70,10 @@ name = "migration_benchmark"
 harness = false
 
 [features]
-default = ["postgres"]
+default = ["postgres", "velesdb-core/default"]
 postgres = ["sqlx"]
 all-sources = ["postgres"]
+loom = ["velesdb-core/loom"]
 
 # sqlx is optional behind "postgres" feature flag — cargo-machete can't detect it
 [package.metadata.cargo-machete]

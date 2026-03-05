@@ -17,7 +17,7 @@ crate-type = ["cdylib", "staticlib", "lib"]
 name = "velesdb_mobile"
 
 [dependencies]
-velesdb-core = { path = "../velesdb-core", version = "1.4.0" }
+velesdb-core = { workspace = true }
 uniffi = { version = "0.28", features = ["tokio"] }
 tokio = { version = "1.42", features = ["rt-multi-thread"] }
 thiserror = "2.0"
@@ -33,6 +33,12 @@ serde_json = "1.0"
 # - armv7-linux-androideabi (ARMv7 devices)
 # - x86_64-linux-android (x86_64 emulator)
 # - i686-linux-android (x86 emulator)
+
+[features]
+default = ["velesdb-core/default"]
+gpu = ["velesdb-core/gpu"]
+update-check = ["velesdb-core/update-check"]
+loom = ["velesdb-core/loom"]
 
 [dev-dependencies]
 tempfile = "3.14"
