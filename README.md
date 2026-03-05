@@ -192,7 +192,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | Domain      | Component                          | Description                              | Install                     |
 |-------------|------------------------------------|------------------------------------------|----------------------------|
 | **🦀 Core** | [velesdb-core](crates/velesdb-core) | Core engine (HNSW, SIMD, VelesQL)        | `cargo add velesdb-core`   |
-| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (11 endpoints, OpenAPI)         | `cargo install velesdb-server` |
+| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (22+ endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
 | **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
 | **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
 | **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb`   |
@@ -402,7 +402,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.1.0"}
+# {"status":"healthy"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -469,7 +469,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections` | `POST` | Create a collection |
 | `/collections/{name}` | `GET` | Get collection info |
 | `/collections/{name}` | `DELETE` | Delete a collection |
-| `/collections/{name}/empty` | `POST` | Remove all points from a collection |
+| `/collections/{name}/empty` | `GET` | Check if a collection has no points |
 | `/collections/{name}/flush` | `POST` | Flush collection data to disk |
 | `/collections/{name}/sanity` | `GET` | Quick collection diagnostics (readiness and counters) |
 
