@@ -82,13 +82,11 @@ curl -X POST http://localhost:8080/collections/documents/points \
     ]
   }'
 
-# Get points by IDs
-curl -X POST http://localhost:8080/collections/documents/points/get \
-  -d '{"ids": [1, 2, 3]}'
+# Get a point by ID
+curl http://localhost:8080/collections/documents/points/1
 
-# Delete points
-curl -X DELETE http://localhost:8080/collections/documents/points \
-  -d '{"ids": [1, 2, 3]}'
+# Delete a point by ID
+curl -X DELETE http://localhost:8080/collections/documents/points/1
 ```
 
 ### Search
@@ -181,16 +179,52 @@ curl -X POST http://localhost:8080/query/explain \
   }'
 ```
 
+### Graph API
+
+```bash
+# List edges filtered by label (label is required)
+curl http://localhost:8080/collections/documents/graph/edges?label=related
+
+# Add an edge (id, source, target, label are required)
+curl -X POST http://localhost:8080/collections/documents/graph/edges \
+  -H "Content-Type: application/json" \
+  -d '{"id": 1, "source": 1, "target": 2, "label": "related"}'
+
+# Traverse graph from a node (source is required)
+curl -X POST http://localhost:8080/collections/documents/graph/traverse \
+  -H "Content-Type: application/json" \
+  -d '{"source": 1, "max_depth": 3}'
+
+# Stream graph traversal (start_node is required)
+curl "http://localhost:8080/collections/documents/graph/traverse/stream?start_node=1"
+
+# Get node degree
+curl http://localhost:8080/collections/documents/graph/nodes/1/degree
+```
+
+### Index API
+
+```bash
+# List indexes on a collection
+curl http://localhost:8080/collections/documents/indexes
+
+# Create an index
+curl -X POST http://localhost:8080/collections/documents/indexes \
+  -H "Content-Type: application/json" \
+  -d '{"label": "category", "property": "name"}'
+
+# Delete an index
+curl -X DELETE http://localhost:8080/collections/documents/indexes/category/name
+```
+
 ### Health & OpenAPI
 
 ```bash
 # Health check
 curl http://localhost:8080/health
 
-# OpenAPI spec (JSON)
+# OpenAPI spec and Swagger UI (requires --features swagger-ui at build time)
 curl http://localhost:8080/api-docs/openapi.json
-
-# Swagger UI (interactive docs)
 # Open in browser: http://localhost:8080/swagger-ui
 ```
 
