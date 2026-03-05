@@ -442,8 +442,8 @@ impl Collection {
         // the HNSW has dimension 0 and the guard above already rejected the call.
         let ids = self.index.search(query, k);
 
-        // BUG-4: acquire each lock once for all results instead of holding
-        // vector_storage while repeatedly locking payload_storage per item.
+        // Acquire each lock once: collect vector data, then collect payload data.
+        // This avoids holding vector_storage while locking payload_storage per item.
         let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
             let vector_storage = self.vector_storage.read();
             ids.into_iter()

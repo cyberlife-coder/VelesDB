@@ -11,6 +11,8 @@ mod crud_helpers;
 #[cfg(test)]
 mod crud_tests;
 mod graph_api;
+#[cfg(test)]
+mod graph_api_tests;
 mod index_management;
 #[cfg(test)]
 mod index_management_tests;

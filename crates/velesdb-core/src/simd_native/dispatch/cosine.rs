@@ -48,6 +48,14 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
             _ => {}
         }
     }
+    // NEON cosine dispatch for aarch64 (EPIC-054 US-004).
+    #[cfg(target_arch = "aarch64")]
+    if a.len() >= 4 {
+        // SAFETY: `cosine_neon` is a pure-Rust NEON function; no CPU feature detection
+        // needed because NEON is always present on aarch64.
+        // Reason: dispatch to the optimized NEON fused cosine kernel.
+        return crate::simd_native::cosine_neon(a, b);
+    }
     crate::simd_native::scalar::cosine_scalar(a, b)
 }
 
@@ -89,6 +97,8 @@ pub(super) fn resolve_cosine(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32])
                 unsafe { crate::simd_native::cosine_fused_avx2(a, b) }
             }
         }
+        #[cfg(target_arch = "aarch64")]
+        SimdLevel::Neon if dim >= 4 => |a, b| crate::simd_native::cosine_neon(a, b),
         _ => crate::simd_native::scalar::cosine_scalar,
     }
 }

@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57-102µs HNSW Search* • 18.7ns SIMD • 3,100+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 57-102µs HNSW Search* • 18.7ns SIMD • 3,300+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.7ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-3,100+-green?style=for-the-badge" alt="Tests"/>
+  <img src="https://img.shields.io/badge/🧪_Tests-3,300+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
@@ -100,7 +100,7 @@
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 3,100+</h3>
+<h3>🧪 3,300+</h3>
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
@@ -150,7 +150,7 @@
 ```
 ✅ cargo check --workspace
 ✅ cargo clippy -- -D warnings  
-✅ cargo test --workspace (3,000 passing)
+✅ cargo test --workspace (3,300+ passing)
 ✅ cargo deny check (0 advisories)
 ✅ cargo fmt --check
 ✅ Code coverage > 75% (82.30%)
@@ -1107,7 +1107,7 @@ LIMIT 10
 | **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
 | **VelesQL Parsing**| **86 ns** | Cache hit (~11.7M qps), measured 2026-02-17 |
 | **Recall@10** | **100%** | Accurate mode |
-| **Code Coverage** | **82.30%** | 3,000+ tests |
+| **Code Coverage** | **82.30%** | 3,300+ tests |
 
 ### Search Quality (Recall)
 
