@@ -2,6 +2,13 @@
 //!
 //! Provides SIMD-accelerated distance computation using precomputed lookup tables.
 //! Dispatches to AVX2 gather, NEON, or scalar path based on runtime detection.
+//!
+//! The public-crate API (`adc_distances_batch`) is wired into the PQ search
+//! pipeline in Phase 03. Functions are marked `#[allow(dead_code)]` until then.
+
+// `adc_distances_batch` is the Phase 03 search hot-path; suppressed until wired into
+// the PQ rescoring pipeline. Remove this allow when Phase 03 integration is complete.
+#![allow(dead_code)]
 
 use super::dispatch::{simd_level, SimdLevel};
 
@@ -21,7 +28,7 @@ use super::dispatch::{simd_level, SimdLevel};
 ///
 /// Panics if `m` is zero or `lut.len()` is not divisible by `m`.
 #[must_use]
-pub fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Vec<f32> {
+pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Vec<f32> {
     assert!(m > 0, "m must be > 0");
     assert!(lut.len() % m == 0, "lut length must be divisible by m");
     let k = lut.len() / m;

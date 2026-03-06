@@ -144,9 +144,14 @@ pub struct CollectionConfig {
     pub embedding_dimension: Option<usize>,
 
     /// PQ rescore oversampling factor. `Some(4)` by default.
+    ///
     /// The search pipeline fetches `max(k * factor, k + 32)` candidates from HNSW
     /// and rescores them with full-precision ADC.
-    /// `None` disables rescore entirely (expert-only; risks silent recall collapse).
+    ///
+    /// - `None`: disables rescore entirely (expert-only; risks silent recall collapse).
+    /// - `Some(0)`: treated as disabled (equivalent to `None`) — the oversampling factor
+    ///   of 0 produces a candidates count of 0, which falls back to raw HNSW results.
+    /// - `Some(n)` where `n > 0`: enables rescore with `n`-fold oversampling.
     #[serde(default = "default_pq_rescore_oversampling")]
     pub pq_rescore_oversampling: Option<u32>,
 }

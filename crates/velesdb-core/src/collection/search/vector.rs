@@ -14,6 +14,8 @@ impl Collection {
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
         let metric = config.metric;
+        // u32 → usize: safe on all 32-bit+ targets (u32::MAX fits in usize).
+        #[allow(clippy::cast_possible_truncation)]
         let oversampling = config.pq_rescore_oversampling.unwrap_or(0) as usize;
         drop(config);
 

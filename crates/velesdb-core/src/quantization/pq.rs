@@ -6,6 +6,7 @@
 use crate::error::Error;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Per-subspace centroid tables learned with k-means.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,72 @@ pub struct ProductQuantizer {
     pub rotation: Option<Vec<f32>>,
 }
 
+/// Validate common training parameters shared by [`ProductQuantizer::train`] and [`train_opq`].
+///
+/// Returns `(dimension, subspace_dim)` on success.
+///
+/// # Errors
+///
+/// Returns `Error::InvalidQuantizerConfig` if:
+/// - `vectors` is empty
+/// - `num_subspaces` is 0
+/// - `num_centroids` is 0 or exceeds `u16::MAX`
+/// - vector dimension is zero or not uniform across all vectors
+/// - vector dimension is not divisible by `num_subspaces`
+/// - `num_centroids` exceeds `vectors.len()`
+fn validate_train_params(
+    vectors: &[Vec<f32>],
+    num_subspaces: usize,
+    num_centroids: usize,
+) -> Result<(usize, usize), Error> {
+    if vectors.is_empty() {
+        return Err(Error::InvalidQuantizerConfig(
+            "cannot train PQ with empty dataset".into(),
+        ));
+    }
+    if num_subspaces == 0 {
+        return Err(Error::InvalidQuantizerConfig(
+            "num_subspaces must be > 0".into(),
+        ));
+    }
+    if num_centroids == 0 {
+        return Err(Error::InvalidQuantizerConfig(
+            "num_centroids must be > 0".into(),
+        ));
+    }
+    if u16::try_from(num_centroids).is_err() {
+        return Err(Error::InvalidQuantizerConfig(
+            "num_centroids must fit in u16 (max 65535)".into(),
+        ));
+    }
+
+    let dimension = vectors[0].len();
+    if dimension == 0 {
+        return Err(Error::InvalidQuantizerConfig(
+            "vectors must have non-zero dimension".into(),
+        ));
+    }
+    if !vectors.iter().all(|v| v.len() == dimension) {
+        return Err(Error::InvalidQuantizerConfig(
+            "all vectors must share the same dimension".into(),
+        ));
+    }
+    if dimension % num_subspaces != 0 {
+        return Err(Error::InvalidQuantizerConfig(
+            "dimension must be divisible by num_subspaces".into(),
+        ));
+    }
+    if num_centroids > vectors.len() {
+        return Err(Error::InvalidQuantizerConfig(format!(
+            "num_centroids ({num_centroids}) exceeds number of training vectors ({})",
+            vectors.len()
+        )));
+    }
+
+    let subspace_dim = dimension / num_subspaces;
+    Ok((dimension, subspace_dim))
+}
+
 impl ProductQuantizer {
     /// Train a PQ codebook using simplified k-means for each subspace.
     ///
@@ -55,51 +122,8 @@ impl ProductQuantizer {
         num_subspaces: usize,
         num_centroids: usize,
     ) -> Result<Self, Error> {
-        if vectors.is_empty() {
-            return Err(Error::InvalidQuantizerConfig(
-                "cannot train PQ with empty dataset".into(),
-            ));
-        }
-        if num_subspaces == 0 {
-            return Err(Error::InvalidQuantizerConfig(
-                "num_subspaces must be > 0".into(),
-            ));
-        }
-        if num_centroids == 0 {
-            return Err(Error::InvalidQuantizerConfig(
-                "num_centroids must be > 0".into(),
-            ));
-        }
-        if u16::try_from(num_centroids).is_err() {
-            return Err(Error::InvalidQuantizerConfig(
-                "num_centroids must fit in u16 (max 65535)".into(),
-            ));
-        }
-
-        let dimension = vectors[0].len();
-        if dimension == 0 {
-            return Err(Error::InvalidQuantizerConfig(
-                "vectors must have non-zero dimension".into(),
-            ));
-        }
-        if !vectors.iter().all(|v| v.len() == dimension) {
-            return Err(Error::InvalidQuantizerConfig(
-                "all vectors must share the same dimension".into(),
-            ));
-        }
-        if dimension % num_subspaces != 0 {
-            return Err(Error::InvalidQuantizerConfig(
-                "dimension must be divisible by num_subspaces".into(),
-            ));
-        }
-        if num_centroids > vectors.len() {
-            return Err(Error::InvalidQuantizerConfig(format!(
-                "num_centroids ({num_centroids}) exceeds number of training vectors ({})",
-                vectors.len()
-            )));
-        }
-
-        let subspace_dim = dimension / num_subspaces;
+        let (dimension, subspace_dim) =
+            validate_train_params(vectors, num_subspaces, num_centroids)?;
 
         let centroids: Vec<Vec<Vec<f32>>>;
 
@@ -121,10 +145,15 @@ impl ProductQuantizer {
                     let end = start + subspace_dim;
                     let sub_vectors: Vec<Vec<f32>> =
                         vectors.iter().map(|v| v[start..end].to_vec()).collect();
+                    // Derive a per-subspace seed from the base seed (42) so each
+                    // subspace explores a different initialization order.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let seed = 42u64.wrapping_add(subspace as u64);
                     kmeans_train(
                         &sub_vectors,
                         num_centroids,
                         50,
+                        seed,
                         #[cfg(feature = "gpu")]
                         gpu_ctx_ref,
                     )
@@ -139,10 +168,13 @@ impl ProductQuantizer {
                     let end = start + subspace_dim;
                     let sub_vectors: Vec<Vec<f32>> =
                         vectors.iter().map(|v| v[start..end].to_vec()).collect();
+                    #[allow(clippy::cast_possible_truncation)]
+                    let seed = 42u64.wrapping_add(subspace as u64);
                     kmeans_train(
                         &sub_vectors,
                         num_centroids,
                         50,
+                        seed,
                         #[cfg(feature = "gpu")]
                         gpu_ctx.as_ref(),
                     )
@@ -207,7 +239,7 @@ impl ProductQuantizer {
 
         // Apply rotation so codes are computed in the same space as the codebook.
         let rotated = self.apply_rotation(vector);
-        let effective = rotated.as_slice();
+        let effective: &[f32] = &rotated;
 
         let mut codes = Vec::with_capacity(self.codebook.num_subspaces);
         for subspace in 0..self.codebook.num_subspaces {
@@ -377,47 +409,7 @@ pub fn train_opq(
         return ProductQuantizer::train(vectors, num_subspaces, num_centroids);
     }
 
-    // Validate inputs (same as train())
-    if vectors.is_empty() {
-        return Err(Error::InvalidQuantizerConfig(
-            "cannot train OPQ with empty dataset".into(),
-        ));
-    }
-    if num_subspaces == 0 {
-        return Err(Error::InvalidQuantizerConfig(
-            "num_subspaces must be > 0".into(),
-        ));
-    }
-    if num_centroids == 0 {
-        return Err(Error::InvalidQuantizerConfig(
-            "num_centroids must be > 0".into(),
-        ));
-    }
-    if u16::try_from(num_centroids).is_err() {
-        return Err(Error::InvalidQuantizerConfig(
-            "num_centroids must fit in u16 (max 65535)".into(),
-        ));
-    }
-
-    let dimension = vectors[0].len();
-    if dimension == 0 {
-        return Err(Error::InvalidQuantizerConfig(
-            "vectors must have non-zero dimension".into(),
-        ));
-    }
-    if dimension % num_subspaces != 0 {
-        return Err(Error::InvalidQuantizerConfig(
-            "dimension must be divisible by num_subspaces".into(),
-        ));
-    }
-    if num_centroids > vectors.len() {
-        return Err(Error::InvalidQuantizerConfig(format!(
-            "num_centroids ({num_centroids}) exceeds number of training vectors ({})",
-            vectors.len()
-        )));
-    }
-
-    let d = dimension;
+    let (d, _) = validate_train_params(vectors, num_subspaces, num_centroids)?;
 
     // Initialize rotation R = Identity (flattened row-major D x D)
     let mut rotation = vec![0.0_f32; d * d];
@@ -629,10 +621,14 @@ impl ProductQuantizer {
         lut
     }
 
-    /// Apply OPQ rotation matrix to a vector. Returns the original if no rotation.
-    pub(crate) fn apply_rotation(&self, vector: &[f32]) -> Vec<f32> {
+    /// Apply OPQ rotation matrix to a vector.
+    ///
+    /// Returns a [`Cow::Borrowed`] slice pointing to the original vector when no
+    /// rotation is present, avoiding an allocation on the common no-rotation path.
+    /// Returns a [`Cow::Owned`] `Vec<f32>` with the rotated result otherwise.
+    pub(crate) fn apply_rotation<'a>(&self, vector: &'a [f32]) -> Cow<'a, [f32]> {
         match &self.rotation {
-            None => vector.to_vec(),
+            None => Cow::Borrowed(vector),
             Some(matrix) => {
                 let d = vector.len();
                 let mut rotated = vec![0.0_f32; d];
@@ -641,7 +637,7 @@ impl ProductQuantizer {
                         rotated[i] += matrix[i * d + j] * vector[j];
                     }
                 }
-                rotated
+                Cow::Owned(rotated)
             }
         }
     }
@@ -774,15 +770,20 @@ fn kmeans_train(
     samples: &[Vec<f32>],
     k: usize,
     max_iters: usize,
+    // Seed for the k-means++ RNG. Use a distinct seed per subspace to ensure
+    // each subspace explores a different initialization order.
+    seed: u64,
     #[cfg(feature = "gpu")] gpu_ctx: Option<&crate::gpu::PqGpuContext>,
 ) -> Vec<Vec<f32>> {
+    use rand::SeedableRng;
     // Internal invariant: callers validate non-empty samples and k > 0.
     debug_assert!(!samples.is_empty());
     debug_assert!(k > 0);
     let dim = samples[0].len();
 
     // k-means++ initialization for well-spread initial centroids.
-    let mut rng = rand::thread_rng();
+    // Use a seeded RNG for reproducibility across training runs.
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut centroids = kmeans_plusplus_init(samples, k.min(samples.len()), &mut rng);
     // If k > samples.len(), pad with cycled samples (shouldn't happen after train() validation).
     while centroids.len() < k {

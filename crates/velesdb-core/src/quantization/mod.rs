@@ -25,7 +25,7 @@ pub use pq::train_opq;
 pub use pq::{PQCodebook, PQVector, ProductQuantizer};
 
 // Re-export RaBitQ quantization
-pub use rabitq::{RaBitQIndex, RaBitQVector};
+pub use rabitq::{RaBitQCorrection, RaBitQIndex, RaBitQVector};
 
 // Re-export scalar quantization
 pub use scalar::{

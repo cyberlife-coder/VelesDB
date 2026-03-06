@@ -14,16 +14,25 @@
 use crate::error::Error;
 use serde::{Deserialize, Serialize};
 
+/// Scalar correction factors for a `RaBitQ`-encoded vector.
+///
+/// These values are needed to apply the affine correction during distance estimation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaBitQCorrection {
+    /// L2 norm of the centered vector before binarization.
+    pub vector_norm: f32,
+    /// Inner product between the binary reconstruction (`±1/√D` scaled) and the
+    /// rotated normalized vector. Measures quantization quality; closer to 1.0 is better.
+    pub quantization_ip: f32,
+}
+
 /// Binary-quantized vector with scalar correction factors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaBitQVector {
     /// Binary codes packed in u64 words. Length = `ceil(D / 64)`.
     pub bits: Vec<u64>,
-    /// Correction factors: `(vector_norm, quantization_inner_product)`.
-    /// `vector_norm` is the L2 norm of the centered vector before binarization.
-    /// `quantization_inner_product` is the inner product between the binary
-    /// reconstruction and the rotated normalized vector (quality measure).
-    pub norms: (f32, f32),
+    /// Affine correction factors used to recover an accurate distance estimate.
+    pub correction: RaBitQCorrection,
 }
 
 /// `RaBitQ` index holding the random rotation matrix and dataset centroid.
@@ -40,9 +49,11 @@ pub struct RaBitQIndex {
 /// Pack sign bits of a float slice into u64 words.
 ///
 /// Bit `i` of word `w` is 1 if `values[w*64 + i] >= 0.0`.
-/// The output length is `ceil(dim / 64)`.
+/// The output length is `ceil(dim / 64)`. Padding bits in the last word are
+/// always zero (values beyond `dim` are not written), which is required by
+/// `xor_popcount_ip` for correct padding adjustment.
 #[must_use]
-pub fn signs_to_bits(values: &[f32], dim: usize) -> Vec<u64> {
+pub(crate) fn signs_to_bits(values: &[f32], dim: usize) -> Vec<u64> {
     let num_words = dim.div_ceil(64);
     let mut bits = vec![0u64; num_words];
     for (i, &v) in values.iter().take(dim).enumerate() {
@@ -59,7 +70,7 @@ pub fn signs_to_bits(values: &[f32], dim: usize) -> Vec<u64> {
 ///
 /// Computes `result[i] = sum_j rotation[i * dim + j] * vector[j]` for each `i`.
 #[must_use]
-pub fn apply_rotation_flat(rotation: &[f32], vector: &[f32], dim: usize) -> Vec<f32> {
+pub(crate) fn apply_rotation_flat(rotation: &[f32], vector: &[f32], dim: usize) -> Vec<f32> {
     (0..dim)
         .map(|i| {
             let row_start = i * dim;
@@ -83,11 +94,25 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
         // matching = total_bits_in_word - differing
         matching_bits += 64 - xor.count_ones();
     }
-    // Adjust for padding bits in last word: padding bits are 0 in both
-    // vectors, so they count as matching but shouldn't contribute.
+    // Adjust for padding bits in last word: padding bits are 0 in both vectors
+    // (signs_to_bits only writes bits up to `dim`, zeroing the rest), so they
+    // count as matching but shouldn't contribute.
     let padding_bits = num_words * 64 - dim;
+    // SAFETY of subtraction: padding_bits <= num_words * 64 - dim.
+    // matching_bits counts matching bits in `num_words * 64` positions. The
+    // minimum number of matching bits equals the number of padding bits (since
+    // padding bits are 0 in both vectors and thus always match). Therefore
+    // matching_bits >= padding_bits is a guaranteed invariant.
+    // `padding_bits` is at most `num_words * 64 - 1 < 64 * usize::MAX / 64`, which
+    // is always less than u32::MAX for any realistic dimension. The cast is safe.
     #[allow(clippy::cast_possible_truncation)]
-    let matching_bits = matching_bits - padding_bits as u32;
+    let padding_bits_u32 = padding_bits as u32;
+    debug_assert!(
+        matching_bits >= padding_bits_u32,
+        "matching_bits ({matching_bits}) < padding_bits ({padding_bits}): \
+         signs_to_bits must zero padding bits"
+    );
+    let matching_bits = matching_bits - padding_bits_u32;
 
     // Inner product estimate: each matching bit contributes +1/D,
     // each differing bit contributes -1/D.
@@ -137,7 +162,10 @@ impl RaBitQIndex {
             let num_words = self.dimension.div_ceil(64);
             return Ok(RaBitQVector {
                 bits: vec![0u64; num_words],
-                norms: (0.0, 1.0),
+                correction: RaBitQCorrection {
+                    vector_norm: 0.0,
+                    quantization_ip: 1.0,
+                },
             });
         }
 
@@ -169,7 +197,10 @@ impl RaBitQIndex {
 
         Ok(RaBitQVector {
             bits,
-            norms: (norm, qip),
+            correction: RaBitQCorrection {
+                vector_norm: norm,
+                quantization_ip: qip,
+            },
         })
     }
 
@@ -191,7 +222,7 @@ impl RaBitQIndex {
 
         if q_norm < f32::EPSILON {
             // Query is at centroid; distance = norm of encoded vector
-            return encoded.norms.0;
+            return encoded.correction.vector_norm;
         }
 
         let q_normalized: Vec<f32> = centered.iter().map(|&x| x / q_norm).collect();
@@ -207,7 +238,7 @@ impl RaBitQIndex {
         let ip_binary = xor_popcount_ip(&q_bits, &encoded.bits, num_words, self.dimension);
 
         // Affine correction with stored norms
-        let v_norm = encoded.norms.0;
+        let v_norm = encoded.correction.vector_norm;
 
         // Estimated <q, v> = q_norm * v_norm * ip_binary
         let estimated_ip = q_norm * v_norm * ip_binary;
@@ -235,7 +266,7 @@ impl RaBitQIndex {
         let q_norm = q_norm_sq.sqrt();
 
         if q_norm < f32::EPSILON {
-            return encoded.iter().map(|e| e.norms.0).collect();
+            return encoded.iter().map(|e| e.correction.vector_norm).collect();
         }
 
         let q_normalized: Vec<f32> = centered.iter().map(|&x| x / q_norm).collect();
@@ -248,7 +279,7 @@ impl RaBitQIndex {
             .map(|ev| {
                 let ip_binary = xor_popcount_ip(&q_bits, &ev.bits, num_words, self.dimension);
 
-                let v_norm = ev.norms.0;
+                let v_norm = ev.correction.vector_norm;
                 let estimated_ip = q_norm * v_norm * ip_binary;
                 let l2_sq = v_norm.mul_add(v_norm, q_norm_sq) - 2.0 * estimated_ip;
                 l2_sq.max(0.0).sqrt()
@@ -358,6 +389,13 @@ impl RaBitQIndex {
 /// Creates a D x D random matrix from a seeded RNG, then orthogonalizes it
 /// using modified Gram-Schmidt (numerically stable for D <= 2048).
 /// Returns the matrix flattened in row-major order.
+///
+/// # Numerical stability
+///
+/// MGS produces near-orthogonal matrices for D up to ~1024 at f32 precision.
+/// For D > 1024, accumulated rounding errors can make the result noticeably
+/// non-orthogonal (‖Rᵀ R − I‖_F may exceed 1e-3). If higher-dimensional
+/// rotations are required, consider Householder QR or double-precision MGS.
 #[cfg(feature = "persistence")]
 fn generate_orthogonal_matrix(dim: usize, seed: u64) -> Vec<f32> {
     use rand::{Rng, SeedableRng};
@@ -512,7 +550,7 @@ mod tests {
         let zero_vec = vec![0.0; dim];
         let encoded = index.encode(&zero_vec).unwrap();
         assert!(
-            encoded.norms.0.abs() < f32::EPSILON,
+            encoded.correction.vector_norm.abs() < f32::EPSILON,
             "zero vector should have zero norm"
         );
         // Bits should be all zero
@@ -712,8 +750,15 @@ mod tests {
 
         let index = RaBitQIndex::train(&vectors, 42).unwrap();
 
-        // Verify R * R^T ~= I
-        let r = &index.rotation;
+        assert_rotation_is_orthogonal(&index.rotation, dim, 1e-4);
+    }
+
+    /// Check that the rotation matrix R satisfies R * Rᵀ ≈ I within `tol`.
+    ///
+    /// MGS orthogonality degrades slowly with dimension at f32 precision, so
+    /// the tolerance is intentionally looser for larger matrices.
+    #[cfg(feature = "persistence")]
+    fn assert_rotation_is_orthogonal(r: &[f32], dim: usize, tol: f32) {
         for i in 0..dim {
             for j in 0..dim {
                 let mut dot = 0.0f32;
@@ -722,11 +767,29 @@ mod tests {
                 }
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
-                    (dot - expected).abs() < 1e-4,
-                    "R*R^T[{i}][{j}] = {dot}, expected {expected}"
+                    (dot - expected).abs() < tol,
+                    "R*Rᵀ[{i}][{j}] = {dot}, expected {expected} (dim={dim}, tol={tol})"
                 );
             }
         }
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_rotation_orthogonal_d128() {
+        // d=128 is a common embedding dimension (e.g. GloVe, FastText).
+        // MGS at f32 remains near-orthogonal at this size; tolerance 5e-4.
+        let rotation = generate_orthogonal_matrix(128, 13);
+        assert_rotation_is_orthogonal(&rotation, 128, 5e-4);
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_rotation_orthogonal_d512() {
+        // d=512 is near the MGS stability boundary at f32.
+        // Tolerance is relaxed to 1e-3 to account for accumulated rounding.
+        let rotation = generate_orthogonal_matrix(512, 17);
+        assert_rotation_is_orthogonal(&rotation, 512, 1e-3);
     }
 
     #[test]
