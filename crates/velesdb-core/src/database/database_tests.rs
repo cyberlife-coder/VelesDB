@@ -655,7 +655,7 @@ fn test_execute_train_missing_m_is_required() {
         .execute_query(&query, &std::collections::HashMap::new())
         .unwrap_err();
     assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
-    assert!(err.to_string().contains("required"));
+    assert!(err.to_string().contains("must be > 0"));
 }
 
 #[test]
@@ -689,12 +689,12 @@ fn test_database_open_loads_sparse_index() {
     {
         let db = Database::open(dir.path()).unwrap();
         let coll = db.get_collection("sparse_test").unwrap();
-        let guard = coll.sparse_index().read();
+        let guard = coll.sparse_indexes().read();
         assert!(
-            guard.is_some(),
-            "Sparse index should be loaded from disk on Database::open()"
+            guard.contains_key(""),
+            "Default sparse index should be loaded from disk on Database::open()"
         );
-        let sparse = guard.as_ref().unwrap();
+        let sparse = guard.get("").unwrap();
         assert_eq!(sparse.doc_count(), 20);
     }
 
@@ -716,11 +716,11 @@ fn test_database_open_loads_sparse_index() {
     {
         let db = Database::open(dir2.path()).unwrap();
         let coll = db.get_collection("wal_only").unwrap();
-        let guard = coll.sparse_index().read();
+        let guard = coll.sparse_indexes().read();
         assert!(
-            guard.is_some(),
+            guard.contains_key(""),
             "WAL-only sparse index should be loaded on Database::open()"
         );
-        assert_eq!(guard.as_ref().unwrap().doc_count(), 5);
+        assert_eq!(guard.get("").unwrap().doc_count(), 5);
     }
 }
