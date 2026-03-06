@@ -1,9 +1,9 @@
-//! DAAT MaxScore sparse search with linear scan fallback.
+//! DAAT `MaxScore` sparse search with linear scan fallback.
 //!
 //! Provides inner-product ANN search over a [`SparseInvertedIndex`].
-//! MaxScore partitions query terms into essential/non-essential sets for
+//! `MaxScore` partitions query terms into essential/non-essential sets for
 //! early termination. A linear scan fallback handles high-coverage queries
-//! where MaxScore overhead exceeds its benefit.
+//! where `MaxScore` overhead exceeds its benefit.
 
 #![allow(clippy::cast_precision_loss)]
 
@@ -25,7 +25,7 @@ const MAX_DENSE_ACCUMULATOR: u64 = 10_000_000;
 
 /// Searches the sparse inverted index for the top-k documents by inner product.
 ///
-/// Automatically selects between MaxScore DAAT and linear scan based on a
+/// Automatically selects between `MaxScore` DAAT and linear scan based on a
 /// coverage heuristic.
 #[must_use]
 pub fn sparse_search(
@@ -62,7 +62,7 @@ struct TermPostings {
     postings: Vec<PostingEntry>,
 }
 
-/// MaxScore DAAT search over the inverted index.
+/// `MaxScore` DAAT search over the inverted index.
 fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) -> Vec<ScoredDoc> {
     // Collect posting lists for each query term
     let mut term_data: Vec<TermPostings> = Vec::with_capacity(query.nnz());
@@ -124,9 +124,8 @@ fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) 
             }
         }
 
-        let doc_id = match min_doc_id {
-            Some(d) => d,
-            None => break, // All essential lists exhausted
+        let Some(doc_id) = min_doc_id else {
+            break; // All essential lists exhausted
         };
 
         // Compute score from essential terms

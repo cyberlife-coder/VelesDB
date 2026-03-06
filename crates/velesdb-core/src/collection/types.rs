@@ -4,6 +4,7 @@ use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex
 use crate::collection::stats::CollectionStats;
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
+use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
@@ -176,6 +177,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
 //   8. edge_store
+//   9. sparse_index
 
 /// A collection of vectors with associated metadata.
 #[derive(Clone)]
@@ -223,6 +225,10 @@ pub struct Collection {
     /// Edge store for knowledge graph relationships (EPIC-015).
     pub(super) edge_store: Arc<RwLock<EdgeStore>>,
 
+    /// Sparse inverted index for sparse vector search (EPIC-062).
+    /// `None` until first sparse vector upsert or loaded from disk.
+    pub(super) sparse_index: Arc<RwLock<Option<SparseInvertedIndex>>>,
+
     /// Secondary indexes for metadata payload fields.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
 
@@ -240,6 +246,12 @@ pub struct Collection {
 }
 
 impl Collection {
+    /// Returns a reference to the sparse index lock (EPIC-062 sparse integration).
+    #[allow(dead_code)]
+    pub(crate) fn sparse_index(&self) -> &Arc<RwLock<Option<SparseInvertedIndex>>> {
+        &self.sparse_index
+    }
+
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
         crate::collection::text_utils::extract_text(payload)
