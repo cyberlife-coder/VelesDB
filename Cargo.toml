@@ -67,6 +67,7 @@ toml = "0.8"
 criterion = "0.5"
 proptest = "1.5"
 tempfile = "3.14"
+rand = "0.8"
 
 # Cryptography (for license validation)
 ed25519-dalek = "2.1"

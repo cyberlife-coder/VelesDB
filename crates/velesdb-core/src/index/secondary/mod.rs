@@ -68,7 +68,7 @@ impl JsonValue {
         }
     }
 
-    /// Converts VelesQL AST value into an index key.
+    /// Converts `VelesQL` AST value into an index key.
     #[must_use]
     pub fn from_ast_value(value: &crate::velesql::Value) -> Option<Self> {
         match value {

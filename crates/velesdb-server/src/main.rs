@@ -147,7 +147,7 @@ fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);
     axum::serve(listener, app).await?;

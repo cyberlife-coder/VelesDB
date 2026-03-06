@@ -1,5 +1,5 @@
 #[cfg(feature = "persistence")]
-use super::*;
+use super::{Collection, ColumnStore, Database, Error, Result};
 
 impl Database {
     pub(super) fn resolve_dml_value(

@@ -252,16 +252,11 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
-      - name: Check coverage threshold
+      - name: Generate coverage report and enforce threshold
         run: |
           cargo llvm-cov --features persistence,gpu,update-check --workspace \
             --exclude velesdb-python \
-            --fail-under-lines 82
-
-      - name: Generate coverage report
-        run: |
-          cargo llvm-cov --features persistence,gpu,update-check --workspace \
-            --exclude velesdb-python \
+            --fail-under-lines 82 \
             --lcov --output-path lcov.info
 
       - uses: codecov/codecov-action@015f24e6818733317a2da2edd6290ab26238649a # v4.5.0

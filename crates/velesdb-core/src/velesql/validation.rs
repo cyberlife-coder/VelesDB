@@ -199,11 +199,19 @@ pub struct QueryValidator;
 
 impl QueryValidator {
     /// Validates a query with default configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError` if the query fails semantic validation.
     pub fn validate(query: &Query) -> Result<(), ValidationError> {
         Self::validate_with_config(query, &ValidationConfig::default())
     }
 
     /// Validates a query with custom semantic configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError` if the query fails semantic validation.
     pub fn validate_with_config(
         query: &Query,
         config: &ValidationConfig,
@@ -225,6 +233,10 @@ impl QueryValidator {
     }
 
     /// Enforces complexity budgets and returns parse errors on overflow.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the query exceeds configured complexity limits.
     pub fn enforce_query_complexity(
         query: &Query,
         raw_query: &str,

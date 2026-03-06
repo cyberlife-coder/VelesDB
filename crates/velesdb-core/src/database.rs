@@ -194,6 +194,11 @@ impl Database {
     }
 
     /// Analyzes a collection, caches stats, and persists them to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection does not exist, analysis fails, or
+    /// stats cannot be serialized and written to disk.
     pub fn analyze_collection(
         &self,
         name: &str,
@@ -216,6 +221,11 @@ impl Database {
     }
 
     /// Returns cached statistics when available, loading from disk if present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the on-disk stats file exists but cannot be read or
+    /// deserialized.
     pub fn get_collection_stats(
         &self,
         name: &str,

@@ -36,6 +36,10 @@ impl GpuAccelerator {
     ///
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
+    // GPU initialization is inherently sequential: instance → adapter → device → queue →
+    // shader → pipeline. Splitting this into sub-functions would create artificial
+    // intermediate state without reducing cognitive complexity.
+    #[allow(clippy::too_many_lines)]
     pub fn new() -> Option<Self> {
         // Avoid probing GLES/EGL on headless Linux where some drivers may abort.
         let backends = Self::preferred_backends();

@@ -155,7 +155,7 @@ fn tokenize_like_pattern(pattern: &[u8]) -> Vec<Token> {
     out
 }
 
-/// LIKE matching using rolling DP (O(text_len * token_len) time, O(token_len) memory).
+/// LIKE matching using rolling DP (`O(text_len * token_len)` time, `O(token_len)` memory).
 fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
     let tokens = tokenize_like_pattern(pattern);
     let n = tokens.len();

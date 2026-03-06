@@ -1,4 +1,4 @@
-use super::*;
+use super::{Collection, HashSet, Result, SearchResult, MAX_LIMIT};
 
 impl Collection {
     pub(super) fn execute_indexed_metadata_query(

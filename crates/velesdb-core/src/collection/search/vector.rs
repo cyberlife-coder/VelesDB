@@ -33,7 +33,15 @@ impl Collection {
             .into_iter()
             .map(|(id, fallback_score)| {
                 let score = pq_cache.get(&id).map_or(fallback_score, |pq_vec| {
-                    rescore_with_metric(query, pq_vec, quantizer, metric)
+                    rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
+                        tracing::warn!(
+                            id,
+                            %err,
+                            "PQ reconstruct failed during rescore; \
+                             falling back to HNSW score"
+                        );
+                        fallback_score
+                    })
                 });
                 (id, score)
             })
@@ -56,13 +64,12 @@ fn rescore_with_metric(
     pq_vec: &PQVector,
     quantizer: &ProductQuantizer,
     metric: DistanceMetric,
-) -> f32 {
-    match metric {
-        DistanceMetric::Euclidean => distance_pq_l2(query, pq_vec, &quantizer.codebook),
-        _ => match quantizer.reconstruct(pq_vec) {
-            Ok(reconstructed) => metric.calculate(query, &reconstructed),
-            Err(_) => f32::MAX,
-        },
+) -> Result<f32> {
+    if metric == DistanceMetric::Euclidean {
+        Ok(distance_pq_l2(query, pq_vec, &quantizer.codebook))
+    } else {
+        let reconstructed = quantizer.reconstruct(pq_vec)?;
+        Ok(metric.calculate(query, &reconstructed))
     }
 }
 

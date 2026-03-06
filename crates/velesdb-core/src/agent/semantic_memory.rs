@@ -76,7 +76,7 @@ impl SemanticMemory {
         })
     }
 
-    /// Returns the name of the underlying VelesDB collection.
+    /// Returns the name of the underlying `VelesDB` collection.
     #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name

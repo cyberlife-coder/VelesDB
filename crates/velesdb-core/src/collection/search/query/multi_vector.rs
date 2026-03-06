@@ -41,29 +41,24 @@ impl Collection {
 
         // Named vector from payload JSON field
         let payload_storage = self.payload_storage.read();
-        let payload = match payload_storage.retrieve(point_id)? {
-            Some(p) => p,
-            None => return Ok(None),
+        let Some(payload) = payload_storage.retrieve(point_id)? else {
+            return Ok(None);
         };
 
         // Absent field → Ok(None): the point simply has no vector for this field.
         // This is normal for sparse multi-vector schemas and must not be treated as an error.
         // Reason: returning Err here caused all callers to silently skip ALL points when the
         // field name had a typo, making wrong queries return empty results with no error.
-        let value = match payload.get(field) {
-            Some(v) => v,
-            None => return Ok(None),
+        let Some(value) = payload.get(field) else {
+            return Ok(None);
         };
 
-        let array = match value.as_array() {
-            Some(a) => a,
-            None => {
-                // Field exists but is not an array — this IS a data error.
-                return Err(Error::Config(format!(
-                    "similarity() field '{}' is not a numeric array in payload.",
-                    field
-                )));
-            }
+        let Some(array) = value.as_array() else {
+            // Field exists but is not an array — this IS a data error.
+            return Err(Error::Config(format!(
+                "similarity() field '{}' is not a numeric array in payload.",
+                field
+            )));
         };
 
         #[allow(clippy::cast_possible_truncation)]

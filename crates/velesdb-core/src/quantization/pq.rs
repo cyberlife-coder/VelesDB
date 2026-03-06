@@ -74,6 +74,11 @@ impl ProductQuantizer {
         }
 
         let dimension = vectors[0].len();
+        if dimension == 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "vectors must have non-zero dimension".into(),
+            ));
+        }
         if !vectors.iter().all(|v| v.len() == dimension) {
             return Err(Error::InvalidQuantizerConfig(
                 "all vectors must share the same dimension".into(),
@@ -92,6 +97,7 @@ impl ProductQuantizer {
         }
 
         let subspace_dim = dimension / num_subspaces;
+
         let mut centroids = Vec::with_capacity(num_subspaces);
 
         for subspace in 0..num_subspaces {
@@ -261,9 +267,11 @@ fn kmeans_plusplus_init(samples: &[Vec<f32>], k: usize, rng: &mut impl Rng) -> V
     let mut min_dists = vec![f32::MAX; n];
 
     // Step 2: Pick remaining centroids proportional to D(x)^2.
-    for _ in 1..k {
-        // Update min distances with the most recently added centroid.
-        let last_centroid = centroids.last().expect("centroids non-empty");
+    for iter in 1..k {
+        // `centroids` is non-empty: we pushed the first centroid before this
+        // loop, and each iteration pushes exactly one more, so index `iter - 1`
+        // is always valid.
+        let last_centroid = &centroids[iter - 1];
         for (i, sample) in samples.iter().enumerate() {
             let dist = l2_squared(sample, last_centroid);
             if dist < min_dists[i] {
@@ -342,6 +350,11 @@ fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32
                 // Re-seed empty cluster deterministically.
                 new_centroids[cluster].clone_from(&samples[cluster % samples.len()]);
             } else {
+                // `counts[cluster]` is a cluster-member count bounded by
+                // `samples.len()`. In practice sub-vectors number in the
+                // thousands at most, well within the 24-bit f32 mantissa
+                // (exact for values ≤ 16_777_216), so precision loss is
+                // negligible for the centroid update.
                 #[allow(clippy::cast_precision_loss)]
                 let inv = 1.0_f32 / counts[cluster] as f32;
                 for value in new_centroids[cluster].iter_mut().take(dim) {
@@ -441,6 +454,20 @@ mod tests {
     }
 
     #[test]
+    fn train_zero_dimension_returns_error() {
+        // A vector with dimension 0 must be rejected before subspace arithmetic.
+        let vectors = vec![vec![]];
+        let result = ProductQuantizer::train(&vectors, 1, 1);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, Error::InvalidQuantizerConfig(_)));
+        assert!(
+            err.to_string().contains("non-zero dimension"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
     fn train_zero_subspaces_returns_error() {
         let vectors = vec![vec![1.0, 2.0]];
         let result = ProductQuantizer::train(&vectors, 0, 2);
@@ -531,9 +558,9 @@ mod tests {
 
         // Generate 100 random 8-dim vectors in distinct clusters.
         let mut samples = Vec::with_capacity(100);
-        for i in 0..100 {
-            let offset = (i / 25) as f32 * 10.0;
-            let v: Vec<f32> = (0..8).map(|d| offset + (d as f32) * 0.1).collect();
+        for i in 0_u8..100 {
+            let offset = f32::from(i / 25) * 10.0;
+            let v: Vec<f32> = (0_u8..8).map(|d| offset + f32::from(d) * 0.1).collect();
             samples.push(v);
         }
 
@@ -558,9 +585,9 @@ mod tests {
 
         // Generate 100 random 8-dim vectors with clear clusters.
         let mut samples = Vec::with_capacity(100);
-        for i in 0..100 {
-            let cluster = (i / 25) as f32 * 100.0;
-            let v: Vec<f32> = (0..8).map(|d| cluster + (d as f32) * 0.01).collect();
+        for i in 0_u8..100 {
+            let cluster = f32::from(i / 25) * 100.0;
+            let v: Vec<f32> = (0_u8..8).map(|d| cluster + f32::from(d) * 0.01).collect();
             samples.push(v);
         }
 

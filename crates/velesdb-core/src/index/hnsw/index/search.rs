@@ -124,7 +124,7 @@ impl HnswIndex {
 
         // If we're over budget, reduce rerank_k proportionally
         if ema > target {
-            let scaled = (rerank_k as u128).saturating_mul(target as u128) / (ema as u128);
+            let scaled = (rerank_k as u128).saturating_mul(u128::from(target)) / u128::from(ema);
             let adapted = usize::try_from(scaled).unwrap_or(usize::MAX);
             adapted.max(k) // Never go below k
         } else {
