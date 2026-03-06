@@ -1,7 +1,9 @@
 //! WHERE clause and condition parsing.
 
 use super::{extract_identifier, Rule};
+use crate::index::sparse::SparseVector;
 use crate::metrics::global_guardrails_metrics;
+use crate::velesql::ast::condition::{SparseVectorExpr, SparseVectorSearch};
 use crate::velesql::ast::{
     BetweenCondition, CompareOp, Comparison, Condition, FusionConfig, InCondition, IsNullCondition,
     LikeCondition, MatchCondition, SimilarityCondition, VectorExpr, VectorFusedSearch,
@@ -140,6 +142,7 @@ impl Parser {
             Rule::similarity_expr => Self::parse_similarity_expr(inner),
             Rule::graph_match_expr => Self::parse_graph_match_expr(inner),
             Rule::vector_fused_search => Self::parse_vector_fused_search(inner),
+            Rule::sparse_vector_search => Self::parse_sparse_vector_search(inner),
             Rule::vector_search => Self::parse_vector_search(inner),
             Rule::match_expr => Self::parse_match_expr(inner),
             Rule::in_expr => Self::parse_in_expr(inner),
@@ -227,6 +230,83 @@ impl Parser {
             vector.ok_or_else(|| ParseError::syntax(0, "", "Expected vector expression"))?;
 
         Ok(Condition::VectorSearch(VectorSearch { vector }))
+    }
+
+    /// Parses a sparse vector search: `vector SPARSE_NEAR sparse_value [USING 'index-name']`
+    pub(crate) fn parse_sparse_vector_search(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Condition, ParseError> {
+        let mut vector = None;
+        let mut index_name = None;
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::sparse_value => {
+                    vector = Some(Self::parse_sparse_value(inner)?);
+                }
+                Rule::string => {
+                    // USING clause: string value is the index name
+                    index_name = Some(inner.as_str().trim_matches('\'').to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let vector =
+            vector.ok_or_else(|| ParseError::syntax(0, "", "Expected sparse vector expression"))?;
+
+        Ok(Condition::SparseVectorSearch(SparseVectorSearch {
+            vector,
+            index_name,
+        }))
+    }
+
+    /// Parses a sparse value: either a sparse literal `{12: 0.8, 45: 0.3}` or a parameter `$sv`.
+    fn parse_sparse_value(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<SparseVectorExpr, ParseError> {
+        let inner = pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected sparse vector expression"))?;
+
+        match inner.as_rule() {
+            Rule::sparse_literal => {
+                let mut pairs = Vec::new();
+                for entry in inner.into_inner() {
+                    if entry.as_rule() == Rule::sparse_entry {
+                        let mut entry_inner = entry.into_inner();
+                        let idx = entry_inner
+                            .next()
+                            .ok_or_else(|| {
+                                ParseError::syntax(0, "", "Expected sparse entry index")
+                            })?
+                            .as_str()
+                            .parse::<u32>()
+                            .map_err(|_| ParseError::syntax(0, "", "Invalid sparse entry index"))?;
+                        let val = entry_inner
+                            .next()
+                            .ok_or_else(|| {
+                                ParseError::syntax(0, "", "Expected sparse entry value")
+                            })?
+                            .as_str()
+                            .parse::<f32>()
+                            .map_err(|_| ParseError::syntax(0, "", "Invalid sparse entry value"))?;
+                        pairs.push((idx, val));
+                    }
+                }
+                Ok(SparseVectorExpr::Literal(SparseVector::new(pairs)))
+            }
+            Rule::parameter => {
+                let name = inner.as_str().trim_start_matches('$').to_string();
+                Ok(SparseVectorExpr::Parameter(name))
+            }
+            _ => Err(ParseError::syntax(
+                0,
+                inner.as_str(),
+                "Expected sparse literal or parameter",
+            )),
+        }
     }
 
     pub(crate) fn parse_vector_fused_search(

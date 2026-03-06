@@ -37,11 +37,13 @@ pub fn sparse_search(
         return Vec::new();
     }
 
-    // Decide search strategy based on coverage heuristic
+    // Decide search strategy based on coverage heuristic.
+    // Use `posting_count` (no Vec allocation) rather than materialising
+    // `get_all_postings` and immediately discarding the result.
     let doc_count = index.doc_count();
     let mut total_postings: usize = 0;
     for &term_id in &query.indices {
-        total_postings += index.get_all_postings(term_id).len();
+        total_postings += index.posting_count(term_id);
     }
 
     let threshold = FULL_SCAN_THRESHOLD * doc_count as f32 * query.nnz() as f32;
@@ -516,5 +518,45 @@ mod tests {
         assert_eq!(results[0].doc_id, 2); // 8.0
         assert_eq!(results[1].doc_id, 1); // 7.0
         assert_eq!(results[2].doc_id, 0); // 3.8
+    }
+
+    // --- Negative weight correctness ---
+
+    /// Verify that `MaxScore` produces the same top-k as brute-force when
+    /// document vectors contain negative weights (e.g. SPLADE with negatives).
+    #[test]
+    fn test_maxscore_negative_weights() {
+        let index = SparseInvertedIndex::new();
+        // doc 0: mixed positive and negative weights
+        index.insert(0, &make_vector(vec![(1, 2.0), (2, -1.0), (3, 0.5)]));
+        // doc 1: all positive
+        index.insert(1, &make_vector(vec![(1, 1.0), (2, 3.0)]));
+        // doc 2: benefits from negative query term
+        index.insert(2, &make_vector(vec![(2, -2.0), (3, 4.0)]));
+        // doc 3: single negative + positive
+        index.insert(3, &make_vector(vec![(1, -0.5), (3, 1.0)]));
+
+        // query: term 1 positive, term 2 negative, term 3 positive
+        let query = make_vector(vec![(1, 1.0), (2, -1.0), (3, 1.0)]);
+
+        // Expected inner products:
+        // doc 0: 2*1 + (-1)*(-1) + 0.5*1 = 3.5
+        // doc 1: 1*1 + 3*(-1) = -2.0
+        // doc 2: (-2)*(-1) + 4*1 = 6.0
+        // doc 3: (-0.5)*1 + 1*1 = 0.5
+
+        let bf = brute_force_search(&index, &query, 4);
+        let ms = sparse_search(&index, &query, 4);
+
+        let bf_ids: Vec<u64> = bf.iter().map(|r| r.doc_id).collect();
+        let ms_ids: Vec<u64> = ms.iter().map(|r| r.doc_id).collect();
+        assert_eq!(
+            bf_ids, ms_ids,
+            "MaxScore must match brute-force with mixed-sign weights"
+        );
+
+        // Spot-check top result
+        assert_eq!(ms[0].doc_id, 2, "doc 2 should score highest (6.0)");
+        assert!((ms[0].score - 6.0).abs() < 1e-5, "score={}", ms[0].score);
     }
 }

@@ -232,7 +232,9 @@ mod tests {
 
     #[test]
     fn test_posting_entry_size() {
-        assert!(std::mem::size_of::<PostingEntry>() <= 16);
+        // PostingEntry is #[repr(C)] with u64 (8 bytes) + f32 (4 bytes) + 4 bytes alignment
+        // padding = 16 bytes total. The on-disk packed layout uses 12 bytes (POSTING_DISK_SIZE).
+        assert_eq!(std::mem::size_of::<PostingEntry>(), 16);
     }
 
     #[test]

@@ -30,10 +30,7 @@ impl MutableSegment {
     }
 
     fn insert(&mut self, point_id: u64, vector: &SparseVector) {
-        for (idx, (&term_id, &weight)) in
-            vector.indices.iter().zip(vector.values.iter()).enumerate()
-        {
-            let _ = idx; // suppress unused warning
+        for (&term_id, &weight) in vector.indices.iter().zip(vector.values.iter()) {
             let entries = self.postings.entry(term_id).or_default();
 
             let entry = PostingEntry {
@@ -57,24 +54,42 @@ impl MutableSegment {
         self.doc_count += 1;
     }
 
-    fn delete(&mut self, point_id: u64) {
-        let mut empty_terms = Vec::new();
+    /// Removes all posting entries for `point_id`.
+    ///
+    /// Returns `true` if the point had at least one entry in this segment
+    /// (i.e. was actually present and removed), `false` if it was not found.
+    /// Also recalculates `max_weights` only for the terms that were modified.
+    fn delete(&mut self, point_id: u64) -> bool {
+        let mut any_removed = false;
+        // Terms that still have remaining entries after removal — need max_weight
+        // recalculation.
+        let mut recalc_terms: Vec<u32> = Vec::new();
+        let mut empty_terms: Vec<u32> = Vec::new();
+
         for (&term_id, entries) in &mut self.postings {
+            let before = entries.len();
             entries.retain(|e| e.doc_id != point_id);
-            if entries.is_empty() {
-                empty_terms.push(term_id);
+            if entries.len() < before {
+                any_removed = true;
+                if entries.is_empty() {
+                    empty_terms.push(term_id);
+                } else {
+                    recalc_terms.push(term_id);
+                }
             }
         }
 
-        // Remove empty posting lists
+        // Remove posting lists that became empty.
         for term_id in &empty_terms {
             self.postings.remove(term_id);
             self.max_weights.remove(term_id);
         }
 
-        // Recalculate max_weights for terms that had entries removed
-        for (&term_id, entries) in &self.postings {
-            if !entries.is_empty() {
+        // Recalculate max_weights ONLY for terms that lost an entry but still
+        // have remaining postings. This is O(postings for modified terms only),
+        // not O(total_postings).
+        for term_id in recalc_terms {
+            if let Some(entries) = self.postings.get(&term_id) {
                 let max_w = entries
                     .iter()
                     .map(|e| e.weight.abs())
@@ -82,6 +97,8 @@ impl MutableSegment {
                 self.max_weights.insert(term_id, max_w);
             }
         }
+
+        any_removed
     }
 }
 
@@ -106,6 +123,18 @@ impl FrozenSegment {
             tombstones: FxHashSet::default(),
             doc_count,
         }
+    }
+
+    /// Returns `true` if `point_id` has a live (non-tombstoned) entry in this segment.
+    fn contains_live(&self, point_id: u64) -> bool {
+        if self.tombstones.contains(&point_id) {
+            return false;
+        }
+        self.postings.values().any(|(entries, _)| {
+            entries
+                .binary_search_by_key(&point_id, |e| e.doc_id)
+                .is_ok()
+        })
     }
 }
 
@@ -180,25 +209,64 @@ impl SparseInvertedIndex {
 
     /// Deletes a point from the index.
     ///
-    /// Removes entries from the mutable segment and adds the point ID
-    /// to the tombstone set of all frozen segments.
+    /// Removes entries from the mutable segment and adds a tombstone to frozen
+    /// segments that actually contain the point as a live entry.
+    /// `doc_count` is decremented **only** if the point was actually present,
+    /// preventing underflow on double-delete or delete of a non-existent ID.
     pub fn delete(&self, point_id: u64) {
-        // Lock ordering: mutable before frozen
+        // Lock ordering: mutable before frozen (position 9 in canonical order).
         let mut seg = self.mutable.write();
-        seg.delete(point_id);
+        let was_in_mutable = seg.delete(point_id);
 
         let mut frozen_vec = self.frozen.write();
+        let mut was_in_frozen = false;
         for frozen_seg in frozen_vec.iter_mut() {
-            frozen_seg.tombstones.insert(point_id);
+            // Only insert a tombstone — and only count as "found" — if the
+            // point was live in this segment (not already tombstoned).
+            if frozen_seg.contains_live(point_id) {
+                frozen_seg.tombstones.insert(point_id);
+                was_in_frozen = true;
+            }
         }
 
-        self.doc_count.fetch_sub(1, Ordering::Relaxed);
+        if was_in_mutable || was_in_frozen {
+            self.doc_count.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 
     /// Returns the total number of documents across all segments.
     #[must_use]
     pub fn doc_count(&self) -> u64 {
         self.doc_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of live posting entries for a term without materialising
+    /// the full `Vec`. Use this in coverage heuristics to avoid a throwaway
+    /// allocation; call `get_all_postings` only when the entries themselves are needed.
+    #[must_use]
+    pub fn posting_count(&self, term_id: u32) -> usize {
+        let mut count: usize = 0;
+
+        {
+            let frozen_vec = self.frozen.read();
+            for frozen_seg in frozen_vec.iter() {
+                if let Some((entries, _)) = frozen_seg.postings.get(&term_id) {
+                    count += entries
+                        .iter()
+                        .filter(|e| !frozen_seg.tombstones.contains(&e.doc_id))
+                        .count();
+                }
+            }
+        }
+
+        {
+            let seg = self.mutable.read();
+            if let Some(entries) = seg.postings.get(&term_id) {
+                count += entries.len();
+            }
+        }
+
+        count
     }
 
     /// Returns all posting entries for a term across all segments,
@@ -315,11 +383,29 @@ impl SparseInvertedIndex {
     ///
     /// Filters tombstoned entries and recalculates max weights.
     /// Returns `(term_id -> (postings, max_weight))`.
+    ///
+    /// ## Last-write-wins semantics
+    ///
+    /// The mutable segment holds the newest writes; frozen segments are older.
+    /// To preserve newest-wins when the same `doc_id` appears in both, mutable
+    /// entries are inserted **first** into the per-term buffer. After a stable
+    /// sort by `doc_id`, each mutable entry precedes any same-id frozen entry,
+    /// so `dedup_by_key` (which retains the first occurrence) keeps the mutable
+    /// (newer) weight.
     #[must_use]
     pub fn get_merged_postings_for_compaction(&self) -> FxHashMap<u32, (Vec<PostingEntry>, f32)> {
         let mut merged: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
 
-        // Collect from frozen segments, filtering tombstones
+        // Insert mutable entries FIRST — they are the newest writes.
+        {
+            let seg = self.mutable.read();
+            for (&term_id, entries) in &seg.postings {
+                let dest = merged.entry(term_id).or_default();
+                dest.extend_from_slice(entries);
+            }
+        }
+
+        // Append frozen entries (older), filtering tombstones.
         {
             let frozen_vec = self.frozen.read();
             for frozen_seg in frozen_vec.iter() {
@@ -334,23 +420,15 @@ impl SparseInvertedIndex {
             }
         }
 
-        // Collect from mutable segment
-        {
-            let seg = self.mutable.read();
-            for (&term_id, entries) in &seg.postings {
-                let dest = merged.entry(term_id).or_default();
-                dest.extend_from_slice(entries);
-            }
-        }
-
-        // Deduplicate by doc_id (last-write-wins), sort, and compute max_weights
+        // Sort by doc_id then dedup, keeping the first occurrence per doc_id.
+        // Because mutable entries were inserted before frozen entries, the first
+        // occurrence of any doc_id that appears in both segments is the mutable
+        // (newer) one — last-write-wins is correctly enforced.
         let mut result: FxHashMap<u32, (Vec<PostingEntry>, f32)> = FxHashMap::default();
         for (term_id, mut entries) in merged {
-            // Sort by doc_id; deduplicate keeping last occurrence
             entries.sort_by_key(|e| e.doc_id);
             entries.dedup_by_key(|e| e.doc_id);
 
-            // Filter empty lists
             if entries.is_empty() {
                 continue;
             }
@@ -551,5 +629,87 @@ mod tests {
         assert_eq!(index.term_count(), 0);
         assert!(index.get_all_postings(1).is_empty());
         assert!((index.get_global_max_weight(1)).abs() < f32::EPSILON);
+    }
+
+    // --- Bug-fix regression tests ---
+
+    #[test]
+    fn test_double_delete_no_underflow() {
+        let index = SparseInvertedIndex::new();
+        index.insert(42, &make_vector(vec![(1, 1.0)]));
+        assert_eq!(index.doc_count(), 1);
+
+        index.delete(42);
+        assert_eq!(index.doc_count(), 0);
+
+        // Second delete of the same point must not wrap to u64::MAX.
+        index.delete(42);
+        assert_eq!(
+            index.doc_count(),
+            0,
+            "doc_count must not underflow on double-delete"
+        );
+    }
+
+    #[test]
+    fn test_delete_nonexistent_no_underflow() {
+        let index = SparseInvertedIndex::new();
+        assert_eq!(index.doc_count(), 0);
+
+        // Deleting a point that was never inserted must leave count at 0.
+        index.delete(999);
+        assert_eq!(
+            index.doc_count(),
+            0,
+            "doc_count must not underflow on delete of non-existent id"
+        );
+    }
+
+    #[test]
+    fn test_dedup_last_write_wins_within_mutable() {
+        // Insert point 1 twice; second insert (upsert) updates in-place via
+        // binary_search. Compaction must see only the newer weight.
+        let index = SparseInvertedIndex::new();
+        index.insert(1, &make_vector(vec![(5, 0.1)]));
+        index.insert(1, &make_vector(vec![(5, 9.9)]));
+
+        let compacted = index.get_merged_postings_for_compaction();
+        let (entries, _) = compacted.get(&5).expect("term 5 must be present");
+        let entry = entries
+            .iter()
+            .find(|e| e.doc_id == 1)
+            .expect("doc 1 must be present");
+        assert!(
+            (entry.weight - 9.9).abs() < 1e-5,
+            "compaction must keep newest weight; got {}",
+            entry.weight
+        );
+    }
+
+    #[test]
+    fn test_dedup_last_write_wins_across_segments() {
+        // Force doc 0 into a frozen segment, then re-insert it with a different
+        // weight in the mutable segment. Compaction must pick the mutable weight.
+        let index = SparseInvertedIndex::new();
+
+        for i in 0..FREEZE_THRESHOLD {
+            index.insert(i as u64, &make_vector(vec![(7, 1.0)]));
+        }
+        assert_eq!(index.frozen_count(), 1, "segment must have frozen");
+
+        // Re-insert doc 0 into the mutable segment with an updated weight.
+        index.insert(0, &make_vector(vec![(7, 5.5)]));
+
+        let compacted = index.get_merged_postings_for_compaction();
+        let (entries, _) = compacted.get(&7).expect("term 7 must be present");
+        let entry = entries
+            .iter()
+            .find(|e| e.doc_id == 0)
+            .expect("doc 0 must be present");
+        assert!(
+            (entry.weight - 5.5).abs() < 1e-5,
+            "mutable (newer) weight 5.5 must win over frozen weight 1.0; got {}",
+            entry.weight
+        );
     }
 }

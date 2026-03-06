@@ -157,6 +157,8 @@ pub use ast::{
     SetOperator,
     SimilarityCondition,
     SimilarityOrderBy,
+    SparseVectorExpr,
+    SparseVectorSearch,
     Subquery,
     TemporalExpr,
     // TRAIN statement

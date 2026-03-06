@@ -105,6 +105,36 @@
       "id": "P020",
       "query": "TRAIN QUANTIZER ON my_collection",
       "should_parse": false
+    },
+    {
+      "id": "P021",
+      "query": "SELECT * FROM t WHERE vector SPARSE_NEAR $sv LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P022",
+      "query": "SELECT * FROM t WHERE vector SPARSE_NEAR {1: 0.5, 2: 0.3} LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P023",
+      "query": "SELECT * FROM t WHERE vector SPARSE_NEAR $sv USING 'idx' LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P024",
+      "query": "SELECT * FROM t WHERE vector NEAR $v AND vector SPARSE_NEAR $sv LIMIT 5",
+      "should_parse": true
+    },
+    {
+      "id": "P025",
+      "query": "SELECT * FROM t WHERE vector SPARSE_NEAR LIMIT 5",
+      "should_parse": false
+    },
+    {
+      "id": "P026",
+      "query": "SELECT * FROM t WHERE vector SPARSE_NEAR {} LIMIT 5",
+      "should_parse": false
     }
   ]
 }

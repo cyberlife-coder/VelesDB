@@ -3,7 +3,7 @@
 //! This module defines the data structures representing parsed VelesQL queries.
 
 mod aggregation;
-mod condition;
+pub(crate) mod condition;
 mod dml;
 mod fusion;
 mod join;
@@ -21,8 +21,8 @@ pub use aggregation::{
 };
 pub use condition::{
     BetweenCondition, CompareOp, Comparison, Condition, GraphMatchPredicate, InCondition,
-    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, VectorFusedSearch,
-    VectorSearch,
+    IsNullCondition, LikeCondition, MatchCondition, SimilarityCondition, SparseVectorExpr,
+    SparseVectorSearch, VectorFusedSearch, VectorSearch,
 };
 pub use dml::{DmlStatement, InsertStatement, UpdateAssignment, UpdateStatement};
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};

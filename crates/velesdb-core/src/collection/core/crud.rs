@@ -9,6 +9,8 @@ use crate::point::Point;
 use crate::quantization::StorageMode;
 use crate::storage::{PayloadStorage, VectorStorage};
 
+use std::collections::BTreeMap;
+
 impl Collection {
     /// Inserts or updates points in the collection.
     ///
@@ -46,6 +48,11 @@ impl Collection {
                 });
             }
         }
+
+        // Buffer sparse data for batch insert after storage locks are released.
+        // LOCK ORDER: sparse_indexes(9) acquired AFTER vector_storage(2) + payload_storage(3).
+        let mut sparse_batch: Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)> =
+            Vec::new();
 
         let mut vector_storage = self.vector_storage.write();
         let mut payload_storage = self.payload_storage.write();
@@ -101,6 +108,13 @@ impl Collection {
             } else {
                 self.text_index.remove_document(point.id);
             }
+
+            // Buffer sparse vectors for batch insert after releasing storage locks.
+            if let Some(sv_map) = point.sparse_vectors {
+                if !sv_map.is_empty() {
+                    sparse_batch.push((point.id, sv_map));
+                }
+            }
         }
 
         // LOCK ORDER: flush while vector_storage(2) + payload_storage(3) still held,
@@ -117,6 +131,32 @@ impl Collection {
         drop(config);
 
         self.index.save(&self.path).map_err(Error::Io)?;
+
+        // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
+        if !sparse_batch.is_empty() {
+            let mut indexes = self.sparse_indexes.write();
+            for (point_id, sv_map) in &sparse_batch {
+                for (name, sv) in sv_map {
+                    let idx = indexes.entry(name.clone()).or_default();
+                    idx.insert(*point_id, sv);
+                }
+            }
+            drop(indexes);
+
+            // Append sparse WAL entries for persistence (after index insert).
+            #[cfg(feature = "persistence")]
+            {
+                for (point_id, sv_map) in &sparse_batch {
+                    for (name, sv) in sv_map {
+                        let wal_path =
+                            crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                        crate::index::sparse::persistence::wal_append_upsert(
+                            &wal_path, *point_id, sv,
+                        )?;
+                    }
+                }
+            }
+        }
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
         *self.cached_stats.lock() = None;
@@ -366,6 +406,31 @@ impl Collection {
             let mut config = self.config.write();
             config.point_count = point_count;
             drop(config);
+
+            // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
+            {
+                let indexes = self.sparse_indexes.read();
+                for idx in indexes.values() {
+                    for &id in ids {
+                        idx.delete(id);
+                    }
+                }
+            }
+
+            // Append sparse WAL delete entries for persistence.
+            #[cfg(feature = "persistence")]
+            {
+                let indexes = self.sparse_indexes.read();
+                if !indexes.is_empty() {
+                    for (name, _) in indexes.iter() {
+                        let wal_path =
+                            crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                        for &id in ids {
+                            crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
+                        }
+                    }
+                }
+            }
         }
 
         // Invalidate stats cache so the next get_stats() recomputes fresh data.

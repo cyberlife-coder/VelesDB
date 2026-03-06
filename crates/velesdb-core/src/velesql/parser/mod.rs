@@ -16,6 +16,8 @@ mod match_query_tests;
 #[cfg(test)]
 mod robustness_tests;
 #[cfg(test)]
+mod sparse_search_tests;
+#[cfg(test)]
 mod subquery_tests;
 #[cfg(test)]
 mod temporal_tests;
