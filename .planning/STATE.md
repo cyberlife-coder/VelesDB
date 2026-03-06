@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 03-03-PLAN.md (Phase 03 complete)
-last_updated: "2026-03-06T15:16:40Z"
-last_activity: 2026-03-06 — Completed plan 03-03 (TRAIN QUANTIZER executor + recall benchmark)
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-06T17:43:43Z"
+last_activity: 2026-03-06 — Completed plan 04-01 (Sparse vector core types and inverted index)
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 12
+  completed_plans: 12
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 3 — PQ Integration
+**Current focus:** Phase 4 — Sparse Vector Engine
 
 ## Current Position
 
-Phase: 3 of 10 (PQ Integration) -- COMPLETE
-Plan: 3 of 3 in current phase (all completed)
-Status: Phase 03 complete, ready for Phase 04 (Sparse Engine)
-Last activity: 2026-03-06 — Completed plan 03-03 (TRAIN QUANTIZER executor + recall benchmark)
+Phase: 4 of 10 (Sparse Vector Engine)
+Plan: 1 of ? in current phase
+Status: Completed plan 04-01 (core types + inverted index)
+Last activity: 2026-03-06 — Completed plan 04-01 (Sparse vector core types and inverted index)
 
-Progress: [██████████] 100% (8 prior + 3 phase 3)
+Progress: [████████████] 100% (11 prior + 1 phase 4)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 11
+- Total plans completed: 12
 - Average duration: 19 min
-- Total execution time: 3.5 hours
+- Total execution time: 3.8 hours
 
 **By Phase:**
 
@@ -46,10 +46,11 @@ Progress: [██████████] 100% (8 prior + 3 phase 3)
 | 01-foundation-fixes | 2/4 | 32 min | 16 min |
 | 02-pq-core-engine | 4/4 | 93 min | 23 min |
 | 03-pq-integration | 3/3 | 55 min | 18 min |
+| 04-sparse-vector-engine | 1/? | 20 min | 20 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-04 (21 min), 03-01 (19 min), 03-02 (19 min), 03-03 (17 min)
-- Trend: Improving ~18-19 min per plan
+- Last 5 plans: 03-01 (19 min), 03-02 (19 min), 03-03 (17 min), 04-01 (20 min)
+- Trend: Stable ~18-20 min per plan
 
 *Updated after each plan completion*
 
@@ -85,6 +86,9 @@ Recent decisions affecting current work:
 - [03-03]: pub(crate) accessors on Collection (data_path, config_write, pq_quantizer) to avoid widening field visibility
 - [03-03]: PQ recall threshold 20% for auto-trained PQ on synthetic data (HNSW only reaches 87.6%)
 - [03-03]: RaBitQ stores index to disk but does not use pq_quantizer Arc slot
+- [04-01]: SparseInvertedIndex fully implemented in Task 1 to avoid clippy dead_code errors from stub
+- [04-01]: Point struct literal updates across 19 files for sparse_vector: None (no Default/non_exhaustive workaround)
+- [04-01]: FrozenSegment.doc_count kept with allow(dead_code) for future persistence layer
 
 ### Pending Todos
 
@@ -98,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T15:16:40Z
-Stopped at: Completed 03-03-PLAN.md (Phase 03 complete)
-Resume file: Next phase (04)
+Last session: 2026-03-06T17:43:43Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: .planning/phases/04-sparse-vector-engine/04-01-SUMMARY.md

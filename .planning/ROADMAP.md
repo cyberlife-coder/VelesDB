@@ -82,7 +82,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — SparseVector types + SparseInvertedIndex segment isolation + Point integration (SPARSE-01)
+- [x] 04-01-PLAN.md — SparseVector types + SparseInvertedIndex segment isolation + Point integration (SPARSE-01) (completed 2026-03-06)
 - [ ] 04-02-PLAN.md — MaxScore DAAT search + linear scan fallback + Criterion benchmark (SPARSE-03)
 - [ ] 04-03-PLAN.md — WAL persistence + compaction + Collection/Database integration (SPARSE-02)
 
@@ -162,7 +162,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 1. Quality Baseline & Security | 3/4 | In Progress|  |
 | 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
 | 3. PQ Integration | 2/3 | In Progress|  |
-| 4. Sparse Vector Engine | 0/3 | Not started | - |
+| 4. Sparse Vector Engine | 1/3 | In Progress | - |
 | 5. Sparse Integration | 0/TBD | Not started | - |
 | 6. Query Plan Cache | 0/TBD | Not started | - |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
