@@ -30,7 +30,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 ### Sparse Vectors — EPIC-062 (SPARSE)
 
 - [x] **SPARSE-01**: `WeightedPostingList` — inverted index avec poids f32 par terme, SPLADE-v2/BM42-compatible (format `{term_id: u32 -> weight: f32}`)
-- [ ] **SPARSE-02**: Index sparse persiste sur disque — nouveau fichier `sparse.idx` dans le repertoire collection, survit aux redemarrages
+- [x] **SPARSE-02**: Index sparse persiste sur disque — nouveau fichier `sparse.idx` dans le repertoire collection, survit aux redemarrages
 - [x] **SPARSE-03**: Recherche sparse ANN — inner product sur posting lists, support WAND ou scan lineaire selon densite
 - [ ] **SPARSE-04**: Hybrid dense+sparse via RRF existant — `fusion/rrf_merge()` non modifie, fonctionne out-of-the-box
 - [ ] **SPARSE-05**: Extension grammaire VelesQL — keyword `SPARSE` et clause `vector SPARSE_NEAR $sv` dans `velesql.pest`
@@ -131,7 +131,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | PQ-06 | Phase 3: PQ Integration | Complete |
 | PQ-07 | Phase 3: PQ Integration | Complete |
 | SPARSE-01 | Phase 4: Sparse Vector Engine | Complete |
-| SPARSE-02 | Phase 4: Sparse Vector Engine | Pending |
+| SPARSE-02 | Phase 4: Sparse Vector Engine | Complete |
 | SPARSE-03 | Phase 4: Sparse Vector Engine | Complete |
 | SPARSE-04 | Phase 5: Sparse Integration | Pending |
 | SPARSE-05 | Phase 5: Sparse Integration | Pending |

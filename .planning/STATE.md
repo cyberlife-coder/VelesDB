@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-06T18:10:30.541Z"
-last_activity: 2026-03-06 — Completed plan 04-01 (Sparse vector core types and inverted index)
+status: in-progress
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-03-06T18:11:00Z"
+last_activity: 2026-03-06 — Completed plan 04-03 (Sparse index persistence and collection integration)
 progress:
   total_phases: 10
   completed_phases: 3
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
   percent: 100
 ---
 
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 4 of 10 (Sparse Vector Engine)
-Plan: 1 of ? in current phase
-Status: Completed plan 04-01 (core types + inverted index)
-Last activity: 2026-03-06 — Completed plan 04-01 (Sparse vector core types and inverted index)
+Plan: 3 of ? in current phase
+Status: Completed plan 04-03 (sparse index persistence + collection integration)
+Last activity: 2026-03-06 — Completed plan 04-03 (Sparse index persistence and collection integration)
 
-Progress: [████████████] 100% (11 prior + 1 phase 4)
+Progress: [████████████] 100% (11 prior + 3 phase 4)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
+- Total plans completed: 14
 - Average duration: 19 min
-- Total execution time: 3.8 hours
+- Total execution time: 4.5 hours
 
 **By Phase:**
 
@@ -46,14 +46,18 @@ Progress: [████████████] 100% (11 prior + 1 phase 4)
 | 01-foundation-fixes | 2/4 | 32 min | 16 min |
 | 02-pq-core-engine | 4/4 | 93 min | 23 min |
 | 03-pq-integration | 3/3 | 55 min | 18 min |
-| 04-sparse-vector-engine | 1/? | 20 min | 20 min |
+| 04-sparse-vector-engine | 3/? | 66 min | 22 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-01 (19 min), 03-02 (19 min), 03-03 (17 min), 04-01 (20 min)
-- Trend: Stable ~18-20 min per plan
+- Last 5 plans: 03-02 (19 min), 03-03 (17 min), 04-01 (20 min), 04-02 (22 min), 04-03 (24 min)
+- Trend: Stable ~20-24 min per plan
 
 *Updated after each plan completion*
-| Phase 04 P02 | 22 | 2 tasks | 5 files |
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 04 P02 | 22 min | 2 tasks | 5 files |
+| Phase 04 P03 | 24 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -90,6 +94,10 @@ Recent decisions affecting current work:
 - [04-01]: SparseInvertedIndex fully implemented in Task 1 to avoid clippy dead_code errors from stub
 - [04-01]: Point struct literal updates across 19 files for sparse_vector: None (no Default/non_exhaustive workaround)
 - [04-01]: FrozenSegment.doc_count kept with allow(dead_code) for future persistence layer
+- [04-03]: Packed 12-byte PostingEntry on disk (no repr(C) padding) for compact storage
+- [04-03]: WAL-only load path supported: sparse.wal without sparse.meta replays into fresh index
+- [04-03]: Compaction threshold 10K replayed entries for auto-compaction on load
+- [04-03]: sparse_index uses Option<SparseInvertedIndex> for lazy init (populated on first sparse upsert or disk load)
 - [Phase 04]: MaxScore uses sorted-by-contribution term ordering with prefix-sum upper bounds for early termination
 - [Phase 04]: Linear scan threshold at 30% coverage (total_postings > 0.3 * doc_count * query_nnz)
 - [Phase 04]: Dense array accumulator up to 10M doc IDs, FxHashMap fallback above
@@ -106,6 +114,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T18:10:30.537Z
-Stopped at: Completed 04-02-PLAN.md
-Resume file: None
+Last session: 2026-03-06T18:11:00Z
+Stopped at: Completed 04-03-PLAN.md
+Resume file: .planning/phases/04-sparse-vector-engine/04-03-SUMMARY.md
