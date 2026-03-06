@@ -319,3 +319,7 @@ harness = false
 [[bench]]
 name = "pq_recall_benchmark"
 harness = false
+
+[[bench]]
+name = "sparse_benchmark"
+harness = false
