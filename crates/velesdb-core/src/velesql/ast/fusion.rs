@@ -15,12 +15,14 @@ pub enum FusionStrategyType {
     Weighted,
     /// Take maximum score from either source.
     Maximum,
+    /// Reciprocal Sparse Fusion for dense + sparse hybrid search.
+    Rsf,
 }
 
 /// USING FUSION clause for hybrid search (EPIC-040 US-005).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FusionClause {
-    /// Fusion strategy (rrf, weighted, maximum).
+    /// Fusion strategy (rrf, weighted, maximum, rsf).
     pub strategy: FusionStrategyType,
     /// RRF k parameter (default 60).
     pub k: Option<u32>,
@@ -28,6 +30,12 @@ pub struct FusionClause {
     pub vector_weight: Option<f64>,
     /// Graph weight for weighted fusion (0.0-1.0).
     pub graph_weight: Option<f64>,
+    /// Dense vector weight for RSF fusion (0.0-1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dense_weight: Option<f32>,
+    /// Sparse vector weight for RSF fusion (0.0-1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparse_weight: Option<f32>,
 }
 
 impl Default for FusionClause {
@@ -37,6 +45,8 @@ impl Default for FusionClause {
             k: Some(60),
             vector_weight: None,
             graph_weight: None,
+            dense_weight: None,
+            sparse_weight: None,
         }
     }
 }

@@ -170,6 +170,7 @@ primary_expr = {
     graph_match_expr |
     similarity_expr |
     vector_fused_search |
+    sparse_vector_search |
     vector_search |
     match_expr |
     in_expr |
@@ -194,10 +195,20 @@ similarity_expr = {
 numeric_threshold = { float | integer }
 similarity_field = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | ".")* }
 
+// Sparse vector search: vector SPARSE_NEAR sparse_value [USING 'index-name']
+sparse_vector_search = {
+    ^"vector" ~ ^"SPARSE_NEAR" ~ sparse_value ~ (^"USING" ~ string)?
+}
+
+// Sparse value: inline literal {12: 0.8, 45: 0.3} or bind parameter $sv
+sparse_value = { sparse_literal | parameter }
+sparse_literal = { "{" ~ sparse_entry ~ ("," ~ sparse_entry)* ~ "}" }
+sparse_entry = { integer ~ ":" ~ float }
+
 // Vector search: vector NEAR vector_value
 // Note: Distance metric is defined at collection creation, not per-query
-vector_search = { 
-    ^"vector" ~ ^"NEAR" ~ vector_value 
+vector_search = {
+    ^"vector" ~ ^"NEAR" ~ vector_value
 }
 
 // Multi-vector fusion search: vector NEAR_FUSED [v1, v2, ...] USING FUSION 'strategy' (params)

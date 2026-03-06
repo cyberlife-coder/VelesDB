@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::fusion::FusionConfig;
 use super::values::{Value, VectorExpr};
+use crate::index::sparse::SparseVector;
 use crate::velesql::GraphPattern;
 
 /// A condition in a WHERE clause.
@@ -16,6 +17,8 @@ pub enum Condition {
     VectorSearch(VectorSearch),
     /// Multi-vector fused search: `vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf'`
     VectorFusedSearch(VectorFusedSearch),
+    /// Sparse vector search: `vector SPARSE_NEAR $sv [USING 'index-name']`
+    SparseVectorSearch(SparseVectorSearch),
     /// Similarity function: `similarity(field, $vector) > threshold`
     Similarity(SimilarityCondition),
     /// Comparison: column op value
@@ -63,6 +66,24 @@ pub struct VectorFusedSearch {
     pub vectors: Vec<VectorExpr>,
     /// Fusion strategy configuration.
     pub fusion: FusionConfig,
+}
+
+/// Sparse vector search condition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SparseVectorSearch {
+    /// Sparse vector expression (literal or parameter).
+    pub vector: SparseVectorExpr,
+    /// Optional named sparse index (from USING clause).
+    pub index_name: Option<String>,
+}
+
+/// Expression representing a sparse vector value in a query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SparseVectorExpr {
+    /// Inline sparse literal: `{12: 0.8, 45: 0.3}`
+    Literal(SparseVector),
+    /// Bind parameter: `$sv`
+    Parameter(String),
 }
 
 /// Similarity function condition: `similarity(field, vector) op threshold`

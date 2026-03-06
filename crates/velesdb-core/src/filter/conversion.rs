@@ -98,6 +98,10 @@ impl From<crate::velesql::Condition> for Condition {
                 // Fused vector search is handled separately by the query engine
                 Self::And { conditions: vec![] } // Identity for AND
             }
+            crate::velesql::Condition::SparseVectorSearch(_) => {
+                // Sparse vector search is handled separately by the query engine
+                Self::And { conditions: vec![] } // Identity for AND
+            }
             crate::velesql::Condition::Similarity(_) => {
                 // Similarity function is handled separately by the query engine
                 // It combines vector search with graph traversal

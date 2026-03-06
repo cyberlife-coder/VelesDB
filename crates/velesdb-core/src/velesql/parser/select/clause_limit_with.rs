@@ -11,6 +11,8 @@ impl Parser {
         let mut k = None;
         let mut vector_weight = None;
         let mut graph_weight = None;
+        let mut dense_weight = None;
+        let mut sparse_weight = None;
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::fusion_options {
                 for opt_pair in inner_pair.into_inner() {
@@ -40,12 +42,15 @@ impl Parser {
                                             "maximum" => {
                                                 crate::velesql::FusionStrategyType::Maximum
                                             }
+                                            "rsf" => crate::velesql::FusionStrategyType::Rsf,
                                             _ => crate::velesql::FusionStrategyType::Rrf,
                                         }
                                     }
                                     "k" => k = value_str.parse().ok(),
                                     "vector_weight" => vector_weight = value_str.parse().ok(),
                                     "graph_weight" => graph_weight = value_str.parse().ok(),
+                                    "dense_w" => dense_weight = value_str.parse().ok(),
+                                    "sparse_w" => sparse_weight = value_str.parse().ok(),
                                     _ => {}
                                 }
                             }
@@ -59,6 +64,8 @@ impl Parser {
             k,
             vector_weight,
             graph_weight,
+            dense_weight,
+            sparse_weight,
         }
     }
 }

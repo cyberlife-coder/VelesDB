@@ -276,6 +276,7 @@ impl QueryPlan {
         match condition {
             Condition::VectorSearch(_)
             | Condition::VectorFusedSearch(_)
+            | Condition::SparseVectorSearch(_)
             | Condition::Similarity(_) => {
                 *has_vector_search = true;
             }
