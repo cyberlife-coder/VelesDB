@@ -1,5 +1,5 @@
 {
-  "version": "2.2.0",
+  "version": "2.3.0",
   "cases": [
     {
       "id": "P001",
@@ -55,6 +55,56 @@
       "query": "SELECT e.name, m.name, d.name FROM employees AS e JOIN employees AS m ON e.manager_id = m.id JOIN employees AS d ON m.manager_id = d.id",
       "should_parse": true,
       "from_alias": ["e", "m", "d"]
+    },
+    {
+      "id": "P011",
+      "query": "TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)",
+      "should_parse": true
+    },
+    {
+      "id": "P012",
+      "query": "TRAIN QUANTIZER ON docs WITH (m=8)",
+      "should_parse": true
+    },
+    {
+      "id": "P013",
+      "query": "TRAIN QUANTIZER ON vectors WITH (m=16, k=256, type=opq)",
+      "should_parse": true
+    },
+    {
+      "id": "P014",
+      "query": "TRAIN QUANTIZER ON my_coll WITH (m=8, k=256, oversampling=4, force=true)",
+      "should_parse": true
+    },
+    {
+      "id": "P015",
+      "query": "TRAIN QUANTIZER ON data WITH (m=8, type=rabitq)",
+      "should_parse": true
+    },
+    {
+      "id": "P016",
+      "query": "TRAIN QUANTIZER ON my_collection WITH (m=8, k=256);",
+      "should_parse": true
+    },
+    {
+      "id": "P017",
+      "query": "TRAIN my_collection WITH (m=8)",
+      "should_parse": false
+    },
+    {
+      "id": "P018",
+      "query": "TRAIN QUANTIZER my_collection WITH (m=8)",
+      "should_parse": false
+    },
+    {
+      "id": "P019",
+      "query": "TRAIN QUANTIZER ON WITH (m=8)",
+      "should_parse": false
+    },
+    {
+      "id": "P020",
+      "query": "TRAIN QUANTIZER ON my_collection",
+      "should_parse": false
     }
   ]
 }
