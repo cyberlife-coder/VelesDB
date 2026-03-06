@@ -6,7 +6,7 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
 
 // Main entry point - supports SELECT, MATCH and DML (INSERT/UPDATE)
-query = { SOI ~ (match_query | compound_query | insert_stmt | update_stmt) ~ ";"? ~ EOI }
+query = { SOI ~ (match_query | compound_query | train_stmt | insert_stmt | update_stmt) ~ ";"? ~ EOI }
 
 // MATCH query for graph pattern matching (EPIC-045 US-001)
 // Syntax: MATCH pattern WHERE condition RETURN items [ORDER BY ...] [LIMIT n]
@@ -71,6 +71,11 @@ update_stmt = {
     where_clause?
 }
 assignment = { identifier ~ "=" ~ value }
+
+// TRAIN statement: TRAIN QUANTIZER ON collection WITH (params)
+train_stmt = {
+    ^"TRAIN" ~ ^"QUANTIZER" ~ ^"ON" ~ identifier ~ with_clause
+}
 
 // SELECT statement with optional DISTINCT, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, WITH, FUSION clauses
 // EPIC-052 US-001: Added DISTINCT support

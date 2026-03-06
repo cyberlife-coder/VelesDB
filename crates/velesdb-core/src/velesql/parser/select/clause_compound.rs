@@ -35,6 +35,7 @@ impl Parser {
             compound,
             match_clause: None,
             dml: None,
+            train: None,
         })
     }
 

@@ -19,6 +19,7 @@ impl Parser {
             match p.as_rule() {
                 Rule::match_query => return Self::parse_match_query(p),
                 Rule::compound_query => return Self::parse_compound_query(p),
+                Rule::train_stmt => return Self::parse_train_stmt(p),
                 Rule::insert_stmt => return Self::parse_insert_stmt(p),
                 Rule::update_stmt => return Self::parse_update_stmt(p),
                 _ => {}
@@ -27,7 +28,7 @@ impl Parser {
         Err(ParseError::syntax(
             0,
             "",
-            "Expected MATCH, SELECT, INSERT, or UPDATE query",
+            "Expected MATCH, SELECT, INSERT, UPDATE, or TRAIN query",
         ))
     }
 

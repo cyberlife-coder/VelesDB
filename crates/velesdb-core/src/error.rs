@@ -152,6 +152,13 @@ pub enum Error {
     /// zero subspaces, dimension not divisible by subspaces).
     #[error("[VELES-028] Invalid quantizer config: {0}")]
     InvalidQuantizerConfig(String),
+
+    /// Training failed (VELES-029).
+    ///
+    /// Indicates a quantizer training operation failed (convergence, insufficient
+    /// data, etc.).
+    #[error("[VELES-029] Training failed: {0}")]
+    TrainingFailed(String),
 }
 
 impl Error {
@@ -187,6 +194,7 @@ impl Error {
             Self::EpochMismatch(_) => "VELES-026",
             Self::GuardRail(_) => "VELES-027",
             Self::InvalidQuantizerConfig(_) => "VELES-028",
+            Self::TrainingFailed(_) => "VELES-029",
         }
     }
 

@@ -235,6 +235,7 @@ fn create_query_with_multiple_similarity() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -272,6 +273,7 @@ fn create_query_with_multiple_similarity_or() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -302,6 +304,7 @@ fn create_query_with_single_similarity() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -337,6 +340,7 @@ fn create_query_with_similarity_or_metadata() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -372,6 +376,7 @@ fn create_query_with_similarity_and_metadata() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -402,6 +407,7 @@ fn create_query_with_not_similarity() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -425,6 +431,7 @@ fn create_simple_query() -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -464,6 +471,7 @@ fn test_validate_vector_search_near_with_or_detected() {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     // Should detect multiple vector search with OR
@@ -506,6 +514,7 @@ fn test_validate_vector_search_or_now_passes() {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     // EPIC-044 US-002: NEAR OR metadata is now supported
@@ -570,6 +579,7 @@ fn test_validate_compound_query_where_clause() {
         }),
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     // Should detect multiple similarity in OR in compound query
@@ -605,6 +615,7 @@ fn make_query(where_clause: Option<Condition>) -> Query {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     }
 }
 
@@ -931,6 +942,7 @@ fn test_complexity_rejects_like_budget() {
         compound: None,
         match_clause: None,
         dml: None,
+        train: None,
     };
 
     let cfg = ValidationConfig {

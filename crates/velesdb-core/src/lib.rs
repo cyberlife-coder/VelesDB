@@ -182,8 +182,8 @@ pub use column_store::{
     ColumnValue, ExpireResult, StringId, StringTable, TypedColumn, UpsertResult,
 };
 pub use config::{
-    ConfigError, HnswConfig, LimitsConfig, QuantizationConfig, SearchConfig, SearchMode,
-    VelesConfig,
+    ConfigError, HnswConfig, LimitsConfig, QuantizationConfig, QuantizationType, SearchConfig,
+    SearchMode, VelesConfig,
 };
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};

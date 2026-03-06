@@ -310,4 +310,147 @@ default_mode = "ultra_fast"
         assert_eq!(parsed.search.ef_search, Some(300));
         assert_eq!(parsed.server.port, 9000);
     }
+
+    // ========================================================================
+    // QuantizationType enum tests (PQ-06)
+    // ========================================================================
+
+    #[test]
+    fn test_quantization_type_old_format_sq8() {
+        // Old config.json format with default_type string
+        let json = r#"{
+            "default_type": "sq8",
+            "rerank_enabled": true,
+            "rerank_multiplier": 2,
+            "auto_quantization": true,
+            "auto_quantization_threshold": 10000
+        }"#;
+        let config: QuantizationConfig = serde_json::from_str(json).expect("deserialize old sq8");
+        assert_eq!(*config.mode(), QuantizationType::SQ8);
+        assert!(config.rerank_enabled);
+        assert_eq!(config.rerank_multiplier, 2);
+    }
+
+    #[test]
+    fn test_quantization_type_old_format_none() {
+        let json = r#"{"default_type": "none"}"#;
+        let config: QuantizationConfig = serde_json::from_str(json).expect("deserialize old none");
+        assert_eq!(*config.mode(), QuantizationType::None);
+    }
+
+    #[test]
+    fn test_quantization_type_old_format_binary() {
+        let json = r#"{"default_type": "binary"}"#;
+        let config: QuantizationConfig =
+            serde_json::from_str(json).expect("deserialize old binary");
+        assert_eq!(*config.mode(), QuantizationType::Binary);
+    }
+
+    #[test]
+    fn test_quantization_type_new_format_pq() {
+        let json = r#"{
+            "mode": {"type": "pq", "m": 8, "k": 256, "opq_enabled": false, "oversampling": 4}
+        }"#;
+        let config: QuantizationConfig = serde_json::from_str(json).expect("deserialize new pq");
+        match config.mode() {
+            QuantizationType::PQ {
+                m,
+                k,
+                opq_enabled,
+                oversampling,
+            } => {
+                assert_eq!(*m, 8);
+                assert_eq!(*k, 256);
+                assert!(!opq_enabled);
+                assert_eq!(*oversampling, Some(4));
+            }
+            other => panic!("Expected PQ, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_quantization_type_new_format_rabitq() {
+        let json = r#"{"mode": {"type": "rabitq"}}"#;
+        let config: QuantizationConfig =
+            serde_json::from_str(json).expect("deserialize new rabitq");
+        assert_eq!(*config.mode(), QuantizationType::RaBitQ);
+    }
+
+    #[test]
+    fn test_quantization_type_roundtrip() {
+        let config = QuantizationConfig {
+            mode: QuantizationType::PQ {
+                m: 16,
+                k: 128,
+                opq_enabled: true,
+                oversampling: Some(8),
+            },
+            rerank_enabled: false,
+            rerank_multiplier: 4,
+            auto_quantization: false,
+            auto_quantization_threshold: 50_000,
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        let roundtripped: QuantizationConfig =
+            serde_json::from_str(&json).expect("deserialize roundtrip");
+        assert_eq!(*roundtripped.mode(), *config.mode());
+        assert_eq!(roundtripped.rerank_enabled, config.rerank_enabled);
+        assert_eq!(roundtripped.rerank_multiplier, config.rerank_multiplier);
+    }
+
+    #[test]
+    fn test_quantization_type_default() {
+        let config = QuantizationConfig::default();
+        assert_eq!(*config.mode(), QuantizationType::None);
+        assert!(config.rerank_enabled);
+    }
+
+    #[test]
+    fn test_quantization_type_should_quantize() {
+        let config = QuantizationConfig::default();
+        assert!(config.should_quantize(15_000));
+        assert!(!config.should_quantize(5_000));
+    }
+
+    #[test]
+    fn test_quantization_type_is_pq() {
+        let pq = QuantizationType::PQ {
+            m: 8,
+            k: 256,
+            opq_enabled: false,
+            oversampling: Some(4),
+        };
+        assert!(pq.is_pq());
+        assert!(!pq.is_rabitq());
+        assert!(!QuantizationType::SQ8.is_pq());
+    }
+
+    #[test]
+    fn test_quantization_type_is_rabitq() {
+        assert!(QuantizationType::RaBitQ.is_rabitq());
+        assert!(!QuantizationType::RaBitQ.is_pq());
+        assert!(!QuantizationType::None.is_rabitq());
+    }
+
+    #[test]
+    fn test_quantization_type_pq_defaults() {
+        // PQ with minimal JSON should fill in defaults for k and oversampling
+        let json = r#"{"mode": {"type": "pq", "m": 8}}"#;
+        let config: QuantizationConfig =
+            serde_json::from_str(json).expect("deserialize pq defaults");
+        match config.mode() {
+            QuantizationType::PQ {
+                m,
+                k,
+                opq_enabled,
+                oversampling,
+            } => {
+                assert_eq!(*m, 8);
+                assert_eq!(*k, 256); // default
+                assert!(!opq_enabled); // default
+                assert_eq!(*oversampling, Some(4)); // default
+            }
+            other => panic!("Expected PQ, got {other:?}"),
+        }
+    }
 }

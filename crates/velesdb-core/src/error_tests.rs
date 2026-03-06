@@ -151,3 +151,28 @@ fn test_error_debug_impl() {
     assert!(debug.contains("Storage"));
     assert!(debug.contains("disk full"));
 }
+
+// -------------------------------------------------------------------------
+// TrainingFailed error tests (VELES-029, PQ-06)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_training_failed_code() {
+    let err = Error::TrainingFailed("convergence failure".into());
+    assert_eq!(err.code(), "VELES-029");
+}
+
+#[test]
+fn test_training_failed_display() {
+    let err = Error::TrainingFailed("insufficient data for 256 clusters".into());
+    let display = format!("{err}");
+    assert!(display.contains("[VELES-029]"));
+    assert!(display.contains("Training failed"));
+    assert!(display.contains("insufficient data for 256 clusters"));
+}
+
+#[test]
+fn test_training_failed_is_recoverable() {
+    // Training failure is recoverable (user can add more data or change params)
+    assert!(Error::TrainingFailed("not enough vectors".into()).is_recoverable());
+}
