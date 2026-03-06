@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::index::sparse::SparseVector;
+use crate::sparse_index::SparseVector;
 
 /// A point in the vector database.
 ///

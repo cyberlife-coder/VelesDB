@@ -1,14 +1,16 @@
 //! Sparse vector index using inverted index with segment isolation.
 //!
-//! Provides `SparseVector` for sparse embeddings (e.g., SPLADE, BM25 term weights)
-//! and `SparseInvertedIndex` for efficient sparse-to-sparse similarity search.
+//! Re-exports from `crate::sparse_index` (always-compiled module).
+//! The persistence sub-module remains here since it depends on mmap/WAL.
 
-pub mod inverted_index;
 #[cfg(feature = "persistence")]
 pub mod persistence;
-pub mod search;
-pub mod types;
 
-pub use inverted_index::SparseInvertedIndex;
-pub use search::{sparse_search, sparse_search_filtered};
-pub use types::{PostingEntry, ScoredDoc, SparseVector};
+// Re-export all public types from the always-compiled sparse_index module.
+pub use crate::sparse_index::inverted_index;
+pub use crate::sparse_index::search;
+pub use crate::sparse_index::types;
+
+pub use crate::sparse_index::inverted_index::SparseInvertedIndex;
+pub use crate::sparse_index::search::{sparse_search, sparse_search_filtered};
+pub use crate::sparse_index::types::{PostingEntry, ScoredDoc, SparseVector};

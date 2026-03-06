@@ -52,6 +52,7 @@ mod parsing;
 mod persistence;
 mod serialization;
 mod simd;
+pub mod sparse;
 mod store_get;
 mod store_insert;
 mod store_new;

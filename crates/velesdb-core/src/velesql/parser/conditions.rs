@@ -1,8 +1,8 @@
 //! WHERE clause and condition parsing.
 
 use super::{extract_identifier, Rule};
-use crate::index::sparse::SparseVector;
 use crate::metrics::global_guardrails_metrics;
+use crate::sparse_index::SparseVector;
 use crate::velesql::ast::condition::{SparseVectorExpr, SparseVectorSearch};
 use crate::velesql::ast::{
     BetweenCondition, CompareOp, Comparison, Condition, FusionConfig, InCondition, IsNullCondition,

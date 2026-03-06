@@ -64,6 +64,11 @@ fn actionable_search_error(error: &dyn std::fmt::Display) -> ErrorResponse {
 }
 
 /// Search for similar vectors.
+///
+/// Auto-detects search mode:
+/// - **Dense**: `vector` only (existing behavior)
+/// - **Sparse**: `sparse_vector` only
+/// - **Hybrid**: both `vector` and `sparse_vector` (fused via RRF/RSF)
 #[utoipa::path(
     post,
     path = "/collections/{name}/search",
@@ -100,6 +105,89 @@ pub async fn search(
         }
     };
 
+    // Determine search mode from request fields.
+    let has_dense = !req.vector.is_empty();
+    // Prefer single sparse_vector; fall back to first named entry in sparse_vectors.
+    let sparse_input = req.sparse_vector.or_else(|| {
+        req.sparse_vectors
+            .and_then(|mut m| m.pop_first().map(|(_, v)| v))
+    });
+    let has_sparse = sparse_input.is_some();
+
+    if !has_dense && !has_sparse {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Either 'vector' or 'sparse_vector' must be provided".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Convert sparse input if present.
+    let sparse_vec = if let Some(sv_input) = sparse_input {
+        match sv_input.into_sparse_vector() {
+            Ok(sv) => Some(sv),
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
+            }
+        }
+    } else {
+        None
+    };
+
+    let index_name = req.sparse_index.as_deref().unwrap_or("");
+
+    // ---- HYBRID: both dense and sparse ----
+    if has_dense && has_sparse {
+        let expected_dimension = collection.config().dimension;
+        if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector)
+        {
+            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        }
+
+        let strategy = match req.fusion {
+            Some(ref f) => match f.strategy.to_lowercase().as_str() {
+                "rrf" => velesdb_core::FusionStrategy::RRF {
+                    k: f.k.unwrap_or(60),
+                },
+                "rsf" => velesdb_core::FusionStrategy::RelativeScore {
+                    dense_weight: f.dense_w.unwrap_or(0.5),
+                    sparse_weight: f.sparse_w.unwrap_or(0.5),
+                },
+                other => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Invalid fusion strategy: '{other}'. Valid: rrf, rsf"),
+                        }),
+                    )
+                        .into_response();
+                }
+            },
+            None => velesdb_core::FusionStrategy::rrf_default(),
+        };
+
+        let sparse_query = sparse_vec.expect("sparse_vec is Some when has_sparse is true");
+        let search_result = collection.hybrid_sparse_search(
+            &req.vector,
+            &sparse_query,
+            req.top_k,
+            index_name,
+            &strategy,
+        );
+
+        return finish_search(&state, &name, start, search_result);
+    }
+
+    // ---- SPARSE-ONLY ----
+    if has_sparse {
+        let sparse_query = sparse_vec.expect("sparse_vec is Some when has_sparse is true");
+        let search_result = collection.sparse_search(&sparse_query, req.top_k, index_name);
+        return finish_search(&state, &name, start, search_result);
+    }
+
+    // ---- DENSE-ONLY (existing path) ----
     let expected_dimension = collection.config().dimension;
     if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector) {
         return (StatusCode::BAD_REQUEST, Json(error)).into_response();
@@ -130,6 +218,16 @@ pub async fn search(
         collection.search(&req.vector, req.top_k)
     };
 
+    finish_search(&state, &name, start, search_result)
+}
+
+/// Shared result-handling for all search modes.
+fn finish_search(
+    state: &AppState,
+    name: &str,
+    start: std::time::Instant,
+    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+) -> axum::response::Response {
     match search_result {
         Ok(results) => {
             if results.is_empty() {
@@ -139,7 +237,7 @@ pub async fn search(
             #[allow(clippy::cast_possible_truncation)]
             state
                 .db
-                .notify_query(&name, duration_us.min(u128::from(u64::MAX)) as u64);
+                .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
 
             let response = SearchResponse {
                 results: results

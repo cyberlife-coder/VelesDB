@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::fusion::FusionConfig;
 use super::values::{Value, VectorExpr};
-use crate::index::sparse::SparseVector;
+use crate::sparse_index::SparseVector;
 use crate::velesql::GraphPattern;
 
 /// A condition in a WHERE clause.

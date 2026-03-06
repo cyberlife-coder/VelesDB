@@ -427,6 +427,87 @@ impl VectorCollection {
     }
 
     // -------------------------------------------------------------------------
+    // Sparse search
+    // -------------------------------------------------------------------------
+
+    /// Performs sparse-only search on the named index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist.
+    pub fn sparse_search(
+        &self,
+        query: &crate::index::sparse::SparseVector,
+        k: usize,
+        index_name: &str,
+    ) -> Result<Vec<SearchResult>> {
+        let indexes = self.inner.sparse_indexes.read();
+        let index = indexes.get(index_name).ok_or_else(|| {
+            crate::error::Error::Config(format!(
+                "Sparse index '{}' not found",
+                if index_name.is_empty() {
+                    "<default>"
+                } else {
+                    index_name
+                }
+            ))
+        })?;
+        let results = crate::index::sparse::sparse_search(index, query, k);
+        drop(indexes);
+        Ok(self.inner.resolve_sparse_results(&results, k))
+    }
+
+    /// Performs hybrid dense+sparse search with RRF fusion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if dense or sparse search fails, or fusion errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hybrid_sparse_search(
+        &self,
+        dense_vector: &[f32],
+        sparse_query: &crate::index::sparse::SparseVector,
+        k: usize,
+        index_name: &str,
+        strategy: &crate::fusion::FusionStrategy,
+    ) -> Result<Vec<SearchResult>> {
+        let candidate_k = k.saturating_mul(2).max(k + 10);
+
+        let (dense_results, sparse_results) = self.inner.execute_both_branches(
+            dense_vector,
+            sparse_query,
+            index_name,
+            candidate_k,
+            None,
+        );
+
+        if dense_results.is_empty() && sparse_results.is_empty() {
+            return Ok(Vec::new());
+        }
+        if dense_results.is_empty() {
+            let scored: Vec<(u64, f32)> = sparse_results
+                .iter()
+                .map(|sd| (sd.doc_id, sd.score))
+                .collect();
+            return Ok(self.inner.resolve_fused_results(&scored, k));
+        }
+        if sparse_results.is_empty() {
+            return Ok(self.inner.resolve_fused_results(&dense_results, k));
+        }
+
+        let sparse_tuples: Vec<(u64, f32)> = sparse_results
+            .iter()
+            .map(|sd| (sd.doc_id, sd.score))
+            .collect();
+
+        let fused = strategy
+            .fuse(vec![dense_results, sparse_tuples])
+            .map_err(|e| crate::error::Error::Config(format!("Fusion error: {e}")))?;
+
+        Ok(self.inner.resolve_fused_results(&fused, k))
+    }
+
+    // -------------------------------------------------------------------------
     // VelesQL
     // -------------------------------------------------------------------------
 

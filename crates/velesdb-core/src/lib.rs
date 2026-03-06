@@ -115,6 +115,8 @@ pub mod simd_dispatch;
 mod simd_dispatch_tests;
 #[cfg(test)]
 mod simd_epic073_tests;
+/// Sparse vector types, inverted index, and search -- always compiled (no persistence dependency).
+pub mod sparse_index;
 // simd_explicit removed - consolidated into simd_native (EPIC-075)
 pub mod simd_native;
 #[cfg(test)]

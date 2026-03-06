@@ -242,7 +242,7 @@ impl Collection {
     }
 
     /// Execute dense and sparse branches, optionally in parallel.
-    fn execute_both_branches(
+    pub(crate) fn execute_both_branches(
         &self,
         dense_vector: &[f32],
         sparse_query: &SparseVector,
@@ -312,7 +312,7 @@ impl Collection {
     // ------------------------------------------------------------------
 
     /// Resolve `ScoredDoc` results to full `SearchResult` with Point data.
-    fn resolve_sparse_results(
+    pub(crate) fn resolve_sparse_results(
         &self,
         results: &[crate::index::sparse::ScoredDoc],
         limit: usize,
@@ -340,7 +340,11 @@ impl Collection {
     }
 
     /// Resolve fused `(id, score)` tuples to `SearchResult`.
-    fn resolve_fused_results(&self, fused: &[(u64, f32)], limit: usize) -> Vec<SearchResult> {
+    pub(crate) fn resolve_fused_results(
+        &self,
+        fused: &[(u64, f32)],
+        limit: usize,
+    ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
