@@ -84,6 +84,9 @@ features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO"]
 [target.'cfg(target_os = "linux")'.dependencies.libc]
 version = "0.2"
 
+[dependencies.rand]
+version = "0.8"
+
 [dependencies.pest]
 version = "2.7"
 

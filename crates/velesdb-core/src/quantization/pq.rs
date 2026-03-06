@@ -4,6 +4,7 @@
 //! independently with its own codebook (k-means centroids).
 
 use crate::error::Error;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 /// Per-subspace centroid tables learned with k-means.
@@ -239,14 +240,77 @@ fn l2_squared(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
+/// k-means++ initialization: picks well-spread initial centroids.
+///
+/// Step 1: Choose the first centroid uniformly at random.
+/// Step 2: For each subsequent centroid, pick a sample with probability
+///         proportional to D(x)^2 (squared distance to nearest existing centroid).
+fn kmeans_plusplus_init(samples: &[Vec<f32>], k: usize, rng: &mut impl Rng) -> Vec<Vec<f32>> {
+    debug_assert!(!samples.is_empty());
+    debug_assert!(k > 0);
+    debug_assert!(k <= samples.len());
+
+    let n = samples.len();
+    let mut centroids = Vec::with_capacity(k);
+
+    // Step 1: Pick first centroid uniformly at random.
+    let first_idx = rng.gen_range(0..n);
+    centroids.push(samples[first_idx].clone());
+
+    // Distances from each sample to its nearest centroid (initialized to MAX).
+    let mut min_dists = vec![f32::MAX; n];
+
+    // Step 2: Pick remaining centroids proportional to D(x)^2.
+    for _ in 1..k {
+        // Update min distances with the most recently added centroid.
+        let last_centroid = centroids.last().expect("centroids non-empty");
+        for (i, sample) in samples.iter().enumerate() {
+            let dist = l2_squared(sample, last_centroid);
+            if dist < min_dists[i] {
+                min_dists[i] = dist;
+            }
+        }
+
+        // Compute cumulative distribution of D(x)^2.
+        let total: f64 = min_dists.iter().map(|&d| f64::from(d)).sum();
+        if total <= 0.0 {
+            // All remaining samples are identical to existing centroids.
+            // Fall back to sequential selection for remaining centroids.
+            for i in centroids.len()..k {
+                centroids.push(samples[i % n].clone());
+            }
+            break;
+        }
+
+        let threshold = rng.gen::<f64>() * total;
+        let mut cumulative = 0.0_f64;
+        let mut chosen = n - 1; // default to last if rounding issues
+        for (i, &d) in min_dists.iter().enumerate() {
+            cumulative += f64::from(d);
+            if cumulative >= threshold {
+                chosen = i;
+                break;
+            }
+        }
+        centroids.push(samples[chosen].clone());
+    }
+
+    centroids
+}
+
 fn kmeans_train(samples: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32>> {
     // Internal invariant: callers validate non-empty samples and k > 0.
     debug_assert!(!samples.is_empty());
     debug_assert!(k > 0);
     let dim = samples[0].len();
 
-    // Deterministic init: first k (cycled if needed).
-    let mut centroids: Vec<Vec<f32>> = (0..k).map(|i| samples[i % samples.len()].clone()).collect();
+    // k-means++ initialization for well-spread initial centroids.
+    let mut rng = rand::thread_rng();
+    let mut centroids = kmeans_plusplus_init(samples, k.min(samples.len()), &mut rng);
+    // If k > samples.len(), pad with cycled samples (shouldn't happen after train() validation).
+    while centroids.len() < k {
+        centroids.push(samples[centroids.len() % samples.len()].clone());
+    }
 
     let mut assignments = vec![0usize; samples.len()];
 
@@ -458,5 +522,96 @@ mod tests {
         let bad_pq_vec = super::PQVector { codes: vec![0] };
         let result = pq.reconstruct(&bad_pq_vec);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn kmeans_plusplus_init_produces_k_distinct_centroids() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        // Generate 100 random 8-dim vectors in distinct clusters.
+        let mut samples = Vec::with_capacity(100);
+        for i in 0..100 {
+            let offset = (i / 25) as f32 * 10.0;
+            let v: Vec<f32> = (0..8).map(|d| offset + (d as f32) * 0.1).collect();
+            samples.push(v);
+        }
+
+        let centroids = super::kmeans_plusplus_init(&samples, 4, &mut rng);
+        assert_eq!(centroids.len(), 4, "expected 4 centroids");
+
+        // All centroids must be distinct (no duplicates).
+        for i in 0..centroids.len() {
+            for j in (i + 1)..centroids.len() {
+                assert_ne!(
+                    centroids[i], centroids[j],
+                    "centroids {i} and {j} are identical"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kmeans_plusplus_init_centroids_are_spread() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+
+        // Generate 100 random 8-dim vectors with clear clusters.
+        let mut samples = Vec::with_capacity(100);
+        for i in 0..100 {
+            let cluster = (i / 25) as f32 * 100.0;
+            let v: Vec<f32> = (0..8).map(|d| cluster + (d as f32) * 0.01).collect();
+            samples.push(v);
+        }
+
+        let centroids = super::kmeans_plusplus_init(&samples, 4, &mut rng);
+
+        // No two centroids should be closer than 1e-6 L2 squared.
+        for i in 0..centroids.len() {
+            for j in (i + 1)..centroids.len() {
+                let dist = super::l2_squared(&centroids[i], &centroids[j]);
+                assert!(
+                    dist > 1e-6,
+                    "centroids {i} and {j} too close: L2^2 = {dist}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kmeans_plusplus_init_k1_returns_single_centroid() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+
+        let samples = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let centroids = super::kmeans_plusplus_init(&samples, 1, &mut rng);
+        assert_eq!(centroids.len(), 1);
+        // The single centroid must be one of the input samples.
+        assert!(
+            samples.contains(&centroids[0]),
+            "k=1 centroid not from dataset"
+        );
+    }
+
+    #[test]
+    fn train_with_kmeans_plusplus_still_passes_happy_path() {
+        // Verify that with k-means++ init, the full PQ pipeline still works.
+        let vectors = vec![
+            vec![0.0, 0.0, 10.0, 10.0],
+            vec![0.1, 0.0, 9.9, 10.1],
+            vec![8.0, 8.0, 1.0, 1.0],
+            vec![8.1, 7.9, 1.2, 0.8],
+        ];
+        let pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
+
+        // Verify codebook shape.
+        assert_eq!(pq.codebook.num_subspaces, 2);
+        assert_eq!(pq.codebook.num_centroids, 2);
+        assert_eq!(pq.codebook.subspace_dim, 2);
+
+        // Quantize and reconstruct should still work.
+        let code = pq.quantize(&[8.0, 8.0, 1.0, 1.0]).unwrap();
+        let reconstructed = pq.reconstruct(&code).unwrap();
+        assert_eq!(reconstructed.len(), 4);
     }
 }
