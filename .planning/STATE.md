@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-06T17:43:43Z"
+status: completed
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-06T18:10:30.541Z"
 last_activity: 2026-03-06 — Completed plan 04-01 (Sparse vector core types and inverted index)
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 14
+  completed_plans: 13
   percent: 100
 ---
 
@@ -53,6 +53,7 @@ Progress: [████████████] 100% (11 prior + 1 phase 4)
 - Trend: Stable ~18-20 min per plan
 
 *Updated after each plan completion*
+| Phase 04 P02 | 22 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,9 @@ Recent decisions affecting current work:
 - [04-01]: SparseInvertedIndex fully implemented in Task 1 to avoid clippy dead_code errors from stub
 - [04-01]: Point struct literal updates across 19 files for sparse_vector: None (no Default/non_exhaustive workaround)
 - [04-01]: FrozenSegment.doc_count kept with allow(dead_code) for future persistence layer
+- [Phase 04]: MaxScore uses sorted-by-contribution term ordering with prefix-sum upper bounds for early termination
+- [Phase 04]: Linear scan threshold at 30% coverage (total_postings > 0.3 * doc_count * query_nnz)
+- [Phase 04]: Dense array accumulator up to 10M doc IDs, FxHashMap fallback above
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T17:43:43Z
-Stopped at: Completed 04-01-PLAN.md
-Resume file: .planning/phases/04-sparse-vector-engine/04-01-SUMMARY.md
+Last session: 2026-03-06T18:10:30.537Z
+Stopped at: Completed 04-02-PLAN.md
+Resume file: None
