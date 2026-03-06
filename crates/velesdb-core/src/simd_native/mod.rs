@@ -102,6 +102,13 @@ pub(crate) use x86_avx2_similarity::{
 pub(crate) use neon::{cosine_neon, dot_product_neon, squared_l2_neon};
 
 // =============================================================================
+// ADC (Asymmetric Distance Computation) for PQ search
+// =============================================================================
+
+pub mod adc;
+pub use adc::adc_distances_batch;
+
+// =============================================================================
 // Dispatch module (public API)
 // =============================================================================
 

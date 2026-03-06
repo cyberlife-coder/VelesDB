@@ -315,6 +315,45 @@ impl ProductQuantizer {
     }
 }
 
+impl ProductQuantizer {
+    /// Precompute ADC lookup table for a query vector.
+    ///
+    /// Returns flat `[m * k]` table indexed as `lut[subspace * k + centroid_id]`.
+    /// Applies OPQ rotation if present.
+    #[must_use]
+    pub fn precompute_lut(&self, query: &[f32]) -> Vec<f32> {
+        let query = self.apply_rotation(query);
+        let m = self.codebook.num_subspaces;
+        let k = self.codebook.num_centroids;
+        let sd = self.codebook.subspace_dim;
+        let mut lut = Vec::with_capacity(m * k);
+        for subspace in 0..m {
+            let q_sub = &query[subspace * sd..(subspace + 1) * sd];
+            for centroid in &self.codebook.centroids[subspace] {
+                lut.push(l2_squared(q_sub, centroid));
+            }
+        }
+        lut
+    }
+
+    /// Apply OPQ rotation matrix to a vector. Returns the original if no rotation.
+    fn apply_rotation(&self, vector: &[f32]) -> Vec<f32> {
+        match &self.rotation {
+            None => vector.to_vec(),
+            Some(matrix) => {
+                let d = vector.len();
+                let mut rotated = vec![0.0_f32; d];
+                for i in 0..d {
+                    for j in 0..d {
+                        rotated[i] += matrix[i * d + j] * vector[j];
+                    }
+                }
+                rotated
+            }
+        }
+    }
+}
+
 /// Asymmetric distance computation (ADC): query is f32, candidate is PQ-coded.
 ///
 /// # Panics
@@ -1130,5 +1169,77 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = ProductQuantizer::load_rotation(dir.path()).unwrap();
         assert!(result.is_none());
+    }
+
+    // ====================================================================
+    // Task: ADC LUT precomputation tests
+    // ====================================================================
+
+    #[test]
+    fn precompute_lut_returns_correct_size_and_distances() {
+        let vectors = vec![
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![5.0, 6.0, 7.0, 8.0],
+            vec![9.0, 10.0, 11.0, 12.0],
+        ];
+        let pq = ProductQuantizer::train(&vectors, 2, 3).unwrap();
+        let query = vec![2.0, 3.0, 5.0, 6.0];
+        let lut = pq.precompute_lut(&query);
+
+        // m=2, k=3 => lut length = 6
+        assert_eq!(lut.len(), 6, "LUT length must be m*k = 2*3 = 6");
+
+        // Each entry must be a non-negative L2 squared distance
+        for &val in &lut {
+            assert!(val >= 0.0, "LUT entry must be non-negative, got {val}");
+        }
+    }
+
+    #[test]
+    fn precompute_lut_applies_rotation_when_present() {
+        let vectors = vec![
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![5.0, 6.0, 7.0, 8.0],
+            vec![9.0, 10.0, 11.0, 12.0],
+        ];
+        let mut pq = ProductQuantizer::train(&vectors, 2, 3).unwrap();
+        let query = vec![2.0, 3.0, 5.0, 6.0];
+
+        let lut_no_rot = pq.precompute_lut(&query);
+
+        // Set identity-like rotation that swaps dimensions
+        pq.rotation = Some(vec![
+            0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+        ]);
+
+        let lut_with_rot = pq.precompute_lut(&query);
+
+        // With rotation, the LUT should differ from without
+        assert_ne!(lut_no_rot, lut_with_rot, "Rotation must change LUT values");
+    }
+
+    #[test]
+    fn precompute_lut_m8_k256_size() {
+        // Standard PQ config: m=8, k=256 => LUT = 8*256 = 2048 entries = 8192 bytes
+        let dim = 64;
+        let m = 8;
+        let k = 256;
+        let vectors = generate_clustered_vectors(300, dim, 4, 42);
+        let pq = ProductQuantizer::train(&vectors, m, k).unwrap();
+        let query: Vec<f32> = (0..dim)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let v = i as f32 * 0.1;
+                v
+            })
+            .collect();
+
+        let lut = pq.precompute_lut(&query);
+        assert_eq!(lut.len(), m * k, "LUT length for m=8 k=256");
+        assert_eq!(
+            lut.len() * std::mem::size_of::<f32>(),
+            8192,
+            "LUT must be exactly 8KB for m=8 k=256"
+        );
     }
 }
