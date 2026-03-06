@@ -6763,6 +6763,7 @@ dependencies = [
  "libc",
  "loom",
  "memmap2",
+ "ndarray",
  "parking_lot",
  "pest",
  "pest_derive",

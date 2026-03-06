@@ -104,7 +104,7 @@ version = "2.7"
 ##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
-persistence = ["dep:memmap2", "dep:rayon", "dep:tokio"]
+persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray"]
 update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
 loom = ["dep:loom"]
 
@@ -297,6 +297,11 @@ optional = true
 
 [dependencies.whoami]
 version = "1.5"
+optional = true
+
+[dependencies.ndarray]
+version = "0.16"
+default-features = false
 optional = true
 
 [dependencies.reqwest]
