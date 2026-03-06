@@ -253,7 +253,8 @@ impl VectorStorage for MmapStorage {
         let file = File::create(&index_path)?;
         let mut writer = io::BufWriter::new(file);
         let flat_index = self.index.to_hashmap();
-        bincode::serialize_into(&mut writer, &flat_index).map_err(io::Error::other)?;
+        let bytes = postcard::to_allocvec(&flat_index).map_err(io::Error::other)?;
+        writer.write_all(&bytes)?;
         writer.flush()?;
         writer
             .into_inner()

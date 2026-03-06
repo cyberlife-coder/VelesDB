@@ -47,7 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Storage
 memmap2 = "0.9"
-bincode = "1.3"
+postcard = { version = "1", features = ["alloc", "use-std"] }
 
 # Indexing
 # Note: hnsw_rs is defined per-crate with target-specific features

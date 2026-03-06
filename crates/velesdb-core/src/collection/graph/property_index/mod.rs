@@ -255,20 +255,20 @@ impl PropertyIndex {
     // Persistence - serialize/deserialize index to/from bytes
     // =========================================================================
 
-    /// Serialize the index to bytes using bincode.
+    /// Serialize the index to bytes using postcard.
     ///
     /// # Errors
     /// Returns an error if serialization fails.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        bincode::serialize(self)
+    pub fn to_bytes(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
     }
 
     /// Deserialize an index from bytes.
     ///
     /// # Errors
     /// Returns an error if deserialization fails (corrupted data).
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
-        bincode::deserialize(bytes)
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
     }
 
     /// Save the index to a file.

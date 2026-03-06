@@ -1,6 +1,6 @@
 //! Shared HNSW persistence helpers for metadata and mappings serialization.
 //!
-//! Consolidates duplicated bincode save/load logic used by both `HnswIndex`
+//! Consolidates duplicated postcard save/load logic used by both `HnswIndex`
 //! and `NativeHnswIndex` to prevent format drift between the two index types.
 //!
 //! # On-Disk Format
@@ -12,6 +12,7 @@
 
 use crate::distance::DistanceMetric;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 
 /// HNSW index metadata as stored on disk.
@@ -41,16 +42,15 @@ pub(crate) struct HnswVectorsData {
 pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
     let meta_path = path.join("native_meta.bin");
     let meta_file = std::fs::File::create(meta_path)?;
-    let meta_writer = std::io::BufWriter::new(meta_file);
-    bincode::serialize_into(
-        meta_writer,
-        &(
-            meta.dimension,
-            meta.metric as u8,
-            meta.enable_vector_storage,
-        ),
-    )
-    .map_err(std::io::Error::other)
+    let mut meta_writer = std::io::BufWriter::new(meta_file);
+    let bytes = postcard::to_allocvec(&(
+        meta.dimension,
+        meta.metric as u8,
+        meta.enable_vector_storage,
+    ))
+    .map_err(std::io::Error::other)?;
+    meta_writer.write_all(&bytes)?;
+    meta_writer.flush()
 }
 
 /// Loads HNSW metadata from `native_meta.bin` in the given directory.
@@ -61,10 +61,9 @@ pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
 /// contains an unknown metric discriminant.
 pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
     let meta_path = path.join("native_meta.bin");
-    let meta_file = std::fs::File::open(meta_path)?;
-    let meta_reader = std::io::BufReader::new(meta_file);
+    let bytes = std::fs::read(meta_path)?;
     let (dimension, metric_u8, enable_vector_storage): (usize, u8, bool) =
-        bincode::deserialize_from(meta_reader).map_err(std::io::Error::other)?;
+        postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
 
     // Match enum order: Cosine=0, Euclidean=1, DotProduct=2, Hamming=3, Jaccard=4
     let metric = metric_from_u8(metric_u8)?;
@@ -84,9 +83,11 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
 pub(crate) fn save_mappings(path: &Path, data: &HnswMappingsData) -> std::io::Result<()> {
     let mappings_path = path.join("native_mappings.bin");
     let file = std::fs::File::create(mappings_path)?;
-    let writer = std::io::BufWriter::new(file);
-    bincode::serialize_into(writer, &(&data.id_to_idx, &data.idx_to_id, data.next_idx))
-        .map_err(std::io::Error::other)
+    let mut writer = std::io::BufWriter::new(file);
+    let bytes = postcard::to_allocvec(&(&data.id_to_idx, &data.idx_to_id, data.next_idx))
+        .map_err(std::io::Error::other)?;
+    writer.write_all(&bytes)?;
+    writer.flush()
 }
 
 /// Loads HNSW id-mappings from `native_mappings.bin` in the given directory.
@@ -96,11 +97,10 @@ pub(crate) fn save_mappings(path: &Path, data: &HnswMappingsData) -> std::io::Re
 /// Returns `io::Error` if the file doesn't exist or is corrupted.
 pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
     let mappings_path = path.join("native_mappings.bin");
-    let file = std::fs::File::open(mappings_path)?;
-    let reader = std::io::BufReader::new(file);
+    let bytes = std::fs::read(mappings_path)?;
 
     let (id_to_idx, idx_to_id, next_idx): (HashMap<u64, usize>, HashMap<usize, u64>, usize) =
-        bincode::deserialize_from(reader).map_err(std::io::Error::other)?;
+        postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
 
     Ok(HnswMappingsData {
         id_to_idx,
@@ -117,8 +117,10 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
 pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Result<()> {
     let vectors_path = path.join("native_vectors.bin");
     let file = std::fs::File::create(vectors_path)?;
-    let writer = std::io::BufWriter::new(file);
-    bincode::serialize_into(writer, &data.vectors).map_err(std::io::Error::other)
+    let mut writer = std::io::BufWriter::new(file);
+    let bytes = postcard::to_allocvec(&data.vectors).map_err(std::io::Error::other)?;
+    writer.write_all(&bytes)?;
+    writer.flush()
 }
 
 /// Loads HNSW vectors from `native_vectors.bin` in the given directory.
@@ -128,10 +130,9 @@ pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Resu
 /// Returns `io::Error` if the file doesn't exist or is corrupted.
 pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
     let vectors_path = path.join("native_vectors.bin");
-    let file = std::fs::File::open(vectors_path)?;
-    let reader = std::io::BufReader::new(file);
+    let bytes = std::fs::read(vectors_path)?;
     let vectors: Vec<(usize, Vec<f32>)> =
-        bincode::deserialize_from(reader).map_err(std::io::Error::other)?;
+        postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
     Ok(HnswVectorsData { vectors })
 }
 

@@ -132,10 +132,9 @@ impl MmapStorage {
         // 3. Load Index (EPIC-033/US-004: Convert to ShardedIndex)
         let index_path = path.join("vectors.idx");
         let (index, next_offset) = if index_path.exists() {
-            let file = File::open(&index_path)?;
-            let flat_index: FxHashMap<u64, usize> =
-                bincode::deserialize_from(io::BufReader::new(file))
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let bytes = std::fs::read(&index_path)?;
+            let flat_index: FxHashMap<u64, usize> = postcard::from_bytes(&bytes)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
             // Calculate next_offset based on stored data
             let max_offset = flat_index.values().max().copied().unwrap_or(0);

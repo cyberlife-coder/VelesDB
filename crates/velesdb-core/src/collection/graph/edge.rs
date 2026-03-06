@@ -427,20 +427,20 @@ impl EdgeStore {
     // Persistence
     // =========================================================================
 
-    /// Serializes the edge store to bytes using `bincode`.
+    /// Serializes the edge store to bytes using `postcard`.
     ///
     /// # Errors
     /// Returns an error if serialization fails.
-    pub fn to_bytes(&self) -> std::result::Result<Vec<u8>, Box<bincode::ErrorKind>> {
-        bincode::serialize(self)
+    pub fn to_bytes(&self) -> std::result::Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
     }
 
     /// Deserializes an edge store from bytes.
     ///
     /// # Errors
     /// Returns an error if deserialization fails (e.g., corrupted data).
-    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, Box<bincode::ErrorKind>> {
-        bincode::deserialize(bytes)
+    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
     }
 
     /// Saves the edge store to a file.
