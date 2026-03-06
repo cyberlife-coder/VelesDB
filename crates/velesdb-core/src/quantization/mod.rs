@@ -46,4 +46,6 @@ pub enum StorageMode {
     Binary,
     /// Product Quantization (PQ) for aggressive lossy compression (8x-16x typical).
     ProductQuantization,
+    /// `RaBitQ` binary quantization for 32x compression with scalar correction.
+    RaBitQ,
 }

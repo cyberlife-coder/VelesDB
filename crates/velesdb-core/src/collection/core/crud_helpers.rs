@@ -73,7 +73,7 @@ impl Collection {
                     }
                 }
             }
-            StorageMode::Full => {}
+            StorageMode::Full | StorageMode::RaBitQ => {}
         }
     }
 

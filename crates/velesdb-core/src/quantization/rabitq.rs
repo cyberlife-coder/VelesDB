@@ -257,6 +257,154 @@ impl RaBitQIndex {
     }
 }
 
+/// Training and persistence methods (require `persistence` feature for ndarray and rayon).
+#[cfg(feature = "persistence")]
+impl RaBitQIndex {
+    /// Train a `RaBitQ` index from a set of vectors.
+    ///
+    /// Computes dataset centroid and generates a random orthogonal rotation
+    /// matrix via modified Gram-Schmidt orthogonalization of a random matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::InvalidQuantizerConfig` if:
+    /// - `vectors` is empty
+    /// - vectors have inconsistent dimensions
+    /// - vector dimension is 0
+    pub fn train(vectors: &[Vec<f32>], seed: u64) -> Result<Self, Error> {
+        if vectors.is_empty() {
+            return Err(Error::InvalidQuantizerConfig(
+                "cannot train RaBitQ with empty dataset".into(),
+            ));
+        }
+
+        let dimension = vectors[0].len();
+        if dimension == 0 {
+            return Err(Error::InvalidQuantizerConfig(
+                "vectors must have non-zero dimension".into(),
+            ));
+        }
+        if !vectors.iter().all(|v| v.len() == dimension) {
+            return Err(Error::InvalidQuantizerConfig(
+                "all vectors must share the same dimension".into(),
+            ));
+        }
+
+        // Compute centroid (element-wise mean)
+        let mut centroid = vec![0.0f32; dimension];
+        for v in vectors {
+            for (ci, &vi) in centroid.iter_mut().zip(v.iter()) {
+                *ci += vi;
+            }
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let inv_n = 1.0 / vectors.len() as f32;
+        for x in &mut centroid {
+            *x *= inv_n;
+        }
+
+        // Generate random orthogonal matrix via modified Gram-Schmidt
+        let rotation = generate_orthogonal_matrix(dimension, seed);
+
+        Ok(Self {
+            rotation,
+            centroid,
+            dimension,
+        })
+    }
+
+    /// Save `RaBitQ` index to `<dir>/rabitq.idx` using postcard with atomic write.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if serialization or file I/O fails.
+    pub fn save(&self, dir: &std::path::Path) -> Result<(), Error> {
+        let data = postcard::to_allocvec(self).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to serialize RaBitQ index: {e}"),
+            ))
+        })?;
+        let tmp_path = dir.join("rabitq.idx.tmp");
+        let final_path = dir.join("rabitq.idx");
+        std::fs::write(&tmp_path, &data)?;
+        std::fs::rename(&tmp_path, &final_path)?;
+        Ok(())
+    }
+
+    /// Load `RaBitQ` index from `<dir>/rabitq.idx`. Returns `None` if file doesn't exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if deserialization or file I/O fails.
+    pub fn load(dir: &std::path::Path) -> Result<Option<Self>, Error> {
+        let path = dir.join("rabitq.idx");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = std::fs::read(&path)?;
+        let index: Self = postcard::from_bytes(&data).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to deserialize RaBitQ index: {e}"),
+            ))
+        })?;
+        Ok(Some(index))
+    }
+}
+
+/// Generate a random orthogonal matrix using modified Gram-Schmidt.
+///
+/// Creates a D x D random matrix from a seeded RNG, then orthogonalizes it
+/// using modified Gram-Schmidt (numerically stable for D <= 2048).
+/// Returns the matrix flattened in row-major order.
+#[cfg(feature = "persistence")]
+fn generate_orthogonal_matrix(dim: usize, seed: u64) -> Vec<f32> {
+    use rand::{Rng, SeedableRng};
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+
+    // Generate random D x D matrix (column-major for easier Gram-Schmidt)
+    // columns[j][i] = element at row i, column j
+    let mut columns: Vec<Vec<f32>> = (0..dim)
+        .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 2.0 - 1.0).collect())
+        .collect();
+
+    // Modified Gram-Schmidt orthogonalization
+    for j in 0..dim {
+        // Normalize column j
+        let norm: f32 = columns[j].iter().map(|&x| x * x).sum::<f32>().sqrt();
+        if norm > f32::EPSILON {
+            for x in &mut columns[j] {
+                *x /= norm;
+            }
+        }
+
+        // Subtract projection of remaining columns onto column j
+        for k in (j + 1)..dim {
+            let dot: f32 = columns[j]
+                .iter()
+                .zip(columns[k].iter())
+                .map(|(&a, &b)| a * b)
+                .sum();
+            let proj: Vec<f32> = columns[j].iter().map(|&x| dot * x).collect();
+            for (ck, p) in columns[k].iter_mut().zip(proj.iter()) {
+                *ck -= p;
+            }
+        }
+    }
+
+    // Convert column-major to row-major flattened format
+    let mut rotation = vec![0.0f32; dim * dim];
+    for i in 0..dim {
+        for j in 0..dim {
+            rotation[i * dim + j] = columns[j][i];
+        }
+    }
+
+    rotation
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +674,235 @@ mod tests {
                 "mismatch at index {i}: batch={bd}, individual={id}"
             );
         }
+    }
+
+    // ====================================================================
+    // Task 2: Training + StorageMode + Persistence tests
+    // ====================================================================
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_train_computes_centroid_as_mean() {
+        let vectors = vec![
+            vec![2.0, 4.0, 6.0, 8.0],
+            vec![4.0, 6.0, 8.0, 10.0],
+            vec![6.0, 8.0, 10.0, 12.0],
+        ];
+        let index = RaBitQIndex::train(&vectors, 42).unwrap();
+        let expected = vec![4.0, 6.0, 8.0, 10.0];
+        for (i, (&c, &e)) in index.centroid.iter().zip(expected.iter()).enumerate() {
+            assert!((c - e).abs() < 1e-5, "centroid[{i}] = {c}, expected {e}");
+        }
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_train_rotation_is_orthogonal() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(77);
+
+        let dim = 32;
+        let vectors: Vec<Vec<f32>> = (0..100)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>() * 10.0 - 5.0).collect())
+            .collect();
+
+        let index = RaBitQIndex::train(&vectors, 42).unwrap();
+
+        // Verify R * R^T ~= I
+        let r = &index.rotation;
+        for i in 0..dim {
+            for j in 0..dim {
+                let mut dot = 0.0f32;
+                for k in 0..dim {
+                    dot += r[i * dim + k] * r[j * dim + k];
+                }
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (dot - expected).abs() < 1e-4,
+                    "R*R^T[{i}][{j}] = {dot}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rabitq_storage_mode_serde_roundtrip() {
+        use crate::quantization::StorageMode;
+
+        let mode = StorageMode::RaBitQ;
+        let json = serde_json::to_string(&mode).unwrap();
+        let deserialized: StorageMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(mode, deserialized);
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_train_empty_returns_error() {
+        let result = RaBitQIndex::train(&[], 42);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_train_dim_less_than_64_works() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(99);
+
+        let dim = 16;
+        let vectors: Vec<Vec<f32>> = (0..50)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+            .collect();
+
+        let index = RaBitQIndex::train(&vectors, 42).unwrap();
+        assert_eq!(index.dimension, dim);
+        assert_eq!(index.rotation.len(), dim * dim);
+        assert_eq!(index.centroid.len(), dim);
+
+        // Encode should work
+        let encoded = index.encode(&vectors[0]).unwrap();
+        assert_eq!(encoded.bits.len(), 1); // 16 bits fits in 1 u64
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_trained_recall_at_10_on_clustered_data() {
+        // Full pipeline: train on 500+ vectors, encode, search top-10.
+        // RaBitQ is a coarse quantizer (32x compression = 1 bit per dimension).
+        // With 128 dimensions and many small clusters, sign bits provide
+        // enough resolution for good recall.
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
+
+        let dim = 128;
+        let n = 1000;
+        let num_clusters = 100;
+        let top_k = 10;
+        let num_queries = 20;
+
+        // Generate many small clusters spread across 128-dimensional space.
+        let mut centers = Vec::new();
+        for _ in 0..num_clusters {
+            let center: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>() * 200.0 - 100.0).collect();
+            centers.push(center);
+        }
+
+        let mut vectors = Vec::with_capacity(n);
+        for i in 0..n {
+            let cluster = i % num_clusters;
+            let v: Vec<f32> = centers[cluster]
+                .iter()
+                .map(|&c| c + (rng.gen::<f32>() - 0.5) * 40.0)
+                .collect();
+            vectors.push(v);
+        }
+
+        // Train with full pipeline
+        let index = RaBitQIndex::train(&vectors, 42).unwrap();
+
+        // Encode all
+        let encoded: Vec<RaBitQVector> = vectors.iter().map(|v| index.encode(v).unwrap()).collect();
+
+        let mut total_recall = 0.0_f64;
+        for qi in 0..num_queries {
+            let query_idx = qi * (n / num_queries);
+            let query = &vectors[query_idx];
+
+            // True top-k by L2
+            let mut true_dists: Vec<(usize, f32)> = vectors
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let d: f32 = query
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(a, b)| {
+                            let diff = a - b;
+                            diff * diff
+                        })
+                        .sum::<f32>()
+                        .sqrt();
+                    (i, d)
+                })
+                .collect();
+            true_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            let true_top: Vec<usize> = true_dists.iter().take(top_k).map(|&(i, _)| i).collect();
+
+            // RaBitQ top-k
+            let rabitq_dists = index.batch_distance(query, &encoded);
+            let mut rabitq_ranked: Vec<(usize, f32)> =
+                rabitq_dists.into_iter().enumerate().collect();
+            rabitq_ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            let rabitq_top: Vec<usize> =
+                rabitq_ranked.iter().take(top_k).map(|&(i, _)| i).collect();
+
+            let hits = true_top
+                .iter()
+                .filter(|&&idx| rabitq_top.contains(&idx))
+                .count();
+            #[allow(clippy::cast_precision_loss)]
+            let recall = hits as f64 / top_k as f64;
+            total_recall += recall;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let avg_recall = total_recall / num_queries as f64;
+        assert!(
+            avg_recall >= 0.85,
+            "RaBitQ trained recall@10 = {avg_recall:.3}, expected >= 0.85"
+        );
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_save_load_roundtrip() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(55);
+
+        let dim = 32;
+        let vectors: Vec<Vec<f32>> = (0..50)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+            .collect();
+
+        let index = RaBitQIndex::train(&vectors, 42).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        index.save(dir.path()).unwrap();
+
+        let loaded = RaBitQIndex::load(dir.path())
+            .unwrap()
+            .expect("index should exist");
+        assert_eq!(loaded.dimension, index.dimension);
+        assert_eq!(loaded.centroid, index.centroid);
+        assert_eq!(loaded.rotation, index.rotation);
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_load_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = RaBitQIndex::load(dir.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn rabitq_save_uses_atomic_write() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(66);
+
+        let dim = 16;
+        let vectors: Vec<Vec<f32>> = (0..20)
+            .map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect())
+            .collect();
+
+        let index = RaBitQIndex::train(&vectors, 42).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        index.save(dir.path()).unwrap();
+
+        // .tmp file should not exist after successful save
+        assert!(!dir.path().join("rabitq.idx.tmp").exists());
+        // Final file should exist
+        assert!(dir.path().join("rabitq.idx").exists());
     }
 }
