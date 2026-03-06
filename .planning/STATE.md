@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 05-03-PLAN.md (Hybrid dense+sparse fusion execution)
-last_updated: "2026-03-06T22:17:57.726Z"
-last_activity: 2026-03-06 — Completed plan 05-03 (Hybrid dense+sparse fusion execution)
+stopped_at: Completed 05-04-PLAN.md (REST API and WASM sparse bindings)
+last_updated: "2026-03-06T22:45:26Z"
+last_activity: 2026-03-06 — Completed plan 05-04 (REST API and WASM sparse bindings)
 progress:
   total_phases: 10
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 18
-  completed_plans: 17
-  percent: 94
+  completed_plans: 18
+  percent: 100
 ---
 
 # Project State
@@ -26,17 +26,17 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 5 of 10 (Sparse Integration)
-Plan: 3 of 4 in current phase
-Status: Completed plan 05-03 (Hybrid dense+sparse fusion execution)
-Last activity: 2026-03-06 — Completed plan 05-03 (Hybrid dense+sparse fusion execution)
+Plan: 4 of 4 in current phase (PHASE COMPLETE)
+Status: Completed plan 05-04 (REST API and WASM sparse bindings)
+Last activity: 2026-03-06 — Completed plan 05-04 (REST API and WASM sparse bindings)
 
-Progress: [█████████░] 94% (14 prior + 3 phase 5)
+Progress: [██████████] 100% (14 prior + 4 phase 5)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
-- Average duration: 19 min
+- Total plans completed: 18
+- Average duration: 20 min
 - Total execution time: 4.9 hours
 
 **By Phase:**
@@ -61,6 +61,7 @@ Progress: [█████████░] 94% (14 prior + 3 phase 5)
 | Phase 05 P02 | 26 min | 2 tasks | 12 files |
 | Phase 05 P01 | 28 | 2 tasks | 24 files |
 | Phase 05 P03 | 24 | 2 tasks | 9 files |
+| Phase 05 P04 | 26 | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,11 @@ Recent decisions affecting current work:
 - [Phase 05]: RSF uses min-max normalization per branch then weighted sum (dense_weight + sparse_weight must equal 1.0)
 - [Phase 05]: Filtered sparse search uses 4x/8x oversampling with on-the-fly payload predicate
 - [Phase 05]: Parallel branch execution via rayon::join gated on cfg(feature=persistence) with sequential fallback
+- [05-04]: Self-contained WASM sparse index (avoids persistence-gated velesdb-core::index dependency)
+- [05-04]: Extracted sparse_index to always-compiled top-level module, index::sparse re-exports from it
+- [05-04]: SparseVectorInput uses #[serde(untagged)] enum for dual-format JSON (parallel arrays + dict)
+- [05-04]: Search handler auto-detects mode from vector/sparse_vector field presence
+- [05-04]: RRF (k=60) is default fusion strategy for hybrid search via REST
 
 ### Pending Todos
 
@@ -126,6 +132,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T22:17:57.723Z
-Stopped at: Completed 05-03-PLAN.md (Hybrid dense+sparse fusion execution)
+Last session: 2026-03-06T22:45:26Z
+Stopped at: Completed 05-04-PLAN.md (REST API and WASM sparse bindings)
 Resume file: None

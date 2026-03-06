@@ -10,7 +10,7 @@ VelesDB v1.5 adds four interdependent engine subsystems (Product Quantization, S
 - [x] **Phase 2: PQ Core Engine** - Production-quality PQ training (k-means++), ADC SIMD kernels, no API surface change (completed 2026-03-06)
 - [ ] **Phase 3: PQ Integration** - VelesQL TRAIN command, QuantizationConfig PQ variant, recall benchmark suite
 - [x] **Phase 4: Sparse Vector Engine** - WeightedPostingList inverted index, sparse persistence, ANN inner-product search (completed 2026-03-06)
-- [ ] **Phase 5: Sparse Integration** - Hybrid dense+sparse RRF, VelesQL SPARSE_NEAR grammar, REST endpoints, u32 term_id
+- [x] **Phase 5: Sparse Integration** - Hybrid dense+sparse RRF, VelesQL SPARSE_NEAR grammar, REST endpoints, u32 term_id (completed 2026-03-06)
 - [ ] **Phase 6: Query Plan Cache** - Two-level CompiledPlanCache, write_generation invalidation, lifecycle hooks, metrics
 - [ ] **Phase 7: Streaming Inserts** - StreamIngester channel, micro-batches, delta buffer, searchable-immediately guarantee
 - [ ] **Phase 8: SDK Parity** - Python, TypeScript, WASM, Mobile, LangChain, LlamaIndex, Tauri updated to v1.5 API
@@ -169,7 +169,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 2. PQ Core Engine | 4/4 | Complete   | 2026-03-06 |
 | 3. PQ Integration | 2/3 | In Progress|  |
 | 4. Sparse Vector Engine | 3/3 | Complete   | 2026-03-06 |
-| 5. Sparse Integration | 2/4 | In Progress|  |
+| 5. Sparse Integration | 4/4 | Complete   | 2026-03-06 |
 | 6. Query Plan Cache | 0/TBD | Not started | - |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
 | 8. SDK Parity | 0/TBD | Not started | - |

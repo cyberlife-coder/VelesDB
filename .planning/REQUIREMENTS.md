@@ -34,7 +34,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 - [x] **SPARSE-03**: Recherche sparse ANN — inner product sur posting lists, support WAND ou scan lineaire selon densite
 - [x] **SPARSE-04**: Hybrid dense+sparse via RRF existant — `fusion/rrf_merge()` non modifie, fonctionne out-of-the-box
 - [x] **SPARSE-05**: Extension grammaire VelesQL — keyword `SPARSE` et clause `vector SPARSE_NEAR $sv` dans `velesql.pest`
-- [ ] **SPARSE-06**: API REST — endpoints upsert avec champ `sparse_vector` + search sparse endpoint
+- [x] **SPARSE-06**: API REST — endpoints upsert avec champ `sparse_vector` + search sparse endpoint
 - [x] **SPARSE-07**: term_id u32 (4 milliards de termes — couvre tous les vocabulaires LLM modernes)
 
 ### Query Plan Cache — EPIC-065 (CACHE)
@@ -135,7 +135,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | SPARSE-03 | Phase 4: Sparse Vector Engine | Complete |
 | SPARSE-04 | Phase 5: Sparse Integration | Complete |
 | SPARSE-05 | Phase 5: Sparse Integration | Complete |
-| SPARSE-06 | Phase 5: Sparse Integration | Pending |
+| SPARSE-06 | Phase 5: Sparse Integration | Complete |
 | SPARSE-07 | Phase 5: Sparse Integration | Complete |
 | CACHE-01 | Phase 6: Query Plan Cache | Pending |
 | CACHE-02 | Phase 6: Query Plan Cache | Pending |
