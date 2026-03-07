@@ -112,7 +112,11 @@ Plans:
   2. Inserting a document into a collection invalidates all compiled plans for that collection — the next query execution is a cache miss and re-plans correctly
   3. Dropping or recreating a collection immediately invalidates all its cached plans — no stale plan survives collection drop/recreate
   4. Cache metrics (hit rate, miss rate, evictions) are visible at the `/metrics` Prometheus endpoint after several queries
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — PlanKey/CompiledPlan types + write_generation + schema_version + cache on Database (CACHE-01, CACHE-02, CACHE-03)
+- [ ] 06-02-PLAN.md — Cache integration in execute_query + EXPLAIN cache_hit + invalidation tests + Prometheus metrics (CACHE-01, CACHE-02, CACHE-03, CACHE-04)
 
 ### Phase 7: Streaming Inserts
 **Goal**: Clients can insert vectors continuously without forced batching — inserts are immediately searchable, backpressure is signaled correctly, and the HNSW rebuild race is eliminated
@@ -170,7 +174,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 3. PQ Integration | 2/3 | In Progress|  |
 | 4. Sparse Vector Engine | 3/3 | Complete   | 2026-03-06 |
 | 5. Sparse Integration | 4/4 | Complete   | 2026-03-06 |
-| 6. Query Plan Cache | 0/TBD | Not started | - |
+| 6. Query Plan Cache | 0/2 | Not started | - |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
 | 8. SDK Parity | 0/TBD | Not started | - |
 | 9. Documentation | 0/TBD | Not started | - |
