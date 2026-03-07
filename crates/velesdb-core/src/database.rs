@@ -288,17 +288,61 @@ impl Database {
         Ok(Some(stats))
     }
 
+    /// Produces a canonical JSON string for a `serde_json::Value`.
+    ///
+    /// Recursively sorts the keys of every JSON object so that two values
+    /// representing the same logical structure always produce identical bytes,
+    /// regardless of the `HashMap` iteration order used during serialization.
+    ///
+    /// This is required because `FusionConfig::params` and
+    /// `TrainStatement::params` are `HashMap`-backed; `serde_json` serialises
+    /// them in hash-order, which is non-deterministic across invocations.
+    fn canonical_json(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                // Collect into a BTreeMap to sort keys, then recurse.
+                let sorted: serde_json::Map<String, serde_json::Value> = map
+                    .into_iter()
+                    .map(|(k, v)| (k, Self::canonical_json(v)))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    .into_iter()
+                    .collect();
+                serde_json::Value::Object(sorted)
+            }
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.into_iter().map(Self::canonical_json).collect())
+            }
+            other => other,
+        }
+    }
+
     /// Builds a deterministic cache key for a query (CACHE-02).
     ///
-    /// Hashes the debug representation of the query, reads the current
-    /// `schema_version`, and gathers per-collection `write_generation`
-    /// counters (sorted by collection name) to form a `PlanKey`.
+    /// Serialises the query to canonical JSON (object keys sorted recursively),
+    /// reads the current `schema_version`, and gathers per-collection
+    /// `write_generation` counters (sorted by collection name) to form a
+    /// `PlanKey`.
+    ///
+    /// # Why canonical JSON instead of `Debug`
+    ///
+    /// `format!("{query:?}")` is non-deterministic when the `Query` AST
+    /// contains `HashMap`-backed fields (`FusionConfig::params`,
+    /// `TrainStatement::params`) because `HashMap` iteration order is not
+    /// guaranteed across invocations. Canonical JSON with sorted object keys
+    /// is stable and produces the same byte sequence for logically identical
+    /// queries.
     #[must_use]
     pub fn build_plan_key(&self, query: &crate::velesql::Query) -> crate::cache::PlanKey {
         use std::hash::{BuildHasher, Hasher};
 
-        // Hash the query via its Debug representation (deterministic for identical ASTs).
-        let query_text = format!("{query:?}");
+        // Serialise via serde_json, then canonicalise (sort object keys) before hashing.
+        // Fallback to Debug representation if serialization fails (should never happen in
+        // practice since all Query fields are Serialize, but erring on the side of liveness).
+        let query_text = serde_json::to_value(query)
+            .map(Self::canonical_json)
+            .and_then(|v| serde_json::to_string(&v))
+            .unwrap_or_else(|_| format!("{query:?}"));
+
         let mut hasher = rustc_hash::FxBuildHasher.build_hasher();
         hasher.write(query_text.as_bytes());
         let query_hash = hasher.finish();
