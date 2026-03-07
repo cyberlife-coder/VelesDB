@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 57-102µs HNSW Search* • 18.7ns SIMD • 3,300+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 59µs HNSW Search • 18.8ns SIMD • 3,300+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -24,13 +24,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.7ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.8ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
   <img src="https://img.shields.io/badge/🧪_Tests-3,300+-green?style=for-the-badge" alt="Tests"/>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
   <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
-  <img src="https://img.shields.io/badge/Sparse_Search-757NS-blue?style=for-the-badge" alt="Sparse Search Latency"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-226µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
@@ -76,8 +76,8 @@ SELECT * FROM docs WHERE vector SPARSE_NEAR $sv LIMIT 10
 ```
 
 ```python
-# Python SDK
-results = db.sparse_search("docs", sparse_vector={42: 0.8, 137: 0.6, 891: 0.3}, top_k=10)
+# Python SDK -- unified search with optional sparse_vector
+results = collection.search(sparse_vector={42: 0.8, 137: 0.6, 891: 0.3}, top_k=10)
 ```
 
 ### Hybrid Dense+Sparse Search -- Best of Both Worlds
@@ -88,17 +88,16 @@ Combine dense semantic similarity with sparse lexical matching in a single query
 -- Hybrid search with RRF fusion
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RRF(k=60)
+USING FUSION(strategy='rrf', k=60)
 LIMIT 10
 ```
 
 ```json
-// REST API
+// REST API -- unified search endpoint auto-detects hybrid mode
 POST /collections/docs/search
 {
-  "vector": [0.1, 0.2, ...],
+  "vector": [0.1, 0.2, 0.3],
   "sparse_vector": {"42": 0.8, "137": 0.6},
-  "fusion": "rrf",
   "top_k": 10
 }
 ```
@@ -162,7 +161,7 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 18.7ns SIMD</h3>
+<h3>⚡ 18.8ns SIMD</h3>
 <p>Native HNSW + AVX2 SIMD.<br/><strong>41 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
@@ -197,7 +196,7 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 18.7 ns</h3>
+<h3>⚡ 18.8 ns</h3>
 <p><strong>Dot Product</strong><br/>768D vectors</p>
 </td>
 <td align="center" width="20%">
@@ -211,14 +210,15 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 18.7 ns | 41.1 Gelem/s |
-| **SIMD Cosine (768D)** | 27 ns | 28.4 Gelem/s |
-| **SIMD Hamming (768D)** | 19 ns | 52.6M ops/sec |
-| **HNSW Search (10K vectors)** | 96-106 µs (median 102 µs) | k=10, 768D, measured 2026-02-17 |
-| **ColumnStore Filter (100K)** | 44-84 µs | eq string: 44 µs, int range: 84 µs |
-| **VelesQL Cache Hit** | 86 ns | criterion run, 2026-02-17 |
+| **SIMD Dot Product (768D)** | 18.8 ns | 41.0 Gelem/s |
+| **SIMD Cosine (768D)** | 35.6 ns | 21.6 Gelem/s |
+| **SIMD Hamming (768D)** | 37.4 ns | 20.5M ops/sec |
+| **HNSW Search (10K vectors)** | 59 µs | k=10, 768D, measured 2026-03-07 |
+| **ColumnStore Filter (10K)** | 4.5 µs (column_store) / 148 µs (JSON) | eq string, measured 2026-03-07 |
+| **VelesQL Cache Hit** | 444 ns | criterion run, 2026-03-07 |
+| **Sparse Search (10K)** | 226 µs (top10) / 696 µs (top100) | MaxScore DAAT, measured 2026-03-07 |
 
-> \*Measured latency depends on CPU/flags/dataset. Current run measured **96-106 µs**; **57 µs** remains the best-case reference in optimized balanced mode.
+> \*Measured on i9-14900KF, Windows 11, Rust 1.92.0. Latency depends on CPU/flags/dataset.
 
 ### Codebase Health
 
@@ -1175,22 +1175,22 @@ LIMIT 10
 
 ### 🔥 Core Vector Operations (768D - BERT/OpenAI dimensions)
 
-| Operation | Latency | Throughput | vs. Naive |
-|-----------|---------|------------|----------|
-| **Dot Product (768D)** | **46 ns** | **21.7M ops/sec** | 🚀 **8x faster** |
-| **Euclidean (768D)** | **56 ns** | **17.9M ops/sec** | 🚀 **6x faster** |
-| **Cosine (768D)** | **105 ns** | **9.5M ops/sec** | 🚀 **4x faster** |
-| **Hamming (Binary)**| **8 ns** | **125M ops/sec** | 🚀 **10x faster** |
-| **Jaccard (768D)** | **175 ns** | **5.7M ops/sec** | 🚀 **3x faster** |
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| **Dot Product (768D)** | **18.8 ns** | **41.0 Gelem/s** |
+| **Euclidean (768D)** | **20.9 ns** | **36.7 Gelem/s** |
+| **Cosine (768D)** | **35.6 ns** | **21.6 Gelem/s** |
+| **Hamming (768D)**| **37.4 ns** | **20.5M ops/sec** |
+| **Jaccard (768D)** | **22.8 ns** | **33.7M ops/sec** |
 
 ### 📊 System Performance (10K Vectors, 768D)
 
 | Benchmark | Result | Details |
 |-----------|--------|----------|
-| **HNSW Search** | **102 µs** | Balanced mode (ef=128), measured 2026-02-17 |
+| **HNSW Search** | **59 µs** | k=10, 768D, measured 2026-03-07 |
 | **Hybrid Search** | **139 µs** | Vector + filter |
 | **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
-| **VelesQL Parsing**| **86 ns** | Cache hit (~11.7M qps), measured 2026-02-17 |
+| **VelesQL Cache Hit**| **444 ns** | ~2.3M qps, measured 2026-03-07 |
 | **Recall@10** | **100%** | Accurate mode |
 | **Code Coverage** | **82.30%** | 3,300+ tests |
 
