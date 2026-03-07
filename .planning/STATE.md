@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-03-07T11:21:02Z"
-last_activity: 2026-03-07 — Completed plan 06-02 (Plan cache wiring + metrics)
+status: executing
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-03-07T13:58:29Z"
+last_activity: 2026-03-07 — Phase 07 Plan 01 complete (StreamIngester + DeltaBuffer stub)
 progress:
   total_phases: 10
-  completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
-  percent: 100
+  completed_phases: 6
+  total_plans: 23
+  completed_plans: 21
+  percent: 63
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 6 — Query Plan Cache
+**Current focus:** Phase 7 — Streaming Inserts (Plan 01 complete, 2 remaining)
 
 ## Current Position
 
-Phase: 6 of 10 (Query Plan Cache)
-Plan: 2 of ? in current phase
-Status: Completed plan 06-02 (Plan cache wiring + metrics)
-Last activity: 2026-03-07 — Completed plan 06-02 (Plan cache wiring + metrics)
+Phase: 7 of 10 (Streaming Inserts) — executing
+Plan: 1 of 3 in current phase
+Status: Plan 01 complete — StreamIngester + DeltaBuffer stub wired into Collection
+Last activity: 2026-03-07 — Phase 07 Plan 01 complete (StreamIngester + DeltaBuffer stub)
 
-Progress: [██████████] 100% (18 prior + 2 phase 6)
+Progress: [██████░░░░] 63% (21/23 plans complete)
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [██████████] 100% (18 prior + 2 phase 6)
 | Phase 05 P04 | 26 | 2 tasks | 14 files |
 | Phase 06 P01 | 23 min | 2 tasks | 9 files |
 | Phase 06 P02 | 17 min | 2 tasks | 7 files |
+| Phase 07 P01 | 14 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -126,10 +127,18 @@ Recent decisions affecting current work:
 - [06-01]: write_generation bumps once per mutation batch, not per-item
 - [06-01]: Default cache sizing L1=1K, L2=10K
 - [06-01]: allow(dead_code) on schema_version/plan_cache accessors (wired in Plan 02)
-- [06-02]: FxHash of query Debug repr for PlanKey.query_hash (deterministic for identical ASTs)
 - [06-02]: Cache-aside pattern: cache stores QueryPlan, execution still runs against live data
 - [06-02]: explain_query reads cache only, execute_query populates on miss
 - [06-02]: /metrics route moved before .with_state() for State access in prometheus_metrics handler
+- [06-review]: Replaced Debug-based hash with canonical JSON serialization (serde_json + BTreeMap key sort)
+- [06-review]: TOCTOU fix: PlanKey rebuilt post-execution before cache insert (pre_exec_key/post_exec_key)
+- [06-review]: Graph mutations (add_edge, remove_edge, store_node_payload) now bump write_generation
+- [06-review]: load_collections bumps schema_version after loading pre-existing collections
+- [06-review]: CompiledPlanCache::contains() added for metric-free cache existence check
+- [07-01]: Option<JoinHandle> pattern for StreamIngester to support both graceful shutdown and Drop abort
+- [07-01]: BackpressureError maps both Full and Closed channel states to BufferFull
+- [07-01]: Lock order position 10 for delta_buffer (after sparse_indexes at 9)
+- [07-01]: allow(dead_code) on stream_ingester/delta_buffer fields (wired in Plan 02)
 
 ### Pending Todos
 
@@ -143,6 +152,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T11:21:02Z
-Stopped at: Completed 06-02-PLAN.md
-Resume file: .planning/phases/06-query-plan-cache/06-02-SUMMARY.md
+Last session: 2026-03-07T13:58:29Z
+Stopped at: Completed 07-01-PLAN.md
+Resume file: .planning/phases/07-streaming-inserts/07-01-SUMMARY.md
+Next action: Execute 07-02-PLAN.md (DeltaBuffer search integration)
