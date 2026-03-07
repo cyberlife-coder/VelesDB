@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-03-07T23:16:02Z"
-last_activity: 2026-03-08 — Phase 10 Plan 01 complete (version bump 1.4.5 to 1.5.0 + publish guards)
+status: completed
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-03-07T23:24:02.121Z"
+last_activity: 2026-03-08 — Phase 10 Plan 02 complete (release pipeline: maturin PyPI matrix, CHANGELOG notes, validate-all gate)
 progress:
   total_phases: 10
-  completed_phases: 9
-  total_plans: 32
-  completed_plans: 32
+  completed_phases: 10
+  total_plans: 33
+  completed_plans: 33
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 10 — Release Readiness (in progress)
+**Current focus:** Phase 10 — Release Readiness (COMPLETE)
 
 ## Current Position
 
-Phase: 10 of 10 (Release Readiness) -- IN PROGRESS
-Plan: 1 of ? in current phase (1 complete)
-Status: Phase 10 Plan 01 complete -- version bump 1.5.0 + publish guards
-Last activity: 2026-03-08 — Phase 10 Plan 01 complete (version bump 1.4.5 to 1.5.0 + publish guards)
+Phase: 10 of 10 (Release Readiness) -- COMPLETE
+Plan: 2 of 2 in current phase (2 complete)
+Status: Phase 10 Plan 02 complete -- release pipeline enhanced with cross-platform PyPI, CHANGELOG notes, validation gate
+Last activity: 2026-03-08 — Phase 10 Plan 02 complete (release pipeline: maturin PyPI matrix, CHANGELOG notes, validate-all gate)
 
-Progress: [██████████] 100% (32/32 plans complete)
+Progress: [██████████] 100% (33/33 plans complete)
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Progress: [██████████] 100% (32/32 plans complete)
 | Phase 09 P03 | 6 | 2 tasks | 4 files |
 | Phase 09 P04 | 17 min | 1 tasks | 1 files |
 | Phase 10 P01 | 3 min | 2 tasks | 10 files |
+| Phase 10 P02 | 4 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -181,6 +182,9 @@ Recent decisions affecting current work:
 - [10-01]: Inter-crate deps use workspace = true inheritance, no explicit version in crate Cargo.toml files
 - [10-01]: Downstream crate dry-run fails expected (velesdb-core 1.5.0 not yet on crates.io), resolves during ordered publish
 - [10-01]: publish = false on velesdb-python and velesdb-wasm to prevent accidental crates.io publish
+- [Phase 10]: Split publish-pypi into publish-pypi-wheels (maturin cross-platform) and publish-pypi-pure (pure Python)
+- [Phase 10]: CHANGELOG extraction with git-log fallback for GitHub Release notes
+- [Phase 10]: validate-all job gates all publish jobs with workspace tests + cargo publish --dry-run
 
 ### Pending Todos
 
@@ -194,7 +198,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T23:16:02Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-03-07T23:24:02.119Z
+Stopped at: Completed 10-02-PLAN.md
 Resume file: None
 Next action: Proceed to Phase 10 Plan 02

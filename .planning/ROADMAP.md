@@ -15,7 +15,7 @@ VelesDB v1.5 adds four interdependent engine subsystems (Product Quantization, S
 - [x] **Phase 7: Streaming Inserts** - StreamIngester channel, micro-batches, delta buffer, searchable-immediately guarantee (completed 2026-03-07)
 - [ ] **Phase 8: SDK Parity** - Python, TypeScript, WASM, Mobile, LangChain, LlamaIndex, Tauri updated to v1.5 API
 - [x] **Phase 9: Documentation** - README v1.5, rustdoc, OpenAPI spec, migration guide, benchmarks, changelog (completed 2026-03-07)
-- [ ] **Phase 10: Release Readiness** - Version bump 1.5.0, crates.io publish, PyPI wheels, npm packages, GitHub release
+- [x] **Phase 10: Release Readiness** - Version bump 1.5.0, crates.io publish, PyPI wheels, npm packages, GitHub release (completed 2026-03-07)
 
 ## Phase Details
 
@@ -199,4 +199,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
 | 8. SDK Parity | 3/4 | In Progress|  |
 | 9. Documentation | 4/4 | Complete   | 2026-03-07 |
-| 10. Release Readiness | 1/2 | In Progress|  |
+| 10. Release Readiness | 2/2 | Complete   | 2026-03-07 |
