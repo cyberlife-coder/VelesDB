@@ -28,6 +28,7 @@ fn formatting_error_response() -> Response {
     )
         .into_response()
 }
+
 /// Prometheus text format metrics response.
 ///
 /// Returns metrics in Prometheus exposition format, including plan cache stats.
@@ -159,6 +160,8 @@ pub async fn health_metrics() -> impl IntoResponse {
     if writeln!(output, "# HELP velesdb_up VelesDB server is up").is_err()
         || writeln!(output, "# TYPE velesdb_up gauge").is_err()
         || writeln!(output, "velesdb_up 1").is_err()
+        // Prometheus text format requires a trailing blank line after each metric family.
+        || writeln!(output).is_err()
     {
         return formatting_error_response();
     }

@@ -300,7 +300,12 @@ impl Database {
     fn canonical_json(value: serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::Object(map) => {
-                // Collect into a BTreeMap to sort keys, then recurse.
+                // Without the `preserve_order` feature flag, `serde_json::Map` is already
+                // backed by `BTreeMap` and therefore already sorted. This explicit sort
+                // step is kept as defense-in-depth: if `preserve_order` is ever enabled
+                // in `Cargo.toml` (which switches the backing store to `IndexMap` and
+                // preserves insertion order), the canonical key ordering is still upheld
+                // without any change to this function.
                 let sorted: serde_json::Map<String, serde_json::Value> = map
                     .into_iter()
                     .map(|(k, v)| (k, Self::canonical_json(v)))

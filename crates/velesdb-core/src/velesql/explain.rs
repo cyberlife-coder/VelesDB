@@ -38,6 +38,10 @@ pub struct QueryPlan {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_hit: Option<bool>,
     /// How many times this cached plan has been reused (CACHE-02).
+    ///
+    /// The value is the `reuse_count` atomically incremented inside the cache on every
+    /// successful `get()`. A value of 1 means the plan was found in cache and this is
+    /// its first reuse. The count includes the current call to `explain_query`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_reuse_count: Option<u64>,
 }

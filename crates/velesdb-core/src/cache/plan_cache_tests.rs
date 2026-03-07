@@ -460,6 +460,61 @@ fn test_explain_first_query_cache_miss() {
     assert_eq!(explain.plan_reuse_count, Some(0));
 }
 
+/// Verifies that calling `add_edge` on a collection increments `write_generation`
+/// and therefore invalidates any cached query plan for that collection (CACHE-01).
+///
+/// `add_edge` is a write operation on the graph sub-layer of a `Collection`.
+/// The cache invalidation contract requires that **every** write operation — vector
+/// upserts, deletes, *and* graph edge mutations — advances `write_generation`.
+/// This test asserts that contract for graph mutations specifically.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_plan_invalidation_on_graph_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::Database::open(dir.path()).unwrap();
+
+    db.create_collection("cache_graph", 4, crate::DistanceMetric::Cosine)
+        .unwrap();
+
+    let coll = db.get_collection("cache_graph").unwrap();
+
+    // Seed with one vector point so the query returns results and the
+    // planner can produce a stable plan to cache.
+    coll.upsert(vec![crate::Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+        sparse_vectors: None,
+    }])
+    .unwrap();
+
+    let query = select_query("cache_graph");
+    let params = std::collections::HashMap::new();
+
+    // Populate the plan cache via execute_query.
+    let _ = db.execute_query(&query, &params).unwrap();
+
+    // Confirm the plan is cached before the graph mutation.
+    let explain_before = db.explain_query(&query).unwrap();
+    assert_eq!(
+        explain_before.cache_hit,
+        Some(true),
+        "plan should be cached before graph mutation"
+    );
+
+    // Graph mutation: add_edge bumps write_generation, invalidating the cached plan.
+    let edge = crate::GraphEdge::new(1, 1, 2, "KNOWS").expect("edge should be valid");
+    coll.add_edge(edge).unwrap();
+
+    // The cache key now encodes a newer write_generation — it must miss.
+    let explain_after = db.explain_query(&query).unwrap();
+    assert_eq!(
+        explain_after.cache_hit,
+        Some(false),
+        "plan should be invalidated after add_edge"
+    );
+}
+
 // ---- schema_version bumped by load_collections (C-3) ----
 
 /// Verifies that `schema_version` is incremented when `load_collections`
