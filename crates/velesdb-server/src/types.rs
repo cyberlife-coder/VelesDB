@@ -182,6 +182,20 @@ pub struct PointRequest {
     pub sparse_vectors: Option<BTreeMap<String, SparseVectorInput>>,
 }
 
+/// Request body for the streaming insert endpoint.
+///
+/// Accepts a single point to be pushed into the bounded ingestion channel.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct StreamInsertRequest {
+    /// Point ID.
+    pub id: u64,
+    /// Dense vector data.
+    pub vector: Vec<f32>,
+    /// Optional JSON payload (metadata).
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+}
+
 // ============================================================================
 // Search Types
 // ============================================================================

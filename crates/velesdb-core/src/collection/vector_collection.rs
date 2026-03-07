@@ -521,6 +521,23 @@ impl VectorCollection {
         self.inner.execute_query(query, params)
     }
 
+    /// Sends a point into the streaming ingestion channel.
+    ///
+    /// Returns `Ok(())` on success (202 semantics). Returns
+    /// [`BackpressureError::BufferFull`] when the channel is at capacity, or
+    /// [`BackpressureError::NotConfigured`] if streaming is not active.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackpressureError`] on buffer-full or not-configured.
+    #[cfg(feature = "persistence")]
+    pub fn stream_insert(
+        &self,
+        point: crate::point::Point,
+    ) -> std::result::Result<(), crate::collection::streaming::BackpressureError> {
+        self.inner.stream_insert(point)
+    }
+
     /// Executes a raw VelesQL string.
     /// # Errors
     pub fn execute_query_str(

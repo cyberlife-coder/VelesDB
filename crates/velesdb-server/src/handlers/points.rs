@@ -11,9 +11,9 @@ use futures::StreamExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::types::{ErrorResponse, SparseVectorInput, UpsertPointsRequest};
+use crate::types::{ErrorResponse, SparseVectorInput, StreamInsertRequest, UpsertPointsRequest};
 use crate::AppState;
-use velesdb_core::{Point, VectorCollection};
+use velesdb_core::{BackpressureError, Point, VectorCollection};
 
 use velesdb_core::index::sparse::SparseVector;
 
@@ -280,6 +280,74 @@ pub async fn stream_upsert_points(
         "failed_upserts": stats.failed_upserts
     }))
     .into_response()
+}
+
+/// Stream-insert a single point via the bounded ingestion channel.
+///
+/// Returns 202 Accepted on success, 429 Too Many Requests when the buffer is
+/// full (with `Retry-After: 0.1` header), and 404 when the collection is not
+/// found.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/stream/insert",
+    tag = "points",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = StreamInsertRequest,
+    responses(
+        (status = 202, description = "Point accepted into streaming buffer"),
+        (status = 429, description = "Streaming buffer full — retry after delay", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 409, description = "Streaming not configured", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::unused_async)]
+pub async fn stream_insert(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<StreamInsertRequest>,
+) -> impl IntoResponse {
+    let collection = match state.db.get_vector_collection(&name) {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Collection '{}' not found or is not a vector collection",
+                        name
+                    ),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let point = Point::new(req.id, req.vector, req.payload);
+
+    match collection.stream_insert(point) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(BackpressureError::BufferFull) => {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert("Retry-After", axum::http::HeaderValue::from_static("0.1"));
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                headers,
+                Json(ErrorResponse {
+                    error: "Stream buffer full, retry after 100ms".to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(BackpressureError::NotConfigured) => (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "Streaming not configured for this collection".to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// Get a point by ID.

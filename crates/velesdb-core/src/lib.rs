@@ -149,6 +149,8 @@ pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
+pub use collection::streaming::BackpressureError;
+#[cfg(feature = "persistence")]
 pub use collection::{
     // Collection: internal executor kept pub for backward compat and internal modules.
     // Suppression de l'export = PR dédiée (requiert ~40 corrections de références internes).

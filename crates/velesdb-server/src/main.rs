@@ -23,7 +23,7 @@ use velesdb_server::{
     add_edge, aggregate, batch_search, collection_sanity, create_collection, create_index,
     delete_collection, delete_index, delete_point, explain, flush_collection, get_collection,
     get_edges, get_node_degree, get_point, health_check, hybrid_search, is_empty, list_collections,
-    list_indexes, match_query, multi_query_search, query, search, stream_traverse,
+    list_indexes, match_query, multi_query_search, query, search, stream_insert, stream_traverse,
     stream_upsert_points, text_search, traverse_graph, upsert_points, AppState, OnboardingMetrics,
 };
 
@@ -92,6 +92,7 @@ fn build_router(state: Arc<AppState>) -> Router {
                 )
                 .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
+        .route("/collections/{name}/stream/insert", post(stream_insert))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),

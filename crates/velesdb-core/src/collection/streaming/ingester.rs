@@ -226,15 +226,32 @@ async fn drain_loop(
 /// Flushes the accumulated batch via the collection's existing upsert pipeline.
 ///
 /// Runs the blocking upsert on Tokio's blocking thread pool to avoid stalling
-/// the async runtime.
+/// the async runtime. If the delta buffer is active (HNSW rebuild in progress),
+/// also pushes the batch vectors into the delta buffer for immediate searchability.
 async fn flush_batch(collection: &Collection, batch: &mut Vec<Point>) {
     let points: Vec<Point> = std::mem::take(batch);
+
+    // Snapshot vectors for delta buffer before moving points into upsert.
+    // Only allocate if delta is active (common case: delta is inactive).
+    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.delta_buffer.is_active() {
+        points.iter().map(|p| (p.id, p.vector.clone())).collect()
+    } else {
+        Vec::new()
+    };
+
     let coll = collection.clone();
     // spawn_blocking wraps the synchronous upsert call (which acquires
     // multiple RwLocks and does mmap I/O) to prevent blocking the async runtime.
     let result = tokio::task::spawn_blocking(move || coll.upsert(points)).await;
     match result {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => {
+            // After successful upsert, push to delta buffer if active.
+            // The upsert wrote to storage+WAL; delta is an additional runtime
+            // copy so search can find these vectors before HNSW is rebuilt.
+            if !delta_entries.is_empty() {
+                collection.delta_buffer.extend(delta_entries);
+            }
+        }
         Ok(Err(e)) => {
             tracing::error!("Streaming drain flush failed: {e}");
         }
@@ -404,5 +421,45 @@ mod tests {
             found_count, 2,
             "shutdown should flush remaining buffered points"
         );
+    }
+
+    #[tokio::test]
+    async fn test_stream_delta_drain_loop_routes_to_delta_when_active() {
+        let (_dir, coll) = test_collection(4);
+        let config = StreamingConfig {
+            buffer_size: 100,
+            batch_size: 4,
+            flush_interval_ms: 50,
+        };
+        let coll_clone = coll.clone();
+
+        // Activate delta buffer (simulating HNSW rebuild)
+        coll.delta_buffer.activate();
+
+        let ingester = StreamIngester::new(coll, config);
+
+        // Send points via streaming
+        for i in 1..=4 {
+            ingester
+                .try_send(make_point(i, 4))
+                .expect("send should succeed");
+        }
+
+        // Wait for drain loop to flush
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Verify points are in storage (upsert always writes)
+        let results = coll_clone.get(&[1, 2, 3, 4]);
+        let found = results.iter().filter(|r| r.is_some()).count();
+        assert_eq!(found, 4, "upsert should write all points to storage");
+
+        // Verify points are also in the delta buffer
+        assert_eq!(
+            coll_clone.delta_buffer.len(),
+            4,
+            "delta buffer should contain the streamed points when active"
+        );
+
+        ingester.shutdown().await;
     }
 }

@@ -270,8 +270,7 @@ pub struct Collection {
     ///
     /// Lock order position: **10** (after `sparse_indexes` at 9).
     #[cfg(feature = "persistence")]
-    #[allow(dead_code)] // Wired in streaming Plan 02
-    pub(super) delta_buffer: Arc<DeltaBuffer>,
+    pub(crate) delta_buffer: Arc<DeltaBuffer>,
 }
 
 impl Collection {
@@ -304,8 +303,7 @@ impl Collection {
     ///
     /// Returns [`BackpressureError`] on buffer-full or not-configured.
     #[cfg(feature = "persistence")]
-    #[allow(dead_code)] // Wired in streaming Plan 02 / REST endpoint
-    pub(crate) fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
+    pub fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
         let guard = self.stream_ingester.read();
         match guard.as_ref() {
             Some(ingester) => ingester.try_send(point),

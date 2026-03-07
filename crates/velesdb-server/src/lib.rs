@@ -37,7 +37,7 @@ pub use handlers::{
     aggregate, batch_search, collection_sanity, create_collection, create_index, delete_collection,
     delete_index, delete_point, explain, flush_collection, get_collection, get_point, health_check,
     hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
-    query, search, stream_upsert_points, text_search, upsert_points,
+    query, search, stream_insert, stream_upsert_points, text_search, upsert_points,
 };
 
 // Graph handlers (EPIC-016/US-031)
@@ -86,6 +86,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::collections::collection_sanity,
         handlers::points::upsert_points,
         handlers::points::stream_upsert_points,
+        handlers::points::stream_insert,
         handlers::points::get_point,
         handlers::points::delete_point,
         handlers::search::search,
@@ -105,6 +106,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             CollectionResponse,
             UpsertPointsRequest,
             PointRequest,
+            StreamInsertRequest,
             SearchRequest,
             BatchSearchRequest,
             TextSearchRequest,
