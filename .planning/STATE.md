@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 09-03-PLAN.md
+stopped_at: Completed 09-02-PLAN.md
 last_updated: "2026-03-07T17:25:12.454Z"
 last_activity: 2026-03-07 — Phase 09 Plan 01 complete (README + CHANGELOG v1.5)
 progress:
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 9 of 10 (Documentation) -- IN PROGRESS
-Plan: 1 of 5 in current phase (1 complete)
-Status: Phase 09 Plan 01 complete -- README + CHANGELOG v1.5
-Last activity: 2026-03-07 — Phase 09 Plan 01 complete (README + CHANGELOG v1.5)
+Plan: 2 of 5 in current phase (3 complete)
+Status: Phase 09 Plan 02 complete -- Rustdoc + OpenAPI spec
+Last activity: 2026-03-07 — Phase 09 Plan 02 complete (zero-warning rustdoc + OpenAPI 3.0 spec)
 
-Progress: [██████████] 100% (28/32 plans in phases 1-9 complete)
+Progress: [██████████] 100% (29/32 plans in phases 1-9 complete)
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Progress: [██████████] 100% (28/32 plans in phases 1-9 compl
 | Phase 08 P03 | 9 min | 2 tasks | 6 files |
 | Phase 08 P04 | 3 | 2 tasks | 4 files |
 | Phase 09 P01 | 4 min | 2 tasks | 2 files |
+| Phase 09 P02 | 7 min | 2 tasks | 15 files |
 | Phase 09 P03 | 6 | 2 tasks | 4 files |
 
 ## Accumulated Context
@@ -169,6 +170,9 @@ Recent decisions affecting current work:
 - [09-01]: CHANGELOG preserves existing Expert Rust Review and SIMD entries, v1.5 entries added after
 - [Phase 09]: Migration guide covers 6 breaking change areas with checklist and FAQ
 - [Phase 09]: VelesQL spec bumped to v2.2.0 with SPARSE_NEAR, FUSE BY, TRAIN QUANTIZER grammar
+- [09-02]: Backtick code formatting for private item references in rustdoc (avoids broken intra-doc links without losing readability)
+- [09-02]: Graph handler submodules elevated to pub for utoipa paths macro resolution
+- [09-02]: OpenAPI spec regeneration via cargo test generate_openapi_spec_files pattern
 
 ### Pending Todos
 
@@ -182,7 +186,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T17:25:12.452Z
-Stopped at: Completed 09-03-PLAN.md
+Last session: 2026-03-07T17:24:30Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
-Next action: Proceed to Phase 09 Plan 02
+Next action: Proceed to Phase 09 remaining plans (04, 05)
