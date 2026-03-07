@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: executing
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-07T15:57:33Z"
-last_activity: 2026-03-07 — Phase 08 Plan 01 complete (Python SDK sparse/PQ/streaming)
+status: completed
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-03-07T16:05:00.471Z"
+last_activity: 2026-03-07 — Phase 08 Plan 04 complete (LangChain + LlamaIndex examples)
 progress:
   total_phases: 10
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 27
-  completed_plans: 26
-  percent: 74
+  completed_plans: 27
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 8 — SDK Parity (plan 03 complete)
+**Current focus:** Phase 8 — SDK Parity (complete)
 
 ## Current Position
 
-Phase: 8 of 10 (SDK Parity)
-Plan: 3 of 4 in current phase (01, 02, 03 complete; 04 remaining)
-Status: Phase 08 Plan 01 complete — Python SDK sparse/PQ/streaming
-Last activity: 2026-03-07 — Phase 08 Plan 01 complete (Python SDK sparse/PQ/streaming)
+Phase: 8 of 10 (SDK Parity) -- COMPLETE
+Plan: 4 of 4 in current phase (all complete)
+Status: Phase 08 complete -- all SDK parity plans done
+Last activity: 2026-03-07 — Phase 08 Plan 04 complete (LangChain + LlamaIndex examples)
 
-Progress: [████████░░] 74% (26/27 plans in phases 1-8 complete)
+Progress: [██████████] 100% (27/27 plans in phases 1-8 complete)
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Progress: [████████░░] 74% (26/27 plans in phases 1-8 comple
 | Phase 08 P01 | 9 min | 2 tasks | 6 files |
 | Phase 08 P02 | 6 min | 2 tasks | 7 files |
 | Phase 08 P03 | 9 min | 2 tasks | 6 files |
+| Phase 08 P04 | 3 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,7 @@ Recent decisions affecting current work:
 - [08-01]: train_pq placed on Database (not Collection) because TRAIN QUANTIZER requires Database-level execute_query
 - [08-01]: Public sparse_search_default/hybrid_sparse_search added to legacy Collection (new search/sparse.rs) for SDK access
 - [08-01]: Unified search signature: search(vector=None, *, sparse_vector=None, top_k=10) for backward compat
+- [Phase 08]: Synthetic embeddings for self-contained LangChain/LlamaIndex demos (no API keys required)
 
 ### Pending Todos
 
@@ -173,7 +175,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T15:57:33Z
-Stopped at: Completed 08-01-PLAN.md
-Resume file: .planning/phases/08-sdk-parity/08-01-SUMMARY.md
-Next action: Continue Phase 08 — Plan 04 remaining
+Last session: 2026-03-07T16:05:00.469Z
+Stopped at: Completed 08-04-PLAN.md
+Resume file: .planning/phases/08-sdk-parity/08-04-SUMMARY.md
+Next action: Phase 08 complete — proceed to Phase 09 (Docs) or Phase 10 (Release)
