@@ -96,23 +96,14 @@ impl Collection {
 
                 let payload: Option<serde_json::Value> = match point_dict.get("payload") {
                     Some(p) => {
-                        let payload_str: String = p
-                            .call_method0(py, "__str__")
-                            .and_then(|s| s.extract(py))
-                            .ok()
-                            .unwrap_or_default();
-
-                        if let Ok(json_val) = serde_json::from_str(&payload_str) {
-                            Some(json_val)
-                        } else {
-                            let dict: HashMap<String, PyObject> =
-                                p.extract(py).ok().unwrap_or_default();
-                            let json_map: serde_json::Map<String, serde_json::Value> = dict
-                                .into_iter()
-                                .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
-                                .collect();
-                            Some(serde_json::Value::Object(json_map))
-                        }
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
+                        let json_map: serde_json::Map<String, serde_json::Value> = dict
+                            .into_iter()
+                            .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+                            .collect();
+                        Some(serde_json::Value::Object(json_map))
                     }
                     None => None,
                 };
@@ -144,8 +135,9 @@ impl Collection {
 
                 let payload: serde_json::Value = match point_dict.get("payload") {
                     Some(p) => {
-                        let dict: HashMap<String, PyObject> =
-                            p.extract(py).ok().unwrap_or_default();
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
                         let json_map: serde_json::Map<String, serde_json::Value> = dict
                             .into_iter()
                             .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
@@ -190,8 +182,9 @@ impl Collection {
 
                 let payload: Option<serde_json::Value> = match point_dict.get("payload") {
                     Some(p) => {
-                        let dict: HashMap<String, PyObject> =
-                            p.extract(py).ok().unwrap_or_default();
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
                         let json_map: serde_json::Map<String, serde_json::Value> = dict
                             .into_iter()
                             .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
@@ -842,8 +835,9 @@ impl Collection {
 
                 let payload: Option<serde_json::Value> = match point_dict.get("payload") {
                     Some(p) => {
-                        let dict: HashMap<String, PyObject> =
-                            p.extract(py).ok().unwrap_or_default();
+                        let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
+                            PyValueError::new_err("payload must be a dict[str, Any]")
+                        })?;
                         let json_map: serde_json::Map<String, serde_json::Value> = dict
                             .into_iter()
                             .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))

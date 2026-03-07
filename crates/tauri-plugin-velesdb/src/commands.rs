@@ -327,17 +327,18 @@ pub async fn batch_search<R: Runtime>(
                 })
                 .collect();
 
-            // Use the top_k from the first search as default for the batch operation if needed,
-            // though search_batch_with_filters will handle them correctly if we adapt it or use it as base.
-            // For now, we'll use search_batch_with_filters from core.
-            let top_k = request.searches.first().map_or(10, |s| s.top_k);
+            // Use the maximum top_k across all searches so that every individual
+            // query retrieves enough candidates before per-query truncation.
+            let top_k = request.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
             let results = coll.search_batch_with_filters(&query_refs, top_k, &filters)?;
 
             Ok(results
                 .into_iter()
-                .map(|search_results| {
+                .zip(request.searches.iter().map(|s| s.top_k))
+                .map(|(search_results, k)| {
                     search_results
                         .into_iter()
+                        .take(k)
                         .map(|r| SearchResult {
                             id: r.point.id,
                             score: r.score,

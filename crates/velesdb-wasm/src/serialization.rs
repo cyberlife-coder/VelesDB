@@ -31,7 +31,8 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
 
     // Dimension
     // Reason: WASM vector dimensions are always < 100K (model constraints), safely < u32::MAX
-    let dim_u32 = store.dimension as u32;
+    let dim_u32 = u32::try_from(store.dimension)
+        .expect("dimension fits in u32: WASM model dimensions are always well below 2^32");
     bytes.extend_from_slice(&dim_u32.to_le_bytes());
 
     // Metric
@@ -40,7 +41,8 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
 
     // Vector count
     // Reason: WASM memory limits (4GB) prevent > u64::MAX vectors anyway
-    let count_u64 = count as u64;
+    let count_u64 =
+        u64::try_from(count).expect("count fits in u64: usize <= u64 on all WASM targets");
     bytes.extend_from_slice(&count_u64.to_le_bytes());
 
     // Data
@@ -129,8 +131,10 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
 
     // Perf: Bulk copy all vector data
     // SAFETY: Reinterprets the `Vec<f32>` allocation as mutable bytes for bulk deserialization.
-    // - `data` is a valid, uniquely-owned Vec<f32> with capacity `total_floats`.
-    // - Length passed is `total_floats * 4`, the exact byte size of the allocation.
+    // - `data` is a valid, uniquely-owned Vec<f32> freshly allocated on the heap in this function;
+    //   it cannot alias `bytes`, which is a shared reference provided by the caller.
+    // - The length passed is `total_floats * 4`, which is the exact byte size of the `data`
+    //   allocation (count * dimension * sizeof(f32) == count * dimension * 4).
     // - WASM is guaranteed little-endian, matching the on-wire format written by `export_to_bytes`.
     // Reason: avoids per-element f32::from_le_bytes() for significantly higher throughput.
     let data_as_bytes: &mut [u8] = unsafe {

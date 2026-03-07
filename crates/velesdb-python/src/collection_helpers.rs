@@ -56,21 +56,18 @@ pub fn search_result_to_multimodel_dict(
     dict.insert("graph_score".to_string(), py.None());
     dict.insert("fused_score".to_string(), to_pyobject(py, result.score));
 
-    // Payload as bindings
+    // Payload as bindings — convert once, then clone the reference for the legacy field.
     let bindings_py = match &result.point.payload {
         Some(p) => json_to_python(py, p),
         None => py.None(),
     };
+    let payload_py = bindings_py.clone_ref(py);
     dict.insert("bindings".to_string(), bindings_py);
     dict.insert("column_data".to_string(), py.None());
 
     // Legacy fields for compatibility
     dict.insert("id".to_string(), to_pyobject(py, result.point.id));
     dict.insert("score".to_string(), to_pyobject(py, result.score));
-    let payload_py = match &result.point.payload {
-        Some(p) => json_to_python(py, p),
-        None => py.None(),
-    };
     dict.insert("payload".to_string(), payload_py);
 
     dict
@@ -144,16 +141,33 @@ pub fn parse_sparse_vector(py: Python<'_>, obj: &PyObject) -> PyResult<SparseVec
     }
 
     // Try scipy.sparse via duck typing: check for `.toarray()` method.
-    if let Ok(has_toarray) = obj.call_method0(py, "toarray") {
+    // First confirm the attribute exists without calling it, so we can distinguish
+    // "not a scipy object" (AttributeError → try next format) from runtime errors.
+    let has_toarray_attr = obj
+        .getattr(py, "toarray")
+        .map(|attr| !attr.is_none(py))
+        .unwrap_or(false);
+
+    if has_toarray_attr {
         // `.toarray()` returns a dense numpy 2D array; flatten to 1D.
-        let flat = has_toarray.call_method0(py, "flatten")?;
-        let values: Vec<f32> = flat.extract(py)?;
+        let array = obj
+            .call_method0(py, "toarray")
+            .map_err(|e| PyValueError::new_err(format!("scipy toarray() failed: {e}")))?;
+        let flat = array
+            .call_method0(py, "flatten")
+            .map_err(|e| PyValueError::new_err(format!("scipy flatten() failed: {e}")))?;
+        let values: Vec<f32> = flat.extract(py).map_err(|e| {
+            PyValueError::new_err(format!("Failed to extract floats from scipy array: {e}"))
+        })?;
         let pairs: Vec<(u32, f32)> = values
             .into_iter()
             .enumerate()
             .filter(|(_, v)| v.abs() > f32::EPSILON)
-            .map(|(i, v)| (i as u32, v))
-            .collect();
+            .map(|(i, v)| u32::try_from(i).map(|idx| (idx, v)))
+            .collect::<Result<_, _>>()
+            .map_err(|_| {
+                PyValueError::new_err("Sparse vector has more than u32::MAX dimensions")
+            })?;
         return Ok(SparseVector::new(pairs));
     }
 
