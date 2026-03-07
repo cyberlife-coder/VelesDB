@@ -29,8 +29,8 @@
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
-  <img src="https://img.shields.io/badge/PQ_Recall@10-92%25-success?style=for-the-badge" alt="PQ Recall@10"/>
-  <img src="https://img.shields.io/badge/Sparse_Search-<0.5ms-blue?style=for-the-badge" alt="Sparse Search Latency"/>
+  <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-757µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
@@ -1220,7 +1220,7 @@ Reduce memory usage by **4-32x** with minimal recall loss:
 
 | Method | Compression | Recall Loss | Use Case |
 |--------|-------------|-------------|----------|
-| **PQ** (Product Quantization) | **4x** | < 8% (92%+ recall@10) | Large-scale search, production recommended |
+| **PQ** (Product Quantization) | **16-32x** | Variable (improves with higher D) | Memory-constrained, large-scale search |
 | **SQ8** (8-bit) | **4x** | < 2% | General purpose, Edge |
 | **Binary** (1-bit) | **32x** | ~10-15% | Fingerprints, IoT |
 | **RaBitQ** (Binary PQ) | **32x** | ~15% | Ultra-compressed, high dimensionality |
@@ -1509,7 +1509,7 @@ gantt
 </details>
 
 **Highlights:**
-- **Product Quantization** - 4x compression with 92%+ recall@10, ADC SIMD acceleration
+- **Product Quantization** - 16-32x compression with ADC SIMD acceleration, SQ8 mode for lossless 4x
 - **Sparse Vectors** - SPLADE/BM42-compatible inverted index with MaxScore algorithm
 - **Hybrid Search** - Dense+Sparse fusion via RRF/RSF in a single VelesQL query
 - **Streaming Inserts** - Immediately searchable with backpressure and delta buffer
