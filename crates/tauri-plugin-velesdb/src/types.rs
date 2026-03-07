@@ -205,6 +205,92 @@ pub struct MultiQuerySearchRequest {
     pub filter: Option<serde_json::Value>,
 }
 
+/// Request for sparse vector search.
+///
+/// Sparse vectors use JSON string keys (`"42": 0.8`) because JSON only
+/// supports string keys. Keys are parsed to `u32` in the command handler.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparseSearchRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Sparse vector as `{ "dim_index": weight, ... }`.
+    pub sparse_vector: std::collections::HashMap<String, f32>,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Optional sparse index name (empty string or omitted for default).
+    #[serde(default)]
+    pub index_name: Option<String>,
+}
+
+/// Request for hybrid dense+sparse search.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HybridSparseSearchRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Dense query vector.
+    pub vector: Vec<f32>,
+    /// Sparse vector as `{ "dim_index": weight, ... }`.
+    pub sparse_vector: std::collections::HashMap<String, f32>,
+    /// Number of results.
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+}
+
+/// A point input with optional sparse vector.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparsePointInput {
+    /// Point ID.
+    pub id: u64,
+    /// Dense vector data.
+    pub vector: Vec<f32>,
+    /// Optional payload (JSON object).
+    pub payload: Option<serde_json::Value>,
+    /// Optional sparse vector as `{ "dim_index": weight, ... }`.
+    #[serde(default)]
+    pub sparse_vector: Option<std::collections::HashMap<String, f32>>,
+}
+
+/// Request to upsert points with optional sparse vectors.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparseUpsertRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Points to upsert (with optional sparse vectors).
+    pub points: Vec<SparsePointInput>,
+}
+
+/// Request to train a Product Quantizer on a collection.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainPqRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Number of sub-quantizers.
+    #[serde(default)]
+    pub m: Option<usize>,
+    /// Number of centroids per sub-quantizer.
+    #[serde(default)]
+    pub k: Option<usize>,
+    /// Whether to use Optimized Product Quantization.
+    #[serde(default)]
+    pub opq: Option<bool>,
+}
+
+/// Request to stream-insert points.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamInsertRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Points to stream-insert.
+    pub points: Vec<PointInput>,
+}
+
 // ============================================================================
 // Response DTOs
 // ============================================================================

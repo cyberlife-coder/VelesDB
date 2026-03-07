@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 8 context gathered
-last_updated: "2026-03-07T15:25:38.745Z"
-last_activity: 2026-03-07 — Phase 07 Plan 03 complete (REST endpoint + WASM verification)
+status: executing
+stopped_at: Phase 08 Plan 02 complete
+last_updated: "2026-03-07T15:53:22Z"
+last_activity: 2026-03-07 — Phase 08 Plan 02 complete (TypeScript SDK sparse/PQ/streaming)
 progress:
   total_phases: 10
   completed_phases: 7
-  total_plans: 23
-  completed_plans: 23
-  percent: 70
+  total_plans: 26
+  completed_plans: 25
+  percent: 73
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 7 — Streaming Inserts (all 3 plans complete)
+**Current focus:** Phase 8 — SDK Parity (plan 02 complete)
 
 ## Current Position
 
-Phase: 7 of 10 (Streaming Inserts) — complete
-Plan: 3 of 3 in current phase
-Status: Phase 07 complete — REST endpoint + WASM verification done
-Last activity: 2026-03-07 — Phase 07 Plan 03 complete (REST endpoint + WASM verification)
+Phase: 8 of 10 (SDK Parity)
+Plan: 2 of 3 in current phase
+Status: Phase 08 Plan 02 complete — TypeScript SDK sparse/PQ/streaming
+Last activity: 2026-03-07 — Phase 08 Plan 02 complete (TypeScript SDK sparse/PQ/streaming)
 
-Progress: [███████░░░] 70% (23/23 plans in phases 1-7 complete)
+Progress: [███████░░░] 73% (25/26 plans in phases 1-8 complete)
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Progress: [███████░░░] 70% (23/23 plans in phases 1-7 comple
 | Phase 07 P01 | 14 min | 2 tasks | 6 files |
 | Phase 07 P02 | 18 min | 2 tasks | 7 files |
 | Phase 07 P03 | 18 min | 2 tasks | 12 files |
+| Phase 08 P02 | 6 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -147,6 +148,10 @@ Recent decisions affecting current work:
 - [07-02]: delta_buffer visibility widened from pub(super) to pub(crate) for cross-module access
 - [07-03]: plan_cache gated behind persistence feature (QueryPlan depends on persistence-gated velesql types)
 - [07-03]: merge_delta elevated to pub(crate) for cross-module access (graph_api.rs needs it)
+- [08-02]: SparseVector typed as Record<number, number> (simple dict matching REST SparseVectorInput untagged enum)
+- [08-02]: Lazy SparseIndex init in VectorStore (Option<SparseIndex>, populated on first sparse_insert)
+- [08-02]: WASM hybrid search uses RRF fusion (k=60) via existing hybrid_search_fuse
+- [08-02]: trainPq/streamInsert throw NOT_SUPPORTED in WASM mode
 
 ### Pending Todos
 
@@ -160,7 +165,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T15:25:38.742Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-sdk-parity/08-CONTEXT.md
-Next action: Phase 07 complete — proceed to Phase 08 (SDK)
+Last session: 2026-03-07T15:53:22Z
+Stopped at: Phase 08 Plan 02 complete
+Resume file: .planning/phases/08-sdk-parity/08-02-SUMMARY.md
+Next action: Continue Phase 08 — remaining SDK plans

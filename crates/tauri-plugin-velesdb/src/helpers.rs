@@ -107,6 +107,25 @@ pub fn parse_fusion_strategy(
     }
 }
 
+/// Parses a sparse vector from JSON string-keyed map to core `SparseVector`.
+///
+/// JSON only supports string keys, so the frontend sends `{ "42": 0.8, "7": 1.2 }`.
+/// This function parses each key to `u32` and constructs a sorted `SparseVector`.
+pub fn parse_sparse_vector<S: std::hash::BuildHasher>(
+    sparse: &std::collections::HashMap<String, f32, S>,
+) -> Result<velesdb_core::sparse_index::SparseVector> {
+    let mut pairs = Vec::with_capacity(sparse.len());
+    for (key, &value) in sparse {
+        let index: u32 = key.parse().map_err(|_| {
+            Error::InvalidConfig(format!(
+                "Sparse vector key '{key}' is not a valid u32 dimension index"
+            ))
+        })?;
+        pairs.push((index, value));
+    }
+    Ok(velesdb_core::sparse_index::SparseVector::new(pairs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

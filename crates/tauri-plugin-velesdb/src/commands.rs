@@ -4,18 +4,21 @@
 use crate::error::{CommandError, Error};
 use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
 use crate::helpers::{
-    metric_to_string, parse_fusion_strategy, parse_metric, parse_storage_mode,
+    metric_to_string, parse_fusion_strategy, parse_metric, parse_sparse_vector, parse_storage_mode,
     storage_mode_to_string,
 };
 use crate::state::VelesDbState;
+#[cfg(feature = "persistence")]
+use crate::types::StreamInsertRequest;
 pub use crate::types::{
     default_fusion, default_metric, default_storage_mode, default_top_k, default_vector_weight,
 };
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
     DeletePointsRequest, GetPointsRequest, HybridResult, HybridSearchRequest,
-    MultiQuerySearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest,
-    SearchResponse, SearchResult, TextSearchRequest, UpsertMetadataRequest, UpsertRequest,
+    HybridSparseSearchRequest, MultiQuerySearchRequest, PointOutput, QueryRequest, QueryResponse,
+    SearchRequest, SearchResponse, SearchResult, SparseSearchRequest, SparseUpsertRequest,
+    TextSearchRequest, TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -587,6 +590,208 @@ pub async fn multi_query_search<R: Runtime>(
         results,
         timing_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+// ============================================================================
+// Sparse Vector Commands
+// ============================================================================
+
+/// Searches using a sparse (keyword) vector via inverted index.
+#[command]
+pub async fn sparse_search<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: SparseSearchRequest,
+) -> std::result::Result<SearchResponse, CommandError> {
+    let start = std::time::Instant::now();
+
+    let results = state
+        .with_db(|db| {
+            let coll = db
+                .get_vector_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let core_sv = parse_sparse_vector(&request.sparse_vector)?;
+            let idx_name = request.index_name.unwrap_or_default();
+
+            let search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
+
+            Ok(search_results
+                .into_iter()
+                .map(|r| SearchResult {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect::<Vec<_>>())
+        })
+        .map_err(CommandError::from)?;
+
+    Ok(SearchResponse {
+        results,
+        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+/// Performs hybrid dense+sparse search with RRF fusion.
+#[command]
+pub async fn hybrid_sparse_search<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: HybridSparseSearchRequest,
+) -> std::result::Result<SearchResponse, CommandError> {
+    let start = std::time::Instant::now();
+
+    let results = state
+        .with_db(|db| {
+            let coll = db
+                .get_vector_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let core_sv = parse_sparse_vector(&request.sparse_vector)?;
+            let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
+
+            let search_results =
+                coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
+
+            Ok(search_results
+                .into_iter()
+                .map(|r| SearchResult {
+                    id: r.point.id,
+                    score: r.score,
+                    payload: r.point.payload,
+                })
+                .collect::<Vec<_>>())
+        })
+        .map_err(CommandError::from)?;
+
+    Ok(SearchResponse {
+        results,
+        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+/// Upserts points with optional sparse vectors.
+#[command]
+pub async fn sparse_upsert<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: SparseUpsertRequest,
+) -> std::result::Result<usize, CommandError> {
+    let collection_name = request.collection.clone();
+    let count = state
+        .with_db(|db| {
+            let coll = db
+                .get_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let mut points = Vec::with_capacity(request.points.len());
+            for p in request.points {
+                let sparse_map = if let Some(ref sv) = p.sparse_vector {
+                    let core_sv = parse_sparse_vector(sv)?;
+                    let mut map = std::collections::BTreeMap::new();
+                    map.insert(String::new(), core_sv);
+                    Some(map)
+                } else {
+                    None
+                };
+                points.push(velesdb_core::Point::with_sparse(
+                    p.id, p.vector, p.payload, sparse_map,
+                ));
+            }
+
+            let count = points.len();
+            coll.upsert(points)?;
+            Ok(count)
+        })
+        .map_err(CommandError::from)?;
+
+    emit_collection_updated(&app, &collection_name, "sparse_upsert", count);
+    Ok(count)
+}
+
+// ============================================================================
+// PQ Training Command
+// ============================================================================
+
+/// Trains a Product Quantizer on a collection via `VelesQL` TRAIN statement.
+#[command]
+pub async fn train_pq<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: TrainPqRequest,
+) -> std::result::Result<String, CommandError> {
+    state
+        .with_db(|db| {
+            use velesdb_core::velesql::{Query, TrainStatement, WithValue};
+
+            let mut params = std::collections::HashMap::new();
+            if let Some(m) = request.m {
+                params.insert(
+                    "m".to_string(),
+                    WithValue::Integer(i64::try_from(m).unwrap_or(i64::MAX)),
+                );
+            }
+            if let Some(k) = request.k {
+                params.insert(
+                    "k".to_string(),
+                    WithValue::Integer(i64::try_from(k).unwrap_or(i64::MAX)),
+                );
+            }
+            if let Some(true) = request.opq {
+                params.insert("type".to_string(), WithValue::Identifier("opq".to_string()));
+            }
+
+            let query = Query::new_train(TrainStatement {
+                collection: request.collection,
+                params,
+            });
+
+            let empty_params = std::collections::HashMap::new();
+            db.execute_query(&query, &empty_params)
+                .map_err(|e| Error::InvalidConfig(format!("PQ training failed: {e}")))?;
+
+            Ok("PQ training complete".to_string())
+        })
+        .map_err(CommandError::from)
+}
+
+// ============================================================================
+// Streaming Insert Command
+// ============================================================================
+
+/// Stream-inserts points into a collection's delta buffer.
+///
+/// Uses the streaming ingestion pipeline for low-latency writes.
+/// Requires the `persistence` feature and an active stream ingester.
+#[cfg(feature = "persistence")]
+#[command]
+pub async fn stream_insert<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: StreamInsertRequest,
+) -> std::result::Result<usize, CommandError> {
+    let collection_name = request.collection.clone();
+    let count = state
+        .with_db(|db| {
+            let coll = db
+                .get_vector_collection(&request.collection)
+                .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
+
+            let mut inserted = 0;
+            for p in request.points {
+                let point = velesdb_core::Point::new(p.id, p.vector, p.payload);
+                coll.stream_insert(point).map_err(|e| {
+                    Error::InvalidConfig(format!("Stream insert backpressure: {e}"))
+                })?;
+                inserted += 1;
+            }
+            Ok(inserted)
+        })
+        .map_err(CommandError::from)?;
+
+    emit_collection_updated(&app, &collection_name, "stream_insert", count);
+    Ok(count)
 }
 
 // ============================================================================

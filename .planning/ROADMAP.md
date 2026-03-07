@@ -147,7 +147,7 @@ Plans:
 
 Plans:
 - [ ] 08-01-PLAN.md — Python SDK sparse/PQ/streaming (SDK-01)
-- [ ] 08-02-PLAN.md — TypeScript SDK + WASM sparse wiring (SDK-02, SDK-03)
+- [x] 08-02-PLAN.md — TypeScript SDK + WASM sparse wiring (SDK-02, SDK-03) (completed 2026-03-07)
 - [ ] 08-03-PLAN.md — Mobile UniFFI + Tauri plugin v1.5 parity (SDK-04, SDK-07)
 - [ ] 08-04-PLAN.md — LangChain + LlamaIndex example integrations (SDK-05, SDK-06)
 
@@ -187,6 +187,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 5. Sparse Integration | 4/4 | Complete   | 2026-03-06 |
 | 6. Query Plan Cache | 2/2 | Complete   | 2026-03-07 |
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
-| 8. SDK Parity | 0/4 | Not started | - |
+| 8. SDK Parity | 2/4 | In Progress | - |
 | 9. Documentation | 0/TBD | Not started | - |
 | 10. Release Readiness | 0/TBD | Not started | - |

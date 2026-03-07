@@ -327,34 +327,77 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
     let db_path = path.as_ref().to_path_buf();
 
-    Builder::new("velesdb")
-        .invoke_handler(tauri::generate_handler![
-            commands::create_collection,
-            commands::create_metadata_collection,
-            commands::delete_collection,
-            commands::list_collections,
-            commands::get_collection,
-            commands::upsert,
-            commands::upsert_metadata,
-            commands::get_points,
-            commands::delete_points,
-            commands::search,
-            commands::batch_search,
-            commands::text_search,
-            commands::hybrid_search,
-            commands::multi_query_search,
-            commands::query,
-            commands::is_empty,
-            commands::flush,
-            // AgentMemory commands (EPIC-016 US-003)
-            commands::semantic_store,
-            commands::semantic_query,
-            // Knowledge Graph commands (EPIC-015 US-001) - moved to commands_graph.rs
-            commands_graph::add_edge,
-            commands_graph::get_edges,
-            commands_graph::traverse_graph,
-            commands_graph::get_node_degree,
-        ])
+    #[cfg(feature = "persistence")]
+    let builder = Builder::new("velesdb").invoke_handler(tauri::generate_handler![
+        commands::create_collection,
+        commands::create_metadata_collection,
+        commands::delete_collection,
+        commands::list_collections,
+        commands::get_collection,
+        commands::upsert,
+        commands::upsert_metadata,
+        commands::get_points,
+        commands::delete_points,
+        commands::search,
+        commands::batch_search,
+        commands::text_search,
+        commands::hybrid_search,
+        commands::multi_query_search,
+        commands::query,
+        commands::is_empty,
+        commands::flush,
+        // Sparse vector commands
+        commands::sparse_search,
+        commands::hybrid_sparse_search,
+        commands::sparse_upsert,
+        // PQ training command
+        commands::train_pq,
+        // Streaming insert command (requires persistence)
+        commands::stream_insert,
+        // AgentMemory commands (EPIC-016 US-003)
+        commands::semantic_store,
+        commands::semantic_query,
+        // Knowledge Graph commands (EPIC-015 US-001)
+        commands_graph::add_edge,
+        commands_graph::get_edges,
+        commands_graph::traverse_graph,
+        commands_graph::get_node_degree,
+    ]);
+    #[cfg(not(feature = "persistence"))]
+    let builder = Builder::new("velesdb").invoke_handler(tauri::generate_handler![
+        commands::create_collection,
+        commands::create_metadata_collection,
+        commands::delete_collection,
+        commands::list_collections,
+        commands::get_collection,
+        commands::upsert,
+        commands::upsert_metadata,
+        commands::get_points,
+        commands::delete_points,
+        commands::search,
+        commands::batch_search,
+        commands::text_search,
+        commands::hybrid_search,
+        commands::multi_query_search,
+        commands::query,
+        commands::is_empty,
+        commands::flush,
+        // Sparse vector commands
+        commands::sparse_search,
+        commands::hybrid_sparse_search,
+        commands::sparse_upsert,
+        // PQ training command
+        commands::train_pq,
+        // AgentMemory commands (EPIC-016 US-003)
+        commands::semantic_store,
+        commands::semantic_query,
+        // Knowledge Graph commands (EPIC-015 US-001)
+        commands_graph::add_edge,
+        commands_graph::get_edges,
+        commands_graph::traverse_graph,
+        commands_graph::get_node_degree,
+    ]);
+    builder
         .setup(move |app, _api| {
             let state = VelesDbState::new(db_path.clone());
             app.manage(state);
