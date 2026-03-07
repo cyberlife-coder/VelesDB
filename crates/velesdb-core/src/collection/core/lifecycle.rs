@@ -102,6 +102,10 @@ impl Collection {
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         };
 
         collection.save_config()?;
@@ -202,6 +206,10 @@ impl Collection {
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         };
 
         collection.save_config()?;
@@ -307,6 +315,10 @@ impl Collection {
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         })
     }
 
@@ -370,6 +382,10 @@ impl Collection {
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
             write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
         };
 
         collection.save_config()?;

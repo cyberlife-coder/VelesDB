@@ -2,10 +2,16 @@
 
 use crate::collection::graph::{EdgeStore, GraphSchema, PropertyIndex, RangeIndex};
 use crate::collection::stats::CollectionStats;
+#[cfg(feature = "persistence")]
+use crate::collection::streaming::delta::DeltaBuffer;
+#[cfg(feature = "persistence")]
+use crate::collection::streaming::{BackpressureError, StreamIngester};
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
+#[cfg(feature = "persistence")]
+use crate::point::Point;
 use crate::quantization::{
     BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
 };
@@ -178,6 +184,7 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //   7. property_index / range_index         (any order among themselves)
 //   8. edge_store
 //   9. sparse_indexes
+//  10. delta_buffer
 
 /// A collection of vectors with associated metadata.
 #[derive(Clone)]
@@ -250,6 +257,21 @@ pub struct Collection {
     /// Used by `CompiledPlanCache` to invalidate cached query plans when collection data changes.
     /// `Arc` because `Collection` is `Clone` and all clones must share the same counter.
     pub(crate) write_generation: Arc<std::sync::atomic::AtomicU64>,
+
+    /// Streaming ingestion handle (STREAM-01).
+    ///
+    /// `None` when streaming is not configured. Wrapped in `RwLock` so that
+    /// the ingester can be lazily initialized or swapped at runtime.
+    #[cfg(feature = "persistence")]
+    #[allow(dead_code)] // Wired in streaming Plan 02
+    pub(super) stream_ingester: Arc<RwLock<Option<StreamIngester>>>,
+
+    /// Delta buffer for vectors pending HNSW index insertion (STREAM-02).
+    ///
+    /// Lock order position: **10** (after `sparse_indexes` at 9).
+    #[cfg(feature = "persistence")]
+    #[allow(dead_code)] // Wired in streaming Plan 02
+    pub(super) delta_buffer: Arc<DeltaBuffer>,
 }
 
 impl Collection {
@@ -271,6 +293,32 @@ impl Collection {
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
         crate::collection::text_utils::extract_text(payload)
+    }
+
+    /// Sends a point into the streaming ingestion channel.
+    ///
+    /// Returns `BackpressureError::NotConfigured` if streaming is not active
+    /// on this collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackpressureError`] on buffer-full or not-configured.
+    #[cfg(feature = "persistence")]
+    #[allow(dead_code)] // Wired in streaming Plan 02 / REST endpoint
+    pub(crate) fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
+        let guard = self.stream_ingester.read();
+        match guard.as_ref() {
+            Some(ingester) => ingester.try_send(point),
+            None => Err(BackpressureError::NotConfigured),
+        }
+    }
+
+    /// Returns a reference to the delta buffer.
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    #[allow(dead_code)] // Wired in streaming Plan 02
+    pub(crate) fn delta_buffer(&self) -> &Arc<DeltaBuffer> {
+        &self.delta_buffer
     }
 }
 
