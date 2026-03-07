@@ -163,7 +163,7 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — README v1.5 update + CHANGELOG completion (DOC-01, DOC-06)
+- [x] 09-01-PLAN.md — README v1.5 update + CHANGELOG completion (DOC-01, DOC-06) (completed 2026-03-07)
 - [ ] 09-02-PLAN.md — Rustdoc link fixes + OpenAPI spec generation (DOC-02, DOC-03)
 - [ ] 09-03-PLAN.md — Migration guide + VelesQL spec + guides updates (DOC-04)
 - [ ] 09-04-PLAN.md — Benchmarks v1.5 with real Criterion numbers (DOC-05)
@@ -194,5 +194,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 6. Query Plan Cache | 2/2 | Complete   | 2026-03-07 |
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
 | 8. SDK Parity | 3/4 | In Progress|  |
-| 9. Documentation | 0/4 | Not started | - |
+| 9. Documentation | 1/4 | In Progress |  |
 | 10. Release Readiness | 0/TBD | Not started | - |

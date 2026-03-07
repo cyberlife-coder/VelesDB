@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-stopped_at: Completed 08-04-PLAN.md
-last_updated: "2026-03-07T16:09:03.208Z"
-last_activity: 2026-03-07 — Phase 08 Plan 04 complete (LangChain + LlamaIndex examples)
+status: in-progress
+stopped_at: Phase 09 Plan 01 complete
+last_updated: "2026-03-07T17:21:11Z"
+last_activity: 2026-03-07 — Phase 09 Plan 01 complete (README + CHANGELOG v1.5)
 progress:
   total_phases: 10
   completed_phases: 8
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 8 — SDK Parity (complete)
+**Current focus:** Phase 9 — Documentation (in progress)
 
 ## Current Position
 
-Phase: 8 of 10 (SDK Parity) -- COMPLETE
-Plan: 4 of 4 in current phase (all complete)
-Status: Phase 08 complete -- all SDK parity plans done
-Last activity: 2026-03-07 — Phase 08 Plan 04 complete (LangChain + LlamaIndex examples)
+Phase: 9 of 10 (Documentation) -- IN PROGRESS
+Plan: 1 of 5 in current phase (1 complete)
+Status: Phase 09 Plan 01 complete -- README + CHANGELOG v1.5
+Last activity: 2026-03-07 — Phase 09 Plan 01 complete (README + CHANGELOG v1.5)
 
-Progress: [██████████] 100% (27/27 plans in phases 1-8 complete)
+Progress: [██████████] 100% (28/32 plans in phases 1-9 complete)
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Progress: [██████████] 100% (27/27 plans in phases 1-8 compl
 | Phase 08 P02 | 6 min | 2 tasks | 7 files |
 | Phase 08 P03 | 9 min | 2 tasks | 6 files |
 | Phase 08 P04 | 3 | 2 tasks | 4 files |
+| Phase 09 P01 | 4 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,9 @@ Recent decisions affecting current work:
 - [08-01]: Public sparse_search_default/hybrid_sparse_search added to legacy Collection (new search/sparse.rs) for SDK access
 - [08-01]: Unified search signature: search(vector=None, *, sparse_vector=None, top_k=10) for backward compat
 - [Phase 08]: Synthetic embeddings for self-contained LangChain/LlamaIndex demos (no API keys required)
+- [09-01]: What's New section placed between badge block and Problem We Solve for maximum visibility
+- [09-01]: v1.5 roadmap entry changed from Planned to Released, Distributed Mode moved to future
+- [09-01]: CHANGELOG preserves existing Expert Rust Review and SIMD entries, v1.5 entries added after
 
 ### Pending Todos
 
@@ -175,7 +179,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T16:05:00.469Z
-Stopped at: Completed 08-04-PLAN.md
-Resume file: .planning/phases/08-sdk-parity/08-04-SUMMARY.md
-Next action: Phase 08 complete — proceed to Phase 09 (Docs) or Phase 10 (Release)
+Last session: 2026-03-07T17:21:11Z
+Stopped at: Completed 09-01-PLAN.md
+Resume file: .planning/phases/09-documentation/09-01-SUMMARY.md
+Next action: Proceed to Phase 09 Plan 02
