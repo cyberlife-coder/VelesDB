@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-03-07T10:59:45Z"
-last_activity: 2026-03-07 — Completed plan 06-01 (Plan cache foundation types)
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-03-07T11:21:02Z"
+last_activity: 2026-03-07 — Completed plan 06-02 (Plan cache wiring + metrics)
 progress:
   total_phases: 10
   completed_phases: 5
-  total_plans: 19
-  completed_plans: 19
+  total_plans: 20
+  completed_plans: 20
   percent: 100
 ---
 
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 6 of 10 (Query Plan Cache)
-Plan: 1 of ? in current phase
-Status: Completed plan 06-01 (Plan cache foundation types)
-Last activity: 2026-03-07 — Completed plan 06-01 (Plan cache foundation types)
+Plan: 2 of ? in current phase
+Status: Completed plan 06-02 (Plan cache wiring + metrics)
+Last activity: 2026-03-07 — Completed plan 06-02 (Plan cache wiring + metrics)
 
-Progress: [██████████] 100% (18 prior + 1 phase 6)
+Progress: [██████████] 100% (18 prior + 2 phase 6)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 19
+- Total plans completed: 20
 - Average duration: 21 min
-- Total execution time: 5.3 hours
+- Total execution time: 5.6 hours
 
 **By Phase:**
 
@@ -63,6 +63,7 @@ Progress: [██████████] 100% (18 prior + 1 phase 6)
 | Phase 05 P03 | 24 | 2 tasks | 9 files |
 | Phase 05 P04 | 26 | 2 tasks | 14 files |
 | Phase 06 P01 | 23 min | 2 tasks | 9 files |
+| Phase 06 P02 | 17 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -125,6 +126,10 @@ Recent decisions affecting current work:
 - [06-01]: write_generation bumps once per mutation batch, not per-item
 - [06-01]: Default cache sizing L1=1K, L2=10K
 - [06-01]: allow(dead_code) on schema_version/plan_cache accessors (wired in Plan 02)
+- [06-02]: FxHash of query Debug repr for PlanKey.query_hash (deterministic for identical ASTs)
+- [06-02]: Cache-aside pattern: cache stores QueryPlan, execution still runs against live data
+- [06-02]: explain_query reads cache only, execute_query populates on miss
+- [06-02]: /metrics route moved before .with_state() for State access in prometheus_metrics handler
 
 ### Pending Todos
 
@@ -138,6 +143,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T10:59:45Z
-Stopped at: Completed 06-01-PLAN.md
-Resume file: .planning/phases/06-query-plan-cache/06-01-SUMMARY.md
+Last session: 2026-03-07T11:21:02Z
+Stopped at: Completed 06-02-PLAN.md
+Resume file: .planning/phases/06-query-plan-cache/06-02-SUMMARY.md

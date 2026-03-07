@@ -42,7 +42,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 - [x] **CACHE-01**: `CompiledPlanCache` deux niveaux — AST cache inchange + nouveau tier plan compile avec invalidation collection
 - [x] **CACHE-02**: `write_generation: AtomicU64` par collection — tout write incremente, invalide tous les plans cached pour cette collection
 - [x] **CACHE-03**: Invalidation lifecycle — drop ou recreate d'une collection invalide immediatement tous les plans associes
-- [ ] **CACHE-04**: Metriques cache exposees — hit rate, miss rate, evictions accessibles via `/metrics` (Prometheus)
+- [x] **CACHE-04**: Metriques cache exposees — hit rate, miss rate, evictions accessibles via `/metrics` (Prometheus)
 
 ### Streaming Inserts — EPIC-064 (STREAM)
 
@@ -140,7 +140,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | CACHE-01 | Phase 6: Query Plan Cache | Complete |
 | CACHE-02 | Phase 6: Query Plan Cache | Complete |
 | CACHE-03 | Phase 6: Query Plan Cache | Complete |
-| CACHE-04 | Phase 6: Query Plan Cache | Pending |
+| CACHE-04 | Phase 6: Query Plan Cache | Complete |
 | STREAM-01 | Phase 7: Streaming Inserts | Pending |
 | STREAM-02 | Phase 7: Streaming Inserts | Pending |
 | STREAM-03 | Phase 7: Streaming Inserts | Pending |

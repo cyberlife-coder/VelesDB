@@ -11,7 +11,7 @@ VelesDB v1.5 adds four interdependent engine subsystems (Product Quantization, S
 - [ ] **Phase 3: PQ Integration** - VelesQL TRAIN command, QuantizationConfig PQ variant, recall benchmark suite
 - [x] **Phase 4: Sparse Vector Engine** - WeightedPostingList inverted index, sparse persistence, ANN inner-product search (completed 2026-03-06)
 - [x] **Phase 5: Sparse Integration** - Hybrid dense+sparse RRF, VelesQL SPARSE_NEAR grammar, REST endpoints, u32 term_id (completed 2026-03-06)
-- [ ] **Phase 6: Query Plan Cache** - Two-level CompiledPlanCache, write_generation invalidation, lifecycle hooks, metrics
+- [x] **Phase 6: Query Plan Cache** - Two-level CompiledPlanCache, write_generation invalidation, lifecycle hooks, metrics (completed 2026-03-07)
 - [ ] **Phase 7: Streaming Inserts** - StreamIngester channel, micro-batches, delta buffer, searchable-immediately guarantee
 - [ ] **Phase 8: SDK Parity** - Python, TypeScript, WASM, Mobile, LangChain, LlamaIndex, Tauri updated to v1.5 API
 - [ ] **Phase 9: Documentation** - README v1.5, rustdoc, OpenAPI spec, migration guide, benchmarks, changelog
@@ -115,8 +115,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 06-01-PLAN.md — PlanKey/CompiledPlan types + write_generation + schema_version + cache on Database (CACHE-01, CACHE-02, CACHE-03)
-- [ ] 06-02-PLAN.md — Cache integration in execute_query + EXPLAIN cache_hit + invalidation tests + Prometheus metrics (CACHE-01, CACHE-02, CACHE-03, CACHE-04)
+- [x] 06-01-PLAN.md — PlanKey/CompiledPlan types + write_generation + schema_version + cache on Database (CACHE-01, CACHE-02, CACHE-03) (completed 2026-03-07)
+- [x] 06-02-PLAN.md — Cache integration in execute_query + EXPLAIN cache_hit + invalidation tests + Prometheus metrics (CACHE-01, CACHE-02, CACHE-03, CACHE-04) (completed 2026-03-07)
 
 ### Phase 7: Streaming Inserts
 **Goal**: Clients can insert vectors continuously without forced batching — inserts are immediately searchable, backpressure is signaled correctly, and the HNSW rebuild race is eliminated
@@ -174,7 +174,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 3. PQ Integration | 2/3 | In Progress|  |
 | 4. Sparse Vector Engine | 3/3 | Complete   | 2026-03-06 |
 | 5. Sparse Integration | 4/4 | Complete   | 2026-03-06 |
-| 6. Query Plan Cache | 1/2 | In Progress | - |
+| 6. Query Plan Cache | 2/2 | Complete   | 2026-03-07 |
 | 7. Streaming Inserts | 0/TBD | Not started | - |
 | 8. SDK Parity | 0/TBD | Not started | - |
 | 9. Documentation | 0/TBD | Not started | - |
