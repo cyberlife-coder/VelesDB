@@ -562,13 +562,16 @@ pub fn train_opq(
             (lambda, j)
         })
         .collect();
-    eigenvalue_col_pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    eigenvalue_col_pairs.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     // Build rotation matrix: rows are principal components in descending eigenvalue order.
     // rotation[i * d + j] = q_cols[col_idx][j]  where col_idx = eigenvalue_col_pairs[i].1
     rotation = vec![0.0_f32; d * d];
     for (i, (_, col_idx)) in eigenvalue_col_pairs.iter().enumerate() {
         for (j, &val) in q_cols[*col_idx].iter().enumerate() {
+            // Truncation from f64 to f32 is intentional: the rotation matrix is applied
+            // in f32 arithmetic during quantize/decode. The 7-decimal-digit precision of
+            // f32 is sufficient for PCA-based rotation decorrelation.
             #[allow(clippy::cast_possible_truncation)]
             {
                 rotation[i * d + j] = val as f32;
@@ -743,6 +746,12 @@ fn kmeans_plusplus_init(samples: &[Vec<f32>], k: usize, rng: &mut impl Rng) -> V
         if total <= 0.0 {
             // All remaining samples are identical to existing centroids.
             // Fall back to sequential selection for remaining centroids.
+            tracing::warn!(
+                remaining = k - centroids.len(),
+                existing = centroids.len(),
+                "k-means++: all samples coincide with existing centroids; \
+                 using sequential fallback — degenerate centroids likely"
+            );
             for i in centroids.len()..k {
                 centroids.push(samples[i % n].clone());
             }

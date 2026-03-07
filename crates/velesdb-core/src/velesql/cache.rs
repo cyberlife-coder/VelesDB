@@ -26,20 +26,13 @@ pub struct CacheStats {
 impl CacheStats {
     /// Returns the cache hit rate as a percentage (0.0 - 100.0).
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn hit_rate(&self) -> f64 {
         let total = self.hits + self.misses;
         if total == 0 {
-            0.0
-        } else {
-            // Rounded fixed-point ratio to avoid systematic truncation bias.
-            let basis_points = self
-                .hits
-                .saturating_mul(10_000)
-                .saturating_add(total / 2)
-                .saturating_div(total);
-            let basis_points = u32::try_from(basis_points).unwrap_or(u32::MAX);
-            f64::from(basis_points) / 100.0
+            return 0.0;
         }
+        (self.hits as f64 / total as f64) * 100.0
     }
 }
 
@@ -109,9 +102,13 @@ impl QueryCache {
         let canonical_query = canonicalize_query(query);
         let hash = (self.hash_fn)(&canonical_query);
 
-        let cached = {
-            let cache = self.cache.read();
-            cache.get(&hash).and_then(|entries| {
+        // Hit path: hold cache.write() while updating LRU order to close the
+        // TOCTOU gap between the read and order.write() that would otherwise
+        // allow a concurrent miss path to evict the key between the two lock
+        // acquisitions. The write lock is released before parsing on miss.
+        {
+            let cache = self.cache.write();
+            let cached = cache.get(&hash).and_then(|entries| {
                 entries
                     .iter()
                     .find(|entry| {
@@ -119,25 +116,27 @@ impl QueryCache {
                         entry.original_query == query && entry.canonical_query == canonical_query
                     })
                     .cloned()
-            })
-        };
+            });
 
-        if let Some(cached) = cached {
-            let key = CacheKey {
-                hash,
-                original_query: query.to_string(),
-            };
-
-            {
+            if let Some(cached) = cached {
+                let key = CacheKey {
+                    hash,
+                    original_query: query.to_string(),
+                };
+                // O(n) LRU promotion: VecDeque::remove shifts elements. For L1 cache size
+                // of 1000 entries, this is ~4KB of data movement per hit — acceptable for
+                // the current QPS targets. If cache hit rate becomes a bottleneck at >50k QPS,
+                // replace with an IndexMap or intrusive linked list for O(1) promotion.
                 let mut order = self.order.write();
                 if let Some(pos) = order.iter().position(|existing| existing == &key) {
                     order.remove(pos);
                 }
                 order.push_back(key);
+                drop(order);
+                drop(cache);
+                self.stats.write().hits += 1;
+                return Ok(cached.parsed);
             }
-
-            self.stats.write().hits += 1;
-            return Ok(cached.parsed);
         }
 
         let parsed = Parser::parse(query)?;

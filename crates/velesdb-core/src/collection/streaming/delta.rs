@@ -71,6 +71,17 @@ impl DeltaBuffer {
         self.state.load(Ordering::Acquire) == ACTIVE
     }
 
+    /// Returns true if the buffer contains data that should be merged into search results.
+    ///
+    /// This is true in both `ACTIVE` and `DRAINING` states: the buffer holds
+    /// vectors not yet present in HNSW, so searches must include them regardless
+    /// of whether new writes are still being accepted.
+    #[must_use]
+    pub fn is_searchable(&self) -> bool {
+        let s = self.state.load(Ordering::Acquire);
+        s == ACTIVE || s == DRAINING
+    }
+
     /// Activates the delta buffer (marks a rebuild as in progress).
     ///
     /// While active, the drain loop will push vectors into this buffer so
@@ -85,8 +96,13 @@ impl DeltaBuffer {
     ///
     /// Transitions `ACTIVE → DRAINING`, takes the points, then sets
     /// `INACTIVE`. Any concurrent `search` call that observes `DRAINING`
-    /// will still scan the buffer (under a snapshot taken before this
-    /// method clears it).
+    /// may race with this method and observe an empty buffer — that is
+    /// architecturally acceptable. The real searchable-immediately guarantee
+    /// is provided by the HNSW index rebuild completing after drain
+    /// incorporates all drained vectors. Searches racing with
+    /// `deactivate_and_drain` during the DRAINING window may miss these
+    /// vectors transiently; they will be found via HNSW once the rebuild
+    /// completes.
     ///
     /// Returns the accumulated `(point_id, vector)` pairs for progressive
     /// merge into the newly rebuilt HNSW index. After this call, the buffer
@@ -97,8 +113,11 @@ impl DeltaBuffer {
         self.state.store(DRAINING, Ordering::Release);
         let mut points = self.points.write();
         let drained = std::mem::take(&mut *points);
-        // Set INACTIVE before releasing the lock so there is no observable
-        // window where state == DRAINING but the buffer is already empty.
+        // Set INACTIVE before dropping write lock: this ensures no observable window
+        // where state == DRAINING but buffer is empty. A concurrent activate() call
+        // seeing INACTIVE will store ACTIVE, and any subsequent push() will contend
+        // for the write lock (still held here) then see the empty-but-active buffer.
+        // This is correct: the activate→push sequence works on a clean buffer.
         self.state.store(INACTIVE, Ordering::Release);
         drop(points);
         drained
@@ -205,8 +224,7 @@ pub fn merge_with_delta(
     k: usize,
     metric: DistanceMetric,
 ) -> Vec<(u64, f32)> {
-    let current_state = delta.state.load(Ordering::Acquire);
-    if current_state != ACTIVE && current_state != DRAINING {
+    if !delta.is_searchable() {
         return hnsw_results;
     }
 

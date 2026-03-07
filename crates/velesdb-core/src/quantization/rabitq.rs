@@ -98,7 +98,7 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
     // (signs_to_bits only writes bits up to `dim`, zeroing the rest), so they
     // count as matching but shouldn't contribute.
     let padding_bits = num_words * 64 - dim;
-    // SAFETY of subtraction: padding_bits <= num_words * 64 - dim.
+    // Invariant: padding_bits <= num_words * 64 - dim.
     // matching_bits counts matching bits in `num_words * 64` positions. The
     // minimum number of matching bits equals the number of padding bits (since
     // padding bits are 0 in both vectors and thus always match). Therefore
@@ -389,6 +389,11 @@ impl RaBitQIndex {
 /// Creates a D x D random matrix from a seeded RNG, then orthogonalizes it
 /// using modified Gram-Schmidt (numerically stable for D <= 2048).
 /// Returns the matrix flattened in row-major order.
+///
+/// # Complexity
+///
+/// Time complexity: O(d³) for Modified Gram-Schmidt on a d×d matrix.
+/// For d=1024 this is ~10⁹ f64 operations. Only called during training.
 ///
 /// # Numerical stability
 ///

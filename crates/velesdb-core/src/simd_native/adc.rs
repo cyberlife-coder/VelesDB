@@ -134,9 +134,14 @@ unsafe fn adc_single_avx2(lut: &[f32], code: &[u16], m: usize, k: usize) -> f32 
             lane_index(code, base + 7, k),
         );
 
-        // SAFETY: All indices are within bounds of `lut` (validated above).
-        // `_mm256_i32gather_ps` reads f32 at `base_ptr + index * scale` for each lane.
-        // Scale = 4 (sizeof f32). The lut pointer is valid for the lifetime of this call.
+        // SAFETY: _mm256_i32gather_ps reads f32 values at base_ptr + index * scale.
+        // - Scale = 4 = size_of::<f32>(), matching the f32 element type of `lut`.
+        // - Each index is computed as subspace * k + code[subspace], validated to be
+        //   within [0, m*k) which is within the `lut` slice bounds.
+        // - All gathered reads are therefore within the allocated region of `lut`.
+        // - No alignment requirement beyond f32 natural alignment (4 bytes) is imposed
+        //   by gather instructions; `lut` is a &[f32] which guarantees f32 alignment.
+        // - The pointer is valid for the duration of this intrinsic call (borrowed from `lut`).
         let gathered = _mm256_i32gather_ps::<4>(lut.as_ptr(), indices);
         acc = _mm256_add_ps(acc, gathered);
     }

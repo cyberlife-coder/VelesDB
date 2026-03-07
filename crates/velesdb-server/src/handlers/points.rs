@@ -306,7 +306,12 @@ pub async fn stream_upsert_points(
                 while let Some(newline_pos) = buffer.iter().position(|byte| *byte == b'\n') {
                     let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
                     let line = String::from_utf8_lossy(&line_bytes);
-                    // N-2: attempt to extract an `id` field for the warning log
+                    // N-2: pre-parse `id` field for the warning log. This is a second
+                    // JSON parse of the same line (parse_ndjson_line also parses it),
+                    // but only occurs on the error path (malformed NDJSON). On the
+                    // happy path the id_hint parse result is unused if the line is
+                    // well-formed. A future refactor could extract id from the Point
+                    // struct inside parse_ndjson_line to eliminate the double parse.
                     let id_hint = serde_json::from_str::<serde_json::Value>(line.trim())
                         .ok()
                         .and_then(|v| v.get("id").and_then(|id| id.as_u64()));
@@ -338,6 +343,9 @@ pub async fn stream_upsert_points(
 
     flush_point_batch_with_delta(&collection, &mut batch, &mut stats).await;
 
+    // notify_upsert is intentionally called once at stream completion (not per batch)
+    // to avoid triggering auto-reindex threshold checks mid-stream. The HNSW rebuild
+    // is deferred until the entire stream is ingested for efficiency.
     if stats.inserted > 0 {
         state.db.notify_upsert(&name, stats.inserted);
     }

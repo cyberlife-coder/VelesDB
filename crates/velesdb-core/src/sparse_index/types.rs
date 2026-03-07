@@ -53,8 +53,11 @@ impl SparseVector {
             if idx == current_idx {
                 current_val += val;
             } else {
-                // Flush previous
-                if current_val.abs() >= f32::EPSILON {
+                // Flush previous.
+                // Discard entries with exactly zero weight. We use strict zero comparison
+                // rather than an epsilon threshold to avoid discarding legitimately small
+                // non-zero weights (e.g., sub-unit TF-IDF or SPLADE scores).
+                if current_val != 0.0 {
                     indices.push(current_idx);
                     values.push(current_val);
                 }
@@ -63,7 +66,7 @@ impl SparseVector {
             }
         }
         // Flush last
-        if current_val.abs() >= f32::EPSILON {
+        if current_val != 0.0 {
             indices.push(current_idx);
             values.push(current_val);
         }

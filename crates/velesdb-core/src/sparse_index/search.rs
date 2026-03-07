@@ -21,7 +21,11 @@ const FULL_SCAN_THRESHOLD: f32 = 0.3;
 
 /// Maximum doc ID for which we use a dense accumulator array.
 /// Above this threshold we fall back to a hash map.
-const MAX_DENSE_ACCUMULATOR: u64 = 10_000_000;
+///
+/// Capped at `1_000_000` to bound the worst-case allocation to ~4 MB
+/// (`(max_doc_id + 1) * size_of::<f32>() == ~4 MB`). The density check
+/// in `linear_scan_search` further restricts this path to compact ID spaces.
+const MAX_DENSE_ACCUMULATOR: u64 = 1_000_000;
 
 /// Searches the sparse inverted index for the top-k documents by inner product.
 ///
@@ -49,7 +53,16 @@ pub fn sparse_search(
     let threshold = FULL_SCAN_THRESHOLD * doc_count as f32 * query.nnz() as f32;
     let use_linear = (total_postings as f32) > threshold;
 
-    if use_linear {
+    // CRITICAL-1: MaxScore DAAT computes upper bounds as
+    // `query_weight.abs() * max_doc_weight`, which is incorrect when query
+    // weights are negative and document weights are also negative (the inner
+    // product can be positive but the bound treats it as zero-or-negative
+    // contribution). Rather than tracking dual min/max doc weights per term
+    // (which would require index schema changes), we fall back to linear scan
+    // for any query containing negative weights. In practice, SPLADE and
+    // BM25-derived sparse vectors are non-negative, so this path is rare.
+    let has_negative_weight = query.values.iter().any(|&w| w < 0.0);
+    if use_linear || has_negative_weight {
         linear_scan_search(index, query, k)
     } else {
         maxscore_search(index, query, k)
@@ -240,11 +253,20 @@ fn linear_scan_search(
         return Vec::new();
     }
 
-    // Choose accumulator strategy based on max_doc_id
-    if max_doc_id > MAX_DENSE_ACCUMULATOR {
-        linear_scan_hashmap(k, &term_postings)
-    } else {
+    // Choose accumulator strategy based on max_doc_id and ID-space density.
+    // Density check: use dense only when the ID space is reasonably compact
+    // (max_doc_id < doc_count * 4). Without this, a single document with
+    // doc_id = 999_999 in a 10-doc index would allocate ~4 MB unnecessarily.
+    // Allocation: (max_doc_id + 1) * 4 bytes. With MAX_DENSE_ACCUMULATOR = 1_000_000,
+    // maximum allocation is ~4 MB. The density check ensures this path is only used
+    // when the ID space is reasonably compact.
+    let doc_count = index.doc_count();
+    let use_dense = max_doc_id <= MAX_DENSE_ACCUMULATOR
+        && (doc_count == 0 || max_doc_id < doc_count.saturating_mul(4));
+    if use_dense {
         linear_scan_dense(k, max_doc_id, &term_postings)
+    } else {
+        linear_scan_hashmap(k, &term_postings)
     }
 }
 

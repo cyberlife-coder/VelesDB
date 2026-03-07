@@ -267,7 +267,12 @@ impl SparseInvertedIndex {
         }
     }
 
-    /// Returns the total number of documents across all segments.
+    /// Returns the approximate document count in this index.
+    ///
+    /// Uses `Relaxed` ordering intentionally: this count is only used for the
+    /// heuristic branch selection between `MaxScore` and linear scan in search.
+    /// Stale counts cause at most a suboptimal algorithm choice, not incorrect
+    /// results. Actual mutations are protected by write locks on the segments.
     #[must_use]
     pub fn doc_count(&self) -> u64 {
         self.doc_count.load(Ordering::Relaxed)
@@ -276,6 +281,16 @@ impl SparseInvertedIndex {
     /// Returns the number of live posting entries for a term without materialising
     /// the full `Vec`. Use this in coverage heuristics to avoid a throwaway
     /// allocation; call `get_all_postings` only when the entries themselves are needed.
+    ///
+    /// # Lock ordering note
+    ///
+    /// Write paths (`insert`, `delete`, `freeze_inner`) acquire `mutable.write()`
+    /// before `frozen.write()` — the canonical ordering. Read paths (`posting_count`,
+    /// `get_all_postings`) acquire `frozen.read()` then `mutable.read()` in reverse
+    /// order. This is safe because `parking_lot` read locks are non-exclusive and
+    /// cannot create a deadlock cycle with the write path. If this code is ever
+    /// restructured to hold a write lock on one while acquiring the other in the read
+    /// path, it MUST be updated to match the canonical mutable-before-frozen ordering.
     #[must_use]
     pub fn posting_count(&self, term_id: u32) -> usize {
         let mut count: usize = 0;
