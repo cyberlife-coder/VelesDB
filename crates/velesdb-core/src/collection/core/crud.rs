@@ -315,6 +315,14 @@ impl Collection {
         *self.cached_stats.lock() = None;
 
         // Bump write generation once per batch (CACHE-01 invalidation counter).
+        //
+        // Intentional placement: the bump occurs AFTER all mutations (vector
+        // storage write, payload storage write, HNSW insertion, config update)
+        // have completed successfully. Bumping earlier would allow a concurrent
+        // reader to see the new generation before the data is consistent,
+        // causing it to build a fresh plan key that matches no cached entry —
+        // harmless, but wasteful. Bumping here ensures cache invalidation is
+        // visible only once all writes are durable.
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 

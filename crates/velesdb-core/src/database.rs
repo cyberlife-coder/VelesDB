@@ -332,6 +332,15 @@ impl Database {
     /// `plan_reuse_count` set. Otherwise generates a fresh plan with
     /// `cache_hit: Some(false)`.
     ///
+    /// # Design decision: explain_query does not populate the cache
+    ///
+    /// `explain_query` intentionally does **not** insert a new plan into the
+    /// compiled plan cache. EXPLAIN is a diagnostic operation; allowing it to
+    /// influence cache state would make cache metrics (hit/miss ratios,
+    /// `plan_reuse_count`) unreliable because EXPLAIN calls would be
+    /// indistinguishable from real execution hits. Only `execute_query` is
+    /// authorised to write to the cache.
+    ///
     /// # Errors
     ///
     /// Returns an error if the query is invalid.

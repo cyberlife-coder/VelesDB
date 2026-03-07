@@ -220,6 +220,24 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the config file cannot be read or parsed.
+    ///
+    /// # INVARIANT(CACHE-01): write_generation starts at 0 on open
+    ///
+    /// Every call to `Collection::open` initialises `write_generation` to 0.
+    /// This is **safe** for cache correctness because:
+    ///
+    /// 1. The plan cache is **not persisted** across process restarts — it is
+    ///    always empty when the database opens. There are therefore no stale
+    ///    cached plans that could be incorrectly served.
+    ///
+    /// 2. `Database::load_collections` bumps `schema_version` after loading
+    ///    at least one collection (C-3). Any plan key built before the load
+    ///    would carry the pre-load `schema_version` and would miss the cache
+    ///    even if the `write_generation` happened to match.
+    ///
+    /// 3. Within a single process lifetime the `write_generation` is only ever
+    ///    incremented (never reset), so a cache key built with generation N
+    ///    will never be reused once the generation advances past N.
     pub fn open(path: PathBuf) -> Result<Self> {
         let config_path = path.join("config.json");
         let config_data = std::fs::read_to_string(&config_path)?;

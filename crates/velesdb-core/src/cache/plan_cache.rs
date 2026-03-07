@@ -25,6 +25,17 @@ use crate::velesql::QueryPlan;
 ///
 /// `collection_generations` must be sorted by collection name before
 /// insertion for deterministic hashing.
+///
+/// # Correctness invariant (CACHE-01)
+///
+/// Cache correctness depends on `query_hash` capturing **all** collection
+/// names referenced by the query (base table + JOIN targets). If two
+/// structurally different queries happened to hash to the same value the cache
+/// would serve a stale plan. This is prevented by using the full canonical
+/// serialization of the `Query` AST — not just the collection name — as the
+/// hash input (see `Database::build_plan_key`). The `collection_generations`
+/// vector is then ordered by collection name so that the same set of
+/// collections always produces the same key regardless of JOIN ordering.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PlanKey {
     /// `FxHash` of canonical query text.
@@ -44,6 +55,16 @@ pub struct CompiledPlan {
     /// The query plan produced by the planner.
     pub plan: QueryPlan,
     /// Collections referenced by this plan (for invalidation checks).
+    ///
+    /// Currently stale-key detection in `build_plan_key` handles invalidation:
+    /// when a collection's `write_generation` changes the key no longer matches
+    /// anything in the cache so a fresh plan is compiled on the next call.
+    ///
+    /// Future work (CACHE-01): use `referenced_collections` for targeted
+    /// invalidation — evict only plans that touch a mutated collection rather
+    /// than relying on stale-key detection. This requires an inverted index
+    /// from collection name to `PlanKey` and would reduce spurious misses in
+    /// multi-collection workloads.
     pub referenced_collections: Vec<String>,
     /// When this plan was compiled.
     pub compiled_at: std::time::Instant,
