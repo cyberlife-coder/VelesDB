@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector search in VelesDB.
 
-**Version**: 2.1.0 | **Last Updated**: 2026-02-18
+**Version**: 2.2.0 | **Last Updated**: 2026-03-07
 
 ## Overview
 
@@ -26,6 +26,9 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | USING FUSION | ✅ Stable | 2.0 |
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
 | MATCH graph traversal | ✅ Stable | 2.1 |
+| SPARSE_NEAR sparse vector search | ✅ Stable | 2.2 |
+| FUSE BY fusion clause | ✅ Stable | 2.2 |
+| TRAIN QUANTIZER command | ✅ Stable | 2.2 |
 | Table aliases | 🔜 Planned | - |
 
 ### REST Contract Notes
@@ -220,6 +223,42 @@ SELECT * FROM docs
 WHERE vector NEAR $v AND category = 'tech' AND price > 50
 LIMIT 10
 ```
+
+### Sparse Vector Search (v2.2+)
+
+Use `SPARSE_NEAR` for sparse vector similarity search (SPLADE, BM42, or custom sparse embeddings):
+
+```sql
+-- With parameter placeholder
+SELECT * FROM docs WHERE vector SPARSE_NEAR $sv
+
+-- With literal sparse vector (indices and values)
+SELECT * FROM docs WHERE vector SPARSE_NEAR $sparse_query LIMIT 10
+```
+
+#### SparseVectorExpr
+
+The `SPARSE_NEAR` clause accepts a `SparseVectorExpr` with two variants:
+
+| Variant | Syntax | Description |
+|---------|--------|-------------|
+| **Parameter** | `$name` | Resolved at runtime from query params |
+| **Literal** | `$sparse_query` | Sparse vector passed as parameter |
+
+Sparse vectors are scored using inner product. The scoring algorithm uses MaxScore DAAT (Document-At-A-Time) for efficient top-K retrieval with early termination.
+
+#### Hybrid Search: NEAR + SPARSE_NEAR
+
+Combine dense and sparse search in a single query using `FUSE BY`:
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY RRF(k=60)
+LIMIT 10
+```
+
+See the [FUSE BY clause](#fuse-by-clause-v22) section below for fusion strategy details.
 
 ### Similarity Function (v1.3+)
 
@@ -510,6 +549,84 @@ USING FUSION(maximum)
 LIMIT 10
 ```
 
+## FUSE BY Clause (v2.2+)
+
+The `FUSE BY` clause provides explicit control over how dense and sparse search results are combined in hybrid queries. It replaces `USING FUSION` for hybrid dense+sparse queries.
+
+### Syntax
+
+```sql
+SELECT * FROM <collection>
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY <strategy>
+LIMIT <n>
+```
+
+### Fusion Strategies
+
+#### RRF (Reciprocal Rank Fusion)
+
+Combines results by rank position. Each result's fused score is the sum of `1 / (k + rank)` across both branches.
+
+```sql
+-- Default k=60
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY RRF(k=60)
+LIMIT 10
+
+-- Custom k value
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY RRF(k=30)
+LIMIT 10
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `k` | integer | 60 | Ranking constant. Lower k gives more weight to top ranks |
+
+#### RSF (Reciprocal Score Fusion)
+
+Combines results by normalized score with explicit weights. Scores are min-max normalized per branch, then combined as weighted sum.
+
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)
+LIMIT 10
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `dense_weight` | float | 0.5 | Weight for dense search scores |
+| `sparse_weight` | float | 0.5 | Weight for sparse search scores |
+
+**Constraint:** `dense_weight + sparse_weight` must equal 1.0.
+
+### Examples
+
+```sql
+-- Balanced hybrid search (equal weight)
+SELECT * FROM articles
+WHERE vector NEAR $query_embedding AND vector SPARSE_NEAR $bm25_query
+FUSE BY RRF(k=60)
+LIMIT 20
+
+-- Keyword-heavy hybrid (30% semantic, 70% keyword)
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY RSF(dense_weight=0.3, sparse_weight=0.7)
+LIMIT 10
+
+-- Hybrid with metadata filter
+SELECT * FROM products
+WHERE vector NEAR $v AND vector SPARSE_NEAR $sv
+  AND category = 'electronics'
+FUSE BY RRF(k=60)
+LIMIT 10
+```
+
 ## LIMIT and OFFSET
 
 ```sql
@@ -698,9 +815,10 @@ SELECT id AS `select` FROM docs
 | `ORDER`, `BY`, `ASC`, `DESC` | Sorting |
 | `GROUP`, `HAVING` | Aggregation |
 | `WITH`, `AS` | Options and aliases |
-| `NEAR`, `SIMILARITY` | Vector operations |
+| `NEAR`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
+| `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions |
 
-## Grammar (EBNF) - v2.0
+## Grammar (EBNF) - v2.2
 
 ```ebnf
 (* Top-level query with optional set operations *)
@@ -741,13 +859,15 @@ join_type       = "INNER" | "LEFT" ["OUTER"] | "RIGHT" ["OUTER"] | "FULL" ["OUTE
 where_clause    = "WHERE" or_expr ;
 or_expr         = and_expr { "OR" and_expr } ;
 and_expr        = condition { "AND" condition } ;
-condition       = comparison | vector_search | similarity_cond | in_cond 
+condition       = comparison | vector_search | sparse_search | similarity_cond | in_cond
                 | between_cond | like_cond | is_null_cond | "(" or_expr ")" ;
 
 (* Vector operations *)
 vector_search   = identifier "NEAR" vector_expr ;
+sparse_search   = identifier "SPARSE_NEAR" sparse_vector_expr ;
 similarity_cond = "similarity" "(" identifier "," vector_expr ")" compare_op number ;
 vector_expr     = "$" identifier | "[" number { "," number } "]" ;
+sparse_vector_expr = "$" identifier ;
 
 (* Comparisons *)
 comparison      = column compare_op value ;
@@ -783,6 +903,15 @@ using_fusion_clause = "USING" "FUSION" "(" fusion_strategy ["," fusion_params] "
 fusion_strategy = "rrf" | "weighted" | "maximum" ;
 fusion_params   = fusion_param { "," fusion_param } ;
 fusion_param    = identifier "=" value ;
+
+(* FUSE BY for dense+sparse hybrid search *)
+fuse_by_clause  = "FUSE" "BY" fuse_strategy ;
+fuse_strategy   = "RRF" "(" fuse_params ")" | "RSF" "(" fuse_params ")" ;
+
+(* TRAIN QUANTIZER command *)
+train_quantizer = "TRAIN" "QUANTIZER" "ON" identifier "WITH" "(" train_params ")" ;
+train_params    = train_param { "," train_param } ;
+train_param     = identifier "=" integer ;
 
 (* Values *)
 value           = string | number | boolean | "NULL" | vector_literal ;
@@ -825,6 +954,28 @@ LIMIT 5
 -- High-accuracy search
 SELECT * FROM legal_docs WHERE vector NEAR $q LIMIT 10 
 WITH (mode = 'high_recall')
+```
+
+### Hybrid Search (Dense + Sparse)
+
+```sql
+-- Hybrid search with RRF fusion
+SELECT * FROM docs
+WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
+FUSE BY RRF(k=60)
+LIMIT 10
+
+-- Hybrid search with weighted score fusion
+SELECT * FROM articles
+WHERE vector NEAR $embedding AND vector SPARSE_NEAR $bm25
+FUSE BY RSF(dense_weight=0.6, sparse_weight=0.4)
+LIMIT 20
+
+-- Sparse-only search
+SELECT * FROM docs WHERE vector SPARSE_NEAR $keywords LIMIT 10
+
+-- Train a quantizer then search with PQ compression
+TRAIN QUANTIZER ON embeddings WITH (m=8, k=256)
 ```
 
 ### Complex Filters
@@ -919,6 +1070,49 @@ Content-Type: application/json
   "params": { "v": [0.1, 0.2, ...] }
 }
 ```
+
+## TRAIN QUANTIZER Command (v2.2+)
+
+Explicitly train a Product Quantizer on a collection's vector data.
+
+### Syntax
+
+```sql
+TRAIN QUANTIZER ON <collection> WITH (m=<subspaces>, k=<codebook_size>)
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `m` | integer | 8 | Number of subspaces (vector is split into m sub-vectors) |
+| `k` | integer | 256 | Codebook size per subspace (number of centroids) |
+
+### Semantics
+
+- Training is **explicit** -- it does not happen automatically on collection creation or data insertion.
+- The collection must contain enough vectors for meaningful training (recommended: at least `k` vectors).
+- After training, subsequent searches on the collection can use PQ-compressed distance computation (ADC).
+- Training uses k-means++ initialization for codebook construction.
+
+### Examples
+
+```sql
+-- Train with default-like parameters
+TRAIN QUANTIZER ON my_embeddings WITH (m=8, k=256)
+
+-- Higher compression (more subspaces)
+TRAIN QUANTIZER ON large_collection WITH (m=16, k=256)
+
+-- Finer codebooks
+TRAIN QUANTIZER ON precision_collection WITH (m=8, k=512)
+```
+
+### Notes
+
+- Training may take several seconds for large collections (100K+ vectors).
+- OPQ (Optimized Product Quantization) can be enabled via the Rust API or REST API but is not exposed in VelesQL syntax.
+- Re-training overwrites the existing quantizer. Export the previous quantizer if rollback is needed.
 
 ## Error Handling
 
