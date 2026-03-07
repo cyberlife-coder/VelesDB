@@ -143,7 +143,13 @@ Plans:
   2. A TypeScript/Node.js script can call `sparseSearch()`, `streamInsert()`, and set PQ config via the TypeScript SDK
   3. The WASM module runs sparse search without the `persistence` feature — `cargo build -p velesdb-wasm --no-default-features` produces a working browser module that supports sparse search
   4. A LangChain VectorStore or LlamaIndex integration example demonstrates hybrid dense+sparse search using the v1.5 API
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Python SDK sparse/PQ/streaming (SDK-01)
+- [ ] 08-02-PLAN.md — TypeScript SDK + WASM sparse wiring (SDK-02, SDK-03)
+- [ ] 08-03-PLAN.md — Mobile UniFFI + Tauri plugin v1.5 parity (SDK-04, SDK-07)
+- [ ] 08-04-PLAN.md — LangChain + LlamaIndex example integrations (SDK-05, SDK-06)
 
 ### Phase 9: Documentation
 **Goal**: Every public-facing artifact (README, rustdoc, OpenAPI, migration guide, benchmarks, changelog) accurately reflects the v1.5 release and contains no stale v1.4 claims
@@ -181,6 +187,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 5. Sparse Integration | 4/4 | Complete   | 2026-03-06 |
 | 6. Query Plan Cache | 2/2 | Complete   | 2026-03-07 |
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
-| 8. SDK Parity | 0/TBD | Not started | - |
+| 8. SDK Parity | 0/4 | Not started | - |
 | 9. Documentation | 0/TBD | Not started | - |
 | 10. Release Readiness | 0/TBD | Not started | - |

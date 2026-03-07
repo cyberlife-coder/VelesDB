@@ -25,8 +25,10 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
   RestPointId,
+  PqTrainOptions,
+  SparseVector,
 } from '../types';
-import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../types';
+import { BackpressureError, ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../types';
 
 /** REST API response wrapper */
 interface ApiResponse<T> {
@@ -401,6 +403,14 @@ export class RestBackend implements IVelesDBBackend {
     }
   }
 
+  private sparseVectorToRestFormat(sv: SparseVector): Record<string, number> {
+    const result: Record<string, number> = {};
+    for (const [k, v] of Object.entries(sv)) {
+      result[String(k)] = v;
+    }
+    return result;
+  }
+
   async search(
     collection: string,
     query: number[] | Float32Array,
@@ -410,15 +420,22 @@ export class RestBackend implements IVelesDBBackend {
 
     const queryVector = query instanceof Float32Array ? Array.from(query) : query;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: Record<string, any> = {
+      vector: queryVector,
+      top_k: options?.k ?? 10,
+      filter: options?.filter,
+      include_vectors: options?.includeVectors ?? false,
+    };
+
+    if (options?.sparseVector) {
+      body.sparse_vector = this.sparseVectorToRestFormat(options.sparseVector);
+    }
+
     const response = await this.request<SearchResponse>(
       'POST',
       `/collections/${encodeURIComponent(collection)}/search`,
-      {
-        vector: queryVector,
-        top_k: options?.k ?? 10,
-        filter: options?.filter,
-        include_vectors: options?.includeVectors ?? false,
-      }
+      body
     );
 
     if (response.error) {
@@ -781,6 +798,106 @@ export class RestBackend implements IVelesDBBackend {
         throw new NotFoundError(`Collection '${collection}'`);
       }
       throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  // ========================================================================
+  // Sparse / PQ / Streaming (v1.5)
+  // ========================================================================
+
+  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
+    this.ensureInitialized();
+
+    const m = options?.m ?? 8;
+    const k = options?.k ?? 256;
+    const withClause = options?.opq
+      ? `WITH (m=${m}, k=${k}, opq=true)`
+      : `WITH (m=${m}, k=${k})`;
+    const queryString = `TRAIN QUANTIZER ON ${collection} ${withClause}`;
+
+    const response = await this.request<{ message: string }>(
+      'POST',
+      '/query',
+      { query: queryString }
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.message ?? 'PQ training initiated';
+  }
+
+  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
+    this.ensureInitialized();
+
+    for (const doc of docs) {
+      const restId = this.parseRestPointId(doc.id);
+      const vector = doc.vector instanceof Float32Array
+        ? Array.from(doc.vector)
+        : doc.vector;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body: Record<string, any> = {
+        id: restId,
+        vector,
+        payload: doc.payload,
+      };
+
+      if (doc.sparseVector) {
+        body.sparse_vector = this.sparseVectorToRestFormat(doc.sparseVector);
+      }
+
+      const url = `${this.baseUrl}/collections/${encodeURIComponent(collection)}/stream/insert`;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (this.apiKey) {
+        headers['Authorization'] = `Bearer ${this.apiKey}`;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.status === 429) {
+          throw new BackpressureError();
+        }
+
+        if (!response.ok && response.status !== 202) {
+          const data = await response.json().catch(() => ({}));
+          const errorPayload = this.extractErrorPayload(data);
+          throw new VelesDBError(
+            errorPayload.message ?? `HTTP ${response.status}`,
+            errorPayload.code ?? this.mapStatusToErrorCode(response.status)
+          );
+        }
+      } catch (error) {
+        clearTimeout(timeoutId);
+
+        if (error instanceof BackpressureError || error instanceof VelesDBError) {
+          throw error;
+        }
+
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new ConnectionError('Request timeout');
+        }
+
+        throw new ConnectionError(
+          `Stream insert failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          error instanceof Error ? error : undefined
+        );
+      }
     }
   }
 

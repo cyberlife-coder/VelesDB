@@ -24,6 +24,7 @@ import type {
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
+  PqTrainOptions,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 
@@ -654,6 +655,26 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     throw new VelesDBError(
       'Graph degree query is not supported in WASM backend. Use REST backend for graph features.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  // ========================================================================
+  // Sparse / PQ / Streaming (v1.5)
+  // ========================================================================
+
+  async trainPq(_collection: string, _options?: PqTrainOptions): Promise<string> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'PQ training is not available in WASM mode. Use REST backend for PQ training.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async streamInsert(_collection: string, _docs: VectorDocument[]): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Streaming insert is not available in WASM mode. Use REST backend for streaming.',
       'NOT_SUPPORTED'
     );
   }

@@ -23,6 +23,7 @@ import type {
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
+  PqTrainOptions,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -502,8 +503,43 @@ export class VelesDB {
   }
 
   /**
+   * Train Product Quantization on a collection
+   *
+   * @param collection - Collection name
+   * @param options - PQ training options (m, k, opq)
+   * @returns Server response message
+   */
+  async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
+    this.ensureInitialized();
+    return this.backend.trainPq(collection, options);
+  }
+
+  /**
+   * Stream-insert documents with backpressure support
+   *
+   * Sends documents sequentially to respect server backpressure.
+   * Throws BackpressureError on 429 responses.
+   *
+   * @param collection - Collection name
+   * @param docs - Documents to insert
+   */
+  async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
+    this.ensureInitialized();
+
+    if (!Array.isArray(docs)) {
+      throw new ValidationError('Documents must be an array');
+    }
+
+    for (const doc of docs) {
+      this.validateDocument(doc);
+    }
+
+    await this.backend.streamInsert(collection, docs);
+  }
+
+  /**
    * Check if a collection is empty
-   * 
+   *
    * @param collection - Collection name
    * @returns true if empty, false otherwise
    */

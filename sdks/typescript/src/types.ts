@@ -64,6 +64,9 @@ export interface Collection {
   createdAt?: Date;
 }
 
+/** Sparse vector: mapping from term/dimension index to weight */
+export type SparseVector = Record<number, number>;
+
 /** Vector document to insert */
 export interface VectorDocument {
   /** Unique identifier */
@@ -72,6 +75,8 @@ export interface VectorDocument {
   vector: number[] | Float32Array;
   /** Optional payload/metadata */
   payload?: Record<string, unknown>;
+  /** Optional sparse vector for hybrid search */
+  sparseVector?: SparseVector;
 }
 
 /** Search options */
@@ -82,6 +87,18 @@ export interface SearchOptions {
   filter?: Record<string, unknown>;
   /** Include vectors in results (default: false) */
   includeVectors?: boolean;
+  /** Optional sparse vector for hybrid sparse+dense search */
+  sparseVector?: SparseVector;
+}
+
+/** PQ (Product Quantization) training options */
+export interface PqTrainOptions {
+  /** Number of subquantizers (default: 8) */
+  m?: number;
+  /** Number of centroids per subquantizer (default: 256) */
+  k?: number;
+  /** Enable Optimized Product Quantization (default: false) */
+  opq?: boolean;
 }
 
 /** Fusion strategy for multi-query search */
@@ -491,6 +508,14 @@ export interface IVelesDBBackend {
 
   /** Get the in-degree and out-degree of a node */
   getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse>;
+
+  // Sparse / PQ / Streaming (v1.5)
+
+  /** Train Product Quantization on a collection */
+  trainPq(collection: string, options?: PqTrainOptions): Promise<string>;
+
+  /** Stream-insert documents with backpressure support */
+  streamInsert(collection: string, docs: VectorDocument[]): Promise<void>;
 }
 
 /** Error types */
@@ -523,5 +548,13 @@ export class NotFoundError extends VelesDBError {
   constructor(resource: string) {
     super(`${resource} not found`, 'NOT_FOUND');
     this.name = 'NotFoundError';
+  }
+}
+
+/** Thrown when stream insert receives 429 Too Many Requests (backpressure) */
+export class BackpressureError extends VelesDBError {
+  constructor(message = 'Server backpressure: too many requests') {
+    super(message, 'BACKPRESSURE');
+    this.name = 'BackpressureError';
   }
 }
