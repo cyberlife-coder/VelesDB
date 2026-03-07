@@ -4,12 +4,7 @@
 //! `PlanCacheMetrics` (hit/miss counters), and `CompiledPlanCache` (thin wrapper around
 //! `LockFreeLruCache`).
 
-// SAFETY: Numeric casts in cache metrics are intentional:
-// - f64/u64 conversions for computing cache hit ratios
-// - Values bounded by cache size and access patterns
-// - Precision loss acceptable for cache metrics
-#![allow(clippy::cast_precision_loss)]
-
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -106,6 +101,7 @@ impl PlanCacheMetrics {
 
     /// Returns the hit rate as a ratio in `[0.0, 1.0]`.
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn hit_rate(&self) -> f64 {
         let h = self.hits();
         let m = self.misses();
@@ -113,6 +109,8 @@ impl PlanCacheMetrics {
         if total == 0 {
             0.0
         } else {
+            // Precision loss is acceptable: hit rate is a diagnostic metric,
+            // not a value used in any computation where exactness matters.
             h as f64 / total as f64
         }
     }
@@ -124,6 +122,18 @@ impl PlanCacheMetrics {
 pub struct CompiledPlanCache {
     cache: LockFreeLruCache<PlanKey, Arc<CompiledPlan>>,
     metrics: PlanCacheMetrics,
+}
+
+impl fmt::Debug for CompiledPlanCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stats = self.cache.stats();
+        f.debug_struct("CompiledPlanCache")
+            .field("l1_size", &stats.l1_size)
+            .field("l2_size", &stats.l2_size)
+            .field("hits", &self.metrics.hits())
+            .field("misses", &self.metrics.misses())
+            .finish()
+    }
 }
 
 impl CompiledPlanCache {
@@ -139,6 +149,21 @@ impl CompiledPlanCache {
             cache: LockFreeLruCache::new(l1_capacity, l2_capacity),
             metrics: PlanCacheMetrics::default(),
         }
+    }
+
+    /// Returns `true` if a plan for `key` exists in the cache.
+    ///
+    /// Unlike [`get`](Self::get), this method does **not** record a hit or miss
+    /// in the metrics counters and does **not** increment `reuse_count`. It is
+    /// intended for existence checks (e.g. deciding whether to insert a newly
+    /// compiled plan) where polluting the metrics would distort hit-rate
+    /// calculations.
+    #[must_use]
+    pub fn contains(&self, key: &PlanKey) -> bool {
+        // Check L1 first (lock-free DashMap), then L2 (LRU behind a mutex).
+        // Using peek_l1 / peek_l2 avoids the LRU promotion that `get` would
+        // trigger, keeping the hot-path ordering stable.
+        self.cache.peek_l1(key).is_some() || self.cache.peek_l2(key).is_some()
     }
 
     /// Looks up a compiled plan by key, recording hit/miss.
