@@ -12,8 +12,8 @@
 </h3>
 
 <p align="center">
-  <strong>🚀 v1.4.1 Released</strong> — Ecosystem crates synced on crates.io + hardened release workflow<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.4.1">Download Now</a> • <a href="#-quick-start">Quick Start</a>
+  <strong>🚀 v1.5.0 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.5.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
 </p>
 
 <p align="center">
@@ -29,6 +29,8 @@
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+  <img src="https://img.shields.io/badge/PQ_Recall@10-92%25-success?style=for-the-badge" alt="PQ Recall@10"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-<0.5ms-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
@@ -41,6 +43,89 @@
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
+
+---
+
+## 🆕 What's New in v1.5
+
+### Product Quantization (PQ) -- 4x Memory Compression
+
+Train a codebook on your vectors and compress them from 32-bit floats to compact codes. Configurable subspaces (m) and centroids (k), with OPQ pre-rotation for clustered data and RaBitQ binary quantization (32x compression). ADC search uses SIMD-accelerated lookup tables that fit in L1 cache. Rescore oversampling (default 4x) prevents silent recall collapse.
+
+```sql
+-- Train a PQ quantizer on your collection
+TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)
+
+-- Search uses PQ automatically after training (ADC + rescore)
+SELECT * FROM my_collection WHERE vector NEAR $query LIMIT 10
+```
+
+```python
+# Python SDK
+db.train_pq("my_collection", m=8, k=256)
+results = db.search("my_collection", vector=query_vec, top_k=10)
+```
+
+### Sparse Vector Search -- SPLADE/BM42-Compatible
+
+Native inverted index with SPLADE/BM42-compatible term_id:weight format. MaxScore DAAT algorithm with early termination for sub-millisecond ANN search. Named sparse vectors per point with WAL persistence and automatic compaction. Supports inner-product scoring out of the box.
+
+```sql
+-- Sparse vector search
+SELECT * FROM docs WHERE vector SPARSE_NEAR $sv LIMIT 10
+```
+
+```python
+# Python SDK
+results = db.sparse_search("docs", sparse_vector={42: 0.8, 137: 0.6, 891: 0.3}, top_k=10)
+```
+
+### Hybrid Dense+Sparse Search -- Best of Both Worlds
+
+Combine dense semantic similarity with sparse lexical matching in a single query. RRF (Reciprocal Rank Fusion) and RSF (Reciprocal Score Fusion) strategies merge results from both branches. Parallel execution via rayon for minimal latency overhead.
+
+```sql
+-- Hybrid search with RRF fusion
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+FUSE BY RRF(k=60)
+LIMIT 10
+```
+
+```json
+// REST API
+POST /collections/docs/search
+{
+  "vector": [0.1, 0.2, ...],
+  "sparse_vector": {"42": 0.8, "137": 0.6},
+  "fusion": "rrf",
+  "top_k": 10
+}
+```
+
+### Streaming Inserts -- Immediately Searchable
+
+Bounded channel with backpressure (HTTP 429 when full). Inserted vectors are immediately searchable via a delta buffer that merges with HNSW results at query time. Micro-batch draining into HNSW with configurable batch size (default 128). Delta-wins dedup strategy ensures freshest data is always returned.
+
+```python
+# Python SDK -- stream inserts without blocking
+db.stream_insert("my_collection", points=[
+    {"id": "p1", "vector": vec1, "payload": {"text": "hello"}},
+    {"id": "p2", "vector": vec2, "payload": {"text": "world"}},
+])
+# Immediately searchable -- no rebuild wait
+results = db.search("my_collection", vector=query_vec, top_k=10)
+```
+
+### Query Plan Cache -- Compiled Plan Reuse
+
+Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automatic invalidation via per-collection `write_generation` counter and schema version tracking. Observable via `EXPLAIN` output (`cache_hit`, `plan_reuse_count`) and `/metrics` Prometheus endpoint.
+
+```sql
+-- Check if your query hits the plan cache
+EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+-- Output includes: cache_hit: true, plan_reuse_count: 42
+```
 
 ---
 
@@ -1135,8 +1220,10 @@ Reduce memory usage by **4-32x** with minimal recall loss:
 
 | Method | Compression | Recall Loss | Use Case |
 |--------|-------------|-------------|----------|
+| **PQ** (Product Quantization) | **4x** | < 8% (92%+ recall@10) | Large-scale search, production recommended |
 | **SQ8** (8-bit) | **4x** | < 2% | General purpose, Edge |
 | **Binary** (1-bit) | **32x** | ~10-15% | Fingerprints, IoT |
+| **RaBitQ** (Binary PQ) | **32x** | ~15% | Ultra-compressed, high dimensionality |
 
 ```rust
 use velesdb_core::quantization::{QuantizedVector, dot_product_quantized_simd};
@@ -1221,8 +1308,9 @@ let results = db.search(query_vector, filters, graph_traversal);
 | **📦 15MB Binary** | Zero dependencies, single executable | **Deploy anywhere** - from servers to edge devices |
 | **🔒 Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **🌍 Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |
-| **🧠 SQ8 Quantization** | 4x memory reduction | **Run complex AI** on resource-constrained devices |
-| **📝 VelesQL** | SQL-like unified query language | **Simplify complex queries** - no DSL learning curve |
+| **🧠 PQ + SQ8 Quantization** | 4-32x memory reduction (PQ, SQ8, Binary, RaBitQ) | **Run complex AI** on resource-constrained devices |
+| **🔍 Hybrid Dense+Sparse** | SPLADE/BM42 sparse index + RRF/RSF fusion | **Best lexical + semantic** retrieval in one query |
+| **📝 VelesQL** | SQL-like unified query language with SPARSE_NEAR, TRAIN QUANTIZER | **Simplify complex queries** - no DSL learning curve |
 
 ---
 
@@ -1326,9 +1414,11 @@ gantt
     Multi-Score Fusion          :done, 2026-01, 2026-01
     SDK Ecosystem Complete      :done, 2026-01, 2026-01
     E2E Test Suite              :done, 2026-01, 2026-01
-    section v1.5 📋
-    Distributed Mode            :2026-02, 2026-04
-    Sparse Vectors              :2026-03, 2026-05
+    section v1.5 ✅
+    Product Quantization        :done, 2026-02, 2026-03
+    Sparse Vectors              :done, 2026-02, 2026-03
+    Streaming Inserts           :done, 2026-03, 2026-03
+    Query Plan Cache            :done, 2026-03, 2026-03
 ```
 
 ### Progress Overview
@@ -1337,7 +1427,7 @@ gantt
 |---------|--------|------------|----------|
 | **v1.3.0** | ✅ Released | 6/6 | ![100%](https://progress-bar.xyz/100?title=Complete) |
 | **v1.4.0** | ✅ Released | 10/10 | ![100%](https://progress-bar.xyz/100?title=Complete) |
-| **v1.5.0** | 📋 Planned | 0/5 | ![0%](https://progress-bar.xyz/0?title=Planned) |
+| **v1.5.0** | ✅ Released | 5/5 | ![100%](https://progress-bar.xyz/100?title=Complete) |
 
 ---
 
@@ -1403,15 +1493,27 @@ gantt
 
 ---
 
-### v1.5.0 📋 Planned (Q2 2026)
+### v1.5.0 ✅ Released (March 2026)
 
-| EPIC | Feature | Focus |
-|------|---------|-------|
-| EPIC-061 | **Distributed Mode** | Multi-node clustering |
-| EPIC-062 | **Sparse Vectors** | Efficient storage |
-| EPIC-063 | **Product Quantization** | PQ compression |
-| EPIC-064 | **Streaming Inserts** | Real-time pipelines |
-| EPIC-065 | **Advanced Caching** | Query plan cache |
+<details>
+<summary><b>5 Major Features - Click to expand</b></summary>
+
+| Feature | Description | Impact |
+|---------|-------------|--------|
+| **Product Quantization** | PQ (m/k configurable), OPQ, RaBitQ, GPU-accelerated training | 4-32x memory compression |
+| **Sparse Vectors** | SPLADE/BM42 inverted index, MaxScore DAAT, WAL persistence | Sub-ms lexical search |
+| **Hybrid Dense+Sparse** | RRF/RSF fusion, parallel branch execution, filtered sparse | Best of both worlds |
+| **Streaming Inserts** | Bounded channel, backpressure, delta buffer, immediate search | Real-time ingestion |
+| **Query Plan Cache** | Two-level LRU, write_generation invalidation, EXPLAIN metrics | Faster repeated queries |
+
+</details>
+
+**Highlights:**
+- **Product Quantization** - 4x compression with 92%+ recall@10, ADC SIMD acceleration
+- **Sparse Vectors** - SPLADE/BM42-compatible inverted index with MaxScore algorithm
+- **Hybrid Search** - Dense+Sparse fusion via RRF/RSF in a single VelesQL query
+- **Streaming Inserts** - Immediately searchable with backpressure and delta buffer
+- **Query Plan Cache** - Two-level compiled plan cache with automatic invalidation
 
 ---
 
@@ -1428,9 +1530,9 @@ pie title VelesDB Feature Distribution
 
 | Horizon | Features |
 |---------|----------|
-| **2026 H2** | Sparse vectors, Product Quantization (PQ) |
-| **2027** | Distributed mode (Premium), Cluster HA |
-| **Beyond** | Agent Hooks & Triggers, Multi-tenancy |
+| **2026 H1** | ✅ Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
+| **2026 H2** | Distributed mode, Multi-tenancy |
+| **2027** | Cluster HA, Agent Hooks & Triggers |
 
 ---
 
