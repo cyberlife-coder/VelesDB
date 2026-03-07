@@ -99,6 +99,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WASM compatibility** - Verified with `default-features=false`
 - **296 SIMD tests** passing across all backends
 
+### Added
+
+#### Product Quantization (PQ)
+- Product Quantization (PQ) with k-means++ codebook training, configurable m subspaces and k centroids
+- ADC (Asymmetric Distance Computation) with AVX2/NEON/scalar SIMD dispatch and L1-cache-fitting lookup tables
+- OPQ (Optimized Product Quantization) pre-rotation for improved recall on clustered data
+- RaBitQ binary quantization (32x compression) with orthogonal rotation preprocessing
+- GPU-accelerated k-means assignment for PQ training via wgpu (FLOP threshold auto-detection)
+- PQ rescore oversampling (configurable, default 4x) preventing silent recall collapse
+- VelesQL `TRAIN QUANTIZER ON <collection> WITH (m=, k=)` command for explicit PQ training
+- `QuantizationConfig::ProductQuantization` variant with backward-compatible deserialization
+- Criterion benchmark suite `pq_recall` with recall@10 >= 92% threshold for m=8
+
+#### Sparse Vector Search
+- Sparse vector inverted index (`WeightedPostingList`) with SPLADE/BM42-compatible term_id:u32 format
+- Segment-isolated sparse index with RwLock mutable buffer + immutable frozen segments
+- MaxScore DAAT sparse ANN search with linear scan fallback based on coverage threshold
+- Sparse index WAL persistence with compaction (10K entry threshold) and disk recovery
+- Named sparse vectors per point with backward-compatible deserialization
+- VelesQL `SPARSE_NEAR` clause for sparse vector search
+
+#### Hybrid Dense+Sparse Search
+- Hybrid dense+sparse search with RRF (k=60 default) and RSF fusion strategies
+- RSF (Reciprocal Score Fusion) with configurable dense_weight/sparse_weight
+- Filtered sparse search with oversampling and on-the-fly payload predicates
+
+#### Streaming Inserts
+- `StreamIngester` with bounded tokio::sync::mpsc channel and HTTP 429 backpressure
+- Micro-batch draining into HNSW (configurable batch size, default 128)
+- `DeltaBuffer` for inserts during HNSW rebuild with delta-wins dedup strategy
+- Insert-and-immediately-searchable guarantee (search merges delta buffer results)
+
+#### Query Plan Cache
+- Two-level `CompiledPlanCache` (AST + compiled plan) with LRU eviction
+- `write_generation: AtomicU64` per collection for automatic cache invalidation on writes
+- Schema version tracking for collection lifecycle cache invalidation
+- Cache metrics (hit rate, miss rate, evictions) exposed via `/metrics` Prometheus endpoint
+- `EXPLAIN` output includes `cache_hit` and `plan_reuse_count` fields
+
+#### REST API & VelesQL
+- REST API endpoints for sparse upsert and sparse search
+- VelesQL grammar extended with `SPARSE_NEAR` and `FUSE BY` clauses
+
+#### SDK Parity
+- Python SDK: `sparse_search()`, `train_pq()`, `stream_insert()` methods
+- TypeScript SDK: `sparseSearch()`, `streamInsert()`, PQ config support
+- WASM module: sparse search without persistence feature
+- Mobile iOS/Android: UniFFI bindings for sparse + PQ APIs
+- Tauri plugin: v1.5 API parity
+- LangChain VectorStore: hybrid dense+sparse search example
+- LlamaIndex VectorStore: hybrid search + PQ configuration example
+
+### Changed
+
+- bincode serialization replaced with postcard (RUSTSEC-2025-0141 migration)
+- `Point` struct now includes `sparse_vector: Option<BTreeMap<String, SparseVector>>` field
+- VelesQL grammar extended with `SPARSE_NEAR` and `FUSE BY` clauses
+- Default PQ rescore oversampling reduced from 8x to configurable 4x
+- SIMD modules consolidated into `simd_native/` (EPIC-075)
+- Query planner integrates compiled plan cache (cache-aside pattern)
+
+### Fixed
+
+- BUG-8: Multi-alias FROM in VelesQL no longer produces silently wrong results
+
+### Security
+
+- RUSTSEC-2025-0141: bincode replaced with postcard in velesdb-core (bincode remains as transitive dep in velesdb-mobile via uniffi, acknowledged in deny.toml)
+
+### Breaking Changes (Migration Required)
+
+- On-disk wire format changed from bincode to postcard -- existing persisted data requires re-creation (see Migration Guide)
+- `QuantizationConfig` enum extended with `ProductQuantization` variant -- custom deserializers must handle new variant
+- VelesQL grammar now includes `SPARSE_NEAR` keyword -- parsers consuming VelesQL must be updated
+
 ## [1.4.1] - 2026-01-29
 
 ### � Highlights
