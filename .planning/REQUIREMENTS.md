@@ -54,7 +54,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 
 ### SDK Parity (SDK)
 
-- [ ] **SDK-01**: Python SDK — sparse upsert/search, PQ train/config, streaming insert propages dans velesdb-python
+- [x] **SDK-01**: Python SDK — sparse upsert/search, PQ train/config, streaming insert propages dans velesdb-python
 - [x] **SDK-02**: TypeScript SDK — sparse vectors, PQ config, streaming insert dans `sdks/typescript`
 - [x] **SDK-03**: WASM module — sparse search sans persistence, plan cache actif (features compatibles no-persistence)
 - [x] **SDK-04**: Mobile iOS/Android — bindings UniFFI mis a jour pour API v1.5 (sparse + PQ)
@@ -146,7 +146,7 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | STREAM-03 | Phase 7: Streaming Inserts | Complete |
 | STREAM-04 | Phase 7: Streaming Inserts | Complete |
 | STREAM-05 | Phase 7: Streaming Inserts | Complete |
-| SDK-01 | Phase 8: SDK Parity | Pending |
+| SDK-01 | Phase 8: SDK Parity | Complete |
 | SDK-02 | Phase 8: SDK Parity | Complete |
 | SDK-03 | Phase 8: SDK Parity | Complete |
 | SDK-04 | Phase 8: SDK Parity | Complete |

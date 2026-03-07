@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: executing
-stopped_at: Phase 08 Plan 03 complete
-last_updated: "2026-03-07T15:56:00Z"
-last_activity: 2026-03-07 — Phase 08 Plan 03 complete (Mobile + Tauri sparse/PQ/streaming)
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-03-07T15:57:33Z"
+last_activity: 2026-03-07 — Phase 08 Plan 01 complete (Python SDK sparse/PQ/streaming)
 progress:
   total_phases: 10
   completed_phases: 7
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 8 of 10 (SDK Parity)
-Plan: 3 of 4 in current phase
-Status: Phase 08 Plan 03 complete — Mobile + Tauri sparse/PQ/streaming
-Last activity: 2026-03-07 — Phase 08 Plan 03 complete (Mobile + Tauri sparse/PQ/streaming)
+Plan: 3 of 4 in current phase (01, 02, 03 complete; 04 remaining)
+Status: Phase 08 Plan 01 complete — Python SDK sparse/PQ/streaming
+Last activity: 2026-03-07 — Phase 08 Plan 01 complete (Python SDK sparse/PQ/streaming)
 
-Progress: [███████░░░] 74% (26/27 plans in phases 1-8 complete)
+Progress: [████████░░] 74% (26/27 plans in phases 1-8 complete)
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Progress: [███████░░░] 74% (26/27 plans in phases 1-8 comple
 | Phase 07 P01 | 14 min | 2 tasks | 6 files |
 | Phase 07 P02 | 18 min | 2 tasks | 7 files |
 | Phase 07 P03 | 18 min | 2 tasks | 12 files |
+| Phase 08 P01 | 9 min | 2 tasks | 6 files |
 | Phase 08 P02 | 6 min | 2 tasks | 7 files |
 | Phase 08 P03 | 9 min | 2 tasks | 6 files |
 
@@ -156,6 +157,9 @@ Recent decisions affecting current work:
 - [08-03]: train_pq placed on VelesDatabase (not VelesCollection) since PQ training requires Database-level VelesQL execution
 - [08-03]: Parallel Vec<u32>/Vec<f32> for mobile sparse vectors (safer FFI mapping than HashMap)
 - [08-03]: cfg-gated dual invoke_handler blocks for persistence-dependent stream_insert command
+- [08-01]: train_pq placed on Database (not Collection) because TRAIN QUANTIZER requires Database-level execute_query
+- [08-01]: Public sparse_search_default/hybrid_sparse_search added to legacy Collection (new search/sparse.rs) for SDK access
+- [08-01]: Unified search signature: search(vector=None, *, sparse_vector=None, top_k=10) for backward compat
 
 ### Pending Todos
 
@@ -169,7 +173,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-07T15:56:00Z
-Stopped at: Phase 08 Plan 03 complete
-Resume file: .planning/phases/08-sdk-parity/08-03-SUMMARY.md
+Last session: 2026-03-07T15:57:33Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: .planning/phases/08-sdk-parity/08-01-SUMMARY.md
 Next action: Continue Phase 08 — Plan 04 remaining
