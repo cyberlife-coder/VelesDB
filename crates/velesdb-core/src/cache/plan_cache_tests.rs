@@ -443,3 +443,40 @@ fn test_explain_first_query_cache_miss() {
     assert_eq!(explain.cache_hit, Some(false));
     assert_eq!(explain.plan_reuse_count, Some(0));
 }
+
+// ---- schema_version bumped by load_collections (C-3) ----
+
+/// Verifies that `schema_version` is incremented when `load_collections`
+/// loads at least one collection from disk on re-open.
+///
+/// This ensures that any plan key built before the re-open (with the old
+/// schema_version) cannot match a key built after, preventing stale-plan
+/// cache hits across process restarts (CACHE-01).
+#[cfg(feature = "persistence")]
+#[test]
+fn test_schema_version_after_load_collections() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Phase 1: create a collection and close the DB.
+    {
+        let db = crate::Database::open(dir.path()).unwrap();
+        // Fresh empty DB: no collections loaded, version stays 0.
+        assert_eq!(db.schema_version(), 0, "empty DB starts at 0");
+        db.create_collection("reload_test", 4, crate::DistanceMetric::Cosine)
+            .unwrap();
+        // After create_collection: version = 1.
+        assert_eq!(db.schema_version(), 1, "after create = 1");
+        // DB drops here, persisting the collection to disk.
+    }
+
+    // Phase 2: re-open the DB. load_collections loads "reload_test" from disk,
+    // bumping schema_version by 1 (from 0 to 1).
+    {
+        let db2 = crate::Database::open(dir.path()).unwrap();
+        assert_eq!(
+            db2.schema_version(),
+            1,
+            "schema_version should be 1 after loading one collection from disk"
+        );
+    }
+}

@@ -30,7 +30,12 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
-        self.edge_store.write().add_edge(edge)
+        self.edge_store.write().add_edge(edge)?;
+        // Bump write generation so any cached plan for this collection is
+        // invalidated on the next query (CACHE-01).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     /// Gets all edges from the collection's knowledge graph.
@@ -280,6 +285,13 @@ impl Collection {
         let mut store = self.edge_store.write();
         if store.contains_edge(edge_id) {
             store.remove_edge(edge_id);
+            // Bump only when a mutation actually occurred (CACHE-01).
+            // Releasing the write lock before the atomic bump is intentional:
+            // the bump is a best-effort cache invalidation hint, not part of
+            // the edge-store transaction.
+            drop(store);
+            self.write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             true
         } else {
             false
@@ -325,7 +337,12 @@ impl Collection {
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
         let mut storage = self.payload_storage.write();
-        storage.store(node_id, payload).map_err(Error::Io)
+        storage.store(node_id, payload).map_err(Error::Io)?;
+        // Bump write generation so any cached plan for this collection is
+        // invalidated on the next query (CACHE-01).
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     /// Retrieves the JSON payload for a graph node.

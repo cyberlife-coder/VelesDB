@@ -872,6 +872,8 @@ impl Database {
     ///
     /// Returns an error if collection directories cannot be read.
     pub fn load_collections(&self) -> Result<()> {
+        let mut loaded_count: usize = 0;
+
         for entry in std::fs::read_dir(&self.data_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -919,6 +921,7 @@ impl Database {
                             .write()
                             .insert(name.clone(), coll.inner.clone());
                         self.graph_colls.write().insert(name, coll);
+                        loaded_count += 1;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, name = %path.display(), "Failed to load graph collection");
@@ -932,6 +935,7 @@ impl Database {
                             .write()
                             .insert(name.clone(), coll.inner.clone());
                         self.metadata_colls.write().insert(name, coll);
+                        loaded_count += 1;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, name = %path.display(), "Failed to load metadata collection");
@@ -945,12 +949,24 @@ impl Database {
                             .write()
                             .insert(name.clone(), coll.inner.clone());
                         self.vector_colls.write().insert(name, coll);
+                        loaded_count += 1;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, name = %path.display(), "Failed to load vector collection");
                     }
                 }
             }
+        }
+
+        // Bump schema_version if at least one collection was loaded from disk (C-3).
+        //
+        // This ensures that any plan key built before load_collections() ran
+        // (schema_version = 0) will never match a key built after it
+        // (schema_version ≥ 1), preventing the plan cache from serving a stale
+        // plan for a collection that was not yet visible in the registry.
+        if loaded_count > 0 {
+            self.schema_version
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         Ok(())
