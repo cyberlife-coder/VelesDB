@@ -159,6 +159,12 @@ impl FusionStrategy {
             } => format!(
                 "FusionStrategy.weighted(avg_weight={avg_weight}, max_weight={max_weight}, hit_weight={hit_weight})"
             ),
+            CoreFusionStrategy::RelativeScore {
+                dense_weight,
+                sparse_weight,
+            } => format!(
+                "FusionStrategy.relative_score(dense_weight={dense_weight}, sparse_weight={sparse_weight})"
+            ),
         }
     }
 }

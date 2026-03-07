@@ -42,7 +42,8 @@ mod types;
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
-    MobileIndexInfo, SearchResult, StorageMode, VelesError, VelesPoint,
+    MobileIndexInfo, PqTrainConfig, SearchResult, StorageMode, VelesError, VelesPoint,
+    VelesSparseVector,
 };
 
 use std::sync::Arc;
@@ -185,6 +186,49 @@ impl VelesDatabase {
     pub fn delete_collection(&self, name: String) -> Result<(), VelesError> {
         self.inner.delete_collection(&name)?;
         Ok(())
+    }
+
+    /// Trains a Product Quantizer on a collection.
+    ///
+    /// PQ training is a database-level operation that requires access to the
+    /// VelesQL TRAIN executor.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection_name` - Name of the collection to train PQ on
+    /// * `config` - PQ training configuration
+    ///
+    /// # Returns
+    ///
+    /// Status message from the training process.
+    pub fn train_pq(
+        &self,
+        collection_name: String,
+        config: PqTrainConfig,
+    ) -> Result<String, VelesError> {
+        use std::collections::HashMap;
+        use velesdb_core::velesql::{Query, TrainStatement, WithValue};
+
+        let mut params = HashMap::new();
+        params.insert("m".to_string(), WithValue::Integer(i64::from(config.m)));
+        params.insert("k".to_string(), WithValue::Integer(i64::from(config.k)));
+        if config.opq {
+            params.insert("type".to_string(), WithValue::Identifier("opq".to_string()));
+        }
+
+        let query = Query::new_train(TrainStatement {
+            collection: collection_name,
+            params,
+        });
+
+        let empty_params = HashMap::new();
+        self.inner
+            .execute_query(&query, &empty_params)
+            .map_err(|e| VelesError::Database {
+                message: format!("PQ training failed: {e}"),
+            })?;
+
+        Ok("PQ training complete".to_string())
     }
 }
 
@@ -794,6 +838,138 @@ impl VelesCollection {
     /// Returns the latest known collection statistics snapshot.
     pub fn get_stats(&self) -> MobileCollectionStats {
         self.inner.get_stats().into()
+    }
+
+    // ========================================================================
+    // Sparse Vector Operations
+    // ========================================================================
+
+    /// Performs sparse-only search using an inverted index.
+    ///
+    /// # Arguments
+    ///
+    /// * `sparse_vector` - Query sparse vector (parallel arrays of indices/values)
+    /// * `limit` - Maximum number of results
+    /// * `index_name` - Name of the sparse index (empty string for default)
+    ///
+    /// # Returns
+    ///
+    /// Vector of search results sorted by sparse similarity.
+    pub fn sparse_search(
+        &self,
+        sparse_vector: VelesSparseVector,
+        limit: u32,
+        index_name: Option<String>,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        let core_sv = Self::to_core_sparse_vector(&sparse_vector);
+        let idx_name = index_name.unwrap_or_default();
+
+        let results = self
+            .inner
+            .sparse_search(
+                &core_sv,
+                usize::try_from(limit).unwrap_or(usize::MAX),
+                &idx_name,
+            )
+            .map_err(|e| VelesError::Database {
+                message: format!("Sparse search failed: {e}"),
+            })?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Performs hybrid dense+sparse search with RRF fusion.
+    ///
+    /// Combines vector similarity search with sparse (keyword) search
+    /// using Reciprocal Rank Fusion.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector` - Dense query vector
+    /// * `sparse_vector` - Sparse query vector (parallel arrays)
+    /// * `limit` - Maximum number of results
+    ///
+    /// # Returns
+    ///
+    /// Vector of fused search results.
+    pub fn hybrid_sparse_search(
+        &self,
+        vector: Vec<f32>,
+        sparse_vector: VelesSparseVector,
+        limit: u32,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        let core_sv = Self::to_core_sparse_vector(&sparse_vector);
+        let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
+
+        let results = self
+            .inner
+            .hybrid_sparse_search(
+                &vector,
+                &core_sv,
+                usize::try_from(limit).unwrap_or(usize::MAX),
+                "",
+                &strategy,
+            )
+            .map_err(|e| VelesError::Database {
+                message: format!("Hybrid sparse search failed: {e}"),
+            })?;
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.point.id,
+                score: r.score,
+            })
+            .collect())
+    }
+
+    /// Inserts or updates a point with an associated sparse vector.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - The point to upsert (dense vector + payload)
+    /// * `sparse_vector` - Sparse vector to associate with this point
+    pub fn upsert_with_sparse(
+        &self,
+        point: VelesPoint,
+        sparse_vector: VelesSparseVector,
+    ) -> Result<(), VelesError> {
+        let payload = point
+            .payload
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|e| VelesError::Database {
+                message: format!("Invalid JSON payload: {e}"),
+            })?;
+
+        let core_sv = Self::to_core_sparse_vector(&sparse_vector);
+        let mut sparse_map = std::collections::BTreeMap::new();
+        sparse_map.insert(String::new(), core_sv);
+
+        let core_point =
+            velesdb_core::Point::with_sparse(point.id, point.vector, payload, Some(sparse_map));
+        self.inner.upsert(vec![core_point])?;
+        Ok(())
+    }
+}
+
+impl VelesCollection {
+    /// Converts a `VelesSparseVector` (UniFFI-safe parallel arrays) to the
+    /// core `SparseVector` type.
+    fn to_core_sparse_vector(sv: &VelesSparseVector) -> velesdb_core::sparse_index::SparseVector {
+        let pairs: Vec<(u32, f32)> = sv
+            .indices
+            .iter()
+            .copied()
+            .zip(sv.values.iter().copied())
+            .collect();
+        velesdb_core::sparse_index::SparseVector::new(pairs)
     }
 }
 

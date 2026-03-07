@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::collection_helpers::{
-    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, point_to_dict,
-    search_result_to_dict, search_results_to_dicts, search_results_to_multimodel_dicts,
+    id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vectors_from_point,
+    point_to_dict, search_result_to_dict, search_results_to_dicts,
+    search_results_to_multimodel_dicts,
 };
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 use crate::FusionStrategy;
@@ -116,7 +117,8 @@ impl Collection {
                     None => None,
                 };
 
-                core_points.push(Point::new(id, vector, payload));
+                let sparse_vectors = parse_sparse_vectors_from_point(py, &point_dict)?;
+                core_points.push(Point::with_sparse(id, vector, payload, sparse_vectors));
             }
 
             let count = core_points.len();

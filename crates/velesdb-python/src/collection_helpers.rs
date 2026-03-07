@@ -4,9 +4,10 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::utils::{json_to_python, to_pyobject};
+use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
 /// Parse a Python filter object into a VelesDB Filter.
@@ -126,4 +127,75 @@ pub fn id_score_pairs_to_dicts(
             dict
         })
         .collect()
+}
+
+/// Parse a Python object into a `SparseVector`.
+///
+/// Accepts:
+/// - A Python `dict[int, float]` mapping dimension indices to weights.
+/// - A scipy sparse object with a `.toarray()` method (COO/CSR/CSC).
+///
+/// Returns `PyValueError` if the object is neither format.
+pub fn parse_sparse_vector(py: Python<'_>, obj: &PyObject) -> PyResult<SparseVector> {
+    // Try dict[int, float] first (most common usage pattern).
+    if let Ok(dict) = obj.extract::<HashMap<u32, f32>>(py) {
+        let pairs: Vec<(u32, f32)> = dict.into_iter().collect();
+        return Ok(SparseVector::new(pairs));
+    }
+
+    // Try scipy.sparse via duck typing: check for `.toarray()` method.
+    if let Ok(has_toarray) = obj.call_method0(py, "toarray") {
+        // `.toarray()` returns a dense numpy 2D array; flatten to 1D.
+        let flat = has_toarray.call_method0(py, "flatten")?;
+        let values: Vec<f32> = flat.extract(py)?;
+        let pairs: Vec<(u32, f32)> = values
+            .into_iter()
+            .enumerate()
+            .filter(|(_, v)| v.abs() > f32::EPSILON)
+            .map(|(i, v)| (i as u32, v))
+            .collect();
+        return Ok(SparseVector::new(pairs));
+    }
+
+    Err(PyValueError::new_err(
+        "sparse_vector must be a dict[int, float] or a scipy sparse object with .toarray()",
+    ))
+}
+
+/// Parse the `sparse_vector` field from a point dict into named sparse vectors.
+///
+/// Accepts:
+/// - `dict[int, float]`: treated as the default (unnamed) sparse vector.
+/// - `dict[str, dict[int, float]]`: named sparse vectors.
+///
+/// Returns `None` if the key is absent from the point dict.
+pub fn parse_sparse_vectors_from_point(
+    py: Python<'_>,
+    point_dict: &HashMap<String, PyObject>,
+) -> PyResult<Option<BTreeMap<String, SparseVector>>> {
+    let Some(obj) = point_dict.get("sparse_vector") else {
+        return Ok(None);
+    };
+
+    // Try as dict[int, float] -> default sparse vector (key "").
+    if let Ok(dict) = obj.extract::<HashMap<u32, f32>>(py) {
+        let sv = SparseVector::new(dict.into_iter().collect());
+        let mut map = BTreeMap::new();
+        map.insert(String::new(), sv);
+        return Ok(Some(map));
+    }
+
+    // Try as dict[str, dict[int, float]] -> named sparse vectors.
+    if let Ok(named) = obj.extract::<HashMap<String, PyObject>>(py) {
+        let mut map = BTreeMap::new();
+        for (name, inner_obj) in named {
+            let sv = parse_sparse_vector(py, &inner_obj)?;
+            map.insert(name, sv);
+        }
+        return Ok(Some(map));
+    }
+
+    Err(PyValueError::new_err(
+        "sparse_vector must be dict[int, float] or dict[str, dict[int, float]]",
+    ))
 }

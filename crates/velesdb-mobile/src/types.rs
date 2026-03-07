@@ -153,6 +153,29 @@ impl Default for FusionStrategy {
 // Data Types
 // ============================================================================
 
+/// A sparse vector represented as parallel arrays of indices and values.
+///
+/// Uses parallel `Vec<u32>` / `Vec<f32>` instead of `HashMap` for safe FFI
+/// mapping to all mobile targets (Swift arrays, Kotlin IntArray/FloatArray).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct VelesSparseVector {
+    /// Dimension indices (must be sorted, unique).
+    pub indices: Vec<u32>,
+    /// Weights corresponding to each index.
+    pub values: Vec<f32>,
+}
+
+/// Configuration for Product Quantization training.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PqTrainConfig {
+    /// Number of sub-quantizers (subspaces).
+    pub m: u32,
+    /// Number of centroids per sub-quantizer.
+    pub k: u32,
+    /// Whether to use Optimized Product Quantization.
+    pub opq: bool,
+}
+
 /// A search result containing an ID and similarity score.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SearchResult {
