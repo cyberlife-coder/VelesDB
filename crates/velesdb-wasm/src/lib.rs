@@ -130,6 +130,8 @@ pub struct VectorStore {
     dimension: usize,
     metric: DistanceMetric,
     storage_mode: StorageMode,
+    /// Optional sparse index for sparse/hybrid search
+    sparse_index: Option<sparse::SparseIndex>,
 }
 
 #[wasm_bindgen]
@@ -606,6 +608,46 @@ impl VectorStore {
     #[wasm_bindgen]
     pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
         serialization::import_from_bytes(bytes)
+    }
+
+    // ========================================================================
+    // Sparse search (v1.5)
+    // ========================================================================
+
+    /// Inserts a sparse vector into the internal sparse index.
+    ///
+    /// Lazily initializes the sparse index on first call.
+    #[wasm_bindgen]
+    pub fn sparse_insert(
+        &mut self,
+        doc_id: u64,
+        indices: &[u32],
+        values: &[f32],
+    ) -> Result<(), JsValue> {
+        let idx = self
+            .sparse_index
+            .get_or_insert_with(sparse::SparseIndex::new);
+        idx.insert(doc_id, indices, values)
+    }
+
+    /// Searches the internal sparse index.
+    ///
+    /// Returns a JSON array of `{doc_id, score}` objects sorted by score descending.
+    #[wasm_bindgen]
+    pub fn sparse_search(
+        &self,
+        indices: &[u32],
+        values: &[f32],
+        k: usize,
+    ) -> Result<JsValue, JsValue> {
+        match &self.sparse_index {
+            Some(idx) => idx.search(indices, values, k),
+            None => {
+                // No sparse data inserted yet — return empty results
+                serde_wasm_bindgen::to_value::<Vec<()>>(&vec![])
+                    .map_err(|e| JsValue::from_str(&e.to_string()))
+            }
+        }
     }
 }
 

@@ -157,6 +157,7 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
         dimension,
         metric,
         storage_mode: StorageMode::Full,
+        sparse_index: None,
     })
 }
 

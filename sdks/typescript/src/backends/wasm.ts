@@ -27,6 +27,7 @@ import type {
   PqTrainOptions,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
+import type { SparseVector } from '../types';
 
 // Type definitions are loose to avoid strict type checking issues with dynamic WASM imports
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -277,6 +278,50 @@ export class WasmBackend implements IVelesDBBackend {
     }
 
     const k = options?.k ?? 10;
+
+    // Sparse/hybrid search handling
+    if (options?.sparseVector) {
+      const { indices, values } = this.sparseVectorToArrays(options.sparseVector);
+
+      if (queryVector.length > 0 && collection.config.dimension && collection.config.dimension > 0) {
+        // Hybrid: dense + sparse → use RRF fusion
+        const denseResults = collection.store.search(queryVector, k) as Array<[bigint, number]>;
+        const sparseResults = collection.store.sparse_search(
+          new Uint32Array(indices),
+          new Float32Array(values),
+          k
+        );
+
+        // Parse sparse results
+        const sparseArray = (sparseResults as Array<{ doc_id: bigint | number; score: number }>);
+
+        // Format for hybrid_search_fuse: arrays of [doc_id, score]
+        const denseForFuse = denseResults.map(([id, score]: [bigint, number]) => [Number(id), score]);
+        const sparseForFuse = sparseArray.map((r: { doc_id: bigint | number; score: number }) => [Number(r.doc_id), r.score]);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fused = (this.wasmModule as any).hybrid_search_fuse(denseForFuse, sparseForFuse, 60) as Array<{ doc_id: bigint | number; score: number }>;
+
+        return fused.slice(0, k).map(r => ({
+          id: String(r.doc_id),
+          score: r.score,
+          payload: collection.payloads.get(this.canonicalPayloadKeyFromResultId(r.doc_id)),
+        }));
+      } else {
+        // Sparse-only search
+        const sparseResults = collection.store.sparse_search(
+          new Uint32Array(indices),
+          new Float32Array(values),
+          k
+        ) as Array<{ doc_id: bigint | number; score: number }>;
+
+        return sparseResults.map(r => ({
+          id: String(r.doc_id),
+          score: r.score,
+          payload: collection.payloads.get(this.canonicalPayloadKeyFromResultId(r.doc_id)),
+        }));
+      }
+    }
 
     if (options?.filter) {
       // Use the new search_with_filter method
@@ -563,6 +608,16 @@ export class WasmBackend implements IVelesDBBackend {
     }
     this.collections.clear();
     this._initialized = false;
+  }
+
+  private sparseVectorToArrays(sv: SparseVector): { indices: number[]; values: number[] } {
+    const indices: number[] = [];
+    const values: number[] = [];
+    for (const [k, v] of Object.entries(sv)) {
+      indices.push(Number(k));
+      values.push(v);
+    }
+    return { indices, values };
   }
 
   private toNumericId(id: string | number): number {

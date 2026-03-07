@@ -19,6 +19,7 @@ pub fn create_store(
         dimension,
         metric,
         storage_mode,
+        sparse_index: None,
     }
 }
 
