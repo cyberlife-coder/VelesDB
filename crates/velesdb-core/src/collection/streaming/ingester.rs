@@ -462,4 +462,113 @@ mod tests {
 
         ingester.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn test_stream_searchable_immediately() {
+        let (_dir, coll) = test_collection(4);
+        let config = StreamingConfig {
+            buffer_size: 100,
+            batch_size: 4,
+            flush_interval_ms: 50,
+        };
+        let coll_clone = coll.clone();
+        let ingester = StreamIngester::new(coll, config);
+
+        // Insert points with distinct vectors for search
+        for i in 1..=4u64 {
+            let mut vec = vec![0.0_f32; 4];
+            vec[(i as usize - 1) % 4] = 1.0;
+            let p = Point {
+                id: i,
+                vector: vec,
+                payload: None,
+                sparse_vectors: None,
+            };
+            ingester.try_send(p).expect("send should succeed");
+        }
+
+        // Wait for drain to flush
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Search for the first vector — should find it via HNSW (indexed by upsert)
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let results = coll_clone.search(&query, 4).expect("search should succeed");
+        assert!(
+            !results.is_empty(),
+            "inserted points should be searchable after drain"
+        );
+        // The closest result to [1,0,0,0] should be id=1
+        assert_eq!(results[0].point.id, 1, "closest match should be id=1");
+
+        ingester.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_stream_delta_rebuild_no_data_loss() {
+        let (_dir, coll) = test_collection(4);
+        // Pre-insert some points via direct upsert (these go into HNSW)
+        let initial_points: Vec<Point> = (1..=5u64)
+            .map(|i| {
+                let mut vec = vec![0.0_f32; 4];
+                vec[0] = i as f32;
+                Point {
+                    id: i,
+                    vector: vec,
+                    payload: None,
+                    sparse_vectors: None,
+                }
+            })
+            .collect();
+        coll.upsert(initial_points).expect("upsert initial points");
+
+        // Simulate rebuild: activate delta buffer
+        coll.delta_buffer.activate();
+        assert!(coll.delta_buffer.is_active());
+
+        let config = StreamingConfig {
+            buffer_size: 100,
+            batch_size: 4,
+            flush_interval_ms: 50,
+        };
+        let coll_clone = coll.clone();
+        let ingester = StreamIngester::new(coll, config);
+
+        // Insert new points during "rebuild"
+        for i in 6..=10u64 {
+            let mut vec = vec![0.0_f32; 4];
+            vec[0] = i as f32;
+            let p = Point {
+                id: i,
+                vector: vec,
+                payload: None,
+                sparse_vectors: None,
+            };
+            ingester.try_send(p).expect("send should succeed");
+        }
+
+        // Wait for drain to flush
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Search — should find both HNSW (old) and delta (new) points
+        let query = vec![10.0, 0.0, 0.0, 0.0];
+        let results = coll_clone
+            .search_ids(&query, 10)
+            .expect("search_ids should succeed");
+        let found_ids: std::collections::HashSet<u64> = results.iter().map(|(id, _)| *id).collect();
+
+        // All 10 points should be found (5 HNSW + 5 delta)
+        for id in 1..=10 {
+            assert!(
+                found_ids.contains(&id),
+                "point id={id} should be in search results"
+            );
+        }
+
+        // Deactivate and drain
+        let drained = coll_clone.delta_buffer.deactivate_and_drain();
+        assert!(!coll_clone.delta_buffer.is_active());
+        assert_eq!(drained.len(), 5, "delta should have had 5 entries");
+
+        ingester.shutdown().await;
+    }
 }

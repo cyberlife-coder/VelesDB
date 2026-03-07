@@ -457,7 +457,9 @@ impl Collection {
         // Reason: we reuse the existing HNSW index (dimension == emb_dim when created
         // via create_graph_collection_with_embeddings). For graph-without-embeddings
         // the HNSW has dimension 0 and the guard above already rejected the call.
+        let metric = self.config.read().metric;
         let ids = self.index.search(query, k);
+        let ids = self.merge_delta(ids, query, k, metric);
 
         // Acquire each lock once: collect vector data, then collect payload data.
         // This avoids holding vector_storage while locking payload_storage per item.

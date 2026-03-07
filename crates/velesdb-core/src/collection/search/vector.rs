@@ -20,13 +20,15 @@ impl Collection {
         drop(config);
 
         if !is_pq {
-            return self.index.search(query, k);
+            let results = self.index.search(query, k);
+            return self.merge_delta(results, query, k, metric);
         }
 
         // When oversampling is disabled (None or Some(0)), skip rescore entirely
         // and return raw index results truncated to k.
         if oversampling == 0 {
-            return self.index.search(query, k);
+            let results = self.index.search(query, k);
+            return self.merge_delta(results, query, k, metric);
         }
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
@@ -35,7 +37,8 @@ impl Collection {
         let pq_cache = self.pq_cache.read();
         let quantizer = self.pq_quantizer.read();
         let Some(quantizer) = quantizer.as_ref() else {
-            return index_results.into_iter().take(k).collect();
+            let results: Vec<(u64, f32)> = index_results.into_iter().take(k).collect();
+            return self.merge_delta(results, query, k, metric);
         };
 
         let mut rescored: Vec<(u64, f32)> = index_results
@@ -64,7 +67,35 @@ impl Collection {
             }
         });
         rescored.truncate(k);
-        rescored
+        self.merge_delta(rescored, query, k, metric)
+    }
+
+    /// Merges HNSW results with the delta buffer (if active).
+    ///
+    /// When the delta buffer is inactive (no rebuild in progress), this is
+    /// a no-op that returns results unchanged.
+    #[inline]
+    pub(crate) fn merge_delta(
+        &self,
+        results: Vec<(u64, f32)>,
+        _query: &[f32],
+        _k: usize,
+        _metric: DistanceMetric,
+    ) -> Vec<(u64, f32)> {
+        #[cfg(feature = "persistence")]
+        {
+            crate::collection::streaming::merge_with_delta(
+                results,
+                &self.delta_buffer,
+                _query,
+                _k,
+                _metric,
+            )
+        }
+        #[cfg(not(feature = "persistence"))]
+        {
+            results
+        }
     }
 }
 
@@ -167,7 +198,9 @@ impl Collection {
             _ => crate::SearchQuality::Perfect,
         };
 
+        let metric = self.config.read().metric;
         let index_results = self.index.search_with_quality(query, k, quality);
+        let index_results = self.merge_delta(index_results, query, k, metric);
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
