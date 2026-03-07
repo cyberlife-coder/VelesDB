@@ -2,16 +2,20 @@
 //!
 //! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods
 //! against brute-force exact L2 search ground truth.
+//!
+//! Uses explicit `TRAIN QUANTIZER ON ... WITH (m=8, k=256)` via `Database`
+//! + VelesQL instead of auto-training, ensuring controlled m/k parameters.
 
 #![allow(clippy::cast_precision_loss)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tempfile::{tempdir, TempDir};
-use velesdb_core::{Collection, DistanceMetric, Point, StorageMode};
+use velesdb_core::velesql::Parser;
+use velesdb_core::{Collection, Database, DistanceMetric, Point, StorageMode};
 
 const DIMENSION: usize = 128;
 const NUM_VECTORS: usize = 5_000;
@@ -80,7 +84,7 @@ fn recall_at_k(ground_truth: &[u64], results: &[u64], k: usize) -> f64 {
     recall
 }
 
-/// Build a collection with given storage mode and data.
+/// Build a collection with full-precision storage mode (no quantization).
 ///
 /// Returns the `TempDir` alongside the `Collection` so the directory stays
 /// alive for the benchmark duration and is cleaned up on drop.
@@ -110,6 +114,45 @@ fn build_pq_collection(
     (collection, dir)
 }
 
+/// Build a collection via `Database` + VelesQL `TRAIN QUANTIZER` for explicit
+/// PQ/OPQ/RaBitQ training with controlled parameters.
+///
+/// Returns `(Collection, Database, TempDir)` -- `Database` and `TempDir`
+/// must stay alive to keep the collection valid.
+fn build_trained_collection(
+    dataset: &[Vec<f32>],
+    dimension: usize,
+    name: &str,
+    train_query: &str,
+) -> (Collection, Database, TempDir) {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open database");
+    db.create_collection(name, dimension, DistanceMetric::Euclidean)
+        .expect("create collection");
+
+    let coll = db.get_collection(name).expect("get collection");
+    let points: Vec<Point> = dataset
+        .iter()
+        .enumerate()
+        .map(|(id, v)| {
+            #[allow(clippy::cast_possible_truncation)]
+            let pid = id as u64;
+            Point::new(pid, v.clone(), Some(serde_json::json!({})))
+        })
+        .collect();
+    coll.upsert(points).expect("upsert");
+
+    // Train quantizer via VelesQL
+    let query = Parser::parse(train_query).expect("parse TRAIN QUANTIZER");
+    let params: HashMap<String, serde_json::Value> = HashMap::new();
+    db.execute_query(&query, &params)
+        .expect("execute TRAIN QUANTIZER");
+
+    // Re-fetch collection after training
+    let coll = db.get_collection(name).expect("get trained collection");
+    (coll, db, dir)
+}
+
 /// Measure average recall@k for a collection against brute-force ground truth.
 fn measure_recall(
     collection: &Collection,
@@ -133,50 +176,86 @@ fn measure_recall(
     avg
 }
 
+#[allow(clippy::too_many_lines)]
 fn pq_recall_benchmarks(c: &mut Criterion) {
     // Generate shared dataset and queries
     let dataset = generate_clustered_data(NUM_VECTORS, DIMENSION, NUM_CLUSTERS, 42);
     let queries = generate_clustered_data(NUM_QUERIES, DIMENSION, NUM_CLUSTERS, 123);
 
-    // Build full-precision reference collection
-    let (full_collection, _full_dir) =
-        build_pq_collection(StorageMode::Full, &dataset, DIMENSION, "full_ref");
-
-    // Build PQ collection (auto-trains on upsert)
-    let (pq_collection, _pq_dir) = build_pq_collection(
-        StorageMode::ProductQuantization,
+    // --- Variant 1: PQ m=8 k=256 with default rescore (oversampling=4) ---
+    let (pq_coll, _pq_db, _pq_dir) = build_trained_collection(
         &dataset,
         DIMENSION,
-        "pq_m8_k256",
+        "pq_m8",
+        "TRAIN QUANTIZER ON pq_m8 WITH (m=8, k=256, type='pq')",
     );
+    let pq_recall = measure_recall(&pq_coll, &queries, &dataset, K);
+    println!("PQ m=8 k=256 rescore recall@{K}: {pq_recall:.4}");
 
-    // Measure full-precision recall (should be ~100% as self-reference)
+    // --- Variant 2: Full precision baseline ---
+    let (full_collection, _full_dir) =
+        build_pq_collection(StorageMode::Full, &dataset, DIMENSION, "full_ref");
     let full_recall = measure_recall(&full_collection, &queries, &dataset, K);
     println!("Full-precision recall@{K}: {full_recall:.4}");
 
-    // Measure PQ recall with default rescore
-    let pq_recall = measure_recall(&pq_collection, &queries, &dataset, K);
-    println!("PQ (m=auto, k=auto, rescore) recall@{K}: {pq_recall:.4}");
+    // --- Variant 3: PQ m=8 k=256 no rescore ---
+    let (norescore_coll, _norescore_db, _norescore_dir) = build_trained_collection(
+        &dataset,
+        DIMENSION,
+        "pq_norescore",
+        "TRAIN QUANTIZER ON pq_norescore WITH (m=8, k=256, type='pq', oversampling=0)",
+    );
+    let norescore_recall = measure_recall(&norescore_coll, &queries, &dataset, K);
+    println!("PQ no-rescore recall@{K}: {norescore_recall:.4}");
 
-    // Benchmark: PQ recall measurement (rescore enabled by default)
+    // --- Variant 4: OPQ m=8 k=256 with rescore ---
+    let (opq_coll, _opq_db, _opq_dir) = build_trained_collection(
+        &dataset,
+        DIMENSION,
+        "opq_m8",
+        "TRAIN QUANTIZER ON opq_m8 WITH (m=8, k=256, type='opq')",
+    );
+    let opq_recall = measure_recall(&opq_coll, &queries, &dataset, K);
+    println!("OPQ m=8 k=256 rescore recall@{K}: {opq_recall:.4}");
+
+    // --- Variant 5: RaBitQ 128d ---
+    let (rabitq_coll, _rabitq_db, _rabitq_dir) = build_trained_collection(
+        &dataset,
+        DIMENSION,
+        "rabitq_128",
+        "TRAIN QUANTIZER ON rabitq_128 WITH (m=8, type='rabitq')",
+    );
+    let rabitq_recall = measure_recall(&rabitq_coll, &queries, &dataset, K);
+    println!("RaBitQ 128d recall@{K}: {rabitq_recall:.4}");
+
+    // --- Variant 6: PQ m=8 k=256 with oversampling=8 ---
+    let (os8_coll, _os8_db, _os8_dir) = build_trained_collection(
+        &dataset,
+        DIMENSION,
+        "pq_os8",
+        "TRAIN QUANTIZER ON pq_os8 WITH (m=8, k=256, type='pq', oversampling=8)",
+    );
+    let os8_recall = measure_recall(&os8_coll, &queries, &dataset, K);
+    println!("PQ oversampling=8 recall@{K}: {os8_recall:.4}");
+
+    // Benchmark group
     let mut group = c.benchmark_group("pq_recall");
     group.sample_size(10); // accuracy benchmark, not speed
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    group.bench_function("pq_recall_m_auto_rescore", |b| {
+    group.bench_function("pq_recall_m8_k256_rescore", |b| {
         b.iter(|| {
             let recall = measure_recall(
-                black_box(&pq_collection),
+                black_box(&pq_coll),
                 black_box(&queries),
                 black_box(&dataset),
                 K,
             );
-            // PQ with auto-training on 5K synthetic vectors.
-            // Threshold: >= 20% (conservative for auto-trained PQ on synthetic data).
-            // Production recall is higher with more vectors and manual training.
+            // HNSW ceiling on 5K/128d clustered synthetic data is ~0.876;
+            // PQ with rescore matches full-precision HNSW recall.
             assert!(
-                recall >= 0.20,
-                "PQ recall@{K} = {recall:.4}, expected >= 0.20"
+                recall >= 0.80,
+                "PQ m=8 k=256 rescore recall@{K} = {recall:.4}, expected >= 0.80"
             );
             recall
         });
@@ -184,12 +263,84 @@ fn pq_recall_benchmarks(c: &mut Criterion) {
 
     group.bench_function("full_precision_baseline", |b| {
         b.iter(|| {
-            measure_recall(
+            let recall = measure_recall(
                 black_box(&full_collection),
                 black_box(&queries),
                 black_box(&dataset),
                 K,
-            )
+            );
+            // HNSW ceiling on 5K/128d clustered synthetic data is ~0.876.
+            assert!(
+                recall >= 0.80,
+                "Full precision recall@{K} = {recall:.4}, expected >= 0.80"
+            );
+            recall
+        });
+    });
+
+    group.bench_function("pq_recall_m8_k256_no_rescore", |b| {
+        b.iter(|| {
+            let recall = measure_recall(
+                black_box(&norescore_coll),
+                black_box(&queries),
+                black_box(&dataset),
+                K,
+            );
+            assert!(
+                recall >= 0.20,
+                "PQ no-rescore recall@{K} = {recall:.4}, expected >= 0.20"
+            );
+            recall
+        });
+    });
+
+    group.bench_function("opq_recall_m8_k256_rescore", |b| {
+        b.iter(|| {
+            let recall = measure_recall(
+                black_box(&opq_coll),
+                black_box(&queries),
+                black_box(&dataset),
+                K,
+            );
+            // HNSW ceiling on 5K/128d clustered synthetic data is ~0.876.
+            assert!(
+                recall >= 0.80,
+                "OPQ m=8 k=256 rescore recall@{K} = {recall:.4}, expected >= 0.80"
+            );
+            recall
+        });
+    });
+
+    group.bench_function("rabitq_recall_128d", |b| {
+        b.iter(|| {
+            let recall = measure_recall(
+                black_box(&rabitq_coll),
+                black_box(&queries),
+                black_box(&dataset),
+                K,
+            );
+            assert!(
+                recall >= 0.80,
+                "RaBitQ 128d recall@{K} = {recall:.4}, expected >= 0.80"
+            );
+            recall
+        });
+    });
+
+    group.bench_function("pq_recall_m8_k256_oversampling8", |b| {
+        b.iter(|| {
+            let recall = measure_recall(
+                black_box(&os8_coll),
+                black_box(&queries),
+                black_box(&dataset),
+                K,
+            );
+            // HNSW ceiling on 5K/128d clustered synthetic data is ~0.876.
+            assert!(
+                recall >= 0.80,
+                "PQ oversampling=8 recall@{K} = {recall:.4}, expected >= 0.80"
+            );
+            recall
         });
     });
 
@@ -197,8 +348,12 @@ fn pq_recall_benchmarks(c: &mut Criterion) {
 
     // Print summary for CI reporting
     println!("\n=== PQ Recall Summary ===");
-    println!("Full precision: {full_recall:.4}");
-    println!("PQ (rescore):   {pq_recall:.4}");
+    println!("PQ m=8 k=256 rescore:  {pq_recall:.4}");
+    println!("Full precision:        {full_recall:.4}");
+    println!("PQ no-rescore:         {norescore_recall:.4}");
+    println!("OPQ m=8 k=256 rescore: {opq_recall:.4}");
+    println!("RaBitQ 128d:           {rabitq_recall:.4}");
+    println!("PQ oversampling=8:     {os8_recall:.4}");
 }
 
 criterion_group!(pq_recall, pq_recall_benchmarks);

@@ -10,12 +10,12 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 ### Quality & Security (QUAL)
 
 - [x] **QUAL-01**: bincode RUSTSEC-2025-0141 migre vers une alternative sound (bitcode ou postcard) — wire-format compatible si possible
-- [ ] **QUAL-02**: BUG-8 corrige — multi-alias FROM dans VelesQL produit des resultats incorrects
+- [x] **QUAL-02**: BUG-8 corrige — multi-alias FROM dans VelesQL produit des resultats incorrects
 - [x] **QUAL-03**: `ProductQuantizer::train()` — `assert!` / `panic!` remplaces par `Result<_, VelesError>` — input invalide ne tue plus le serveur
 - [x] **QUAL-04**: k-means++ init implemente pour PQ — remplace l'init sequentielle deterministe qui produit des codebooks degeneres sur donnees reelles
 - [x] **QUAL-05**: `cargo audit || true` retire du CI — advisory reel = CI rouge
 - [ ] **QUAL-06**: Criterion baseline v1.5 enregistre dans `benchmarks/baseline.json` — seuil 15% enforced sur toutes les 35+ suites
-- [ ] **QUAL-07**: Coverage code >= 82% maintenue apres toutes les additions v1.5
+- [x] **QUAL-07**: Coverage code >= 82% maintenue apres toutes les additions v1.5
 
 ### Product Quantization — EPIC-063 (PQ)
 
@@ -115,18 +115,18 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | QUAL-01 | Phase 1: Quality Baseline & Security | Complete |
-| QUAL-02 | Phase 1: Quality Baseline & Security | Pending |
+| QUAL-02 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-03 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-04 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-05 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-06 | Phase 1: Quality Baseline & Security | Pending |
-| QUAL-07 | Phase 1: Quality Baseline & Security | Pending |
+| QUAL-07 | Phase 1: Quality Baseline & Security | Complete |
 | PQ-01 | Phase 2: PQ Core Engine | Complete |
 | PQ-02 | Phase 2: PQ Core Engine | Complete |
 | PQ-03 | Phase 2: PQ Core Engine | Complete |
 | PQ-04 | Phase 2: PQ Core Engine | Complete |
-| PQ-ADV-01 | Phase 2: PQ Core Engine | Pending (promoted from v2) |
-| QUANT-ADV-01 | Phase 2: PQ Core Engine | Pending (promoted from v2) |
+| PQ-ADV-01 | Phase 2: PQ Core Engine | Complete |
+| QUANT-ADV-01 | Phase 2: PQ Core Engine | Complete |
 | PQ-05 | Phase 3: PQ Integration | Complete |
 | PQ-06 | Phase 3: PQ Integration | Complete |
 | PQ-07 | Phase 3: PQ Integration | Complete |
@@ -173,4 +173,4 @@ Mapping requirements -> phases. Updated 2026-03-06 after Phase 2 plan revision (
 
 ---
 *Requirements defined: 2026-03-05*
-*Last updated: 2026-03-06 after Phase 2 plan revision*
+*Last updated: 2026-03-08 after gap closure phases 11-12 added*

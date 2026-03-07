@@ -183,6 +183,34 @@ Plans:
 - [ ] 10-01-PLAN.md — Version bump 1.5.0 + cargo publish dry-run validation (REL-01, REL-05)
 - [ ] 10-02-PLAN.md — Release workflow: PyPI matrix + structured notes + npm verification + validation gate (REL-02, REL-03, REL-04, REL-05)
 
+### Phase 11: PQ Recall Benchmark Hardening
+**Goal**: The PQ recall benchmark enforces the 92% recall contract with explicit m=8 k=256 training and includes all planned benchmark variants (OPQ, RaBitQ, no-rescore, oversampling8)
+**Depends on**: Phase 3
+**Requirements**: PQ-07
+**Gap Closure:** Closes PQ-07 partial gap from v1.5 audit
+**Success Criteria** (what must be TRUE):
+  1. The `pq_recall` Criterion benchmark uses explicit `m=8, k=256` training (not auto-training) and asserts `recall@10 >= 0.92`
+  2. Benchmark variants for OPQ, RaBitQ, no-rescore, and oversampling8 are present and run successfully
+  3. Results are recorded in `benchmarks/baseline.json` alongside existing benchmarks
+
+Plans:
+- [ ] 11-01-PLAN.md — Fix recall threshold + explicit training config + add benchmark variants (PQ-07)
+
+### Phase 12: Traceability & Cosmetic Cleanup
+**Goal**: All stale traceability entries are corrected and cosmetic version/naming issues are resolved — REQUIREMENTS.md accurately reflects reality
+**Depends on**: Nothing (housekeeping)
+**Requirements**: QUAL-02, QUAL-07, PQ-ADV-01, QUANT-ADV-01
+**Gap Closure:** Closes stale traceability + cosmetic issues from v1.5 audit
+**Success Criteria** (what must be TRUE):
+  1. QUAL-02 and QUAL-07 checkboxes are `[x]` and traceability status is `Complete`
+  2. PQ-ADV-01 and QUANT-ADV-01 traceability status is `Complete` (not "Pending (promoted)")
+  3. OpenAPI spec version is `1.5.0` (not `0.1.1`)
+  4. REL-03 naming is consistent between REQUIREMENTS.md and actual npm package name
+
+Plans:
+- [ ] 12-01-PLAN.md — Fix stale traceability checkboxes + status entries (QUAL-02, QUAL-07, PQ-ADV-01, QUANT-ADV-01)
+- [ ] 12-02-PLAN.md — OpenAPI version fix + REL-03 naming alignment
+
 ## Progress
 
 **Execution Order:**
@@ -199,4 +227,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 7. Streaming Inserts | 3/3 | Complete   | 2026-03-07 |
 | 8. SDK Parity | 3/4 | In Progress|  |
 | 9. Documentation | 4/4 | Complete   | 2026-03-07 |
-| 10. Release Readiness | 2/2 | Complete   | 2026-03-07 |
+| 10. Release Readiness | 2/2 | Complete    | 2026-03-07 |
+| 11. PQ Recall Benchmark Hardening | 0/1 | Not Started |  |
+| 12. Traceability & Cosmetic Cleanup | 0/2 | Not Started |  |
