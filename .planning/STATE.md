@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 05-04-PLAN.md (REST API and WASM sparse bindings)
-last_updated: "2026-03-06T22:45:26Z"
-last_activity: 2026-03-06 — Completed plan 05-04 (REST API and WASM sparse bindings)
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-07T10:59:45Z"
+last_activity: 2026-03-07 — Completed plan 06-01 (Plan cache foundation types)
 progress:
   total_phases: 10
   completed_phases: 5
-  total_plans: 18
-  completed_plans: 18
+  total_plans: 19
+  completed_plans: 19
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 5 — Sparse Integration
+**Current focus:** Phase 6 — Query Plan Cache
 
 ## Current Position
 
-Phase: 5 of 10 (Sparse Integration)
-Plan: 4 of 4 in current phase (PHASE COMPLETE)
-Status: Completed plan 05-04 (REST API and WASM sparse bindings)
-Last activity: 2026-03-06 — Completed plan 05-04 (REST API and WASM sparse bindings)
+Phase: 6 of 10 (Query Plan Cache)
+Plan: 1 of ? in current phase
+Status: Completed plan 06-01 (Plan cache foundation types)
+Last activity: 2026-03-07 — Completed plan 06-01 (Plan cache foundation types)
 
-Progress: [██████████] 100% (14 prior + 4 phase 5)
+Progress: [██████████] 100% (18 prior + 1 phase 6)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
-- Average duration: 20 min
-- Total execution time: 4.9 hours
+- Total plans completed: 19
+- Average duration: 21 min
+- Total execution time: 5.3 hours
 
 **By Phase:**
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100% (14 prior + 4 phase 5)
 | Phase 05 P01 | 28 | 2 tasks | 24 files |
 | Phase 05 P03 | 24 | 2 tasks | 9 files |
 | Phase 05 P04 | 26 | 2 tasks | 14 files |
+| Phase 06 P01 | 23 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,11 @@ Recent decisions affecting current work:
 - [05-04]: SparseVectorInput uses #[serde(untagged)] enum for dual-format JSON (parallel arrays + dict)
 - [05-04]: Search handler auto-detects mode from vector/sparse_vector field presence
 - [05-04]: RRF (k=60) is default fusion strategy for hybrid search via REST
+- [06-01]: SmallVec<[u64; 4]> for PlanKey.collection_generations (stack-allocated for <= 4 collections)
+- [06-01]: Arc<CompiledPlan> as cache value type (AtomicU64 reuse_count stays shared)
+- [06-01]: write_generation bumps once per mutation batch, not per-item
+- [06-01]: Default cache sizing L1=1K, L2=10K
+- [06-01]: allow(dead_code) on schema_version/plan_cache accessors (wired in Plan 02)
 
 ### Pending Todos
 
@@ -132,6 +138,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-06T22:45:26Z
-Stopped at: Completed 05-04-PLAN.md (REST API and WASM sparse bindings)
-Resume file: None
+Last session: 2026-03-07T10:59:45Z
+Stopped at: Completed 06-01-PLAN.md
+Resume file: .planning/phases/06-query-plan-cache/06-01-SUMMARY.md
