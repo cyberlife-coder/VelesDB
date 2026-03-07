@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(cargo test:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh api:*)",
+      "Bash(wc:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(CARGO_TERM_COLOR=never cargo clippy:*)",
+      "Bash(touch:*)",
+      "Bash(python:*)",
+      "Bash(cargo:*)",
+      "Bash(magick:*)",
+      "Bash(mkdir:*)",
+      "Bash(node:*)",
+      "WebSearch",
+      "Bash(rustc:*)",
+      "Bash(wmic cpu:*)",
+      "Bash(wmic os:*)",
+      "Bash(powershell:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}

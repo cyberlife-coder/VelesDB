@@ -30,7 +30,7 @@
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
   <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
-  <img src="https://img.shields.io/badge/Sparse_Search-757µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-757NS-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
