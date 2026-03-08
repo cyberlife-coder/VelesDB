@@ -80,9 +80,10 @@ impl CheckpointContext {
 
         if state.version != CHECKPOINT_VERSION {
             return Err(Error::Checkpoint(format!(
-                "Unsupported checkpoint version {} in '{}'",
+                "Unsupported checkpoint version {} in '{}' (expected {})",
                 state.version,
-                self.path.display()
+                self.path.display(),
+                CHECKPOINT_VERSION
             )));
         }
         if state.source_fingerprint != self.source_fingerprint {
@@ -328,6 +329,18 @@ impl Pipeline {
                     collection
                         .flush()
                         .map_err(|e| Error::Loading(e.to_string()))?;
+
+                    // Save checkpoint immediately after successful flush, BEFORE
+                    // the next iteration's offset update.  This ensures that if
+                    // batch N succeeds but batch N+1 fails, the checkpoint
+                    // reflects batch N's completion.
+                    if let Some(ctx) = &checkpoint_ctx {
+                        ctx.save(
+                            batch.next_offset.clone(),
+                            &stats,
+                            resumed_duration_secs + start.elapsed().as_secs_f64(),
+                        )?;
+                    }
                 }
             } else {
                 stats.loaded += transformed.len() as u64;
@@ -340,13 +353,6 @@ impl Pipeline {
             }
 
             offset = batch.next_offset.clone();
-            if let Some(ctx) = &checkpoint_ctx {
-                ctx.save(
-                    offset.clone(),
-                    &stats,
-                    resumed_duration_secs + start.elapsed().as_secs_f64(),
-                )?;
-            }
         }
 
         progress.finish_with_message("Migration complete");
@@ -417,8 +423,10 @@ fn fingerprint_source(source: &crate::config::SourceConfig) -> Result<String> {
 }
 
 fn fingerprint_destination(config: &MigrationConfig) -> Result<String> {
+    // Normalize path separators to forward slashes for cross-platform fingerprint stability.
+    let normalized_path = config.destination.path.to_string_lossy().replace('\\', "/");
     let bytes = serde_json::to_vec(&serde_json::json!({
-        "path": config.destination.path,
+        "path": normalized_path,
         "collection": config.destination.collection,
         "dimension": config.destination.dimension,
         "metric": config.destination.metric,
@@ -443,6 +451,14 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// Maps string IDs to deterministic u64 point IDs.
+///
+/// Numeric strings are parsed directly; non-numeric strings use FNV-1a hash.
+///
+/// # Cross-version stability guarantee
+///
+/// Changing this function would silently corrupt checkpoint-resumed migrations
+/// because IDs would no longer match previously-inserted points.
 fn stable_point_id(id: &str) -> u64 {
     id.parse::<u64>().unwrap_or_else(|_| fnv1a64(id.as_bytes()))
 }
