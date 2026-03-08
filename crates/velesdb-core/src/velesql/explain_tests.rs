@@ -373,6 +373,58 @@ fn test_index_lookup_json_serialization() {
 }
 
 // =========================================================================
+// Cache hit / plan reuse count in to_tree() output
+// =========================================================================
+
+#[test]
+fn test_plan_to_tree_cache_hit_present() {
+    let plan = QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "docs".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        cache_hit: Some(true),
+        plan_reuse_count: Some(42),
+    };
+
+    let tree = plan.to_tree();
+    assert!(
+        tree.contains("Cache hit: true"),
+        "tree should contain cache hit line"
+    );
+    assert!(
+        tree.contains("Plan reuse count: 42"),
+        "tree should contain plan reuse count line"
+    );
+}
+
+#[test]
+fn test_plan_to_tree_cache_hit_absent() {
+    let plan = QueryPlan {
+        root: PlanNode::TableScan(TableScanPlan {
+            collection: "docs".to_string(),
+        }),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        cache_hit: None,
+        plan_reuse_count: None,
+    };
+
+    let tree = plan.to_tree();
+    assert!(
+        !tree.contains("Cache hit"),
+        "tree should NOT contain cache hit when None"
+    );
+    assert!(
+        !tree.contains("Plan reuse count"),
+        "tree should NOT contain plan reuse count when None"
+    );
+}
+
+// =========================================================================
 // EPIC-046 US-004: EXPLAIN MATCH tests (migrated from inline)
 // =========================================================================
 

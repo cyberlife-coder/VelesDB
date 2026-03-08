@@ -5,10 +5,10 @@
 //! uniform random dataset.
 //!
 //! Uses explicit `TRAIN QUANTIZER ON ... WITH (m=8, k=256)` via `Database`
-//! + VelesQL instead of auto-training, ensuring controlled m/k parameters.
+//! + `VelesQL` instead of auto-training, ensuring controlled m/k parameters.
 //!
 //! Uniform random data in high dimensions produces well-separated nearest
-//! neighbors, enabling HNSW (M=24, ef_construction=300, ef_search=128) to
+//! neighbors, enabling HNSW (M=24, `ef_construction=300`, `ef_search=128`) to
 //! achieve recall@10 above 0.92, satisfying PQ-07.
 
 #![allow(clippy::cast_precision_loss)]
@@ -107,7 +107,7 @@ fn build_pq_collection(
     (collection, dir)
 }
 
-/// Build a collection via `Database` + VelesQL `TRAIN QUANTIZER` for explicit
+/// Build a collection via `Database` + `VelesQL` `TRAIN QUANTIZER` for explicit
 /// PQ/OPQ/RaBitQ training with controlled parameters.
 ///
 /// Returns `(Collection, Database, TempDir)` -- `Database` and `TempDir`

@@ -517,6 +517,14 @@ pub struct ExplainResponse {
     pub estimated_cost: ExplainCost,
     /// Query features detected.
     pub features: ExplainFeatures,
+    /// Whether this plan was served from the compiled plan cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable)]
+    pub cache_hit: Option<bool>,
+    /// How many times this cached plan has been reused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable)]
+    pub plan_reuse_count: Option<u64>,
 }
 
 /// A step in the query execution plan.

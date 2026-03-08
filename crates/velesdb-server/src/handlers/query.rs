@@ -567,6 +567,13 @@ pub async fn explain(
         "SELECT"
     };
 
+    // Call Database::explain_query to get cache status (gracefully fall back to None on error)
+    let (cache_hit, plan_reuse_count) = state
+        .db
+        .explain_query(&parsed)
+        .ok()
+        .map_or((None, None), |qp| (qp.cache_hit, qp.plan_reuse_count));
+
     Json(ExplainResponse {
         query: req.query,
         query_type: query_type.to_string(),
@@ -574,6 +581,8 @@ pub async fn explain(
         plan,
         estimated_cost,
         features,
+        cache_hit,
+        plan_reuse_count,
     })
     .into_response()
 }

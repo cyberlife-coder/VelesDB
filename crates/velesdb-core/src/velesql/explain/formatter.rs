@@ -28,6 +28,13 @@ impl QueryPlan {
             let _ = writeln!(output, "Filter strategy: {}", self.filter_strategy.as_str());
         }
 
+        if let Some(hit) = self.cache_hit {
+            let _ = writeln!(output, "Cache hit: {hit}");
+        }
+        if let Some(count) = self.plan_reuse_count {
+            let _ = writeln!(output, "Plan reuse count: {count}");
+        }
+
         output
     }
 
