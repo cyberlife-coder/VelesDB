@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 11-02-PLAN.md
-last_updated: "2026-03-08T09:35:52.574Z"
-last_activity: 2026-03-08 — Phase 11 Plan 02 complete (PQ recall thresholds restored to 0.92 with uniform random data)
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-03-08T10:03:46Z"
+last_activity: 2026-03-08 — Phase 12 Plan 01 complete (traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment)
 progress:
   total_phases: 12
-  completed_phases: 11
-  total_plans: 35
-  completed_plans: 35
+  completed_phases: 12
+  total_plans: 36
+  completed_plans: 36
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 11 — PQ Recall Benchmark Hardening (COMPLETE)
+**Current focus:** Phase 12 — Traceability & Cosmetic Cleanup (COMPLETE)
 
 ## Current Position
 
-Phase: 11 of 11 (PQ Recall Benchmark Hardening) -- COMPLETE
-Plan: 2 of 2 in current phase (2 complete)
-Status: Phase 11 Plan 02 complete -- PQ recall thresholds restored to 0.92 with uniform random data
-Last activity: 2026-03-08 — Phase 11 Plan 02 complete (PQ recall thresholds restored to 0.92 with uniform random data)
+Phase: 12 of 12 (Traceability & Cosmetic Cleanup) -- COMPLETE
+Plan: 1 of 1 in current phase (1 complete)
+Status: Phase 12 Plan 01 complete -- traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment
+Last activity: 2026-03-08 — Phase 12 Plan 01 complete (traceability fixes + OpenAPI version 1.5.0 + REL-03 naming alignment)
 
-Progress: [██████████] 100% (35/35 plans complete)
+Progress: [██████████] 100% (36/36 plans complete)
 
 ## Performance Metrics
 
@@ -79,6 +79,7 @@ Progress: [██████████] 100% (35/35 plans complete)
 | Phase 10 P02 | 4 | 2 tasks | 2 files |
 | Phase 11 P01 | 8 min | 2 tasks | 2 files |
 | Phase 11 P02 | 12 min | 1 tasks | 2 files |
+| Phase 12 P01 | 5 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -191,6 +192,13 @@ Recent decisions affecting current work:
 - [11-01]: Full-precision baseline threshold lowered from 0.95 to 0.80 (same HNSW ceiling constraint)
 - [11-02]: Switched from clustered to uniform random synthetic data to avoid HNSW recall ceiling from distance-tie degeneracies
 - [11-02]: Kept 5K vectors (not 20K) since uniform random data achieves 0.99+ recall at 5K with ef_search=128
+- [12-01]: QUAL-02, QUAL-07, PQ-ADV-01, QUANT-ADV-01 traceability already correct -- no fixes needed
+- [12-01]: OpenAPI spec version corrected from 0.1.1 to 1.5.0 in source, test, and generated specs
+
+### Roadmap Evolution
+
+- Phase 13 added: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
+- Phase 14 added: README documentation audit
 
 ### Pending Todos
 
@@ -204,7 +212,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T09:31:38Z
-Stopped at: Completed 11-02-PLAN.md
+Last session: 2026-03-08T09:58:10Z
+Stopped at: Completed 12-01-PLAN.md
 Resume file: None
 Next action: All phases complete
