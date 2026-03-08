@@ -1,8 +1,8 @@
-//! Integration tests proving VelesDB's hybrid query value proposition.
+//! Integration tests proving `VelesDB`'s hybrid query value proposition.
 //!
-//! HYB-01: VelesQL NEAR + scalar filter with ranking identity assertions
+//! HYB-01: `VelesQL` NEAR + scalar filter with ranking identity assertions
 //! HYB-02: BM25+cosine hybrid fusion ranking differs from pure vector
-//! HYB-03: GraphCollection edges + MATCH traversal returns real results
+//! HYB-03: `GraphCollection` edges + MATCH traversal returns real results
 //!
 //! All tests use 4-dimensional orthogonal unit vectors for deterministic ranking.
 
@@ -19,7 +19,7 @@ use tempfile::TempDir;
 use velesdb_core::velesql::Parser;
 use velesdb_core::{Database, DistanceMetric, GraphEdge, Point};
 
-/// HYB-01: VelesQL SELECT with NEAR + scalar filter executes against a real corpus
+/// HYB-01: `VelesQL` SELECT with NEAR + scalar filter executes against a real corpus
 /// and returns only docs matching the filter, with the highest-similarity doc ranked first.
 #[test]
 fn test_hyb01_velesql_near_scalar_filter_ranking() {
@@ -109,7 +109,7 @@ fn test_hyb01_velesql_near_scalar_filter_ranking() {
     }
 }
 
-/// HYB-02: A hybrid_search() call on a corpus where vector and BM25 signals diverge
+/// HYB-02: A `hybrid_search()` call on a corpus where vector and BM25 signals diverge
 /// produces a ranking that differs from pure-vector ranking.
 #[test]
 fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
@@ -174,7 +174,7 @@ fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
     );
 }
 
-/// HYB-03: A VelesQL MATCH traversal over real `GraphCollection` edges returns results
+/// HYB-03: A `VelesQL` MATCH traversal over real `GraphCollection` edges returns results
 /// (traversal executed, not just parsed).
 #[test]
 fn test_hyb03_graph_match_traversal_returns_real_edges() {
