@@ -233,6 +233,9 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 11. PQ Recall Benchmark Hardening | 2/2 | Complete    | 2026-03-08 |
 | 12. Traceability & Cosmetic Cleanup | 1/1 | Complete    | 2026-03-08 |
 | 13. Recall Benchmark Multi-Distribution | 1/1 | Complete    | 2026-03-08 |
+| 14. README Documentation Audit | 2/2 | Complete    | 2026-03-08 |
+| 15. LangChain & LlamaIndex v1.5 Parity | 0/2 | Planned     |  |
+| 16. Traceability & EXPLAIN Cosmetic Fixes | 0/0 | Pending     |  |
 
 ### Phase 13: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
 
@@ -254,3 +257,31 @@ Plans:
 Plans:
 - [ ] 14-01-PLAN.md — Stale versions + metrics recalculation + badges + structural cleanup (README-01, README-02, README-03, README-05)
 - [ ] 14-02-PLAN.md — API reference v1.5 content + snippet validation against real codebase (README-04, README-06)
+
+### Phase 15: LangChain & LlamaIndex official integration v1.5 parity
+
+**Goal:** The official pip-installable `langchain-velesdb` and `llamaindex-velesdb` packages support sparse vectors, PQ configuration, and streaming inserts — matching the v1.5 core API surface demonstrated by example scripts
+**Requirements**: SDK-05, SDK-06
+**Depends on:** Phase 14
+**Gap Closure:** Closes SDK-05/SDK-06 partial gaps from v1.5 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. `integrations/langchain/src/langchain_velesdb/vectorstore.py` supports `sparse_vector` in `add_texts()` and hybrid dense+sparse search via `similarity_search()` — not just example scripts
+  2. `integrations/llamaindex/src/llamaindex_velesdb/vectorstore.py` supports sparse vectors and PQ config in its public API
+  3. Both official packages pass their existing test suites with the new v1.5 features added
+
+Plans:
+- [ ] 15-01-PLAN.md — LangChain VectorStore v1.5 parity: sparse, PQ, streaming (SDK-05)
+- [ ] 15-02-PLAN.md — LlamaIndex VectorStore v1.5 parity: sparse, PQ, streaming (SDK-06)
+
+### Phase 16: Traceability & EXPLAIN cosmetic fixes
+
+**Goal:** All stale traceability entries are corrected, REST EXPLAIN endpoint is wired to Database::explain_query(), and EXPLAIN tree formatter includes cache status fields
+**Requirements**: CACHE-04, QUAL-06
+**Depends on:** Phase 14
+**Gap Closure:** Closes CACHE-04 cosmetic gap + QUAL-06 traceability from v1.5 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. REST `/query/explain` endpoint calls `Database::explain_query()` and surfaces `cache_hit` and `plan_reuse_count` in its response
+  2. `QueryPlan.to_tree()` formatter includes `cache_hit` and `plan_reuse_count` fields
+  3. QUAL-06 checkbox is `[x]` and traceability status is `Complete` in REQUIREMENTS.md
+
+Plans:
