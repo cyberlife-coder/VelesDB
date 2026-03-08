@@ -37,7 +37,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-velesdb-core = "1.3"
+velesdb-core = "1.5"
 serde_json = "1.0"
 ```
 

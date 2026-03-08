@@ -293,7 +293,7 @@ $env:VELESDB_SEARCH_DEFAULT_MODE = "high_recall"
 $env:VELESDB_SERVER_PORT = "9090"
 
 # Docker
-docker run -e VELESDB_SERVER_HOST=0.0.0.0 -e VELESDB_SERVER_PORT=8080 velesdb/server
+docker run -e VELESDB_SERVER_HOST=0.0.0.0 -e VELESDB_SERVER_PORT=8080 ghcr.io/cyberlife-coder/velesdb:latest
 ```
 
 ---
