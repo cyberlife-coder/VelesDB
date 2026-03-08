@@ -186,10 +186,13 @@ pub async fn search(
                 // (maps to `FusionStrategyType::Rsf` in the core enum).
                 // "relative_score" is accepted as a more descriptive synonym.
                 "rsf" | "relative_score" => {
-                    match velesdb_core::FusionStrategy::relative_score(
-                        f.dense_w.unwrap_or(0.5),
-                        f.sparse_w.unwrap_or(0.5),
-                    ) {
+                    let (dw, sw) = match (f.dense_w, f.sparse_w) {
+                        (Some(d), Some(s)) => (d, s),
+                        (Some(d), None) => (d, 1.0 - d),
+                        (None, Some(s)) => (1.0 - s, s),
+                        (None, None) => (0.5, 0.5),
+                    };
+                    match velesdb_core::FusionStrategy::relative_score(dw, sw) {
                         Ok(s) => s,
                         Err(e) => {
                             return (

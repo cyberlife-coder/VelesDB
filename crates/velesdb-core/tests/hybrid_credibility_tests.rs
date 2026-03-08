@@ -6,12 +6,6 @@
 //!
 //! All tests use 4-dimensional orthogonal unit vectors for deterministic ranking.
 
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::uninlined_format_args
-)]
-
 use std::collections::HashMap;
 
 use serde_json::json;
@@ -219,13 +213,18 @@ fn test_hyb03_graph_match_traversal_returns_real_edges() {
         .execute_query(&query, &HashMap::new())
         .expect("execute MATCH query");
 
-    assert!(
-        !results.is_empty(),
-        "MATCH traversal must return results when real edges exist"
+    // The MATCH pattern traverses Document->Author edges.  Both edges (2->1
+    // and 3->1) should produce a matched path, so we expect exactly 2 results.
+    // The returned point corresponds to the Author node (id=1) in both paths.
+    let result_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        result_ids.len(),
+        2,
+        "Both Document->Author edges must be traversed, got {} results: {result_ids:?}",
+        result_ids.len(),
     );
     assert!(
-        results.len() >= 2,
-        "Both Document->Author edges must be traversed (2 docs point to Author id=1), got {} results",
-        results.len()
+        result_ids.iter().all(|&id| id == 1),
+        "All traversal results should reach Author node (id=1), got {result_ids:?}",
     );
 }
