@@ -239,17 +239,18 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 **Goal:** The PQ recall benchmark suite covers clustered Gaussian (6 variants) and binary {0,1} (2 variants) distributions alongside the existing uniform coverage, with exact search baselines validating ground truth on all three distributions
 **Requirements**: PQ-07
 **Depends on:** Phase 12
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [x] 13-01-PLAN.md — Multi-distribution recall benchmarks: clustered (6 variants), binary (2 variants), exact baselines (PQ-07) (completed 2026-03-08)
 
 ### Phase 14: README documentation audit
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** The README.md is fully accurate against the v1.5 codebase -- zero stale version references, real metrics from codebase commands, v1.5 API endpoints documented, redundant sections removed, and all code snippets validated against real handlers and VelesQL grammar
+**Requirements**: README-01, README-02, README-03, README-04, README-05, README-06
 **Depends on:** Phase 13
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 14 to break down)
+- [ ] 14-01-PLAN.md — Stale versions + metrics recalculation + badges + structural cleanup (README-01, README-02, README-03, README-05)
+- [ ] 14-02-PLAN.md — API reference v1.5 content + snippet validation against real codebase (README-04, README-06)

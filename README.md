@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 59µs HNSW Search • 18.8ns SIMD • 3,300+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 59µs HNSW Search • 18.8ns SIMD • 3,670+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.8ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
-  <img src="https://img.shields.io/badge/🧪_Tests-3,300+-green?style=for-the-badge" alt="Tests"/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&label=tests&style=for-the-badge" alt="Tests"/></a>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
@@ -184,7 +184,7 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 <table align="center">
 <tr>
 <td align="center" width="20%">
-<h3>🧪 3,300+</h3>
+<h3>🧪 3,670+</h3>
 <p><strong>Tests</strong><br/>100% passing</p>
 </td>
 <td align="center" width="20%">
@@ -224,9 +224,9 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 
 | Metric | Value |
 |--------|-------|
-| **Total Rust LoC** | ~133,000 |
+| **Total Rust LoC** | ~48,000 (workspace crates) |
 | **Crates** | 8 production crates |
-| **Benchmarks** | 35 criterion suites |
+| **Benchmarks** | 38 criterion suites |
 | **E2E Test Suites** | 6 (Rust, Python, WASM, CLI, LangChain, LlamaIndex) |
 | **Security Advisories** | 0 ✅ |
 
@@ -235,7 +235,7 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 ```
 ✅ cargo check --workspace
 ✅ cargo clippy -- -D warnings  
-✅ cargo test --workspace (3,300+ passing)
+✅ cargo test --workspace (3,670+ passing)
 ✅ cargo deny check (0 advisories)
 ✅ cargo fmt --check
 ✅ Code coverage > 75% (82.30%)
@@ -277,7 +277,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | Domain      | Component                          | Description                              | Install                     |
 |-------------|------------------------------------|------------------------------------------|----------------------------|
 | **🦀 Core** | [velesdb-core](crates/velesdb-core) | Core engine (HNSW, SIMD, VelesQL)        | `cargo add velesdb-core`   |
-| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (22+ endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
+| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (25 endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
 | **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
 | **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
 | **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb-sdk`   |
@@ -391,7 +391,7 @@ Download from [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/relea
 
 ```bash
 # Install
-sudo dpkg -i velesdb-1.1.0-amd64.deb
+sudo dpkg -i velesdb-<VERSION>-amd64.deb  # Download latest from https://github.com/cyberlife-coder/VelesDB/releases/latest
 
 # Binaries installed to /usr/bin
 velesdb --version
@@ -487,7 +487,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.4.5"}
+# {"status":"healthy","version":"1.5.0"}
 ```
 
 📖 **Full installation guide:** [docs/INSTALLATION.md](docs/INSTALLATION.md)
@@ -593,7 +593,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/indexes` | `POST` | Create index on property |
 | `/collections/{name}/indexes/{label}/{property}` | `DELETE` | Delete index |
 
-### VelesQL v2.0 (Unified Query)
+### VelesQL v2.2.0 (Unified Query)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -601,7 +601,7 @@ curl -X POST http://localhost:8080/query \
 | `/aggregate` | `POST` | Execute aggregation-only VelesQL queries (`GROUP BY`/`HAVING`) |
 | `/query/explain` | `POST` | Return query execution plan (EXPLAIN) |
 
-**VelesQL v2.0 Features:**
+**VelesQL v2.2.0 Features:**
 - `GROUP BY` / `HAVING` with AND/OR operators
 - `ORDER BY` multi-column + `similarity()` function
 - `JOIN ... ON` across collections (inner join runtime support)
@@ -1192,7 +1192,7 @@ LIMIT 10
 | **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
 | **VelesQL Cache Hit**| **444 ns** | ~2.3M qps, measured 2026-03-07 |
 | **Recall@10** | **100%** | Accurate mode |
-| **Code Coverage** | **82.30%** | 3,300+ tests |
+| **Code Coverage** | **82.30%** | 3,670+ tests |
 
 ### Search Quality (Recall)
 
@@ -1485,7 +1485,7 @@ gantt
 </details>
 
 **Highlights:**
-- 🆕 **VelesQL v2.0** - MATCH queries, EXPLAIN plans, DISTINCT
+- 🆕 **VelesQL v2.2.0** - MATCH queries, EXPLAIN plans, DISTINCT
 - 🔀 **Multi-Score Fusion** - RRF, Average, Maximum, Weighted strategies
 - ⚡ **Parallel Graph** - 2-4x speedup on BFS/DFS
 - 🌐 **100% Ecosystem** - VelesQL in all SDKs
