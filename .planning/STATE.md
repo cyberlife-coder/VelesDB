@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-03-08)
 Phase: 17 of 17 (Hybrid Query Test & Demo Coverage)
 Plan: 2 of 2 in current phase
 Status: Completed 17-02-PLAN.md
-Last activity: 2026-03-08 — Completed Phase 17 Plan 02 (Example code honesty - hybrid search + PSEUDOCODE headers)
+Last activity: 2026-03-08 - Completed quick task 1: Fix Python example pseudocode to match real SDK API signatures
 
 Progress: [██████████] 100% (44/44 plans complete, 0 phases pending)
 
@@ -232,9 +232,15 @@ None yet.
 - BUG-8 (multi-alias FROM silent wrong results) is a correctness issue that would damage trust on v1.5 release — targeted for Phase 1.
 - ~~`ProductQuantizer::train()` assert!/panic must be converted to Result~~ RESOLVED in 01-02: all PQ methods return Result, k-means++ init added.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 1 | Fix Python example pseudocode to match real SDK API signatures | 2026-03-08 | b9333359 | [1-fix-python-example-pseudocode-to-match-r](./quick/1-fix-python-example-pseudocode-to-match-r/) |
+
 ## Session Continuity
 
-Last session: 2026-03-08T17:00:52.301Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-03-08T17:14:26Z
+Stopped at: Completed quick task 1
 Resume file: None
-Next action: Phase 17 complete -- continue with next phase or milestone wrap-up
+Next action: Quick task 1 complete
