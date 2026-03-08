@@ -15,7 +15,7 @@ from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from pydantic import ConfigDict
+from pydantic import ConfigDict, PrivateAttr
 
 import velesdb
 
@@ -96,9 +96,9 @@ class VelesDBVectorStore(BasePydanticVectorStore):
     metric: str = "cosine"
     storage_mode: str = "full"
 
-    _db: Optional[velesdb.Database] = None
-    _collection: Optional[velesdb.Collection] = None
-    _dimension: Optional[int] = None
+    _db: Optional[velesdb.Database] = PrivateAttr(default=None)
+    _collection: Optional[velesdb.Collection] = PrivateAttr(default=None)
+    _dimension: Optional[int] = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -301,7 +301,6 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                     metric=self.metric,
                     storage_mode=self.storage_mode,
                 )
-                self._collection = db.get_collection(self.collection_name)
             else:
                 # Validate existing collection dimension matches
                 info = self._collection.info()
@@ -354,6 +353,16 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         if first_embedding is None:
             raise ValueError("Nodes must have embeddings")
         dimension = len(first_embedding)
+
+        # When sparse_vectors are provided, all nodes must have embeddings so
+        # that sparse_vectors[idx] stays aligned with the built points list.
+        if sparse_vectors is not None:
+            for i, node in enumerate(nodes):
+                if node.get_embedding() is None:
+                    raise ValueError(
+                        f"Node at index {i} has no embedding. All nodes must have embeddings "
+                        f"when sparse_vectors are provided to preserve index alignment."
+                    )
 
         collection = self._get_collection(dimension)
 
@@ -447,6 +456,12 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             validate_sparse_vector(sparse_vector)
 
         core_filter = self._metadata_filters_to_core_filter(query.filters)
+
+        if sparse_vector is not None and core_filter is not None:
+            raise ValueError(
+                "sparse_vector cannot be combined with metadata filters. "
+                "Apply filters separately or omit the sparse_vector."
+            )
         if core_filter is not None:
             search_with_filter = getattr(collection, "search_with_filter", None)
             if search_with_filter is None:
@@ -872,7 +887,10 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         for idx, node in enumerate(nodes):
             embedding = node.get_embedding()
             if embedding is None:
-                continue
+                raise ValueError(
+                    f"Node at index {idx} (id={node.node_id!r}) has no embedding. "
+                    f"All nodes passed to stream_insert must have embeddings."
+                )
 
             node_id = node.node_id
 
