@@ -244,6 +244,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 1 | Fix Python example pseudocode to match real SDK API signatures | 2026-03-08 | b9333359 | [1-fix-python-example-pseudocode-to-match-r](./quick/1-fix-python-example-pseudocode-to-match-r/) |
+| 2 | Fix PR #277 review anomalies (checkpoint, RSF weights, tests, docs) | 2026-03-08 | ac45a25e | [2-fix-les-anomalies-identifi-s-avec-le-sub](./quick/2-fix-les-anomalies-identifi-s-avec-le-sub/) |
 
 ## Session Continuity
 
