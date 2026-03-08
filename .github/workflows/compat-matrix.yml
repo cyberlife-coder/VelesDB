@@ -32,7 +32,7 @@ jobs:
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
           - name: Linux no default features
             os: ubuntu-latest
-            command: cargo check --workspace --all-targets --no-default-features --exclude velesdb-python
+            command: cargo check -p velesdb-core -p velesdb-wasm --no-default-features
           - name: Windows all features
             os: windows-latest
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python

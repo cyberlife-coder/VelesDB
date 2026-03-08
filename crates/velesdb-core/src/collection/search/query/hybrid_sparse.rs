@@ -51,8 +51,6 @@ impl Collection {
     ///
     /// Returns `Err` when the condition contains more than one
     /// `SparseVectorSearch` node (ambiguous multi-sparse query).
-    // TODO(SPARSE-04): call this from the VelesQL planner's validation pass to
-    // surface the ambiguous multi-SPARSE_NEAR error to callers at plan time.
     #[allow(dead_code)]
     pub(crate) fn validate_single_sparse_search(condition: &Condition) -> Result<()> {
         fn count(cond: &Condition) -> usize {
@@ -231,8 +229,6 @@ impl Collection {
     ///
     /// Currently only exercised by integration tests; production callers use
     /// [`Self::execute_hybrid_search_with_strategy`] directly.
-    // TODO(SPARSE-04): wire this convenience wrapper into the VelesQL execution
-    // path so it can be selected via `USING FUSION 'rrf'` without explicit params.
     #[allow(dead_code)]
     pub(crate) fn execute_hybrid_search(
         &self,
