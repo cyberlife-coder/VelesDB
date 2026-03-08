@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-03-08T00:01:09Z"
-last_activity: "2026-03-08 — Phase 11 Plan 01 complete (PQ recall benchmark hardened: 6 variants, explicit TRAIN QUANTIZER, 0.80+ recall)"
+stopped_at: Completed 11-02-PLAN.md
+last_updated: "2026-03-08T09:31:38Z"
+last_activity: "2026-03-08 — Phase 11 Plan 02 complete (PQ recall thresholds restored to 0.92 with uniform random data)"
 progress:
   total_phases: 11
   completed_phases: 11
-  total_plans: 34
-  completed_plans: 34
+  total_plans: 35
+  completed_plans: 35
   percent: 100
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 11 of 11 (PQ Recall Benchmark Hardening) -- COMPLETE
-Plan: 1 of 1 in current phase (1 complete)
-Status: Phase 11 Plan 01 complete -- PQ recall benchmark hardened with 6 variants via explicit TRAIN QUANTIZER
-Last activity: 2026-03-08 — Phase 11 Plan 01 complete (PQ recall benchmark hardened: 6 variants, explicit TRAIN QUANTIZER, 0.80+ recall)
+Plan: 2 of 2 in current phase (2 complete)
+Status: Phase 11 Plan 02 complete -- PQ recall thresholds restored to 0.92 with uniform random data
+Last activity: 2026-03-08 — Phase 11 Plan 02 complete (PQ recall thresholds restored to 0.92 with uniform random data)
 
-Progress: [██████████] 100% (34/34 plans complete)
+Progress: [██████████] 100% (35/35 plans complete)
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Progress: [██████████] 100% (34/34 plans complete)
 | Phase 10 P01 | 3 min | 2 tasks | 10 files |
 | Phase 10 P02 | 4 | 2 tasks | 2 files |
 | Phase 11 P01 | 8 min | 2 tasks | 2 files |
+| Phase 11 P02 | 12 min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -188,6 +189,8 @@ Recent decisions affecting current work:
 - [Phase 10]: validate-all job gates all publish jobs with workspace tests + cargo publish --dry-run
 - [11-01]: Recall thresholds set to 0.80 instead of plan's 0.92 (HNSW ceiling on 5K/128d clustered synthetic data is ~0.876)
 - [11-01]: Full-precision baseline threshold lowered from 0.95 to 0.80 (same HNSW ceiling constraint)
+- [11-02]: Switched from clustered to uniform random synthetic data to avoid HNSW recall ceiling from distance-tie degeneracies
+- [11-02]: Kept 5K vectors (not 20K) since uniform random data achieves 0.99+ recall at 5K with ef_search=128
 
 ### Pending Todos
 
@@ -201,7 +204,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T00:01:09Z
-Stopped at: Completed 11-01-PLAN.md
+Last session: 2026-03-08T09:31:38Z
+Stopped at: Completed 11-02-PLAN.md
 Resume file: None
 Next action: All phases complete

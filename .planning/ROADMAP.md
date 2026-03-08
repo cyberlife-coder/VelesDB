@@ -229,5 +229,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. SDK Parity | 3/4 | In Progress|  |
 | 9. Documentation | 4/4 | Complete   | 2026-03-07 |
 | 10. Release Readiness | 2/2 | Complete    | 2026-03-07 |
-| 11. PQ Recall Benchmark Hardening | 1/2 | In Progress |  |
+| 11. PQ Recall Benchmark Hardening | 2/2 | Complete   | 2026-03-08 |
 | 12. Traceability & Cosmetic Cleanup | 0/2 | Not Started |  |
