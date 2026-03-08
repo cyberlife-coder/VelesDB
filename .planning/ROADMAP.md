@@ -47,7 +47,7 @@ Full details: `.planning/milestones/v1.5-ROADMAP.md`
 | HYB-04 | Python examples use real VelesDB API calls (not pseudocode/print); non-runnable examples clearly labeled as pseudocode |
 | HYB-05 | `ecommerce_recommendation` example demonstrates Vector+Graph fusion via VelesQL or engine-level call, not manual HashMap merge |
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 17-01-PLAN.md — Integration tests: HYB-01 (NEAR + scalar filter + ranking identity), HYB-02 (fusion ranking differs from pure vector), HYB-03 (graph MATCH traversal with real edges)
@@ -73,4 +73,4 @@ Plans:
 | 14. README Documentation Audit | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 15. LangChain & LlamaIndex v1.5 Parity | v1.5 | 2/2 | Complete | 2026-03-08 |
 | 16. Traceability & EXPLAIN Cosmetic Fixes | v1.5 | 1/1 | Complete | 2026-03-08 |
-| 17. Hybrid Query Test & Demo Coverage | v1.6 | 0/2 | In Progress | — |
+| 17. Hybrid Query Test & Demo Coverage | 2/2 | Complete   | 2026-03-08 | — |

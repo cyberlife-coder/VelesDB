@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: parity
-status: completed
-stopped_at: Completed 16-01-PLAN.md
-last_updated: "2026-03-08T14:48:31.803Z"
-last_activity: 2026-03-08 — Completed Phase 16 Plan 01 (EXPLAIN cache wiring + QUAL-06 traceability)
+status: in-progress
+stopped_at: Completed 17-02-PLAN.md
+last_updated: "2026-03-08T16:59:24Z"
+last_activity: 2026-03-08 — Completed Phase 17 Plan 02 (Example code honesty - hybrid search + PSEUDOCODE headers)
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 16
-  total_plans: 42
-  completed_plans: 42
+  total_plans: 44
+  completed_plans: 44
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** v1.5 milestone shipped — planning next milestone
+**Current focus:** Phase 17 — Hybrid query test & demo coverage
 
 ## Current Position
 
-Phase: 16 of 16 (Traceability & EXPLAIN Cosmetic Fixes) -- COMPLETED
-Plan: 1 of 1 in current phase
-Status: Completed 16-01-PLAN.md
-Last activity: 2026-03-08 — Completed Phase 16 Plan 01 (EXPLAIN cache wiring + QUAL-06 traceability)
+Phase: 17 of 17 (Hybrid Query Test & Demo Coverage)
+Plan: 2 of 2 in current phase
+Status: Completed 17-02-PLAN.md
+Last activity: 2026-03-08 — Completed Phase 17 Plan 02 (Example code honesty - hybrid search + PSEUDOCODE headers)
 
-Progress: [██████████] 100% (42/42 plans complete, 0 phases pending)
+Progress: [██████████] 100% (44/44 plans complete, 0 phases pending)
 
 ## Performance Metrics
 
@@ -85,6 +85,7 @@ Progress: [██████████] 100% (42/42 plans complete, 0 phases 
 | Phase 14 P02 | 2 | 2 tasks | 1 files |
 | Phase 15 P01 | 2 | 2 tasks | 4 files |
 | Phase 16 P01 | 8 min | 2 tasks | 6 files |
+| Phase 17 P02 | 3 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -232,7 +233,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T14:39:31Z
-Stopped at: Completed 16-01-PLAN.md
+Last session: 2026-03-08T16:59:24Z
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None
-Next action: v1.5 milestone complete -- all 16 phases and 42 plans executed
+Next action: Phase 17 complete -- continue with next phase or milestone wrap-up
