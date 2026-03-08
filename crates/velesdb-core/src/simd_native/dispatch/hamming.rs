@@ -76,10 +76,11 @@ fn jaccard_simd(a: &[f32], b: &[f32]) -> f32 {
     crate::simd_native::scalar::jaccard_scalar(a, b)
 }
 
-pub(super) fn resolve_hamming(_level: SimdLevel, _dim: usize) -> fn(&[f32], &[f32]) -> f32 {
-    match _level {
+#[allow(unused_variables)]
+pub(super) fn resolve_hamming(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
+    match level {
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 if _dim >= 16 => {
+        SimdLevel::Avx512 if dim >= 16 => {
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_hamming`.
@@ -88,7 +89,7 @@ pub(super) fn resolve_hamming(_level: SimdLevel, _dim: usize) -> fn(&[f32], &[f3
             }
         }
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if _dim >= 8 => |a, b| {
+        SimdLevel::Avx2 if dim >= 8 => |a, b| {
             // SAFETY: Resolver emitted AVX2 implementation for this dimension.
             // - Condition 1: caller chose this function pointer via `resolve_hamming`.
             // Reason: execute AVX2 specialized hamming implementation.
@@ -98,10 +99,11 @@ pub(super) fn resolve_hamming(_level: SimdLevel, _dim: usize) -> fn(&[f32], &[f3
     }
 }
 
-pub(super) fn resolve_jaccard(_level: SimdLevel, _dim: usize) -> fn(&[f32], &[f32]) -> f32 {
-    match _level {
+#[allow(unused_variables)]
+pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {
+    match level {
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx512 if _dim >= 16 => {
+        SimdLevel::Avx512 if dim >= 16 => {
             |a, b| {
                 // SAFETY: Resolver emitted AVX-512 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_jaccard`.
@@ -110,7 +112,7 @@ pub(super) fn resolve_jaccard(_level: SimdLevel, _dim: usize) -> fn(&[f32], &[f3
             }
         }
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if _dim >= 8 => |a, b| {
+        SimdLevel::Avx2 if dim >= 8 => |a, b| {
             // SAFETY: Resolver emitted AVX2 implementation for this dimension.
             // - Condition 1: caller chose this function pointer via `resolve_jaccard`.
             // Reason: execute AVX2 specialized jaccard implementation.

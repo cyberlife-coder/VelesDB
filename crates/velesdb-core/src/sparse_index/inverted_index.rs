@@ -141,6 +141,7 @@ pub(crate) struct FrozenSegment {
 
 impl FrozenSegment {
     /// Creates a new frozen segment from postings and a document count.
+    #[allow(dead_code)]
     pub(crate) fn new(
         postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
         doc_count: usize,

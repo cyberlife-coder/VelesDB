@@ -19,6 +19,7 @@ mod scalar;
 
 // Re-export binary quantization
 pub use binary::BinaryQuantizedVector;
+#[allow(unused_imports)]
 pub(crate) use pq::distance_pq_l2;
 #[cfg(feature = "persistence")]
 pub use pq::train_opq;

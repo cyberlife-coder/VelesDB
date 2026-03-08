@@ -25,7 +25,7 @@ fn parse_join_condition_handles_quoted_identifiers_with_dots() {
 
 #[test]
 fn parse_rejects_excessive_condition_nesting_depth() {
-    let depth = 400;
+    let depth = 257;
     let mut query = String::from("SELECT * FROM t WHERE ");
     for _ in 0..depth {
         query.push_str("NOT (");

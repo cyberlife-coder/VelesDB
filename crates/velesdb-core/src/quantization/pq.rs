@@ -653,6 +653,7 @@ impl ProductQuantizer {
 /// `pq_vector.codes.len() == codebook.num_subspaces`. These invariants are
 /// enforced at insert/train time and asserted only in debug builds.
 #[must_use]
+#[allow(dead_code)]
 pub(crate) fn distance_pq_l2(
     query_vector: &[f32],
     pq_vector: &PQVector,
