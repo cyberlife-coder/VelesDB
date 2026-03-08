@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-03-08T17:10:37.421Z"
-last_activity: 2026-03-08 — Completed Phase 17 Plan 02 (Example code honesty - hybrid search + PSEUDOCODE headers)
+stopped_at: Completed 18-03-PLAN.md
+last_updated: "2026-03-08T18:05:26.057Z"
+last_activity: "2026-03-08 - Completed quick task 1: Fix Python example pseudocode to match real SDK API signatures"
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 6
+  completed_plans: 4
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 17 — Hybrid query test & demo coverage
+**Current focus:** Phase 18 — Documentation code audit
 
 ## Current Position
 
-Phase: 17 of 17 (Hybrid Query Test & Demo Coverage)
-Plan: 2 of 2 in current phase
-Status: Completed 17-02-PLAN.md
-Last activity: 2026-03-08 - Completed quick task 1: Fix Python example pseudocode to match real SDK API signatures
+Phase: 18 of 18 (Documentation Code Audit)
+Plan: 1 of 4 in current phase
+Status: Completed 18-01-PLAN.md
+Last activity: 2026-03-08 - Completed 18-01: Fix root README Python snippets and migration guide API mismatches
 
-Progress: [██████████] 100% (44/44 plans complete, 0 phases pending)
+Progress: [██████████] 100% (45/48 plans complete, 0 phases pending)
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Progress: [██████████] 100% (44/44 plans complete, 0 phases 
 | Phase 16 P01 | 8 min | 2 tasks | 6 files |
 | Phase 17 P02 | 3 min | 2 tasks | 4 files |
 | Phase 17 P01 | 4 min | 2 tasks | 1 files |
+| Phase 18 P03 | 2 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -214,6 +215,7 @@ Recent decisions affecting current work:
 - [Phase 15-01]: sparse_vector passed via kwargs.get() in similarity_search to preserve VectorStore ABC signature
 - [Phase 15-01]: stream_insert returns int count rather than list of IDs (streaming semantics)
 - [16-01]: Graceful fallback: explain_query errors map to (None, None) cache fields rather than failing the request
+- [Phase 18]: velesdb-core README exports (Filter, Condition, metrics) verified correct against lib.rs -- no changes needed
 
 ### Roadmap Evolution
 
@@ -221,6 +223,7 @@ Recent decisions affecting current work:
 - Phase 14 added: README documentation audit
 - Phase 15 added: LangChain & LlamaIndex official integration v1.5 parity (gap closure: SDK-05, SDK-06)
 - Phase 16 added: Traceability & EXPLAIN cosmetic fixes (gap closure: CACHE-04, QUAL-06)
+- Phase 18 added: Documentation code audit — verify all code snippets in READMEs, guides, and docs match real API usage
 
 ### Pending Todos
 
@@ -240,7 +243,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T17:14:26Z
-Stopped at: Completed quick task 1
+Last session: 2026-03-08T18:04:38Z
+Stopped at: Completed 18-01-PLAN.md
 Resume file: None
-Next action: Quick task 1 complete
+Next action: Execute 18-02-PLAN.md
