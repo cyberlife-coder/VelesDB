@@ -22,6 +22,11 @@ type-complexity-threshold = 250
 missing-docs-in-crate-items = true
 
 # =============================================================================
+# Toolchain compatibility
+# =============================================================================
+msrv = "1.83"
+
+# =============================================================================
 # Allowed patterns (avec justification obligatoire dans le code)
 # =============================================================================
 # Note: Les lints suivants sont gérés via #[allow(...)] locaux avec commentaire
