@@ -108,3 +108,124 @@ fn test_hyb01_velesql_near_scalar_filter_ranking() {
         );
     }
 }
+
+/// HYB-02: A hybrid_search() call on a corpus where vector and BM25 signals diverge
+/// produces a ranking that differs from pure-vector ranking.
+#[test]
+fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
+    let dir = TempDir::new().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open db");
+    db.create_collection("docs", 4, DistanceMetric::Cosine)
+        .expect("create collection");
+    let collection = db.get_collection("docs").expect("get collection");
+
+    // 3-doc corpus: vector and BM25 signals intentionally diverge
+    collection
+        .upsert(vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0, 0.0, 0.0],
+                Some(json!({"text": "chocolate cake baking"})),
+            ),
+            Point::new(
+                2,
+                vec![0.0, 1.0, 0.0, 0.0],
+                Some(json!({"text": "rust programming systems"})),
+            ),
+            Point::new(
+                3,
+                vec![0.7, 0.3, 0.0, 0.0],
+                Some(json!({"text": "rust performance fast"})),
+            ),
+        ])
+        .expect("upsert points");
+
+    // Vector-only: id=1 should win (exact match to query [1,0,0,0])
+    let vector_results = collection
+        .search(&[1.0, 0.0, 0.0, 0.0_f32], 3)
+        .expect("vector search");
+    assert_eq!(
+        vector_results[0].point.id, 1,
+        "Vector-only: id=1 (exact match) must rank first"
+    );
+
+    // Text-only: id=1 cannot win (no "rust" in "chocolate cake baking")
+    let text_results = collection.text_search("rust", 3);
+    assert!(
+        !text_results.is_empty(),
+        "BM25 must index payload fields -- check auto-indexing or use 'text' field instead of 'content'"
+    );
+    assert_ne!(
+        text_results[0].point.id, 1,
+        "Text-only: id=1 has no 'rust' and must not rank first"
+    );
+
+    // Hybrid fusion: must differ from pure vector ranking
+    let hybrid_results = collection
+        .hybrid_search(&[1.0, 0.0, 0.0, 0.0_f32], "rust", 3, Some(0.5))
+        .expect("hybrid search");
+
+    let vector_ids: Vec<u64> = vector_results.iter().map(|r| r.point.id).collect();
+    let hybrid_ids: Vec<u64> = hybrid_results.iter().map(|r| r.point.id).collect();
+
+    assert_ne!(
+        hybrid_ids, vector_ids,
+        "Fusion ranking must differ from pure vector when BM25 signal diverges"
+    );
+}
+
+/// HYB-03: A VelesQL MATCH traversal over real `GraphCollection` edges returns results
+/// (traversal executed, not just parsed).
+#[test]
+fn test_hyb03_graph_match_traversal_returns_real_edges() {
+    let dir = TempDir::new().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open db");
+    db.create_collection("kg", 4, DistanceMetric::Cosine)
+        .expect("create collection");
+    let collection = db.get_collection("kg").expect("get collection");
+
+    // 3-node knowledge graph with _labels for MATCH label filtering
+    collection
+        .upsert(vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0, 0.0, 0.0],
+                Some(json!({"_labels": ["Author"], "name": "Alice"})),
+            ),
+            Point::new(
+                2,
+                vec![0.0, 1.0, 0.0, 0.0],
+                Some(json!({"_labels": ["Document"], "title": "Rust Guide"})),
+            ),
+            Point::new(
+                3,
+                vec![0.0, 0.0, 1.0, 0.0],
+                Some(json!({"_labels": ["Document"], "title": "Python Guide"})),
+            ),
+        ])
+        .expect("upsert points");
+
+    // Add real edges: Document->Author
+    let edge1 = GraphEdge::new(1, 2, 1, "AUTHORED_BY").expect("create edge 1");
+    let edge2 = GraphEdge::new(2, 3, 1, "AUTHORED_BY").expect("create edge 2");
+    collection.add_edge(edge1).expect("add edge 1");
+    collection.add_edge(edge2).expect("add edge 2");
+
+    // MATCH traversal query
+    let query = Parser::parse("MATCH (d:Document)-[:AUTHORED_BY]->(a:Author) RETURN d, a LIMIT 10")
+        .expect("parse MATCH query");
+
+    let results = collection
+        .execute_query(&query, &HashMap::new())
+        .expect("execute MATCH query");
+
+    assert!(
+        !results.is_empty(),
+        "MATCH traversal must return results when real edges exist"
+    );
+    assert!(
+        results.len() >= 2,
+        "Both Document->Author edges must be traversed (2 docs point to Author id=1), got {} results",
+        results.len()
+    );
+}
