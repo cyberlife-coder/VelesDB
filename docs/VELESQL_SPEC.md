@@ -27,7 +27,7 @@ VelesQL is a SQL-inspired query language designed specifically for vector simila
 | NOW() / INTERVAL temporal | ✅ Stable | 2.1 |
 | MATCH graph traversal | ✅ Stable | 2.1 |
 | SPARSE_NEAR sparse vector search | ✅ Stable | 2.2 |
-| FUSE BY fusion clause | ✅ Stable | 2.2 |
+| FUSE BY fusion clause | 🔜 Planned | 2.2 |
 | TRAIN QUANTIZER command | ✅ Stable | 2.2 |
 | Table aliases | 🔜 Planned | - |
 
@@ -249,16 +249,16 @@ Sparse vectors are scored using inner product. The scoring algorithm uses MaxSco
 
 #### Hybrid Search: NEAR + SPARSE_NEAR
 
-Combine dense and sparse search in a single query using `FUSE BY`:
+Combine dense and sparse search in a single query using `USING FUSION`:
 
 ```sql
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RRF(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 ```
 
-See the [FUSE BY clause](#fuse-by-clause-v22) section below for fusion strategy details.
+> **Note:** The `FUSE BY` syntax is planned but not yet implemented in the grammar. Use `USING FUSION(...)` for hybrid search. See the [FUSE BY clause (planned)](#fuse-by-clause-v22-planned-syntax) section below for the planned syntax.
 
 ### Similarity Function (v1.3+)
 
@@ -549,16 +549,27 @@ USING FUSION(maximum)
 LIMIT 10
 ```
 
-## FUSE BY Clause (v2.2+)
+## FUSE BY Clause (v2.2) -- PLANNED SYNTAX
 
-The `FUSE BY` clause provides explicit control over how dense and sparse search results are combined in hybrid queries. It replaces `USING FUSION` for hybrid dense+sparse queries.
+> **PLANNED SYNTAX**: `FUSE BY` is not yet implemented in the grammar. Use `USING FUSION(...)` instead for all hybrid search queries. The `FUSE BY` syntax is documented here as a planned alternative that may be added in a future release.
 
-### Syntax
+The planned `FUSE BY` clause is designed to provide explicit control over how dense and sparse search results are combined in hybrid queries.
+
+**Current working syntax** (use this):
+```sql
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+USING FUSION(strategy = 'rrf', k = 60)
+LIMIT 10
+```
+
+### Planned Syntax
 
 ```sql
+-- PLANNED SYNTAX: not yet implemented in grammar. Use USING FUSION(...) instead.
 SELECT * FROM <collection>
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY <strategy>
+FUSE BY <strategy>   -- PLANNED: not yet in grammar
 LIMIT <n>
 ```
 
@@ -569,17 +580,11 @@ LIMIT <n>
 Combines results by rank position. Each result's fused score is the sum of `1 / (k + rank)` across both branches.
 
 ```sql
--- Default k=60
-SELECT * FROM docs
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RRF(k=60)
-LIMIT 10
+-- PLANNED SYNTAX: not yet implemented. Use USING FUSION(strategy = 'rrf', k = 60) instead.
+FUSE BY RRF(k=60)   -- PLANNED: not yet in grammar
 
--- Custom k value
-SELECT * FROM docs
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RRF(k=30)
-LIMIT 10
+-- Current working equivalent:
+USING FUSION(strategy = 'rrf', k = 60)
 ```
 
 | Parameter | Type | Default | Description |
@@ -591,10 +596,11 @@ LIMIT 10
 Combines results by normalized score with explicit weights. Scores are min-max normalized per branch, then combined as weighted sum.
 
 ```sql
-SELECT * FROM docs
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)
-LIMIT 10
+-- PLANNED SYNTAX: not yet implemented. Use USING FUSION(strategy = 'rsf', ...) instead.
+FUSE BY RSF(dense_weight=0.7, sparse_weight=0.3)   -- PLANNED: not yet in grammar
+
+-- Current working equivalent:
+USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 ```
 
 | Parameter | Type | Default | Description |
@@ -608,22 +614,28 @@ LIMIT 10
 
 ```sql
 -- Balanced hybrid search (equal weight)
+-- PLANNED: FUSE BY RRF(k=60)
+-- Current working syntax:
 SELECT * FROM articles
 WHERE vector NEAR $query_embedding AND vector SPARSE_NEAR $bm25_query
-FUSE BY RRF(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 20
 
 -- Keyword-heavy hybrid (30% semantic, 70% keyword)
+-- PLANNED: FUSE BY RSF(dense_weight=0.3, sparse_weight=0.7)
+-- Current working syntax:
 SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-FUSE BY RSF(dense_weight=0.3, sparse_weight=0.7)
+USING FUSION(strategy = 'rsf', dense_weight = 0.3, sparse_weight = 0.7)
 LIMIT 10
 
 -- Hybrid with metadata filter
+-- PLANNED: FUSE BY RRF(k=60)
+-- Current working syntax:
 SELECT * FROM products
 WHERE vector NEAR $v AND vector SPARSE_NEAR $sv
   AND category = 'electronics'
-FUSE BY RRF(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 ```
 
@@ -816,7 +828,7 @@ SELECT id AS `select` FROM docs
 | `GROUP`, `HAVING` | Aggregation |
 | `WITH`, `AS` | Options and aliases |
 | `NEAR`, `SPARSE_NEAR`, `SIMILARITY` | Vector operations |
-| `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions |
+| `FUSE`, `TRAIN`, `QUANTIZER` | v2.2 extensions (`FUSE` reserved for planned syntax) |
 
 ## Grammar (EBNF) - v2.2
 
@@ -904,9 +916,10 @@ fusion_strategy = "rrf" | "weighted" | "maximum" ;
 fusion_params   = fusion_param { "," fusion_param } ;
 fusion_param    = identifier "=" value ;
 
-(* FUSE BY for dense+sparse hybrid search *)
-fuse_by_clause  = "FUSE" "BY" fuse_strategy ;
-fuse_strategy   = "RRF" "(" fuse_params ")" | "RSF" "(" fuse_params ")" ;
+(* FUSE BY for dense+sparse hybrid search -- PLANNED SYNTAX, not yet in grammar *)
+(* Use USING FUSION(...) instead. The rules below are reserved for future implementation. *)
+(* fuse_by_clause  = "FUSE" "BY" fuse_strategy ; *)
+(* fuse_strategy   = "RRF" "(" fuse_params ")" | "RSF" "(" fuse_params ")" ; *)
 
 (* TRAIN QUANTIZER command *)
 train_quantizer = "TRAIN" "QUANTIZER" "ON" identifier "WITH" "(" train_params ")" ;
@@ -962,13 +975,13 @@ WITH (mode = 'high_recall')
 -- Hybrid search with RRF fusion
 SELECT * FROM docs
 WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
-FUSE BY RRF(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 
 -- Hybrid search with weighted score fusion
 SELECT * FROM articles
 WHERE vector NEAR $embedding AND vector SPARSE_NEAR $bm25
-FUSE BY RSF(dense_weight=0.6, sparse_weight=0.4)
+USING FUSION(strategy = 'rsf', dense_weight = 0.6, sparse_weight = 0.4)
 LIMIT 20
 
 -- Sparse-only search
