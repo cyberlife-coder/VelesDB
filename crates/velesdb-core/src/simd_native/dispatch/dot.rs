@@ -57,8 +57,9 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 #[must_use]
 pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
     let mut results = Vec::with_capacity(candidates.len());
+
+    #[cfg(target_arch = "x86_64")]
     for (i, candidate) in candidates.iter().enumerate() {
-        #[cfg(target_arch = "x86_64")]
         if i + 4 < candidates.len() {
             // SAFETY: `_mm_prefetch` is a non-faulting cache hint.
             // - Condition 1: pointer originates from a valid slice in `candidates`.
@@ -70,6 +71,12 @@ pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32
         }
         results.push(dot_product_native(candidate, query));
     }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    for candidate in candidates {
+        results.push(dot_product_native(candidate, query));
+    }
+
     results
 }
 

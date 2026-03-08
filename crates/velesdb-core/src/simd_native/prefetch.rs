@@ -83,11 +83,11 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
         return;
     }
 
-    let vector_bytes = std::mem::size_of_val(vector);
-
     #[cfg(target_arch = "x86_64")]
     {
         use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0, _MM_HINT_T1, _MM_HINT_T2};
+
+        let vector_bytes = std::mem::size_of_val(vector);
 
         // SAFETY: _mm_prefetch is a hint instruction that cannot cause memory faults.
         // - Condition 1: All pointers are derived from a valid slice reference (non-empty check above)
@@ -123,6 +123,5 @@ pub fn prefetch_vector_multi_cache_line(vector: &[f32]) {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let _ = vector;
-        let _ = vector_bytes;
     }
 }
