@@ -28,6 +28,7 @@ from langchain_velesdb.security import (
     validate_batch_size,
     validate_collection_name,
     validate_weight,
+    validate_sparse_vector,
     MAX_TEXT_LENGTH,
     MAX_BATCH_SIZE,
     SecurityError,
@@ -190,10 +191,23 @@ class VelesDBVectorStore(VectorStore):
         filter: Optional[dict] = None,
         ef_search: Optional[int] = None,
         ids_only: bool = False,
+        sparse_vector: Optional[dict] = None,
     ) -> List[dict]:
-        """Run the appropriate core vector search variant."""
+        """Run the appropriate core vector search variant.
+
+        When *sparse_vector* is provided alongside a dense *query_embedding*,
+        the search becomes a hybrid dense+sparse search (auto RRF k=60).
+        """
         dimension = len(query_embedding)
         collection = self._get_collection(dimension)
+
+        # Hybrid dense+sparse path
+        if sparse_vector is not None:
+            return collection.search(
+                vector=query_embedding,
+                sparse_vector=sparse_vector,
+                top_k=k,
+            )
 
         if ids_only:
             if filter is not None:
@@ -219,6 +233,7 @@ class VelesDBVectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
         ids: Optional[List[str]] = None,
+        sparse_vectors: Optional[List[dict]] = None,
         **kwargs: Any,
     ) -> List[str]:
         """Add texts to the vector store.
@@ -227,6 +242,9 @@ class VelesDBVectorStore(VectorStore):
             texts: Iterable of strings to add.
             metadatas: Optional list of metadata dicts for each text.
             ids: Optional list of IDs for each text.
+            sparse_vectors: Optional list of sparse vector dicts for hybrid
+                dense+sparse search. Each dict maps int term IDs to float
+                weights, e.g. ``{0: 1.5, 3: 0.8}``.
             **kwargs: Additional arguments.
 
         Returns:
@@ -238,10 +256,15 @@ class VelesDBVectorStore(VectorStore):
 
         # Security: Validate batch size
         validate_batch_size(len(texts_list))
-        
+
         # Security: Validate text lengths
         for text in texts_list:
             validate_text(text)
+
+        # Security: Validate sparse vectors if provided
+        if sparse_vectors is not None:
+            for sv in sparse_vectors:
+                validate_sparse_vector(sv)
 
         # Generate embeddings
         embeddings = self._embedding.embed_documents(texts_list)
@@ -269,11 +292,17 @@ class VelesDBVectorStore(VectorStore):
             if metadatas and i < len(metadatas):
                 payload.update(metadatas[i])
 
-            points.append({
+            point: dict = {
                 "id": int_id,
                 "vector": embedding,
                 "payload": payload,
-            })
+            }
+
+            # Attach sparse vector if provided
+            if sparse_vectors is not None and i < len(sparse_vectors):
+                point["sparse_vector"] = sparse_vectors[i]
+
+            points.append(point)
 
         # Upsert to VelesDB
         collection.upsert(points)
@@ -314,16 +343,22 @@ class VelesDBVectorStore(VectorStore):
     ) -> List[Tuple[Document, float]]:
         """Search for documents with similarity scores.
 
+        Pass ``sparse_vector={0: 1.5, 3: 0.8}`` in *kwargs* to perform
+        hybrid dense+sparse search (auto RRF k=60).
+
         Args:
             query: Query string to search for.
             k: Number of results to return. Defaults to 4.
-            **kwargs: Additional arguments.
+            **kwargs: Additional arguments.  Accepts ``sparse_vector``.
 
         Returns:
             List of (Document, score) tuples.
         """
+        sparse_vector = kwargs.get("sparse_vector")
         query_embedding = self._embedding.embed_query(query)
-        results = self._run_vector_search(query_embedding, k)
+        results = self._run_vector_search(
+            query_embedding, k, sparse_vector=sparse_vector,
+        )
 
         return [(self._to_document(result), result.get("score", 0.0)) for result in results]
 
@@ -1064,3 +1099,87 @@ class VelesDBVectorStore(VectorStore):
                 f"Unknown fusion strategy '{fusion}'. "
                 "Use 'average', 'maximum', 'rrf', or 'weighted'."
             )
+
+    def train_pq(self, m: int = 8, k: int = 256, opq: bool = False) -> str:
+        """Train Product Quantization on the collection.
+
+        PQ training is a Database-level operation (not Collection-level).
+
+        Args:
+            m: Number of subspaces. Defaults to 8.
+            k: Number of centroids per subspace. Defaults to 256.
+            opq: Enable Optimized PQ pre-rotation. Defaults to False.
+
+        Returns:
+            Training result message.
+        """
+        return self._get_db().train_pq(self._collection_name, m=m, k=k, opq=opq)
+
+    def stream_insert(
+        self,
+        texts: Iterable[str],
+        metadatas: Optional[List[dict]] = None,
+        sparse_vectors: Optional[List[dict]] = None,
+        ids: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> int:
+        """Insert texts via streaming channel with backpressure.
+
+        Args:
+            texts: Texts to insert.
+            metadatas: Optional metadata dicts.
+            sparse_vectors: Optional sparse vector dicts.
+            ids: Optional string IDs.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Number of points inserted.
+        """
+        texts_list = list(texts)
+        if not texts_list:
+            return 0
+
+        # Security: Validate batch size and text content
+        validate_batch_size(len(texts_list))
+        for text in texts_list:
+            validate_text(text)
+
+        # Security: Validate sparse vectors if provided
+        if sparse_vectors is not None:
+            for sv in sparse_vectors:
+                validate_sparse_vector(sv)
+
+        # Generate embeddings
+        embeddings = self._embedding.embed_documents(texts_list)
+        dimension = len(embeddings[0])
+
+        # Get collection
+        collection = self._get_collection(dimension)
+
+        # Build points (same pattern as add_texts)
+        points = []
+        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
+            if ids and i < len(ids):
+                doc_id = ids[i]
+                int_id = self._to_point_id(doc_id)
+            else:
+                _doc_id, int_id = self._generate_auto_id()
+
+            payload = {"text": text}
+            if metadatas and i < len(metadatas):
+                payload.update(metadatas[i])
+
+            point: dict = {
+                "id": int_id,
+                "vector": embedding,
+                "payload": payload,
+            }
+
+            if sparse_vectors is not None and i < len(sparse_vectors):
+                point["sparse_vector"] = sparse_vectors[i]
+
+            points.append(point)
+
+        # Stream insert via collection
+        collection.stream_insert(points)
+        return len(points)

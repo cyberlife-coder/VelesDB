@@ -18,6 +18,7 @@ MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096  # Max path length
 ALLOWED_METRICS = {"cosine", "euclidean", "dot", "hamming", "jaccard"}
 ALLOWED_STORAGE_MODES = {"full", "sq8", "binary"}
+MAX_SPARSE_VECTOR_SIZE = 100_000  # Max entries in a sparse vector
 
 
 class SecurityError(ValueError):
@@ -292,6 +293,46 @@ def validate_url(url: str) -> str:
         raise SecurityError("URL contains invalid characters")
     
     return url
+
+
+def validate_sparse_vector(sparse_vector: Any) -> dict:
+    """Validate a sparse vector dict.
+
+    Sparse vectors map integer term IDs to float weights.
+
+    Args:
+        sparse_vector: Dict mapping int keys to int/float values.
+
+    Returns:
+        Validated sparse vector dict.
+
+    Raises:
+        SecurityError: If sparse vector is invalid.
+    """
+    if not isinstance(sparse_vector, dict):
+        raise SecurityError(
+            f"Sparse vector must be a dict, got {type(sparse_vector).__name__}"
+        )
+
+    if len(sparse_vector) > MAX_SPARSE_VECTOR_SIZE:
+        raise SecurityError(
+            f"Sparse vector has {len(sparse_vector)} entries, "
+            f"exceeds maximum of {MAX_SPARSE_VECTOR_SIZE}"
+        )
+
+    for key, value in sparse_vector.items():
+        if not isinstance(key, int):
+            raise SecurityError(
+                f"Sparse vector keys must be int (term IDs), "
+                f"got {type(key).__name__} for key {key!r}"
+            )
+        if not isinstance(value, (int, float)):
+            raise SecurityError(
+                f"Sparse vector values must be int or float (weights), "
+                f"got {type(value).__name__} for key {key}"
+            )
+
+    return sparse_vector
 
 
 def validate_weight(weight: float, name: str = "weight") -> float:

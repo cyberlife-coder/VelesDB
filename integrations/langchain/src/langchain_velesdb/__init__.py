@@ -42,4 +42,4 @@ __all__ = [
 
 if _HAS_MEMORY:
     __all__.extend(["VelesDBChatMemory", "VelesDBSemanticMemory"])
-__version__ = "0.8.10"
+__version__ = "1.5.0"
