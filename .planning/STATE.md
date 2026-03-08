@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.5
-milestone_name: milestone
+milestone_name: parity
 status: completed
-stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-03-08T12:17:34.855Z"
-last_activity: 2026-03-08 — Phase 14 Plan 02 complete (API reference gaps, snippet validation)
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-03-08T13:34:54.163Z"
+last_activity: 2026-03-08 — Completed Phase 15 Plan 02 (LlamaIndex v1.5 parity)
 progress:
-  total_phases: 14
-  completed_phases: 14
-  total_plans: 39
-  completed_plans: 39
-  percent: 100
+  total_phases: 16
+  completed_phases: 15
+  total_plans: 41
+  completed_plans: 41
+  percent: 90
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 14 — README Documentation Audit (IN PROGRESS)
+**Current focus:** Phase 15 — LangChain & LlamaIndex v1.5 Parity (Plan 02 complete)
 
 ## Current Position
 
-Phase: 14 of 14 (README Documentation Audit) -- COMPLETE
-Plan: 2 of 2 in current phase (2 complete)
-Status: Phase 14 complete -- all README documentation audit plans executed
-Last activity: 2026-03-08 — Phase 14 Plan 02 complete (API reference gaps, snippet validation)
+Phase: 15 of 16 (LangChain & LlamaIndex v1.5 Parity) -- IN PROGRESS
+Plan: 2 of 2 in current phase
+Status: Completed 15-02-PLAN.md
+Last activity: 2026-03-08 — Completed Phase 15 Plan 02 (LlamaIndex v1.5 parity)
 
-Progress: [██████████] 100% (39/39 plans complete)
+Progress: [█████████░] 90% (41/41 plans complete, 1 phase pending)
 
 ## Performance Metrics
 
@@ -83,6 +83,7 @@ Progress: [██████████] 100% (39/39 plans complete)
 | Phase 13 P01 | 7 min | 2 tasks | 3 files |
 | Phase 14 P01 | 3 min | 2 tasks | 1 files |
 | Phase 14 P02 | 2 | 2 tasks | 1 files |
+| Phase 15 P01 | 2 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -204,11 +205,18 @@ Recent decisions affecting current work:
 - [14-01]: .deb install example uses <VERSION> placeholder with link to GitHub Releases
 - [Phase 14]: StreamInsertRequest takes single point (not array) -- corrected from plan's suggested payload shape
 - [Phase 14]: Subqueries replaced with direct payload field comparisons (product.price, account.total_amount_24h, etc.) since subqueries evaluate to Null at runtime
+- [15-02]: Sparse vectors passed via add_kwargs/kwargs (not new method signatures) for full backward compat
+- [15-02]: train_pq calls self._get_db().train_pq() since PQ training is Database-level
+- [15-02]: stream_insert returns int (point count) rather than list of IDs for streaming semantics
+- [Phase 15-01]: sparse_vector passed via kwargs.get() in similarity_search to preserve VectorStore ABC signature
+- [Phase 15-01]: stream_insert returns int count rather than list of IDs (streaming semantics)
 
 ### Roadmap Evolution
 
 - Phase 13 added: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
 - Phase 14 added: README documentation audit
+- Phase 15 added: LangChain & LlamaIndex official integration v1.5 parity (gap closure: SDK-05, SDK-06)
+- Phase 16 added: Traceability & EXPLAIN cosmetic fixes (gap closure: CACHE-04, QUAL-06)
 
 ### Pending Todos
 
@@ -222,7 +230,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T12:13:54.165Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-03-08T13:33:30Z
+Stopped at: Completed 15-02-PLAN.md
 Resume file: None
-Next action: Phase 14 Plan 02 (API reference gaps, snippet validation)
+Next action: Phase 16 (Traceability & EXPLAIN cosmetic fixes)

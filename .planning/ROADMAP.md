@@ -234,7 +234,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 12. Traceability & Cosmetic Cleanup | 1/1 | Complete    | 2026-03-08 |
 | 13. Recall Benchmark Multi-Distribution | 1/1 | Complete    | 2026-03-08 |
 | 14. README Documentation Audit | 2/2 | Complete    | 2026-03-08 |
-| 15. LangChain & LlamaIndex v1.5 Parity | 0/2 | Planned     |  |
+| 15. LangChain & LlamaIndex v1.5 Parity | 2/2 | Complete   | 2026-03-08 |
 | 16. Traceability & EXPLAIN Cosmetic Fixes | 0/0 | Pending     |  |
 
 ### Phase 13: Recall benchmark multi-distribution coverage (uniform, clustered, sparse/binary)
