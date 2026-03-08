@@ -628,5 +628,118 @@ class TestVelesDBVectorStoreQueryAnalysis:
         assert isinstance(result.nodes[0], TextNode)
 
 
+class TestV15Features:
+    """Tests for v1.5 features: sparse vectors, PQ training, streaming inserts."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """Create a temporary directory for tests."""
+        path = tempfile.mkdtemp()
+        yield path
+        shutil.rmtree(path, ignore_errors=True)
+
+    @pytest.fixture
+    def vector_store(self, temp_dir):
+        """Create a VelesDBVectorStore instance."""
+        return VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="v15_test",
+            metric="cosine",
+        )
+
+    def test_add_with_sparse_vectors(self, vector_store):
+        """Test add() accepts sparse_vectors via add_kwargs."""
+        nodes = [
+            TextNode(
+                text="Sparse test doc",
+                id_="sparse1",
+                embedding=[0.1] * 768,
+            ),
+        ]
+        ids = vector_store.add(nodes, sparse_vectors=[{0: 1.5, 3: 0.8}])
+        assert len(ids) == 1
+        assert "sparse1" in ids
+
+    def test_add_without_sparse_preserves_behavior(self, vector_store):
+        """Test add() without sparse_vectors kwarg works as before (backward compat)."""
+        nodes = [
+            TextNode(
+                text="Dense only doc",
+                id_="dense1",
+                embedding=[0.2] * 768,
+            ),
+            TextNode(
+                text="Dense only doc 2",
+                id_="dense2",
+                embedding=[0.3] * 768,
+            ),
+        ]
+        ids = vector_store.add(nodes)
+        assert len(ids) == 2
+        assert "dense1" in ids
+        assert "dense2" in ids
+
+    def test_query_with_sparse_vector_kwarg(self, vector_store):
+        """Test query() accepts sparse_vector kwarg for hybrid search."""
+        # Add nodes first
+        nodes = [
+            TextNode(
+                text="Hybrid search test",
+                id_="hybrid1",
+                embedding=[0.1, 0.2, 0.3] + [0.0] * 765,
+            ),
+        ]
+        vector_store.add(nodes)
+
+        query = VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3] + [0.0] * 765,
+            similarity_top_k=5,
+        )
+        result = vector_store.query(query, sparse_vector={0: 1.0})
+
+        assert isinstance(result, VectorStoreQueryResult)
+        assert hasattr(result, "nodes")
+        assert hasattr(result, "similarities")
+        assert hasattr(result, "ids")
+
+    def test_train_pq_method_exists(self, vector_store):
+        """Test that train_pq method exists on VelesDBVectorStore."""
+        assert hasattr(vector_store, "train_pq")
+        assert callable(vector_store.train_pq)
+
+    def test_stream_insert_method_exists(self, vector_store):
+        """Test that stream_insert method exists on VelesDBVectorStore."""
+        assert hasattr(vector_store, "stream_insert")
+        assert callable(vector_store.stream_insert)
+
+    def test_validate_sparse_vector_valid(self):
+        """Test validate_sparse_vector accepts valid sparse vectors."""
+        from llamaindex_velesdb.security import validate_sparse_vector
+
+        # Should not raise
+        result = validate_sparse_vector({0: 1.5, 3: 0.8})
+        assert result == {0: 1.5, 3: 0.8}
+
+    def test_validate_sparse_vector_invalid_type(self):
+        """Test validate_sparse_vector rejects non-dict input."""
+        from llamaindex_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector("not_a_dict")
+
+    def test_validate_sparse_vector_invalid_keys(self):
+        """Test validate_sparse_vector rejects non-integer keys."""
+        from llamaindex_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({"a": 1.0})
+
+    def test_version_is_1_5_0(self):
+        """Test that __version__ is 1.5.0."""
+        from llamaindex_velesdb import __version__
+
+        assert __version__ == "1.5.0"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
