@@ -1,6 +1,6 @@
 {
   "version": "1.5.0",
-  "description": "VelesDB Performance Baseline v1.5 — Phase 11 PQ recall benchmark hardening (6 variants)",
+  "description": "VelesDB Performance Baseline v1.5 — Phase 11 PQ recall benchmark hardening (6 variants, 0.92 thresholds)",
   "recorded_at": "2026-03-08",
   "environment": {
     "rust_version": "1.92.0",
@@ -25,13 +25,13 @@
     },
     "pq_recall/pq_recall_m8_k256_rescore": {
       "recall_at_10": null,
-      "threshold_recall": 0.80,
-      "notes": "PQ m=8 k=256, rescore=4x (HNSW ceiling ~0.876 on 5K/128d synthetic)"
+      "threshold_recall": 0.92,
+      "notes": "PQ m=8 k=256, rescore=4x, 5K/128d uniform random dataset"
     },
     "pq_recall/full_precision_baseline": {
       "recall_at_10": null,
-      "threshold_recall": 0.80,
-      "notes": "Full precision HNSW reference (ceiling ~0.876 on 5K/128d synthetic)"
+      "threshold_recall": 0.95,
+      "notes": "Full precision HNSW reference, 5K/128d uniform random dataset"
     },
     "pq_recall/pq_recall_m8_k256_no_rescore": {
       "recall_at_10": null,
@@ -40,8 +40,8 @@
     },
     "pq_recall/opq_recall_m8_k256_rescore": {
       "recall_at_10": null,
-      "threshold_recall": 0.80,
-      "notes": "OPQ with PCA rotation"
+      "threshold_recall": 0.92,
+      "notes": "OPQ with PCA rotation, 5K/128d uniform random dataset"
     },
     "pq_recall/rabitq_recall_128d": {
       "recall_at_10": null,
@@ -50,8 +50,8 @@
     },
     "pq_recall/pq_recall_m8_k256_oversampling8": {
       "recall_at_10": null,
-      "threshold_recall": 0.80,
-      "notes": "PQ with 8x oversampling"
+      "threshold_recall": 0.92,
+      "notes": "PQ with 8x oversampling, 5K/128d uniform random dataset"
     }
   },
   "notes": [
@@ -59,6 +59,6 @@
     "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
     "Machine: i9-14900KF, 64GB RAM, Windows 11 Pro",
     "pq_recall entries hardened in Phase 11 — 6 variants with explicit m=8 k=256 training via VelesQL",
-    "Recall thresholds set to 0.80 (HNSW ceiling on 5K/128d clustered synthetic data is ~0.876)"
+    "PQ recall thresholds restored to 0.92 (PQ-07 contract) with uniform random data (replaces clustered data that hit HNSW recall ceiling)"
   ]
 }
