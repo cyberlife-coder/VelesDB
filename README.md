@@ -819,7 +819,7 @@ MATCH (product:Product)-[:SUPPLIED_BY]->(supplier:Supplier)
 WHERE 
   similarity(product.image_embedding, $uploaded_photo) > 0.7  -- Vector: visual similarity
   AND supplier.trust_score > 4.5                               -- Graph: relationship data
-  AND (SELECT price FROM inventory WHERE sku = product.sku) < 500  -- Column: real-time price
+  AND product.price < 500                                         -- Column: real-time price
 ORDER BY similarity() DESC
 LIMIT 12
 ```
@@ -843,9 +843,7 @@ MATCH (tx:Transaction)-[:FROM]->(account:Account)-[:LINKED_TO*1..3]->(related:Ac
 WHERE 
   similarity(tx.behavior_embedding, $known_fraud_pattern) > 0.6  -- Vector: behavioral similarity
   AND related.risk_level = 'high'                                 -- Graph: network analysis
-  AND (SELECT SUM(amount) FROM transactions 
-       WHERE account_id = account.id 
-       AND timestamp > NOW() - INTERVAL '24 hours') > 10000       -- Column: velocity check
+  AND account.total_amount_24h > 10000                             -- Column: velocity check
 RETURN tx.id, account.id, similarity() as fraud_score
 ```
 
@@ -869,8 +867,7 @@ MATCH (patient:Patient)-[:HAS_CONDITION]->(condition:Condition)
 WHERE 
   similarity(condition.symptoms_embedding, $current_symptoms) > 0.75  -- Vector: symptom matching
   AND condition.icd10_code IN ('J18.9', 'J12.89')                     -- Column: specific diagnoses
-  AND (SELECT success_rate FROM treatment_outcomes 
-       WHERE treatment_id = treatment.id) > 0.8                       -- Column: outcome data
+  AND treatment.success_rate > 0.8                                    -- Column: outcome data
 RETURN treatment.name, AVG(success_rate) as effectiveness
 ```
 
@@ -894,8 +891,7 @@ MATCH (user:User)-[:HAD_CONVERSATION]->(conv:Conversation)
 WHERE 
   similarity(message.embedding, $current_query) > 0.7     -- Vector: relevant past messages
   AND conv.timestamp > NOW() - INTERVAL '7 days'          -- Column: recent conversations
-  AND (SELECT preference_value FROM user_preferences 
-       WHERE user_id = user.id AND key = 'topic') = message.topic  -- Column: user prefs
+  AND message.topic = user.preferred_topic                          -- Column: user prefs
 ORDER BY conv.timestamp DESC, similarity() DESC
 LIMIT 10
 ```
@@ -918,8 +914,7 @@ MATCH (doc:Document)-[:AUTHORED_BY]->(author:Author)
 WHERE 
   similarity(doc.embedding, $research_question) > 0.8   -- Vector: semantic search
   AND doc.category = 'peer-reviewed'                     -- Column: structured filter
-  AND (SELECT citation_count FROM author_metrics         -- Column: subquery
-       WHERE author_id = author.id) > 50
+  AND author.citation_count > 50                          -- Column: structured filter
 ORDER BY similarity() DESC
 LIMIT 5
 ```
@@ -928,7 +923,7 @@ LIMIT 5
 1. **Graph traversal**: `MATCH` finds document→author relationships
 2. **Vector search**: `similarity()` ranks by semantic relevance to your question
 3. **Columnar filter**: `category = 'peer-reviewed'` filters structured metadata
-4. **Columnar subquery**: Joins with `author_metrics` table for citation counts
+4. **Columnar filter**: `citation_count > 50` filters by author reputation
 
 **Expected Output:**
 ```json
