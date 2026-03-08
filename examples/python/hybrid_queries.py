@@ -57,7 +57,7 @@ def example_1_contextual_rag():
     
     # Programmatic equivalent
     print("\nProgrammatic API:")
-    print("  results = collection.search(query_embedding, top_k=10)")
+    print("  results = collection.search(vector=query_embedding, top_k=10)")
     print("  filtered = [r for r in results if r.payload['category'] == 'ai']")
 
 
@@ -83,7 +83,7 @@ def example_2_semantic_search_with_filters():
     print(f"VelesQL: {velesql.strip()}")
     
     print("\nProgrammatic API:")
-    print("  results = collection.search(query_vec, top_k=50)")
+    print("  results = collection.search(vector=query_vec, top_k=50)")
     print("  filtered = [r for r in results")
     print("              if r.payload['category'] in ['technology', 'science']")
     print("              and r.payload['access_level'] == 'public'][:20]")
@@ -110,7 +110,7 @@ def example_3_aggregations():
     
     print("\nProgrammatic API:")
     print("  from collections import Counter")
-    print("  results = collection.search(query_vec, top_k=100)")
+    print("  results = collection.search(vector=query_vec, top_k=100)")
     print("  filtered = [r for r in results if r.score > 0.6]")
     print("  counts = Counter(r.payload['category'] for r in filtered)")
 
@@ -136,7 +136,7 @@ def example_4_recommendation_engine():
     
     print("\nProgrammatic API:")
     print("  user_pref = get_user_preference_embedding(user_id)")
-    print("  results = collection.search(user_pref, top_k=20)")
+    print("  results = collection.search(vector=user_pref, top_k=20)")
     print("  recommendations = [r for r in results")
     print("                     if r.payload['price'] < 100][:10]")
 
@@ -159,7 +159,7 @@ def example_5_entity_resolution():
     
     print("\nProgrammatic API:")
     print("  new_entity_emb = embed(new_company_name)")
-    print("  matches = collection.search(new_entity_emb, top_k=5)")
+    print("  matches = collection.search(vector=new_entity_emb, top_k=5)")
     print("  duplicates = [m for m in matches if m.score > 0.95]")
     print("  if duplicates:")
     print("      print(f'Possible duplicate: {duplicates[0].payload[\"name\"]}')")
@@ -185,7 +185,7 @@ def example_6_conversational_memory():
     
     print("\nProgrammatic API:")
     print("  current_query_emb = embed(user_message)")
-    print("  context = collection.search(current_query_emb, top_k=20)")
+    print("  context = collection.search(vector=current_query_emb, top_k=20)")
     print("  relevant = [m for m in context")
     print("              if m.payload['conversation_id'] == conv_id][:10]")
     print("  # Pass to LLM as context")

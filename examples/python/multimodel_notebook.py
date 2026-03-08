@@ -84,7 +84,7 @@ print(f"Inserted {len(documents)} documents")
 query_vector = generate_embedding(0.12)
 
 # Search for similar documents
-results = collection.search(query_vector, top_k=3)
+results = collection.search(vector=query_vector, top_k=3)
 
 print("Basic Vector Search Results:")
 for r in results:
