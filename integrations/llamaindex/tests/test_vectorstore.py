@@ -204,7 +204,7 @@ class TestQueryFilterTranslation:
         store.query(query)
 
         assert store._db.create_collection_calls == 1
-        assert store._db.get_collection_calls >= 2
+        assert store._db.get_collection_calls == 1
         assert recording_collection.search_with_filter_called is True
         assert recording_collection.search_called is False
         assert recording_collection.search_filter == {
@@ -702,15 +702,47 @@ class TestV15Features:
         assert hasattr(result, "similarities")
         assert hasattr(result, "ids")
 
-    def test_train_pq_method_exists(self, vector_store):
-        """Test that train_pq method exists on VelesDBVectorStore."""
-        assert hasattr(vector_store, "train_pq")
-        assert callable(vector_store.train_pq)
+    def test_train_pq_calls_db_train_pq(self, temp_dir):
+        """Test that train_pq delegates to db.train_pq with correct args."""
+        store = VelesDBVectorStore(path=temp_dir, collection_name="pq_test")
 
-    def test_stream_insert_method_exists(self, vector_store):
-        """Test that stream_insert method exists on VelesDBVectorStore."""
-        assert hasattr(vector_store, "stream_insert")
-        assert callable(vector_store.stream_insert)
+        calls = []
+
+        class _MockDb:
+            def train_pq(self, collection_name, m, k, opq):
+                calls.append({"collection_name": collection_name, "m": m, "k": k, "opq": opq})
+                return "trained"
+
+        store._db = _MockDb()
+        result = store.train_pq(m=16, k=128, opq=True)
+
+        assert result == "trained"
+        assert len(calls) == 1
+        assert calls[0] == {"collection_name": "pq_test", "m": 16, "k": 128, "opq": True}
+
+    def test_stream_insert_calls_collection_stream_insert(self, temp_dir):
+        """Test that stream_insert builds points and calls collection.stream_insert."""
+        store = VelesDBVectorStore(path=temp_dir, collection_name="stream_test")
+
+        inserted_points = []
+
+        class _MockCollection:
+            def stream_insert(self, points):
+                inserted_points.extend(points)
+
+        store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+
+        nodes = [
+            TextNode(text="Hello", id_="n1", embedding=[0.1] * 4),
+            TextNode(text="World", id_="n2", embedding=[0.2] * 4),
+        ]
+        count = store.stream_insert(nodes)
+
+        assert count == 2
+        assert len(inserted_points) == 2
+        assert "vector" in inserted_points[0]
+        assert inserted_points[0]["payload"]["text"] == "Hello"
+        assert inserted_points[1]["payload"]["text"] == "World"
 
     def test_validate_sparse_vector_valid(self):
         """Test validate_sparse_vector accepts valid sparse vectors."""
@@ -733,6 +765,26 @@ class TestV15Features:
 
         with pytest.raises(SecurityError):
             validate_sparse_vector({"a": 1.0})
+
+    def test_validate_sparse_vector_invalid_values(self):
+        """Test validate_sparse_vector rejects non-numeric values and NaN/Inf weights."""
+        from llamaindex_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: "high"})
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: float("nan")})
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: float("inf")})
+
+    def test_validate_sparse_vector_rejects_bool_keys(self):
+        """Test validate_sparse_vector rejects bool keys (bool is subclass of int)."""
+        from llamaindex_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({True: 1.0})
 
     def test_version_is_1_5_0(self):
         """Test that __version__ is 1.5.0."""

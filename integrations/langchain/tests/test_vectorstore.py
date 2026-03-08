@@ -790,27 +790,50 @@ class TestV15Features:
 
         assert isinstance(results, list)
 
-    def test_train_pq_method_exists(self, temp_db_path, embeddings):
-        """Test that train_pq method exists on VelesDBVectorStore."""
+    def test_train_pq_calls_db_train_pq(self, embeddings):
+        """Test that train_pq delegates to db.train_pq with correct args."""
         vectorstore = VelesDBVectorStore(
             embedding=embeddings,
-            path=temp_db_path,
+            path="./unused",
             collection_name="test_pq",
         )
 
-        assert hasattr(vectorstore, "train_pq")
-        assert callable(vectorstore.train_pq)
+        calls = []
 
-    def test_stream_insert_method_exists(self, temp_db_path, embeddings):
-        """Test that stream_insert method exists on VelesDBVectorStore."""
+        class _MockDb:
+            def train_pq(self, collection_name, m, k, opq):
+                calls.append({"collection_name": collection_name, "m": m, "k": k, "opq": opq})
+                return "trained"
+
+        vectorstore._db = _MockDb()
+        result = vectorstore.train_pq(m=16, k=128, opq=True)
+
+        assert result == "trained"
+        assert len(calls) == 1
+        assert calls[0] == {"collection_name": "test_pq", "m": 16, "k": 128, "opq": True}
+
+    def test_stream_insert_calls_collection_stream_insert(self, embeddings):
+        """Test that stream_insert builds points and calls collection.stream_insert."""
         vectorstore = VelesDBVectorStore(
             embedding=embeddings,
-            path=temp_db_path,
+            path="./unused",
             collection_name="test_stream",
         )
 
-        assert hasattr(vectorstore, "stream_insert")
-        assert callable(vectorstore.stream_insert)
+        inserted_points = []
+
+        class _MockCollection:
+            def stream_insert(self, points):
+                inserted_points.extend(points)
+
+        vectorstore._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
+        count = vectorstore.stream_insert(["hello", "world"])
+
+        assert count == 2
+        assert len(inserted_points) == 2
+        assert "vector" in inserted_points[0]
+        assert inserted_points[0]["payload"]["text"] == "hello"
+        assert inserted_points[1]["payload"]["text"] == "world"
 
     def test_validate_sparse_vector_valid(self):
         """Test validate_sparse_vector accepts valid sparse vectors."""
@@ -832,6 +855,26 @@ class TestV15Features:
 
         with pytest.raises(SecurityError, match="keys must be int"):
             validate_sparse_vector({"a": 1.0})
+
+    def test_validate_sparse_vector_invalid_values(self):
+        """Test validate_sparse_vector rejects non-numeric values and NaN/Inf weights."""
+        from langchain_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: "high"})
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: float("nan")})
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({0: float("inf")})
+
+    def test_validate_sparse_vector_rejects_bool_keys(self):
+        """Test validate_sparse_vector rejects bool keys (bool is subclass of int)."""
+        from langchain_velesdb.security import validate_sparse_vector, SecurityError
+
+        with pytest.raises(SecurityError):
+            validate_sparse_vector({True: 1.0})
 
     def test_version_is_1_5_0(self):
         """Test that package version is 1.5.0."""
