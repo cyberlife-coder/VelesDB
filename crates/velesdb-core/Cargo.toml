@@ -271,6 +271,11 @@ harness = false
 # Target-specific dependencies (WASM compatibility)
 # ============================================================================
 
+# getrandom requires the "js" feature to compile on wasm32-unknown-unknown
+[target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
+version = "0.2"
+features = ["js"]
+
 # ============================================================================
 # Optional deps for persistence feature (not WASM-compatible)
 # ============================================================================
