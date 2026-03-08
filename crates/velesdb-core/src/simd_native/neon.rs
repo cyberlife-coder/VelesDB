@@ -162,12 +162,8 @@ pub(crate) fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    // SAFETY: `vsqrts_f32` is a non-faulting scalar square-root instruction on aarch64.
-    // - Condition 1: NEON/ASIMD is always present on aarch64; `vsqrts_f32` is always available.
-    // - Condition 2: Both inputs are sums of squared floats (non-negative), so the result is well-defined.
-    // Reason: Compute norms using the ARM64 hardware square-root to avoid a slow software path.
-    let norm_a = unsafe { std::arch::aarch64::vsqrts_f32(norm_a_sq) };
-    let norm_b = unsafe { std::arch::aarch64::vsqrts_f32(norm_b_sq) };
+    let norm_a = norm_a_sq.sqrt();
+    let norm_b = norm_b_sq.sqrt();
 
     dot / (norm_a * norm_b)
 }
