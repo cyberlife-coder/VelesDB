@@ -1411,6 +1411,11 @@ components:
       - estimated_cost
       - features
       properties:
+        cache_hit:
+          type:
+          - boolean
+          - 'null'
+          description: Whether this plan was served from the compiled plan cache.
         collection:
           type: string
           description: Target collection name.
@@ -1425,6 +1430,13 @@ components:
           items:
             $ref: '#/components/schemas/ExplainStep'
           description: Query plan steps.
+        plan_reuse_count:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: How many times this cached plan has been reused.
+          minimum: 0
         query:
           type: string
           description: The original query.

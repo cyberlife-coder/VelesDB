@@ -4,7 +4,7 @@ milestone: v1.5
 milestone_name: parity
 status: completed
 stopped_at: Completed 16-01-PLAN.md
-last_updated: "2026-03-08T14:39:31Z"
+last_updated: "2026-03-08T14:48:31.803Z"
 last_activity: 2026-03-08 — Completed Phase 16 Plan 01 (EXPLAIN cache wiring + QUAL-06 traceability)
 progress:
   total_phases: 16
@@ -18,10 +18,10 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-05)
+See: .planning/PROJECT.md (updated 2026-03-08)
 
 **Core value:** Un seul moteur de connaissance pour les agents IA — Vector + Graph + ColumnStore, sub-milliseconde, offline, 15 Mo — sans glue code ni dépendances cloud.
-**Current focus:** Phase 16 — Traceability & EXPLAIN Cosmetic Fixes (Plan 01 complete -- MILESTONE COMPLETE)
+**Current focus:** v1.5 milestone shipped — planning next milestone
 
 ## Current Position
 
