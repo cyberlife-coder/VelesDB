@@ -14,7 +14,7 @@ Requirements pour la release v1.5. Chaque requirement mappe a une phase du roadm
 - [x] **QUAL-03**: `ProductQuantizer::train()` — `assert!` / `panic!` remplaces par `Result<_, VelesError>` — input invalide ne tue plus le serveur
 - [x] **QUAL-04**: k-means++ init implemente pour PQ — remplace l'init sequentielle deterministe qui produit des codebooks degeneres sur donnees reelles
 - [x] **QUAL-05**: `cargo audit || true` retire du CI — advisory reel = CI rouge
-- [ ] **QUAL-06**: Criterion baseline v1.5 enregistre dans `benchmarks/baseline.json` — seuil 15% enforced sur toutes les 35+ suites
+- [x] **QUAL-06**: Criterion baseline v1.5 enregistre dans `benchmarks/baseline.json` — seuil 15% enforced sur toutes les 35+ suites
 - [x] **QUAL-07**: Coverage code >= 82% maintenue apres toutes les additions v1.5
 
 ### Product Quantization — EPIC-063 (PQ)
@@ -119,7 +119,7 @@ Mapping requirements -> phases. Updated 2026-03-08 after milestone audit gap clo
 | QUAL-03 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-04 | Phase 1: Quality Baseline & Security | Complete |
 | QUAL-05 | Phase 1: Quality Baseline & Security | Complete |
-| QUAL-06 | Phase 16: Traceability & EXPLAIN Cosmetic Fixes | Pending |
+| QUAL-06 | Phase 16: Traceability & EXPLAIN Cosmetic Fixes | Complete |
 | QUAL-07 | Phase 1: Quality Baseline & Security | Complete |
 | PQ-01 | Phase 2: PQ Core Engine | Complete |
 | PQ-02 | Phase 2: PQ Core Engine | Complete |
@@ -140,7 +140,7 @@ Mapping requirements -> phases. Updated 2026-03-08 after milestone audit gap clo
 | CACHE-01 | Phase 6: Query Plan Cache | Complete |
 | CACHE-02 | Phase 6: Query Plan Cache | Complete |
 | CACHE-03 | Phase 6: Query Plan Cache | Complete |
-| CACHE-04 | Phase 16: Traceability & EXPLAIN Cosmetic Fixes | Pending |
+| CACHE-04 | Phase 16: Traceability & EXPLAIN Cosmetic Fixes | Complete |
 | STREAM-01 | Phase 7: Streaming Inserts | Complete |
 | STREAM-02 | Phase 7: Streaming Inserts | Complete |
 | STREAM-03 | Phase 7: Streaming Inserts | Complete |
@@ -173,4 +173,4 @@ Mapping requirements -> phases. Updated 2026-03-08 after milestone audit gap clo
 
 ---
 *Requirements defined: 2026-03-05*
-*Last updated: 2026-03-08 after gap closure phases 11-12 added*
+*Last updated: 2026-03-08 after Phase 16 completion (QUAL-06, CACHE-04 closed)*
