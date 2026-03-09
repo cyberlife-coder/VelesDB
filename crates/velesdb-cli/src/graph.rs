@@ -161,6 +161,23 @@ pub enum GraphAction {
         /// Node ID
         node_id: u64,
     },
+
+    /// List all nodes with stored payloads (paginated)
+    Nodes {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Graph collection name
+        collection: String,
+
+        /// Page number (1-indexed)
+        #[arg(short, long, default_value = "1")]
+        page: usize,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
 }
 
 /// Handle graph subcommands with direct core calls.
@@ -234,6 +251,13 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             collection,
             node_id,
         } => handle_get_payload(&path, &collection, node_id),
+
+        GraphAction::Nodes {
+            path,
+            collection,
+            page,
+            format,
+        } => handle_graph_nodes(&path, &collection, page, &format),
     }
 }
 
@@ -479,6 +503,84 @@ fn handle_store_payload(
         "✅".green(),
         node_id.to_string().green(),
     );
+    Ok(())
+}
+
+fn handle_graph_nodes(
+    path: &PathBuf,
+    collection: &str,
+    page: usize,
+    format: &str,
+) -> anyhow::Result<()> {
+    let col = open_graph(path, collection)?;
+    let edges = col.get_edges(None);
+
+    let all_node_ids: std::collections::BTreeSet<u64> = edges
+        .iter()
+        .flat_map(|e| [e.source(), e.target()])
+        .collect();
+
+    let total = all_node_ids.len();
+    let page_size = 20_usize;
+    let page = page.max(1);
+    let total_pages = total.div_ceil(page_size);
+    let offset = (page - 1) * page_size;
+
+    let page_ids: Vec<u64> = all_node_ids
+        .into_iter()
+        .skip(offset)
+        .take(page_size)
+        .collect();
+
+    // Collect node data with optional payloads
+    let mut node_data: Vec<(u64, Option<serde_json::Value>)> = Vec::new();
+    for &node_id in &page_ids {
+        let payload = col
+            .get_node_payload(node_id)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        node_data.push((node_id, payload));
+    }
+
+    if format == "json" {
+        let data: Vec<serde_json::Value> = node_data
+            .iter()
+            .map(|(id, payload)| {
+                serde_json::json!({
+                    "id": id,
+                    "payload": payload
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&data)?);
+    } else {
+        println!(
+            "\n{} in '{}' — Page {}/{} ({} unique nodes from {} edges)\n",
+            "Nodes".bold().underline(),
+            collection.green(),
+            page,
+            total_pages.max(1),
+            total,
+            edges.len()
+        );
+
+        if node_data.is_empty() {
+            println!("  No nodes on this page.\n");
+        } else {
+            for (node_id, payload) in &node_data {
+                let payload_str = match payload {
+                    Some(v) => serde_json::to_string(v).unwrap_or_default(),
+                    None => "null".to_string(),
+                };
+                println!(
+                    "  {} {} payload={}",
+                    format!("[{}]", node_id).cyan(),
+                    node_id.to_string().green(),
+                    payload_str,
+                );
+            }
+            println!("\n  Total: {} node(s) on this page\n", node_data.len());
+        }
+    }
     Ok(())
 }
 

@@ -160,6 +160,27 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         result
     }
 
+    /// Executes a closure with both vectors AND layers read locks held simultaneously.
+    ///
+    /// Acquires locks in correct rank order: vectors (10) → layers (20).
+    /// This avoids repeated lock acquire/release in tight search loops (F-03/F-04).
+    #[inline]
+    pub(in crate::index::hnsw::native) fn with_vectors_and_layers_read<R>(
+        &self,
+        f: impl FnOnce(&[Vec<f32>], &[Layer]) -> R,
+    ) -> R {
+        record_lock_acquire(LockRank::Vectors);
+        let vectors = self.vectors.read();
+        record_lock_acquire(LockRank::Layers);
+        let layers = self.layers.read();
+        let result = f(&vectors, &layers);
+        drop(layers);
+        record_lock_release(LockRank::Layers);
+        drop(vectors);
+        record_lock_release(LockRank::Vectors);
+        result
+    }
+
     // SAFETY: Layer selection uses exponential distribution capped at 15.
     // - cast_precision_loss: u64 to f64 may lose precision but is acceptable for PRNG
     // - cast_possible_truncation: floor() result is capped at 15, fitting in usize

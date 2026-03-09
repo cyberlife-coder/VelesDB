@@ -118,14 +118,15 @@ History is persisted across sessions in `~/.local/share/.velesdb_history` (Linux
 | `.describe <name>` | `.desc` | Detailed collection info (memory estimate, schema, storage mode) |
 | `.stats <name>` | | Collection statistics (point count, dimension, memory) |
 | `.count <name>` | | Show record/edge/item count |
-| `.sample <name> [n]` | | Show first N records (default: 5) with vector preview |
-| `.browse <name> [page]` | | Paginated record browsing (10 per page) |
+| `.sample <name> [n]` | | Show first N records (default: 5). Works for Vector, Graph, and Metadata collections. |
+| `.browse <name> [page]` | | Paginated record browsing (10 per page). Works for Vector, Graph, and Metadata collections. |
+| `.nodes <name> [page]` | | Paginated node browsing for Graph collections (10 per page, includes payload). |
 
 ### Data Operations
 
 | Command | Description |
 |---------|-------------|
-| `.export <name> [file]` | Export collection to JSON (default: `<name>.json`). Vector collections only. |
+| `.export <name> [file]` | Export collection to JSON (default: `<name>.json`). Supports Vector and Metadata collections. |
 | `.delete <name> <id> [id2...]` | Delete points by ID |
 | `.flush <name>` | Flush collection data to disk |
 
@@ -183,6 +184,7 @@ All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 | `.graph neighbors <col> <node_id> [--direction in\|out\|both]` | List neighbors of a node (default: out) |
 | `.graph store-payload <col> <node_id> <json>` | Store a JSON payload on a graph node |
 | `.graph get-payload <col> <node_id>` | Retrieve the JSON payload of a graph node |
+| `.nodes <col> [page]` | Paginated browsing of all nodes referenced in edges (with payload if stored) |
 
 > **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 
@@ -434,6 +436,11 @@ velesdb graph store-payload ./data my_graph 100 '{"name": "Alice", "role": "auth
 
 # Retrieve node payload
 velesdb graph get-payload ./data my_graph 100
+
+# List all nodes (paginated, 20 per page)
+velesdb graph nodes ./data my_graph
+velesdb graph nodes ./data my_graph --page 2
+velesdb graph nodes ./data my_graph --format json
 ```
 
 **`traverse` flags:**
@@ -560,6 +567,24 @@ RETURN author.name, doc.title
 ORDER BY similarity() DESC
 LIMIT 5;
 ```
+
+### Metadata-Only Collections
+
+Metadata collections store structured data without vectors. They support full VelesQL `SELECT` queries:
+
+```sql
+-- Browse all items in a metadata collection
+SELECT * FROM my_metadata LIMIT 10;
+
+-- Filter by field
+SELECT * FROM my_metadata WHERE status = 'active' LIMIT 20;
+
+-- Count items
+SELECT * FROM my_metadata WHERE price > 100 LIMIT 100;
+```
+
+> **Tip:** Use `.sample my_metadata`, `.browse my_metadata`, and `.export my_metadata` in the REPL —
+> all three commands work for Metadata collections (no "vector" column is shown).
 
 ### Metadata Filters
 

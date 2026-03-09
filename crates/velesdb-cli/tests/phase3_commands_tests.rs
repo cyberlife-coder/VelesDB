@@ -894,3 +894,93 @@ fn test_create_analyze_explain_flow() {
         .success()
         .stdout(predicate::str::contains("Query Execution Plan"));
 }
+
+// =============================================================================
+// Phase 4 — Full collection read (Graph nodes, Metadata query)
+// =============================================================================
+
+fn setup_graph_collection(name: &str) -> (std::path::PathBuf, tempfile::TempDir) {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_graph_collection(name, velesdb_core::GraphSchema::schemaless())
+        .unwrap();
+    let col = db.get_graph_collection(name).unwrap();
+    let edge = velesdb_core::GraphEdge::new(1, 10, 20, "KNOWS").unwrap();
+    col.add_edge(edge).unwrap();
+    col.store_node_payload(10, &serde_json::json!({"name": "Alice"}))
+        .unwrap();
+    col.store_node_payload(20, &serde_json::json!({"name": "Bob"}))
+        .unwrap();
+    drop(db);
+    (db_path, temp_dir)
+}
+
+fn setup_metadata_collection(name: &str) -> (std::path::PathBuf, tempfile::TempDir) {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_metadata_collection(name).unwrap();
+    let col = db.get_metadata_collection(name).unwrap();
+    let points: Vec<velesdb_core::Point> = (1u64..=3)
+        .map(|i| {
+            velesdb_core::Point::metadata_only(
+                i,
+                serde_json::json!({"label": format!("item_{}", i)}),
+            )
+        })
+        .collect();
+    col.upsert(points).unwrap();
+    drop(db);
+    (db_path, temp_dir)
+}
+
+#[test]
+fn test_graph_nodes_table_output() {
+    let (db_path, _temp_dir) = setup_graph_collection("kg");
+
+    velesdb_cmd()
+        .arg("graph")
+        .arg("nodes")
+        .arg(&db_path)
+        .arg("kg")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Nodes in"));
+}
+
+#[test]
+fn test_graph_nodes_json_output() {
+    let (db_path, _temp_dir) = setup_graph_collection("kg");
+
+    let output = velesdb_cmd()
+        .arg("graph")
+        .arg("nodes")
+        .arg(&db_path)
+        .arg("kg")
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = String::from_utf8_lossy(&output);
+    let parsed: serde_json::Value =
+        serde_json::from_str(text.trim()).expect("should be valid JSON");
+    assert!(parsed.is_array(), "json output should be an array");
+}
+
+#[test]
+fn test_velesql_select_metadata_collection() {
+    let (db_path, _temp_dir) = setup_metadata_collection("meta");
+
+    velesdb_cmd()
+        .arg("query")
+        .arg(&db_path)
+        .arg("SELECT * FROM meta LIMIT 5")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("item_1").or(predicate::str::contains("Results")));
+}

@@ -465,6 +465,7 @@ impl Database {
         let base_collection = self
             .get_collection(&base_name)
             .or_else(|| self.get_vector_collection(&base_name).map(|vc| vc.inner))
+            .or_else(|| self.get_metadata_collection(&base_name).map(|mc| mc.inner))
             .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
 
         let results = if query.select.joins.is_empty() {
@@ -478,6 +479,7 @@ impl Database {
                 let join_collection = self
                     .get_collection(&join.table)
                     .or_else(|| self.get_vector_collection(&join.table).map(|vc| vc.inner))
+                    .or_else(|| self.get_metadata_collection(&join.table).map(|mc| mc.inner))
                     .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
                 let column_store = Self::build_join_column_store(&join_collection)?;
                 let joined = crate::collection::search::query::join::execute_join(

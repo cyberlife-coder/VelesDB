@@ -374,3 +374,34 @@ fn test_metadata_only_persistence() {
         assert!(results[1].is_some());
     }
 }
+
+// =============================================================================
+// AC9: execute_query on metadata collections via Database::execute_query
+// =============================================================================
+
+#[test]
+fn test_execute_query_on_metadata_collection() {
+    use crate::velesql::Parser;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    db.create_metadata_collection("meta_items").unwrap();
+    let coll = db.get_metadata_collection("meta_items").unwrap();
+
+    // Insert a few items
+    let points: Vec<Point> = (1u64..=5)
+        .map(|i| Point::metadata_only(i, json!({"name": format!("item_{}", i)})))
+        .collect();
+    coll.upsert(points).unwrap();
+    drop(coll);
+
+    // Execute VelesQL SELECT via Database::execute_query
+    let query_str = "SELECT * FROM meta_items LIMIT 5";
+    let parsed = Parser::parse(query_str).unwrap();
+    let results = db
+        .execute_query(&parsed, &std::collections::HashMap::new())
+        .unwrap();
+
+    assert_eq!(results.len(), 5, "execute_query should return all 5 items");
+}

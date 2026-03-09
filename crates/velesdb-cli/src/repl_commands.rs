@@ -45,6 +45,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".stats" => cmd_stats(db, &parts),
         ".bench" | "\\bench" => cmd_bench(db, config, &parts),
         ".export" => cmd_export(db, &parts),
+        ".nodes" => cmd_nodes(db, &parts),
         ".graph" => cmd_graph(db, &parts),
         // Phase 5 -- REPL Enhancements
         ".explain" => cmd_explain(db, &parts),
@@ -261,8 +262,8 @@ fn cmd_sample(db: &Database, parts: &[&str]) -> CommandResult {
     let name = parts[1];
     let count: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
 
-    match db.get_vector_collection(name) {
-        Some(col) => {
+    match collection_helpers::resolve_collection(db, name) {
+        Some(collection_helpers::TypedCollection::Vector(col)) => {
             let all_ids = col.all_ids();
             let sample_ids: Vec<u64> = all_ids.into_iter().take(count).collect();
             let points = col.get(&sample_ids);
@@ -297,6 +298,68 @@ fn cmd_sample(db: &Database, parts: &[&str]) -> CommandResult {
                 println!();
             }
         }
+        Some(collection_helpers::TypedCollection::Graph(col)) => {
+            let edges = col.get_edges(None);
+            let mut unique_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+            for e in &edges {
+                unique_ids.insert(e.source());
+                unique_ids.insert(e.target());
+            }
+            let sample_ids: Vec<u64> = unique_ids.into_iter().take(count).collect();
+
+            let mut rows = Vec::new();
+            for node_id in &sample_ids {
+                let mut row = HashMap::new();
+                row.insert("id".to_string(), serde_json::json!(node_id));
+                if let Ok(Some(serde_json::Value::Object(map))) = col.get_node_payload(*node_id) {
+                    for (k, v) in map {
+                        row.insert(k, v);
+                    }
+                }
+                rows.push(row);
+            }
+
+            if rows.is_empty() {
+                println!("No nodes found.\n");
+            } else {
+                println!(
+                    "\n{} sample(s) from {} (Graph):\n",
+                    rows.len(),
+                    name.green()
+                );
+                crate::repl_output::print_table(&rows);
+                println!();
+            }
+        }
+        Some(collection_helpers::TypedCollection::Metadata(col)) => {
+            let all_ids = col.all_ids();
+            let sample_ids: Vec<u64> = all_ids.into_iter().take(count).collect();
+            let points = col.get(&sample_ids);
+
+            let mut rows = Vec::new();
+            for point in points.into_iter().flatten().take(count) {
+                let mut row = HashMap::new();
+                row.insert("id".to_string(), serde_json::json!(point.id));
+                if let Some(serde_json::Value::Object(map)) = &point.payload {
+                    for (k, v) in map {
+                        row.insert(k.clone(), v.clone());
+                    }
+                }
+                rows.push(row);
+            }
+
+            if rows.is_empty() {
+                println!("No records found.\n");
+            } else {
+                println!(
+                    "\n{} sample(s) from {} (Metadata):\n",
+                    rows.len(),
+                    name.green()
+                );
+                crate::repl_output::print_table(&rows);
+                println!();
+            }
+        }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
         }
@@ -319,8 +382,8 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
     let page_size = 10;
     let offset = (page - 1) * page_size;
 
-    match db.get_vector_collection(name) {
-        Some(col) => {
+    match collection_helpers::resolve_collection(db, name) {
+        Some(collection_helpers::TypedCollection::Vector(col)) => {
             let all_ids = col.all_ids();
             let total = all_ids.len();
             let total_pages = total.div_ceil(page_size);
@@ -368,9 +431,169 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
                 );
             }
         }
+        Some(collection_helpers::TypedCollection::Graph(col)) => {
+            let edges = col.get_edges(None);
+            let all_node_ids: std::collections::BTreeSet<u64> = edges
+                .iter()
+                .flat_map(|e| [e.source(), e.target()])
+                .collect();
+            let total = all_node_ids.len();
+            let total_pages = total.div_ceil(page_size);
+
+            let page_ids: Vec<u64> = all_node_ids
+                .into_iter()
+                .skip(offset)
+                .take(page_size)
+                .collect();
+
+            let mut rows = Vec::new();
+            for node_id in &page_ids {
+                let mut row = HashMap::new();
+                row.insert("id".to_string(), serde_json::json!(node_id));
+                if let Ok(Some(serde_json::Value::Object(map))) = col.get_node_payload(*node_id) {
+                    for (k, v) in map {
+                        row.insert(k, v);
+                    }
+                }
+                rows.push(row);
+            }
+
+            println!(
+                "\n{} (Graph) - Page {}/{} ({} unique nodes)",
+                name.green(),
+                page,
+                total_pages.max(1),
+                total
+            );
+            println!();
+
+            if rows.is_empty() {
+                println!("No nodes on this page.\n");
+            } else {
+                crate::repl_output::print_table(&rows);
+                println!(
+                    "\nUse {} to see next page\n",
+                    format!(".browse {} {}", name, page + 1).yellow()
+                );
+            }
+        }
+        Some(collection_helpers::TypedCollection::Metadata(col)) => {
+            let all_ids = col.all_ids();
+            let total = all_ids.len();
+            let total_pages = total.div_ceil(page_size);
+
+            let page_ids: Vec<u64> = all_ids.into_iter().skip(offset).take(page_size).collect();
+            let points = col.get(&page_ids);
+
+            let mut rows = Vec::new();
+            for point in points.into_iter().flatten().take(page_size) {
+                let mut row = HashMap::new();
+                row.insert("id".to_string(), serde_json::json!(point.id));
+
+                if let Some(serde_json::Value::Object(map)) = &point.payload {
+                    for (k, v) in map {
+                        let display_val = match v {
+                            serde_json::Value::String(s) if s.len() > 50 => {
+                                let truncated: String = s.chars().take(47).collect();
+                                serde_json::json!(format!("{truncated}..."))
+                            }
+                            other => other.clone(),
+                        };
+                        row.insert(k.clone(), display_val);
+                    }
+                }
+                rows.push(row);
+            }
+
+            println!(
+                "\n{} (Metadata) - Page {}/{} ({} total records)",
+                name.green(),
+                page,
+                total_pages.max(1),
+                total
+            );
+            println!();
+
+            if rows.is_empty() {
+                println!("No records on this page.\n");
+            } else {
+                crate::repl_output::print_table(&rows);
+                println!(
+                    "\nUse {} to see next page\n",
+                    format!(".browse {} {}", name, page + 1).yellow()
+                );
+            }
+        }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
         }
+    }
+    CommandResult::Continue
+}
+
+fn cmd_nodes(db: &Database, parts: &[&str]) -> CommandResult {
+    if parts.len() < 2 {
+        println!("Usage: .nodes <collection_name> [page]\n");
+        return CommandResult::Continue;
+    }
+    let name = parts[1];
+    let page: usize = parts
+        .get(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+    let page_size = 10;
+    let offset = (page - 1) * page_size;
+
+    let col = match db.get_graph_collection(name) {
+        Some(c) => c,
+        None => return CommandResult::Error(format!("Graph collection '{name}' not found")),
+    };
+
+    let edges = col.get_edges(None);
+    let all_node_ids: std::collections::BTreeSet<u64> = edges
+        .iter()
+        .flat_map(|e| [e.source(), e.target()])
+        .collect();
+    let total = all_node_ids.len();
+    let total_pages = total.div_ceil(page_size);
+
+    let page_ids: Vec<u64> = all_node_ids
+        .into_iter()
+        .skip(offset)
+        .take(page_size)
+        .collect();
+
+    println!(
+        "\n{} in '{}' — Page {}/{} ({} unique nodes from {} edges)",
+        "Nodes".bold().underline(),
+        name.green(),
+        page,
+        total_pages.max(1),
+        total,
+        edges.len()
+    );
+    println!();
+
+    if page_ids.is_empty() {
+        println!("No nodes on this page.\n");
+    } else {
+        let mut rows = Vec::new();
+        for node_id in &page_ids {
+            let mut row = HashMap::new();
+            row.insert("id".to_string(), serde_json::json!(node_id));
+            if let Ok(Some(serde_json::Value::Object(map))) = col.get_node_payload(*node_id) {
+                for (k, v) in map {
+                    row.insert(k, v);
+                }
+            }
+            rows.push(row);
+        }
+        crate::repl_output::print_table(&rows);
+        println!(
+            "\nUse {} to see next page\n",
+            format!(".nodes {} {}", name, page + 1).yellow()
+        );
     }
     CommandResult::Continue
 }
@@ -493,8 +716,8 @@ fn cmd_export(db: &Database, parts: &[&str]) -> CommandResult {
         .get(2)
         .map_or_else(|| format!("{name}.json"), std::string::ToString::to_string);
 
-    match db.get_vector_collection(name) {
-        Some(col) => {
+    match collection_helpers::resolve_collection(db, name) {
+        Some(collection_helpers::TypedCollection::Vector(col)) => {
             let all_ids = col.all_ids();
             let total = all_ids.len();
             println!("Exporting {} records from {}...", total, name.green());
@@ -535,6 +758,56 @@ fn cmd_export(db: &Database, parts: &[&str]) -> CommandResult {
                     return CommandResult::Error(format!("Failed to write file: {e}"));
                 }
             }
+        }
+        Some(collection_helpers::TypedCollection::Metadata(col)) => {
+            let all_ids = col.all_ids();
+            let total = all_ids.len();
+            println!(
+                "Exporting {} records from {} (Metadata)...",
+                total,
+                name.green()
+            );
+
+            let mut records = Vec::new();
+            let batch_size = 1000;
+
+            for batch in all_ids.chunks(batch_size) {
+                let points = col.get(batch);
+
+                for point in points.into_iter().flatten() {
+                    let mut record = serde_json::Map::new();
+                    record.insert("id".to_string(), serde_json::json!(point.id));
+                    if let Some(payload) = &point.payload {
+                        record.insert("payload".to_string(), payload.clone());
+                    }
+                    records.push(serde_json::Value::Object(record));
+                }
+            }
+
+            let json_str = match serde_json::to_string_pretty(&records) {
+                Ok(s) => s,
+                Err(e) => {
+                    return CommandResult::Error(format!("Failed to serialize records: {e}"));
+                }
+            };
+            match std::fs::write(&filename, json_str) {
+                Ok(()) => {
+                    println!(
+                        "{} Exported {} records to {}\n",
+                        "\u{2713}".green(),
+                        records.len(),
+                        filename.green()
+                    );
+                }
+                Err(e) => {
+                    return CommandResult::Error(format!("Failed to write file: {e}"));
+                }
+            }
+        }
+        Some(collection_helpers::TypedCollection::Graph(_)) => {
+            return CommandResult::Error(
+                "Export is not supported for Graph collections. Use 'velesdb graph get-edges' instead.".to_string()
+            );
         }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));

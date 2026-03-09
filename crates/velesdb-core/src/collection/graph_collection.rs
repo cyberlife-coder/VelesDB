@@ -152,6 +152,16 @@ impl GraphCollection {
         self.inner.get_node_degree(node_id)
     }
 
+    /// Returns the IDs of all nodes that have a stored payload.
+    ///
+    /// Nodes that appear only as edge endpoints without a stored payload
+    /// are not included. Use [`GraphCollection::get_edges`] to discover
+    /// all referenced node IDs.
+    #[must_use]
+    pub fn all_node_ids(&self) -> Vec<u64> {
+        self.inner.all_ids()
+    }
+
     /// Performs BFS traversal from a source node.
     #[must_use]
     pub fn traverse_bfs(&self, source_id: u64, config: &TraversalConfig) -> Vec<TraversalResult> {
@@ -215,5 +225,37 @@ impl GraphCollection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         self.inner.execute_query(query, params)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collection::graph::GraphSchema;
+    use crate::distance::DistanceMetric;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_all_node_ids_returns_ids_with_payload() {
+        let dir = tempdir().unwrap();
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            None,
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+
+        // Store payloads on two nodes
+        col.store_node_payload(10, &serde_json::json!({"name": "Alice"}))
+            .unwrap();
+        col.store_node_payload(20, &serde_json::json!({"name": "Bob"}))
+            .unwrap();
+
+        let ids = col.all_node_ids();
+        assert!(ids.contains(&10), "node 10 should be present");
+        assert!(ids.contains(&20), "node 20 should be present");
+        assert_eq!(ids.len(), 2);
     }
 }

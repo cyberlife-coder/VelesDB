@@ -286,8 +286,14 @@ impl Collection {
         // In production, this should use metadata indexes
         let mut results = Vec::new();
 
-        // We need all IDs to scan
-        let ids = vector_storage.ids();
+        // Prefer vector_storage IDs (vector collections). Fall back to payload_storage
+        // IDs for metadata-only collections where vector_storage is empty.
+        let vector_ids = vector_storage.ids();
+        let ids: Vec<u64> = if vector_ids.is_empty() {
+            payload_storage.ids()
+        } else {
+            vector_ids
+        };
 
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
@@ -297,17 +303,23 @@ impl Collection {
             };
 
             if matches {
-                if let Ok(Some(vector)) = vector_storage.retrieve(id) {
-                    results.push(SearchResult::new(
-                        Point {
-                            id,
-                            vector,
-                            payload,
-                            sparse_vectors: None,
-                        },
-                        1.0, // Constant score for scans
-                    ));
-                }
+                // For metadata-only collections, vectors are empty (metadata stored
+                // in payload_storage only). Use unwrap_or_default so both vector and
+                // metadata-only points are included in scan results.
+                let vector = vector_storage
+                    .retrieve(id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                results.push(SearchResult::new(
+                    Point {
+                        id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
+                    1.0, // Constant score for scans
+                ));
             }
 
             if results.len() >= limit {
