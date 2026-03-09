@@ -91,7 +91,7 @@ impl LicenseInfo {
     }
 
     /// Checks if a feature is enabled
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reason: public API for license validation (used in tests, consumed by velesdb-premium)
     pub fn has_feature(&self, feature: PremiumFeature) -> bool {
         self.features.contains(&feature)
     }

@@ -1,0 +1,4238 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "toolExecutionNotifications": [
+            {
+              "descriptor": {
+                "id": "Syntax error"
+              },
+              "level": "warning",
+              "message": {
+                "text": "Syntax error at line Dockerfile:8:\n `pkg-config \\\r\n    libssl-dev \\\r\n    \u0026\u0026 rm -rf /var/lib/apt/lists/*\r\n\r\n# Copy manifests and source\r\nCOPY Cargo.toml Cargo.lock ./\r\nCOPY crates ./crates\r\nCOPY integrations ./integrations\r\n\r\n# Build the application\r\nRUN cargo build --release --bin velesdb-server\r\n\r\n# Runtime stage\r\nFROM debian:bookworm-slim\r\n\r\nWORKDIR /app\r\n\r\n# Install runtime dependencies\r\nRUN apt-get update \u0026\u0026 apt-get install -y \\\r\n    ca-certificates \\\r\n    \u0026\u0026 rm -rf /var/lib/apt/lists/*\r\n\r\n# Create non-root user\r\nRUN useradd -r -s /bin/false velesdb\r\n\r\n# Copy binary from builder\r\nCOPY --from=builder /app/target/release/velesdb-server /usr/local/bin/\r\n\r\n# Create data directory\r\nRUN mkdir -p /data \u0026\u0026 chown velesdb:velesdb /data\r\n\r\n# Switch to non-root user\r\nUSER velesdb\r\n\r\n# Expose port\r\nEXPOSE 8080\r\n\r\n# Set environment variables\r\nENV VELESDB_DATA_DIR=/data\r\nENV VELESDB_HOST=0.0.0.0\r\nENV VELESDB_PORT=8080\r\nENV RUST_LOG=info\r\n\r\n# Health check\r\nHEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\\r\n    CMD curl -f http://localhost:8080/health || exit 1\r\n\r\n# Run the server\r\nENTRYPOINT [\"velesdb-server\"]` was unexpected"
+              }
+            }
+          ]
+        }
+      ],
+      "results": [
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "53b28727b8b1949dbbca0621fa16e75d02f31a7d0245c5048ed92da22ca9360428f675f2c77a0dbab28ec415741d9aafc79b45fe3c8f0a459c3a2af66c8b9ce3_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/bench-regression.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 42,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 42
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 61,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 61
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 156,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 156
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 188,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 188
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 237,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 237
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 278,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 278
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 321,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 321
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "67c86c474f8716e78c26e35647097aad3899c2bea2653e6dfc4c49ee9b4a0e01fb19d63aa328c7af3c4183e4f1fa9fe42b72fce09f1b3a7ace67990231cf3440_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/ci.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 367,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 367
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "66691e4f9f0efab632badcbb040fefb0903a1f3c0562f46f58d5c81759855480decfc3c0c8e42a2808746726c0b553c7ecd6e440d2ca8ee28ddb2445383cc7b0_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/compat-matrix.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 43,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 43
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "66691e4f9f0efab632badcbb040fefb0903a1f3c0562f46f58d5c81759855480decfc3c0c8e42a2808746726c0b553c7ecd6e440d2ca8ee28ddb2445383cc7b0_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/compat-matrix.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 68,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 68
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "e9a9f6ce7b50073cfdb934ff0c980fd644664d6f4e3a3360af62a78b2de555e6cc3e44fa473c1bc3c3a0375011c92b587fa43fd59a54461317d8d2d45d079fbf_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/pr-governance.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 2,
+                  "endLine": 21,
+                  "snippet": {
+                    "text": "        run: |\n          echo \"::error::PR source branch '${{ github.event.pull_request.head.ref }}' is archived and cannot be merged.\"\n          exit 1"
+                  },
+                  "startColumn": 9,
+                  "startLine": 18
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Using variable interpolation `${{...}}` with `github` context data in a `run:` step could allow an attacker to inject their own code into the runner. This would allow them to steal secrets and code. `github` context data can have arbitrary user input and should be treated as untrusted. Instead, use an intermediate environment variable with `env:` to store the data and use the environment variable in the `run:` script. Be sure to use double-quotes the environment variable, like this: \"$ENVVAR\"."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.run-shell-injection.run-shell-injection"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "07e1538e7a93c5e0c37944e89aeaf9baebfcdf54f72f6b6faeabc0dcadd177eef42a9b0691e692bdefb3240d6519c9aa73d528043f61b328b26f8799e67c0d3b_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/production-gates.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 24,
+                  "snippet": {
+                    "text": "        uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 24
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7c2f9cad4931339f21d5444acbd3ff338ffc00f9a3daabadbc60515a10e94148ad9fb2a313704e220f2e9d08ea362ffe70365da71539d52f760e906baa6ff4bf_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 47,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 47
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "5e793da211095aa5f8281910f2c8870fb3449cc7ba14570df8acce953637cc1b17500592df438b05f1733d1d52ae175d128f20ba3e54dceb2459c8d5bd6ba78f_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 37,
+                  "endLine": 55,
+                  "snippet": {
+                    "text": "      - uses: Swatinem/rust-cache@v2"
+                  },
+                  "startColumn": 9,
+                  "startLine": 55
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7c2f9cad4931339f21d5444acbd3ff338ffc00f9a3daabadbc60515a10e94148ad9fb2a313704e220f2e9d08ea362ffe70365da71539d52f760e906baa6ff4bf_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 72,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 72
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "5e793da211095aa5f8281910f2c8870fb3449cc7ba14570df8acce953637cc1b17500592df438b05f1733d1d52ae175d128f20ba3e54dceb2459c8d5bd6ba78f_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 37,
+                  "endLine": 78,
+                  "snippet": {
+                    "text": "      - uses: Swatinem/rust-cache@v2"
+                  },
+                  "startColumn": 9,
+                  "startLine": 78
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7c2f9cad4931339f21d5444acbd3ff338ffc00f9a3daabadbc60515a10e94148ad9fb2a313704e220f2e9d08ea362ffe70365da71539d52f760e906baa6ff4bf_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 137,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 137
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "5e793da211095aa5f8281910f2c8870fb3449cc7ba14570df8acce953637cc1b17500592df438b05f1733d1d52ae175d128f20ba3e54dceb2459c8d5bd6ba78f_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 37,
+                  "endLine": 150,
+                  "snippet": {
+                    "text": "      - uses: Swatinem/rust-cache@v2"
+                  },
+                  "startColumn": 9,
+                  "startLine": 150
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7c2f9cad4931339f21d5444acbd3ff338ffc00f9a3daabadbc60515a10e94148ad9fb2a313704e220f2e9d08ea362ffe70365da71539d52f760e906baa6ff4bf_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 183,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 183
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "5e793da211095aa5f8281910f2c8870fb3449cc7ba14570df8acce953637cc1b17500592df438b05f1733d1d52ae175d128f20ba3e54dceb2459c8d5bd6ba78f_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/propagation-guard.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 37,
+                  "endLine": 186,
+                  "snippet": {
+                    "text": "      - uses: Swatinem/rust-cache@v2"
+                  },
+                  "startColumn": 9,
+                  "startLine": 186
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d5f6b28ace1b6354f87ab75564e7cfbebfa916139a2f31090ade7d63f9a1506b649e161b60ea9c8ba0b5790cef85b9aab0589018c28d546f392f985f3ed2cfea_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 81,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 81
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "904f1a6934bf39c528c3c0c62da910e21289a4a5da3a02f6e4a51be9e112fa0df0f993513e386e15a5b0a01826ac91e00027aed6375c6d20947a49806db23069_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 49,
+                  "endLine": 85,
+                  "snippet": {
+                    "text": "        uses: awalsh128/cache-apt-pkgs-action@v1"
+                  },
+                  "startColumn": 9,
+                  "startLine": 85
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "16b84e46b129e0b1d690796f6108f4597034d72ae4c4816f82d10d78eee9ab1261e64d0c6837e05ca563a816a4108046ae8be698073d4eb1d8390b60e4c6069f_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 37,
+                  "endLine": 89,
+                  "snippet": {
+                    "text": "      - uses: Swatinem/rust-cache@v2"
+                  },
+                  "startColumn": 9,
+                  "startLine": 89
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d5f6b28ace1b6354f87ab75564e7cfbebfa916139a2f31090ade7d63f9a1506b649e161b60ea9c8ba0b5790cef85b9aab0589018c28d546f392f985f3ed2cfea_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 129,
+                  "snippet": {
+                    "text": "        uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 129
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d5f6b28ace1b6354f87ab75564e7cfbebfa916139a2f31090ade7d63f9a1506b649e161b60ea9c8ba0b5790cef85b9aab0589018c28d546f392f985f3ed2cfea_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 198,
+                  "snippet": {
+                    "text": "      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input"
+                  },
+                  "startColumn": 9,
+                  "startLine": 198
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "a8d22e833dd31d07d19fac311c6cbc802acb535c872fdc0ea896ff6ead446fc1aee0be96a9f142245749275177bff5039f091ffd91c41d14d9422b6f94d93b8d_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 37,
+                  "endLine": 277,
+                  "snippet": {
+                    "text": "      - uses: PyO3/maturin-action@v1"
+                  },
+                  "startColumn": 9,
+                  "startLine": 277
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d5f6b28ace1b6354f87ab75564e7cfbebfa916139a2f31090ade7d63f9a1506b649e161b60ea9c8ba0b5790cef85b9aab0589018c28d546f392f985f3ed2cfea_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/release.yml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 379,
+                  "snippet": {
+                    "text": "        uses: dtolnay/rust-toolchain@stable"
+                  },
+                  "startColumn": 9,
+                  "startLine": 379
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "An action sourced from a third-party repository on GitHub is not pinned to a full length commit SHA. Pinning an action to a full length commit SHA is currently the only way to use an action as an immutable release. Pinning to a particular SHA helps mitigate the risk of a bad actor adding a backdoor to the action's repository, as they would need to generate a SHA-1 collision for a valid Git object payload."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7943d27253b5e70ddb7551101023280ad0cbd41525b143d796253241a8b975b75e7204cc0ada580656e0e2ba5e11a4b4a837d74ac98acfbda07b306b8253eb85_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/benches/scalability_benchmark.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 123,
+                  "snippet": {
+                    "text": "    unsafe {\n        let mut pmc = MaybeUninit::\u003cProcessMemoryCounters\u003e::zeroed().assume_init();\n        pmc.cb = std::mem::size_of::\u003cProcessMemoryCounters\u003e() as u32;\n        #[allow(clippy::borrow_as_ptr)]\n        if GetProcessMemoryInfo(\n            GetCurrentProcess(),\n            \u0026mut pmc,\n            std::mem::size_of::\u003cProcessMemoryCounters\u003e() as u32,\n        ) != 0\n        {\n            pmc.working_set_size\n        } else {\n            0\n        }\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 109
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7943d27253b5e70ddb7551101023280ad0cbd41525b143d796253241a8b975b75e7204cc0ada580656e0e2ba5e11a4b4a837d74ac98acfbda07b306b8253eb85_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/benches/scalability_benchmark.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 163,
+                  "snippet": {
+                    "text": "    unsafe {\n        let mut usage = MaybeUninit::\u003cRusage\u003e::zeroed().assume_init();\n        if getrusage(0, \u0026mut usage) == 0 {\n            usage.ru_maxrss as usize\n        } else {\n            0\n        }\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 156
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "f60789419cad8db247079e44305c83ba8c55f9154fc86f50add95b2603c5b96b91ad00967856c27849de2692b82b3e55c0b94b3902817eb32c24b9e3516e013e_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/alloc_guard.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 43,
+                  "endLine": 66,
+                  "snippet": {
+                    "text": "        let ptr = unsafe { alloc(layout) };"
+                  },
+                  "startColumn": 19,
+                  "startLine": 66
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "f60789419cad8db247079e44305c83ba8c55f9154fc86f50add95b2603c5b96b91ad00967856c27849de2692b82b3e55c0b94b3902817eb32c24b9e3516e013e_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/alloc_guard.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 123,
+                  "snippet": {
+                    "text": "            unsafe {\n                dealloc(self.ptr.as_ptr(), self.layout);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 121
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ff0dc4f865cb73d0ecd809755898bf1d52256c98e8b0481f3fa3c17795233ea2624c043ee860c5d1102ecf1fea49bc3d433620a223ca02466842f8d632ac3899_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/alloc_guard_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 26,
+                  "snippet": {
+                    "text": "    unsafe {\n        dealloc(ptr, layout);\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 24
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ff0dc4f865cb73d0ecd809755898bf1d52256c98e8b0481f3fa3c17795233ea2624c043ee860c5d1102ecf1fea49bc3d433620a223ca02466842f8d632ac3899_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/alloc_guard_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 60,
+                  "snippet": {
+                    "text": "    unsafe {\n        for i in 0..10 {\n            *float_ptr.add(i) = i as f32;\n        }\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 56
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ff0dc4f865cb73d0ecd809755898bf1d52256c98e8b0481f3fa3c17795233ea2624c043ee860c5d1102ecf1fea49bc3d433620a223ca02466842f8d632ac3899_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/alloc_guard_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 68,
+                  "snippet": {
+                    "text": "    unsafe {\n        for i in 0..10 {\n            assert_eq!(*float_ptr.add(i), i as f32);\n        }\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 64
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 101,
+                  "snippet": {
+                    "text": "            unsafe {\n                std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 99
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 79,
+                  "endLine": 121,
+                  "snippet": {
+                    "text": "            Some(unsafe { self.chunks[chunk_idx][slot_idx].assume_init_ref() })"
+                  },
+                  "startColumn": 18,
+                  "startLine": 121
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 18,
+                  "endLine": 144,
+                  "snippet": {
+                    "text": "                unsafe {\n                    std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());\n                }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 142
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 230,
+                  "snippet": {
+                    "text": "            unsafe {\n                std::arch::x86_64::_mm_prefetch(ptr.cast::\u003ci8\u003e(), std::arch::x86_64::_MM_HINT_T0);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 228
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 246,
+                  "snippet": {
+                    "text": "        unsafe {\n            chunk.set_len(self.chunk_size);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 244
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 267,
+                  "snippet": {
+                    "text": "        unsafe {\n            chunk.set_len(self.chunk_size);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 265
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "8aaa79a22e55221279808e8c6b08b49af2257078a4e3f4fda872e8fd675155475c947c1f2628846c210cd731f544f93174be0d363140c091766a32e46a58937f_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/memory_pool/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 18,
+                  "endLine": 305,
+                  "snippet": {
+                    "text": "                unsafe {\n                    std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr());\n                }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 303
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "9ad634b36051df2301bc5bf131a6fffb5d8ca8df497e45a28212691e30d3ed24b542ce2ee5ddf6c1853919e15492fb2ac214f8ae49a53b1290630e9f79b5e106_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/property_index_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 40,
+                  "endLine": 288,
+                  "snippet": {
+                    "text": "    let temp_dir = std::env::temp_dir();"
+                  },
+                  "startColumn": 20,
+                  "startLine": 288
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "temp_dir should not be used for security operations. From the docs: 'The temporary directory may be shared among users, or between processes with different privileges; thus, the creation of any files or directories in the temporary directory must use a secure method to create a uniquely named file. Creating a file or directory with a fixed or predictable name may result in “insecure temporary file” security vulnerabilities.'"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.temp-dir.temp-dir"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "f5eb31764db5796896d6edcef745a5c2cbe5b6d28c875238837bb440786e35ab2ca7d9298c5d0caf8351cee70720e7073b02672472bf47fca8f9ad877e28c135_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/collection/graph/range_index_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 40,
+                  "endLine": 271,
+                  "snippet": {
+                    "text": "    let temp_dir = std::env::temp_dir();"
+                  },
+                  "startColumn": 20,
+                  "startLine": 271
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "temp_dir should not be used for security operations. From the docs: 'The temporary directory may be shared among users, or between processes with different privileges; thus, the creation of any files or directories in the temporary directory must use a secure method to create a uniquely named file. Creating a file or directory with a fixed or predictable name may result in “insecure temporary file” security vulnerabilities.'"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.temp-dir.temp-dir"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "50237a3b33c261ec1a49da31e3e67e072f5021b73da3d4d7383012833315bd876b216afe8fbedd4ffc4c3ec7633c1f95ad740a491480e9b7d26aebfd85ade0e2_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/hnsw/index/mod.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 127,
+                  "snippet": {
+                    "text": "        unsafe {\n            ManuallyDrop::drop(\u0026mut *self.inner.write());\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 125
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "cdfe7997641d9570c9a4d2b947ca0d4a8fd21db740fa2c9fe48177bd6908820f0712e20d1911bee60f1ca401271a4977f0350f1fad781e5c6bcd353197df2468_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/hnsw/index/vacuum.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 172,
+                  "snippet": {
+                    "text": "            unsafe {\n                ManuallyDrop::drop(\u0026mut *inner_guard);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 170
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "73a1bfdd96fa8c5739e05cfbe46c4cf0bcc0d0baa0de29c9e7c9b312e2dd7d09ba3df0c11805d6a7ae5c515460a786c9cea954c0e86f6c72f11a2a19805bafe6_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/hnsw/vector_store.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 248,
+                  "snippet": {
+                    "text": "            unsafe {\n                use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};\n                let ptr = buffer.as_ptr().add(offset);\n                _mm_prefetch(ptr.cast::\u003ci8\u003e(), _MM_HINT_T0);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 244
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "73a1bfdd96fa8c5739e05cfbe46c4cf0bcc0d0baa0de29c9e7c9b312e2dd7d09ba3df0c11805d6a7ae5c515460a786c9cea954c0e86f6c72f11a2a19805bafe6_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/hnsw/vector_store.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 277,
+                  "snippet": {
+                    "text": "        unsafe {\n            let ptr = self.guard.as_ptr().add(self.offset);\n            std::slice::from_raw_parts(ptr, self.dimension)\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 274
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "fa09b58befba932d936269068c6d67140ee348cb120ccf249ab0c77ec555aacb3d7a4bd1b9eff5cf06a75bc54bbe815ac98fc46c8d3478450232c0f4318c7371_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/trigram/simd.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 56,
+                  "endLine": 207,
+                  "snippet": {
+                    "text": "        unsafe { extract_trigrams_avx2_inner(\u0026padded) }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 207
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "fa09b58befba932d936269068c6d67140ee348cb120ccf249ab0c77ec555aacb3d7a4bd1b9eff5cf06a75bc54bbe815ac98fc46c8d3478450232c0f4318c7371_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/trigram/simd.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 58,
+                  "endLine": 277,
+                  "snippet": {
+                    "text": "        unsafe { extract_trigrams_avx512_inner(\u0026padded) }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 277
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "fa09b58befba932d936269068c6d67140ee348cb120ccf249ab0c77ec555aacb3d7a4bd1b9eff5cf06a75bc54bbe815ac98fc46c8d3478450232c0f4318c7371_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/index/trigram/simd.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 317,
+                  "snippet": {
+                    "text": "        unsafe {\n            let _chunk = vld1q_u8(bytes.as_ptr().add(i));\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 315
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 43,
+                  "endLine": 100,
+                  "snippet": {
+                    "text": "        let ptr = unsafe { alloc(layout) };"
+                  },
+                  "startColumn": 19,
+                  "startLine": 100
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 196,
+                  "snippet": {
+                    "text": "        unsafe {\n            ptr::copy_nonoverlapping(\n                vector.as_ptr(),\n                self.data.as_ptr().add(offset),\n                self.dimension,\n            );\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 190
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 99,
+                  "endLine": 250,
+                  "snippet": {
+                    "text": "        Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension) })"
+                  },
+                  "startColumn": 14,
+                  "startLine": 250
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 64,
+                  "endLine": 290,
+                  "snippet": {
+                    "text": "            let ptr = unsafe { self.data.as_ptr().add(offset) };"
+                  },
+                  "startColumn": 23,
+                  "startLine": 290
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 301,
+                  "snippet": {
+                    "text": "            unsafe {\n                use std::arch::x86_64::_mm_prefetch;\n                // Prefetch for read, into L2 cache\n                _mm_prefetch(ptr.cast::\u003ci8\u003e(), std::arch::x86_64::_MM_HINT_T1);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 297
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 367,
+                  "snippet": {
+                    "text": "            unsafe {\n                ptr::copy_nonoverlapping(self.data.as_ptr(), new_data.as_ptr(), copy_size);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 365
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 380,
+                  "snippet": {
+                    "text": "        unsafe {\n            dealloc(self.data.as_ptr().cast::\u003cu8\u003e(), old_layout);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 378
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "7dca8391d0b0071439d30d609c4911ff3253f9e6af01e4b54bd21a629e30c2a027bec720e351d6f7e6cca8bba56906b0aac52b481eecb3667b32aa8a74faec43_7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 430,
+                  "snippet": {
+                    "text": "        unsafe {\n            dealloc(self.data.as_ptr().cast::\u003cu8\u003e(), layout);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 428
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "1957125dd22d3f1b2b4ac0602004f655bce45611b9d9908855b391dad70aed40f9dc8257cb30451d9a497af0b7d73655b294c9c3fd1e0ced540acd3119c73596_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 236,
+                  "snippet": {
+                    "text": "    let v0 = unsafe { cv.get_unchecked(0) };"
+                  },
+                  "startColumn": 14,
+                  "startLine": 236
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "1957125dd22d3f1b2b4ac0602004f655bce45611b9d9908855b391dad70aed40f9dc8257cb30451d9a497af0b7d73655b294c9c3fd1e0ced540acd3119c73596_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 237,
+                  "snippet": {
+                    "text": "    let v1 = unsafe { cv.get_unchecked(1) };"
+                  },
+                  "startColumn": 14,
+                  "startLine": 237
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "1957125dd22d3f1b2b4ac0602004f655bce45611b9d9908855b391dad70aed40f9dc8257cb30451d9a497af0b7d73655b294c9c3fd1e0ced540acd3119c73596_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 43,
+                  "endLine": 253,
+                  "snippet": {
+                    "text": "    let _ = unsafe { cv.get_unchecked(5) };"
+                  },
+                  "startColumn": 13,
+                  "startLine": 253
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "1957125dd22d3f1b2b4ac0602004f655bce45611b9d9908855b391dad70aed40f9dc8257cb30451d9a497af0b7d73655b294c9c3fd1e0ced540acd3119c73596_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/perf_optimizations_tests.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 43,
+                  "endLine": 266,
+                  "snippet": {
+                    "text": "    let _ = unsafe { cv.get_unchecked(2) };"
+                  },
+                  "startColumn": 13,
+                  "startLine": 266
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "40ea07d2b42e134ca9f59e0717b2b6568dbe32166a95e6ac4ed1c6858575e0489811b481e29041c44874c1d1b48af080315f839010a5a7ed392a6d6583b074ea_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/adc.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 66,
+                  "endLine": 44,
+                  "snippet": {
+                    "text": "                .map(|c| unsafe { adc_single_avx2(lut, c, m, k) })"
+                  },
+                  "startColumn": 26,
+                  "startLine": 44
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "40ea07d2b42e134ca9f59e0717b2b6568dbe32166a95e6ac4ed1c6858575e0489811b481e29041c44874c1d1b48af080315f839010a5a7ed392a6d6583b074ea_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/adc.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 66,
+                  "endLine": 54,
+                  "snippet": {
+                    "text": "                .map(|c| unsafe { adc_single_neon(lut, c, m, k) })"
+                  },
+                  "startColumn": 26,
+                  "startLine": 54
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 80,
+                  "endLine": 28,
+                  "snippet": {
+                    "text": "                return unsafe { crate::simd_native::cosine_fused_avx512(a, b) };"
+                  },
+                  "startColumn": 24,
+                  "startLine": 28
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 78,
+                  "endLine": 34,
+                  "snippet": {
+                    "text": "                return unsafe { crate::simd_native::cosine_fused_avx2(a, b) };"
+                  },
+                  "startColumn": 24,
+                  "startLine": 34
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 83,
+                  "endLine": 40,
+                  "snippet": {
+                    "text": "                return unsafe { crate::simd_native::cosine_fused_avx2_2acc(a, b) };"
+                  },
+                  "startColumn": 24,
+                  "startLine": 40
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 78,
+                  "endLine": 46,
+                  "snippet": {
+                    "text": "                return unsafe { crate::simd_native::cosine_fused_avx2(a, b) };"
+                  },
+                  "startColumn": 24,
+                  "startLine": 46
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 73,
+                  "endLine": 70,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::cosine_fused_avx512(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 70
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 71,
+                  "endLine": 79,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::cosine_fused_avx2(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 79
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 76,
+                  "endLine": 88,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::cosine_fused_avx2_2acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 88
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c09e2d0484a18a99fec9bf8c9d7a11f47d68209aba0510c9f7dc7ee6f14b6ea3dea85196241d8034525feff15f9ec747b35fb0d4eb10e6d19ad1b54af2dc4218_7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/cosine.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 71,
+                  "endLine": 97,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::cosine_fused_avx2(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 97
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 73,
+                  "endLine": 19,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::dot_product_avx512_4acc(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 19
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 68,
+                  "endLine": 26,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::dot_product_avx512(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 26
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 71,
+                  "endLine": 33,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::dot_product_avx2_4acc(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 33
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 66,
+                  "endLine": 40,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::dot_product_avx2(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 40
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 71,
+                  "endLine": 47,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::dot_product_avx2_1acc(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 47
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 14,
+                  "endLine": 70,
+                  "snippet": {
+                    "text": "            unsafe {\n                use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};\n                _mm_prefetch(candidates[i + 4].as_ptr().cast::\u003ci8\u003e(), _MM_HINT_T0);\n            }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 67
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 77,
+                  "endLine": 91,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::dot_product_avx512_4acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 91
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 68,
+                  "endLine": 99,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::dot_product_avx512(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 99
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_8"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 75,
+                  "endLine": 107,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::dot_product_avx2_4acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 107
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_9"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 70,
+                  "endLine": 116,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::dot_product_avx2(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 116
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c6c78d2ccb301496f1ce7b93dcd144dcd8f00e588d96beef92d57b6a41dea4624b22059ea16b4d18a5e86cd9f7a4b4514794851d0e774bce058428ab697257c8_10"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/dot.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 75,
+                  "endLine": 125,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::dot_product_avx2_1acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 125
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 72,
+                  "endLine": 19,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx512_4acc(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 19
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 67,
+                  "endLine": 26,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx512(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 26
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 70,
+                  "endLine": 33,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx2_4acc(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 33
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 65,
+                  "endLine": 40,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx2(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 40
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 70,
+                  "endLine": 47,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx2_1acc(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 47
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 76,
+                  "endLine": 92,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::squared_l2_avx512_4acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 92
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 67,
+                  "endLine": 100,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx512(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 100
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 74,
+                  "endLine": 108,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::squared_l2_avx2_4acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 108
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_8"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 65,
+                  "endLine": 116,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::squared_l2_avx2(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 116
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "96c3424ef2b85e21a96665b22639d7cf521ac59db25fae85e458aca6300ec88c7d54a2888c1703f06fd58e59b584b669c55bbbada4c64061aec61d6a3734d3c7_9"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/euclidean.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 74,
+                  "endLine": 124,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::squared_l2_avx2_1acc(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 124
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 71,
+                  "endLine": 47,
+                  "snippet": {
+                    "text": "            return unsafe { crate::simd_native::hamming_avx512(a, b) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 47
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 69,
+                  "endLine": 53,
+                  "snippet": {
+                    "text": "            return unsafe { crate::simd_native::hamming_avx2(a, b) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 53
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 71,
+                  "endLine": 67,
+                  "snippet": {
+                    "text": "            return unsafe { crate::simd_native::jaccard_avx512(a, b) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 67
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 69,
+                  "endLine": 73,
+                  "snippet": {
+                    "text": "            return unsafe { crate::simd_native::jaccard_avx2(a, b) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 73
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 68,
+                  "endLine": 88,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::hamming_avx512(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 88
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 62,
+                  "endLine": 96,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::hamming_avx2(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 96
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 68,
+                  "endLine": 111,
+                  "snippet": {
+                    "text": "                unsafe { crate::simd_native::jaccard_avx512(a, b) }"
+                  },
+                  "startColumn": 17,
+                  "startLine": 111
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "491c23aab56730c3df2adafccf9fd9af3d838783c4af55f394b57f8e103586570093b36ecda3c5f092a8fd996d55ad2f50d15d4df53e348b1ab247bd30522b19_7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/dispatch/hamming.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 62,
+                  "endLine": 119,
+                  "snippet": {
+                    "text": "            unsafe { crate::simd_native::jaccard_avx2(a, b) }"
+                  },
+                  "startColumn": 13,
+                  "startLine": 119
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 46,
+                  "endLine": 38,
+                  "snippet": {
+                    "text": "    let mut sum = unsafe { vdupq_n_f32(0.0) };"
+                  },
+                  "startColumn": 19,
+                  "startLine": 38
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 53,
+                  "snippet": {
+                    "text": "        unsafe {\n            let va = vld1q_f32(a_ptr.add(offset));\n            let vb = vld1q_f32(b_ptr.add(offset));\n            sum = vfmaq_f32(sum, va, vb);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 49
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 48,
+                  "endLine": 60,
+                  "snippet": {
+                    "text": "    let mut result = unsafe { vaddvq_f32(sum) };"
+                  },
+                  "startColumn": 22,
+                  "startLine": 60
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 60,
+                  "endLine": 83,
+                  "snippet": {
+                    "text": "    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 83
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 49,
+                  "endLine": 84,
+                  "snippet": {
+                    "text": "    let end_ptr = unsafe { a.as_ptr().add(len) };"
+                  },
+                  "startColumn": 19,
+                  "startLine": 84
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 47,
+                  "endLine": 90,
+                  "snippet": {
+                    "text": "    let mut acc0 = unsafe { vdupq_n_f32(0.0) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 90
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 47,
+                  "endLine": 91,
+                  "snippet": {
+                    "text": "    let mut acc1 = unsafe { vdupq_n_f32(0.0) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 91
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 47,
+                  "endLine": 92,
+                  "snippet": {
+                    "text": "    let mut acc2 = unsafe { vdupq_n_f32(0.0) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 92
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_8"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 47,
+                  "endLine": 93,
+                  "snippet": {
+                    "text": "    let mut acc3 = unsafe { vdupq_n_f32(0.0) };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 93
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_9"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 119,
+                  "snippet": {
+                    "text": "        unsafe {\n            let va0 = vld1q_f32(a_ptr);\n            let vb0 = vld1q_f32(b_ptr);\n            acc0 = vfmaq_f32(acc0, va0, vb0);\n\n            let va1 = vld1q_f32(a_ptr.add(4));\n            let vb1 = vld1q_f32(b_ptr.add(4));\n            acc1 = vfmaq_f32(acc1, va1, vb1);\n\n            let va2 = vld1q_f32(a_ptr.add(8));\n            let vb2 = vld1q_f32(b_ptr.add(8));\n            acc2 = vfmaq_f32(acc2, va2, vb2);\n\n            let va3 = vld1q_f32(a_ptr.add(12));\n            let vb3 = vld1q_f32(b_ptr.add(12));\n            acc3 = vfmaq_f32(acc3, va3, vb3);\n\n            a_ptr = a_ptr.add(16);\n            b_ptr = b_ptr.add(16);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 100
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_10"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 49,
+                  "endLine": 126,
+                  "snippet": {
+                    "text": "    let sum01 = unsafe { vaddq_f32(acc0, acc1) };"
+                  },
+                  "startColumn": 17,
+                  "startLine": 126
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_11"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 49,
+                  "endLine": 127,
+                  "snippet": {
+                    "text": "    let sum23 = unsafe { vaddq_f32(acc2, acc3) };"
+                  },
+                  "startColumn": 17,
+                  "startLine": 127
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_12"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 49,
+                  "endLine": 128,
+                  "snippet": {
+                    "text": "    let sum = unsafe { vaddq_f32(sum01, sum23) };"
+                  },
+                  "startColumn": 15,
+                  "startLine": 128
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_13"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 48,
+                  "endLine": 129,
+                  "snippet": {
+                    "text": "    let mut result = unsafe { vaddvq_f32(sum) };"
+                  },
+                  "startColumn": 22,
+                  "startLine": 129
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_14"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 140,
+                  "snippet": {
+                    "text": "        unsafe {\n            result += *a_ptr * *b_ptr;\n            a_ptr = a_ptr.add(1);\n            b_ptr = b_ptr.add(1);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 136
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_15"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 46,
+                  "endLine": 188,
+                  "snippet": {
+                    "text": "    let mut sum = unsafe { vdupq_n_f32(0.0) };"
+                  },
+                  "startColumn": 19,
+                  "startLine": 188
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_16"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 204,
+                  "snippet": {
+                    "text": "        unsafe {\n            let va = vld1q_f32(a_ptr.add(offset));\n            let vb = vld1q_f32(b_ptr.add(offset));\n            let diff = vsubq_f32(va, vb);\n            sum = vfmaq_f32(sum, diff, diff);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 199
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee5ad6cb15bccd375d097267e7a02ebf42e4c13c016a3a847767e28f9c8abe369013a2af45e5c2677b95701fe56592be88e5d4c04daa3ed1c99ec015f2722874_17"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 48,
+                  "endLine": 211,
+                  "snippet": {
+                    "text": "    let mut result = unsafe { vaddvq_f32(sum) };"
+                  },
+                  "startColumn": 22,
+                  "startLine": 211
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c9ca36d9c721ab3380070510408d62e5b209c3f11a6103d8d8221055029bddcbc9af69be3a3fefcf82cde7a6987ffc51f96ca9dd1f328d0508d131d04e06d07e_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 60,
+                  "snippet": {
+                    "text": "        unsafe {\n            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};\n            _mm_prefetch(vector.as_ptr().cast::\u003ci8\u003e(), _MM_HINT_T0);\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 57
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "c9ca36d9c721ab3380070510408d62e5b209c3f11a6103d8d8221055029bddcbc9af69be3a3fefcf82cde7a6987ffc51f96ca9dd1f328d0508d131d04e06d07e_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_native/prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 115,
+                  "snippet": {
+                    "text": "        unsafe {\n            _mm_prefetch(vector.as_ptr().cast::\u003ci8\u003e(), _MM_HINT_T0);\n\n            if vector_bytes \u003e L2_CACHE_LINE_BYTES {\n                let ptr = vector.as_ptr().cast::\u003ci8\u003e().add(L2_CACHE_LINE_BYTES);\n                _mm_prefetch(ptr, _MM_HINT_T1);\n            }\n\n            if vector_bytes \u003e L2_CACHE_LINE_BYTES * 2 {\n                let ptr = vector.as_ptr().cast::\u003ci8\u003e().add(L2_CACHE_LINE_BYTES * 2);\n                _mm_prefetch(ptr, _MM_HINT_T2);\n            }\n\n            if vector_bytes \u003e L2_CACHE_LINE_BYTES * 4 {\n                let ptr = vector.as_ptr().cast::\u003ci8\u003e().add(L2_CACHE_LINE_BYTES * 4);\n                _mm_prefetch(ptr, _MM_HINT_T2);\n            }\n        }"
+                  },
+                  "startColumn": 9,
+                  "startLine": 98
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "00cace81cfcf854d7222f2c063050b3c938369c833c548bcdafa1a2e701f5a5eb1b976c1ea50eb90108e36cb76a9d1ce8fa57f0fd8a286108020264332489d83_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 38,
+                  "endLine": 176,
+                  "snippet": {
+                    "text": "    unsafe { dot_product_neon(a, b) }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 176
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "00cace81cfcf854d7222f2c063050b3c938369c833c548bcdafa1a2e701f5a5eb1b976c1ea50eb90108e36cb76a9d1ce8fa57f0fd8a286108020264332489d83_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 36,
+                  "endLine": 188,
+                  "snippet": {
+                    "text": "    unsafe { euclidean_neon(a, b) }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 188
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "00cace81cfcf854d7222f2c063050b3c938369c833c548bcdafa1a2e701f5a5eb1b976c1ea50eb90108e36cb76a9d1ce8fa57f0fd8a286108020264332489d83_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 33,
+                  "endLine": 200,
+                  "snippet": {
+                    "text": "    unsafe { cosine_neon(a, b) }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 200
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "00cace81cfcf854d7222f2c063050b3c938369c833c548bcdafa1a2e701f5a5eb1b976c1ea50eb90108e36cb76a9d1ce8fa57f0fd8a286108020264332489d83_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 44,
+                  "endLine": 212,
+                  "snippet": {
+                    "text": "    unsafe { cosine_normalized_neon(a, b) }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 212
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "99c01247c0b730d226e3c61c08c0fbbde3509a6d21350bdb016f2f118f5a0e0a4bce4e2deb8eb199b1da8e8cfd6e3bf050c2785f4f66a56737af457b90ede71b_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon_prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 52,
+                  "snippet": {
+                    "text": "    unsafe {\n        core::arch::asm!(\n            \"prfm pldl1keep, [{ptr}]\",\n            ptr = in(reg) ptr,\n            options(nostack, preserves_flags)\n        );\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 46
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "99c01247c0b730d226e3c61c08c0fbbde3509a6d21350bdb016f2f118f5a0e0a4bce4e2deb8eb199b1da8e8cfd6e3bf050c2785f4f66a56737af457b90ede71b_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon_prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 71,
+                  "snippet": {
+                    "text": "    unsafe {\n        core::arch::asm!(\n            \"prfm pldl2keep, [{ptr}]\",\n            ptr = in(reg) ptr,\n            options(nostack, preserves_flags)\n        );\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 65
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "99c01247c0b730d226e3c61c08c0fbbde3509a6d21350bdb016f2f118f5a0e0a4bce4e2deb8eb199b1da8e8cfd6e3bf050c2785f4f66a56737af457b90ede71b_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon_prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 90,
+                  "snippet": {
+                    "text": "    unsafe {\n        core::arch::asm!(\n            \"prfm pldl3keep, [{ptr}]\",\n            ptr = in(reg) ptr,\n            options(nostack, preserves_flags)\n        );\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 84
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "99c01247c0b730d226e3c61c08c0fbbde3509a6d21350bdb016f2f118f5a0e0a4bce4e2deb8eb199b1da8e8cfd6e3bf050c2785f4f66a56737af457b90ede71b_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon_prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 109,
+                  "snippet": {
+                    "text": "    unsafe {\n        core::arch::asm!(\n            \"prfm pstl1keep, [{ptr}]\",\n            ptr = in(reg) ptr,\n            options(nostack, preserves_flags)\n        );\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 103
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "99c01247c0b730d226e3c61c08c0fbbde3509a6d21350bdb016f2f118f5a0e0a4bce4e2deb8eb199b1da8e8cfd6e3bf050c2785f4f66a56737af457b90ede71b_4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon_prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 83,
+                  "endLine": 142,
+                  "snippet": {
+                    "text": "            let ptr = unsafe { vector.as_ptr().cast::\u003cu8\u003e().add(cache_line_size) };"
+                  },
+                  "startColumn": 23,
+                  "startLine": 142
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "99c01247c0b730d226e3c61c08c0fbbde3509a6d21350bdb016f2f118f5a0e0a4bce4e2deb8eb199b1da8e8cfd6e3bf050c2785f4f66a56737af457b90ede71b_5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/simd_neon_prefetch.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 87,
+                  "endLine": 152,
+                  "snippet": {
+                    "text": "            let ptr = unsafe { vector.as_ptr().cast::\u003cu8\u003e().add(cache_line_size * 2) };"
+                  },
+                  "startColumn": 23,
+                  "startLine": 152
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d1f5a93d3f729817e79cec6a77d0df1e2feec384364452a53e105c95e89b8d1949bf2a75e7888a6ea0308506d838656a203b738b4c3f2a508ebfa58ba62d8302_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/compaction.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 76,
+                  "endLine": 99,
+                  "snippet": {
+                    "text": "    let ret = unsafe { libc::fallocate(fd, mode, offset_off_t, len_off_t) };"
+                  },
+                  "startColumn": 15,
+                  "startLine": 99
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d1f5a93d3f729817e79cec6a77d0df1e2feec384364452a53e105c95e89b8d1949bf2a75e7888a6ea0308506d838656a203b738b4c3f2a508ebfa58ba62d8302_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/compaction.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 159,
+                  "snippet": {
+                    "text": "    let result = unsafe {\n        DeviceIoControl(\n            handle,\n            FSCTL_SET_ZERO_DATA,\n            std::ptr::addr_of!(info).cast(),\n            // Reason: FileZeroDataInformation struct size is always \u003c= 16 bytes; fits in u32.\n            #[allow(clippy::cast_possible_truncation)]\n            {\n                std::mem::size_of::\u003cFileZeroDataInformation\u003e() as u32\n            },\n            std::ptr::null_mut(),\n            0,\n            std::ptr::addr_of_mut!(bytes_returned),\n            std::ptr::null_mut(),\n        )\n    };"
+                  },
+                  "startColumn": 18,
+                  "startLine": 144
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d1f5a93d3f729817e79cec6a77d0df1e2feec384364452a53e105c95e89b8d1949bf2a75e7888a6ea0308506d838656a203b738b4c3f2a508ebfa58ba62d8302_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/compaction.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 69,
+                  "endLine": 320,
+                  "snippet": {
+                    "text": "        let mut temp_mmap = unsafe { MmapMut::map_mut(\u0026temp_file)? };"
+                  },
+                  "startColumn": 29,
+                  "startLine": 320
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "d1f5a93d3f729817e79cec6a77d0df1e2feec384364452a53e105c95e89b8d1949bf2a75e7888a6ea0308506d838656a203b738b4c3f2a508ebfa58ba62d8302_3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/compaction.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 68,
+                  "endLine": 354,
+                  "snippet": {
+                    "text": "        let new_mmap = unsafe { MmapMut::map_mut(\u0026new_data_file)? };"
+                  },
+                  "startColumn": 24,
+                  "startLine": 354
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "4d7c24bfb9541fea717c6ca8eb83c7acf88b14ea4586e6c1363c8ded60c5a393ad250376bdd9a8a419457d63c27110bc6d2df5111287832038a74309218a6f1f_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/guard.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 69,
+                  "endLine": 95,
+                  "snippet": {
+                    "text": "        Ok(unsafe { std::slice::from_raw_parts(self.ptr, self.len) })"
+                  },
+                  "startColumn": 12,
+                  "startLine": 95
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "9e4ec613f1064e3afea3c0f8109d278f362df7023bc8bb986ba8536dee8c45f3bd1652f5e11125992fd7e099bb190e00c40cf03f24f01916833632703217a4f1_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/mmap.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 60,
+                  "endLine": 122,
+                  "snippet": {
+                    "text": "        let mmap = unsafe { MmapMut::map_mut(\u0026data_file)? };"
+                  },
+                  "startColumn": 20,
+                  "startLine": 122
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "9e4ec613f1064e3afea3c0f8109d278f362df7023bc8bb986ba8536dee8c45f3bd1652f5e11125992fd7e099bb190e00c40cf03f24f01916833632703217a4f1_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/mmap.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 66,
+                  "endLine": 213,
+                  "snippet": {
+                    "text": "            *mmap = unsafe { MmapMut::map_mut(\u0026self.data_file)? };"
+                  },
+                  "startColumn": 21,
+                  "startLine": 213
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "9e4ec613f1064e3afea3c0f8109d278f362df7023bc8bb986ba8536dee8c45f3bd1652f5e11125992fd7e099bb190e00c40cf03f24f01916833632703217a4f1_2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/mmap.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 69,
+                  "endLine": 426,
+                  "snippet": {
+                    "text": "        let ptr = unsafe { mmap.as_ptr().add(offset).cast::\u003cf32\u003e() };"
+                  },
+                  "startColumn": 19,
+                  "startLine": 426
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "b1147ba717458922294eebab717a32d2de1d7fcf09c33316152a206eac42268e861c2c2763469aa138b5e0698427ce897d5ac4eb87dc6d89a58e9acc028522da_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/vector_bytes.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 28,
+                  "snippet": {
+                    "text": "    unsafe {\n        std::slice::from_raw_parts(vector.as_ptr().cast::\u003cu8\u003e(), std::mem::size_of_val(vector))\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 26
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "b1147ba717458922294eebab717a32d2de1d7fcf09c33316152a206eac42268e861c2c2763469aa138b5e0698427ce897d5ac4eb87dc6d89a58e9acc028522da_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-core/src/storage/vector_bytes.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 66,
+                  "snippet": {
+                    "text": "    unsafe {\n        std::ptr::copy_nonoverlapping(\n            bytes.as_ptr(),\n            vector.as_mut_ptr().cast::\u003cu8\u003e(),\n            vector_size,\n        );\n    }"
+                  },
+                  "startColumn": 5,
+                  "startLine": 60
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee6957a4acdc919d3e2db4e9c0719659e57527517eef9127d85ea896e17c07db88cd8fd9715030f1c0cf905c7adb626bb8311c93488daf4cce4c99491a98c8d8_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-wasm/src/serialization.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 10,
+                  "endLine": 59,
+                  "snippet": {
+                    "text": "        let data_bytes: \u0026[u8] = unsafe {\n            core::slice::from_raw_parts(data_slice.as_ptr().cast::\u003cu8\u003e(), store.dimension * 4)\n        };"
+                  },
+                  "startColumn": 33,
+                  "startLine": 57
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "ee6957a4acdc919d3e2db4e9c0719659e57527517eef9127d85ea896e17c07db88cd8fd9715030f1c0cf905c7adb626bb8311c93488daf4cce4c99491a98c8d8_1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "crates/velesdb-wasm/src/serialization.rs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 6,
+                  "endLine": 142,
+                  "snippet": {
+                    "text": "    let data_as_bytes: \u0026mut [u8] = unsafe {\n        core::slice::from_raw_parts_mut(data.as_mut_ptr().cast::\u003cu8\u003e(), total_floats * 4)\n    };"
+                  },
+                  "startColumn": 36,
+                  "startLine": 140
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected 'unsafe' usage, please audit for secure usage"
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.rust.lang.security.unsafe-usage.unsafe-usage"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "13f45a3285a85c2965daa2165b4dca9d57bf34b44cd8466301e96c1995054df1b71b75679fe5014bdaf60770d8bdf756d2719db07d1ddd83d761e3cebdf4d238_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "demos/rag-pdf-demo/src/main.py",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 24,
+                  "endLine": 56,
+                  "snippet": {
+                    "text": "    allow_origins=[\"*\"],"
+                  },
+                  "startColumn": 19,
+                  "startLine": 56
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "CORS policy allows any origin (using wildcard '*'). This is insecure and should be avoided."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.python.fastapi.security.wildcard-cors.wildcard-cors"
+        },
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "cb33762a4caacad3f1819d181c989a3c8286c04576491332a3b7eb4a9440759001d489e169eb596dd1c35a89bf1eb15d6487a886a536f2ef86dfc6c033d354ff_0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "demos/rag-pdf-demo/src/pdf_processor.py",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 45,
+                  "endLine": 172,
+                  "snippet": {
+                    "text": "        return hashlib.md5(content.encode()).hexdigest()  # Full 32 chars"
+                  },
+                  "startColumn": 16,
+                  "startLine": 172
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Detected MD5 hash algorithm which is considered insecure. MD5 is not collision resistant and is therefore not suitable as a cryptographic signature. Use SHA256 or SHA3 instead."
+          },
+          "properties": {},
+          "ruleId": "codacy.tools-configs.python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "rules": null,
+          "semanticVersion": "1.78.0"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

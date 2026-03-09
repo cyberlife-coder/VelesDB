@@ -90,13 +90,13 @@ mod query_commands {
     fn test_query_select_with_limit() {
         let temp = temp_db_dir();
 
-        // First create a collection (may fail if no data, but command should parse)
-        let _ = cli()
+        // Collection does not exist — command should fail gracefully
+        cli()
             .arg("query")
             .arg(temp.path())
             .arg("SELECT * FROM nonexistent LIMIT 10")
-            .assert();
-        // Note: May fail due to missing collection, but tests query parsing
+            .assert()
+            .failure();
     }
 }
 
@@ -111,8 +111,8 @@ mod multi_search_commands {
     fn test_multi_search_rrf_strategy() {
         let temp = temp_db_dir();
 
-        // Test command structure (will fail without data, but tests argument parsing)
-        let _ = cli()
+        // Collection does not exist — command should fail gracefully
+        cli()
             .arg("multi-search")
             .arg(temp.path())
             .arg("test_collection")
@@ -123,35 +123,38 @@ mod multi_search_commands {
             .arg("60")
             .arg("-k")
             .arg("10")
-            .assert();
+            .assert()
+            .failure();
     }
 
     #[test]
     fn test_multi_search_average_strategy() {
         let temp = temp_db_dir();
 
-        let _ = cli()
+        cli()
             .arg("multi-search")
             .arg(temp.path())
             .arg("test_collection")
             .arg("[[1.0, 0.0], [0.0, 1.0]]")
             .arg("--strategy")
             .arg("average")
-            .assert();
+            .assert()
+            .failure();
     }
 
     #[test]
     fn test_multi_search_json_output() {
         let temp = temp_db_dir();
 
-        let _ = cli()
+        cli()
             .arg("multi-search")
             .arg(temp.path())
             .arg("test_collection")
             .arg("[[1.0, 0.0]]")
             .arg("--format")
             .arg("json")
-            .assert();
+            .assert()
+            .failure();
     }
 }
 
@@ -162,72 +165,123 @@ mod multi_search_commands {
 mod graph_commands {
     use super::*;
 
+    /// Helper: create a graph collection via CLI.
+    fn create_graph(temp: &TempDir, name: &str) {
+        cli()
+            .args([
+                "create-graph-collection",
+                temp.path().to_str().unwrap(),
+                name,
+            ])
+            .assert()
+            .success();
+    }
+
     #[test]
     fn test_graph_traverse_bfs() {
         let temp = temp_db_dir();
+        create_graph(&temp, "g");
+
+        // Add an edge so traversal has something to find
+        cli()
+            .args([
+                "graph",
+                "add-edge",
+                temp.path().to_str().unwrap(),
+                "g",
+                "1",
+                "10",
+                "20",
+                "REL",
+            ])
+            .assert()
+            .success();
 
         cli()
-            .arg("graph")
-            .arg("traverse")
-            .arg(temp.path())
-            .arg("test_collection")
-            .arg("1") // source node
-            .arg("--strategy")
-            .arg("bfs")
-            .arg("--max-depth")
-            .arg("3")
+            .args([
+                "graph",
+                "traverse",
+                temp.path().to_str().unwrap(),
+                "g",
+                "10",
+                "--algorithm",
+                "bfs",
+                "--max-depth",
+                "3",
+            ])
             .assert()
             .success()
-            .stdout(predicate::str::contains("curl")); // Shows curl command
+            .stdout(predicate::str::contains("Traversal Results"));
     }
 
     #[test]
     fn test_graph_traverse_dfs() {
         let temp = temp_db_dir();
+        create_graph(&temp, "g");
 
         cli()
-            .arg("graph")
-            .arg("traverse")
-            .arg(temp.path())
-            .arg("test_collection")
-            .arg("1")
-            .arg("--strategy")
-            .arg("dfs")
-            .arg("--max-depth")
-            .arg("5")
+            .args([
+                "graph",
+                "add-edge",
+                temp.path().to_str().unwrap(),
+                "g",
+                "1",
+                "10",
+                "20",
+                "REL",
+            ])
             .assert()
             .success();
+
+        cli()
+            .args([
+                "graph",
+                "traverse",
+                temp.path().to_str().unwrap(),
+                "g",
+                "10",
+                "--algorithm",
+                "dfs",
+                "--max-depth",
+                "5",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("DFS"));
     }
 
     #[test]
     fn test_graph_degree() {
         let temp = temp_db_dir();
+        create_graph(&temp, "g");
 
         cli()
-            .arg("graph")
-            .arg("degree")
-            .arg(temp.path())
-            .arg("test_collection")
-            .arg("1")
+            .args(["graph", "degree", temp.path().to_str().unwrap(), "g", "1"])
             .assert()
-            .success();
+            .success()
+            .stdout(predicate::str::contains("In-degree:"))
+            .stdout(predicate::str::contains("Out-degree:"));
     }
 
     #[test]
     fn test_graph_add_edge() {
         let temp = temp_db_dir();
+        create_graph(&temp, "g");
 
         cli()
-            .arg("graph")
-            .arg("add-edge")
-            .arg(temp.path())
-            .arg("test_collection")
-            .arg("1") // edge id
-            .arg("100") // source
-            .arg("200") // target
-            .arg("related") // label
+            .args([
+                "graph",
+                "add-edge",
+                temp.path().to_str().unwrap(),
+                "g",
+                "1",
+                "100",
+                "200",
+                "related",
+            ])
             .assert()
-            .success();
+            .success()
+            .stdout(predicate::str::contains("Edge 1 added"));
     }
 }
 
@@ -268,14 +322,15 @@ mod import_export_commands {
         let temp = temp_db_dir();
         let output_file = temp.path().join("export.json");
 
-        // Export (will be empty if collection doesn't exist)
-        let _ = cli()
+        // Collection does not exist — export should fail gracefully
+        cli()
             .arg("export")
             .arg(temp.path())
             .arg("test_collection")
             .arg("--output")
             .arg(&output_file)
-            .assert();
+            .assert()
+            .failure();
     }
 }
 
@@ -379,28 +434,30 @@ mod get_commands {
     fn test_get_point_json() {
         let temp = temp_db_dir();
 
-        let _ = cli()
+        cli()
             .arg("get")
             .arg(temp.path())
             .arg("test_collection")
             .arg("1")
             .arg("--format")
             .arg("json")
-            .assert();
+            .assert()
+            .failure();
     }
 
     #[test]
     fn test_get_point_table() {
         let temp = temp_db_dir();
 
-        let _ = cli()
+        cli()
             .arg("get")
             .arg(temp.path())
             .arg("test_collection")
             .arg("1")
             .arg("--format")
             .arg("table")
-            .assert();
+            .assert()
+            .failure();
     }
 }
 
@@ -415,25 +472,27 @@ mod show_commands {
     fn test_show_collection_json() {
         let temp = temp_db_dir();
 
-        let _ = cli()
+        cli()
             .arg("show")
             .arg(temp.path())
             .arg("test_collection")
             .arg("--format")
             .arg("json")
-            .assert();
+            .assert()
+            .failure();
     }
 
     #[test]
     fn test_show_collection_with_samples() {
         let temp = temp_db_dir();
 
-        let _ = cli()
+        cli()
             .arg("show")
             .arg(temp.path())
             .arg("test_collection")
             .arg("--samples")
             .arg("5")
-            .assert();
+            .assert()
+            .failure();
     }
 }

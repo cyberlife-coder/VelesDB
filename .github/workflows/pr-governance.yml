@@ -15,14 +15,18 @@ jobs:
     steps:
       - name: Block archive branches as PR source
         if: ${{ startsWith(github.event.pull_request.head.ref, 'archive/') }}
+        env:
+          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
         run: |
-          echo "::error::PR source branch '${{ github.event.pull_request.head.ref }}' is archived and cannot be merged."
+          echo "::error::PR source branch '${BRANCH_NAME}' is archived and cannot be merged."
           exit 1
 
       - name: Ensure PR targets main
         if: ${{ github.event.pull_request.base.ref != 'main' }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          echo "::error::PR base must be 'main'. Current base: '${{ github.event.pull_request.base.ref }}'."
+          echo "::error::PR base must be 'main'. Current base: '${BASE_REF}'."
           exit 1
 
       - name: Checkout head branch

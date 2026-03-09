@@ -53,28 +53,28 @@ impl SessionSettings {
 
     /// Gets the effective ef_search value.
     #[must_use]
-    #[allow(dead_code)] // Will be used when integrating session settings with queries
+    #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
     pub fn effective_ef_search(&self) -> usize {
         self.ef_search.unwrap_or_else(|| self.mode.ef_search())
     }
 
     /// Gets the query timeout in milliseconds.
     #[must_use]
-    #[allow(dead_code)] // Will be used when integrating session settings with queries
+    #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
     pub fn timeout_ms(&self) -> u64 {
         self.timeout_ms
     }
 
     /// Gets the rerank setting.
     #[must_use]
-    #[allow(dead_code)] // Will be used when integrating session settings with queries
+    #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
     pub fn rerank(&self) -> bool {
         self.rerank
     }
 
     /// Gets max results.
     #[must_use]
-    #[allow(dead_code)] // Will be used when integrating session settings with queries
+    #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
     pub fn max_results(&self) -> usize {
         self.max_results
     }

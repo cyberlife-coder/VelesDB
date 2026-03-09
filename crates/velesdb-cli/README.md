@@ -1,9 +1,24 @@
 # VelesDB CLI
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-cli.svg)](https://crates.io/crates/velesdb-cli)
+[![Build](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
 [![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
 
-Interactive CLI and REPL for VelesDB with VelesQL support.
+Interactive VelesQL REPL and CLI for VelesDB.
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Getting Started](#getting-started)
+- [REPL Mode](#repl-mode)
+- [CLI Subcommands](#cli-subcommands)
+- [VelesQL Examples](#velesql-examples)
+- [Session Settings](#session-settings)
+- [Output Formats](#output-formats)
+- [Shell Completions](#shell-completions)
+- [Common Errors](#common-errors)
+- [License](#license)
 
 ## Installation
 
@@ -21,307 +36,674 @@ cd VelesDB
 cargo install --path crates/velesdb-cli
 ```
 
-## Usage
+### Linux .deb package
 
-### Interactive REPL
+A `cargo-deb` configuration is included. Build the package with:
 
 ```bash
-# Start interactive REPL with default data directory (./data)
+cargo deb -p velesdb-cli
+sudo dpkg -i target/debian/velesdb-cli_*.deb
+```
+
+The binary is installed as `velesdb` in `/usr/bin/`.
+
+## Quick Start
+
+```bash
+# Start the interactive REPL (default data directory: ./data)
 velesdb repl
 
-# Or specify a data directory
-velesdb repl ./my_vectors
-```
+# Open a specific database
+velesdb repl ./my_database
 
-### Single Query Execution
+# Execute a one-shot query
+velesdb query ./my_database "SELECT * FROM documents LIMIT 10"
 
-```bash
-# Execute a query directly
-velesdb query ./my_vectors "SELECT * FROM documents LIMIT 10"
-
-# Output as JSON
-velesdb query ./my_vectors "SELECT * FROM documents LIMIT 5" --format json
-```
-
-### Database Info
-
-```bash
-velesdb info ./my_vectors
-```
-
-### List Collections
-
-```bash
 # List all collections
-velesdb list ./my_vectors
-
-# Output as JSON
-velesdb list ./my_vectors --format json
+velesdb list ./my_database
 ```
 
-### Show Collection Details
+## Getting Started
+
+End-to-end example: create a collection, insert vectors, search, and query the graph.
 
 ```bash
-# Show collection schema and stats
-velesdb show ./my_vectors documents
+# 1. Create a vector collection (384-dimensional, cosine similarity)
+velesdb create-vector-collection ./data docs --dimension 384 --metric cosine
 
-# Show with sample records
-velesdb show ./my_vectors documents --samples 5
+# 2. Upsert a few points
+velesdb upsert ./data docs --id 1 --vector '[0.1, 0.2, ..., 0.384]' \
+  --payload '{"title": "Intro to VelesDB", "category": "tech"}'
+velesdb upsert ./data docs --id 2 --vector '[0.3, 0.4, ..., 0.384]' \
+  --payload '{"title": "Graph Databases 101", "category": "tech"}'
+
+# 3. Search by vector similarity
+velesdb query ./data "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, ..., 0.384] LIMIT 5"
+
+# 4. Create a graph collection and add edges
+velesdb create-graph-collection ./data my_graph
+velesdb graph add-edge ./data my_graph 1 100 200 "AUTHORED_BY"
+
+# 5. Query the graph
+velesdb graph neighbors ./data my_graph 100 --direction both
+
+# 6. Enter the REPL for interactive exploration
+velesdb repl ./data
 ```
 
-### Import/Export
+## REPL Mode
 
-```bash
-# Export collection to JSON
-velesdb export ./my_vectors documents --output documents.json
+Start the REPL with `velesdb repl [path]`. The REPL accepts dot-commands (`.help`), backslash-commands (`\set`), and raw VelesQL queries.
 
-# Export without vectors (metadata only)
-velesdb export ./my_vectors documents --output meta.json --include-vectors false
+The REPL is single-line only -- each command or query must fit on one line. Multi-line input is not supported.
 
-# Import from JSONL file
-velesdb import data.jsonl --database ./my_vectors --collection documents --dimension 768
+History is persisted across sessions in `~/.local/share/.velesdb_history` (Linux) or the equivalent platform data directory.
 
-# Import from CSV
-velesdb import embeddings.csv --database ./my_vectors --collection docs --dimension 384
+### General Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `.help` | `.h` | Show all available commands |
+| `.quit` | `.exit`, `.q` | Exit the REPL |
+| `.collections` | `.tables` | List all collections (vector, graph, metadata) |
+| `.clear` | | Clear the terminal screen |
+| `.timing on\|off` | | Toggle query execution time display (default: on). Also accepts `true`/`false`, `1`/`0`. |
+| `.format table\|json` | | Set output format for query results |
+
+### Collection Inspection
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `.schema <name>` | | Show collection type, dimension, metric, and point count |
+| `.describe <name>` | `.desc` | Detailed collection info (memory estimate, schema, storage mode) |
+| `.stats <name>` | | Collection statistics (point count, dimension, memory) |
+| `.count <name>` | | Show record/edge/item count |
+| `.sample <name> [n]` | | Show first N records (default: 5) with vector preview |
+| `.browse <name> [page]` | | Paginated record browsing (10 per page) |
+
+### Data Operations
+
+| Command | Description |
+|---------|-------------|
+| `.export <name> [file]` | Export collection to JSON (default: `<name>.json`). Vector collections only. |
+| `.delete <name> <id> [id2...]` | Delete points by ID |
+| `.flush <name>` | Flush collection data to disk |
+
+### Query Analysis
+
+| Command | Description |
+|---------|-------------|
+| `.explain <query>` | Show the execution plan for a VelesQL query (tree format) |
+| `.analyze <name>` | Analyze collection: row count, deletion ratio, field stats, index stats |
+| `.bench <name> [n] [k]` | Benchmark N random queries with top-k (default: 100 queries, k=10) |
+
+### Index Management
+
+| Command | Description |
+|---------|-------------|
+| `.indexes <name>` | List all indexes on a collection (type, cardinality, memory) |
+| `.create-index <name> <field> [--type secondary\|property\|range]` | Create an index (default: secondary) |
+| `.drop-index <name> <label> <property>` | Drop an index by label and property |
+
+### Advanced Search
+
+| Command | Description |
+|---------|-------------|
+| `.sparse-search <col> <index> <json> [k]` | Sparse vector search. JSON format: `[[idx, weight], ...]`. Default k=10. |
+| `.hybrid-sparse <col> <dense> <sparse> [k] [--strategy rrf\|average\|max] [--index <name>]` | Dense+sparse hybrid search with fusion. Default k=10, strategy=rrf. |
+| `.guardrails` | Display current query guard-rails (timeout, memory limit, rate limit, circuit breaker) |
+| `.agent [cmd]` | Agent memory commands (preview -- not yet fully implemented in CLI) |
+
+**`.sparse-search` example:**
+
+```
+velesdb> .sparse-search my_col sparse_idx [[42,0.8],[137,0.6],[891,0.3]] 10
 ```
 
-### Create Metadata-Only Collection
-```bash
-# Create a collection for metadata storage (no vectors)
-velesdb create-metadata-collection ./my_vectors my_metadata
+**`.hybrid-sparse` example:**
+
+Dense vector is a JSON array `[0.1, 0.2, ...]`, sparse vector is `[[index, weight], ...]`:
+
+```
+velesdb> .hybrid-sparse docs [0.1,0.2,0.3,0.4] [[0,1.5],[3,0.8]] 10 --strategy rrf
 ```
 
-### Get Point by ID
-```bash
-# Get a point by ID (JSON output)
-velesdb get ./my_vectors documents 42
+Valid strategies: `rrf`, `average`, `max` (also accepts `maximum`).
 
-# Get with table output
-velesdb get ./my_vectors documents 42 --format table
-```
+### Graph Commands (REPL)
 
-### Multi-Query Fusion Search
-```bash
-# Multi-query search with RRF fusion (default)
-velesdb multi-search ./my_vectors documents \
-  --vectors '[[0.1, 0.2, ...], [0.3, 0.4, ...]]' \
-  --top-k 10 \
-  --strategy rrf
+All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 
-# With different fusion strategies
-velesdb multi-search ./my_vectors documents \
-  --vectors '[[...], [...]]' \
-  --strategy average
+| Command | Description |
+|---------|-------------|
+| `.graph add-edge <col> <id> <src> <tgt> <label>` | Add a directed edge |
+| `.graph edges <col> [--label <label>]` | List edges, optionally filtered by label |
+| `.graph degree <col> <node_id>` | Show in-degree, out-degree, and total degree |
+| `.graph traverse <col> <source> [--algo bfs\|dfs] [--depth N] [--limit N]` | BFS/DFS traversal from a source node |
+| `.graph neighbors <col> <node_id> [--direction in\|out\|both]` | List neighbors of a node (default: out) |
+| `.graph store-payload <col> <node_id> <json>` | Store a JSON payload on a graph node |
+| `.graph get-payload <col> <node_id>` | Retrieve the JSON payload of a graph node |
 
-velesdb multi-search ./my_vectors documents \
-  --vectors '[[...], [...]]' \
-  --strategy maximum
+> **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 
-velesdb multi-search ./my_vectors documents \
-  --vectors '[[...], [...]]' \
-  --strategy weighted
+### Session Commands
 
-# Output as JSON
-velesdb multi-search ./my_vectors documents \
-  --vectors '[[...]]' \
-  --format json
-```
+Session commands use the backslash prefix (dot prefix also accepted):
+
+| Command | Description |
+|---------|-------------|
+| `\set <key> <value>` | Set a session parameter |
+| `\show [key]` | Show all session settings or a specific one |
+| `\reset [key]` | Reset one setting or all settings to defaults |
+| `\use <collection>` | Set the active collection for the session |
+| `\info` | Show database version, collection count, total points |
+| `\bench <col> [n] [k]` | Quick benchmark (same as `.bench`) |
+
+**Effect of `\use <collection>`:** Sets the `collection` session setting to the named collection. The REPL verifies that the collection exists (vector, graph, or metadata) and displays its type. Currently, `\use` records the active collection in the session state (visible via `\show`), but VelesQL queries still require an explicit `FROM <collection>` clause. The active collection does not automatically apply to dot-commands or queries.
 
 ### VelesQL Queries
 
-#### Vector Search
+Any input not starting with `.` or `\` is executed as a VelesQL query:
+
+```
+velesdb> SELECT * FROM documents WHERE category = 'tech' LIMIT 10;
+velesdb> SELECT * FROM docs WHERE vector NEAR [0.1, 0.2, 0.3] LIMIT 5;
+```
+
+## CLI Subcommands
+
+All subcommands operate offline against the database directory -- no running server required.
+
+### Collections
+
+```bash
+# Create a vector collection
+velesdb create-vector-collection ./data my_vectors \
+  --dimension 384 \
+  --metric cosine \
+  --storage full
+
+# Create a graph collection
+velesdb create-graph-collection ./data my_graph --schemaless true
+
+# Create a metadata-only collection (no vectors, no graph -- structured payloads only)
+velesdb create-metadata-collection ./data my_metadata
+
+# List all collections
+velesdb list ./data
+velesdb list ./data --format json
+
+# Show collection details
+velesdb show ./data my_vectors
+velesdb show ./data my_vectors --samples 5 --format json
+
+# Delete a collection (interactive confirmation)
+velesdb delete-collection ./data my_vectors
+velesdb delete-collection ./data my_vectors --force
+
+# Database overview
+velesdb info ./data
+```
+
+**`create-vector-collection` flags:**
+
+| Flag | Values | Default | Description |
+|------|--------|---------|-------------|
+| `-d, --dimension` | integer | (required) | Vector dimension |
+| `-m, --metric` | `cosine`, `euclidean`, `dot`, `hamming`, `jaccard` | `cosine` | Distance metric |
+| `-s, --storage` | `full`, `sq8`, `binary`, `pq`, `rabitq` | `full` | Storage/quantization mode |
+
+**`create-metadata-collection`:** Creates a collection that stores only structured JSON payloads -- no vectors, no graph edges. Useful for reference tables, configuration, or any metadata that does not need similarity search. There are no additional flags beyond the database path and collection name.
+
+### Points
+
+```bash
+# Upsert a point with vector and payload
+velesdb upsert ./data my_vectors \
+  --id 1 \
+  --vector '[0.1, 0.2, 0.3]' \
+  --payload '{"title": "Hello World"}'
+
+# Upsert with payload only (no --vector flag)
+# The vector defaults to an empty array. This will fail if the collection
+# expects a specific dimension -- the collection validates vector dimensions.
+velesdb upsert ./data my_vectors \
+  --id 2 \
+  --payload '{"title": "No vector"}'
+
+# Get a point by ID (default output format: json)
+velesdb get ./data my_vectors 42
+velesdb get ./data my_vectors 42 --format table
+
+# Delete points
+velesdb delete-points ./data my_vectors 1 2 3
+```
+
+The `upsert` subcommand operates on **vector collections only**. The `--vector` flag is optional (an empty vector is used when omitted), but the collection will reject vectors whose dimension does not match the configured dimension -- this produces a dimension mismatch error. The `--id` flag is required.
+
+### Import / Export
+
+```bash
+# Import from JSONL
+velesdb import data.jsonl \
+  --database ./data \
+  --collection documents \
+  --dimension 768 \
+  --metric cosine \
+  --batch-size 1000
+
+# Import from CSV (custom column names)
+velesdb import embeddings.csv \
+  --database ./data \
+  --collection docs \
+  --id-column doc_id \
+  --vector-column embedding
+
+# Export to JSON (vector collections only)
+velesdb export ./data documents --output documents.json
+
+# Export metadata only (no vectors)
+velesdb export ./data documents --output meta.json --no-include-vectors
+```
+
+> **Note on `--include-vectors`:** This is a Clap boolean flag that defaults to `true`. To disable it, use `--no-include-vectors` (Clap's automatic negation syntax). Writing `--include-vectors false` does **not** work as expected with Clap.
+
+**JSONL format for `import`:**
+
+Each line must be a valid JSON object with the following fields:
+
+```jsonl
+{"id": 1, "vector": [0.1, 0.2, 0.3, 0.4], "payload": {"title": "Doc A", "category": "tech"}}
+{"id": 2, "vector": [0.5, 0.6, 0.7, 0.8], "payload": {"title": "Doc B"}}
+{"id": 3, "vector": [0.9, 0.0, 0.1, 0.2]}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `u64` | yes | Unique point identifier |
+| `vector` | `[f32]` | yes | Dense vector (must match the collection dimension) |
+| `payload` | JSON object | no | Arbitrary JSON metadata |
+
+Lines with mismatched vector dimensions are counted as errors and skipped.
+
+**`import` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-d, --database` | `./data` | Database directory |
+| `-c, --collection` | (required) | Target collection name |
+| `--dimension` | auto-detected | Vector dimension (detected from first record if omitted) |
+| `--metric` | `cosine` | Distance metric (`cosine`, `euclidean`, `dot`, `hamming`, `jaccard`) |
+| `--storage-mode` | `full` | Storage mode (`full`, `sq8`, `binary`, `pq`, `rabitq`) |
+| `--id-column` | `id` | ID column name (CSV only) |
+| `--vector-column` | `vector` | Vector column name (CSV only) |
+| `--batch-size` | `1000` | Insertion batch size |
+| `--progress` | `true` | Show progress bar |
+
+**`export` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o, --output` | `<collection>.json` | Output file path |
+| `--include-vectors` / `--no-include-vectors` | `true` | Include vector data in export |
+
+Export operates on **vector collections only**. Attempting to export a graph or metadata collection produces a "not found" error.
+
+### Search
+
+```bash
+# Execute a single VelesQL query
+velesdb query ./data "SELECT * FROM documents LIMIT 10"
+velesdb query ./data "SELECT * FROM docs WHERE category = 'tech' LIMIT 5" --format json
+
+# Multi-query fusion search
+velesdb multi-search ./data my_vectors \
+  '[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]' \
+  -k 10 \
+  --strategy rrf \
+  --rrf-k 60
+
+# Explain a query plan (default format: tree)
+velesdb explain ./data "SELECT * FROM docs WHERE vector NEAR [0.1, 0.2] LIMIT 5"
+velesdb explain ./data "SELECT * FROM docs LIMIT 10" --format json
+```
+
+**`multi-search` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-k, --top-k` | `10` | Number of results to return |
+| `-s, --strategy` | `rrf` | Fusion strategy: `average`, `maximum`, `rrf`, `weighted` |
+| `--rrf-k` | `60` | RRF k parameter (only used with `rrf` strategy) |
+| `-f, --format` | `table` | Output format (`table`, `json`) |
+
+**`multi-search` strategies:** `average` (also `avg`), `maximum` (also `max`), `rrf` (default), `weighted`
+
+The `weighted` strategy uses fixed weights (`avg_weight=0.5`, `max_weight=0.3`, `hit_weight=0.2`) that are not configurable via the CLI.
+
+**`explain` formats:**
+
+The default format is `tree`, which renders a human-readable execution plan tree. Use `--format json` for machine-readable output.
+
+Example tree output:
+
+```
+velesdb> .explain SELECT * FROM docs WHERE category = 'tech' LIMIT 10
+Plan:
+  Scan: docs
+    Filter: category = 'tech'
+    Limit: 10
+  Estimated cost: 0.150 ms
+```
+
+### Analyze
+
+```bash
+# Collection statistics (point count, deletion ratio, index stats, column stats)
+velesdb analyze ./data my_vectors
+velesdb analyze ./data my_vectors --format json
+```
+
+### Graph
+
+All graph CLI subcommands require a database path and graph collection name:
+
+```bash
+# Add an edge
+velesdb graph add-edge ./data my_graph 1 100 200 "AUTHORED_BY"
+
+# List edges
+velesdb graph get-edges ./data my_graph
+velesdb graph get-edges ./data my_graph --label "AUTHORED_BY" --format json
+
+# Node degree
+velesdb graph degree ./data my_graph 100
+
+# Traverse (BFS/DFS)
+velesdb graph traverse ./data my_graph 100 \
+  --algorithm bfs \
+  --max-depth 3 \
+  --limit 50 \
+  --rel-types "AUTHORED_BY,CITES"
+
+# Get neighbors
+velesdb graph neighbors ./data my_graph 100 --direction both --format json
+
+# Store payload on a graph node
+velesdb graph store-payload ./data my_graph 100 '{"name": "Alice", "role": "author"}'
+
+# Retrieve node payload
+velesdb graph get-payload ./data my_graph 100
+```
+
+**`traverse` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--algorithm` | `bfs` | `bfs` or `dfs` |
+| `-d, --max-depth` | `3` | Maximum traversal depth |
+| `-l, --limit` | `100` | Maximum number of results |
+| `-r, --rel-types` | (all) | Comma-separated relationship type filter |
+| `-f, --format` | `table` | Output format (`table`, `json`) |
+
+### Index Management
+
+```bash
+# Create a secondary index
+velesdb index create ./data my_vectors category
+
+# Create a property index
+velesdb index create ./data my_vectors name --index-type property --label Person
+
+# Create a range index
+velesdb index create ./data my_vectors price --index-type range --label Product
+
+# List indexes
+velesdb index list ./data my_vectors
+velesdb index list ./data my_vectors --format json
+
+# Drop an index
+velesdb index drop ./data my_vectors Person name
+```
+
+### SIMD Diagnostics
+
+```bash
+# Show SIMD dispatch configuration
+velesdb simd info
+
+# Run SIMD benchmarks (redirects to cargo bench)
+velesdb simd benchmark
+```
+
+### License Management
+
+```bash
+# Show current license status
+velesdb license show
+
+# Activate a license
+velesdb license activate <license_key>
+
+# Verify a license (without activating)
+velesdb license verify <license_key> --public-key <base64_public_key>
+```
+
+Both `license show` and `license activate` read the public key from the `VELESDB_LICENSE_PUBLIC_KEY` environment variable. If the variable is not set, a development fallback key is used with a warning. Set it with:
+
+```bash
+export VELESDB_LICENSE_PUBLIC_KEY=<base64_encoded_public_key>
+```
+
+### Shell Completions
+
+```bash
+# Generate completions for your shell
+velesdb completions bash       > /etc/bash_completion.d/velesdb
+velesdb completions zsh        > ~/.zfunc/_velesdb
+velesdb completions fish       > ~/.config/fish/completions/velesdb.fish
+velesdb completions powershell > velesdb.ps1
+velesdb completions elvish     > velesdb.elv
+```
+
+## VelesQL Examples
+
+VelesQL is a SQL-like query language with vector and graph extensions. These examples work directly in the REPL.
+
+### Vector Search
 
 ```sql
--- Vector similarity search (uses collection's metric)
-SELECT * FROM documents 
-WHERE VECTOR NEAR [0.15, 0.25, ...] 
-LIMIT 5;
+-- Basic vector similarity search
+SELECT * FROM documents
+WHERE vector NEAR [0.15, 0.25, 0.35, 0.45]
+LIMIT 10;
 
--- With parameter (for API usage)
-SELECT * FROM documents 
-WHERE VECTOR NEAR $query_vector
+-- Vector search with metadata filter
+SELECT * FROM documents
+WHERE vector NEAR [0.1, 0.2, 0.3, 0.4]
+AND category = 'tech'
+AND views > 100
+LIMIT 5;
+```
+
+> The distance metric is defined at collection creation time and applies to all searches on that collection. All five metrics are supported: Cosine, Euclidean, DotProduct, Hamming, Jaccard.
+
+### Hybrid Dense + Sparse (USING FUSION)
+
+```sql
+-- RRF fusion with multiple query vectors
+SELECT * FROM documents
+WHERE vector NEAR_FUSED [$v1, $v2, $v3]
+WITH (fusion = 'rrf', k = 60)
+LIMIT 10;
+
+-- Weighted fusion
+SELECT * FROM documents
+WHERE vector NEAR_FUSED [$query1, $query2]
+WITH (fusion = 'weighted', avg_weight = 0.6, max_weight = 0.3, hit_weight = 0.1)
+LIMIT 10;
+
+-- Average or Maximum fusion
+SELECT * FROM documents
+WHERE vector NEAR_FUSED $vectors
+WITH (fusion = 'average')
 LIMIT 10;
 ```
 
-> ℹ️ **Note**: The distance metric is defined at **collection creation time** and cannot be changed per-query. All 5 metrics (Cosine, Euclidean, DotProduct, Hamming, Jaccard) are supported.
-
-#### Metadata Filtering
-
-Metadata is stored as JSON. Query any field with SQL operators:
+### Graph MATCH Queries
 
 ```sql
--- Equality
+-- Find authors of documents similar to a query
+MATCH (doc:Document)-[:AUTHORED_BY]->(author:Person)
+WHERE similarity(doc.embedding, $question) > 0.8
+RETURN author.name, doc.title
+ORDER BY similarity() DESC
+LIMIT 5;
+```
+
+### Metadata Filters
+
+```sql
+-- Equality, comparison, pattern matching
 SELECT * FROM docs WHERE category = 'tech' LIMIT 10;
-
--- Numeric comparisons
-SELECT * FROM docs WHERE views > 1000 LIMIT 10;
 SELECT * FROM docs WHERE price >= 50 AND price <= 200 LIMIT 10;
-
--- String patterns
 SELECT * FROM docs WHERE title LIKE '%rust%' LIMIT 10;
 
--- IN list
+-- IN, BETWEEN, NULL checks
 SELECT * FROM docs WHERE status IN ('published', 'featured') LIMIT 10;
-
--- BETWEEN range
 SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0 LIMIT 10;
-
--- NULL checks
 SELECT * FROM docs WHERE author IS NOT NULL LIMIT 10;
 
 -- Full-text search (BM25)
 SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
 ```
 
-#### Multi-Query Fusion (MQG)
+### Aggregations
+
 ```sql
--- RRF fusion with multiple query vectors (ideal for RAG pipelines)
-SELECT * FROM documents 
-WHERE VECTOR NEAR_FUSED [$v1, $v2, $v3]
-WITH (fusion = 'rrf', k = 60)
-LIMIT 10;
-
--- Weighted fusion strategy
-SELECT * FROM documents 
-WHERE VECTOR NEAR_FUSED [$query1, $query2]
-WITH (fusion = 'weighted', avg_weight = 0.6, max_weight = 0.3, hit_weight = 0.1)
-LIMIT 10;
-
--- Average/Maximum fusion
-SELECT * FROM documents 
-WHERE VECTOR NEAR_FUSED $vectors
-WITH (fusion = 'average')
+SELECT category, COUNT(*) as cnt
+FROM documents
+GROUP BY category
+HAVING cnt > 5
+ORDER BY cnt DESC
 LIMIT 10;
 ```
 
-#### Combined Queries (Vector + Metadata + Text)
+### EXPLAIN
 
 ```sql
--- Vector search + metadata filter
-SELECT * FROM documents 
-WHERE VECTOR NEAR [0.15, 0.25, ...] 
-AND category = 'tech' 
-AND views > 100
-LIMIT 5;
-
--- Hybrid search (vector + full-text)
-SELECT * FROM documents
-WHERE VECTOR NEAR $query 
-AND content MATCH 'rust'
-LIMIT 5;
-
--- Complex conditions
-SELECT * FROM products
-WHERE VECTOR NEAR COSINE [0.1, 0.2, ...]
-AND (category = 'electronics' OR category = 'gadgets')
-AND price BETWEEN 100 AND 500
-AND in_stock = true
+-- Show the query execution plan
+EXPLAIN SELECT * FROM documents
+WHERE vector NEAR [0.1, 0.2, 0.3, 0.4]
+AND category = 'tech'
 LIMIT 10;
 ```
 
-#### WITH Clause (Query Options)
-
-Override search parameters per-query:
+### TRAIN QUANTIZER
 
 ```sql
--- Set search mode (fast, balanced, accurate, high_recall, perfect)
-SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
-WITH (mode = 'high_recall');
+-- Train a product quantizer on a collection
+TRAIN QUANTIZER ON documents WITH (m = 8, k = 256);
+```
 
--- Set ef_search parameter directly
-SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
-WITH (ef_search = 512);
+| Parameter | Description | Typical Values |
+|-----------|-------------|----------------|
+| `m` | Number of sub-spaces to divide the vector into. Higher = better recall, slower training. | 4, 8, 16, 32 |
+| `k` | Number of centroids per sub-space. Almost always 256 (one byte per sub-quantizer). | 256 |
 
--- Multiple options
-SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
-WITH (mode = 'fast', timeout_ms = 5000, rerank = true);
+### WITH Clause (Per-Query Options)
+
+```sql
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (mode = 'accurate');
+
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (ef_search = 512, timeout_ms = 5000, rerank = true);
 ```
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | Search preset: fast, balanced, accurate, high_recall, perfect |
-| `ef_search` | integer | HNSW ef_search parameter (higher = better recall) |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect` |
+| `ef_search` | integer | HNSW ef_search (16--4096) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
-| `rerank` | boolean | Enable result reranking |
+| `rerank` | boolean | Enable reranking after quantized search |
 
-#### Available Filter Operators
+## Session Settings
 
-| Operator | Syntax | Example |
-|----------|--------|---------|
-| Equal | `=` | `status = 'active'` |
-| Not Equal | `!=`, `<>` | `type != 'draft'` |
-| Greater | `>` | `views > 1000` |
-| Greater/Equal | `>=` | `rating >= 4` |
-| Less | `<` | `price < 100` |
-| Less/Equal | `<=` | `age <= 30` |
-| IN | `IN (...)` | `tag IN ('a', 'b')` |
-| BETWEEN | `BETWEEN...AND` | `score BETWEEN 0 AND 1` |
-| LIKE | `LIKE` | `name LIKE '%john%'` |
-| IS NULL | `IS NULL` | `email IS NULL` |
-| IS NOT NULL | `IS NOT NULL` | `phone IS NOT NULL` |
-| Full-text | `MATCH` | `body MATCH 'search'` |
+Session settings control REPL search behavior. Set with `\set`, view with `\show`, reset with `\reset`.
 
-### Dot Commands
+| Setting | Range / Values | Default | Description |
+|---------|---------------|---------|-------------|
+| `mode` | `fast`, `balanced`, `accurate`, `perfect` | `balanced` | Search quality preset (sets `ef_search` automatically) |
+| `ef_search` | 16--4096 (or `auto` from mode) | auto | HNSW graph exploration factor |
+| `timeout_ms` | >= 100 | 30000 | Query timeout in milliseconds. Also accepts the alias `timeout`. |
+| `rerank` | `true`/`false`, `on`/`off`, `1`/`0`, `yes`/`no` | `true` | Reranking after quantized search |
+| `max_results` | 1--10000 | 100 | Maximum results per query |
+| `collection` | collection name | (none) | Active collection for `\use` |
 
-| Command | Description |
-|---------|-------------|
-| `.help` | Show help |
-| `.quit` / `.exit` | Exit REPL |
-| `.collections` / `.tables` | List collections |
-| `.schema <name>` | Show collection schema |
-| `.describe <name>` | Show detailed collection info |
-| `.count <name>` | Show point count |
-| `.timing on/off` | Toggle query timing |
-| `.format table/json` | Set output format |
-| `.clear` | Clear screen |
+Examples:
 
-## Features
-
-- **VelesQL Support**: SQL-like syntax for vector operations
-- **Tab Completion**: Auto-complete collection names and keywords
-- **Command History**: Arrow keys to navigate history
-- **Colored Output**: Easy-to-read formatted results
-- **Timing**: Query execution time display
-
-## Examples
-
-### Semantic Search
-
-```sql
--- Search with metadata filter
-SELECT id, score, payload->title FROM articles
-WHERE VECTOR NEAR $query_embedding
-AND category = 'technology'
-LIMIT 5;
-
--- Search with multiple conditions
-SELECT * FROM documents
-WHERE VECTOR NEAR [0.1, 0.2, 0.3, ...]
-AND status = 'published'
-AND views > 1000
-LIMIT 10;
+```
+velesdb> \set mode accurate
+velesdb> \set ef_search 512
+velesdb> \set timeout 5000
+velesdb> \set rerank no
+velesdb> \show
+velesdb> \show mode
+velesdb> \reset ef_search
+velesdb> \reset
+velesdb> \use documents
 ```
 
-### Binary Vector Search
+## Output Formats
 
-```sql
--- Find similar binary vectors (fingerprints, hashes)
-SELECT * FROM images
-WHERE VECTOR NEAR [1.0, 0.0, 1.0, 1.0, 0.0, ...]
-LIMIT 10;
+Two output formats are available, controlled by `.format` in the REPL or `--format` on CLI subcommands:
+
+- **table** (default) -- UTF-8 formatted table with colored headers. The `id` column is always first.
+- **json** -- Pretty-printed JSON array.
+
+```
+velesdb> .format json
+velesdb> SELECT * FROM documents LIMIT 3;
 ```
 
-### Creating Collections (via Rust API)
-
-Collections are created programmatically, not via VelesQL:
-
-```rust
-use velesdb_core::{Database, DistanceMetric};
-
-let db = Database::open("./data")?;
-db.create_collection("articles", 384, DistanceMetric::Cosine)?;
-db.create_collection("images", 256, DistanceMetric::Hamming)?;
+```bash
+velesdb query ./data "SELECT * FROM docs LIMIT 3" --format json
 ```
+
+## Shell Completions
+
+Generate tab-completion scripts for your shell:
+
+```bash
+# Bash
+velesdb completions bash > /etc/bash_completion.d/velesdb
+
+# Zsh (add ~/.zfunc to fpath in .zshrc)
+velesdb completions zsh > ~/.zfunc/_velesdb
+
+# Fish
+velesdb completions fish > ~/.config/fish/completions/velesdb.fish
+
+# PowerShell
+velesdb completions powershell | Out-String | Invoke-Expression
+
+# Elvish
+velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
+```
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Collection 'X' not found` | The collection does not exist, or you used a command that expects a specific type (e.g., `upsert` requires a vector collection but 'X' is a graph collection). | Check the name with `.collections`. Use the correct command for the collection type. |
+| `Vector collection 'X' not found` | A vector-specific command (`upsert`, `export`, `delete-points`, `get`) was used on a graph or metadata collection. | Use the correct collection type or create a vector collection. |
+| `Graph collection 'X' not found` | A graph command was used but the collection is not a graph collection. | Verify the collection type with `.schema X`. |
+| Dimension mismatch on upsert/import | The vector length does not match the collection's configured dimension. | Ensure all vectors have the correct number of elements. During import, mismatched lines are skipped and counted in `errors`. |
+| `Failed to open database` | The database path is incorrect, the directory does not exist, or insufficient permissions. | Verify the path exists and is writable. |
+| `null` from `get` | The requested point ID does not exist in the collection. | The `get` command prints `null` (JSON format) or shows "Point with ID X not found" (table format). |
+| `Parse error: ...` | Invalid VelesQL syntax. | Check the query syntax against the VelesQL spec. |
+| `Empty file` | The import file contains no records. | Verify the file is not empty and has the correct format (.jsonl or .csv). |
 
 ## License
 

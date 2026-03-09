@@ -21,6 +21,11 @@ fn test_alloc_guard_into_raw() {
 
     // Must manually deallocate
     assert!(!ptr.is_null());
+    // SAFETY: `dealloc` requires a pointer from `alloc` with the same layout.
+    // - Condition 1: `ptr` was obtained from `into_raw()`, which transfers ownership
+    //   of a valid allocation created by `AllocGuard::new(layout)`.
+    // - Condition 2: `layout` is the same layout used for the original allocation.
+    // Reason: `into_raw()` disables the RAII guard; caller must deallocate manually.
     unsafe {
         dealloc(ptr, layout);
     }
@@ -52,6 +57,10 @@ fn test_alloc_guard_cast() {
     let float_ptr: *mut f32 = guard.cast();
 
     // Write some data
+    // SAFETY: `float_ptr.add(i)` requires a valid, aligned pointer within the allocation.
+    // - Condition 1: `guard` allocated `size_of::<f32>() * 10` bytes with `align_of::<f32>()`.
+    // - Condition 2: `i` ranges 0..10, so `add(i)` stays within the allocation bounds.
+    // Reason: Verifying that `AllocGuard::cast` produces a usable typed pointer.
     #[allow(clippy::cast_precision_loss)]
     unsafe {
         for i in 0..10 {
@@ -60,6 +69,10 @@ fn test_alloc_guard_cast() {
     }
 
     // Read back
+    // SAFETY: Same invariants as the write block above.
+    // - Condition 1: Data was written in the preceding block; no reallocation occurred.
+    // - Condition 2: `guard` is still alive, so the allocation is valid.
+    // Reason: Round-trip verification of typed pointer read/write.
     #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
     unsafe {
         for i in 0..10 {

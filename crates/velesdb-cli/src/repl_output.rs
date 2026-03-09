@@ -17,9 +17,10 @@ pub fn print_result(result: &QueryResult, format: &str) {
     }
 
     match format.to_lowercase().as_str() {
-        "json" => {
-            println!("{}", serde_json::to_string_pretty(&result.rows).unwrap());
-        }
+        "json" => match serde_json::to_string_pretty(&result.rows) {
+            Ok(json) => println!("{json}"),
+            Err(e) => eprintln!("{}", format!("Failed to serialize to JSON: {e}").red()),
+        },
         _ => {
             print_table(&result.rows);
         }
@@ -112,6 +113,50 @@ pub fn print_help() {
     );
     println!("  {}          Clear screen", ".clear".yellow());
     println!();
+    println!("{}", "Data & Index Commands:".bold().underline());
+    println!();
+    println!(
+        "  {}      Show query execution plan",
+        ".explain <query>".yellow()
+    );
+    println!(
+        "  {}    Analyze collection statistics",
+        ".analyze <name>".yellow()
+    );
+    println!(
+        "  {}    List indexes on collection",
+        ".indexes <name>".yellow()
+    );
+    println!(
+        "  {} Delete points by ID",
+        ".delete <name> <id> [id2..]".yellow()
+    );
+    println!(
+        "  {}      Flush collection to disk",
+        ".flush <name>".yellow()
+    );
+    println!(
+        "  {} Create index",
+        ".create-index <name> <field> [--type secondary|property|range]".yellow()
+    );
+    println!(
+        "  {}  Drop index",
+        ".drop-index <name> <label> <prop>".yellow()
+    );
+    println!();
+    println!("{}", "Advanced Search:".bold().underline());
+    println!();
+    println!(
+        "  {} Sparse-only search",
+        ".sparse-search <name> <idx> <json> [k]".yellow()
+    );
+    println!(
+        "  {} Dense+sparse hybrid",
+        ".hybrid-sparse <name> <dense> <sparse> [k] [--strategy rrf|average|max]".yellow()
+    );
+    println!("  {}        Show query guard-rails", ".guardrails".yellow());
+    println!("  {}   Agent memory (preview)", ".agent [cmd]".yellow());
+    println!();
     println!("{}", "Session Commands:".bold().underline());
     println!();
     println!(
@@ -129,10 +174,7 @@ pub fn print_help() {
     println!();
     println!("{}", "Session Settings:".bold().underline());
     println!();
-    println!(
-        "  {} fast, balanced, accurate, high_recall, perfect",
-        "mode".cyan()
-    );
+    println!("  {} fast, balanced, accurate, perfect", "mode".cyan());
     println!("  {} 16-4096 (or auto from mode)", "ef_search".cyan());
     println!("  {} Query timeout in ms", "timeout_ms".cyan());
     println!("  {} Enable reranking (true/false)", "rerank".cyan());

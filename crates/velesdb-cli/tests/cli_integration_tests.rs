@@ -398,6 +398,159 @@ fn test_graph_help() {
 }
 
 // =============================================================================
+// Phase 2: Typed Collection Display Tests
+// =============================================================================
+
+#[test]
+fn test_info_shows_vector_type_label() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    // Create a vector collection via the core API
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_vector_collection("docs", 128, velesdb_core::DistanceMetric::Cosine)
+        .unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[Vector]"));
+}
+
+#[test]
+fn test_info_shows_graph_type_label() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_graph_collection("knowledge", velesdb_core::GraphSchema::schemaless())
+        .unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[Graph]"));
+}
+
+#[test]
+fn test_info_shows_metadata_type_label() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_metadata_collection("catalog").unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[Metadata]"));
+}
+
+#[test]
+fn test_list_json_shows_type_field() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_vector_collection("vectors", 64, velesdb_core::DistanceMetric::Euclidean)
+        .unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("list")
+        .arg(&db_path)
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"type\": \"Vector\""));
+}
+
+#[test]
+fn test_show_vector_collection_shows_type() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_vector_collection("docs", 128, velesdb_core::DistanceMetric::Cosine)
+        .unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("show")
+        .arg(&db_path)
+        .arg("docs")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Vector"));
+}
+
+#[test]
+fn test_show_graph_collection_shows_type() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_graph_collection("kg", velesdb_core::GraphSchema::schemaless())
+        .unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("show")
+        .arg(&db_path)
+        .arg("kg")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Graph"));
+}
+
+#[test]
+fn test_show_metadata_collection_shows_type() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_metadata_collection("products").unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("show")
+        .arg(&db_path)
+        .arg("products")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Metadata"));
+}
+
+#[test]
+fn test_export_rejects_graph_collection() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_graph_collection("kg", velesdb_core::GraphSchema::schemaless())
+        .unwrap();
+    drop(db);
+
+    velesdb_cmd()
+        .arg("export")
+        .arg(&db_path)
+        .arg("kg")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+// =============================================================================
 // REPL Command Tests (limited - can't test interactive mode)
 // =============================================================================
 

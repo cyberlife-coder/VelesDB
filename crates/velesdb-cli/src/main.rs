@@ -13,10 +13,12 @@
 //!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 //!   `velesdb import ./data.jsonl --collection docs`
 
+mod collection_helpers;
 mod graph;
 mod import;
 mod license;
 mod repl;
+mod repl_commands;
 mod repl_output;
 mod session;
 
@@ -70,6 +72,7 @@ enum StorageModeArg {
     Sq8,
     Binary,
     Pq,
+    Rabitq,
 }
 
 impl From<StorageModeArg> for StorageMode {
@@ -79,6 +82,7 @@ impl From<StorageModeArg> for StorageMode {
             StorageModeArg::Sq8 => StorageMode::SQ8,
             StorageModeArg::Binary => StorageMode::Binary,
             StorageModeArg::Pq => StorageMode::ProductQuantization,
+            StorageModeArg::Rabitq => StorageMode::RaBitQ,
         }
     }
 }
@@ -274,6 +278,119 @@ enum Commands {
         #[command(subcommand)]
         action: SimdAction,
     },
+
+    /// Create a vector collection with dimension, metric, and storage options
+    CreateVectorCollection {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+
+        /// Vector dimension
+        #[arg(short, long)]
+        dimension: usize,
+
+        /// Distance metric (cosine, euclidean, dot, hamming, jaccard)
+        #[arg(short, long, value_enum, default_value = "cosine")]
+        metric: MetricArg,
+
+        /// Storage mode (full, sq8, binary, pq, rabitq)
+        #[arg(short, long, value_enum, default_value = "full")]
+        storage: StorageModeArg,
+    },
+
+    /// Create a graph collection
+    CreateGraphCollection {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+
+        /// Create with schemaless mode (any node/edge types accepted)
+        #[arg(long, default_value = "true")]
+        schemaless: bool,
+    },
+
+    /// Delete a collection (vector, graph, or metadata)
+    DeleteCollection {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        name: String,
+
+        /// Skip interactive confirmation
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Show the query execution plan (EXPLAIN) for a VelesQL query
+    Explain {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// VelesQL query to explain
+        query: String,
+
+        /// Output format (tree, json)
+        #[arg(short, long, default_value = "tree")]
+        format: String,
+    },
+
+    /// Analyze a collection and display statistics
+    Analyze {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
+    /// Delete points from a vector collection by ID
+    DeletePoints {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Point IDs to delete
+        #[arg(required = true)]
+        ids: Vec<u64>,
+    },
+
+    /// Upsert a single point into a vector collection
+    Upsert {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Point ID
+        #[arg(long)]
+        id: u64,
+
+        /// Vector as JSON array (e.g., '[0.1, 0.2, 0.3]')
+        #[arg(long)]
+        vector: Option<String>,
+
+        /// Payload as JSON object (e.g., '{"title": "Hello"}')
+        #[arg(long)]
+        payload: Option<String>,
+    },
+
+    /// Index management (create, drop, list)
+    Index {
+        #[command(subcommand)]
+        action: IndexAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -283,6 +400,65 @@ enum SimdAction {
 
     /// Force re-benchmark of all SIMD backends
     Benchmark,
+}
+
+/// CLI index type option
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum IndexTypeArg {
+    Secondary,
+    Property,
+    Range,
+}
+
+#[derive(Subcommand)]
+enum IndexAction {
+    /// Create an index on a collection field
+    Create {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Field name to index
+        field: String,
+
+        /// Index type (secondary, property, range)
+        #[arg(long, value_enum, default_value = "secondary")]
+        index_type: IndexTypeArg,
+
+        /// Label (required for property and range index types)
+        #[arg(long)]
+        label: Option<String>,
+    },
+
+    /// Drop an index from a collection
+    Drop {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Label of the index to drop
+        label: String,
+
+        /// Property of the index to drop
+        property: String,
+    },
+
+    /// List all indexes on a collection
+    List {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Collection name
+        collection: String,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -329,12 +505,29 @@ fn main() -> anyhow::Result<()> {
             println!("VelesDB Database: {}", path.display());
             println!("Collections:");
             for name in db.list_collections() {
-                if let Some(col) = db.get_collection(&name) {
-                    let config = col.config();
-                    println!(
-                        "  - {} ({} dims, {:?}, {} points)",
-                        config.name, config.dimension, config.metric, config.point_count
-                    );
+                let type_label = collection_helpers::collection_type_label(&db, &name);
+                match collection_helpers::resolve_collection(&db, &name) {
+                    Some(collection_helpers::TypedCollection::Vector(col)) => {
+                        let config = col.config();
+                        println!(
+                            "  - {} [{}] ({} dims, {:?}, {} points)",
+                            config.name,
+                            type_label,
+                            config.dimension,
+                            config.metric,
+                            config.point_count
+                        );
+                    }
+                    Some(collection_helpers::TypedCollection::Graph(col)) => {
+                        let edge_count = col.get_edges(None).len();
+                        println!("  - {} [{}] ({} edges)", col.name(), type_label, edge_count);
+                    }
+                    Some(collection_helpers::TypedCollection::Metadata(col)) => {
+                        println!("  - {} [{}] ({} items)", col.name(), type_label, col.len());
+                    }
+                    None => {
+                        println!("  - {} [{}]", name, type_label);
+                    }
                 }
             }
         }
@@ -347,16 +540,42 @@ fn main() -> anyhow::Result<()> {
             if format == "json" {
                 let data: Vec<_> = collections
                     .iter()
-                    .filter_map(|name| db.get_collection(name))
-                    .map(|col| {
-                        let cfg = col.config();
-                        serde_json::json!({
-                            "name": cfg.name,
-                            "dimension": cfg.dimension,
-                            "metric": format!("{:?}", cfg.metric),
-                            "point_count": cfg.point_count,
-                            "storage_mode": format!("{:?}", cfg.storage_mode)
-                        })
+                    .map(|name| {
+                        let type_label = collection_helpers::collection_type_label(&db, name);
+                        match collection_helpers::resolve_collection(&db, name) {
+                            Some(collection_helpers::TypedCollection::Vector(col)) => {
+                                let cfg = col.config();
+                                serde_json::json!({
+                                    "name": cfg.name,
+                                    "type": type_label,
+                                    "dimension": cfg.dimension,
+                                    "metric": format!("{:?}", cfg.metric),
+                                    "point_count": cfg.point_count,
+                                    "storage_mode": format!("{:?}", cfg.storage_mode)
+                                })
+                            }
+                            Some(collection_helpers::TypedCollection::Graph(col)) => {
+                                serde_json::json!({
+                                    "name": col.name(),
+                                    "type": type_label,
+                                    "edge_count": col.get_edges(None).len(),
+                                    "has_embeddings": col.has_embeddings()
+                                })
+                            }
+                            Some(collection_helpers::TypedCollection::Metadata(col)) => {
+                                serde_json::json!({
+                                    "name": col.name(),
+                                    "type": type_label,
+                                    "item_count": col.len()
+                                })
+                            }
+                            None => {
+                                serde_json::json!({
+                                    "name": name,
+                                    "type": type_label
+                                })
+                            }
+                        }
                     })
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&data)?);
@@ -366,16 +585,46 @@ fn main() -> anyhow::Result<()> {
                     println!("  No collections found.\n");
                 } else {
                     for name in &collections {
-                        if let Some(col) = db.get_collection(name) {
-                            let cfg = col.config();
-                            println!(
-                                "  {} {} ({} dims, {:?}, {} points)",
-                                "•".cyan(),
-                                cfg.name.green(),
-                                cfg.dimension,
-                                cfg.metric,
-                                cfg.point_count
-                            );
+                        let type_label = collection_helpers::collection_type_label(&db, name);
+                        match collection_helpers::resolve_collection(&db, name) {
+                            Some(collection_helpers::TypedCollection::Vector(col)) => {
+                                let cfg = col.config();
+                                println!(
+                                    "  {} {} [{}] ({} dims, {:?}, {} points)",
+                                    "•".cyan(),
+                                    cfg.name.green(),
+                                    type_label.cyan(),
+                                    cfg.dimension,
+                                    cfg.metric,
+                                    cfg.point_count
+                                );
+                            }
+                            Some(collection_helpers::TypedCollection::Graph(col)) => {
+                                println!(
+                                    "  {} {} [{}] ({} edges)",
+                                    "•".cyan(),
+                                    col.name().green(),
+                                    type_label.cyan(),
+                                    col.get_edges(None).len()
+                                );
+                            }
+                            Some(collection_helpers::TypedCollection::Metadata(col)) => {
+                                println!(
+                                    "  {} {} [{}] ({} items)",
+                                    "•".cyan(),
+                                    col.name().green(),
+                                    type_label.cyan(),
+                                    col.len()
+                                );
+                            }
+                            None => {
+                                println!(
+                                    "  {} {} [{}]",
+                                    "•".cyan(),
+                                    name.green(),
+                                    type_label.cyan()
+                                );
+                            }
                         }
                     }
                     println!("\n  Total: {} collection(s)\n", collections.len());
@@ -391,46 +640,88 @@ fn main() -> anyhow::Result<()> {
             use colored::Colorize;
 
             let db = velesdb_core::Database::open(&path)?;
-            let col = db
-                .get_collection(&collection)
+            let typed = collection_helpers::resolve_collection(&db, &collection)
                 .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+            let type_label = collection_helpers::collection_type_label(&db, &collection);
 
-            let cfg = col.config();
+            match typed {
+                collection_helpers::TypedCollection::Vector(col) => {
+                    let cfg = col.config();
+                    if format == "json" {
+                        let data = serde_json::json!({
+                            "name": cfg.name,
+                            "type": type_label,
+                            "dimension": cfg.dimension,
+                            "metric": format!("{:?}", cfg.metric),
+                            "point_count": cfg.point_count,
+                            "storage_mode": format!("{:?}", cfg.storage_mode),
+                            "estimated_memory_mb": (cfg.point_count * cfg.dimension * 4) as f64 / 1_000_000.0
+                        });
+                        println!("{}", serde_json::to_string_pretty(&data)?);
+                    } else {
+                        println!("\n{}", "Collection Details".bold().underline());
+                        println!("  {} {}", "Name:".cyan(), cfg.name.green());
+                        println!("  {} {}", "Type:".cyan(), type_label.green());
+                        println!("  {} {}", "Dimension:".cyan(), cfg.dimension);
+                        println!("  {} {:?}", "Metric:".cyan(), cfg.metric);
+                        println!("  {} {}", "Point Count:".cyan(), cfg.point_count);
+                        println!("  {} {:?}", "Storage Mode:".cyan(), cfg.storage_mode);
 
-            if format == "json" {
-                let data = serde_json::json!({
-                    "name": cfg.name,
-                    "dimension": cfg.dimension,
-                    "metric": format!("{:?}", cfg.metric),
-                    "point_count": cfg.point_count,
-                    "storage_mode": format!("{:?}", cfg.storage_mode),
-                    "estimated_memory_mb": (cfg.point_count * cfg.dimension * 4) as f64 / 1_000_000.0
-                });
-                println!("{}", serde_json::to_string_pretty(&data)?);
-            } else {
-                println!("\n{}", "Collection Details".bold().underline());
-                println!("  {} {}", "Name:".cyan(), cfg.name.green());
-                println!("  {} {}", "Dimension:".cyan(), cfg.dimension);
-                println!("  {} {:?}", "Metric:".cyan(), cfg.metric);
-                println!("  {} {}", "Point Count:".cyan(), cfg.point_count);
-                println!("  {} {:?}", "Storage Mode:".cyan(), cfg.storage_mode);
+                        let estimated_mb =
+                            (cfg.point_count * cfg.dimension * 4) as f64 / 1_000_000.0;
+                        println!("  {} {:.2} MB", "Est. Memory:".cyan(), estimated_mb);
 
-                let estimated_mb = (cfg.point_count * cfg.dimension * 4) as f64 / 1_000_000.0;
-                println!("  {} {:.2} MB", "Est. Memory:".cyan(), estimated_mb);
-
-                if samples > 0 {
-                    println!("\n{}", "Sample Records".bold().underline());
-                    let ids: Vec<u64> = (1..=(samples as u64 * 2)).collect();
-                    let points = col.get(&ids);
-
-                    for point in points.into_iter().flatten().take(samples) {
-                        println!("  ID: {}", point.id.to_string().green());
-                        if let Some(payload) = &point.payload {
-                            println!("    Payload: {}", payload);
+                        if samples > 0 {
+                            println!("\n{}", "Sample Records".bold().underline());
+                            let ids: Vec<u64> = (1..=(samples as u64 * 2)).collect();
+                            let points = col.get(&ids);
+                            for point in points.into_iter().flatten().take(samples) {
+                                println!("  ID: {}", point.id.to_string().green());
+                                if let Some(payload) = &point.payload {
+                                    println!("    Payload: {}", payload);
+                                }
+                            }
                         }
+                        println!();
                     }
                 }
-                println!();
+                collection_helpers::TypedCollection::Graph(col) => {
+                    let edge_count = col.get_edges(None).len();
+                    if format == "json" {
+                        let data = serde_json::json!({
+                            "name": col.name(),
+                            "type": type_label,
+                            "edge_count": edge_count,
+                            "has_embeddings": col.has_embeddings(),
+                            "schema": format!("{:?}", col.schema())
+                        });
+                        println!("{}", serde_json::to_string_pretty(&data)?);
+                    } else {
+                        println!("\n{}", "Collection Details".bold().underline());
+                        println!("  {} {}", "Name:".cyan(), col.name().green());
+                        println!("  {} {}", "Type:".cyan(), type_label.green());
+                        println!("  {} {}", "Edges:".cyan(), edge_count);
+                        println!("  {} {}", "Embeddings:".cyan(), col.has_embeddings());
+                        println!("  {} {:?}", "Schema:".cyan(), col.schema());
+                        println!();
+                    }
+                }
+                collection_helpers::TypedCollection::Metadata(col) => {
+                    if format == "json" {
+                        let data = serde_json::json!({
+                            "name": col.name(),
+                            "type": type_label,
+                            "item_count": col.len()
+                        });
+                        println!("{}", serde_json::to_string_pretty(&data)?);
+                    } else {
+                        println!("\n{}", "Collection Details".bold().underline());
+                        println!("  {} {}", "Name:".cyan(), col.name().green());
+                        println!("  {} {}", "Type:".cyan(), type_label.green());
+                        println!("  {} {}", "Item Count:".cyan(), col.len());
+                        println!();
+                    }
+                }
             }
         }
         Commands::Export {
@@ -442,9 +733,12 @@ fn main() -> anyhow::Result<()> {
             use colored::Colorize;
 
             let db = velesdb_core::Database::open(&path)?;
-            let col = db
-                .get_collection(&collection)
-                .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+            let col = db.get_vector_collection(&collection).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Vector collection '{}' not found. Export requires a vector collection.",
+                    collection
+                )
+            })?;
 
             let cfg = col.config();
             let output_path =
@@ -646,7 +940,7 @@ fn main() -> anyhow::Result<()> {
 
             let db = velesdb_core::Database::open(&path)?;
             let col = db
-                .get_collection(&collection)
+                .get_vector_collection(&collection)
                 .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
 
             // Parse vectors from JSON
@@ -740,7 +1034,7 @@ fn main() -> anyhow::Result<()> {
 
             let db = velesdb_core::Database::open(&path)?;
             let col = db
-                .get_collection(&collection)
+                .get_vector_collection(&collection)
                 .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
 
             let points = col.get(&[id]);
@@ -768,7 +1062,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Graph { action } => {
-            graph::handle(action);
+            graph::handle(action)?;
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -801,7 +1095,478 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::CreateVectorCollection {
+            path,
+            name,
+            dimension,
+            metric,
+            storage,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            db.create_vector_collection_with_options(
+                &name,
+                dimension,
+                metric.into(),
+                storage.into(),
+            )?;
+
+            println!(
+                "{} Vector collection '{}' created ({} dims, {:?}, {:?})",
+                "✅".green(),
+                name.cyan(),
+                dimension,
+                DistanceMetric::from(metric),
+                StorageMode::from(storage),
+            );
+        }
+        Commands::CreateGraphCollection {
+            path,
+            name,
+            schemaless,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let schema = if schemaless {
+                velesdb_core::GraphSchema::schemaless()
+            } else {
+                // Reason: Strict schema from file is planned for future; default to schemaless.
+                velesdb_core::GraphSchema::schemaless()
+            };
+            db.create_graph_collection(&name, schema)?;
+
+            println!(
+                "{} Graph collection '{}' created (schemaless: {})",
+                "✅".green(),
+                name.cyan(),
+                schemaless,
+            );
+        }
+        Commands::DeleteCollection { path, name, force } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+
+            if !force {
+                println!(
+                    "Are you sure you want to delete collection '{}'? This cannot be undone.",
+                    name.yellow()
+                );
+                print!("Type 'yes' to confirm: ");
+                use std::io::Write;
+                std::io::stdout().flush()?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if input.trim() != "yes" {
+                    println!("{} Deletion cancelled.", "ℹ️".cyan());
+                    return Ok(());
+                }
+            }
+
+            db.delete_collection(&name)?;
+            println!("{} Collection '{}' deleted.", "✅".green(), name.cyan());
+        }
+        Commands::Explain {
+            path,
+            query,
+            format,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let parsed = velesdb_core::velesql::Parser::parse(&query)
+                .map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+
+            let plan = db
+                .explain_query(&parsed)
+                .map_err(|e| anyhow::anyhow!("Explain error: {}", e))?;
+
+            if format == "json" {
+                let json = plan
+                    .to_json()
+                    .map_err(|e| anyhow::anyhow!("JSON serialization error: {}", e))?;
+                println!("{}", json);
+            } else {
+                println!("\n{}", "Query Execution Plan".bold().underline());
+                println!("{}", plan.to_tree());
+                println!(
+                    "  {} {:.3} ms",
+                    "Estimated cost:".cyan(),
+                    plan.estimated_cost_ms
+                );
+                if let Some(idx) = &plan.index_used {
+                    println!("  {} {:?}", "Index used:".cyan(), idx);
+                }
+                println!("  {} {:?}", "Filter strategy:".cyan(), plan.filter_strategy);
+                if let Some(hit) = plan.cache_hit {
+                    println!(
+                        "  {} {}",
+                        "Cache hit:".cyan(),
+                        if hit { "yes".green() } else { "no".yellow() }
+                    );
+                }
+                if let Some(reuse) = plan.plan_reuse_count {
+                    println!("  {} {}", "Plan reuse count:".cyan(), reuse);
+                }
+                println!();
+            }
+        }
+        Commands::Analyze {
+            path,
+            collection,
+            format,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let stats = db
+                .analyze_collection(&collection)
+                .map_err(|e| anyhow::anyhow!("Analyze error: {}", e))?;
+
+            if format == "json" {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                println!("\n{}", "Collection Statistics".bold().underline());
+                println!("  {} {}", "Collection:".cyan(), collection.green());
+                println!("  {} {}", "Total points:".cyan(), stats.total_points);
+                println!("  {} {}", "Row count:".cyan(), stats.row_count);
+                println!("  {} {}", "Deleted count:".cyan(), stats.deleted_count);
+                println!("  {} {}", "Live rows:".cyan(), stats.live_row_count());
+                println!(
+                    "  {} {:.2}%",
+                    "Deletion ratio:".cyan(),
+                    stats.deletion_ratio() * 100.0
+                );
+                println!(
+                    "  {} {} bytes",
+                    "Payload size:".cyan(),
+                    stats.payload_size_bytes
+                );
+                println!(
+                    "  {} {} bytes",
+                    "Avg row size:".cyan(),
+                    stats.avg_row_size_bytes
+                );
+                println!(
+                    "  {} {} bytes",
+                    "Total size:".cyan(),
+                    stats.total_size_bytes
+                );
+
+                if !stats.index_stats.is_empty() {
+                    println!("\n  {}", "Indexes:".cyan().bold());
+                    for (name, idx) in &stats.index_stats {
+                        println!(
+                            "    {} ({}) — {} entries, depth {}, {} bytes",
+                            name.green(),
+                            idx.index_type,
+                            idx.entry_count,
+                            idx.depth,
+                            idx.size_bytes
+                        );
+                    }
+                }
+
+                if !stats.column_stats.is_empty() {
+                    println!("\n  {}", "Columns:".cyan().bold());
+                    for (name, col) in &stats.column_stats {
+                        println!(
+                            "    {} — {} distinct, {} nulls",
+                            name.green(),
+                            col.distinct_count,
+                            col.null_count
+                        );
+                    }
+                }
+
+                if let Some(ts) = stats.last_analyzed_epoch_ms {
+                    println!("\n  {} epoch {} ms", "Last analyzed:".cyan(), ts);
+                }
+                println!();
+            }
+        }
+        Commands::DeletePoints {
+            path,
+            collection,
+            ids,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let col = db
+                .get_vector_collection(&collection)
+                .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+
+            col.delete(&ids)
+                .map_err(|e| anyhow::anyhow!("Delete failed: {}", e))?;
+
+            println!(
+                "{} Deleted {} point(s) from '{}'",
+                "✅".green(),
+                ids.len(),
+                collection.cyan()
+            );
+        }
+        Commands::Upsert {
+            path,
+            collection,
+            id,
+            vector,
+            payload,
+        } => {
+            use colored::Colorize;
+
+            let db = velesdb_core::Database::open(&path)?;
+            let col = db
+                .get_vector_collection(&collection)
+                .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+
+            let vec_data: Vec<f32> = match vector {
+                Some(v) => serde_json::from_str(&v)
+                    .map_err(|e| anyhow::anyhow!("Invalid vector JSON: {}", e))?,
+                None => vec![],
+            };
+
+            let payload_data: Option<serde_json::Value> = match payload {
+                Some(p) => Some(
+                    serde_json::from_str(&p)
+                        .map_err(|e| anyhow::anyhow!("Invalid payload JSON: {}", e))?,
+                ),
+                None => None,
+            };
+
+            let point = velesdb_core::Point::new(id, vec_data, payload_data);
+            col.upsert(vec![point])
+                .map_err(|e| anyhow::anyhow!("Upsert failed: {}", e))?;
+
+            println!(
+                "{} Upserted point {} into '{}'",
+                "✅".green(),
+                id.to_string().green(),
+                collection.cyan()
+            );
+        }
+        Commands::Index { action } => {
+            use colored::Colorize;
+
+            match action {
+                IndexAction::Create {
+                    path,
+                    collection,
+                    field,
+                    index_type,
+                    label,
+                } => {
+                    let db = velesdb_core::Database::open(&path)?;
+                    let col = db.get_vector_collection(&collection).ok_or_else(|| {
+                        anyhow::anyhow!("Vector collection '{}' not found", collection)
+                    })?;
+
+                    match index_type {
+                        IndexTypeArg::Secondary => {
+                            col.create_index(&field)
+                                .map_err(|e| anyhow::anyhow!("Create index failed: {}", e))?;
+                            println!(
+                                "{} Secondary index created on field '{}' in '{}'",
+                                "✅".green(),
+                                field.cyan(),
+                                collection.cyan()
+                            );
+                        }
+                        IndexTypeArg::Property => {
+                            let lbl = label.as_deref().unwrap_or("default");
+                            col.create_property_index(lbl, &field)
+                                .map_err(|e| anyhow::anyhow!("Create index failed: {}", e))?;
+                            println!(
+                                "{} Property index created on '{}:{}' in '{}'",
+                                "✅".green(),
+                                lbl.cyan(),
+                                field.cyan(),
+                                collection.cyan()
+                            );
+                        }
+                        IndexTypeArg::Range => {
+                            let lbl = label.as_deref().unwrap_or("default");
+                            col.create_range_index(lbl, &field)
+                                .map_err(|e| anyhow::anyhow!("Create index failed: {}", e))?;
+                            println!(
+                                "{} Range index created on '{}:{}' in '{}'",
+                                "✅".green(),
+                                lbl.cyan(),
+                                field.cyan(),
+                                collection.cyan()
+                            );
+                        }
+                    }
+                }
+                IndexAction::Drop {
+                    path,
+                    collection,
+                    label,
+                    property,
+                } => {
+                    let db = velesdb_core::Database::open(&path)?;
+                    let col = db.get_vector_collection(&collection).ok_or_else(|| {
+                        anyhow::anyhow!("Vector collection '{}' not found", collection)
+                    })?;
+
+                    let dropped = col
+                        .drop_index(&label, &property)
+                        .map_err(|e| anyhow::anyhow!("Drop index failed: {}", e))?;
+
+                    if dropped {
+                        println!(
+                            "{} Index '{}:{}' dropped from '{}'",
+                            "✅".green(),
+                            label.cyan(),
+                            property.cyan(),
+                            collection.cyan()
+                        );
+                    } else {
+                        println!(
+                            "{} No index '{}:{}' found in '{}'",
+                            "⚠️".yellow(),
+                            label,
+                            property,
+                            collection
+                        );
+                    }
+                }
+                IndexAction::List {
+                    path,
+                    collection,
+                    format,
+                } => {
+                    let db = velesdb_core::Database::open(&path)?;
+                    let col = db.get_vector_collection(&collection).ok_or_else(|| {
+                        anyhow::anyhow!("Vector collection '{}' not found", collection)
+                    })?;
+
+                    let indexes = col.list_indexes();
+
+                    if format == "json" {
+                        let data: Vec<_> = indexes
+                            .iter()
+                            .map(|idx| {
+                                serde_json::json!({
+                                    "label": idx.label,
+                                    "property": idx.property,
+                                    "index_type": idx.index_type,
+                                    "cardinality": idx.cardinality,
+                                    "memory_bytes": idx.memory_bytes
+                                })
+                            })
+                            .collect();
+                        println!("{}", serde_json::to_string_pretty(&data)?);
+                    } else {
+                        println!("\n{}", "Indexes".bold().underline());
+                        if indexes.is_empty() {
+                            println!("  No indexes found.\n");
+                        } else {
+                            for idx in &indexes {
+                                println!(
+                                    "  {} {}:{} ({}) — {} unique values, {} bytes",
+                                    "•".cyan(),
+                                    idx.label.green(),
+                                    idx.property.green(),
+                                    idx.index_type,
+                                    idx.cardinality,
+                                    idx.memory_bytes
+                                );
+                            }
+                            println!("\n  Total: {} index(es)\n", indexes.len());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Tests for MetricArg conversions
+    // =========================================================================
+
+    #[test]
+    fn test_metric_arg_cosine() {
+        let metric: DistanceMetric = MetricArg::Cosine.into();
+        assert_eq!(metric, DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn test_metric_arg_euclidean() {
+        let metric: DistanceMetric = MetricArg::Euclidean.into();
+        assert_eq!(metric, DistanceMetric::Euclidean);
+    }
+
+    #[test]
+    fn test_metric_arg_dot() {
+        let metric: DistanceMetric = MetricArg::Dot.into();
+        assert_eq!(metric, DistanceMetric::DotProduct);
+    }
+
+    #[test]
+    fn test_metric_arg_hamming() {
+        let metric: DistanceMetric = MetricArg::Hamming.into();
+        assert_eq!(metric, DistanceMetric::Hamming);
+    }
+
+    #[test]
+    fn test_metric_arg_jaccard() {
+        let metric: DistanceMetric = MetricArg::Jaccard.into();
+        assert_eq!(metric, DistanceMetric::Jaccard);
+    }
+
+    // =========================================================================
+    // Tests for StorageModeArg conversions (Phase 1.2)
+    // =========================================================================
+
+    #[test]
+    fn test_storage_mode_arg_full() {
+        let mode: StorageMode = StorageModeArg::Full.into();
+        assert_eq!(mode, StorageMode::Full);
+    }
+
+    #[test]
+    fn test_storage_mode_arg_sq8() {
+        let mode: StorageMode = StorageModeArg::Sq8.into();
+        assert_eq!(mode, StorageMode::SQ8);
+    }
+
+    #[test]
+    fn test_storage_mode_arg_binary() {
+        let mode: StorageMode = StorageModeArg::Binary.into();
+        assert_eq!(mode, StorageMode::Binary);
+    }
+
+    #[test]
+    fn test_storage_mode_arg_pq() {
+        let mode: StorageMode = StorageModeArg::Pq.into();
+        assert_eq!(mode, StorageMode::ProductQuantization);
+    }
+
+    #[test]
+    fn test_storage_mode_arg_rabitq() {
+        let mode: StorageMode = StorageModeArg::Rabitq.into();
+        assert_eq!(mode, StorageMode::RaBitQ);
+    }
+
+    #[test]
+    fn test_storage_mode_arg_default_is_full() {
+        let mode = StorageModeArg::default();
+        assert!(matches!(mode, StorageModeArg::Full));
+    }
 }

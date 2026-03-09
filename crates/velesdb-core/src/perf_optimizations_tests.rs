@@ -233,6 +233,9 @@ fn test_get_unchecked_valid_index() {
     cv.push(&[4.0, 5.0, 6.0]);
 
     // Act - Valid indices should work
+    // SAFETY: `get_unchecked` requires index < count.
+    // - Condition 1: Two vectors were pushed above, so indices 0 and 1 are valid.
+    // Reason: Verify that `get_unchecked` returns correct data for in-bounds access.
     let v0 = unsafe { cv.get_unchecked(0) };
     let v1 = unsafe { cv.get_unchecked(1) };
 
@@ -250,6 +253,9 @@ fn test_get_unchecked_panics_on_invalid_index_in_debug() {
     cv.push(&[1.0, 2.0, 3.0]);
 
     // Act - Out of bounds index should panic in debug mode
+    // SAFETY: Intentionally calling `get_unchecked` with an invalid index.
+    // - Condition 1: Index 5 exceeds count (1), triggering the debug_assert inside `get_unchecked`.
+    // Reason: Verify that the debug bounds check panics on out-of-bounds access.
     let _ = unsafe { cv.get_unchecked(5) };
 }
 
@@ -263,6 +269,9 @@ fn test_get_unchecked_panics_on_boundary_index_in_debug() {
     cv.push(&[4.0, 5.0, 6.0]);
 
     // Act - Index == count should panic (off by one)
+    // SAFETY: Intentionally calling `get_unchecked` with index == count.
+    // - Condition 1: Index 2 equals count (2), triggering the debug_assert inside `get_unchecked`.
+    // Reason: Verify that the debug bounds check catches the off-by-one boundary.
     let _ = unsafe { cv.get_unchecked(2) };
 }
 

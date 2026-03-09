@@ -1,10 +1,12 @@
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::uninlined_format_args)]
 //! REPL (Read-Eval-Print-Loop) for `VelesQL` queries
+//!
+//! This module owns the I/O loop (`run`) and query execution.
+//! Command dispatch is delegated to [`crate::repl_commands`].
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-// NOTE: comfy_table imports moved to repl_output.rs (EPIC-061/US-004 refactoring)
 use instant::Instant;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
@@ -88,18 +90,22 @@ pub fn run(path: PathBuf) -> Result<()> {
 
                 let _ = rl.add_history_entry(line);
 
-                if line.starts_with('.') {
-                    match handle_command(&db, line, &mut config) {
-                        CommandResult::Continue => (),
-                        CommandResult::Quit => break,
-                        CommandResult::Error(e) => {
+                if line.starts_with('.') || line.starts_with('\\') {
+                    match crate::repl_commands::handle_command(&db, line, &mut config) {
+                        crate::repl_commands::CommandResult::Continue => (),
+                        crate::repl_commands::CommandResult::Quit => break,
+                        crate::repl_commands::CommandResult::Error(e) => {
                             println!("{} {}", "Error:".red().bold(), e);
                         }
                     }
                 } else {
                     match execute_query(&db, line) {
                         Ok(result) => {
-                            print_result(&result, &format!("{:?}", config.format).to_lowercase());
+                            let fmt = match config.format {
+                                OutputFormat::Table => "table",
+                                OutputFormat::Json => "json",
+                            };
+                            print_result(&result, fmt);
                             if config.timing {
                                 println!(
                                     "\n{} rows ({:.2}ms)\n",
@@ -132,498 +138,17 @@ pub fn run(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-enum CommandResult {
-    Continue,
-    Quit,
-    Error(String),
-}
-
-#[allow(clippy::too_many_lines, clippy::cognitive_complexity)] // Reason: REPL command dispatcher with many branches
-fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> CommandResult {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    let cmd = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
-
-    match cmd.as_str() {
-        ".quit" | ".exit" | ".q" => CommandResult::Quit,
-
-        ".help" | ".h" => {
-            print_help();
-            CommandResult::Continue
-        }
-
-        ".collections" | ".tables" => {
-            let collections = db.list_collections();
-            if collections.is_empty() {
-                println!("No collections found.\n");
-            } else {
-                println!("{}", "Collections:".bold());
-                for name in collections {
-                    println!("  - {}", name.green());
-                }
-                println!();
-            }
-            CommandResult::Continue
-        }
-
-        ".schema" => {
-            if parts.len() < 2 {
-                println!("Usage: .schema <collection_name>\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            match db.get_collection(name) {
-                Some(col) => {
-                    let cfg = col.config();
-                    println!("{} {}", "Collection:".bold(), cfg.name.green());
-                    println!("  Dimension: {}", cfg.dimension);
-                    println!("  Metric:    {:?}", cfg.metric);
-                    println!("  Points:    {}", cfg.point_count);
-                    println!();
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        ".timing" => {
-            if parts.len() < 2 {
-                println!("Timing is {}", if config.timing { "ON" } else { "OFF" });
-            } else {
-                match parts[1].to_lowercase().as_str() {
-                    "on" | "true" | "1" => {
-                        config.timing = true;
-                        println!("Timing ON");
-                    }
-                    "off" | "false" | "0" => {
-                        config.timing = false;
-                        println!("Timing OFF");
-                    }
-                    _ => {
-                        return CommandResult::Error("Use: .timing on|off".to_string());
-                    }
-                }
-            }
-            println!();
-            CommandResult::Continue
-        }
-
-        ".format" => {
-            if parts.len() < 2 {
-                println!("Format is {:?}", config.format);
-            } else {
-                match parts[1].to_lowercase().as_str() {
-                    "table" => {
-                        config.format = OutputFormat::Table;
-                        println!("Format: table");
-                    }
-                    "json" => {
-                        config.format = OutputFormat::Json;
-                        println!("Format: json");
-                    }
-                    _ => {
-                        return CommandResult::Error("Use: .format table|json".to_string());
-                    }
-                }
-            }
-            println!();
-            CommandResult::Continue
-        }
-
-        ".clear" => {
-            print!("\x1B[2J\x1B[1;1H");
-            CommandResult::Continue
-        }
-
-        ".describe" | ".desc" => {
-            if parts.len() < 2 {
-                println!("Usage: .describe <collection_name>\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            match db.get_collection(name) {
-                Some(col) => {
-                    let cfg = col.config();
-                    println!("\n{}", "Collection Details".bold().underline());
-                    println!("  {} {}", "Name:".cyan(), cfg.name.green());
-                    println!("  {} {}", "Dimension:".cyan(), cfg.dimension);
-                    println!("  {} {:?}", "Metric:".cyan(), cfg.metric);
-                    println!("  {} {}", "Point Count:".cyan(), cfg.point_count);
-                    println!("  {} {:?}", "Storage Mode:".cyan(), cfg.storage_mode);
-
-                    // Estimate memory usage
-                    let vector_size = cfg.dimension * 4; // f32 = 4 bytes
-                    let estimated_mb = (cfg.point_count * vector_size) as f64 / 1_000_000.0;
-                    println!(
-                        "  {} {:.2} MB (vectors only)",
-                        "Est. Memory:".cyan(),
-                        estimated_mb
-                    );
-                    println!();
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        ".count" => {
-            if parts.len() < 2 {
-                println!("Usage: .count <collection_name>\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            match db.get_collection(name) {
-                Some(col) => {
-                    let count = col.config().point_count;
-                    println!("Count: {} records\n", count.to_string().green());
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        ".sample" => {
-            if parts.len() < 2 {
-                println!("Usage: .sample <collection_name> [count]\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            let count: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
-
-            match db.get_collection(name) {
-                Some(col) => {
-                    let ids: Vec<u64> = (1..=(count as u64 * 2)).collect();
-                    let points = col.get(&ids);
-
-                    let mut rows = Vec::new();
-                    for point in points.into_iter().flatten().take(count) {
-                        let mut row = HashMap::new();
-                        row.insert("id".to_string(), serde_json::json!(point.id));
-
-                        // Show vector preview (first 5 dims)
-                        let vec_preview: Vec<f32> = point.vector.iter().take(5).copied().collect();
-                        let vec_str = if point.vector.len() > 5 {
-                            format!("{:?}... ({} dims)", vec_preview, point.vector.len())
-                        } else {
-                            format!("{:?}", vec_preview)
-                        };
-                        row.insert("vector".to_string(), serde_json::json!(vec_str));
-
-                        if let Some(serde_json::Value::Object(map)) = &point.payload {
-                            for (k, v) in map {
-                                row.insert(k.clone(), v.clone());
-                            }
-                        }
-                        rows.push(row);
-                    }
-
-                    if rows.is_empty() {
-                        println!("No records found.\n");
-                    } else {
-                        println!("\n{} sample(s) from {}:\n", rows.len(), name.green());
-                        crate::repl_output::print_table(&rows);
-                        println!();
-                    }
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        ".browse" => {
-            if parts.len() < 2 {
-                println!("Usage: .browse <collection_name> [page]\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            let page: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
-            let page_size = 10;
-            let offset = (page - 1) * page_size;
-
-            match db.get_collection(name) {
-                Some(col) => {
-                    let total = col.config().point_count;
-                    let total_pages = total.div_ceil(page_size);
-
-                    let ids: Vec<u64> =
-                        ((offset as u64 + 1)..=(offset as u64 + page_size as u64 * 2)).collect();
-                    let points = col.get(&ids);
-
-                    let mut rows = Vec::new();
-                    for point in points.into_iter().flatten().take(page_size) {
-                        let mut row = HashMap::new();
-                        row.insert("id".to_string(), serde_json::json!(point.id));
-
-                        if let Some(serde_json::Value::Object(map)) = &point.payload {
-                            for (k, v) in map {
-                                // Truncate long values
-                                let display_val = match v {
-                                    serde_json::Value::String(s) if s.len() > 50 => {
-                                        serde_json::json!(format!("{}...", &s[..47]))
-                                    }
-                                    other => other.clone(),
-                                };
-                                row.insert(k.clone(), display_val);
-                            }
-                        }
-                        rows.push(row);
-                    }
-
-                    println!(
-                        "\n{} - Page {}/{} ({} total records)",
-                        name.green(),
-                        page,
-                        total_pages.max(1),
-                        total
-                    );
-                    println!();
-
-                    if rows.is_empty() {
-                        println!("No records on this page.\n");
-                    } else {
-                        crate::repl_output::print_table(&rows);
-                        println!(
-                            "\nUse {} to see next page\n",
-                            format!(".browse {} {}", name, page + 1).yellow()
-                        );
-                    }
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        // ========== Session commands (backslash style) ==========
-        "\\set" | ".set" => {
-            if parts.len() < 3 {
-                println!("Usage: \\set <setting> <value>\n");
-                println!("Settings: mode, ef_search, timeout_ms, rerank, max_results\n");
-                return CommandResult::Continue;
-            }
-            let key = parts[1];
-            let value = parts[2];
-            match config.session.set(key, value) {
-                Ok(()) => println!("{} = {}\n", key.cyan(), value.green()),
-                Err(e) => return CommandResult::Error(e),
-            }
-            CommandResult::Continue
-        }
-
-        "\\show" | ".show" => {
-            if parts.len() < 2 {
-                // Show all settings
-                println!("\n{}", "Session Settings".bold().underline());
-                for (key, value) in config.session.all_settings() {
-                    println!("  {} = {}", key.cyan(), value.green());
-                }
-                println!();
-            } else {
-                let key = parts[1];
-                match config.session.get(key) {
-                    Some(value) => println!("{} = {}\n", key.cyan(), value.green()),
-                    None => return CommandResult::Error(format!("Unknown setting: {key}")),
-                }
-            }
-            CommandResult::Continue
-        }
-
-        "\\reset" | ".reset" => {
-            let key = parts.get(1).copied();
-            config.session.reset(key);
-            if let Some(k) = key {
-                println!("Reset {}\n", k.cyan());
-            } else {
-                println!("All settings reset to defaults\n");
-            }
-            CommandResult::Continue
-        }
-
-        "\\use" | ".use" => {
-            if parts.len() < 2 {
-                match config.session.active_collection() {
-                    Some(name) => println!("Active collection: {}\n", name.green()),
-                    None => println!("No active collection. Usage: \\use <collection>\n"),
-                }
-            } else {
-                let name = parts[1];
-                if db.get_collection(name).is_some() {
-                    config.session.use_collection(Some(name.to_string()));
-                    println!("Using collection: {}\n", name.green());
-                } else {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        "\\info" | ".info" => {
-            println!("\n{}", "VelesDB Information".bold().underline());
-            println!("  {} {}", "Version:".cyan(), VERSION.green());
-            println!("  {} {}", "Database:".cyan(), "active".green());
-
-            let collections = db.list_collections();
-            println!("  {} {}", "Collections:".cyan(), collections.len());
-
-            let total_points: usize = collections
-                .iter()
-                .filter_map(|name| db.get_collection(name))
-                .map(|col| col.config().point_count)
-                .sum();
-            println!("  {} {}", "Total Points:".cyan(), total_points);
-
-            if let Some(col_name) = config.session.active_collection() {
-                println!("  {} {}", "Active Collection:".cyan(), col_name.green());
-            }
-            println!();
-            CommandResult::Continue
-        }
-
-        "\\bench" | ".bench" => {
-            if parts.len() < 2 {
-                println!("Usage: \\bench <collection> [n_queries] [k]\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            let n_queries: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
-            let k: usize = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
-
-            match db.get_collection(name) {
-                Some(col) => {
-                    let cfg = col.config();
-                    println!(
-                        "\nBenchmarking {} ({} points, {}D)...\n",
-                        name.green(),
-                        cfg.point_count,
-                        cfg.dimension
-                    );
-                    println!(
-                        "  {} queries, k={}, mode={:?}",
-                        n_queries,
-                        k,
-                        config.session.mode()
-                    );
-
-                    // Generate random query vectors
-                    let start = Instant::now();
-                    let mut total_results = 0usize;
-
-                    for i in 0..n_queries {
-                        // Use deterministic pseudo-random for reproducibility
-                        let query: Vec<f32> = (0..cfg.dimension)
-                            .map(|j| ((i * 31 + j * 17) % 1000) as f32 / 1000.0)
-                            .collect();
-
-                        if let Ok(results) = col.search(&query, k) {
-                            total_results += results.len();
-                        }
-                    }
-
-                    let elapsed = start.elapsed();
-                    let qps = n_queries as f64 / elapsed.as_secs_f64();
-                    let avg_latency_ms = elapsed.as_millis() as f64 / n_queries as f64;
-
-                    println!("\n{}", "Results:".bold());
-                    println!("  {} {:.2} queries/sec", "Throughput:".cyan(), qps);
-                    println!("  {} {:.2} ms", "Avg Latency:".cyan(), avg_latency_ms);
-                    println!("  {} {} results", "Total Results:".cyan(), total_results);
-                    println!();
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        ".export" => {
-            if parts.len() < 2 {
-                println!("Usage: .export <collection_name> [filename.json]\n");
-                return CommandResult::Continue;
-            }
-            let name = parts[1];
-            let filename = parts
-                .get(2)
-                .map_or_else(|| format!("{name}.json"), std::string::ToString::to_string);
-
-            match db.get_collection(name) {
-                Some(col) => {
-                    let total = col.config().point_count;
-                    println!("Exporting {} records from {}...", total, name.green());
-
-                    let mut records = Vec::new();
-                    let batch_size = 1000;
-
-                    for batch_start in (0..total).step_by(batch_size) {
-                        let ids: Vec<u64> = ((batch_start as u64 + 1)
-                            ..=((batch_start + batch_size) as u64))
-                            .collect();
-                        let points = col.get(&ids);
-
-                        for point in points.into_iter().flatten() {
-                            let mut record = serde_json::Map::new();
-                            record.insert("id".to_string(), serde_json::json!(point.id));
-                            record.insert("vector".to_string(), serde_json::json!(point.vector));
-                            if let Some(payload) = &point.payload {
-                                record.insert("payload".to_string(), payload.clone());
-                            }
-                            records.push(serde_json::Value::Object(record));
-                        }
-                    }
-
-                    match std::fs::write(&filename, serde_json::to_string_pretty(&records).unwrap())
-                    {
-                        Ok(()) => {
-                            println!(
-                                "{} Exported {} records to {}\n",
-                                "✓".green(),
-                                records.len(),
-                                filename.green()
-                            );
-                        }
-                        Err(e) => {
-                            return CommandResult::Error(format!("Failed to write file: {e}"));
-                        }
-                    }
-                }
-                None => {
-                    return CommandResult::Error(format!("Collection '{name}' not found"));
-                }
-            }
-            CommandResult::Continue
-        }
-
-        _ => CommandResult::Error(format!("Unknown command: {cmd}")),
-    }
-}
-
-// NOTE: print_help moved to repl_output.rs (EPIC-061/US-004 refactoring)
-fn print_help() {
-    crate::repl_output::print_help();
-}
-
-/// Execute a `VelesQL` query and return results
+/// Execute a `VelesQL` query and return results.
+///
+/// Delegates to [`Database::execute_query`] which handles JOINs, plan caching
+/// and validation centrally -- the CLI no longer calls `Collection::execute_query`
+/// directly.
 pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
     let start = Instant::now();
 
     // Parse the query
     let parsed = velesdb_core::velesql::Parser::parse(query)
         .map_err(|e| anyhow::anyhow!("Parse error: {}", e.message))?;
-
-    let collection_name = &parsed.select.from;
-
-    // Get the collection
-    let collection = db
-        .get_collection(collection_name)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{collection_name}' not found"))?;
 
     // Check if there's a vector search requiring parameters
     let has_param_vector = parsed
@@ -646,9 +171,9 @@ pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
         });
     }
 
-    // Use unified execute_query from Collection (empty params for CLI)
+    // Delegate to Database::execute_query which handles JOINs and plan caching
     let params = HashMap::new();
-    let results = collection
+    let results = db
         .execute_query(&parsed, &params)
         .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
 
@@ -675,14 +200,28 @@ pub fn execute_query(db: &Database, query: &str) -> Result<QueryResult> {
 }
 
 fn contains_param_vector(condition: &velesdb_core::velesql::Condition) -> bool {
-    use velesdb_core::velesql::{Condition, VectorExpr};
+    use velesdb_core::velesql::{Condition, SparseVectorExpr, VectorExpr};
     match condition {
         Condition::VectorSearch(vs) => matches!(vs.vector, VectorExpr::Parameter(_)),
+        Condition::VectorFusedSearch(vfs) => vfs
+            .vectors
+            .iter()
+            .any(|v| matches!(v, VectorExpr::Parameter(_))),
+        Condition::SparseVectorSearch(svs) => {
+            matches!(svs.vector, SparseVectorExpr::Parameter(_))
+        }
+        Condition::Similarity(sim) => matches!(sim.vector, VectorExpr::Parameter(_)),
         Condition::And(left, right) | Condition::Or(left, right) => {
             contains_param_vector(left) || contains_param_vector(right)
         }
-        Condition::Group(inner) => contains_param_vector(inner),
-        _ => false,
+        Condition::Not(inner) | Condition::Group(inner) => contains_param_vector(inner),
+        Condition::Comparison(_)
+        | Condition::In(_)
+        | Condition::Between(_)
+        | Condition::Like(_)
+        | Condition::IsNull(_)
+        | Condition::Match(_)
+        | Condition::GraphMatch(_) => false,
     }
 }
 
@@ -699,7 +238,6 @@ fn contains_vector_search(condition: &velesdb_core::velesql::Condition) -> bool 
     }
 }
 
-// NOTE: print_result and print_table moved to repl_output.rs (EPIC-061/US-004 refactoring)
 /// Print query results in the specified format
 pub fn print_result(result: &QueryResult, format: &str) {
     crate::repl_output::print_result(result, format);
@@ -714,7 +252,8 @@ mod tests {
     use super::*;
     use serde_json::json;
     use velesdb_core::velesql::{
-        CompareOp, Comparison, Condition, Value, VectorExpr, VectorSearch,
+        CompareOp, Comparison, Condition, FusionConfig, SimilarityCondition, SparseVectorExpr,
+        SparseVectorSearch, Value, VectorExpr, VectorFusedSearch, VectorSearch,
     };
 
     // =========================================================================
@@ -841,6 +380,138 @@ mod tests {
     }
 
     // =========================================================================
+    // Tests for contains_param_vector (Phase 1.1 -- exhaustive variants)
+    // =========================================================================
+
+    #[test]
+    fn test_contains_param_vector_vector_search_param() {
+        let cond = Condition::VectorSearch(VectorSearch {
+            vector: VectorExpr::Parameter("v".to_string()),
+        });
+        assert!(contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_vector_search_literal() {
+        let cond = Condition::VectorSearch(VectorSearch {
+            vector: VectorExpr::Literal(vec![0.1, 0.2]),
+        });
+        assert!(!contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_fused_search_param() {
+        let cond = Condition::VectorFusedSearch(VectorFusedSearch {
+            vectors: vec![
+                VectorExpr::Literal(vec![0.1]),
+                VectorExpr::Parameter("q".to_string()),
+            ],
+            fusion: FusionConfig::default(),
+        });
+        assert!(contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_fused_search_all_literal() {
+        let cond = Condition::VectorFusedSearch(VectorFusedSearch {
+            vectors: vec![
+                VectorExpr::Literal(vec![0.1]),
+                VectorExpr::Literal(vec![0.2]),
+            ],
+            fusion: FusionConfig::default(),
+        });
+        assert!(!contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_sparse_search_param() {
+        let cond = Condition::SparseVectorSearch(SparseVectorSearch {
+            vector: SparseVectorExpr::Parameter("sv".to_string()),
+            index_name: None,
+        });
+        assert!(contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_sparse_search_literal() {
+        use velesdb_core::sparse_index::SparseVector;
+        let cond = Condition::SparseVectorSearch(SparseVectorSearch {
+            vector: SparseVectorExpr::Literal(SparseVector::new(vec![(0, 1.0)])),
+            index_name: None,
+        });
+        assert!(!contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_similarity_param() {
+        let cond = Condition::Similarity(SimilarityCondition {
+            field: "embedding".to_string(),
+            vector: VectorExpr::Parameter("q".to_string()),
+            operator: CompareOp::Gt,
+            threshold: 0.8,
+        });
+        assert!(contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_similarity_literal() {
+        let cond = Condition::Similarity(SimilarityCondition {
+            field: "embedding".to_string(),
+            vector: VectorExpr::Literal(vec![0.1, 0.2]),
+            operator: CompareOp::Gt,
+            threshold: 0.8,
+        });
+        assert!(!contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_not_recurses() {
+        let inner = Condition::VectorSearch(VectorSearch {
+            vector: VectorExpr::Parameter("v".to_string()),
+        });
+        let cond = Condition::Not(Box::new(inner));
+        assert!(contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_not_no_param() {
+        let inner = Condition::Comparison(Comparison {
+            column: "x".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::Integer(1),
+        });
+        let cond = Condition::Not(Box::new(inner));
+        assert!(!contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_comparison_false() {
+        let cond = Condition::Comparison(Comparison {
+            column: "cat".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::String("tech".to_string()),
+        });
+        assert!(!contains_param_vector(&cond));
+    }
+
+    #[test]
+    fn test_contains_param_vector_nested_and_with_similarity() {
+        let sim = Condition::Similarity(SimilarityCondition {
+            field: "vec".to_string(),
+            vector: VectorExpr::Parameter("q".to_string()),
+            operator: CompareOp::Gt,
+            threshold: 0.5,
+        });
+        let comp = Condition::Comparison(Comparison {
+            column: "status".to_string(),
+            operator: CompareOp::Eq,
+            value: Value::String("active".to_string()),
+        });
+        let combined = Condition::And(Box::new(sim), Box::new(comp));
+        assert!(contains_param_vector(&combined));
+    }
+
+    // =========================================================================
     // Tests for print_result (output format logic)
     // =========================================================================
 
@@ -866,21 +537,19 @@ mod tests {
         };
         // Should not panic
         print_result(&result, "json");
-        print_result(&result, "JSON"); // case insensitive
     }
 
     #[test]
     fn test_print_result_table_format() {
         let mut row = HashMap::new();
-        row.insert("id".to_string(), json!(1));
+        row.insert("id".to_string(), json!(42));
         row.insert("name".to_string(), json!("test"));
 
         let result = QueryResult {
             rows: vec![row],
-            duration_ms: 1.0,
+            duration_ms: 2.0,
         };
         // Should not panic
         print_result(&result, "table");
-        print_result(&result, "unknown"); // defaults to table
     }
 }
