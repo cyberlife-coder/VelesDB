@@ -278,13 +278,23 @@ jobs:
         with:
           target: ${{ matrix.target }}
           working-directory: crates/velesdb-python
-          args: --release --out dist
+          args: --release --out dist -i python3.11
           manylinux: ${{ matrix.manylinux || '' }}
-      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
+      # gh-action-pypi-publish only runs on Linux; upload wheel directly on other OSes
+      - name: Publish to PyPI (Linux)
+        if: runner.os == 'Linux'
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
         with:
           packages-dir: crates/velesdb-python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+      - name: Publish to PyPI (non-Linux)
+        if: runner.os != 'Linux'
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          pip install twine
+          twine upload --skip-existing -u __token__ crates/velesdb-python/dist/*
 
   # ===========================================================================
   # 4b. Publish to PyPI — Pure Python packages
