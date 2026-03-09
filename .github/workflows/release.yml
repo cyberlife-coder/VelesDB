@@ -95,8 +95,16 @@ jobs:
             --exclude velesdb-python -- --test-threads=1
       - name: Verify publish readiness
         run: |
-          for crate in velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb; do
-            cargo publish --dry-run -p "$crate"
+          # Only dry-run velesdb-core (no workspace deps) — dependent crates
+          # cannot resolve velesdb-core from crates.io during dry-run since
+          # it hasn't been published yet (chicken-and-egg).
+          # For dependent crates, validate packaging only (--no-verify skips
+          # dependency resolution and build, but checks Cargo.toml and file inclusion).
+          echo "📦 Full dry-run for velesdb-core..."
+          cargo publish --dry-run -p velesdb-core
+          for crate in velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb; do
+            echo "📦 Package check for $crate..."
+            cargo package --no-verify -p "$crate"
           done
 
   # ===========================================================================
