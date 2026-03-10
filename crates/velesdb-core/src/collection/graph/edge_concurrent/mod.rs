@@ -15,7 +15,8 @@ mod query;
 use super::edge::{EdgeStore, GraphEdge};
 use crate::error::{Error, Result};
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap;
+use std::collections::HashSet;
 
 /// Default number of shards for concurrent edge store.
 /// Increased from 64 to 256 for better scalability with 10M+ edges (EPIC-019 US-001).
@@ -50,7 +51,8 @@ pub struct ConcurrentEdgeStore {
     pub(super) num_shards: usize,
     /// Global registry of edge IDs with source node for optimized removal.
     /// Maps edge_id -> source_node_id for O(1) shard lookup during removal.
-    pub(super) edge_ids: RwLock<HashMap<u64, u64>>,
+    /// F-19: FxHashMap ~2x faster than std HashMap for u64 keys (no SipHash).
+    pub(super) edge_ids: RwLock<FxHashMap<u64, u64>>,
 }
 
 impl ConcurrentEdgeStore {
@@ -74,7 +76,7 @@ impl ConcurrentEdgeStore {
         Self {
             shards,
             num_shards,
-            edge_ids: RwLock::new(HashMap::new()),
+            edge_ids: RwLock::new(FxHashMap::default()),
         }
     }
 

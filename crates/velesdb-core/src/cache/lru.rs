@@ -8,7 +8,7 @@
 //! | Operation | Complexity | Notes |
 //! |-----------|------------|-------|
 //! | insert | O(1) | Amortized |
-//! | get | O(1) | With recency update |
+//! | get | O(n) | With recency update (shift_remove) |
 //! | remove | O(1) | swap_remove |
 //! | eviction | O(1) | shift_remove from front |
 
@@ -125,21 +125,21 @@ where
 
     /// Get a value by key, updating recency.
     ///
-    /// O(1) complexity with read lock for lookup, write lock for recency update.
+    /// F-18: Uses a single write lock for lookup + move-to-back in one operation,
+    /// eliminating the previous read-lock → clone → write-lock → re-clone pattern
+    /// (2 locks + 2 clones → 1 lock + 1 clone).
     #[must_use]
     pub fn get(&self, key: &K) -> Option<V> {
-        // Fast path: read lock to check existence and get value
-        let value = {
-            let inner = self.inner.read();
-            inner.get(key).cloned()
-        };
-
-        if let Some(v) = value {
+        let mut inner = self.inner.write();
+        if let Some((_idx, owned_key, value)) = inner.shift_remove_full(key) {
+            let cloned = value.clone();
+            // Re-insert at back (MRU position)
+            inner.insert(owned_key, value);
+            drop(inner);
             self.hits.fetch_add(1, Ordering::Relaxed);
-            // Update recency: remove and re-insert at back
-            self.move_to_back(key, &v);
-            Some(v)
+            Some(cloned)
         } else {
+            drop(inner);
             self.misses.fetch_add(1, Ordering::Relaxed);
             None
         }
@@ -176,16 +176,6 @@ where
             misses: self.misses.load(Ordering::Relaxed),
             evictions: self.evictions.load(Ordering::Relaxed),
         }
-    }
-
-    /// Move a key to the back (most recently used).
-    /// O(1) amortized using `shift_remove` + insert.
-    fn move_to_back(&self, key: &K, value: &V) {
-        let mut inner = self.inner.write();
-        // Remove from current position
-        inner.shift_remove(key);
-        // Re-insert at back
-        inner.insert(key.clone(), value.clone());
     }
 }
 
