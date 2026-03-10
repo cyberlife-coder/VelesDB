@@ -922,10 +922,11 @@ fn test_prenormalized_cosine_recall_matches_standard() {
         assert_eq!(results_std.len(), k, "standard should return {k} results");
         assert_eq!(results_pre.len(), k, "prenorm should return {k} results");
 
-        // First result should be the same (the query vector itself)
-        assert_eq!(
-            results_std[0].0, results_pre[0].0,
-            "Nearest neighbor should match (q={q_idx})"
+        // HNSW is approximate and graph construction is distance-order sensitive.
+        // Compare recall quality and best-distance parity instead of exact top-1 ID.
+        assert!(
+            (results_std[0].1 - results_pre[0].1).abs() < 1e-4,
+            "Best distance should stay aligned across cosine paths (q={q_idx})"
         );
 
         // Verify overlap: at least 80% of top-k results should match

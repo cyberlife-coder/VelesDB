@@ -6,9 +6,11 @@
 #![allow(clippy::cast_precision_loss)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+#[cfg(feature = "internal-bench")]
+use velesdb_core::internal_bench;
 use velesdb_core::simd_native::{
     cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
-    jaccard_similarity_native, DistanceEngine,
+    jaccard_similarity_native, DistanceEngine, SimdLevel,
 };
 
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -30,14 +32,7 @@ fn bench_dot_product(c: &mut Criterion) {
         let a = generate_vector(*dim, 0.0);
         let b = generate_vector(*dim, 1.0);
 
-        group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
-            warmup(|| {
-                let _ = dot_product_native(&a, &b);
-            });
-            bencher.iter(|| dot_product_native(black_box(&a), black_box(&b)));
-        });
-
-        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+        group.bench_with_input(BenchmarkId::new("dispatch", dim), dim, |bencher, _| {
             warmup(|| {
                 let _ = dot_product_native(&a, &b);
             });
@@ -55,14 +50,7 @@ fn bench_euclidean_distance(c: &mut Criterion) {
         let a = generate_vector(*dim, 0.0);
         let b = generate_vector(*dim, 1.0);
 
-        group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
-            warmup(|| {
-                let _ = euclidean_native(&a, &b);
-            });
-            bencher.iter(|| euclidean_native(black_box(&a), black_box(&b)));
-        });
-
-        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+        group.bench_with_input(BenchmarkId::new("dispatch", dim), dim, |bencher, _| {
             warmup(|| {
                 let _ = euclidean_native(&a, &b);
             });
@@ -76,23 +64,79 @@ fn bench_euclidean_distance(c: &mut Criterion) {
 fn bench_cosine_similarity(c: &mut Criterion) {
     let mut group = c.benchmark_group("cosine_similarity");
 
-    for dim in &[128, 384, 768, 1536, 3072] {
+    for dim in &[128, 384, 767, 768, 769, 1536, 3072] {
         let a = generate_vector(*dim, 0.0);
         let b = generate_vector(*dim, 1.0);
+        let engine = DistanceEngine::new(*dim);
 
-        group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
+        group.bench_with_input(BenchmarkId::new("dispatch", dim), dim, |bencher, _| {
             warmup(|| {
                 let _ = cosine_similarity_native(&a, &b);
             });
             bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
         });
 
-        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+        #[cfg(feature = "internal-bench")]
+        group.bench_with_input(BenchmarkId::new("scalar", dim), dim, |bencher, _| {
             warmup(|| {
-                let _ = cosine_similarity_native(&a, &b);
+                let _ = internal_bench::cosine_scalar(&a, &b);
             });
-            bencher.iter(|| cosine_similarity_native(black_box(&a), black_box(&b)));
+            bencher.iter(|| internal_bench::cosine_scalar(black_box(&a), black_box(&b)));
         });
+
+        group.bench_with_input(BenchmarkId::new("resolved", dim), dim, |bencher, _| {
+            warmup(|| {
+                let _ = engine.cosine_similarity(&a, &b);
+            });
+            bencher.iter(|| engine.cosine_similarity(black_box(&a), black_box(&b)));
+        });
+
+        #[cfg(feature = "internal-bench")]
+        if matches!(
+            internal_bench::detected_simd_level(),
+            SimdLevel::Avx2 | SimdLevel::Avx512
+        ) {
+            group.bench_with_input(
+                BenchmarkId::new("kernel_avx2_2acc", dim),
+                dim,
+                |bencher, _| {
+                    warmup(|| {
+                        let _ = internal_bench::cosine_avx2_2acc(&a, &b);
+                    });
+                    bencher.iter(|| {
+                        internal_bench::cosine_avx2_2acc(black_box(&a), black_box(&b))
+                            .expect("AVX2+FMA should be available")
+                    });
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("kernel_avx2_4acc", dim),
+                dim,
+                |bencher, _| {
+                    warmup(|| {
+                        let _ = internal_bench::cosine_avx2_4acc(&a, &b);
+                    });
+                    bencher.iter(|| {
+                        internal_bench::cosine_avx2_4acc(black_box(&a), black_box(&b))
+                            .expect("AVX2+FMA should be available")
+                    });
+                },
+            );
+        }
+
+        #[cfg(feature = "internal-bench")]
+        if matches!(internal_bench::detected_simd_level(), SimdLevel::Avx512) {
+            group.bench_with_input(BenchmarkId::new("kernel_avx512", dim), dim, |bencher, _| {
+                warmup(|| {
+                    let _ = internal_bench::cosine_avx512(&a, &b);
+                });
+                bencher.iter(|| {
+                    internal_bench::cosine_avx512(black_box(&a), black_box(&b))
+                        .expect("AVX-512F should be available")
+                });
+            });
+        }
     }
 
     group.finish();
@@ -115,14 +159,7 @@ fn bench_hamming_f32(c: &mut Criterion) {
         let a = generate_binary_vector(*dim, 0);
         let b = generate_binary_vector(*dim, 1);
 
-        group.bench_with_input(BenchmarkId::new("auto_vec", dim), dim, |bencher, _| {
-            warmup(|| {
-                let _ = hamming_distance_native(&a, &b);
-            });
-            bencher.iter(|| hamming_distance_native(black_box(&a), black_box(&b)));
-        });
-
-        group.bench_with_input(BenchmarkId::new("simd_native", dim), dim, |bencher, _| {
+        group.bench_with_input(BenchmarkId::new("dispatch", dim), dim, |bencher, _| {
             warmup(|| {
                 let _ = hamming_distance_native(&a, &b);
             });

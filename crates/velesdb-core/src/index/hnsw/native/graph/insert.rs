@@ -7,7 +7,13 @@ use std::sync::atomic::Ordering;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Inserts a vector into the index.
-    pub fn insert(&self, vector: Vec<f32>) -> NodeId {
+    pub fn insert(&self, mut vector: Vec<f32>) -> NodeId {
+        if self.distance.is_pre_normalized()
+            && self.distance.metric() == crate::DistanceMetric::Cosine
+        {
+            crate::simd_native::normalize_inplace_native(&mut vector);
+        }
+
         let node_id = {
             let mut guard = self.vectors.write();
             let storage = guard.get_or_insert_with(|| {

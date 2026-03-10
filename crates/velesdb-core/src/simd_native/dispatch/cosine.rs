@@ -27,7 +27,7 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
                 // Reason: call specialized kernel for higher throughput.
                 return unsafe { crate::simd_native::cosine_fused_avx512(a, b) };
             }
-            SimdLevel::Avx2 if a.len() >= 1024 => {
+            SimdLevel::Avx2 if a.len() >= 768 => {
                 // SAFETY: AVX2 cosine kernel requires CPU feature + minimum dim.
                 // - Condition 1: `simd_level()` selected `Avx2` after runtime detection.
                 // Reason: call specialized kernel for higher throughput.
@@ -71,7 +71,7 @@ pub(super) fn resolve_cosine(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32])
             }
         }
         #[cfg(target_arch = "x86_64")]
-        SimdLevel::Avx2 if dim >= 1024 => {
+        SimdLevel::Avx2 if dim >= 768 => {
             |a, b| {
                 // SAFETY: Resolver emitted AVX2 implementation for this dimension.
                 // - Condition 1: caller chose this function pointer via `resolve_cosine`.

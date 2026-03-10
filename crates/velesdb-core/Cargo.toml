@@ -107,6 +107,7 @@ version = "2.7"
 ##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]
+internal-bench = []
 persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray"]
 update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
 loom = ["dep:loom"]
