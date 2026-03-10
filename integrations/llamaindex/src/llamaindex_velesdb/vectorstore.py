@@ -7,6 +7,8 @@ as the underlying vector database for storing and retrieving embeddings.
 from __future__ import annotations
 
 import hashlib
+import logging
+import warnings
 from typing import Any, List, Optional
 
 from llama_index.core.schema import BaseNode, TextNode
@@ -21,7 +23,6 @@ import velesdb
 
 from llamaindex_velesdb.security import (
     validate_path,
-    validate_dimension,
     validate_k,
     validate_text,
     validate_query,
@@ -31,10 +32,9 @@ from llamaindex_velesdb.security import (
     validate_collection_name,
     validate_weight,
     validate_sparse_vector,
-    MAX_TEXT_LENGTH,
-    MAX_BATCH_SIZE,
-    SecurityError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _stable_hash_id(value: str) -> int:
@@ -470,12 +470,25 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                 )
             results = search_with_filter(query.query_embedding, top_k=k, filter=core_filter)
         elif sparse_vector is not None:
-            # Hybrid dense+sparse search -- SDK handles RRF fusion automatically
-            results = collection.search(
-                vector=query.query_embedding,
-                sparse_vector=sparse_vector,
-                top_k=k,
-            )
+            # Hybrid dense+sparse search -- SDK handles RRF fusion automatically.
+            # Fall back to dense-only if the collection has no sparse index yet
+            # (e.g. the collection was created before any sparse vectors were inserted).
+            try:
+                results = collection.search(
+                    vector=query.query_embedding,
+                    sparse_vector=sparse_vector,
+                    top_k=k,
+                )
+            except RuntimeError:
+                warnings.warn(
+                    "sparse_vector was provided but the collection does not have a sparse "
+                    "index (no sparse vectors have been inserted). Falling back to "
+                    "dense-only search. Insert points with sparse_vectors to enable "
+                    "hybrid dense+sparse retrieval.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                results = collection.search(query.query_embedding, top_k=k)
         else:
             results = collection.search(query.query_embedding, top_k=k)
 

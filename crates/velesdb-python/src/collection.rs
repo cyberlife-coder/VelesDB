@@ -15,7 +15,10 @@ use crate::collection_helpers::{
 };
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 use crate::FusionStrategy;
-use velesdb_core::{Collection as CoreCollection, FusionStrategy as CoreFusionStrategy, Point};
+use velesdb_core::{
+    Collection as CoreCollection, Filter, FusionStrategy as CoreFusionStrategy, Point,
+    SearchResult,
+};
 
 /// A vector collection in VelesDB.
 ///
@@ -31,6 +34,50 @@ impl Collection {
     /// Create a new Collection wrapper.
     pub fn new(inner: Arc<CoreCollection>, name: String) -> Self {
         Self { inner, name }
+    }
+
+    /// Dispatch to the correct search path based on which arguments are present.
+    ///
+    /// Handles four combinations of dense/sparse with optional filter.
+    fn dispatch_search(
+        &self,
+        dense: Option<Vec<f32>>,
+        sparse: Option<velesdb_core::sparse_index::SparseVector>,
+        top_k: usize,
+        filter: Option<&Filter>,
+    ) -> PyResult<Vec<SearchResult>> {
+        match (dense, sparse, filter) {
+            (Some(d), Some(s), Some(f)) => {
+                let strategy = CoreFusionStrategy::RRF { k: 60 };
+                self.inner
+                    .hybrid_sparse_search_with_filter(&d, &s, top_k, &strategy, f)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))
+            }
+            (Some(d), Some(s), None) => {
+                let strategy = CoreFusionStrategy::RRF { k: 60 };
+                self.inner
+                    .hybrid_sparse_search(&d, &s, top_k, &strategy)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))
+            }
+            (Some(d), None, Some(f)) => self
+                .inner
+                .search_with_filter(&d, top_k, f)
+                .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}"))),
+            (Some(d), None, None) => self
+                .inner
+                .search(&d, top_k)
+                .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}"))),
+            (None, Some(_), Some(_)) => Err(PyValueError::new_err(
+                "Filter is not supported with sparse-only search; provide 'vector' for hybrid search",
+            )),
+            (None, Some(s), None) => self
+                .inner
+                .sparse_search_default(&s, top_k)
+                .map_err(|e| PyRuntimeError::new_err(format!("Sparse search failed: {e}"))),
+            (None, None, _) => Err(PyValueError::new_err(
+                "At least one of 'vector' or 'sparse_vector' must be provided",
+            )),
+        }
     }
 }
 
@@ -214,15 +261,17 @@ impl Collection {
     ///     vector: Dense query vector (list or numpy array). Optional if sparse_vector is given.
     ///     sparse_vector: Sparse query as dict[int, float] or scipy sparse. Optional if vector is given.
     ///     top_k: Number of results to return (default: 10).
+    ///     filter: Optional metadata filter dict for pre-filtering results.
     ///
     /// Returns:
     ///     List of dicts with id, score, and payload.
-    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10))]
+    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None))]
     fn search(
         &self,
         vector: Option<PyObject>,
         sparse_vector: Option<PyObject>,
         top_k: usize,
+        filter: Option<PyObject>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
             let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
@@ -230,36 +279,9 @@ impl Collection {
                 .as_ref()
                 .map(|sv| parse_sparse_vector(py, sv))
                 .transpose()?;
+            let filter_obj = parse_optional_filter(py, filter)?;
 
-            let results = match (dense, sparse) {
-                (Some(d), Some(s)) => {
-                    // Hybrid dense+sparse with RRF
-                    let strategy = CoreFusionStrategy::RRF { k: 60 };
-                    self.inner
-                        .hybrid_sparse_search(&d, &s, top_k, &strategy)
-                        .map_err(|e| {
-                            PyRuntimeError::new_err(format!("Hybrid search failed: {e}"))
-                        })?
-                }
-                (Some(d), None) => {
-                    // Dense-only (backward compatible)
-                    self.inner
-                        .search(&d, top_k)
-                        .map_err(|e| PyRuntimeError::new_err(format!("Search failed: {e}")))?
-                }
-                (None, Some(s)) => {
-                    // Sparse-only
-                    self.inner.sparse_search_default(&s, top_k).map_err(|e| {
-                        PyRuntimeError::new_err(format!("Sparse search failed: {e}"))
-                    })?
-                }
-                (None, None) => {
-                    return Err(PyValueError::new_err(
-                        "At least one of 'vector' or 'sparse_vector' must be provided",
-                    ));
-                }
-            };
-
+            let results = self.dispatch_search(dense, sparse, top_k, filter_obj.as_ref())?;
             Ok(search_results_to_dicts(py, results))
         })
     }

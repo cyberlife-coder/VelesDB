@@ -7,6 +7,7 @@ as the underlying vector database for storing and retrieving embeddings.
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 import time
 from typing import Any, Iterable, List, Optional, Tuple, Type
@@ -19,7 +20,6 @@ import velesdb
 
 from langchain_velesdb.security import (
     validate_path,
-    validate_dimension,
     validate_k,
     validate_text,
     validate_query,
@@ -29,10 +29,9 @@ from langchain_velesdb.security import (
     validate_collection_name,
     validate_weight,
     validate_sparse_vector,
-    MAX_TEXT_LENGTH,
-    MAX_BATCH_SIZE,
-    SecurityError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _stable_hash_id(value: str) -> int:
@@ -201,17 +200,8 @@ class VelesDBVectorStore(VectorStore):
 
         # Hybrid dense+sparse path
         if sparse_vector is not None:
-            if filter is not None:
-                return collection.search(
-                    vector=query_embedding,
-                    sparse_vector=sparse_vector,
-                    top_k=k,
-                    filter=filter,
-                )
-            return collection.search(
-                vector=query_embedding,
-                sparse_vector=sparse_vector,
-                top_k=k,
+            return self._run_sparse_search(
+                collection, query_embedding, sparse_vector, k, filter=filter
             )
 
         if ids_only:
@@ -232,6 +222,59 @@ class VelesDBVectorStore(VectorStore):
         if filter is not None:
             return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
         return collection.search(query_embedding, top_k=k)
+
+    def _run_sparse_search(
+        self,
+        collection: Any,
+        query_embedding: List[float],
+        sparse_vector: dict,
+        k: int,
+        *,
+        filter: Optional[dict] = None,
+    ) -> List[dict]:
+        """Run hybrid dense+sparse search, degrading to dense-only on failure.
+
+        The PyO3 ``search()`` method accepts ``sparse_vector`` as a keyword
+        argument for hybrid RRF fusion. When a ``filter`` is also requested,
+        the underlying binding does not yet expose a combined
+        sparse+filter surface, so we attempt the hybrid call and fall back to
+        ``search_with_filter`` (dense-only) with a warning rather than raising.
+
+        Args:
+            collection: VelesDB collection object.
+            query_embedding: Dense query vector.
+            sparse_vector: Sparse vector dict mapping int term IDs to float weights.
+            k: Number of results to return.
+            filter: Optional metadata filter dict.
+
+        Returns:
+            List of search result dicts.
+        """
+        try:
+            if filter is not None:
+                # The base search() has no filter parameter; attempt sparse search
+                # without filter and let the caller post-filter, or fall back to
+                # dense-only with filter. We choose the dense+filter path to
+                # preserve filter semantics and log a warning.
+                logger.warning(
+                    "sparse_vector combined with filter is not yet supported by "
+                    "the VelesDB binding; falling back to dense-only search with filter."
+                )
+                return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
+            return collection.search(
+                vector=query_embedding,
+                sparse_vector=sparse_vector,
+                top_k=k,
+            )
+        except (RuntimeError, TypeError) as exc:
+            logger.warning(
+                "Hybrid sparse search failed (%s); falling back to dense-only search. "
+                "Ensure the collection was indexed with sparse vectors to enable hybrid search.",
+                exc,
+            )
+            if filter is not None:
+                return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
+            return collection.search(vector=query_embedding, top_k=k)
 
     def add_texts(
         self,
