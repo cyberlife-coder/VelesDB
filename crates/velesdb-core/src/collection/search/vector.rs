@@ -114,8 +114,13 @@ fn rescore_with_metric(
     if metric == DistanceMetric::Euclidean {
         Ok(distance_pq_l2(query, pq_vec, quantizer))
     } else {
+        // reconstruct() returns a vector in OPQ-rotated space when a rotation matrix is
+        // present. Apply the same rotation to the query so both operands are in the same
+        // space before computing the metric. apply_rotation is a no-op (Cow::Borrowed) when
+        // rotation is None, so this adds no overhead for standard PQ.
+        let rotated_query = quantizer.apply_rotation(query);
         let reconstructed = quantizer.reconstruct(pq_vec)?;
-        Ok(metric.calculate(query, &reconstructed))
+        Ok(metric.calculate(&rotated_query, &reconstructed))
     }
 }
 
