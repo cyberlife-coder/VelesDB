@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 59µs HNSW Search • 18.8ns SIMD • 3,670+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 49µs HNSW Search • 17.2ns SIMD • 3,670+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -24,13 +24,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Dot_768D-18.8ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_Dot_768D-17.2ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&label=tests&style=for-the-badge" alt="Tests"/></a>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
-  <img src="https://img.shields.io/badge/⚡_Throughput-41Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+  <img src="https://img.shields.io/badge/⚡_Throughput-44.7Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
   <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
-  <img src="https://img.shields.io/badge/Sparse_Search-226µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-721µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
@@ -163,8 +163,8 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 18.8ns SIMD</h3>
-<p>Native HNSW + AVX2 SIMD.<br/><strong>41 Gelem/s throughput.</strong></p>
+<h3>⚡ 17.2ns SIMD</h3>
+<p>Native HNSW + AVX2 SIMD.<br/><strong>44.7 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📦 15MB Binary</h3>
@@ -198,7 +198,7 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 <p><strong>Security Issues</strong><br/>cargo deny clean</p>
 </td>
 <td align="center" width="20%">
-<h3>⚡ 18.8 ns</h3>
+<h3>⚡ 17.2 ns</h3>
 <p><strong>Dot Product</strong><br/>768D vectors</p>
 </td>
 <td align="center" width="20%">
@@ -212,13 +212,12 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 
 | Benchmark | Result | Context |
 |-----------|--------|---------|
-| **SIMD Dot Product (768D)** | 18.8 ns | 41.0 Gelem/s |
-| **SIMD Cosine (768D)** | 35.6 ns | 21.6 Gelem/s |
-| **SIMD Hamming (768D)** | 37.4 ns | 20.5M ops/sec |
-| **HNSW Search (10K vectors)** | 59 µs | k=10, 768D, measured 2026-03-07 |
-| **ColumnStore Filter (10K)** | 4.5 µs (column_store) / 148 µs (JSON) | eq string, measured 2026-03-07 |
-| **VelesQL Cache Hit** | 444 ns | criterion run, 2026-03-07 |
-| **Sparse Search (10K)** | 226 µs (top10) / 696 µs (top100) | MaxScore DAAT, measured 2026-03-07 |
+| **SIMD Dot Product (768D)** | 17.2 ns | 44.7 Gelem/s |
+| **SIMD Cosine (768D)** | 38.0 ns | 20.2 Gelem/s |
+| **SIMD Hamming (768D)** | 39.7 ns | — |
+| **HNSW Search (10K vectors)** | 48.8 µs | k=10, 768D, measured 2026-03-10 |
+| **VelesQL Cache Hit** | 301 ns | criterion run, 2026-03-10 |
+| **Sparse Search (10K)** | 721 µs (top10) / 712 µs (top100) | MaxScore DAAT, measured 2026-03-10 |
 
 > \*Measured on i9-14900KF, Windows 11, Rust 1.92.0. Latency depends on CPU/flags/dataset.
 
@@ -1233,20 +1232,20 @@ LIMIT 10
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **Dot Product (768D)** | **18.8 ns** | **41.0 Gelem/s** |
-| **Euclidean (768D)** | **20.9 ns** | **36.7 Gelem/s** |
-| **Cosine (768D)** | **35.6 ns** | **21.6 Gelem/s** |
-| **Hamming (768D)**| **37.4 ns** | **20.5M ops/sec** |
-| **Jaccard (768D)** | **22.8 ns** | **33.7M ops/sec** |
+| **Dot Product (768D)** | **17.2 ns** | **44.7 Gelem/s** |
+| **Euclidean (768D)** | **22.2 ns** | **34.6 Gelem/s** |
+| **Cosine (768D)** | **38.0 ns** | **20.2 Gelem/s** |
+| **Hamming (768D)** | **39.7 ns** | — |
+| **Jaccard (768D)** | **29.2 ns** | — |
 
 ### 📊 System Performance (10K Vectors, 768D)
 
 | Benchmark | Result | Details |
 |-----------|--------|----------|
-| **HNSW Search** | **59 µs** | k=10, 768D, measured 2026-03-07 |
-| **Hybrid Search** | **139 µs** | Vector + filter |
-| **Bulk Insert 10K** | **696ms** | 1.4K elem/s |
-| **VelesQL Cache Hit**| **444 ns** | ~2.3M qps, measured 2026-03-07 |
+| **HNSW Search** | **48.8 µs** | k=10, 768D, measured 2026-03-10 |
+| **Sparse Search** | **721 µs** | top-10, MaxScore DAAT, measured 2026-03-10 |
+| **Bulk Insert 1K (parallel)** | **148.8 ms** | 6.7K vec/s |
+| **VelesQL Cache Hit** | **301 ns** | ~3.3M QPS, measured 2026-03-10 |
 | **Recall@10** | **100%** | Accurate mode |
 | **Code Coverage** | **82.30%** | 3,670+ tests |
 

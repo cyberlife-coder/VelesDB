@@ -9,7 +9,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (57µs search, 57ns dot product)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (48.8µs search, 17.2ns dot product)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
@@ -184,11 +184,13 @@ db.create_collection_with_options(
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| Dot Product | **~36 ns** | 28M ops/sec |
-| Euclidean Distance | **~46 ns** | 22M ops/sec |
-| Cosine Similarity | **~93 ns** | 11M ops/sec |
-| Hamming Distance | **~6 ns** | 164M ops/sec |
-| Jaccard Similarity | **~160 ns** | 6M ops/sec |
+| Dot Product | **17.2 ns** | 44.7 Gelem/s |
+| Euclidean Distance | **22.2 ns** | 34.6 Gelem/s |
+| Cosine Similarity | **38.0 ns** | 20.2 Gelem/s |
+| Hamming Distance | **39.7 ns** | — |
+| Jaccard Similarity | **29.2 ns** | — |
+
+*Measured 2026-03-10 on Intel Core i9-14900KF, Rust 1.92.0, `--release`.*
 
 ### End-to-End Benchmark (10k vectors, 768D)
 
