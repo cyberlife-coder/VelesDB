@@ -7,6 +7,7 @@ use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::ast::Query;
 use super::error::ParseError;
@@ -56,7 +57,7 @@ pub struct QueryCache {
     /// Hash function for canonical query text.
     hash_fn: fn(&str) -> u64,
     /// Cache statistics.
-    stats: RwLock<CacheStats>,
+    stats: AtomicCacheStats,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -70,6 +71,29 @@ struct CacheEntry {
     original_query: String,
     canonical_query: String,
     parsed: Query,
+}
+
+#[derive(Debug, Default)]
+struct AtomicCacheStats {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    evictions: AtomicU64,
+}
+
+impl AtomicCacheStats {
+    fn snapshot(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
+    }
+
+    fn clear(&self) {
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
+        self.evictions.store(0, Ordering::Relaxed);
+    }
 }
 
 impl QueryCache {
@@ -89,7 +113,7 @@ impl QueryCache {
             order: RwLock::new(VecDeque::with_capacity(max_size.max(1))),
             max_size: max_size.max(1),
             hash_fn,
-            stats: RwLock::new(CacheStats::default()),
+            stats: AtomicCacheStats::default(),
         }
     }
 
@@ -99,21 +123,30 @@ impl QueryCache {
     ///
     /// Returns `ParseError` if the query is invalid.
     pub fn parse(&self, query: &str) -> Result<Query, ParseError> {
+        self.parse_impl(query, true)
+    }
+
+    #[cfg(feature = "internal-bench")]
+    pub(crate) fn parse_without_stats(&self, query: &str) -> Result<Query, ParseError> {
+        self.parse_impl(query, false)
+    }
+
+    fn parse_impl(&self, query: &str, record_stats: bool) -> Result<Query, ParseError> {
         let canonical_query = canonicalize_query(query);
+        let original_query = query.to_string();
         let hash = (self.hash_fn)(&canonical_query);
 
-        // Hit path: hold cache.write() while updating LRU order to close the
-        // TOCTOU gap between the read and order.write() that would otherwise
-        // allow a concurrent miss path to evict the key between the two lock
-        // acquisitions. The write lock is released before parsing on miss.
+        // Hit path: hold an upgradable read while promoting the LRU key.
+        // This keeps writers out of the cache map without taking a full write lock.
         {
-            let cache = self.cache.write();
+            let cache = self.cache.upgradable_read();
             let cached = cache.get(&hash).and_then(|entries| {
                 entries
                     .iter()
                     .find(|entry| {
                         // Strict equality check on hit to avoid query confusion.
-                        entry.original_query == query && entry.canonical_query == canonical_query
+                        entry.original_query == original_query
+                            && entry.canonical_query == canonical_query
                     })
                     .cloned()
             });
@@ -121,7 +154,7 @@ impl QueryCache {
             if let Some(cached) = cached {
                 let key = CacheKey {
                     hash,
-                    original_query: query.to_string(),
+                    original_query: original_query.clone(),
                 };
                 // O(n) LRU promotion: VecDeque::remove shifts elements. For L1 cache size
                 // of 1000 entries, this is ~4KB of data movement per hit — acceptable for
@@ -133,8 +166,9 @@ impl QueryCache {
                 }
                 order.push_back(key);
                 drop(order);
-                drop(cache);
-                self.stats.write().hits += 1;
+                if record_stats {
+                    self.stats.hits.fetch_add(1, Ordering::Relaxed);
+                }
                 return Ok(cached.parsed);
             }
         }
@@ -144,9 +178,9 @@ impl QueryCache {
         {
             let mut cache = self.cache.write();
             let mut order = self.order.write();
-            let mut stats = self.stats.write();
-
-            stats.misses += 1;
+            if record_stats {
+                self.stats.misses.fetch_add(1, Ordering::Relaxed);
+            }
 
             while Self::entry_count(&cache) >= self.max_size {
                 if let Some(oldest) = order.pop_front() {
@@ -156,13 +190,15 @@ impl QueryCache {
                             cache.remove(&oldest.hash);
                         }
                     }
-                    stats.evictions += 1;
+                    if record_stats {
+                        self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
 
             let key = CacheKey {
                 hash,
-                original_query: query.to_string(),
+                original_query: original_query.clone(),
             };
 
             if let Some(pos) = order.iter().position(|existing| existing == &key) {
@@ -170,7 +206,7 @@ impl QueryCache {
             }
 
             let new_entry = CacheEntry {
-                original_query: query.to_string(),
+                original_query,
                 canonical_query,
                 parsed: parsed.clone(),
             };
@@ -194,7 +230,7 @@ impl QueryCache {
     /// Returns current cache statistics.
     #[must_use]
     pub fn stats(&self) -> CacheStats {
-        *self.stats.read()
+        self.stats.snapshot()
     }
 
     /// Returns the current number of cached queries.
@@ -213,11 +249,10 @@ impl QueryCache {
     pub fn clear(&self) {
         let mut cache = self.cache.write();
         let mut order = self.order.write();
-        let mut stats = self.stats.write();
 
         cache.clear();
         order.clear();
-        *stats = CacheStats::default();
+        self.stats.clear();
     }
 
     fn entry_count(cache: &FxHashMap<u64, Vec<CacheEntry>>) -> usize {

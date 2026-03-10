@@ -15,6 +15,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use velesdb_core::index::sparse::{sparse_search, SparseInvertedIndex, SparseVector};
+#[cfg(feature = "internal-bench")]
+use velesdb_core::internal_bench;
 
 /// Generate a corpus of SPLADE-like sparse vectors.
 ///
@@ -68,13 +70,71 @@ fn sparse_insert_benchmarks(c: &mut Criterion) {
 
     // Parallel insert of 10K documents (4 threads, rayon)
     #[cfg(feature = "persistence")]
-    group.bench_function("parallel_10k_4threads", |b| {
+    group.bench_function("parallel_10k_rayon_doc_granular", |b| {
         use rayon::prelude::*;
         b.iter(|| {
             let index = Arc::new(SparseInvertedIndex::new());
             corpus.par_iter().enumerate().for_each(|(i, vec)| {
                 index.insert(black_box(i as u64), black_box(vec));
             });
+            index
+        });
+    });
+
+    group.bench_function("parallel_10k_manual_4x2500_doc_granular", |b| {
+        b.iter(|| {
+            let index = Arc::new(SparseInvertedIndex::new());
+            let corpus = Arc::new(corpus.clone());
+            let mut handles = Vec::with_capacity(4);
+
+            for chunk_id in 0..4_usize {
+                let index = Arc::clone(&index);
+                let docs = Arc::clone(&corpus);
+                handles.push(std::thread::spawn(move || {
+                    let start = chunk_id * 2500;
+                    let end = start + 2500;
+                    for i in start..end {
+                        index.insert(i as u64, &docs[i]);
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().expect("thread panicked");
+            }
+
+            index
+        });
+    });
+
+    #[cfg(feature = "internal-bench")]
+    group.bench_function("parallel_10k_manual_4x2500_chunked", |b| {
+        let docs: Vec<(u64, SparseVector)> = corpus
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, vec)| (i as u64, vec))
+            .collect();
+
+        b.iter(|| {
+            let index = Arc::new(SparseInvertedIndex::new());
+            let docs = Arc::new(docs.clone());
+            let mut handles = Vec::with_capacity(4);
+
+            for chunk_id in 0..4_usize {
+                let index = Arc::clone(&index);
+                let docs = Arc::clone(&docs);
+                handles.push(std::thread::spawn(move || {
+                    let start = chunk_id * 2500;
+                    let end = start + 2500;
+                    internal_bench::sparse_insert_batch(&index, &docs[start..end]);
+                }));
+            }
+
+            for handle in handles {
+                handle.join().expect("thread panicked");
+            }
+
             index
         });
     });

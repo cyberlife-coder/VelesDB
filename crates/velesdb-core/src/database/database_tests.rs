@@ -2,6 +2,7 @@ use super::*;
 use crate::collection::graph::GraphEdge;
 use crate::point::Point;
 use crate::velesql::Parser;
+use crate::{CollectionType, DistanceMetric, StorageMode};
 use tempfile::tempdir;
 
 #[test]

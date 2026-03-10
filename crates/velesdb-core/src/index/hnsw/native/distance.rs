@@ -25,6 +25,12 @@ pub trait DistanceEngine: Send + Sync {
 
     /// Returns the metric type for this engine.
     fn metric(&self) -> DistanceMetric;
+
+    /// Returns whether the engine expects cosine inputs to be pre-normalized.
+    #[must_use]
+    fn is_pre_normalized(&self) -> bool {
+        false
+    }
 }
 
 /// CPU scalar distance computation (baseline, no SIMD).
@@ -220,6 +226,7 @@ impl DistanceEngine for AdaptiveSimdDistance {
 pub struct CachedSimdDistance {
     metric: DistanceMetric,
     engine: crate::simd_native::DistanceEngine,
+    pre_normalized: bool,
 }
 
 impl CachedSimdDistance {
@@ -229,6 +236,19 @@ impl CachedSimdDistance {
         Self {
             metric,
             engine: crate::simd_native::DistanceEngine::new(dimension),
+            pre_normalized: false,
+        }
+    }
+
+    /// Creates a cached SIMD engine that expects cosine vectors to be pre-normalized.
+    ///
+    /// For non-cosine metrics, this is equivalent to [`Self::new`].
+    #[must_use]
+    pub fn new_prenormalized(metric: DistanceMetric, dimension: usize) -> Self {
+        Self {
+            metric,
+            engine: crate::simd_native::DistanceEngine::new(dimension),
+            pre_normalized: metric == DistanceMetric::Cosine,
         }
     }
 }
@@ -238,6 +258,9 @@ impl DistanceEngine for CachedSimdDistance {
     #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self.metric {
+            DistanceMetric::Cosine if self.pre_normalized => {
+                1.0 - self.engine.cosine_similarity(a, b).clamp(-1.0, 1.0)
+            }
             DistanceMetric::Cosine => 1.0 - self.engine.cosine_similarity(a, b),
             DistanceMetric::Euclidean => self.engine.euclidean(a, b),
             DistanceMetric::DotProduct => -self.engine.dot_product(a, b),
@@ -260,6 +283,10 @@ impl DistanceEngine for CachedSimdDistance {
 
     fn metric(&self) -> DistanceMetric {
         self.metric
+    }
+
+    fn is_pre_normalized(&self) -> bool {
+        self.pre_normalized
     }
 }
 

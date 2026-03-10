@@ -2,6 +2,13 @@
 
 Benchmark suite comparing VelesDB against pgvector (HNSW).
 
+## Benchmark Guardrails
+
+- Microbench numbers are **host-specific** and must be reported with CPU, OS, Rust toolchain, and feature flags.
+- Internal SIMD, sparse, and `VelesQL` cache measurements should be run with `--features internal-bench`.
+- Do not claim superiority over FAISS, Qdrant, SimSIMD, or other systems unless the dataset, recall target, hardware, and methodology are matched.
+- For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
+
 ## 🚀 v0.7.3 Results: VelesDB Recall ≥95% Guaranteed
 
 ### Search Performance (100K vectors, 768D, Docker)
@@ -89,6 +96,18 @@ Both databases are measured with **total time including index construction**:
 - **pgvector**: Raw INSERT + separate CREATE INDEX time
 
 This ensures an apples-to-apples comparison of the complete ingestion pipeline.
+
+### Controlled-host microbenchmarks
+
+Use these commands for host-local remediation runs:
+
+```bash
+cargo bench -p velesdb-core --features internal-bench --bench simd_benchmark -- 768 --noplot
+cargo bench -p velesdb-core --features internal-bench --bench sparse_benchmark -- sparse_insert --noplot
+cargo bench -p velesdb-core --features internal-bench --bench velesql_benchmark -- velesql_cache --noplot
+```
+
+Report the exact host and toolchain alongside the measured values.
 
 ### HNSW Parameters (Adaptive)
 

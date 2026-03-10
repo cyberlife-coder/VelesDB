@@ -1,6 +1,8 @@
 //! Benchmark for `VelesQL` parser, cache and EXPLAIN performance.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+#[cfg(feature = "internal-bench")]
+use velesdb_core::internal_bench;
 use velesdb_core::velesql::{Parser, QueryCache, QueryPlan};
 
 /// Simple SELECT query
@@ -93,14 +95,42 @@ fn bench_throughput(c: &mut Criterion) {
 fn bench_cache_hit(c: &mut Criterion) {
     let cache = QueryCache::new(1000);
     // Warm up cache
-    let _ = cache.parse(SIMPLE_QUERY);
+    let _ = cache.parse(COMPLEX_QUERY);
 
     c.bench_function("velesql_cache_hit", |b| {
         b.iter(|| {
-            let _ = black_box(cache.parse(SIMPLE_QUERY));
+            let _ = black_box(cache.parse(COMPLEX_QUERY));
         });
     });
 }
+
+#[cfg(feature = "internal-bench")]
+fn bench_cache_hash_only(c: &mut Criterion) {
+    c.bench_function("velesql_cache_hash_only", |b| {
+        b.iter(|| black_box(internal_bench::velesql_canonical_hash(COMPLEX_QUERY)));
+    });
+}
+
+#[cfg(not(feature = "internal-bench"))]
+fn bench_cache_hash_only(_: &mut Criterion) {}
+
+#[cfg(feature = "internal-bench")]
+fn bench_cache_hit_no_stats(c: &mut Criterion) {
+    let cache = QueryCache::new(1000);
+    let _ = cache.parse(COMPLEX_QUERY);
+
+    c.bench_function("velesql_cache_hit_no_stats", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                internal_bench::velesql_parse_without_stats(&cache, COMPLEX_QUERY)
+                    .expect("query should stay valid"),
+            );
+        });
+    });
+}
+
+#[cfg(not(feature = "internal-bench"))]
+fn bench_cache_hit_no_stats(_: &mut Criterion) {}
 
 /// Benchmark cache vs direct parsing
 fn bench_cache_vs_direct(c: &mut Criterion) {
@@ -231,7 +261,9 @@ criterion_group!(
     bench_parse_complex,
     bench_parse_multi_condition,
     bench_throughput,
+    bench_cache_hash_only,
     bench_cache_hit,
+    bench_cache_hit_no_stats,
     bench_cache_vs_direct,
     bench_realistic_workload,
     bench_explain_simple,

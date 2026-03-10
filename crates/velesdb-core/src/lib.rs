@@ -98,6 +98,11 @@ pub mod half_precision;
 mod half_precision_tests;
 #[cfg(feature = "persistence")]
 pub mod index;
+#[cfg(feature = "internal-bench")]
+#[doc(hidden)]
+pub mod internal_bench;
+#[cfg(all(test, feature = "internal-bench"))]
+mod internal_bench_tests;
 pub mod metrics;
 #[cfg(test)]
 mod metrics_tests;

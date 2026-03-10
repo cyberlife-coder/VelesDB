@@ -72,6 +72,54 @@ impl MutableSegment {
         is_new
     }
 
+    fn merge_batch_postings(entries: &mut Vec<PostingEntry>, mut updates: Vec<PostingEntry>) {
+        if updates.is_empty() {
+            return;
+        }
+
+        updates.sort_by_key(|entry| entry.doc_id);
+
+        let mut deduped_rev = Vec::with_capacity(updates.len());
+        for entry in updates.into_iter().rev() {
+            if deduped_rev
+                .last()
+                .is_none_or(|last: &PostingEntry| last.doc_id != entry.doc_id)
+            {
+                deduped_rev.push(entry);
+            }
+        }
+        deduped_rev.reverse();
+
+        let existing = std::mem::take(entries);
+        let mut merged = Vec::with_capacity(existing.len() + deduped_rev.len());
+        let mut existing_iter = existing.into_iter().peekable();
+        let mut updates_iter = deduped_rev.into_iter().peekable();
+
+        while let (Some(existing_entry), Some(update_entry)) =
+            (existing_iter.peek(), updates_iter.peek())
+        {
+            match existing_entry.doc_id.cmp(&update_entry.doc_id) {
+                std::cmp::Ordering::Less => {
+                    merged.push(*existing_entry);
+                    existing_iter.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    merged.push(*update_entry);
+                    updates_iter.next();
+                }
+                std::cmp::Ordering::Equal => {
+                    merged.push(*update_entry);
+                    existing_iter.next();
+                    updates_iter.next();
+                }
+            }
+        }
+
+        merged.extend(existing_iter);
+        merged.extend(updates_iter);
+        *entries = merged;
+    }
+
     /// Removes all posting entries for `point_id`.
     ///
     /// Returns `true` if the point had at least one entry in this segment
@@ -213,6 +261,67 @@ impl SparseInvertedIndex {
         let is_new = seg.insert(point_id, vector);
         if is_new {
             self.doc_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        if seg.doc_count >= FREEZE_THRESHOLD {
+            self.freeze_inner(&mut seg);
+        }
+    }
+
+    /// Inserts a batch of sparse vectors while acquiring the mutable lock once.
+    ///
+    /// Preserves the current per-term upsert semantics of repeated `insert()`:
+    /// later entries in the batch overwrite earlier entries for the same
+    /// `(term_id, doc_id)` pair, while untouched terms from prior inserts remain.
+    pub(crate) fn insert_batch_chunk(&self, docs: &[(u64, SparseVector)]) {
+        if docs.is_empty() {
+            return;
+        }
+
+        let mut batch_postings: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
+        let mut batch_max_weights: FxHashMap<u32, f32> = FxHashMap::default();
+        let mut batch_doc_ids: FxHashSet<u64> = FxHashSet::default();
+
+        for (point_id, vector) in docs {
+            batch_doc_ids.insert(*point_id);
+            for (&term_id, &weight) in vector.indices.iter().zip(vector.values.iter()) {
+                batch_postings
+                    .entry(term_id)
+                    .or_default()
+                    .push(PostingEntry {
+                        doc_id: *point_id,
+                        weight,
+                    });
+                let abs_weight = weight.abs();
+                let max_weight = batch_max_weights.entry(term_id).or_insert(0.0);
+                if abs_weight > *max_weight {
+                    *max_weight = abs_weight;
+                }
+            }
+        }
+
+        let mut seg = self.mutable.write();
+        let mut new_docs = 0_u64;
+        for point_id in batch_doc_ids {
+            if seg.doc_set.insert(point_id) {
+                seg.doc_count += 1;
+                new_docs += 1;
+            }
+        }
+        if new_docs > 0 {
+            self.doc_count.fetch_add(new_docs, Ordering::Relaxed);
+        }
+
+        for (term_id, updates) in batch_postings {
+            let entries = seg.postings.entry(term_id).or_default();
+            MutableSegment::merge_batch_postings(entries, updates);
+
+            if let Some(abs_weight) = batch_max_weights.get(&term_id) {
+                let max_weight = seg.max_weights.entry(term_id).or_insert(0.0);
+                if *abs_weight > *max_weight {
+                    *max_weight = *abs_weight;
+                }
+            }
         }
 
         if seg.doc_count >= FREEZE_THRESHOLD {

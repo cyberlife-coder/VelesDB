@@ -86,7 +86,7 @@ pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Used as fallback when no SIMD path matches.
 #[inline]
-pub(super) fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
     let mut dot = 0.0_f32;
     let mut norm_a_sq = 0.0_f32;
     let mut norm_b_sq = 0.0_f32;

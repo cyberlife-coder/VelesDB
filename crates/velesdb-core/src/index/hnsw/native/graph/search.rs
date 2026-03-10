@@ -11,6 +11,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Searches for k nearest neighbors.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
+        let prepared_query = self.prepare_query(query);
+        let query = prepared_query.as_slice();
         let entry_point = *self.entry_point.read();
         let Some(ep) = entry_point else {
             return Vec::new();
@@ -59,6 +61,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         ef_search: usize,
         num_probes: usize,
     ) -> Vec<(NodeId, f32)> {
+        let prepared_query = self.prepare_query(query);
+        let query = prepared_query.as_slice();
         let entry_point = *self.entry_point.read();
         let Some(ep) = entry_point else {
             return Vec::new();
@@ -243,5 +247,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             results.into_iter().map(|(d, n)| (n, d.0)).collect();
         result_vec.sort_by(|a, b| a.1.total_cmp(&b.1));
         result_vec
+    }
+
+    #[inline]
+    fn prepare_query(&self, query: &[f32]) -> Vec<f32> {
+        let mut prepared = query.to_vec();
+        if self.distance.is_pre_normalized()
+            && self.distance.metric() == crate::DistanceMetric::Cosine
+        {
+            crate::simd_native::normalize_inplace_native(&mut prepared);
+        }
+        prepared
     }
 }

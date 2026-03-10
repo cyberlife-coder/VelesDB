@@ -188,9 +188,9 @@ fn parse_payload(
 ) -> PyResult<Option<serde_json::Value>> {
     match payload_obj {
         Some(p) => {
-            let dict: HashMap<String, PyObject> = p.extract(py).map_err(|_| {
-                PyValueError::new_err("payload must be a dict[str, Any]")
-            })?;
+            let dict: HashMap<String, PyObject> = p
+                .extract(py)
+                .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
             let json_map: serde_json::Map<String, serde_json::Value> = dict
                 .into_iter()
                 .filter_map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
