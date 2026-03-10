@@ -6,6 +6,7 @@
 //! Run with: `cargo bench --bench dual_precision_benchmark`
 
 #![allow(clippy::cast_precision_loss)]
+#![allow(deprecated)] // SimdDistance is deprecated in favor of CachedSimdDistance
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::distance::DistanceMetric;

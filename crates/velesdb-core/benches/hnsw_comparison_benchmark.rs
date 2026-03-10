@@ -2,6 +2,8 @@
 //!
 //! Run with: `cargo bench --bench hnsw_comparison_benchmark`
 
+#![allow(deprecated)] // SimdDistance is deprecated in favor of CachedSimdDistance
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use velesdb_core::index::hnsw::native::{NativeHnsw, SimdDistance};
 use velesdb_core::index::hnsw::{HnswIndex, HnswParams};

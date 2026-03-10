@@ -69,16 +69,15 @@ pub(crate) fn signs_to_bits(values: &[f32], dim: usize) -> Vec<u64> {
 /// Apply a flat row-major rotation matrix to a vector.
 ///
 /// Computes `result[i] = sum_j rotation[i * dim + j] * vector[j]` for each `i`.
+///
+/// F-12: Uses SIMD dot product per row instead of scalar iterator chain.
+/// For dim=768, this is ~8x faster (SIMD dot product vs scalar sum).
 #[must_use]
 pub(crate) fn apply_rotation_flat(rotation: &[f32], vector: &[f32], dim: usize) -> Vec<f32> {
     (0..dim)
         .map(|i| {
             let row_start = i * dim;
-            rotation[row_start..row_start + dim]
-                .iter()
-                .zip(vector.iter())
-                .map(|(&r, &v)| r * v)
-                .sum()
+            crate::simd_native::dot_product_native(&rotation[row_start..row_start + dim], vector)
         })
         .collect()
 }

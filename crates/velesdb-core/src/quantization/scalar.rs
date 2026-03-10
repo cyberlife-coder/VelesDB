@@ -184,19 +184,20 @@ pub fn euclidean_squared_quantized(query: &[f32], quantized: &QuantizedVector) -
 
 /// Computes approximate cosine similarity between a query (f32) and quantized vector.
 ///
+/// F-10: Computes quantized vector norm without full dequantization allocation.
+/// Uses on-the-fly dequantization to accumulate norm squared, avoiding a
+/// 3KB `Vec<f32>` allocation per call (for dim=768).
+///
 /// Note: For best accuracy, the query should be normalized.
 #[must_use]
 pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -> f32 {
     use crate::simd_native;
 
     let dot = dot_product_quantized(query, quantized);
-
-    // Compute norms using direct SIMD dispatch
     let query_norm = simd_native::norm_native(query);
 
-    // Dequantize to compute quantized vector norm (could be cached)
-    let reconstructed = quantized.to_f32();
-    let quantized_norm = simd_native::norm_native(&reconstructed);
+    // F-10: Compute quantized norm without allocating a full f32 vector
+    let quantized_norm = quantized_vector_norm(quantized);
 
     if query_norm < f32::EPSILON || quantized_norm < f32::EPSILON {
         return 0.0;
@@ -205,18 +206,62 @@ pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -
     dot / (query_norm * quantized_norm)
 }
 
+/// Computes the L2 norm of a quantized vector without full dequantization.
+///
+/// F-10: Avoids allocating a `Vec<f32>` just to compute a norm.
+/// Uses on-the-fly dequantization with 4-wide unrolling.
+#[inline]
+fn quantized_vector_norm(quantized: &QuantizedVector) -> f32 {
+    let range = quantized.max - quantized.min;
+    if range < f32::EPSILON {
+        let value = quantized.min;
+        #[allow(clippy::cast_precision_loss)]
+        return value.abs() * (quantized.data.len() as f32).sqrt();
+    }
+
+    let scale = range / 255.0;
+    let offset = quantized.min;
+    let len = quantized.data.len();
+    let chunks = len / 4;
+    let remainder = len % 4;
+
+    let mut sum0: f32 = 0.0;
+    let mut sum1: f32 = 0.0;
+    let mut sum2: f32 = 0.0;
+    let mut sum3: f32 = 0.0;
+
+    for i in 0..chunks {
+        let base = i * 4;
+        let d0 = f32::from(quantized.data[base]) * scale + offset;
+        let d1 = f32::from(quantized.data[base + 1]) * scale + offset;
+        let d2 = f32::from(quantized.data[base + 2]) * scale + offset;
+        let d3 = f32::from(quantized.data[base + 3]) * scale + offset;
+        sum0 += d0 * d0;
+        sum1 += d1 * d1;
+        sum2 += d2 * d2;
+        sum3 += d3 * d3;
+    }
+
+    let base = chunks * 4;
+    for i in 0..remainder {
+        let d = f32::from(quantized.data[base + i]) * scale + offset;
+        sum0 += d * d;
+    }
+
+    (sum0 + sum1 + sum2 + sum3).sqrt()
+}
+
 // =========================================================================
 // SIMD-optimized distance functions for SQ8 quantized vectors
 // =========================================================================
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[allow(unused_imports)]
-use std::arch::x86_64::*;
+// F-11: Removed dead `use std::arch::x86_64::*` import — no intrinsics used in this file.
 
-/// SIMD-optimized dot product between f32 query and SQ8 quantized vector.
+/// Dot product between f32 query and SQ8 quantized vector with 8-wide unrolling.
 ///
-/// Uses AVX2 intrinsics on `x86_64` for ~2-3x speedup over scalar.
-/// Falls back to scalar on other architectures.
+/// F-11: Renamed from `simd_dot_product_avx2` — this is an unrolled scalar
+/// implementation, NOT actual AVX2 intrinsics. The 8-wide unrolling helps
+/// LLVM auto-vectorize but does not guarantee SIMD execution.
 #[must_use]
 pub fn dot_product_quantized_simd(query: &[f32], quantized: &QuantizedVector) -> f32 {
     debug_assert_eq!(
@@ -234,43 +279,27 @@ pub fn dot_product_quantized_simd(query: &[f32], quantized: &QuantizedVector) ->
     let scale = range / 255.0;
     let offset = quantized.min;
 
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    {
-        simd_dot_product_avx2(query, &quantized.data, scale, offset)
-    }
-
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-    {
-        // Scalar fallback
-        query
-            .iter()
-            .zip(quantized.data.iter())
-            .map(|(&q, &v)| q * (f32::from(v) * scale + offset))
-            .sum()
-    }
+    dot_product_dequant_unrolled_8(query, &quantized.data, scale, offset)
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+/// F-11: Honest name — unrolled scalar dequantize+dot, not intrinsics.
 #[inline]
-fn simd_dot_product_avx2(query: &[f32], data: &[u8], scale: f32, offset: f32) -> f32 {
+fn dot_product_dequant_unrolled_8(query: &[f32], data: &[u8], scale: f32, offset: f32) -> f32 {
     let len = query.len();
-    let simd_len = len / 8;
+    let chunks = len / 8;
     let remainder = len % 8;
 
     let mut sum = 0.0f32;
 
-    // Process 8 elements at a time
-    for i in 0..simd_len {
+    for i in 0..chunks {
         let base = i * 8;
-        // Dequantize and compute dot product for 8 elements
         for j in 0..8 {
             let dequant = f32::from(data[base + j]) * scale + offset;
             sum += query[base + j] * dequant;
         }
     }
 
-    // Handle remainder
-    let base = simd_len * 8;
+    let base = chunks * 8;
     for i in 0..remainder {
         let dequant = f32::from(data[base + i]) * scale + offset;
         sum += query[base + i] * dequant;
@@ -330,39 +359,21 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
 
 /// SIMD-optimized cosine similarity between f32 query and SQ8 vector.
 ///
-/// Caches the quantized vector norm for repeated queries against same vector.
+/// F-10: Uses `quantized_vector_norm` for allocation-free norm computation,
+/// consistent with the non-SIMD `cosine_similarity_quantized`.
 #[must_use]
 pub fn cosine_similarity_quantized_simd(query: &[f32], quantized: &QuantizedVector) -> f32 {
     use crate::simd_native;
 
     let dot = dot_product_quantized_simd(query, quantized);
-
-    // Compute query norm using direct SIMD dispatch
     let query_norm = simd_native::norm_native(query);
-    let query_norm_sq = query_norm * query_norm;
 
-    // Compute quantized norm (could be cached in QuantizedVector)
-    let range = quantized.max - quantized.min;
-    let scale = if range < f32::EPSILON {
-        0.0
-    } else {
-        range / 255.0
-    };
-    let offset = quantized.min;
+    // F-10: Compute quantized norm without allocating a full f32 vector
+    let quantized_norm = quantized_vector_norm(quantized);
 
-    let quantized_norm_sq: f32 = quantized
-        .data
-        .iter()
-        .map(|&v| {
-            let dequant = f32::from(v) * scale + offset;
-            dequant * dequant
-        })
-        .sum();
-
-    let denom = (query_norm_sq * quantized_norm_sq).sqrt();
-    if denom < f32::EPSILON {
+    if query_norm < f32::EPSILON || quantized_norm < f32::EPSILON {
         return 0.0;
     }
 
-    dot / denom
+    dot / (query_norm * quantized_norm)
 }
