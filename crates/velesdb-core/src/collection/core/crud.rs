@@ -327,9 +327,6 @@ impl Collection {
         // NOTE: index.save() removed - too slow for batch operations
         // Call collection.flush() explicitly if durability is critical
 
-        // Invalidate stats cache so the next get_stats() recomputes fresh data.
-        *self.cached_stats.lock() = None;
-
         // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
         if !sparse_batch.is_empty() {
             // WAL-before-apply: persist the intent to disk BEFORE mutating the
@@ -353,6 +350,11 @@ impl Collection {
                 idx.insert_batch_chunk(&docs);
             }
         }
+
+        // Invalidate stats cache so the next get_stats() recomputes fresh data.
+        // Placed AFTER sparse mutations so a concurrent get_stats() cannot cache
+        // stats that are missing the sparse data (mirrors ordering in upsert()).
+        *self.cached_stats.lock() = None;
 
         // Bump write generation once per batch (CACHE-01 invalidation counter).
         //
