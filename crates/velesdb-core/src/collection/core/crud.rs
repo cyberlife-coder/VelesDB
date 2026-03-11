@@ -242,6 +242,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if any point has a mismatched dimension.
+    #[allow(clippy::too_many_lines)] // Monolithic for coherent lock-ordering; refactor tracked separately.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
@@ -263,6 +264,21 @@ impl Collection {
         // Perf: Collect vectors for parallel HNSW insertion (needed for clone anyway)
         let vectors_for_hnsw: Vec<(u64, Vec<f32>)> =
             points.iter().map(|p| (p.id, p.vector.clone())).collect();
+
+        // Collect sparse vectors grouped by index name for batch insert.
+        // LOCK ORDER: sparse_indexes(9) acquired AFTER all lower-numbered locks.
+        let mut sparse_batch: BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>> =
+            BTreeMap::new();
+        for point in points {
+            if let Some(sv_map) = &point.sparse_vectors {
+                for (name, sv) in sv_map {
+                    sparse_batch
+                        .entry(name.clone())
+                        .or_default()
+                        .push((point.id, sv.clone()));
+                }
+            }
+        }
 
         // Perf: Single batch WAL write + contiguous mmap write
         // Use references from vectors_for_hnsw to avoid double allocation
@@ -311,7 +327,33 @@ impl Collection {
         // NOTE: index.save() removed - too slow for batch operations
         // Call collection.flush() explicitly if durability is critical
 
+        // LOCK ORDER: sparse_indexes(9) — acquired after all lower-numbered locks released.
+        if !sparse_batch.is_empty() {
+            // WAL-before-apply: persist the intent to disk BEFORE mutating the
+            // in-memory index, matching the semantics of upsert().
+            #[cfg(feature = "persistence")]
+            {
+                for (name, docs) in &sparse_batch {
+                    let wal_path =
+                        crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                    for (point_id, sv) in docs {
+                        crate::index::sparse::persistence::wal_append_upsert(
+                            &wal_path, *point_id, sv,
+                        )?;
+                    }
+                }
+            }
+
+            let mut indexes = self.sparse_indexes.write();
+            for (name, docs) in sparse_batch {
+                let idx = indexes.entry(name).or_default();
+                idx.insert_batch_chunk(&docs);
+            }
+        }
+
         // Invalidate stats cache so the next get_stats() recomputes fresh data.
+        // Placed AFTER sparse mutations so a concurrent get_stats() cannot cache
+        // stats that are missing the sparse data (mirrors ordering in upsert()).
         *self.cached_stats.lock() = None;
 
         // Bump write generation once per batch (CACHE-01 invalidation counter).

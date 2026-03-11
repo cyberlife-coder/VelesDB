@@ -30,15 +30,16 @@ jobs:
           - name: Linux all features
             os: ubuntu-latest
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
+          # velesdb-wasm is wasm32-only; it is checked in the wasm-no-default job below.
           - name: Linux no default features
             os: ubuntu-latest
-            command: cargo check -p velesdb-core -p velesdb-wasm --no-default-features
+            command: cargo check -p velesdb-core --no-default-features
           - name: Windows all features
             os: windows-latest
             command: cargo check --workspace --all-targets --all-features --exclude velesdb-python
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,7 +64,7 @@ jobs:
     name: WASM no default features
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -74,15 +75,15 @@ jobs:
         with:
           shared-key: "velesdb-compat-wasm"
 
-      - name: Check velesdb-core on wasm32 no-default-features
-        run: cargo check -p velesdb-core --target wasm32-unknown-unknown --no-default-features
+      - name: Check velesdb-core and velesdb-wasm on wasm32 no-default-features
+        run: cargo check -p velesdb-core -p velesdb-wasm --target wasm32-unknown-unknown --no-default-features
 
   loom-check:
     name: Loom check (nightly optional)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # nightly
         with:

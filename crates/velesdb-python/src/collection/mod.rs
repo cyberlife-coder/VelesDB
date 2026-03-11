@@ -5,6 +5,10 @@
 //! - `query` — VelesQL query/match/explain methods
 //! - `mutation` — upsert, delete, flush, stream_insert
 //! - `index` — index CRUD (property, range)
+//!
+//! Note: Multiple `#[pymethods]` impl blocks across sub-modules are intentional.
+//! PyO3 ≥ 0.21 supports this natively via inventory-based method registration.
+//! rust-analyzer may incorrectly flag `PyMethods` trait conflicts — verify with `cargo build`.
 
 mod index;
 mod mutation;

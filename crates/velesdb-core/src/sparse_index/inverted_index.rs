@@ -72,6 +72,10 @@ impl MutableSegment {
         is_new
     }
 
+    // Reason: called by `insert_batch_chunk` which is called from `collection::core::crud::upsert_bulk`.
+    // The dead_code lint has a false positive here because the call chain goes through
+    // a `RwLockWriteGuard<BTreeMap<_,SparseInvertedIndex>>` deref which the lint does not trace.
+    #[allow(dead_code)]
     fn merge_batch_postings(entries: &mut Vec<PostingEntry>, mut updates: Vec<PostingEntry>) {
         if updates.is_empty() {
             return;
@@ -273,6 +277,10 @@ impl SparseInvertedIndex {
     /// Preserves the current per-term upsert semantics of repeated `insert()`:
     /// later entries in the batch overwrite earlier entries for the same
     /// `(term_id, doc_id)` pair, while untouched terms from prior inserts remain.
+    // Reason: called from `collection::core::crud::upsert_bulk` and `internal_bench::sparse_insert_batch`.
+    // The dead_code lint has a false positive because the call site reaches this method through
+    // a `RwLockWriteGuard<BTreeMap<_,SparseInvertedIndex>>` deref chain which the lint does not trace.
+    #[allow(dead_code)]
     pub(crate) fn insert_batch_chunk(&self, docs: &[(u64, SparseVector)]) {
         if docs.is_empty() {
             return;

@@ -43,7 +43,7 @@ jobs:
     name: Rust Cross-Crate Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.83"
@@ -52,7 +52,7 @@ jobs:
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
       - name: Cargo check propagated crates
         run: |
           cargo check \
@@ -68,14 +68,14 @@ jobs:
     name: Python SDK Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.83"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
       - name: Cargo check velesdb-python
         env:
           PYO3_PYTHON: python3
@@ -88,10 +88,10 @@ jobs:
     name: TypeScript SDK Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: sdks/typescript/package-lock.json
       - name: Install dependencies
@@ -110,8 +110,8 @@ jobs:
     name: Python Integrations Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
       - name: Static integration checks
@@ -133,21 +133,21 @@ jobs:
     name: Demos and Examples Smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.83"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: |
             demos/tauri-rag-app/package-lock.json
             sdks/typescript/package-lock.json
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
       - name: Rust examples compile smoke
         run: cargo check --manifest-path examples/rust/Cargo.toml
       - name: Python examples syntax smoke
@@ -164,8 +164,8 @@ jobs:
     name: Contract and Doc Guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
       - name: TODO/FIXME/HACK governance
@@ -179,13 +179,16 @@ jobs:
     name: Core Regression Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.83"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
+        with:
+          shared-key: "propagation-regressions"
       - name: Traversal and create-guard regressions
         run: |
-          cargo test -p velesdb-core test_create_collection_rejects_existing_on_disk_dir_not_loaded
-          cargo test -p velesdb-core test_traverse_bfs_config_respects_min_depth
-          cargo test -p velesdb-core test_legacy_traverse_paths_use_edge_ids
+          cargo test -p velesdb-core -- \
+            test_create_collection_rejects_existing_on_disk_dir_not_loaded \
+            test_traverse_bfs_config_respects_min_depth \
+            test_legacy_traverse_paths_use_edge_ids

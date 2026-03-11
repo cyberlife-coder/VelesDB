@@ -138,3 +138,6 @@ todo_analysis_report_updated.md
 
 #Ignore windsurf AI rules
 .windsurfrules
+
+.claude/*
+.codacy/*

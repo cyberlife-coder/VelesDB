@@ -10,8 +10,10 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use velesdb_core::internal_bench;
 use velesdb_core::simd_native::{
     cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
-    jaccard_similarity_native, DistanceEngine, SimdLevel,
+    jaccard_similarity_native, DistanceEngine,
 };
+#[cfg(feature = "internal-bench")]
+use velesdb_core::simd_native::SimdLevel;
 
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
     #[allow(clippy::cast_precision_loss)]

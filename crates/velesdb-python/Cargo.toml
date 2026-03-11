@@ -1,14 +1,14 @@
 [package]
 name = "velesdb-python"
-version.workspace = true
+version = { workspace = true }
 publish = false
-edition.workspace = true
-rust-version.workspace = true
+edition = { workspace = true }
+rust-version = { workspace = true }
 license-file = "LICENSE"
-repository.workspace = true
-homepage.workspace = true
-documentation.workspace = true
-authors.workspace = true
+repository = { workspace = true }
+homepage = { workspace = true }
+documentation = { workspace = true }
+authors = { workspace = true }
 description = "Python bindings for VelesDB vector database"
 keywords = ["vector-database", "python", "pyo3", "embeddings", "similarity-search"]
 categories = ["database", "science"]
@@ -19,7 +19,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 velesdb-core = { workspace = true }
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods"] }
 serde_json = { workspace = true }
 numpy = "0.24"
 
