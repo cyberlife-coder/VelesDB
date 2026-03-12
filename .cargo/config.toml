@@ -15,40 +15,25 @@ test-all = "test --all-features"
 # | aarch64-unknown-linux| NEON    | cargo build --release --target aarch64-unknown-linux-gnu |
 # =============================================================================
 
-# x86_64 optimizations (Windows/Linux)
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-[target.x86_64-pc-windows-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-[target.x86_64-unknown-linux-musl]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-# macOS x86_64 (Intel Macs)
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-# ARM64/aarch64 optimizations (Apple Silicon, ARM servers)
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-[target.aarch64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
-[target.aarch64-unknown-linux-musl]
-rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
-
 # =============================================================================
-# Portable builds (no native CPU detection, for distribution)
-# Use: RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release
+# Per-target rustflags intentionally omitted.
+#
+# target-cpu=native must NOT be committed here: proc-macro dylibs are host
+# binaries executed by rustc during compilation. If they are compiled with
+# native CPU instructions and then restored from a CI cache on a runner with
+# a different CPU, rustc crashes with SIGILL/STATUS_ILLEGAL_INSTRUCTION.
+#
+# Performance flags are handled by [profile.release] and [profile.bench]
+# below (opt-level, lto, codegen-units).
+#
+# To benchmark with full native SIMD locally:
+#   RUSTFLAGS="-C target-cpu=native" cargo bench
+#
+# Portable baseline levels for distribution builds:
+#   x86-64-v2: SSE4.2 (2008+)
+#   x86-64-v3: AVX2 (2013+)  ← recommended
+#   x86-64-v4: AVX-512 (2017+)
 # =============================================================================
-# x86-64-v2: SSE4.2 (2008+)
-# x86-64-v3: AVX2 (2013+) - recommended baseline
-# x86-64-v4: AVX-512 (2017+)
 
 # Build profiles
 [profile.release]
