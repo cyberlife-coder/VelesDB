@@ -600,3 +600,133 @@ export async function isEmpty(name: string): Promise<boolean> {
 export async function flush(name: string): Promise<void> {
   return invoke<void>('plugin:velesdb|flush', { name });
 }
+
+// ============================================================================
+// Knowledge Graph API
+// ============================================================================
+
+/** Request to add an edge to a graph collection. */
+export interface AddEdgeRequest {
+  collection: string;
+  id: number;
+  source: number;
+  target: number;
+  label: string;
+  properties?: Record<string, unknown>;
+}
+
+/** Request to retrieve edges from a graph collection. */
+export interface GetEdgesRequest {
+  collection: string;
+  label?: string;
+  source?: number;
+  target?: number;
+}
+
+/** Request to traverse the knowledge graph. */
+export interface TraverseGraphRequest {
+  collection: string;
+  source: number;
+  max_depth: number;
+  rel_types?: string[];
+  limit: number;
+  algorithm: 'bfs' | 'dfs';
+}
+
+/** Request to get the degree of a node. */
+export interface GetNodeDegreeRequest {
+  collection: string;
+  node_id: number;
+}
+
+/** A single edge in the knowledge graph. */
+export interface EdgeOutput {
+  id: number;
+  source: number;
+  target: number;
+  label: string;
+  properties: Record<string, unknown>;
+}
+
+/** A single traversal result node. */
+export interface TraversalOutput {
+  target_id: number;
+  depth: number;
+  path: number[];
+}
+
+/** In/out degree of a graph node. */
+export interface NodeDegreeOutput {
+  node_id: number;
+  in_degree: number;
+  out_degree: number;
+}
+
+/**
+ * Adds an edge to a knowledge graph collection.
+ *
+ * @param request - Edge to add (collection, id, source, target, label, optional properties)
+ * @throws {CommandError} If the collection doesn't exist
+ *
+ * @example
+ * ```typescript
+ * await addEdge({
+ *   collection: 'social', id: 1, source: 100, target: 200,
+ *   label: 'FOLLOWS', properties: { since: '2024-01-01' }
+ * });
+ * ```
+ */
+export async function addEdge(request: AddEdgeRequest): Promise<void> {
+  return invoke<void>('plugin:velesdb|add_edge', { request });
+}
+
+/**
+ * Retrieves edges from a knowledge graph collection.
+ *
+ * @param request - Filter (by label, source, or target node)
+ * @returns Array of matching edges
+ * @throws {CommandError} If the collection doesn't exist
+ *
+ * @example
+ * ```typescript
+ * const edges = await getEdges({ collection: 'social', label: 'FOLLOWS' });
+ * ```
+ */
+export async function getEdges(request: GetEdgesRequest): Promise<EdgeOutput[]> {
+  return invoke<EdgeOutput[]>('plugin:velesdb|get_edges', { request });
+}
+
+/**
+ * Traverses the knowledge graph from a source node.
+ *
+ * @param request - Traversal parameters (source, max depth, algorithm, optional rel_types filter)
+ * @returns Array of reachable nodes with their depth and path
+ * @throws {CommandError} If the collection doesn't exist
+ *
+ * @example
+ * ```typescript
+ * const result = await traverseGraph({
+ *   collection: 'social', source: 100, algorithm: 'bfs', max_depth: 3, limit: 50
+ * });
+ * ```
+ */
+export async function traverseGraph(request: TraverseGraphRequest): Promise<TraversalOutput[]> {
+  return invoke<TraversalOutput[]>('plugin:velesdb|traverse_graph', { request });
+}
+
+/**
+ * Gets the in-degree and out-degree of a graph node.
+ *
+ * @param request - Collection name and node ID
+ * @returns Node degree information (in_degree, out_degree)
+ * @throws {CommandError} If the collection doesn't exist
+ *
+ * @example
+ * ```typescript
+ * const degree = await getNodeDegree({ collection: 'social', node_id: 100 });
+ * console.log(`In: ${degree.in_degree}, Out: ${degree.out_degree}`);
+ * ```
+ */
+export async function getNodeDegree(request: GetNodeDegreeRequest): Promise<NodeDegreeOutput> {
+  return invoke<NodeDegreeOutput>('plugin:velesdb|get_node_degree', { request });
+}
