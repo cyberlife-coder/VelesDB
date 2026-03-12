@@ -961,7 +961,7 @@ fn test_prenormalized_search_distances_are_consistent() {
     // All distances should be in valid range [0, 2] for cosine
     for &(_, dist) in &results {
         assert!(
-            dist.is_finite() && dist >= -1e-6 && dist <= 2.0 + 1e-6,
+            dist.is_finite() && (-1e-6..=2.0 + 1e-6).contains(&dist),
             "Cosine distance {dist} out of valid range"
         );
     }

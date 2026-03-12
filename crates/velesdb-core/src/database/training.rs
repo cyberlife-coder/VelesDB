@@ -1,4 +1,4 @@
-//! `TRAIN QUANTIZER` statement execution (PQ, OPQ, RaBitQ).
+//! `TRAIN QUANTIZER` statement execution (PQ, OPQ, `RaBitQ`).
 
 use crate::{Error, Result, SearchResult, StorageMode};
 
@@ -182,7 +182,7 @@ impl Database {
         )])
     }
 
-    /// Trains a RaBitQ quantizer and persists it.
+    /// Trains a `RaBitQ` quantizer and persists it.
     fn train_rabitq(
         collection: &crate::Collection,
         vectors: &[Vec<f32>],

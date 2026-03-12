@@ -3,7 +3,7 @@
 //! This module is split into focused submodules:
 //!
 //! - [`collection_ops`] — Collection CRUD (create, delete, list, get)
-//! - [`query_engine`] — VelesQL query execution, plan caching, DML
+//! - [`query_engine`] — `VelesQL` query execution, plan caching, DML
 //! - [`persistence`] — Loading collections from disk at startup
 //! - [`training`] — `TRAIN QUANTIZER` statement execution
 //! - [`stats`] — Collection statistics (analyze, cache)

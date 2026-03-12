@@ -42,6 +42,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 [features]
 default = ["velesdb-core/default"]
 gpu = ["velesdb-core/gpu"]
+internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
 persistence = ["velesdb-core/persistence"]
 prometheus = []
