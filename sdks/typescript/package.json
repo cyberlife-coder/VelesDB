@@ -72,6 +72,6 @@
     "node": ">=18.0.0"
   },
   "overrides": {
-    "minimatch": ">=9.0.7"
+    "minimatch": "^9.0.7"
   }
 }
