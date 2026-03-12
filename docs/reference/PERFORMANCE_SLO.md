@@ -1,6 +1,6 @@
 # VelesDB Performance SLO
 
-Last updated: 2026-02-18
+Last updated: 2026-03-12
 
 This file defines measurable performance objectives used as CI regression gates.
 
@@ -9,6 +9,9 @@ This file defines measurable performance objectives used as CI regression gates.
 - Engine: `velesdb-core`
 - Workload baseline: `crates/velesdb-core/benches/smoke_test.rs`
 - Dataset profile: `10k vectors, 128 dimensions`
+- Baseline environment: **GitHub Actions `ubuntu-latest` (2-core AMD)** — re-baselined 2026-03-12
+  (Previous baseline v1.5.1 was measured on a local i9-14900KF Windows 11 machine, which is
+  ~1.75–2× faster than CI runners; baselines are now CI-authoritative as of v1.5.2.)
 
 ## SLO Targets (Smoke)
 
