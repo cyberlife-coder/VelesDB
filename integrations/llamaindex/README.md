@@ -68,6 +68,7 @@ VelesDBVectorStore(
     path: str = "./velesdb_data",      # Database directory
     collection_name: str = "llamaindex", # Collection name
     metric: str = "cosine",             # Distance metric
+    storage_mode: str = "full",         # Storage / quantization mode
 )
 ```
 
@@ -78,6 +79,7 @@ VelesDBVectorStore(
 | `path` | `str` | `"./velesdb_data"` | Path to database directory |
 | `collection_name` | `str` | `"llamaindex"` | Name of the collection |
 | `metric` | `str` | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot`, `hamming`, `jaccard` |
+| `storage_mode` | `str` | `"full"` | Storage mode: `full` (f32), `sq8` (4× compression), `binary` (32× compression) |
 
 **Methods:**
 
