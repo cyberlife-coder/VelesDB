@@ -1,26 +1,26 @@
 {
-  "version": "1.5.1",
-  "description": "VelesDB Performance Baseline v1.5.1 — re-measured 2026-03-11 full benchmark suite",
-  "recorded_at": "2026-03-11",
+  "version": "1.5.2",
+  "description": "VelesDB Performance Baseline v1.5.2 — re-baselined 2026-03-12 for ubuntu-latest CI runners",
+  "recorded_at": "2026-03-12",
   "environment": {
-    "rust_version": "1.92.0",
-    "features": "persistence,gpu,update-check",
-    "runner": "local (i9-14900KF, Windows 11)"
+    "rust_version": "stable",
+    "features": "default",
+    "runner": "ubuntu-latest (GitHub Actions, 2-core)"
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 2882900000.0,
-      "std_ns": 50000000,
+      "mean_ns": 5067700000.0,
+      "std_ns": 160000000,
       "threshold_percent": 15
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 203770.0,
-      "std_ns": 3000,
+      "mean_ns": 328510.0,
+      "std_ns": 8000,
       "threshold_percent": 15
     },
     "smoke_hybrid/vector_plus_filter": {
-      "mean_ns": 192380.0,
-      "std_ns": 2000,
+      "mean_ns": 270000.0,
+      "std_ns": 10000,
       "threshold_percent": 15
     },
     "pq_recall/pq_recall_m8_k256_rescore": {
@@ -55,9 +55,11 @@
     }
   },
   "notes": [
-    "Re-measured 2026-03-11 full benchmark suite after perf audit",
+    "Re-baselined 2026-03-12 for ubuntu-latest GitHub Actions runners (2-core AMD)",
+    "Previous baseline (v1.5.1) was measured on local i9-14900KF Windows 11 — 1.75-2x faster than CI",
+    "smoke_insert 5.0677s / smoke_search 328.51µs measured from CI run on commit 8f10e9136f",
+    "smoke_hybrid baseline estimated from CI runner scaling (not directly measured by export script)",
     "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
-    "Machine: i9-14900KF, 64GB RAM, Windows 11 Pro",
     "pq_recall entries hardened in Phase 11 — 6 variants with explicit m=8 k=256 training via VelesQL",
     "PQ recall thresholds restored to 0.92 (PQ-07 contract) with uniform random data"
   ]
