@@ -14,6 +14,7 @@ on:
       - "scripts/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/config.toml"
       - ".github/workflows/propagation-guard.yml"
   pull_request:
     branches: [main, develop]
@@ -28,6 +29,7 @@ on:
       - "scripts/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/config.toml"
       - ".github/workflows/propagation-guard.yml"
 
 concurrency:
