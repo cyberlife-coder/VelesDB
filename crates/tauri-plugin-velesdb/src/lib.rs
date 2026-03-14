@@ -111,17 +111,6 @@ impl SimpleVectorIndex {
         }
     }
 
-    /// Creates a new empty index with the given dimension and metric.
-    #[must_use]
-    #[allow(dead_code)] // available for future use by plugin commands
-    pub(crate) fn with_metric(dimension: usize, metric: DistanceMetric) -> Self {
-        Self {
-            vectors: HashMap::new(),
-            dimension,
-            metric,
-        }
-    }
-
     /// Inserts a vector with the given ID.
     ///
     /// # Errors

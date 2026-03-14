@@ -440,10 +440,11 @@ impl Database {
         &self.path
     }
 
-    /// Open a new `Arc<CoreDatabase>` from the same path.
+    /// Open an independent `Arc<CoreDatabase>` handle from the same path.
     ///
-    /// Used by subsystems (e.g., AgentMemory) that need shared ownership.
-    /// VelesDB's `Database::open` is idempotent on the same path.
+    /// Used by subsystems (e.g., AgentMemory) that need `Arc` ownership.
+    /// Each call creates a **separate** in-memory instance that reads/writes
+    /// the same on-disk data. Changes are visible across handles after flush.
     pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
         CoreDatabase::open(&self.path)
             .map(Arc::new)

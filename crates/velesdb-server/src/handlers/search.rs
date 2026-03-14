@@ -396,6 +396,11 @@ pub async fn batch_search(
             for _ in 0..empty_count {
                 state.onboarding_metrics.record_empty_search_results();
             }
+            debug_assert_eq!(
+                batch_results.len(),
+                req.searches.len(),
+                "search_batch_with_filters must return one result-vec per query"
+            );
             batch_results
                 .into_iter()
                 .zip(req.searches.iter())

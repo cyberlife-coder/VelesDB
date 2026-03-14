@@ -119,16 +119,32 @@ impl VelesSemanticMemory {
     }
 
     /// Clears all knowledge facts.
+    ///
+    /// The in-memory content map is cleared eagerly before issuing deletes
+    /// to the underlying collection. This avoids a desync if a delete fails
+    /// mid-loop — the map stays consistent at the cost of possibly leaving
+    /// orphaned vectors in the collection (acceptable for an in-memory-only
+    /// content map).
     pub fn clear(&self) -> Result<(), VelesError> {
-        let mut contents = self.contents.write().map_err(|e| VelesError::Database {
-            message: format!("Lock error: {e}"),
-        })?;
+        let ids: Vec<u64> = {
+            let contents = self.contents.read().map_err(|e| VelesError::Database {
+                message: format!("Lock error: {e}"),
+            })?;
+            contents.keys().copied().collect()
+        };
 
-        // Delete each point individually
-        for &id in contents.keys() {
-            self.collection.delete(id)?;
+        // Clear the in-memory map first to avoid desync on partial delete failure
+        {
+            let mut contents = self.contents.write().map_err(|e| VelesError::Database {
+                message: format!("Lock error: {e}"),
+            })?;
+            contents.clear();
         }
-        contents.clear();
+
+        // Delete from collection — failures are non-fatal since the map is already cleared
+        for id in ids {
+            let _ = self.collection.delete(id);
+        }
         Ok(())
     }
 

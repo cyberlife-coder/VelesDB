@@ -108,14 +108,14 @@ impl CheckpointContext {
         Ok(Some(state))
     }
 
-    fn save(
+    async fn save(
         &self,
         next_offset: Option<serde_json::Value>,
         stats: &MigrationStats,
         duration_secs: f64,
     ) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         let state = CheckpointState {
@@ -132,13 +132,13 @@ impl CheckpointContext {
         };
 
         let bytes = serde_json::to_vec_pretty(&state)?;
-        std::fs::write(&self.path, bytes)?;
+        tokio::fs::write(&self.path, bytes).await?;
         Ok(())
     }
 
-    fn clear(&self) -> Result<()> {
+    async fn clear(&self) -> Result<()> {
         if self.path.exists() {
-            std::fs::remove_file(&self.path)?;
+            tokio::fs::remove_file(&self.path).await?;
         }
         Ok(())
     }
@@ -339,7 +339,8 @@ impl Pipeline {
                             batch.next_offset.clone(),
                             &stats,
                             resumed_duration_secs + start.elapsed().as_secs_f64(),
-                        )?;
+                        )
+                        .await?;
                     }
                 }
             } else {
@@ -361,7 +362,7 @@ impl Pipeline {
 
         stats.duration_secs = resumed_duration_secs + start.elapsed().as_secs_f64();
         if let Some(ctx) = &checkpoint_ctx {
-            ctx.clear()?;
+            ctx.clear().await?;
         }
 
         info!(

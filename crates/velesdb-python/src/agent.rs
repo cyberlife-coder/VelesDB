@@ -55,10 +55,10 @@ impl AgentMemory {
     pub fn new(db: &crate::Database, dimension: Option<usize>) -> PyResult<Self> {
         let dim = dimension.unwrap_or(DEFAULT_DIMENSION);
 
-        // Share the database connection from the Python-side Database.
-        // PyO3 classes cannot hold lifetime parameters, so we open a shared
-        // Arc from the same path (VelesDB::open is idempotent).
-        let owned_db = db.open_shared().map_err(|e| PyRuntimeError::new_err(e))?;
+        // PyO3 classes cannot hold lifetime parameters, so we open an
+        // independent Database handle from the same path. Each handle has its
+        // own in-memory registries but reads/writes the same on-disk data.
+        let owned_db = db.open_shared().map_err(PyRuntimeError::new_err)?;
 
         // Initialize memory subsystems — this creates the underlying collections
         // if they do not already exist.

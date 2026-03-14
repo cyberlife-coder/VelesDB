@@ -29,7 +29,8 @@ pub struct ExtractedPoint {
     /// Metadata/payload.
     pub payload: HashMap<String, serde_json::Value>,
     /// Optional sparse vector (index, value) pairs for hybrid search.
-    /// Supported natively by Qdrant and Pinecone sources.
+    /// Not yet extracted by any connector — reserved for future implementation.
+    /// Qdrant and Pinecone expose sparse vectors natively in their APIs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sparse_vector: Option<Vec<(u32, f32)>>,
 }
