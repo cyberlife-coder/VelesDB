@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::point::*;
-use crate::index::sparse::SparseVector;
+use crate::sparse_index::SparseVector;
 use serde_json::json;
 
 #[test]
