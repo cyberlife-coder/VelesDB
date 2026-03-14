@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_fetch_query_params_with_namespace() {
-        let ids = vec!["id-1".to_string(), "id-2".to_string(), "id-3".to_string()];
+        let ids = ["id-1".to_string(), "id-2".to_string(), "id-3".to_string()];
         let namespace: Option<String> = Some("ns1".to_string());
 
         let mut fetch_params: Vec<(&str, String)> =
