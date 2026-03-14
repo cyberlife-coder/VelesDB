@@ -3,10 +3,14 @@
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 
+use serde_json::json;
 use tempfile::{NamedTempFile, TempDir};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 use velesdb_core::Database;
 use velesdb_migrate::config::{
-    DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, SourceConfig, StorageMode,
+    DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, PineconeConfig,
+    QdrantConfig, SourceConfig, StorageMode,
 };
 use velesdb_migrate::connectors::{csv_file::CsvFileConfig, json_file::JsonFileConfig};
 use velesdb_migrate::Pipeline;
@@ -300,4 +304,209 @@ async fn test_pipeline_workers_match_sequential_results_and_text_ids_stable() {
     assert_eq!(sequential_ids, parallel_ids);
 
     assert_eq!(sequential_ids.len(), 3);
+}
+
+#[tokio::test]
+async fn test_pipeline_qdrant_sparse_vectors_e2e() {
+    let mock_server = MockServer::start().await;
+
+    let collection_info_body = json!({
+        "result": {
+            "vectors_count": 2,
+            "points_count": 2,
+            "config": {
+                "params": {
+                    "vectors": {
+                        "size": 3
+                    }
+                }
+            }
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/collections/test_sparse"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&collection_info_body))
+        .expect(2) // connect() + get_schema()
+        .mount(&mock_server)
+        .await;
+
+    let scroll_body = json!({
+        "result": {
+            "points": [
+                {
+                    "id": 1,
+                    "vector": {
+                        "dense": [0.1, 0.2, 0.3],
+                        "sparse": {"indices": [10, 45, 16], "values": [0.5, 0.5, 0.2]}
+                    },
+                    "payload": {"title": "Doc with sparse"}
+                },
+                {
+                    "id": 2,
+                    "vector": [0.4, 0.5, 0.6],
+                    "payload": {"title": "Doc dense only"}
+                }
+            ],
+            "next_page_offset": null
+        }
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/collections/test_sparse/points/scroll"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&scroll_body))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let destination = TempDir::new().expect("destination dir");
+
+    let config = MigrationConfig {
+        source: SourceConfig::Qdrant(QdrantConfig {
+            url: mock_server.uri(),
+            collection: "test_sparse".to_string(),
+            api_key: None,
+            payload_fields: vec![],
+        }),
+        destination: DestinationConfig {
+            path: destination.path().to_path_buf(),
+            collection: "sparse_docs".to_string(),
+            dimension: 3,
+            metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
+        },
+        options: MigrationOptions {
+            batch_size: 10,
+            workers: 1,
+            ..MigrationOptions::default()
+        },
+    };
+
+    let mut pipeline = Pipeline::new(config).expect("pipeline");
+    let stats = pipeline.run().await.expect("pipeline run");
+
+    assert_eq!(stats.extracted, 2);
+    assert_eq!(stats.loaded, 2);
+    assert_eq!(stats.failed, 0);
+
+    let collection = open_collection(destination.path(), "sparse_docs");
+    assert_eq!(collection.len(), 2);
+
+    let points = collection.get(&[1, 2]);
+    assert_eq!(
+        points[0]
+            .as_ref()
+            .and_then(|point| point.payload.clone())
+            .expect("payload for point 1")["title"],
+        "Doc with sparse"
+    );
+    assert_eq!(
+        points[1]
+            .as_ref()
+            .and_then(|point| point.payload.clone())
+            .expect("payload for point 2")["title"],
+        "Doc dense only"
+    );
+}
+
+#[tokio::test]
+async fn test_pipeline_pinecone_sparse_vectors_e2e() {
+    let mock_server = MockServer::start().await;
+
+    // Extract host:port from mock server URI (strip the "http://" scheme).
+    let mock_host = mock_server
+        .uri()
+        .strip_prefix("http://")
+        .expect("mock URI has http scheme")
+        .to_string();
+
+    // 1. GET /indexes/test-index → IndexDescription
+    Mock::given(method("GET"))
+        .and(path("/indexes/test-index"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "host": mock_host,
+            "dimension": 3,
+            "metric": "cosine",
+            "status": { "ready": true }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // 2. POST /describe_index_stats → IndexStats
+    Mock::given(method("POST"))
+        .and(path("/describe_index_stats"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "dimension": 3,
+            "totalVectorCount": 2
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // 3. GET /vectors/list → ListResponse
+    Mock::given(method("GET"))
+        .and(path("/vectors/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "vectors": [{"id": "vec-1"}, {"id": "vec-2"}],
+            "pagination": null
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // 4. GET /vectors/fetch → FetchResponse (with sparse vectors)
+    Mock::given(method("GET"))
+        .and(path("/vectors/fetch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "vectors": {
+                "vec-1": {
+                    "id": "vec-1",
+                    "values": [0.1, 0.2, 0.3],
+                    "sparseValues": {"indices": [0, 5, 12], "values": [0.9, 0.4, 0.7]},
+                    "metadata": {"title": "Sparse doc"}
+                },
+                "vec-2": {
+                    "id": "vec-2",
+                    "values": [0.4, 0.5, 0.6],
+                    "metadata": {"title": "Dense only doc"}
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let destination = TempDir::new().expect("destination dir");
+
+    let config = MigrationConfig {
+        source: SourceConfig::Pinecone(PineconeConfig {
+            api_key: "test-key".to_string(),
+            index: "test-index".to_string(),
+            base_url: Some(mock_server.uri()),
+            ..Default::default()
+        }),
+        destination: DestinationConfig {
+            path: destination.path().to_path_buf(),
+            collection: "pinecone_sparse_docs".to_string(),
+            dimension: 3,
+            metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
+        },
+        options: MigrationOptions {
+            batch_size: 10,
+            workers: 1,
+            ..MigrationOptions::default()
+        },
+    };
+
+    let mut pipeline = Pipeline::new(config).expect("pipeline");
+    let stats = pipeline.run().await.expect("pipeline run");
+
+    assert_eq!(stats.extracted, 2);
+    assert_eq!(stats.loaded, 2);
+    assert_eq!(stats.failed, 0);
+
+    let collection = open_collection(destination.path(), "pinecone_sparse_docs");
+    assert_eq!(collection.len(), 2);
 }

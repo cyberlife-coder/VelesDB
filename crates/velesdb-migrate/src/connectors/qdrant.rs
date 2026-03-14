@@ -120,20 +120,70 @@ impl std::fmt::Display for QdrantPointId {
     }
 }
 
+/// Qdrant sparse vector format from REST API.
+#[derive(Debug, Deserialize)]
+struct QdrantSparseVector {
+    indices: Vec<u32>,
+    values: Vec<f32>,
+}
+
+/// A named vector entry can be dense (array) or sparse (object with indices/values).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum QdrantNamedVectorValue {
+    Dense(Vec<f32>),
+    Sparse(QdrantSparseVector),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum QdrantVector {
     Single(Vec<f32>),
-    Named(HashMap<String, Vec<f32>>),
+    Named(HashMap<String, QdrantNamedVectorValue>),
 }
 
 impl QdrantVector {
-    fn into_vec(self) -> Vec<f32> {
+    /// Extract the first sparse vector from a Named map, if present.
+    ///
+    /// Returns `None` for `Single` vectors, or if no valid sparse entry exists.
+    /// A sparse entry is valid only when `indices` and `values` have equal,
+    /// non-zero lengths.
+    fn extract_sparse(&self) -> Option<Vec<(u32, f32)>> {
+        match self {
+            Self::Single(_) => None,
+            Self::Named(map) => {
+                for value in map.values() {
+                    if let QdrantNamedVectorValue::Sparse(sv) = value {
+                        if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                            return Some(
+                                sv.indices
+                                    .iter()
+                                    .copied()
+                                    .zip(sv.values.iter().copied())
+                                    .collect(),
+                            );
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// Consume the vector and return the first dense embedding.
+    ///
+    /// For `Named` maps, sparse entries are skipped. Returns an empty vec
+    /// if no dense vector is found.
+    fn into_dense(self) -> Vec<f32> {
         match self {
             Self::Single(v) => v,
-            Self::Named(mut map) => {
-                // Take the first named vector
-                map.drain().next().map(|(_, v)| v).unwrap_or_default()
+            Self::Named(map) => {
+                for (_, value) in map {
+                    if let QdrantNamedVectorValue::Dense(v) = value {
+                        return v;
+                    }
+                }
+                Vec::new()
             }
         }
     }
@@ -231,11 +281,14 @@ impl SourceConnector for QdrantConnector {
             .result
             .points
             .into_iter()
-            .map(|p| ExtractedPoint {
-                id: p.id.to_string(),
-                vector: p.vector.into_vec(),
-                payload: p.payload.unwrap_or_default(),
-                sparse_vector: None,
+            .map(|p| {
+                let sparse = p.vector.extract_sparse();
+                ExtractedPoint {
+                    id: p.id.to_string(),
+                    vector: p.vector.into_dense(),
+                    payload: p.payload.unwrap_or_default(),
+                    sparse_vector: sparse,
+                }
             })
             .collect();
 
@@ -270,15 +323,15 @@ mod tests {
     }
 
     #[test]
-    fn test_qdrant_vector_into_vec() {
+    fn test_qdrant_vector_into_dense() {
         let single = QdrantVector::Single(vec![0.1, 0.2, 0.3]);
-        assert_eq!(single.into_vec(), vec![0.1, 0.2, 0.3]);
+        assert_eq!(single.into_dense(), vec![0.1, 0.2, 0.3]);
 
         let named = QdrantVector::Named(HashMap::from([(
             "default".to_string(),
-            vec![0.4, 0.5, 0.6],
+            QdrantNamedVectorValue::Dense(vec![0.4, 0.5, 0.6]),
         )]));
-        assert_eq!(named.into_vec(), vec![0.4, 0.5, 0.6]);
+        assert_eq!(named.into_dense(), vec![0.4, 0.5, 0.6]);
     }
 
     #[test]
@@ -293,5 +346,56 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"limit\":100"));
         assert!(!json.contains("offset")); // Skip serializing None
+    }
+
+    #[test]
+    fn test_qdrant_sparse_vector_deserialization() {
+        let json = r#"{"indices":[10,45],"values":[0.5,0.3]}"#;
+        let sv: QdrantSparseVector = serde_json::from_str(json).unwrap();
+        assert_eq!(sv.indices, vec![10, 45]);
+        assert_eq!(sv.values, vec![0.5, 0.3]);
+    }
+
+    #[test]
+    fn test_qdrant_named_vector_with_sparse() {
+        let named = QdrantVector::Named(HashMap::from([
+            (
+                "dense".to_string(),
+                QdrantNamedVectorValue::Dense(vec![0.1, 0.2]),
+            ),
+            (
+                "sparse".to_string(),
+                QdrantNamedVectorValue::Sparse(QdrantSparseVector {
+                    indices: vec![3, 7, 42],
+                    values: vec![0.9, 0.1, 0.5],
+                }),
+            ),
+        ]));
+
+        let sparse = named.extract_sparse();
+        assert!(sparse.is_some());
+        let pairs = sparse.unwrap();
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[0].0, 3);
+        assert!((pairs[0].1 - 0.9).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_qdrant_single_vector_no_sparse() {
+        let single = QdrantVector::Single(vec![1.0, 2.0, 3.0]);
+        assert!(single.extract_sparse().is_none());
+    }
+
+    #[test]
+    fn test_qdrant_sparse_mismatched_lengths() {
+        let named = QdrantVector::Named(HashMap::from([(
+            "bad_sparse".to_string(),
+            QdrantNamedVectorValue::Sparse(QdrantSparseVector {
+                indices: vec![1, 2, 3],
+                values: vec![0.5, 0.3],
+            }),
+        )]));
+
+        assert!(named.extract_sparse().is_none());
     }
 }

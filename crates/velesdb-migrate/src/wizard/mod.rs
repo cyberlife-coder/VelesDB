@@ -221,6 +221,7 @@ impl Wizard {
                 environment: String::new(),
                 index: config.collection.clone(),
                 namespace: None,
+                base_url: None,
             }),
             SourceType::Weaviate => SourceConfig::Weaviate(WeaviateConfig {
                 url: config.url.clone(),

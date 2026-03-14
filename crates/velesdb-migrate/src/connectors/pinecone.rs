@@ -33,6 +33,23 @@ impl PineconeConnector {
             .header("Api-Key", &self.config.api_key)
             .header("Content-Type", "application/json")
     }
+
+    /// Control-plane base URL (index describe, etc.).
+    fn control_plane_url(&self) -> String {
+        self.config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://api.pinecone.io".to_string())
+    }
+
+    /// Data-plane base URL (list, fetch, stats).
+    fn data_plane_url(&self) -> String {
+        if let Some(base) = &self.config.base_url {
+            return base.clone();
+        }
+        let host = self.host.as_deref().unwrap_or("localhost");
+        format!("https://{host}")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,11 +111,20 @@ struct FetchResponse {
     vectors: HashMap<String, PineconeVector>,
 }
 
+/// Pinecone sparse vector format from REST API.
+#[derive(Debug, Deserialize)]
+struct PineconeSparseValues {
+    indices: Vec<u32>,
+    values: Vec<f32>,
+}
+
 #[derive(Debug, Deserialize)]
 struct PineconeVector {
     id: String,
     values: Vec<f32>,
     metadata: Option<HashMap<String, serde_json::Value>>,
+    #[serde(rename = "sparseValues", default)]
+    sparse_values: Option<PineconeSparseValues>,
 }
 
 #[async_trait]
@@ -111,7 +137,8 @@ impl SourceConnector for PineconeConnector {
         info!("Connecting to Pinecone index: {}", self.config.index);
 
         // Get index description to find the host
-        let url = format!("https://api.pinecone.io/indexes/{}", self.config.index);
+        let base = self.control_plane_url();
+        let url = format!("{base}/indexes/{}", self.config.index);
 
         let resp = self.api_request(reqwest::Method::GET, &url).send().await?;
 
@@ -141,12 +168,13 @@ impl SourceConnector for PineconeConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        let host = self
+        let _host = self
             .host
             .as_ref()
             .ok_or_else(|| Error::SourceConnection("Not connected to Pinecone".to_string()))?;
 
-        let url = format!("https://{host}/describe_index_stats");
+        let base = self.data_plane_url();
+        let url = format!("{base}/describe_index_stats");
         let resp = self
             .api_request(reqwest::Method::POST, &url)
             .json(&serde_json::json!({}))
@@ -186,7 +214,7 @@ impl SourceConnector for PineconeConnector {
         offset: Option<serde_json::Value>,
         batch_size: usize,
     ) -> Result<ExtractedBatch> {
-        let host = self
+        let _host = self
             .host
             .as_ref()
             .ok_or_else(|| Error::SourceConnection("Not connected to Pinecone".to_string()))?;
@@ -194,7 +222,8 @@ impl SourceConnector for PineconeConnector {
         let pagination_token = offset.and_then(|v| v.as_str().map(String::from));
 
         // First, list vector IDs
-        let list_url = format!("https://{host}/vectors/list");
+        let base = self.data_plane_url();
+        let list_url = format!("{base}/vectors/list");
         let _list_req = ListRequest {
             namespace: self.config.namespace.clone(),
             limit: batch_size,
@@ -235,7 +264,7 @@ impl SourceConnector for PineconeConnector {
         }
 
         // Fetch full vectors
-        let fetch_url = format!("https://{host}/vectors/fetch");
+        let fetch_url = format!("{base}/vectors/fetch");
         let resp = self
             .api_request(reqwest::Method::GET, &fetch_url)
             .query(&[("ids", ids.join(","))])
@@ -255,11 +284,20 @@ impl SourceConnector for PineconeConnector {
         let points: Vec<ExtractedPoint> = fetch_resp
             .vectors
             .into_values()
-            .map(|v| ExtractedPoint {
-                id: v.id,
-                vector: v.values,
-                payload: v.metadata.unwrap_or_default(),
-                sparse_vector: None,
+            .map(|v| {
+                let sparse = v.sparse_values.and_then(|sv| {
+                    if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                        Some(sv.indices.into_iter().zip(sv.values).collect())
+                    } else {
+                        None
+                    }
+                });
+                ExtractedPoint {
+                    id: v.id,
+                    vector: v.values,
+                    payload: v.metadata.unwrap_or_default(),
+                    sparse_vector: sparse,
+                }
             })
             .collect();
 
@@ -297,6 +335,7 @@ mod tests {
             environment: "us-east-1".to_string(),
             index: "test-index".to_string(),
             namespace: None,
+            base_url: None,
         };
 
         let connector = PineconeConnector::new(config);
@@ -316,5 +355,69 @@ mod tests {
         assert!(json.contains("\"limit\":100"));
         assert!(json.contains("\"namespace\":\"ns1\""));
         assert!(!json.contains("paginationToken"));
+    }
+
+    #[test]
+    fn test_pinecone_vector_with_sparse() {
+        let json = r#"{
+            "id": "vec-1",
+            "values": [0.1, 0.2],
+            "sparseValues": {
+                "indices": [0, 5, 11],
+                "values": [0.5, 0.3, 0.8]
+            }
+        }"#;
+
+        let v: PineconeVector = serde_json::from_str(json).unwrap();
+        assert_eq!(v.id, "vec-1");
+        assert_eq!(v.values, vec![0.1, 0.2]);
+
+        let sv = v.sparse_values.expect("sparse_values should be present");
+        assert_eq!(sv.indices, vec![0, 5, 11]);
+        assert_eq!(sv.values, vec![0.5, 0.3, 0.8]);
+    }
+
+    #[test]
+    fn test_pinecone_vector_without_sparse() {
+        let json = r#"{
+            "id": "vec-2",
+            "values": [0.4, 0.5]
+        }"#;
+
+        let v: PineconeVector = serde_json::from_str(json).unwrap();
+        assert_eq!(v.id, "vec-2");
+        assert!(v.sparse_values.is_none());
+    }
+
+    #[test]
+    fn test_pinecone_sparse_extraction_in_point() {
+        let v = PineconeVector {
+            id: "vec-3".to_string(),
+            values: vec![1.0, 2.0, 3.0],
+            metadata: None,
+            sparse_values: Some(PineconeSparseValues {
+                indices: vec![2, 7],
+                values: vec![0.9, 0.1],
+            }),
+        };
+
+        let sparse = v.sparse_values.and_then(|sv| {
+            if sv.indices.len() == sv.values.len() && !sv.indices.is_empty() {
+                Some(sv.indices.into_iter().zip(sv.values).collect::<Vec<_>>())
+            } else {
+                None
+            }
+        });
+
+        let point = ExtractedPoint {
+            id: v.id,
+            vector: v.values,
+            payload: v.metadata.unwrap_or_default(),
+            sparse_vector: sparse,
+        };
+
+        assert_eq!(point.id, "vec-3");
+        let sv = point.sparse_vector.expect("should have sparse vector");
+        assert_eq!(sv, vec![(2, 0.9), (7, 0.1)]);
     }
 }

@@ -91,6 +91,7 @@ impl SourceDiscovery {
                 environment: String::new(),
                 index: collection.to_string(),
                 namespace: None,
+                base_url: None,
             }),
             SourceType::Weaviate => SourceConfig::Weaviate(WeaviateConfig {
                 url: url.to_string(),

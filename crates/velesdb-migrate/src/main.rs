@@ -328,6 +328,7 @@ async fn auto_detect_and_generate(
                 environment: "".to_string(),
                 index: collection.to_string(),
                 namespace: None,
+                base_url: None,
             })
         }
         "weaviate" => SourceConfig::Weaviate(WeaviateConfig {

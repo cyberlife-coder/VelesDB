@@ -113,7 +113,7 @@ pub struct QdrantConfig {
 }
 
 /// Pinecone configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PineconeConfig {
     /// Pinecone API key.
     pub api_key: String,
@@ -123,6 +123,9 @@ pub struct PineconeConfig {
     pub index: String,
     /// Optional namespace.
     pub namespace: Option<String>,
+    /// Override base URL for testing (replaces `https://api.pinecone.io`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 /// Weaviate configuration.
