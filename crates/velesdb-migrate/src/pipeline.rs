@@ -553,10 +553,21 @@ fn build_point(point: ExtractedPoint) -> Result<velesdb_core::Point> {
         ))
     };
 
-    Ok(velesdb_core::Point::new(
+    let sparse_vectors = point.sparse_vector.map(|pairs| {
+        let sv = velesdb_core::sparse_index::SparseVector::new(pairs);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME.to_string(),
+            sv,
+        );
+        map
+    });
+
+    Ok(velesdb_core::Point::with_sparse(
         stable_point_id(&point.id),
         point.vector,
         payload,
+        sparse_vectors,
     ))
 }
 
