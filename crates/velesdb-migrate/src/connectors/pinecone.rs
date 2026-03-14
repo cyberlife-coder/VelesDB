@@ -259,6 +259,7 @@ impl SourceConnector for PineconeConnector {
                 id: v.id,
                 vector: v.values,
                 payload: v.metadata.unwrap_or_default(),
+                sparse_vector: None,
             })
             .collect();
 

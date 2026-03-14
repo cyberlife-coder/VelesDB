@@ -17,7 +17,19 @@
 //! | Milvus | ✅ | REST API (v2) |
 //! | `ChromaDB` | ✅ | Full support via REST API |
 //! | pgvector | ✅ | Requires `postgres` feature |
-//! | Supabase | ✅ | Via `PostgREST` API |
+//! | Supabase | ✅ | Via pgvector connector (`PostgREST` API) |
+//! | Elasticsearch | ✅ | Dense vector fields via REST API |
+//! | MongoDB Atlas | ✅ | Atlas Vector Search via REST API (not self-hosted) |
+//! | Redis | ✅ | RediSearch vector fields |
+//! | JSON file | ✅ | Local `.json` / `.jsonl` files |
+//! | CSV file | ✅ | Local `.csv` files with vector columns |
+//!
+//! ## Limitations
+//!
+//! - **Local destination only**: migrations write to a local VelesDB data directory.
+//!   Remote server migration (e.g., via HTTP to `velesdb-server`) is not supported.
+//! - **MongoDB**: Only Atlas deployments are supported (REST API). Self-hosted
+//!   MongoDB with vector search requires manual export to JSON first.
 //!
 //! ## Quick Start
 //!

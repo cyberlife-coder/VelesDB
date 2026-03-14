@@ -402,6 +402,7 @@ impl SourceConnector for SupabaseConnector {
                 id,
                 vector,
                 payload: row,
+                sparse_vector: None,
             });
         }
 

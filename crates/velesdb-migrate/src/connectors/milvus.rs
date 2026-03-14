@@ -282,6 +282,7 @@ impl SourceConnector for MilvusConnector {
                 id,
                 vector,
                 payload: row,
+                sparse_vector: None,
             });
         }
 

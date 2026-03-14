@@ -319,6 +319,7 @@ impl SourceConnector for WeaviateConnector {
                 id,
                 vector,
                 payload: obj.properties,
+                sparse_vector: None,
             });
         }
 

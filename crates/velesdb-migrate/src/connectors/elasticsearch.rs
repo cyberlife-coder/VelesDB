@@ -391,6 +391,7 @@ impl SourceConnector for ElasticsearchConnector {
                 id,
                 vector,
                 payload,
+                sparse_vector: None,
             });
             last_sort = hit.sort.clone();
         }

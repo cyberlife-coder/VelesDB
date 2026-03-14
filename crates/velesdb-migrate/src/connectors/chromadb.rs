@@ -232,6 +232,7 @@ impl SourceConnector for ChromaDBConnector {
                 id,
                 vector,
                 payload,
+                sparse_vector: None,
             });
         }
 

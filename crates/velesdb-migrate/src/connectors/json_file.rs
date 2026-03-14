@@ -220,6 +220,7 @@ impl SourceConnector for JsonFileConnector {
                 id: self.extract_id(item, start + idx),
                 vector: self.parse_vector(item)?,
                 payload: self.extract_payload(item),
+                sparse_vector: None,
             });
         }
 

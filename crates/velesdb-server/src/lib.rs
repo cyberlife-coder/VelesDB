@@ -1,17 +1,19 @@
-// Server - pedantic/nursery lints relaxed
-#![allow(clippy::pedantic)]
-#![allow(clippy::nursery)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::manual_let_else)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::ref_option)]
-#![allow(clippy::match_same_arms)]
-#![allow(clippy::trivially_copy_pass_by_ref)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::enum_glob_use)]
-#![allow(clippy::unused_async)]
-#![allow(clippy::needless_for_each)]
+// Server - pedantic/nursery lints relaxed for Axum handler ergonomics
+// and utoipa derive compatibility (many handlers are async for the Axum
+// trait signature even when they don't await).
+#![allow(clippy::pedantic)] // Axum handlers + utoipa derive generate pedantic warnings
+#![allow(clippy::nursery)] // false positives on Axum extractors
+#![allow(clippy::doc_markdown)] // utoipa doc attributes conflict with doc_markdown
+#![allow(clippy::uninlined_format_args)] // readability in error messages
+#![allow(clippy::manual_let_else)] // pattern matching in handlers is clearer
+#![allow(clippy::cast_possible_truncation)] // u128→u64 timing casts are bounded
+#![allow(clippy::ref_option)] // utoipa-generated code triggers this
+#![allow(clippy::match_same_arms)] // explicit arms improve readability in routers
+#![allow(clippy::trivially_copy_pass_by_ref)] // Axum extractors require &
+#![allow(clippy::map_unwrap_or)] // readability preference
+#![allow(clippy::enum_glob_use)] // StatusCode::* in handlers
+#![allow(clippy::unused_async)] // Axum requires async signature even for sync handlers
+#![allow(clippy::needless_for_each)] // readability in metric recording loops
 //! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
 //! This module provides the HTTP handlers and types for the `VelesDB` REST API.
@@ -60,7 +62,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 #[openapi(
     info(
         title = "VelesDB API",
-        version = "1.5.1",
+        version = env!("CARGO_PKG_VERSION"),
         description = "High-performance vector database for AI applications. \
             Supports semantic search, HNSW indexing, and multiple distance metrics.",
         license(name = "ELv2", url = "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"),
@@ -220,7 +222,10 @@ mod tests {
         let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
         assert!(!json.is_empty(), "OpenAPI spec should not be empty");
         assert!(json.contains("VelesDB API"), "Should contain API title");
-        assert!(json.contains("1.5.1"), "Should contain version");
+        assert!(
+            json.contains(env!("CARGO_PKG_VERSION")),
+            "Should contain version"
+        );
     }
 
     #[test]

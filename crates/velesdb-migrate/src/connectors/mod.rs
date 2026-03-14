@@ -28,6 +28,10 @@ pub struct ExtractedPoint {
     pub vector: Vec<f32>,
     /// Metadata/payload.
     pub payload: HashMap<String, serde_json::Value>,
+    /// Optional sparse vector (index, value) pairs for hybrid search.
+    /// Supported natively by Qdrant and Pinecone sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparse_vector: Option<Vec<(u32, f32)>>,
 }
 
 /// A batch of extracted points.
@@ -162,6 +166,7 @@ mod tests {
                 ("title".to_string(), serde_json::json!("Test Document")),
                 ("score".to_string(), serde_json::json!(0.95)),
             ]),
+            sparse_vector: None,
         };
 
         let json = serde_json::to_string(&point).unwrap();

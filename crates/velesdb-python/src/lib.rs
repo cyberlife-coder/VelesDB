@@ -147,6 +147,31 @@ impl FusionStrategy {
             .map_err(|e| PyValueError::new_err(format!("{e}")))
     }
 
+    /// Create a Relative Score Fusion (RSF) strategy.
+    ///
+    /// Linearly combines dense and sparse scores with the given weights.
+    /// Useful for hybrid dense+sparse search.
+    ///
+    /// Args:
+    ///     dense_weight: Weight for dense vector scores (0.0-1.0)
+    ///     sparse_weight: Weight for sparse scores (0.0-1.0)
+    ///
+    /// Returns:
+    ///     FusionStrategy: Relative score fusion strategy
+    ///
+    /// Raises:
+    ///     ValueError: If weights are invalid
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.relative_score(0.7, 0.3)
+    #[staticmethod]
+    #[pyo3(signature = (dense_weight, sparse_weight))]
+    fn relative_score(dense_weight: f32, sparse_weight: f32) -> PyResult<Self> {
+        CoreFusionStrategy::relative_score(dense_weight, sparse_weight)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(format!("{e}")))
+    }
+
     fn __repr__(&self) -> String {
         match &self.inner {
             CoreFusionStrategy::Average => "FusionStrategy.average()".to_string(),
@@ -413,6 +438,16 @@ impl Database {
     /// Get the database path.
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    /// Open a new `Arc<CoreDatabase>` from the same path.
+    ///
+    /// Used by subsystems (e.g., AgentMemory) that need shared ownership.
+    /// VelesDB's `Database::open` is idempotent on the same path.
+    pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
+        CoreDatabase::open(&self.path)
+            .map(Arc::new)
+            .map_err(|e| format!("Failed to open shared database: {e}"))
     }
 }
 

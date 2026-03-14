@@ -26,11 +26,22 @@
 //! # Build Commands
 //!
 //! ```bash
-//! # iOS
+//! # iOS - build for device and simulator
 //! cargo build --release --target aarch64-apple-ios
 //! cargo build --release --target aarch64-apple-ios-sim
+//! cargo build --release --target x86_64-apple-ios  # Intel simulator
 //!
-//! # Android (requires NDK)
+//! # iOS - create universal binary + XCFramework
+//! lipo -create \
+//!   target/aarch64-apple-ios-sim/release/libvelesdb_mobile.a \
+//!   target/x86_64-apple-ios/release/libvelesdb_mobile.a \
+//!   -output target/universal-sim/libvelesdb_mobile.a
+//! xcodebuild -create-xcframework \
+//!   -library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
+//!   -library target/universal-sim/libvelesdb_mobile.a \
+//!   -output VelesDB.xcframework
+//!
+//! # Android (requires cargo-ndk: cargo install cargo-ndk)
 //! cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --release
 //! ```
 

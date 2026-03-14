@@ -341,6 +341,7 @@ impl SourceConnector for MongoDBConnector {
                 id,
                 vector,
                 payload,
+                sparse_vector: None,
             });
         }
 

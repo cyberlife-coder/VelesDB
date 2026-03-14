@@ -325,6 +325,7 @@ impl SourceConnector for RedisConnector {
                 id,
                 vector,
                 payload,
+                sparse_vector: None,
             });
         }
 

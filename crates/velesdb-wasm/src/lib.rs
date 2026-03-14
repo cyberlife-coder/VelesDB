@@ -36,7 +36,10 @@
 //!
 //! const store = new VectorStore(768, "cosine");
 //! store.insert(1, new Float32Array([0.1, 0.2, ...]));
+//!
+//! // search() returns Array<{id: number, score: number}>
 //! const results = store.search(new Float32Array([0.1, ...]), 10);
+//! // results = [{id: 1, score: 0.95}, {id: 42, score: 0.87}, ...]
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -94,7 +97,9 @@ pub enum StorageMode {
     SQ8,
     /// Binary: 1-bit quantization (1 bit per dimension, 32x compression)
     Binary,
-    /// Product Quantization (currently mapped to SQ8 path in WASM runtime)
+    /// Product Quantization — **WASM limitation**: PQ requires `rayon`/`persistence`
+    /// which are unavailable in WASM. This variant uses the SQ8 codepath as a
+    /// fallback. For true PQ, use the native `velesdb-core` crate.
     ProductQuantization,
 }
 
@@ -332,6 +337,9 @@ impl VectorStore {
     }
 
     /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5).
+    ///
+    /// **Note:** hybrid_search requires `Full` storage mode. Using it with
+    /// `SQ8`, `Binary`, or `ProductQuantization` returns an error.
     #[wasm_bindgen]
     pub fn hybrid_search(
         &self,
@@ -342,7 +350,11 @@ impl VectorStore {
     ) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query_vector.len(), self.dimension)?;
         if self.storage_mode != StorageMode::Full {
-            return self.search(query_vector, k);
+            return Err(JsValue::from_str(
+                "hybrid_search requires Full storage mode. \
+                 SQ8, Binary, and ProductQuantization modes do not support text scoring. \
+                 Use search() for vector-only queries with quantized stores.",
+            ));
         }
         store_search::hybrid_search_impl(
             query_vector,

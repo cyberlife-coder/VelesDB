@@ -235,6 +235,7 @@ impl SourceConnector for QdrantConnector {
                 id: p.id.to_string(),
                 vector: p.vector.into_vec(),
                 payload: p.payload.unwrap_or_default(),
+                sparse_vector: None,
             })
             .collect();
 

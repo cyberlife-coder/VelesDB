@@ -105,6 +105,7 @@ mod tests {
             id: "1".to_string(),
             vector: vec![0.1, 0.2],
             payload: HashMap::from([("title".to_string(), serde_json::json!("Test"))]),
+            sparse_vector: None,
         };
 
         let result = transformer.transform_point(point);
@@ -120,6 +121,7 @@ mod tests {
             id: "1".to_string(),
             vector: vec![0.1, 0.2],
             payload: HashMap::from([("old_name".to_string(), serde_json::json!("Test"))]),
+            sparse_vector: None,
         };
 
         let result = transformer.transform_point(point);
@@ -176,11 +178,13 @@ mod tests {
                 id: "1".to_string(),
                 vector: vec![0.1],
                 payload: HashMap::new(),
+                sparse_vector: None,
             },
             ExtractedPoint {
                 id: "2".to_string(),
                 vector: vec![0.2],
                 payload: HashMap::new(),
+                sparse_vector: None,
             },
         ];
 

@@ -88,9 +88,13 @@ use parking_lot::RwLock;
 // Use DistanceMetric from velesdb_core
 use velesdb_core::DistanceMetric;
 
-/// Simple in-memory vector index for demo purposes.
-/// For production, use the full plugin commands with persistent storage.
-pub struct SimpleVectorIndex {
+/// Simple in-memory vector index for demo/prototyping purposes.
+///
+/// **WARNING:** O(n) brute-force search — not suitable beyond 10,000 vectors.
+/// No persistence, no HNSW acceleration. For production workloads, use the
+/// full plugin commands backed by `VelesDbState` which provides persistent
+/// HNSW-indexed collections.
+pub(crate) struct SimpleVectorIndex {
     vectors: HashMap<u64, Vec<f32>>,
     dimension: usize,
     metric: DistanceMetric,
@@ -109,7 +113,8 @@ impl SimpleVectorIndex {
 
     /// Creates a new empty index with the given dimension and metric.
     #[must_use]
-    pub fn with_metric(dimension: usize, metric: DistanceMetric) -> Self {
+    #[allow(dead_code)] // available for future use by plugin commands
+    pub(crate) fn with_metric(dimension: usize, metric: DistanceMetric) -> Self {
         Self {
             vectors: HashMap::new(),
             dimension,
@@ -188,7 +193,7 @@ impl SimpleVectorIndex {
 }
 
 /// State for the simple vector index (used by `VelesDbExt`).
-pub struct SimpleIndexState(pub Arc<RwLock<SimpleVectorIndex>>);
+pub(crate) struct SimpleIndexState(pub(crate) Arc<RwLock<SimpleVectorIndex>>);
 
 /// Extension trait for easy access to `VelesDB` from Tauri `AppHandle`.
 pub trait VelesDbExt<R: Runtime> {
@@ -396,22 +401,21 @@ pub fn init_default<R: Runtime>() -> TauriPlugin<R> {
 ///
 /// * `app_name` - Your application's name (used in the path)
 ///
+/// # Errors
+///
+/// Returns an error if the platform's app data directory cannot be determined.
+///
 /// # Example
 ///
 /// ```rust,ignore
 /// tauri::Builder::default()
-///     .plugin(tauri_plugin_velesdb::init_with_app_data("my-app"))
+///     .plugin(tauri_plugin_velesdb::init_with_app_data("my-app")?)
 ///     .run(tauri::generate_context!())
 ///     .expect("error while running tauri application");
 /// ```
-///
-/// # Panics
-///
-/// Panics if the app data directory cannot be determined for the platform.
-#[must_use]
-pub fn init_with_app_data<R: Runtime>(app_name: &str) -> TauriPlugin<R> {
-    let app_data_dir = get_app_data_dir(app_name);
-    init_with_path(app_data_dir)
+pub fn init_with_app_data<R: Runtime>(app_name: &str) -> Result<TauriPlugin<R>> {
+    let app_data_dir = get_app_data_dir(app_name)?;
+    Ok(init_with_path(app_data_dir))
 }
 
 /// Returns the platform-specific app data directory for `VelesDB`.
@@ -422,18 +426,18 @@ pub fn init_with_app_data<R: Runtime>(app_name: &str) -> TauriPlugin<R> {
 ///
 /// # Returns
 ///
-/// Path to `<app_data>/<app_name>/velesdb/`
+/// Path to `<app_data>/<app_name>/velesdb/`, or an error if the platform
+/// data directory cannot be determined.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the app data directory cannot be determined.
-#[must_use]
-pub fn get_app_data_dir(app_name: &str) -> std::path::PathBuf {
-    let Some(base_dir) = dirs::data_dir().or_else(dirs::config_dir) else {
-        panic!("Could not determine app data directory for this platform");
-    };
+/// Returns `Error::InvalidConfig` if the platform data directory cannot be resolved.
+pub fn get_app_data_dir(app_name: &str) -> Result<std::path::PathBuf> {
+    let base_dir = dirs::data_dir().or_else(dirs::config_dir).ok_or_else(|| {
+        Error::InvalidConfig("Could not determine app data directory for this platform".to_string())
+    })?;
 
-    base_dir.join(app_name).join("velesdb")
+    Ok(base_dir.join(app_name).join("velesdb"))
 }
 
 #[cfg(test)]
@@ -455,7 +459,7 @@ mod tests {
     #[test]
     fn test_get_app_data_dir_structure() {
         // Act
-        let path = get_app_data_dir("test-app");
+        let path = get_app_data_dir("test-app").unwrap();
 
         // Assert - path should end with test-app/velesdb
         assert!(path.ends_with("test-app/velesdb") || path.ends_with("test-app\\velesdb"));
@@ -465,8 +469,8 @@ mod tests {
     #[test]
     fn test_get_app_data_dir_different_apps() {
         // Act
-        let path1 = get_app_data_dir("app1");
-        let path2 = get_app_data_dir("app2");
+        let path1 = get_app_data_dir("app1").unwrap();
+        let path2 = get_app_data_dir("app2").unwrap();
 
         // Assert - different apps should have different paths
         assert_ne!(path1, path2);

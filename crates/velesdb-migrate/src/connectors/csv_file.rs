@@ -267,6 +267,7 @@ impl SourceConnector for CsvFileConnector {
                 id: self.extract_id(record, start + idx),
                 vector: self.parse_vector(record)?,
                 payload: self.extract_payload(record),
+                sparse_vector: None,
             });
         }
 

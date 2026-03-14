@@ -70,12 +70,12 @@ impl CheckpointContext {
         })
     }
 
-    fn load(&self) -> Result<Option<CheckpointState>> {
+    async fn load(&self) -> Result<Option<CheckpointState>> {
         if !self.path.exists() {
             return Ok(None);
         }
 
-        let bytes = std::fs::read(&self.path)?;
+        let bytes = tokio::fs::read(&self.path).await?;
         let state: CheckpointState = serde_json::from_slice(&bytes)?;
 
         if state.version != CHECKPOINT_VERSION {
@@ -204,7 +204,7 @@ impl Pipeline {
         }
 
         if let Some(ctx) = &checkpoint_ctx {
-            if let Some(state) = ctx.load()? {
+            if let Some(state) = ctx.load().await? {
                 offset = state.next_offset;
                 stats.extracted = state.extracted;
                 stats.loaded = state.loaded;
@@ -453,7 +453,10 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 /// Maps string IDs to deterministic u64 point IDs.
 ///
-/// Numeric strings are parsed directly; non-numeric strings use FNV-1a hash.
+/// **Strategy:** Numeric strings (`"12345"`) are parsed directly to u64.
+/// Non-numeric strings (UUIDs, slugs, etc.) are hashed via FNV-1a to a
+/// deterministic u64. Hash collisions are theoretically possible but
+/// extremely rare for typical ID spaces.
 ///
 /// # Cross-version stability guarantee
 ///
