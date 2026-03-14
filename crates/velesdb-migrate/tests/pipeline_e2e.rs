@@ -5,8 +5,6 @@ use std::path::Path;
 
 use serde_json::json;
 use tempfile::{NamedTempFile, TempDir};
-use wiremock::matchers::{body_partial_json, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 use velesdb_core::Database;
 use velesdb_migrate::config::{
     DestinationConfig, DistanceMetric, MigrationConfig, MigrationOptions, PineconeConfig,
@@ -15,6 +13,8 @@ use velesdb_migrate::config::{
 use velesdb_migrate::connectors::elasticsearch::ElasticsearchConfig;
 use velesdb_migrate::connectors::{csv_file::CsvFileConfig, json_file::JsonFileConfig};
 use velesdb_migrate::Pipeline;
+use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn write_json_source(file: &mut NamedTempFile, rows: &[serde_json::Value]) {
     file.as_file_mut().set_len(0).expect("truncate json source");
@@ -438,9 +438,7 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
 
     Mock::given(method("POST"))
         .and(path("/collections/test_err/points/scroll"))
-        .respond_with(
-            ResponseTemplate::new(500).set_body_string("Internal Server Error"),
-        )
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
         .expect(1) // proves no retry
         .mount(&mock_server)
         .await;
@@ -881,9 +879,7 @@ async fn test_pipeline_qdrant_pagination_multi_page() {
 
     Mock::given(method("GET"))
         .and(path("/collections/test_pag"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(&collection_info_body),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(&collection_info_body))
         .expect(2) // connect() + get_schema()
         .mount(&mock_server)
         .await;
@@ -909,9 +905,7 @@ async fn test_pipeline_qdrant_pagination_multi_page() {
 
     Mock::given(method("POST"))
         .and(path("/collections/test_pag/points/scroll"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(&page1_body),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(&page1_body))
         .up_to_n_times(1)
         .mount(&mock_server)
         .await;
@@ -938,9 +932,7 @@ async fn test_pipeline_qdrant_pagination_multi_page() {
     Mock::given(method("POST"))
         .and(path("/collections/test_pag/points/scroll"))
         .and(body_partial_json(json!({"offset": 3})))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(&page2_body),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(&page2_body))
         .mount(&mock_server)
         .await;
 
