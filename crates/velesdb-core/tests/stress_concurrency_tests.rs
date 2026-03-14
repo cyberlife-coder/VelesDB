@@ -1,3 +1,4 @@
+#![cfg(feature = "persistence")]
 //! Stress tests for concurrent Collection operations.
 //!
 //! # Design Decision

@@ -1,3 +1,4 @@
+#![cfg(feature = "persistence")]
 //! Integration tests for `VelesDB` real-world usage scenarios.
 #![allow(
     clippy::cast_precision_loss,

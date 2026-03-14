@@ -1,3 +1,4 @@
+#![cfg(feature = "persistence")]
 //! Integration tests for completed EPICs features.
 //!
 //! These tests verify end-to-end functionality of features marked as DONE in EPICs.

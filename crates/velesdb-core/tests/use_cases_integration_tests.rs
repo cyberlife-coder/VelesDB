@@ -1,3 +1,4 @@
+#![cfg(feature = "persistence")]
 //! Integration tests for the 10 hybrid use cases documented in `docs/guides/USE_CASES.md`.
 //!
 //! These tests verify that all documented `VelesQL` queries work correctly and serve

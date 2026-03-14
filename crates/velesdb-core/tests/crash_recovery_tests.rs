@@ -1,3 +1,4 @@
+#![cfg(feature = "persistence")]
 //! Crash recovery integration tests for `VelesDB`.
 //!
 //! These tests verify that `VelesDB` survives abrupt shutdowns without logical corruption.

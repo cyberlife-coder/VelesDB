@@ -33,7 +33,7 @@ mod ast_tests;
 mod cache;
 #[cfg(test)]
 mod cache_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod cbo_tests;
 #[cfg(test)]
 mod complex_parser_tests;

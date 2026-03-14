@@ -129,6 +129,7 @@ optional = true
 [[example]]
 name = "crash_driver"
 path = "examples/crash_driver.rs"
+required-features = ["persistence"]
 
 [[bench]]
 name = "search_benchmark"

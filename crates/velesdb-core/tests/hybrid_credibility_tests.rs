@@ -1,3 +1,4 @@
+#![cfg(feature = "persistence")]
 //! Integration tests proving `VelesDB`'s hybrid query value proposition.
 //!
 //! HYB-01: `VelesQL` NEAR + scalar filter with ranking identity assertions
