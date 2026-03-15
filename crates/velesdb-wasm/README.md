@@ -89,9 +89,13 @@ class VectorStore {
 
   // Methods
   insert(id: bigint, vector: Float32Array): void;
-  insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;  insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
+  insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;
+  insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
   search(query: Float32Array, k: number): Array<[bigint, number]>;
-  search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;  text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;  get(id: bigint): {id, vector, payload} | null;  remove(id: bigint): boolean;
+  search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;
+  text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;
+  get(id: bigint): {id, vector, payload} | null;
+  remove(id: bigint): boolean;
   clear(): void;
   reserve(additional: number): void;  // Pre-allocate memory
   memory_usage(): number;  // Accurate for each storage mode
