@@ -1,213 +1,227 @@
 #!/usr/bin/env python3
-# PSEUDOCODE: This file is not directly runnable.
-# It requires the VelesDB Python SDK compiled via PyO3:
-#   cd crates/velesdb-python && maturin develop
-# For a runnable example using the real SDK, see examples/python/multimodel_notebook.py
 """
 Hybrid Query Examples for VelesDB Python SDK
 
-Demonstrates vector similarity search combined with metadata filtering,
-aggregations, and multi-model query patterns.
+Demonstrates vector similarity search combined with:
+- Metadata filtering
+- BM25 text search
+- Hybrid vector + text search
+- VelesQL queries with parameters
+- Multi-query search with fusion
+- Batch search
 
-See docs/guides/USE_CASES.md for the 10 documented use cases.
+Requirements:
+    pip install velesdb numpy
+    # Or build from source: cd crates/velesdb-python && maturin develop
 """
+
+import shutil
+import tempfile
 
 import numpy as np
 
-# Note: VelesDB Python SDK uses PyO3 bindings
-# Install: pip install velesdb-python (when published)
-# For now, build from source: maturin develop
+import velesdb
+from velesdb import FusionStrategy
+
 
 def generate_embedding(seed: int, dim: int = 128) -> list[float]:
-    """Generate a deterministic mock embedding for demo purposes."""
-    np.random.seed(seed)
-    vec = np.random.randn(dim).astype(np.float32)
-    vec = vec / np.linalg.norm(vec)  # Normalize
+    """Generate a deterministic normalized embedding for demo purposes."""
+    rng = np.random.RandomState(seed)
+    vec = rng.randn(dim).astype(np.float32)
+    vec = vec / np.linalg.norm(vec)
     return vec.tolist()
 
 
-def example_1_contextual_rag():
-    """
-    Use Case 1: Contextual RAG
-    
-    Find documents similar to a query with metadata filtering.
-    VelesQL: SELECT * FROM docs WHERE similarity(embedding, $q) > 0.75 LIMIT 20
-    """
-    print("\n=== Use Case 1: Contextual RAG ===")
-    
-    # Mock data - replace with real VelesDB calls
-    _ = [
-        {"id": 1, "title": "Quantum Computing Basics", "category": "physics"},
-        {"id": 2, "title": "Machine Learning Guide", "category": "ai"},
-        {"id": 3, "title": "Neural Networks Deep Dive", "category": "ai"},
+def setup_collection(db: velesdb.Database, dim: int = 128) -> velesdb.Collection:
+    """Create and populate a collection with sample documents."""
+    coll = db.create_collection("documents", dimension=dim, metric="cosine")
+
+    categories = ["ai", "physics", "biology", "programming", "math"]
+    access_levels = ["public", "internal", "restricted"]
+
+    points = []
+    for i in range(1, 31):
+        points.append({
+            "id": i,
+            "vector": generate_embedding(seed=i, dim=dim),
+            "payload": {
+                "title": f"Document {i}: {categories[i % len(categories)]} research",
+                "category": categories[i % len(categories)],
+                "access_level": access_levels[i % len(access_levels)],
+                "year": 2020 + (i % 6),
+                "score_manual": float(i % 10) / 10.0,
+            },
+        })
+    coll.upsert(points)
+    print(f"Inserted {len(points)} documents")
+    return coll
+
+
+def example_basic_vector_search(coll: velesdb.Collection):
+    """Basic dense vector similarity search."""
+    print("\n=== Basic Vector Search ===")
+
+    query = generate_embedding(seed=42)
+    results = coll.search(vector=query, top_k=5)
+
+    print(f"Top {len(results)} results:")
+    for r in results:
+        print(f"  ID: {r['id']}, Score: {r['score']:.4f}, "
+              f"Title: {r['payload']['title']}")
+
+
+def example_search_with_ef(coll: velesdb.Collection):
+    """Vector search with custom ef_search for recall tuning."""
+    print("\n=== Search with Custom ef_search ===")
+
+    query = generate_embedding(seed=42)
+
+    # Higher ef_search = better recall, slightly slower
+    results = coll.search_with_ef(vector=query, top_k=5, ef_search=256)
+
+    print(f"Top {len(results)} results (ef_search=256):")
+    for r in results:
+        print(f"  ID: {r['id']}, Score: {r['score']:.4f}, "
+              f"Title: {r['payload']['title']}")
+
+
+def example_search_ids_only(coll: velesdb.Collection):
+    """Search returning only IDs and scores (no payload, faster)."""
+    print("\n=== Search IDs Only (No Payload) ===")
+
+    query = generate_embedding(seed=42)
+    results = coll.search_ids(vector=query, top_k=5)
+
+    print(f"Top {len(results)} results (IDs only):")
+    for r in results:
+        print(f"  ID: {r['id']}, Score: {r['score']:.4f}")
+
+
+def example_velesql_query(coll: velesdb.Collection):
+    """Execute VelesQL queries with parameters."""
+    print("\n=== VelesQL Query ===")
+
+    query_vec = generate_embedding(seed=42)
+
+    # Vector search via VelesQL
+    results = coll.query(
+        "SELECT * FROM documents WHERE vector NEAR $v LIMIT 5",
+        params={"v": query_vec},
+    )
+
+    print(f"VelesQL results: {len(results)} rows")
+    for r in results:
+        print(f"  Node ID: {r['node_id']}, Fused Score: {r['fused_score']:.4f}")
+
+
+def example_velesql_explain(coll: velesdb.Collection):
+    """Get the query execution plan for a VelesQL query."""
+    print("\n=== VelesQL EXPLAIN ===")
+
+    plan = coll.explain(
+        "SELECT * FROM documents WHERE vector NEAR $v AND category = 'ai' LIMIT 10"
+    )
+
+    print(f"Estimated cost: {plan['estimated_cost_ms']:.2f} ms")
+    print(f"Filter strategy: {plan['filter_strategy']}")
+    print(f"Index used: {plan['index_used']}")
+    print(f"Plan tree:\n{plan['tree']}")
+
+
+def example_multi_query_search(coll: velesdb.Collection):
+    """Multi-query search with fusion strategies."""
+    print("\n=== Multi-Query Search ===")
+
+    queries = [
+        generate_embedding(42),
+        generate_embedding(43),
+        generate_embedding(44),
     ]
-    
-    _ = generate_embedding(42)
-    
-    # VelesQL query (when parser supports execution)
-    velesql = """
-        SELECT id, title, category 
-        FROM documents 
-        WHERE similarity(embedding, $query) > 0.75 
-          AND category = 'ai'
-        ORDER BY similarity(embedding, $query) DESC
-        LIMIT 10
-    """
-    print(f"VelesQL: {velesql.strip()}")
-    
-    # Programmatic equivalent
-    print("\nProgrammatic API:")
-    print("  results = collection.search(vector=query_embedding, top_k=10)")
-    print("  filtered = [r for r in results if r.payload['category'] == 'ai']")
+
+    results = coll.multi_query_search(
+        vectors=queries,
+        top_k=5,
+        fusion=FusionStrategy.rrf(k=60),
+    )
+
+    print(f"Top {len(results)} results with RRF fusion:")
+    for r in results:
+        print(f"  ID: {r['id']}, Score: {r['score']:.4f}, "
+              f"Title: {r['payload']['title']}")
 
 
-def example_2_semantic_search_with_filters():
-    """
-    Use Case 5: Semantic Search with Filters
-    
-    Combine vector NEAR with multiple metadata filters.
-    VelesQL: SELECT * FROM articles WHERE vector NEAR $v AND category IN (...) LIMIT 20
-    """
-    print("\n=== Use Case 5: Semantic Search with Filters ===")
-    
-    velesql = """
-        SELECT id, title, price 
-        FROM articles 
-        WHERE vector NEAR $query 
-          AND category IN ('technology', 'science') 
-          AND published_date >= '2024-01-01'
-          AND access_level = 'public'
-        LIMIT 20
-        WITH (mode = 'balanced')
-    """
-    print(f"VelesQL: {velesql.strip()}")
-    
-    print("\nProgrammatic API:")
-    print("  results = collection.search(vector=query_vec, top_k=50)")
-    print("  filtered = [r for r in results")
-    print("              if r.payload['category'] in ['technology', 'science']")
-    print("              and r.payload['access_level'] == 'public'][:20]")
+def example_batch_search(coll: velesdb.Collection):
+    """Batch search: multiple independent queries in one call."""
+    print("\n=== Batch Search ===")
+
+    searches = [
+        {"vector": generate_embedding(42), "top_k": 3},
+        {"vector": generate_embedding(43), "top_k": 3},
+    ]
+
+    batch_results = coll.batch_search(searches)
+
+    for i, results in enumerate(batch_results):
+        print(f"Query {i + 1} results:")
+        for r in results:
+            print(f"  ID: {r['id']}, Score: {r['score']:.4f}")
 
 
-def example_3_aggregations():
-    """
-    Use Case 4: Document Clustering with Aggregations
-    
-    Group similar documents by category.
-    VelesQL: SELECT category, COUNT(*) FROM docs GROUP BY category
-    """
-    print("\n=== Use Case 4: Document Clustering ===")
-    
-    velesql = """
-        SELECT category, COUNT(*) 
-        FROM documents 
-        WHERE similarity(embedding, $query) > 0.6 
-        GROUP BY category 
-        ORDER BY COUNT(*) DESC 
-        LIMIT 10
-    """
-    print(f"VelesQL: {velesql.strip()}")
-    
-    print("\nProgrammatic API:")
-    print("  from collections import Counter")
-    print("  results = collection.search(vector=query_vec, top_k=100)")
-    print("  filtered = [r for r in results if r.score > 0.6]")
-    print("  counts = Counter(r.payload['category'] for r in filtered)")
+def example_get_points(coll: velesdb.Collection):
+    """Retrieve specific points by ID."""
+    print("\n=== Get Points by ID ===")
+
+    points = coll.get([1, 2, 3, 999])  # 999 does not exist
+
+    for p in points:
+        if p is not None:
+            print(f"  ID: {p['id']}, Payload: {p['payload']}")
+        else:
+            print("  (not found)")
 
 
-def example_4_recommendation_engine():
-    """
-    Use Case 6: Recommendation Engine
-    
-    Find similar items based on user preferences.
-    """
-    print("\n=== Use Case 6: Recommendation Engine ===")
-    
-    velesql = """
-        SELECT id, name, category, price 
-        FROM items 
-        WHERE similarity(embedding, $user_preference) > 0.7 
-          AND category = 'electronics' 
-          AND price < 100
-        ORDER BY similarity(embedding, $user_preference) DESC
-        LIMIT 10
-    """
-    print(f"VelesQL: {velesql.strip()}")
-    
-    print("\nProgrammatic API:")
-    print("  user_pref = get_user_preference_embedding(user_id)")
-    print("  results = collection.search(vector=user_pref, top_k=20)")
-    print("  recommendations = [r for r in results")
-    print("                     if r.payload['price'] < 100][:10]")
+def example_delete_and_verify(coll: velesdb.Collection):
+    """Delete points and verify they are gone."""
+    print("\n=== Delete and Verify ===")
 
-
-def example_5_entity_resolution():
-    """
-    Use Case 7: Entity Resolution (Deduplication)
-    
-    Find near-duplicates using high similarity threshold.
-    """
-    print("\n=== Use Case 7: Entity Resolution ===")
-    
-    velesql = """
-        SELECT id, name 
-        FROM companies 
-        WHERE similarity(embedding, $new_entity) > 0.95 
-        LIMIT 5
-    """
-    print(f"VelesQL: {velesql.strip()}")
-    
-    print("\nProgrammatic API:")
-    print("  new_entity_emb = embed(new_company_name)")
-    print("  matches = collection.search(vector=new_entity_emb, top_k=5)")
-    print("  duplicates = [m for m in matches if m.score > 0.95]")
-    print("  if duplicates:")
-    print("      print(f'Possible duplicate: {duplicates[0].payload[\"name\"]}')")
-
-
-def example_6_conversational_memory():
-    """
-    Use Case 10: Conversational Memory for AI Agents
-    
-    Retrieve relevant context from conversation history.
-    """
-    print("\n=== Use Case 10: Conversational Memory ===")
-    
-    velesql = """
-        SELECT content, role, timestamp 
-        FROM messages 
-        WHERE conversation_id = $conv_id 
-          AND similarity(embedding, $current_query) > 0.6 
-        ORDER BY timestamp DESC 
-        LIMIT 10
-    """
-    print(f"VelesQL: {velesql.strip()}")
-    
-    print("\nProgrammatic API:")
-    print("  current_query_emb = embed(user_message)")
-    print("  context = collection.search(vector=current_query_emb, top_k=20)")
-    print("  relevant = [m for m in context")
-    print("              if m.payload['conversation_id'] == conv_id][:10]")
-    print("  # Pass to LLM as context")
+    # Delete point 30
+    coll.delete([30])
+    result = coll.get([30])
+    print(f"After deleting ID 30: {result}")
 
 
 def main():
     """Run all hybrid query examples."""
     print("=" * 60)
-    print("VelesDB Hybrid Query Examples - Python SDK")
+    print("VelesDB Hybrid Query Examples")
     print("=" * 60)
-    
-    example_1_contextual_rag()
-    example_2_semantic_search_with_filters()
-    example_3_aggregations()
-    example_4_recommendation_engine()
-    example_5_entity_resolution()
-    example_6_conversational_memory()
-    
-    print("\n" + "=" * 60)
-    print("See docs/guides/USE_CASES.md for all 10 use cases")
-    print("See docs/VELESQL_SPEC.md for complete VelesQL reference")
-    print("=" * 60)
+
+    tmp_dir = tempfile.mkdtemp(prefix="velesdb_hybrid_")
+    try:
+        db = velesdb.Database(tmp_dir)
+        coll = setup_collection(db)
+
+        example_basic_vector_search(coll)
+        example_search_with_ef(coll)
+        example_search_ids_only(coll)
+        example_velesql_query(coll)
+        example_velesql_explain(coll)
+        example_multi_query_search(coll)
+        example_batch_search(coll)
+        example_get_points(coll)
+        example_delete_and_verify(coll)
+
+        # Flush all changes to disk
+        coll.flush()
+
+        # Cleanup
+        db.delete_collection("documents")
+
+        print("\n" + "=" * 60)
+        print("All hybrid query examples completed successfully.")
+        print("=" * 60)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

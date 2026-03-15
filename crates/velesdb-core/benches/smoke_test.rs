@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! Fast performance smoke test for CI.
 //!
 //! EPIC-026/US-002: Runs in < 2 minutes on typical CI runner.

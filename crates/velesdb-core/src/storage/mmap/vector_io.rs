@@ -53,8 +53,9 @@ impl VectorStorage for MmapStorage {
         let (offset, is_new) = if let Some(existing_offset) = self.index.get(id) {
             (existing_offset, false)
         } else {
-            let offset = self.next_offset.load(Ordering::Relaxed);
-            self.next_offset.fetch_add(vector_size, Ordering::Relaxed);
+            // M-2: Use Acquire/AcqRel to ensure mmap writes are visible on ARM/RISC-V.
+            let offset = self.next_offset.load(Ordering::Acquire);
+            self.next_offset.fetch_add(vector_size, Ordering::AcqRel);
             (offset, true)
         };
 
@@ -104,7 +105,8 @@ impl VectorStorage for MmapStorage {
 
         for &(id, _) in vectors {
             if !self.index.contains_key(id) {
-                let offset = self.next_offset.load(Ordering::Relaxed) + total_new_size;
+                // M-2: Acquire ordering for cross-platform visibility
+                let offset = self.next_offset.load(Ordering::Acquire) + total_new_size;
                 new_vector_offsets.insert(id, offset);
                 total_new_size += vector_size;
             }
@@ -112,10 +114,10 @@ impl VectorStorage for MmapStorage {
 
         // 2. Pre-allocate space for all new vectors at once
         if total_new_size > 0 {
-            let start_offset = self.next_offset.load(Ordering::Relaxed);
+            // M-2: Acquire/AcqRel ordering for cross-platform visibility
+            let start_offset = self.next_offset.load(Ordering::Acquire);
             self.ensure_capacity(start_offset + total_new_size)?;
-            self.next_offset
-                .fetch_add(total_new_size, Ordering::Relaxed);
+            self.next_offset.fetch_add(total_new_size, Ordering::AcqRel);
         }
 
         // 3. Single WAL append for entire batch (Op: BatchStore = 3)

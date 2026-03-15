@@ -13,6 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Each variant includes a descriptive error message suitable for end-users.
 /// Error codes follow the pattern `VELES-XXX` for easy debugging.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Collection already exists (VELES-001).
     #[error("[VELES-001] Collection '{0}' already exists")]
@@ -167,6 +168,25 @@ pub enum Error {
     /// Database already locked by another process (VELES-031).
     #[error("[VELES-031] Database is already opened by another process: {0}")]
     DatabaseLocked(String),
+
+    /// Invalid dimension (VELES-032).
+    ///
+    /// Indicates a vector dimension outside the valid range.
+    #[error("[VELES-032] Invalid dimension {dimension}: must be between {min} and {max}")]
+    InvalidDimension {
+        /// The invalid dimension provided.
+        dimension: usize,
+        /// Minimum valid dimension.
+        min: usize,
+        /// Maximum valid dimension.
+        max: usize,
+    },
+
+    /// Allocation failed (VELES-033).
+    ///
+    /// Indicates a memory allocation failure (out of memory or invalid layout).
+    #[error("[VELES-033] Allocation failed: {0}")]
+    AllocationFailed(String),
 }
 
 impl Error {
@@ -205,6 +225,8 @@ impl Error {
             Self::TrainingFailed(_) => "VELES-029",
             Self::SparseIndexError(_) => "VELES-030",
             Self::DatabaseLocked(_) => "VELES-031",
+            Self::InvalidDimension { .. } => "VELES-032",
+            Self::AllocationFailed(_) => "VELES-033",
         }
     }
 
@@ -215,7 +237,10 @@ impl Error {
     pub const fn is_recoverable(&self) -> bool {
         !matches!(
             self,
-            Self::IndexCorrupted(_) | Self::Internal(_) | Self::EpochMismatch(_)
+            Self::IndexCorrupted(_)
+                | Self::Internal(_)
+                | Self::EpochMismatch(_)
+                | Self::AllocationFailed(_)
         )
     }
 }

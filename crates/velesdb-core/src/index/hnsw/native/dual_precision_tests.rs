@@ -13,7 +13,7 @@ use crate::distance::DistanceMetric;
 #[test]
 fn test_create_dual_precision_hnsw() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let hnsw = DualPrecisionHnsw::new(engine, 128, 16, 100, 1000);
+    let hnsw = DualPrecisionHnsw::new(engine, 128, 16, 100, 1000).expect("test");
 
     assert!(hnsw.is_empty());
     assert!(!hnsw.is_quantizer_trained());
@@ -22,12 +22,12 @@ fn test_create_dual_precision_hnsw() {
 #[test]
 fn test_insert_before_quantizer_training() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert fewer vectors than training threshold
     for i in 0..10 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert_eq!(hnsw.len(), 10);
@@ -38,7 +38,7 @@ fn test_insert_before_quantizer_training() {
 fn test_quantizer_trains_after_threshold() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
     // Set low training threshold for test
-    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 100);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 100).expect("test");
     // training_sample_size = min(1000, 100) = 100
 
     // Insert up to threshold
@@ -46,7 +46,7 @@ fn test_quantizer_trains_after_threshold() {
         let v: Vec<f32> = (0..32)
             .map(|j| ((i * 32 + j) as f32 * 0.01).sin())
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert!(
@@ -58,12 +58,12 @@ fn test_quantizer_trains_after_threshold() {
 #[test]
 fn test_force_train_quantizer() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert fewer than threshold
     for i in 0..50 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert!(!hnsw.is_quantizer_trained());
@@ -81,12 +81,12 @@ fn test_force_train_quantizer() {
 #[test]
 fn test_search_before_quantizer_training() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert some vectors
     for i in 0..50 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     // Search without quantizer (should use float32)
@@ -101,12 +101,12 @@ fn test_search_before_quantizer_training() {
 #[test]
 fn test_search_after_quantizer_training() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert vectors
     for i in 0..50 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     // Force train quantizer
@@ -124,7 +124,7 @@ fn test_search_after_quantizer_training() {
 #[test]
 fn test_dual_precision_recall() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000).expect("test");
 
     // Insert 200 vectors
     let vectors: Vec<Vec<f32>> = (0..200)
@@ -136,7 +136,7 @@ fn test_dual_precision_recall() {
         .collect();
 
     for v in &vectors {
-        hnsw.insert(v.clone());
+        hnsw.insert(v.clone()).expect("test");
     }
 
     hnsw.force_train_quantizer();
@@ -163,19 +163,19 @@ fn test_dual_precision_recall() {
 #[test]
 fn test_insert_after_quantizer_training() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
 
     // Insert and train
     for i in 0..50 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
     hnsw.force_train_quantizer();
 
     // Insert more after training
     for i in 50..100 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert_eq!(hnsw.len(), 100);
@@ -194,14 +194,14 @@ fn test_insert_after_quantizer_training() {
 #[test]
 fn test_quantized_reranking_uses_asymmetric_distance() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 64, 16, 100, 500);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 64, 16, 100, 500).expect("test");
 
     // Insert 200 vectors
     for i in 0..200 {
         let v: Vec<f32> = (0..64)
             .map(|j| ((i * 64 + j) as f32 * 0.01).sin())
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     // Force train quantizer
@@ -225,7 +225,7 @@ fn test_quantized_reranking_uses_asymmetric_distance() {
 #[test]
 fn test_quantized_reranking_maintains_recall() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000).expect("test");
 
     // Insert 500 vectors
     let vectors: Vec<Vec<f32>> = (0..500)
@@ -237,7 +237,7 @@ fn test_quantized_reranking_maintains_recall() {
         .collect();
 
     for v in &vectors {
-        hnsw.insert(v.clone());
+        hnsw.insert(v.clone()).expect("test");
     }
 
     hnsw.force_train_quantizer();
@@ -261,14 +261,14 @@ fn test_quantized_reranking_maintains_recall() {
 #[test]
 fn test_search_with_int8_traversal_enabled() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 64, 16, 100, 500);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 64, 16, 100, 500).expect("test");
 
     // Insert vectors
     for i in 0..200 {
         let v: Vec<f32> = (0..64)
             .map(|j| ((i * 64 + j) as f32 * 0.01).sin())
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     hnsw.force_train_quantizer();
@@ -292,7 +292,7 @@ fn test_search_with_int8_traversal_enabled() {
 #[test]
 fn test_int8_traversal_recall_vs_f32() {
     let engine = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 128, 32, 200, 1000).expect("test");
 
     // Insert 500 vectors
     let vectors: Vec<Vec<f32>> = (0..500)
@@ -304,7 +304,7 @@ fn test_int8_traversal_recall_vs_f32() {
         .collect();
 
     for v in &vectors {
-        hnsw.insert(v.clone());
+        hnsw.insert(v.clone()).expect("test");
     }
 
     hnsw.force_train_quantizer();

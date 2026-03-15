@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Tests use legacy Collection.
 //! Tests for plan cache types (CACHE-01).
 
 use std::sync::atomic::Ordering;

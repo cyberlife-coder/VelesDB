@@ -41,7 +41,7 @@ fn bench_batch_search(c: &mut Criterion) {
 
     // Build HNSW index
     let params = HnswParams::custom(16, 200, n + 1000);
-    let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+    let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
 
     for (idx, vec) in dataset.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
@@ -96,7 +96,7 @@ fn bench_brute_force(c: &mut Criterion) {
 
         // Build HNSW index (for brute_force_search_parallel)
         let params = HnswParams::custom(16, 200, n + 1000);
-        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
 
         for (idx, vec) in dataset.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
@@ -143,7 +143,8 @@ fn bench_parallel_insert(c: &mut Criterion) {
                     || {
                         // Setup: create fresh index for each iteration
                         let params = HnswParams::custom(16, 200, n + 1000);
-                        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+                        let index =
+                            HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
                         (index, vectors.clone())
                     },
                     |(index, vecs)| {
@@ -163,7 +164,8 @@ fn bench_parallel_insert(c: &mut Criterion) {
                 b.iter_with_setup(
                     || {
                         let params = HnswParams::custom(16, 200, n + 1000);
-                        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+                        let index =
+                            HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
                         (index, vectors.clone())
                     },
                     |(index, vecs)| {
@@ -196,7 +198,7 @@ fn bench_thread_scaling(c: &mut Criterion) {
 
     // Build index
     let params = HnswParams::custom(16, 200, n + 1000);
-    let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+    let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
 
     for (idx, vec) in dataset.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]

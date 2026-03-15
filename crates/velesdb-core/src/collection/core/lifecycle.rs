@@ -19,6 +19,29 @@ use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Minimum valid vector dimension.
+pub const MIN_DIMENSION: usize = 1;
+
+/// Maximum valid vector dimension (65,536 — covers all known embedding models).
+pub const MAX_DIMENSION: usize = 65_536;
+
+/// Validates that a vector dimension is within the allowed range.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidDimension`] if `dimension` is outside
+/// `[MIN_DIMENSION, MAX_DIMENSION]`.
+fn validate_dimension(dimension: usize) -> Result<()> {
+    if !(MIN_DIMENSION..=MAX_DIMENSION).contains(&dimension) {
+        return Err(Error::InvalidDimension {
+            dimension,
+            min: MIN_DIMENSION,
+            max: MAX_DIMENSION,
+        });
+    }
+    Ok(())
+}
+
 /// Pre-built components needed to assemble a [`Collection`].
 ///
 /// Used by [`Collection::assemble`] as the single point of truth for the
@@ -120,9 +143,9 @@ impl Collection {
                 config.dimension,
                 config.metric,
                 params,
-            ))
+            )?)
         } else {
-            Arc::new(HnswIndex::new(config.dimension, config.metric))
+            Arc::new(HnswIndex::new(config.dimension, config.metric)?)
         };
         let text_index = Arc::new(Bm25Index::new());
         Ok(CollectionParts::new_with_empty_indexes(
@@ -179,6 +202,7 @@ impl Collection {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) -> Result<Self> {
+        validate_dimension(dimension)?;
         std::fs::create_dir_all(&path)?;
 
         let name = path
@@ -230,6 +254,7 @@ impl Collection {
         storage_mode: StorageMode,
         hnsw_params: crate::index::hnsw::HnswParams,
     ) -> Result<Self> {
+        validate_dimension(dimension)?;
         std::fs::create_dir_all(&path)?;
 
         let name = path
@@ -412,6 +437,9 @@ impl Collection {
         metric: DistanceMetric,
     ) -> Result<Self> {
         let dim = embedding_dim.unwrap_or(0);
+        if let Some(d) = embedding_dim {
+            validate_dimension(d)?;
+        }
         std::fs::create_dir_all(&path)?;
 
         let config = CollectionConfig {
@@ -449,9 +477,9 @@ impl Collection {
                 config.dimension,
                 config.metric,
                 params,
-            )))
+            )?))
         } else {
-            Ok(Arc::new(HnswIndex::new(config.dimension, config.metric)))
+            Ok(Arc::new(HnswIndex::new(config.dimension, config.metric)?))
         }
     }
 
@@ -656,12 +684,23 @@ impl Collection {
     }
 
     /// Saves the collection configuration to disk.
+    ///
+    /// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
     pub(crate) fn save_config(&self) -> Result<()> {
+        use std::io::Write;
+
         let config = self.config.read();
         let config_path = self.path.join("config.json");
+        let tmp_path = self.path.join("config.json.tmp");
         let config_data = serde_json::to_string_pretty(&*config)
             .map_err(|e| Error::Serialization(e.to_string()))?;
-        std::fs::write(config_path, config_data)?;
+
+        let file = std::fs::File::create(&tmp_path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(config_data.as_bytes())?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        std::fs::rename(&tmp_path, &config_path)?;
         Ok(())
     }
 }

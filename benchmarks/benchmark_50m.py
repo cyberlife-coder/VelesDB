@@ -22,7 +22,7 @@ Usage:
     python benchmark_50m.py --vectors 10000000
 
 Author: Wiscale France (Julien Lange)
-License: ELv2
+License: VelesDB Core License 1.0
 """
 
 import argparse

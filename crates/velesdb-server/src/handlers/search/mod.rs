@@ -352,18 +352,26 @@ pub async fn text_search(
         collection.text_search(&req.query, req.top_k)
     };
 
-    let response = SearchResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
-            })
-            .collect(),
-    };
-
-    Json(response).into_response()
+    match results {
+        Ok(results) => {
+            let response = SearchResponse {
+                results: results
+                    .into_iter()
+                    .map(|r| SearchResultResponse {
+                        id: r.point.id,
+                        score: r.score,
+                        payload: r.point.payload,
+                    })
+                    .collect(),
+            };
+            Json(response).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(actionable_search_error(&e)),
+        )
+            .into_response(),
+    }
 }
 
 /// Hybrid search combining vector similarity and BM25 text search.

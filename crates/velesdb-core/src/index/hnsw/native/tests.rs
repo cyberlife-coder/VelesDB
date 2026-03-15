@@ -14,7 +14,7 @@ fn test_native_hnsw_basic_insert_search() {
     // Insert 100 vectors
     for i in 0..100_u64 {
         let v: Vec<f32> = (0..128).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert_eq!(hnsw.len(), 100);
@@ -44,7 +44,7 @@ fn test_native_hnsw_recall() {
         .collect();
 
     for v in &vectors {
-        hnsw.insert(v.clone());
+        hnsw.insert(v.clone()).expect("test");
     }
 
     // Test recall with multiple queries
@@ -112,8 +112,8 @@ fn test_cpu_vs_simd_consistency() {
     // Insert same vectors
     for i in 0..50_u64 {
         let v: Vec<f32> = (0..64).map(|j| (i + j) as f32).collect();
-        cpu_hnsw.insert(v.clone());
-        simd_hnsw.insert(v);
+        cpu_hnsw.insert(v.clone()).expect("test");
+        simd_hnsw.insert(v).expect("test");
     }
 
     // Search should return similar results
@@ -152,7 +152,7 @@ fn test_native_hnsw_with_alpha_diversification() {
                 }
             })
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
     for i in 0..25_u64 {
         // Cluster 2: vectors near [0, 1, 0, ...]
@@ -165,7 +165,7 @@ fn test_native_hnsw_with_alpha_diversification() {
                 }
             })
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert_eq!(hnsw.len(), 50);
@@ -201,8 +201,8 @@ fn test_native_hnsw_alpha_affects_graph_structure() {
     // Insert same vectors
     for i in 0..30_u64 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        hnsw_standard.insert(v.clone());
-        hnsw_diverse.insert(v);
+        hnsw_standard.insert(v.clone()).expect("test");
+        hnsw_diverse.insert(v).expect("test");
     }
 
     // Both should have same count
@@ -221,7 +221,7 @@ fn test_search_multi_entry_returns_results() {
     // Insert vectors
     for i in 0..50_u64 {
         let v: Vec<f32> = (0..32).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let query: Vec<f32> = (0..32).map(|j| (j as f32 * 0.01).sin()).collect();
@@ -241,7 +241,7 @@ fn test_search_multi_entry_vs_standard() {
     // Insert vectors
     for i in 0..30_u64 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.05).collect();
@@ -273,7 +273,7 @@ fn test_concurrent_insert_search_no_deadlock() {
     // Pre-populate with some vectors
     for i in 0..50_u64 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let mut handles = vec![];
@@ -284,7 +284,7 @@ fn test_concurrent_insert_search_no_deadlock() {
         handles.push(thread::spawn(move || {
             for i in 0..25_u64 {
                 let v: Vec<f32> = (0..32).map(|j| ((t * 100 + i) + j) as f32 * 0.01).collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -332,7 +332,7 @@ fn test_parallel_insert_stress_no_deadlock() {
                 let v: Vec<f32> = (0..64)
                     .map(|j| ((idx * 64 + j) as f32 * 0.001).sin())
                     .collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -369,7 +369,7 @@ fn test_mixed_operations_no_deadlock() {
     // Pre-populate
     for i in 0..30_u64 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let mut handles = vec![];
@@ -380,7 +380,7 @@ fn test_mixed_operations_no_deadlock() {
         handles.push(thread::spawn(move || {
             for i in 0..20_u64 {
                 let v: Vec<f32> = (0..32).map(|j| ((t * 100 + i) + j) as f32 * 0.01).collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -444,7 +444,7 @@ fn test_concurrent_insert_deterministic_count() {
                 let v: Vec<f32> = (0..64)
                     .map(|j| ((idx * 64 + j) as f32 * 0.001).sin())
                     .collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -495,7 +495,7 @@ fn test_concurrent_insert_search_correctness() {
     // Pre-populate to ensure searches have data
     for i in 0..100_u64 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let mut handles = vec![];
@@ -508,7 +508,7 @@ fn test_concurrent_insert_search_correctness() {
                 let v: Vec<f32> = (0..32)
                     .map(|j| ((t * 1000 + i) + j) as f32 * 0.01)
                     .collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -579,7 +579,7 @@ fn test_concurrent_insert_multi_entry_search() {
     // Pre-populate
     for i in 0..50_u64 {
         let v: Vec<f32> = (0..32).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let mut handles = vec![];
@@ -592,7 +592,7 @@ fn test_concurrent_insert_multi_entry_search() {
                 let v: Vec<f32> = (0..32)
                     .map(|j| ((t * 100 + i) + j) as f32 * 0.005)
                     .collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -641,7 +641,7 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
     // Pre-populate so search has data to traverse
     for i in 0..100_u64 {
         let v: Vec<f32> = (0..64).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let mut handles = vec![];
@@ -654,7 +654,7 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
                 let v: Vec<f32> = (0..64)
                     .map(|j| ((t * 1000 + i) + j) as f32 * 0.001)
                     .collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -712,12 +712,12 @@ fn test_concurrent_insert_delete_search_at_index_level() {
     use std::sync::Arc;
     use std::thread;
 
-    let index = Arc::new(NativeHnswIndex::new(32, DM::Euclidean));
+    let index = Arc::new(NativeHnswIndex::new(32, DM::Euclidean).expect("test"));
 
     // Pre-populate with IDs 0..99
     for i in 0u64..100 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        index.insert(i, &v);
+        index.insert(i, &v).expect("test");
     }
     assert_eq!(index.len(), 100);
 
@@ -730,7 +730,7 @@ fn test_concurrent_insert_delete_search_at_index_level() {
             for i in 0..50u64 {
                 let id = 1000 + t * 50 + i;
                 let v: Vec<f32> = (0..32).map(|j| (id + j) as f32 * 0.01).collect();
-                idx.insert(id, &v);
+                idx.insert(id, &v).expect("test");
             }
         }));
     }
@@ -809,12 +809,12 @@ fn test_delete_exclusion_under_concurrent_search() {
     use std::sync::Arc;
     use std::thread;
 
-    let index = Arc::new(NativeHnswIndex::new(16, DM::Cosine));
+    let index = Arc::new(NativeHnswIndex::new(16, DM::Cosine).expect("test"));
 
     // Pre-populate with IDs 0..199
     for i in 0u64..200 {
         let v: Vec<f32> = (0..16).map(|j| ((i + j) as f32 * 0.01).sin()).collect();
-        index.insert(i, &v);
+        index.insert(i, &v).expect("test");
     }
 
     let violation_found = Arc::new(AtomicBool::new(false));
@@ -906,8 +906,8 @@ fn test_prenormalized_cosine_recall_matches_standard() {
 
     // Insert same vectors into both indexes
     for v in &vectors {
-        hnsw_std.insert(v.clone());
-        hnsw_pre.insert(v.clone());
+        hnsw_std.insert(v.clone()).expect("test");
+        hnsw_pre.insert(v.clone()).expect("test");
     }
 
     // Verify search recall for pre-normalized vs standard
@@ -952,7 +952,7 @@ fn test_prenormalized_search_distances_are_consistent() {
         let v: Vec<f32> = (0..dim)
             .map(|j| ((i + j as u64) as f32 * 0.01).sin())
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.01).sin()).collect();
@@ -983,7 +983,7 @@ fn test_safety_counters_accessible_after_operations() {
 
     for i in 0..20_u64 {
         let v: Vec<f32> = (0..32).map(|j| (i + j) as f32 * 0.1).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.05).collect();

@@ -9,8 +9,10 @@ use std::mem::ManuallyDrop;
 /// Errors that can occur during vacuum operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VacuumError {
-    /// Vector storage is disabled, cannot rebuild index
+    /// Vector storage is disabled, cannot rebuild index.
     VectorStorageDisabled,
+    /// Index rebuild failed (allocation or insertion error).
+    RebuildFailed(String),
 }
 
 impl std::fmt::Display for VacuumError {
@@ -18,6 +20,9 @@ impl std::fmt::Display for VacuumError {
         match self {
             Self::VectorStorageDisabled => {
                 write!(f, "Cannot vacuum: vector storage is disabled (use new() instead of new_fast_insert())")
+            }
+            Self::RebuildFailed(msg) => {
+                write!(f, "Vacuum rebuild failed: {msg}")
             }
         }
     }
@@ -133,7 +138,8 @@ impl HnswIndex {
             count.max(1000), // max_elements with reasonable minimum
             params.ef_construction,
             self.dimension,
-        );
+        )
+        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
         // 3. Create new mappings and vectors
         let new_mappings = ShardedMappings::with_capacity(count);
@@ -157,7 +163,9 @@ impl HnswIndex {
             .collect();
 
         // 5. Parallel insert into new HNSW
-        new_inner.parallel_insert(&refs_for_hnsw);
+        new_inner
+            .parallel_insert(&refs_for_hnsw)
+            .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
         // 6. Atomic swap (replace old with new)
         {

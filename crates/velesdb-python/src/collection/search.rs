@@ -132,9 +132,13 @@ impl Collection {
         Python::with_gil(|py| {
             let filter_obj = parse_optional_filter(py, filter)?;
             let results = if let Some(f) = filter_obj {
-                self.inner.text_search_with_filter(query, top_k, &f)
+                self.inner
+                    .text_search_with_filter(query, top_k, &f)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Text search failed: {e}")))?
             } else {
-                self.inner.text_search(query, top_k)
+                self.inner
+                    .text_search(query, top_k)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Text search failed: {e}")))?
             };
             Ok(search_results_to_dicts(py, results))
         })

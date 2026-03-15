@@ -17,14 +17,17 @@ impl Collection {
     /// # Returns
     ///
     /// Vector of search results sorted by BM25 score (descending).
-    #[must_use]
-    pub fn text_search(&self, query: &str, k: usize) -> Vec<SearchResult> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage retrieval fails.
+    pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         let bm25_results = self.text_index.search(query, k);
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        bm25_results
+        Ok(bm25_results
             .into_iter()
             .filter_map(|(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
@@ -39,7 +42,7 @@ impl Collection {
 
                 Some(SearchResult::new(point, score))
             })
-            .collect()
+            .collect())
     }
 
     /// Performs full-text search with metadata filtering.
@@ -53,13 +56,16 @@ impl Collection {
     /// # Returns
     ///
     /// Vector of search results sorted by BM25 score (descending).
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage retrieval fails.
     pub fn text_search_with_filter(
         &self,
         query: &str,
         k: usize,
         filter: &crate::filter::Filter,
-    ) -> Vec<SearchResult> {
+    ) -> Result<Vec<SearchResult>> {
         // Retrieve more candidates for filtering
         let candidates_k = k.saturating_mul(4).max(k + 10);
         let bm25_results = self.text_index.search(query, candidates_k);
@@ -67,7 +73,7 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        bm25_results
+        Ok(bm25_results
             .into_iter()
             .filter_map(|(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
@@ -89,7 +95,7 @@ impl Collection {
                 Some(SearchResult::new(point, score))
             })
             .take(k)
-            .collect()
+            .collect())
     }
 
     /// Performs hybrid search combining vector similarity and full-text search.

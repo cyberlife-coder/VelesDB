@@ -75,6 +75,22 @@ fn crc32_hash(data: &[u8]) -> u32 {
     !crc
 }
 
+/// Controls how payload WAL writes are synced to disk.
+///
+/// - `Fsync` (default): `flush()` + `sync_all()` — full durability, safe against power loss.
+/// - `FlushOnly`: `flush()` only — data reaches OS kernel but may be lost on power failure.
+/// - `None`: No sync — maximum throughput for bulk imports where data can be re-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DurabilityMode {
+    /// Full durability: flush buffer + fsync to disk.
+    #[default]
+    Fsync,
+    /// Flush buffer to OS only (no fsync). Faster but not power-loss safe.
+    FlushOnly,
+    /// No sync at all. Maximum throughput for bulk imports.
+    None,
+}
+
 /// Log-structured payload storage with snapshot support.
 ///
 /// Stores payloads in an append-only log file with an in-memory index.
@@ -91,10 +107,14 @@ pub struct LogPayloadStorage {
     reader: RwLock<File>,
     /// WAL position at last snapshot (0 = no snapshot)
     last_snapshot_wal_pos: RwLock<u64>,
+    /// Durability mode for WAL writes
+    durability: DurabilityMode,
+    /// Tracked WAL write position (avoids flush+metadata syscall for `DurabilityMode::None`)
+    write_offset: RwLock<u64>,
 }
 
 impl LogPayloadStorage {
-    /// Creates a new `LogPayloadStorage` or opens an existing one.
+    /// Creates a new `LogPayloadStorage` with the default durability mode (`Fsync`).
     ///
     /// If a snapshot file exists and is valid, loads from snapshot and replays
     /// only the WAL delta for fast startup. Otherwise, falls back to full WAL replay.
@@ -103,6 +123,20 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::new_with_durability(path, DurabilityMode::default())
+    }
+
+    /// Creates a new `LogPayloadStorage` with the specified durability mode.
+    ///
+    /// See [`DurabilityMode`] for available modes and their trade-offs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file operations fail.
+    pub fn new_with_durability<P: AsRef<Path>>(
+        path: P,
+        durability: DurabilityMode,
+    ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
         let log_path = path.join("payloads.log");
@@ -142,7 +176,24 @@ impl LogPayloadStorage {
             wal: RwLock::new(wal),
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
+            durability,
+            write_offset: RwLock::new(wal_len),
         })
+    }
+
+    /// Applies the configured durability mode to a WAL writer.
+    fn sync_wal(wal: &mut io::BufWriter<File>, mode: DurabilityMode) -> io::Result<()> {
+        match mode {
+            DurabilityMode::Fsync => {
+                wal.flush()?;
+                wal.get_ref().sync_all()?;
+            }
+            DurabilityMode::FlushOnly => {
+                wal.flush()?;
+            }
+            DurabilityMode::None => {}
+        }
+        Ok(())
     }
 
     /// Replays WAL entries from `start_pos` to `end_pos`, updating the index.
@@ -314,14 +365,18 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn create_snapshot(&mut self) -> io::Result<()> {
-        // Flush WAL first to ensure all writes are on disk
-        self.wal.write().flush()?;
+        // Flush WAL before snapshotting to ensure data is on disk for the reader
+        {
+            let mut wal = self.wal.write();
+            wal.flush()?;
+            wal.get_ref().sync_all()?;
+        }
 
         let snapshot_path = self.path.join("payloads.snapshot");
         let index = self.index.read();
 
-        // Get current WAL position
-        let wal_pos = self.wal.write().get_ref().metadata()?.len();
+        // Use tracked offset — accurate and avoids an extra metadata syscall
+        let wal_pos = *self.write_offset.read();
 
         // Calculate buffer size
         let entry_count = index.len();
@@ -344,9 +399,15 @@ impl LogPayloadStorage {
         let crc = crc32_hash(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
 
-        // Write atomically via temp file + rename
+        // Write atomically via temp file + fsync + rename
         let temp_path = self.path.join("payloads.snapshot.tmp");
-        std::fs::write(&temp_path, &buf)?;
+        {
+            let file = File::create(&temp_path)?;
+            let mut writer = io::BufWriter::new(file);
+            writer.write_all(&buf)?;
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+        }
         std::fs::rename(&temp_path, &snapshot_path)?;
 
         // Update last snapshot position
@@ -362,12 +423,7 @@ impl LogPayloadStorage {
     #[must_use]
     pub fn should_create_snapshot(&self) -> bool {
         let last_pos = *self.last_snapshot_wal_pos.read();
-
-        // Get current WAL size
-        let current_pos = match self.wal.write().get_ref().metadata() {
-            Ok(m) => m.len(),
-            Err(_) => return false,
-        };
+        let current_pos = *self.write_offset.read();
 
         current_pos.saturating_sub(last_pos) >= DEFAULT_SNAPSHOT_THRESHOLD
     }
@@ -378,28 +434,31 @@ impl PayloadStorage for LogPayloadStorage {
         let payload_bytes = serde_json::to_vec(payload)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        let mut wal = self.wal.write();
-        let mut index = self.index.write();
-
-        // Let's force flush to get accurate position or track it manually.
-        wal.flush()?;
-        let pos = wal.get_ref().metadata()?.len();
-
-        // Op: Store (1) | ID | Len | Data
-        // Pos points to start of record (Marker)
-        // We want index to point to Len (Marker(1) + ID(8) = +9 bytes)
-
-        wal.write_all(&[1u8])?;
-        wal.write_all(&id.to_le_bytes())?;
         let len_u32 = u32::try_from(payload_bytes.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
-        wal.write_all(&len_u32.to_le_bytes())?;
-        wal.write_all(&payload_bytes)?;
 
-        // Flush to ensure reader sees it
-        wal.flush()?;
+        let mut wal = self.wal.write();
+        let mut index = self.index.write();
+        let mut offset = self.write_offset.write();
 
-        index.insert(id, pos + 9);
+        let record_start = *offset;
+
+        // H-3: Build complete record in one buffer to minimize partial-write window.
+        // Op: Store (1) | ID (8) | Len (4) | Data (N)
+        let mut record = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len());
+        record.push(1u8);
+        record.extend_from_slice(&id.to_le_bytes());
+        record.extend_from_slice(&len_u32.to_le_bytes());
+        record.extend_from_slice(&payload_bytes);
+        wal.write_all(&record)?;
+
+        // Sync WAL according to durability mode
+        Self::sync_wal(&mut wal, self.durability)?;
+
+        // Marker(1) + ID(8) = 9 bytes before the length field
+        let bytes_written = 1 + 8 + 4 + u64::from(len_u32);
+        *offset += bytes_written;
+        index.insert(id, record_start + 9);
 
         Ok(())
     }
@@ -410,6 +469,14 @@ impl PayloadStorage for LogPayloadStorage {
             return Ok(None);
         };
         drop(index);
+
+        // H-2: Only flush when DurabilityMode::None is configured, because sync_wal()
+        // already flushes the BufWriter after every write in Fsync and FlushOnly modes.
+        // Skipping this avoids acquiring the WAL write lock on every read, which would
+        // serialize all readers behind writers.
+        if self.durability == DurabilityMode::None {
+            self.wal.write().flush()?;
+        }
 
         let mut reader = self.reader.write(); // Need write lock to seek
         reader.seek(SeekFrom::Start(offset))?;
@@ -430,17 +497,27 @@ impl PayloadStorage for LogPayloadStorage {
     fn delete(&mut self, id: u64) -> io::Result<()> {
         let mut wal = self.wal.write();
         let mut index = self.index.write();
+        let mut offset = self.write_offset.write();
 
-        wal.write_all(&[2u8])?;
-        wal.write_all(&id.to_le_bytes())?;
+        // H-3: Build complete delete record in one buffer to minimize partial-write window.
+        // Op: Delete (1) | ID (8)
+        let mut record = [0u8; 1 + 8];
+        record[0] = 2u8;
+        record[1..9].copy_from_slice(&id.to_le_bytes());
+        wal.write_all(&record)?;
 
+        // Sync WAL according to durability mode
+        Self::sync_wal(&mut wal, self.durability)?;
+
+        *offset += 1 + 8; // Marker(1) + ID(8)
         index.remove(&id);
 
         Ok(())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.wal.write().flush()
+        let mut wal = self.wal.write();
+        Self::sync_wal(&mut wal, self.durability)
     }
 
     fn ids(&self) -> Vec<u64> {

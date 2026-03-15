@@ -178,6 +178,7 @@ pub async fn create_collection(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
+#[allow(deprecated)]
 pub async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -217,6 +218,7 @@ pub async fn get_collection(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
+#[allow(deprecated)]
 pub async fn collection_sanity(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -311,6 +313,7 @@ pub async fn delete_collection(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
+#[allow(deprecated)]
 pub async fn is_empty(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -344,6 +347,7 @@ pub async fn is_empty(
         (status = 500, description = "Flush failed", body = ErrorResponse)
     )
 )]
+#[allow(deprecated)]
 pub async fn flush_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,

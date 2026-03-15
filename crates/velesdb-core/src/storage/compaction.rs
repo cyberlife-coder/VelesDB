@@ -288,7 +288,8 @@ impl CompactionContext<'_> {
         }
 
         // Calculate space used vs allocated
-        let current_offset = self.next_offset.load(Ordering::Relaxed);
+        // M-2: Acquire ordering for cross-platform visibility of mmap writes
+        let current_offset = self.next_offset.load(Ordering::Acquire);
         let active_size = active_count * vector_size;
 
         if current_offset <= active_size {
@@ -359,7 +360,8 @@ impl CompactionContext<'_> {
         for (id, offset) in new_index {
             self.index.insert(id, offset);
         }
-        self.next_offset.store(new_offset, Ordering::Relaxed);
+        // M-2: Release ordering so subsequent Acquire loads see the compacted layout
+        self.next_offset.store(new_offset, Ordering::Release);
 
         // 8. Write compaction marker to WAL
         {
@@ -386,7 +388,8 @@ impl CompactionContext<'_> {
 
         let vector_size = self.dimension * std::mem::size_of::<f32>();
         let active_size = active_count * vector_size;
-        let current_offset = self.next_offset.load(Ordering::Relaxed);
+        // M-2: Acquire ordering for cross-platform visibility
+        let current_offset = self.next_offset.load(Ordering::Acquire);
 
         if current_offset == 0 {
             return 0.0;

@@ -1,4 +1,5 @@
 #![cfg(feature = "persistence")]
+#![allow(deprecated)] // Tests use legacy Collection.
 //! Integration tests proving `VelesDB`'s hybrid query value proposition.
 //!
 //! HYB-01: `VelesQL` NEAR + scalar filter with ranking identity assertions
@@ -145,7 +146,7 @@ fn test_hyb02_fusion_ranking_differs_from_pure_vector() {
     );
 
     // Text-only: id=1 cannot win (no "rust" in "chocolate cake baking")
-    let text_results = collection.text_search("rust", 3);
+    let text_results = collection.text_search("rust", 3).unwrap();
     assert!(
         !text_results.is_empty(),
         "BM25 must index payload fields -- check auto-indexing or use 'text' field instead of 'content'"

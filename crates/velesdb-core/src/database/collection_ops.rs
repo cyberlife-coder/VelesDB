@@ -1,10 +1,14 @@
 //! Collection CRUD operations: create, delete, list, and get for all collection types.
 
 use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
+#[allow(deprecated)]
 use crate::{Collection, CollectionType, DistanceMetric, Error, Result, StorageMode};
 
 use super::Database;
 
+// Almost every method below reads/writes `self.collections` (HashMap<String, Collection>),
+// so `#[allow(deprecated)]` is applied at impl-block level rather than per-method.
+#[allow(deprecated)]
 impl Database {
     /// Ensures a collection name is free in memory and on disk.
     ///
@@ -37,7 +41,17 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if a collection with the same name already exists.
+    /// - Returns `Error::CollectionExists` if a collection with the same name already exists.
+    /// - Returns an error if the directory cannot be created or storage initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{Database, DistanceMetric};
+    /// let db = Database::open("./data")?;
+    /// db.create_collection("documents", 768, DistanceMetric::Cosine)?;
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn create_collection(
         &self,
         name: &str,
@@ -93,6 +107,10 @@ impl Database {
     /// # Returns
     ///
     /// Returns `None` if the collection does not exist.
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use get_vector_collection(), get_graph_collection(), or get_metadata_collection()"
+    )]
     pub fn get_collection(&self, name: &str) -> Option<Collection> {
         self.collections.read().get(name).cloned()
     }

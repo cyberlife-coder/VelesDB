@@ -27,6 +27,7 @@ use super::types::{
 /// Auto-creates a schemaless graph collection on first use if no collection exists yet,
 /// preserving backward compatibility with workflows that drive graph ops without
 /// an explicit `create_graph_collection` call.
+#[allow(deprecated)]
 fn get_graph_collection_or_404(
     state: &AppState,
     name: &str,

@@ -52,10 +52,18 @@ pub trait NativeHnswBackend: Send + Sync {
     /// # Arguments
     ///
     /// * `data` - Tuple of (vector slice, internal index)
-    fn insert(&self, data: (&[f32], usize));
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if allocation or insertion fails.
+    fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<()>;
 
     /// Batch parallel insert into the HNSW graph.
-    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any insertion fails.
+    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()>;
 
     /// Sets the index to searching mode after bulk insertions.
     fn set_searching_mode(&mut self, mode: bool);
@@ -111,24 +119,30 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     ///
     /// * `data` - Slice of (vector reference, internal index) pairs
     ///
+    /// # Errors
+    ///
+    /// Returns an error if any insertion fails.
+    ///
     /// # Note
     ///
     /// Unlike sequential insert, parallel insert may result in slightly different
     /// graph structures due to race conditions during neighbor selection.
     /// This is expected behavior and doesn't affect correctness.
-    pub fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) {
+    pub fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()> {
         // For small batches, sequential is faster due to parallelization overhead
         if data.len() < 100 {
             for (vec, _idx) in data {
-                self.insert((*vec).clone());
+                self.insert((*vec).clone())?;
             }
-            return;
+            return Ok(());
         }
 
         // Parallel insertion using rayon
-        data.par_iter().for_each(|(vec, _idx)| {
-            self.insert((*vec).clone());
-        });
+        data.par_iter()
+            .try_for_each(|(vec, _idx)| -> crate::error::Result<()> {
+                self.insert((*vec).clone())?;
+                Ok(())
+            })
     }
 
     /// Sets the index to searching mode after bulk insertions.
@@ -345,14 +359,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         }
 
         let mut storage =
-            crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16));
+            crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16))
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
         let mut buf_vec = vec![0f32; dimension];
         for _ in 0..count {
             for slot in &mut buf_vec {
                 reader.read_exact(&mut buf4)?;
                 *slot = f32::from_le_bytes(buf4);
             }
-            storage.push(&buf_vec);
+            storage
+                .push(&buf_vec)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         Ok((Some(storage), count))
     }
@@ -424,12 +441,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
         self.search_neighbours(query, k, ef_search)
     }
 
-    fn insert(&self, data: (&[f32], usize)) {
-        self.insert(data.0.to_vec());
+    fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<()> {
+        let (vector, expected_idx) = data;
+        let assigned_id = self.insert(vector.to_vec())?;
+        if assigned_id != expected_idx {
+            tracing::warn!(
+                "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id}"
+            );
+        }
+        Ok(())
     }
 
-    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) {
-        NativeHnsw::parallel_insert(self, data);
+    fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()> {
+        NativeHnsw::parallel_insert(self, data)
     }
 
     fn set_searching_mode(&mut self, mode: bool) {

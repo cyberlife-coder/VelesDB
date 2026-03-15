@@ -79,19 +79,28 @@ impl ContiguousVectors {
     ///
     /// # Arguments
     ///
-    /// * `dimension` - Vector dimension
+    /// * `dimension` - Vector dimension (must be > 0)
     /// * `capacity` - Initial capacity (number of vectors)
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if dimension is 0 or allocation fails.
-    #[must_use]
+    /// Returns [`Error::InvalidDimension`] if `dimension` is 0.
+    /// Returns [`Error::AllocationFailed`] if memory allocation fails.
+    ///
+    /// [`Error::InvalidDimension`]: crate::error::Error::InvalidDimension
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
-    pub fn new(dimension: usize, capacity: usize) -> Self {
-        assert!(dimension > 0, "Dimension must be > 0");
+    pub fn new(dimension: usize, capacity: usize) -> crate::error::Result<Self> {
+        if dimension == 0 {
+            return Err(crate::error::Error::InvalidDimension {
+                dimension: 0,
+                min: 1,
+                max: 65_536,
+            });
+        }
 
         let capacity = capacity.max(16); // Minimum 16 vectors
-        let layout = Self::layout(dimension, capacity);
+        let layout = Self::layout(dimension, capacity)?;
 
         // SAFETY: `alloc` requires a valid non-zero layout.
         // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
@@ -100,24 +109,40 @@ impl ContiguousVectors {
         let ptr = unsafe { alloc(layout) };
 
         // EPIC-032/US-002: Use NonNull for type-level non-null guarantee
-        let data = NonNull::new(ptr.cast::<f32>())
-            .unwrap_or_else(|| panic!("Failed to allocate ContiguousVectors: out of memory"));
+        let data = NonNull::new(ptr.cast::<f32>()).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(
+                "ContiguousVectors: allocator returned null".to_string(),
+            )
+        })?;
 
-        Self {
+        Ok(Self {
             data,
             dimension,
             count: 0,
             capacity,
-        }
+        })
     }
 
     /// Returns the memory layout for the given dimension and capacity.
-    fn layout(dimension: usize, capacity: usize) -> Layout {
-        let size = dimension * capacity * std::mem::size_of::<f32>();
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AllocationFailed`] if the layout parameters are invalid.
+    ///
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    fn layout(dimension: usize, capacity: usize) -> crate::error::Result<Layout> {
+        let size = dimension
+            .checked_mul(capacity)
+            .and_then(|s| s.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| {
+                crate::error::Error::AllocationFailed(format!(
+                    "Size overflow: {dimension} * {capacity} * {}",
+                    std::mem::size_of::<f32>()
+                ))
+            })?;
         let align = 64; // Cache line alignment for optimal prefetch
-        Layout::from_size_align(size.max(64), align).unwrap_or_else(|_| {
-            panic!("Invariant violated: 64-byte aligned layout must always be valid")
-        })
+        Layout::from_size_align(size.max(64), align)
+            .map_err(|e| crate::error::Error::AllocationFailed(format!("Invalid layout: {e}")))
     }
 
     /// Returns the dimension of stored vectors.
@@ -156,31 +181,42 @@ impl ContiguousVectors {
     }
 
     /// Ensures the storage has capacity for at least `required_capacity` vectors.
-    pub fn ensure_capacity(&mut self, required_capacity: usize) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AllocationFailed`] if reallocation fails.
+    ///
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    pub fn ensure_capacity(&mut self, required_capacity: usize) -> crate::error::Result<()> {
         if required_capacity > self.capacity {
             let new_capacity = required_capacity.max(self.capacity * 2);
-            self.resize(new_capacity);
+            self.resize(new_capacity)?;
         }
+        Ok(())
     }
 
     /// Inserts a vector at a specific index.
     ///
     /// Automatically grows capacity if needed.
-    /// Note: This allows sparse population. Uninitialized slots contain undefined data (or 0.0 if alloc gave zeroed memory).
+    /// Note: This allows sparse population. Uninitialized slots contain undefined
+    /// data (or 0.0 if alloc gave zeroed memory).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if vector dimension doesn't match.
-    pub fn insert_at(&mut self, index: usize, vector: &[f32]) {
-        assert_eq!(
-            vector.len(),
-            self.dimension,
-            "Vector dimension mismatch: expected {}, got {}",
-            self.dimension,
-            vector.len()
-        );
+    /// Returns [`Error::DimensionMismatch`] if `vector.len() != self.dimension`.
+    /// Returns [`Error::AllocationFailed`] if capacity growth fails.
+    ///
+    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    pub fn insert_at(&mut self, index: usize, vector: &[f32]) -> crate::error::Result<()> {
+        if vector.len() != self.dimension {
+            return Err(crate::error::Error::DimensionMismatch {
+                expected: self.dimension,
+                actual: vector.len(),
+            });
+        }
 
-        self.ensure_capacity(index + 1);
+        self.ensure_capacity(index + 1)?;
 
         let offset = index * self.dimension;
         // SAFETY: We ensured capacity covers index, data is non-null (NonNull invariant)
@@ -199,15 +235,20 @@ impl ContiguousVectors {
         if index >= self.count {
             self.count = index + 1;
         }
+        Ok(())
     }
 
     /// Adds a vector to the storage.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if vector dimension doesn't match.
-    pub fn push(&mut self, vector: &[f32]) {
-        self.insert_at(self.count, vector);
+    /// Returns [`Error::DimensionMismatch`] if `vector.len() != self.dimension`.
+    /// Returns [`Error::AllocationFailed`] if capacity growth fails.
+    ///
+    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    pub fn push(&mut self, vector: &[f32]) -> crate::error::Result<()> {
+        self.insert_at(self.count, vector)
     }
 
     /// Adds multiple vectors in batch (optimized).
@@ -219,13 +260,24 @@ impl ContiguousVectors {
     /// # Returns
     ///
     /// Number of vectors added.
-    pub fn push_batch<'a>(&mut self, vectors: impl Iterator<Item = &'a [f32]>) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] or [`Error::AllocationFailed`] on the
+    /// first vector that fails. Vectors added before the failure remain in storage.
+    ///
+    /// [`Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    pub fn push_batch<'a>(
+        &mut self,
+        vectors: impl Iterator<Item = &'a [f32]>,
+    ) -> crate::error::Result<usize> {
         let mut added = 0;
         for vector in vectors {
-            self.push(vector);
+            self.push(vector)?;
             added += 1;
         }
-        added
+        Ok(added)
     }
 
     /// Gets a vector by index.
@@ -328,29 +380,29 @@ impl ContiguousVectors {
     ///
     /// If panic occurs during copy, the guard ensures new buffer is freed.
     #[allow(clippy::cast_ptr_alignment)] // Layout is 64-byte aligned
-    fn resize(&mut self, new_capacity: usize) {
+    fn resize(&mut self, new_capacity: usize) -> crate::error::Result<()> {
         use crate::alloc_guard::AllocGuard;
 
         if new_capacity <= self.capacity {
-            return;
+            return Ok(());
         }
 
-        let old_layout = Self::layout(self.dimension, self.capacity);
-        let new_layout = Self::layout(self.dimension, new_capacity);
+        let old_layout = Self::layout(self.dimension, self.capacity)?;
+        let new_layout = Self::layout(self.dimension, new_capacity)?;
 
         // Step 1: Allocate new buffer with RAII guard (PERF-002)
         // If panic occurs before into_raw(), memory is automatically freed
-        let guard = AllocGuard::new(new_layout).unwrap_or_else(|| {
-            panic!(
+        let guard = AllocGuard::new(new_layout).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(format!(
                 "Failed to allocate {} bytes for ContiguousVectors resize",
                 new_layout.size()
-            )
-        });
+            ))
+        })?;
 
         // EPIC-032/US-002: Use NonNull for type-level guarantee
-        let new_data = NonNull::new(guard.cast::<f32>()).unwrap_or_else(|| {
-            panic!("Invariant violated: AllocGuard must never return a null pointer")
-        });
+        let new_data = NonNull::new(guard.cast::<f32>()).ok_or_else(|| {
+            crate::error::Error::AllocationFailed("AllocGuard returned null pointer".to_string())
+        })?;
 
         // Step 2: Copy existing data to new buffer
         // If this panics, guard drops and frees new_data automatically
@@ -382,6 +434,7 @@ impl ContiguousVectors {
         // Step 5: Update state (all-or-nothing)
         self.data = new_data;
         self.capacity = new_capacity;
+        Ok(())
     }
 
     /// Computes dot product with another vector using SIMD.
@@ -420,7 +473,18 @@ impl ContiguousVectors {
 impl Drop for ContiguousVectors {
     fn drop(&mut self) {
         // EPIC-032/US-002: No null check needed - NonNull guarantees non-null
-        let layout = Self::layout(self.dimension, self.capacity);
+        // Layout was valid at construction; it must still be valid at drop.
+        let Ok(layout) = Self::layout(self.dimension, self.capacity) else {
+            // Layout was valid at construction; this branch is unreachable
+            // unless memory corruption occurred. Leak memory rather than abort.
+            tracing::error!(
+                "ContiguousVectors::drop: layout computation failed \
+                 (dim={}, cap={}), leaking memory",
+                self.dimension,
+                self.capacity,
+            );
+            return;
+        };
         // SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
         // - Condition 1: Layout matches original allocation parameters.
         // - Condition 2: Pointer is non-null per NonNull invariant.
@@ -442,6 +506,42 @@ impl Drop for ContiguousVectors {
 #[must_use]
 pub fn batch_dot_products_simd(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> {
     crate::simd_native::batch_dot_product_native(vectors, query)
+}
+
+// =============================================================================
+// SIMD Padding Utility
+// =============================================================================
+
+/// AVX2 register width for `f32` lanes: 256 bits / 32 bits = 8 lanes.
+const SIMD_WIDTH: usize = 8;
+
+/// Pads a vector to the next multiple of 8 (AVX2 register width for `f32`).
+///
+/// Appending zeros does not affect distance computations (cosine, euclidean, dot)
+/// when the query and stored vectors share the same padded length.
+///
+/// Returns an empty `Vec` when the input is empty (0 is already a multiple of 8).
+///
+/// # Examples
+///
+/// ```
+/// use velesdb_core::perf_optimizations::pad_to_simd_width;
+///
+/// let v = vec![1.0_f32, 2.0, 3.0];
+/// let padded = pad_to_simd_width(&v);
+/// assert_eq!(padded.len(), 8);
+/// assert_eq!(&padded[..3], &[1.0, 2.0, 3.0]);
+/// ```
+#[must_use]
+pub fn pad_to_simd_width(vector: &[f32]) -> Vec<f32> {
+    let len = vector.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    let padded_len = len.div_ceil(SIMD_WIDTH) * SIMD_WIDTH;
+    let mut padded = vec![0.0_f32; padded_len];
+    padded[..len].copy_from_slice(vector);
+    padded
 }
 
 /// Computes multiple cosine similarities in a single pass with prefetch.

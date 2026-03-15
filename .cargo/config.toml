@@ -50,3 +50,11 @@ debug = true
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+
+# === LOCAL PERFORMANCE OPTIMIZATION ===
+# Uncomment ONLY for local development/benchmarking.
+# WARNING: Do NOT commit uncommented — CI runners use generic x86-64 targets.
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "target-cpu=native"]
+# [target.x86_64-pc-windows-msvc]
+# rustflags = ["-C", "target-cpu=native"]

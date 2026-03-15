@@ -9,6 +9,8 @@
 
 mod batch;
 #[cfg(test)]
+mod batch_tests;
+#[cfg(test)]
 mod distance_semantics_tests;
 pub mod query;
 #[cfg(test)]
@@ -16,7 +18,11 @@ mod query_validation_tests;
 #[cfg(test)]
 mod similarity_exec_tests;
 mod sparse;
+#[cfg(test)]
+mod sparse_tests;
 mod text;
+#[cfg(test)]
+mod text_tests;
 mod vector;
 #[cfg(test)]
 mod vector_tests;

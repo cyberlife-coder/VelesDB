@@ -1,7 +1,7 @@
 # VelesDB Server
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-server.svg)](https://crates.io/crates/velesdb-server)
-[![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
 
 REST API server for VelesDB - a high-performance vector database.
 
@@ -256,6 +256,6 @@ curl http://localhost:8080/api-docs/openapi.json
 
 ## License
 
-Elastic License 2.0 (ELv2)
+VelesDB Core License 1.0
 
 See [LICENSE](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE) for details.

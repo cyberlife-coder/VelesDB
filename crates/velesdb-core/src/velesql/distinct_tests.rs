@@ -1,5 +1,6 @@
 //! Tests for DISTINCT keyword support (EPIC-052 US-001).
 #![cfg(all(test, feature = "persistence"))]
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use crate::collection::Collection;
 use crate::velesql::{DistinctMode, Parser};

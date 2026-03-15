@@ -2,6 +2,7 @@
 //!
 //! EPIC-060: Comprehensive E2E tests for all components
 //! Tests the complete workflow from creation to query.
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use tempfile::TempDir;
 use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
@@ -334,8 +335,7 @@ mod hybrid_e2e {
         assert_eq!(vec_results.len(), 4);
 
         // Text search (BM25)
-        let text_results = col.text_search("learning", 2);
-        // text_search returns Vec, not Result
+        let text_results = col.text_search("learning", 2).unwrap();
         assert!(!text_results.is_empty() || text_results.is_empty()); // May be empty if BM25 not indexed
 
         // Hybrid search

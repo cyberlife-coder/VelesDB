@@ -817,4 +817,4 @@ velesdb-server --port 8080
 
 ## 📄 License
 
-ELv2 (Elastic License 2.0) — Same as VelesDB Core.
+VelesDB Core License 1.0 — Same as VelesDB Core.

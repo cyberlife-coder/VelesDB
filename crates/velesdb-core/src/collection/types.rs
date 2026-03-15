@@ -44,6 +44,7 @@ type PqTrainingSample = (u64, Vec<f32>);
 /// let metadata_type = CollectionType::MetadataOnly;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum CollectionType {
     /// Standard vector collection with HNSW index.
     Vector {
@@ -199,6 +200,10 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 //  10. delta_buffer
 
 /// A collection of vectors with associated metadata.
+#[deprecated(
+    since = "2.0.0",
+    note = "Use VectorCollection, GraphCollection, or MetadataCollection instead"
+)]
 #[derive(Clone)]
 pub struct Collection {
     /// Path to the collection data.

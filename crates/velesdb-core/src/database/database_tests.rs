@@ -1,3 +1,5 @@
+#![allow(deprecated)] // Tests use legacy Collection.
+
 use super::*;
 use crate::collection::graph::GraphEdge;
 use crate::point::Point;

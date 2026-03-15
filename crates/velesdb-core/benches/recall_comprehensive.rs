@@ -67,7 +67,7 @@ fn bench_comprehensive(c: &mut Criterion) {
             params.max_connections, params.ef_construction
         );
 
-        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
         for (idx, vec) in dataset.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
             index.insert(idx as u64, vec);

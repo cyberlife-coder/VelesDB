@@ -153,7 +153,7 @@ fn bench_100k_search_latency(c: &mut Criterion) {
         "\n=== bench_100k_search_latency ===\n📊 Building index with {num_vectors} vectors (dim={dim})..."
     );
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
     // Insert 100k vectors (unique IDs only)
     for i in 0..num_vectors {
@@ -206,7 +206,7 @@ fn bench_recall_measurement(c: &mut Criterion) {
     );
 
     // Build index
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
     #[allow(clippy::cast_sign_loss)]
@@ -271,7 +271,7 @@ fn bench_all_metrics(c: &mut Criterion) {
 
     // DotProduct excluded - hnsw_rs DistDot requires non-negative dot products
     for metric in &[DistanceMetric::Cosine, DistanceMetric::Euclidean] {
-        let index = HnswIndex::new(dim, *metric);
+        let index = HnswIndex::new(dim, *metric).unwrap();
 
         #[allow(clippy::cast_sign_loss)]
         for i in 0..num_vectors {
@@ -315,7 +315,7 @@ fn bench_recall_100k(c: &mut Criterion) {
         "\n=== bench_recall_100k ===\n📊 Measuring recall on {num_vectors} vectors (may take a while)..."
     );
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
     #[allow(clippy::cast_sign_loss)]
@@ -370,7 +370,7 @@ fn bench_dimensions(c: &mut Criterion) {
     println!("\n=== bench_dimensions ===\n📊 Testing performance across dimensions...\n");
 
     for dim in [128, 256, 512, 768] {
-        let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+        let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
         #[allow(clippy::cast_sign_loss)]
         for i in 0..num_vectors {

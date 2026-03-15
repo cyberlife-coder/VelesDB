@@ -16,7 +16,7 @@ fn test_insert_and_search() {
     // Insert some vectors
     for i in 0..100 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     assert_eq!(hnsw.len(), 100);
@@ -53,7 +53,7 @@ fn test_heuristic_selection_empty_candidates() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert a single vector to have valid query
-    hnsw.insert(vec![0.0; 32]);
+    hnsw.insert(vec![0.0; 32]).expect("test");
 
     let candidates: Vec<(NodeId, f32)> = vec![];
 
@@ -69,7 +69,7 @@ fn test_heuristic_selection_fewer_than_max() {
 
     // Insert vectors
     for i in 0..5 {
-        hnsw.insert(vec![i as f32; 32]);
+        hnsw.insert(vec![i as f32; 32]).expect("test");
     }
 
     let candidates: Vec<(NodeId, f32)> = vec![(0, 0.0), (1, 1.0), (2, 2.0)];
@@ -90,7 +90,7 @@ fn test_heuristic_selection_respects_max() {
 
     // Insert vectors
     for i in 0..20 {
-        hnsw.insert(vec![i as f32; 32]);
+        hnsw.insert(vec![i as f32; 32]).expect("test");
     }
 
     let candidates: Vec<(NodeId, f32)> = (0..15).map(|i| (i, i as f32)).collect();
@@ -105,23 +105,23 @@ fn test_heuristic_selection_prefers_diverse_neighbors() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     // Insert diverse vectors: one at origin, cluster around (10,0,0...), spread around (0,10,0...)
-    hnsw.insert(vec![0.0; 32]); // 0: origin
+    hnsw.insert(vec![0.0; 32]).expect("test"); // 0: origin
 
     // Cluster A: near (10, 0, 0, ...)
     let mut v1 = vec![0.0; 32];
     v1[0] = 10.0;
-    hnsw.insert(v1); // 1
+    hnsw.insert(v1).expect("test"); // 1
     let mut v2 = vec![0.0; 32];
     v2[0] = 10.5;
-    hnsw.insert(v2); // 2
+    hnsw.insert(v2).expect("test"); // 2
     let mut v3 = vec![0.0; 32];
     v3[0] = 10.2;
-    hnsw.insert(v3); // 3
+    hnsw.insert(v3).expect("test"); // 3
 
     // Diverse point: near (0, 10, 0, ...)
     let mut v4 = vec![0.0; 32];
     v4[1] = 10.0;
-    hnsw.insert(v4); // 4
+    hnsw.insert(v4).expect("test"); // 4
 
     // Candidates: all close to query in euclidean terms
     let candidates: Vec<(NodeId, f32)> = vec![
@@ -148,7 +148,7 @@ fn test_heuristic_fills_quota_with_closest_if_needed() {
 
     // Insert vectors
     for i in 0..10 {
-        hnsw.insert(vec![i as f32; 32]);
+        hnsw.insert(vec![i as f32; 32]).expect("test");
     }
 
     let candidates: Vec<(NodeId, f32)> = (0..10).map(|i| (i, i as f32)).collect();
@@ -176,7 +176,7 @@ fn test_recall_with_heuristic_selection() {
         let v: Vec<f32> = (0..128)
             .map(|j| ((i * 127 + j) as f32 * 0.01).sin())
             .collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     // Test recall: search should find vectors close to query
@@ -212,7 +212,7 @@ fn test_graph_parallel_insert_search_integrity() {
     for i in 0..50 {
         #[allow(clippy::cast_precision_loss)]
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let mut handles = vec![];
@@ -224,7 +224,7 @@ fn test_graph_parallel_insert_search_integrity() {
             for i in 0..50_usize {
                 #[allow(clippy::cast_precision_loss)]
                 let v: Vec<f32> = (0..32).map(|j| ((t * 1000 + i) * 32 + j) as f32).collect();
-                hnsw_clone.insert(v);
+                hnsw_clone.insert(v).expect("test");
             }
         }));
     }
@@ -284,7 +284,7 @@ fn test_concurrent_insertions() {
                     let v: Vec<f32> = (0..32)
                         .map(|j| ((thread_id * 50 + i) * 32 + j) as f32)
                         .collect();
-                    hnsw_clone.insert(v);
+                    hnsw_clone.insert(v).expect("test");
                 }
             })
         })
@@ -308,7 +308,7 @@ fn test_concurrent_insert_and_search() {
     for i in 0..100 {
         #[allow(clippy::cast_precision_loss)]
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(v);
+        hnsw.insert(v).expect("test");
     }
 
     let handles: Vec<_> = (0..4)
@@ -321,7 +321,7 @@ fn test_concurrent_insert_and_search() {
                         let v: Vec<f32> = (0..32)
                             .map(|j| ((100 + thread_id * 25 + i) * 32 + j) as f32)
                             .collect();
-                        hnsw_clone.insert(v);
+                        hnsw_clone.insert(v).expect("test");
                     } else {
                         #[allow(clippy::cast_precision_loss)]
                         let query: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();

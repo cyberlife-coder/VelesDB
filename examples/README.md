@@ -162,4 +162,4 @@ GROUP BY category
 
 ## License
 
-ELv2 (Elastic License 2.0)
+VelesDB Core License 1.0

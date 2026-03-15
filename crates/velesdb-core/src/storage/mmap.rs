@@ -45,20 +45,20 @@ use tracing::error;
 #[allow(clippy::module_name_repetitions)]
 pub struct MmapStorage {
     /// Directory path for storage files
-    pub(crate) path: PathBuf,
+    pub(super) path: PathBuf,
     /// Vector dimension
-    pub(crate) dimension: usize,
+    pub(super) dimension: usize,
     /// In-memory index of ID -> file offset
     /// EPIC-033/US-004: Sharded for reduced lock contention on read-heavy workloads
-    pub(crate) index: ShardedIndex,
+    pub(super) index: ShardedIndex,
     /// Write-Ahead Log writer
-    pub(crate) wal: RwLock<io::BufWriter<File>>,
+    pub(super) wal: RwLock<io::BufWriter<File>>,
     /// File handle for the data file (kept open for resizing)
-    pub(crate) data_file: File,
+    pub(super) data_file: File,
     /// Memory mapped data file
-    pub(crate) mmap: RwLock<MmapMut>,
+    pub(super) mmap: RwLock<MmapMut>,
     /// Next available offset in the data file
-    pub(crate) next_offset: AtomicUsize,
+    pub(super) next_offset: AtomicUsize,
     /// P0 Audit: Metrics for monitoring `ensure_capacity` latency
     metrics: Arc<StorageMetrics>,
     /// Epoch counter incremented every time the mmap is remapped.

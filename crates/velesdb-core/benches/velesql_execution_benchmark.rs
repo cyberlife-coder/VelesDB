@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! `VelesQL` Execution Benchmarks - Scalability Testing
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 //!
@@ -136,7 +137,7 @@ fn bench_text_search_scaling(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("text_search", size), &size, |b, _| {
             b.iter(|| {
-                let results = collection.text_search(black_box("Product"), 10);
+                let results = collection.text_search(black_box("Product"), 10).unwrap();
                 black_box(results)
             });
         });

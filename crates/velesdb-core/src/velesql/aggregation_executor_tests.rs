@@ -1,5 +1,6 @@
 //! Tests for VelesQL aggregation execution (EPIC-017 US-002).
 #![cfg(all(test, feature = "persistence"))]
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use crate::distance::DistanceMetric;
 use crate::point::Point;

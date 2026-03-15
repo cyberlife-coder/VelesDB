@@ -273,4 +273,3 @@ Use the comparison script to analyze x86_64 vs ARM64 performance:
 - [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
 - [Rust Performance Book](https://nnethercote.github.io/perf-book/)
 - [BENCHMARKS.md](./BENCHMARKS.md) - Current benchmark results
-- [PERFORMANCE_ROADMAP.md](./PERFORMANCE_ROADMAP.md) - Optimization plan

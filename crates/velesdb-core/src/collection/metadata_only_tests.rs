@@ -2,6 +2,7 @@
 //!
 //! These tests define the expected behavior for collections
 //! that store metadata without vectors.
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use crate::collection::CollectionType;
 use crate::error::Error;

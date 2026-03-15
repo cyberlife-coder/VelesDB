@@ -7,7 +7,11 @@ use std::sync::atomic::Ordering;
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Inserts a vector into the index.
-    pub fn insert(&self, mut vector: Vec<f32>) -> NodeId {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage allocation or insertion fails.
+    pub fn insert(&self, mut vector: Vec<f32>) -> crate::error::Result<NodeId> {
         if self.distance.is_pre_normalized()
             && self.distance.metric() == crate::DistanceMetric::Cosine
         {
@@ -16,11 +20,17 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         let node_id = {
             let mut guard = self.vectors.write();
-            let storage = guard.get_or_insert_with(|| {
-                crate::perf_optimizations::ContiguousVectors::new(vector.len(), 16)
-            });
+            if guard.is_none() {
+                *guard = Some(crate::perf_optimizations::ContiguousVectors::new(
+                    vector.len(),
+                    16,
+                )?);
+            }
+            let storage = guard.as_mut().ok_or_else(|| {
+                crate::error::Error::Internal("Vector storage missing after init".to_string())
+            })?;
             let id = storage.len();
-            storage.push(&vector);
+            storage.push(&vector)?;
             id
         };
         // F-14: Use the original owned vector as the query — no clone needed
@@ -74,6 +84,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             *self.entry_point.write() = Some(node_id);
         }
         self.count.fetch_add(1, Ordering::Relaxed);
-        node_id
+        Ok(node_id)
     }
 }

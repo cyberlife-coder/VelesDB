@@ -11,6 +11,7 @@ impl Database {
     ///
     /// Returns an error if the collection does not exist, analysis fails, or
     /// stats cannot be serialized and written to disk.
+    #[allow(deprecated)]
     pub fn analyze_collection(
         &self,
         name: &str,

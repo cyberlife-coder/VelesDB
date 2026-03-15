@@ -144,8 +144,11 @@ impl MetadataCollection {
     // -------------------------------------------------------------------------
 
     /// Performs BM25 full-text search over payloads.
-    #[must_use]
-    pub fn text_search(&self, query: &str, k: usize) -> Vec<SearchResult> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage retrieval fails.
+    pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         self.inner.text_search(query, k)
     }
 

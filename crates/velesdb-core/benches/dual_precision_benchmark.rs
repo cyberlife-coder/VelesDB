@@ -37,14 +37,15 @@ fn bench_search_latency(c: &mut Criterion) {
     let engine_native = SimdDistance::new(DistanceMetric::Euclidean);
     let native_hnsw = NativeHnsw::new(engine_native, 32, 200, num_vectors);
     for v in &vectors {
-        native_hnsw.insert(v.clone());
+        native_hnsw.insert(v.clone()).expect("bench");
     }
 
     // === Build DualPrecisionHnsw (new) ===
     let engine_dual = SimdDistance::new(DistanceMetric::Euclidean);
-    let mut dual_hnsw = DualPrecisionHnsw::new(engine_dual, dim, 32, 200, num_vectors);
+    let mut dual_hnsw =
+        DualPrecisionHnsw::new(engine_dual, dim, 32, 200, num_vectors).expect("bench");
     for v in &vectors {
-        dual_hnsw.insert(v.clone());
+        dual_hnsw.insert(v.clone()).expect("bench");
     }
     // Force training if not already done
     dual_hnsw.force_train_quantizer();
@@ -109,7 +110,7 @@ fn bench_memory_footprint(c: &mut Criterion) {
                 let engine = SimdDistance::new(DistanceMetric::Euclidean);
                 let hnsw = NativeHnsw::new(engine, 32, 200, num_vectors);
                 for v in &vectors {
-                    hnsw.insert(v.clone());
+                    hnsw.insert(v.clone()).expect("bench");
                 }
                 black_box(hnsw.len())
             });
@@ -122,9 +123,10 @@ fn bench_memory_footprint(c: &mut Criterion) {
         |b, ()| {
             b.iter(|| {
                 let engine = SimdDistance::new(DistanceMetric::Euclidean);
-                let mut hnsw = DualPrecisionHnsw::new(engine, dim, 32, 200, num_vectors);
+                let mut hnsw =
+                    DualPrecisionHnsw::new(engine, dim, 32, 200, num_vectors).expect("bench");
                 for v in &vectors {
-                    hnsw.insert(v.clone());
+                    hnsw.insert(v.clone()).expect("bench");
                 }
                 hnsw.force_train_quantizer();
                 black_box(hnsw.len())

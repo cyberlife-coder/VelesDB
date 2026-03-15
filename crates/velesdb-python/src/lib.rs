@@ -262,6 +262,7 @@ impl Database {
     ///     >>> # With custom HNSW parameters:
     ///     >>> custom = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
     #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None))]
+    #[allow(deprecated)]
     fn create_collection(
         &self,
         name: &str,
@@ -314,6 +315,7 @@ impl Database {
     /// Example:
     ///     >>> collection = db.get_collection("documents")
     #[pyo3(signature = (name))]
+    #[allow(deprecated)]
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
         match self.inner.get_collection(name) {
             Some(collection) => Ok(Some(Collection::new(
@@ -368,6 +370,7 @@ impl Database {
     ///     ...     {"id": 1, "payload": {"name": "Widget", "price": 9.99}}
     ///     ... ])
     #[pyo3(signature = (name))]
+    #[allow(deprecated)]
     fn create_metadata_collection(&self, name: &str) -> PyResult<Collection> {
         self.inner.create_metadata_collection(name).map_err(|e| {
             PyRuntimeError::new_err(format!("Failed to create metadata collection: {e}"))

@@ -82,7 +82,7 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
     let num_queries = 50;
 
     // Build index with current defaults (M=32, ef_construction=400)
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
     println!("\n📊 Building index: {num_vectors} vectors, dim={dim}");
@@ -158,7 +158,7 @@ fn bench_recall_at_k(c: &mut Criterion) {
     let num_vectors = 10_000;
     let num_queries = 50;
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
     #[allow(clippy::cast_sign_loss)]
@@ -216,7 +216,7 @@ fn bench_scalability(c: &mut Criterion) {
     println!("\n📊 Scalability test (latency vs index size):\n");
 
     for num_vectors in [10_000, 50_000, 100_000] {
-        let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+        let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
         #[allow(clippy::cast_sign_loss)]
         for i in 0..num_vectors {

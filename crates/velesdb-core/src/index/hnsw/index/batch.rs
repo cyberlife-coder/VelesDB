@@ -90,19 +90,23 @@ impl HnswIndex {
             return 0;
         }
 
-        // Perf: Store vectors first (parallel-friendly) before HNSW insertion
+        // Prepare references for HNSW batch insertion
+        let refs_for_hnsw: Vec<(&Vec<f32>, usize)> =
+            to_insert.iter().map(|(idx, vec)| (vec, *idx)).collect();
+
+        // RF-1: Insert into HNSW graph BEFORE storing vectors.
+        // If parallel_insert fails, we avoid orphaned vectors in sidecar storage.
+        if let Err(e) = self.inner.read().parallel_insert(&refs_for_hnsw) {
+            tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
+            return 0;
+        }
+
+        // Perf: Store vectors after successful HNSW insertion (parallel-friendly)
         if self.enable_vector_storage {
             to_insert.par_iter().for_each(|(idx, vec)| {
                 self.vectors.insert(*idx, vec);
             });
         }
-
-        // Prepare references for HNSW batch insertion
-        let refs_for_hnsw: Vec<(&Vec<f32>, usize)> =
-            to_insert.iter().map(|(idx, vec)| (vec, *idx)).collect();
-
-        // RF-1: Using HnswInner parallel_insert method
-        self.inner.read().parallel_insert(&refs_for_hnsw);
 
         count
     }
@@ -122,16 +126,20 @@ impl HnswIndex {
         I: IntoIterator<Item = (u64, Vec<f32>)>,
     {
         let to_insert = self.prepare_batch_insert(vectors);
-        let count = to_insert.len();
+        let mut inserted = 0;
 
         for (idx, vec) in &to_insert {
-            self.inner.write().insert((vec.as_slice(), *idx));
+            if let Err(e) = self.inner.write().insert((vec.as_slice(), *idx)) {
+                tracing::error!("insert_batch_sequential: insert failed: {e}");
+                continue;
+            }
             if self.enable_vector_storage {
                 self.vectors.insert(*idx, vec);
             }
+            inserted += 1;
         }
 
-        count
+        inserted
     }
 
     /// Performs batch search for multiple queries in parallel.

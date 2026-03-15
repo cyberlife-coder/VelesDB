@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 use velesdb_core::{velesql::Parser, Database, DistanceMetric, Point};
 
+#[allow(deprecated)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 VelesDB Mini Recommender Example\n");
 

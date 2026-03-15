@@ -444,7 +444,7 @@ mod hybrid_search {
         assert!(!vector_results.is_empty());
 
         // Text search (BM25)
-        let text_results = collection.text_search("rust", 10);
+        let text_results = collection.text_search("rust", 10).unwrap();
         assert!(
             !text_results.is_empty(),
             "Should find articles mentioning 'rust'"

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/velesdb-core.svg)](https://crates.io/crates/velesdb-core)
 [![Documentation](https://docs.rs/velesdb-core/badge.svg)](https://docs.rs/velesdb-core)
-[![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
 
 High-performance vector database engine written in Rust.
@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // BM25 full-text search only
-    let text_results = collection.text_search("rust programming", 10);
+    let text_results = collection.text_search("rust programming", 10)?;
 
     // Fast search (IDs + scores only, no payload retrieval)
     let fast_results = collection.search_ids(&query, 10)?;
@@ -396,6 +396,6 @@ use velesdb_core::{recall_at_k, precision_at_k, mrr, ndcg_at_k};
 
 ## License
 
-Elastic License 2.0 (ELv2)
+VelesDB Core License 1.0
 
 See [LICENSE](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE) for details.

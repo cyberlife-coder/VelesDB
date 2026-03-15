@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark for parallel aggregation (EPIC-018 US-001).
 //!
 //! Compares performance at different data scales to prove parallel speedup.

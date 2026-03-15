@@ -15,7 +15,7 @@ use tempfile::tempdir;
 
 #[test]
 fn test_native_index_new() {
-    let index = NativeHnswIndex::new(64, DistanceMetric::Euclidean);
+    let index = NativeHnswIndex::new(64, DistanceMetric::Euclidean).expect("test");
     assert_eq!(index.dimension(), 64);
     assert_eq!(index.metric(), DistanceMetric::Euclidean);
     assert!(index.is_empty());
@@ -23,11 +23,11 @@ fn test_native_index_new() {
 
 #[test]
 fn test_native_index_insert_search() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
 
     for i in 0..50 {
         let vec: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32 * 0.01).collect();
-        index.insert(i, &vec);
+        index.insert(i, &vec).expect("test");
     }
 
     assert_eq!(index.len(), 50);
@@ -42,11 +42,11 @@ fn test_native_index_insert_search() {
 
 #[test]
 fn test_native_index_batch_insert() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
 
     let items: Vec<(u64, Vec<f32>)> = (0..50).map(|i| (i, vec![i as f32 * 0.01; 32])).collect();
 
-    index.insert_batch(&items);
+    index.insert_batch(&items).expect("test");
 
     assert_eq!(index.len(), 50);
 }
@@ -55,9 +55,9 @@ fn test_native_index_batch_insert() {
 fn test_native_index_persistence() {
     let dir = tempdir().unwrap();
 
-    let index = NativeHnswIndex::new(32, DistanceMetric::Cosine);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Cosine).expect("test");
     for i in 0..30 {
-        index.insert(i, &vec![i as f32 * 0.1; 32]);
+        index.insert(i, &vec![i as f32 * 0.1; 32]).expect("test");
     }
 
     index.save(dir.path()).unwrap();
@@ -80,9 +80,9 @@ fn test_native_index_persistence() {
 fn test_native_index_fast_insert_save_does_not_persist_vectors() {
     let dir = tempdir().unwrap();
 
-    let index = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine);
+    let index = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine).expect("test");
     for i in 0..10 {
-        index.insert(i, &vec![i as f32 * 0.1; 16]);
+        index.insert(i, &vec![i as f32 * 0.1; 16]).expect("test");
     }
 
     index.save(dir.path()).unwrap();
@@ -99,13 +99,13 @@ fn test_native_index_fast_insert_save_does_not_persist_vectors() {
 fn test_native_index_fast_insert_save_removes_stale_vectors_file() {
     let dir = tempdir().unwrap();
 
-    let regular = NativeHnswIndex::new(16, DistanceMetric::Cosine);
-    regular.insert(1, &vec![0.1; 16]);
+    let regular = NativeHnswIndex::new(16, DistanceMetric::Cosine).expect("test");
+    regular.insert(1, &vec![0.1; 16]).expect("test");
     regular.save(dir.path()).unwrap();
     assert!(dir.path().join("native_vectors.bin").exists());
 
-    let fast = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine);
-    fast.insert(2, &vec![0.2; 16]);
+    let fast = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine).expect("test");
+    fast.insert(2, &vec![0.2; 16]).expect("test");
     fast.save(dir.path()).unwrap();
 
     assert!(!dir.path().join("native_vectors.bin").exists());
@@ -113,9 +113,9 @@ fn test_native_index_fast_insert_save_removes_stale_vectors_file() {
 
 #[test]
 fn test_native_index_delete() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
-    index.insert(1, &vec![0.1; 32]);
-    index.insert(2, &vec![0.2; 32]);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
+    index.insert(1, &vec![0.1; 32]).expect("test");
+    index.insert(2, &vec![0.2; 32]).expect("test");
 
     assert!(index.remove(1));
     assert!(!index.remove(999));
@@ -123,7 +123,7 @@ fn test_native_index_delete() {
 
 #[test]
 fn test_native_index_vector_index_trait() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
 
     <NativeHnswIndex as VectorIndex>::insert(&index, 1, &vec![0.1; 32]);
     assert_eq!(<NativeHnswIndex as VectorIndex>::len(&index), 1);
@@ -135,11 +135,11 @@ fn test_native_index_vector_index_trait() {
 
 #[test]
 fn test_native_index_brute_force_search() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
 
     for i in 0..20u64 {
         let vec: Vec<f32> = (0..32u64).map(|j| (i * 32 + j) as f32 * 0.001).collect();
-        index.insert(i, &vec);
+        index.insert(i, &vec).expect("test");
     }
 
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.001).collect();
@@ -154,7 +154,7 @@ fn test_native_index_brute_force_search() {
 
 #[test]
 fn test_native_index_brute_force_empty() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
     let query = vec![0.0; 32];
     let results = index.brute_force_search_parallel(&query, 5);
     assert!(results.is_empty());
@@ -162,9 +162,9 @@ fn test_native_index_brute_force_empty() {
 
 #[test]
 fn test_native_index_brute_force_k_larger_than_size() {
-    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean);
-    index.insert(1, &vec![0.1; 32]);
-    index.insert(2, &vec![0.2; 32]);
+    let index = NativeHnswIndex::new(32, DistanceMetric::Euclidean).expect("test");
+    index.insert(1, &vec![0.1; 32]).expect("test");
+    index.insert(2, &vec![0.2; 32]).expect("test");
 
     let results = index.brute_force_search_parallel(&vec![0.0; 32], 10);
     assert_eq!(results.len(), 2);

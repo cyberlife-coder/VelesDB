@@ -1,7 +1,7 @@
 # VelesDB WASM
 
 [![npm](https://img.shields.io/npm/v/@wiscale/velesdb-wasm)](https://www.npmjs.com/package/@wiscale/velesdb-wasm)
-[![License](https://img.shields.io/badge/license-ELv2-blue)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
 
 WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vector search in the browser.
 
@@ -346,6 +346,6 @@ Typical latencies on modern browsers:
 
 ## License
 
-Elastic License 2.0 (ELv2)
+VelesDB Core License 1.0
 
 See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.

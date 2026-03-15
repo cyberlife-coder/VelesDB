@@ -8,6 +8,7 @@
 //!
 //! Tests that params are properly resolved in execute_aggregate queries.
 #![cfg(all(test, feature = "persistence"))]
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use crate::collection::Collection;
 use crate::velesql::Parser;

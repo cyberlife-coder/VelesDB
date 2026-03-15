@@ -255,9 +255,9 @@ Tested on clustered embeddings (768D) — realistic AI workloads:
 
 ## License
 
-Elastic License 2.0 (ELv2)
+MIT
 
-See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.
+See [LICENSE](./LICENSE) for details.
 
 ## Links
 

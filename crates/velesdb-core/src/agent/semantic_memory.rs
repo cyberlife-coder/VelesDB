@@ -36,6 +36,7 @@ impl SemanticMemory {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
 
+    #[allow(deprecated)]
     pub(crate) fn new(
         db: Arc<Database>,
         dimension: usize,
@@ -94,6 +95,7 @@ impl SemanticMemory {
     ///
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or persistence fails.
+    #[allow(deprecated)]
     pub fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), AgentMemoryError> {
         if embedding.len() != self.dimension {
             return Err(AgentMemoryError::DimensionMismatch {
@@ -139,6 +141,7 @@ impl SemanticMemory {
     ///
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or vector search fails.
+    #[allow(deprecated)]
     pub fn query(
         &self,
         query_embedding: &[f32],
@@ -182,6 +185,7 @@ impl SemanticMemory {
     /// # Errors
     ///
     /// Returns an error when collection access or deletion fails.
+    #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
@@ -202,6 +206,7 @@ impl SemanticMemory {
     /// # Errors
     ///
     /// Returns an error when collection access or JSON encoding fails.
+    #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = self
             .db
@@ -223,6 +228,7 @@ impl SemanticMemory {
     ///
     /// Returns an error when JSON decoding fails, collection access fails,
     /// or persistence operations fail.
+    #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         if data.is_empty() {
             return Ok(());

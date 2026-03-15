@@ -4,6 +4,7 @@ use crate::{Error, Result, SearchResult};
 
 use super::Database;
 
+#[allow(deprecated)] // Uses legacy Collection internally for query routing.
 impl Database {
     /// Produces a canonical JSON string for a `serde_json::Value`.
     ///
@@ -238,6 +239,7 @@ impl Database {
     /// Priority: legacy collections registry first (contains live instances for both
     /// `create_collection` and `create_vector_collection` via shared inner `Arc<>`).
     /// Falls back to vector collections, then metadata collections.
+    #[allow(deprecated)]
     fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
         self.get_collection(name)
             .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
@@ -313,7 +315,7 @@ impl Database {
     }
 
     /// Executes an INSERT statement.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, deprecated)]
     fn execute_insert(
         &self,
         stmt: &crate::velesql::InsertStatement,
@@ -380,7 +382,7 @@ impl Database {
     }
 
     /// Executes an UPDATE statement.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, deprecated)]
     fn execute_update(
         &self,
         stmt: &crate::velesql::UpdateStatement,

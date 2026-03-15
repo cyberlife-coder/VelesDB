@@ -2,6 +2,7 @@
 
 use super::{HnswIndex, HnswInner};
 use crate::distance::DistanceMetric;
+use crate::error::Result;
 use crate::index::hnsw::params::HnswParams;
 use crate::index::hnsw::sharded_mappings::ShardedMappings;
 use crate::index::hnsw::sharded_vectors::ShardedVectors;
@@ -18,16 +19,20 @@ impl HnswIndex {
     /// * `dimension` - Vector dimension (e.g., 768 for OpenAI embeddings)
     /// * `metric` - Distance metric for similarity computation
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the HNSW graph allocation fails (invalid dimension
+    /// or insufficient memory).
+    ///
     /// # Example
     ///
     /// ```rust,ignore
     /// use velesdb_core::index::HnswIndex;
     /// use velesdb_core::DistanceMetric;
     ///
-    /// let index = HnswIndex::new(768, DistanceMetric::Cosine);
+    /// let index = HnswIndex::new(768, DistanceMetric::Cosine)?;
     /// ```
-    #[must_use]
-    pub fn new(dimension: usize, metric: DistanceMetric) -> Self {
+    pub fn new(dimension: usize, metric: DistanceMetric) -> Result<Self> {
         let params = HnswParams::auto(dimension);
         Self::with_params(dimension, metric, params)
     }
@@ -37,7 +42,7 @@ impl HnswIndex {
     /// # Performance
     ///
     /// - **~2x faster inserts** than `new()` (vectors not stored for re-ranking)
-    /// - **~50% less memory** (no ShardedVectors duplication)
+    /// - **~50% less memory** (no `ShardedVectors` duplication)
     ///
     /// # Limitations
     ///
@@ -51,6 +56,10 @@ impl HnswIndex {
     /// - Large-scale indexing where recall is more important than perfect precision
     /// - Memory-constrained environments
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the HNSW graph allocation fails.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -58,10 +67,9 @@ impl HnswIndex {
     /// use velesdb_core::DistanceMetric;
     ///
     /// // Fast insert mode: 2x faster, 50% less memory
-    /// let index = HnswIndex::new_fast_insert(768, DistanceMetric::Cosine);
+    /// let index = HnswIndex::new_fast_insert(768, DistanceMetric::Cosine)?;
     /// ```
-    #[must_use]
-    pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Self {
+    pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Result<Self> {
         let params = HnswParams::auto(dimension);
         Self::with_params_internal(dimension, metric, params, false)
     }
@@ -71,8 +79,12 @@ impl HnswIndex {
     /// # Parameters
     ///
     /// Uses auto-tuned parameters for the dimension, plus:
-    /// - Higher ef_construction for better graph quality
+    /// - Higher `ef_construction` for better graph quality
     /// - Optimized for modern hardware
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HNSW graph allocation fails.
     ///
     /// # Example
     ///
@@ -81,10 +93,9 @@ impl HnswIndex {
     /// use velesdb_core::DistanceMetric;
     ///
     /// // Turbo mode: auto-tuned for high-performance workloads
-    /// let index = HnswIndex::new_turbo(768, DistanceMetric::Cosine);
+    /// let index = HnswIndex::new_turbo(768, DistanceMetric::Cosine)?;
     /// ```
-    #[must_use]
-    pub fn new_turbo(dimension: usize, metric: DistanceMetric) -> Self {
+    pub fn new_turbo(dimension: usize, metric: DistanceMetric) -> Result<Self> {
         let mut params = HnswParams::auto(dimension);
         // Turbo: increase ef_construction by 50% for better graph quality
         params.ef_construction = (params.ef_construction * 3) / 2;
@@ -99,6 +110,10 @@ impl HnswIndex {
     /// * `metric` - Distance metric
     /// * `params` - Custom HNSW parameters
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the HNSW graph allocation fails.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -111,10 +126,13 @@ impl HnswIndex {
     ///     ef_construction: 400,
     ///     max_elements: 100_000,
     /// };
-    /// let index = HnswIndex::with_params(768, DistanceMetric::Cosine, params);
+    /// let index = HnswIndex::with_params(768, DistanceMetric::Cosine, params)?;
     /// ```
-    #[must_use]
-    pub fn with_params(dimension: usize, metric: DistanceMetric, params: HnswParams) -> Self {
+    pub fn with_params(
+        dimension: usize,
+        metric: DistanceMetric,
+        params: HnswParams,
+    ) -> Result<Self> {
         Self::with_params_internal(dimension, metric, params, true)
     }
 
@@ -124,18 +142,18 @@ impl HnswIndex {
         metric: DistanceMetric,
         params: HnswParams,
         enable_vector_storage: bool,
-    ) -> Self {
+    ) -> Result<Self> {
         let inner = HnswInner::new(
             metric,
             params.max_connections,
             params.max_elements,
             params.ef_construction,
             dimension,
-        );
+        )?;
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);
 
-        Self {
+        Ok(Self {
             dimension,
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
@@ -145,7 +163,7 @@ impl HnswIndex {
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
-        }
+        })
     }
 
     /// Creates a new HNSW index with fully customized parameters.
@@ -159,6 +177,10 @@ impl HnswIndex {
     /// * `params` - Custom HNSW parameters
     /// * `enable_vector_storage` - Whether to store vectors for re-ranking
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the HNSW graph allocation fails.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -168,15 +190,14 @@ impl HnswIndex {
     ///
     /// // Full control: custom params + fast insert mode
     /// let params = HnswParams::auto(768);
-    /// let index = HnswIndex::with_params_full(768, DistanceMetric::Cosine, params, false);
+    /// let index = HnswIndex::with_params_full(768, DistanceMetric::Cosine, params, false)?;
     /// ```
-    #[must_use]
     pub fn with_params_full(
         dimension: usize,
         metric: DistanceMetric,
         params: HnswParams,
         enable_vector_storage: bool,
-    ) -> Self {
+    ) -> Result<Self> {
         Self::with_params_internal(dimension, metric, params, enable_vector_storage)
     }
 
@@ -195,7 +216,7 @@ impl HnswIndex {
         path: P,
         _dimension: usize,
         _metric: DistanceMetric,
-    ) -> Result<Self, std::io::Error> {
+    ) -> std::result::Result<Self, std::io::Error> {
         use crate::index::hnsw::persistence;
 
         let path = path.as_ref();
@@ -255,7 +276,7 @@ impl HnswIndex {
     /// # Errors
     ///
     /// Returns an error if the write fails.
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> std::result::Result<(), std::io::Error> {
         use crate::index::hnsw::persistence::{self, HnswMappingsData, HnswMeta, HnswVectorsData};
 
         let path = path.as_ref();

@@ -12,6 +12,7 @@
 use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
 use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
+#[allow(deprecated)]
 use crate::{Collection, ColumnStore, Error, Result};
 
 mod collection_ops;
@@ -24,7 +25,11 @@ mod training;
 mod database_helpers;
 
 #[cfg(all(test, feature = "persistence"))]
+mod collection_ops_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod database_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod query_engine_tests;
 
 /// Database instance managing collections and storage.
 ///
@@ -47,6 +52,7 @@ pub struct Database {
     /// The `_` prefix signals this field is kept for its RAII side effect.
     _lock_file: std::fs::File,
     /// Legacy registry (Collection god-object) — kept for backward compatibility during migration.
+    #[allow(deprecated)]
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
     /// New registry: vector collections.
     vector_colls: parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,

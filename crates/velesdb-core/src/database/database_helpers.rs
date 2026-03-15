@@ -1,6 +1,8 @@
 #[cfg(feature = "persistence")]
+#[allow(deprecated)] // Uses legacy Collection internally.
 use super::{Collection, ColumnStore, Database, Error, Result};
 
+#[allow(deprecated)] // Uses legacy Collection internally.
 impl Database {
     pub(super) fn resolve_dml_value(
         value: &crate::velesql::Value,

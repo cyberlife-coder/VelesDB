@@ -36,21 +36,21 @@ pub(crate) struct HnswVectorsData {
 
 /// Saves HNSW metadata to `native_meta.bin` in the given directory.
 ///
+/// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
+///
 /// # Errors
 ///
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_meta(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
     let meta_path = path.join("native_meta.bin");
-    let meta_file = std::fs::File::create(meta_path)?;
-    let mut meta_writer = std::io::BufWriter::new(meta_file);
+    let tmp_path = path.join("native_meta.bin.tmp");
     let bytes = postcard::to_allocvec(&(
         meta.dimension,
         meta.metric as u8,
         meta.enable_vector_storage,
     ))
     .map_err(std::io::Error::other)?;
-    meta_writer.write_all(&bytes)?;
-    meta_writer.flush()
+    atomic_write(&tmp_path, &meta_path, &bytes)
 }
 
 /// Loads HNSW metadata from `native_meta.bin` in the given directory.
@@ -77,17 +77,17 @@ pub(crate) fn load_meta(path: &Path) -> std::io::Result<HnswMeta> {
 
 /// Saves HNSW id-mappings to `native_mappings.bin` in the given directory.
 ///
+/// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
+///
 /// # Errors
 ///
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_mappings(path: &Path, data: &HnswMappingsData) -> std::io::Result<()> {
     let mappings_path = path.join("native_mappings.bin");
-    let file = std::fs::File::create(mappings_path)?;
-    let mut writer = std::io::BufWriter::new(file);
+    let tmp_path = path.join("native_mappings.bin.tmp");
     let bytes = postcard::to_allocvec(&(&data.id_to_idx, &data.idx_to_id, data.next_idx))
         .map_err(std::io::Error::other)?;
-    writer.write_all(&bytes)?;
-    writer.flush()
+    atomic_write(&tmp_path, &mappings_path, &bytes)
 }
 
 /// Loads HNSW id-mappings from `native_mappings.bin` in the given directory.
@@ -111,16 +111,16 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
 
 /// Saves HNSW vectors to `native_vectors.bin` in the given directory.
 ///
+/// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
+///
 /// # Errors
 ///
 /// Returns `io::Error` if file creation or serialization fails.
 pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Result<()> {
     let vectors_path = path.join("native_vectors.bin");
-    let file = std::fs::File::create(vectors_path)?;
-    let mut writer = std::io::BufWriter::new(file);
+    let tmp_path = path.join("native_vectors.bin.tmp");
     let bytes = postcard::to_allocvec(&data.vectors).map_err(std::io::Error::other)?;
-    writer.write_all(&bytes)?;
-    writer.flush()
+    atomic_write(&tmp_path, &vectors_path, &bytes)
 }
 
 /// Loads HNSW vectors from `native_vectors.bin` in the given directory.
@@ -134,6 +134,19 @@ pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
     let vectors: Vec<(usize, Vec<f32>)> =
         postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
     Ok(HnswVectorsData { vectors })
+}
+
+/// Writes `data` to `tmp_path`, fsyncs, then renames to `final_path`.
+///
+/// This provides crash-safe persistence: readers always see either the
+/// previous complete file or the new complete file, never a torn write.
+fn atomic_write(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let file = std::fs::File::create(tmp_path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    writer.write_all(data)?;
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
+    std::fs::rename(tmp_path, final_path)
 }
 
 /// Converts a u8 discriminant to a `DistanceMetric`.

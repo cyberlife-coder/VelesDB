@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! HNSW Index Performance Benchmarks
 //!
 //! Run with: `cargo bench --bench hnsw_benchmark`
@@ -34,7 +35,7 @@ fn bench_hnsw_insert(c: &mut Criterion) {
         &count,
         |b, &count| {
             b.iter(|| {
-                let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
                 for i in 0..count {
                     let vector = generate_vector(dim, i);
                     index.insert(i, &vector);
@@ -64,7 +65,7 @@ fn bench_hnsw_insert_parallel(c: &mut Criterion) {
                     (0..count).map(|i| (i, generate_vector(dim, i))).collect();
 
                 b.iter(|| {
-                    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
                     let inserted = index.insert_batch_parallel(vectors.clone());
                     index.set_searching_mode();
                     black_box(inserted)
@@ -90,7 +91,7 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
         &count,
         |b, &count| {
             b.iter(|| {
-                let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+                let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
                 for i in 0..count {
                     let vector = generate_vector(dim, i);
                     index.insert(i, &vector);
@@ -106,7 +107,7 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
         &count,
         |b, &count| {
             b.iter(|| {
-                let index = HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine);
+                let index = HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine).unwrap();
                 for i in 0..count {
                     let vector = generate_vector(dim, i);
                     index.insert(i, &vector);
@@ -122,7 +123,7 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
         &count,
         |b, &count| {
             b.iter(|| {
-                let index = HnswIndex::new_turbo(dim, DistanceMetric::Cosine);
+                let index = HnswIndex::new_turbo(dim, DistanceMetric::Cosine).unwrap();
                 for i in 0..count {
                     let vector = generate_vector(dim, i);
                     index.insert(i, &vector);
@@ -141,7 +142,7 @@ fn bench_hnsw_search_latency(c: &mut Criterion) {
 
     // Pre-populate index
     let dim = 768;
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
     for i in 0..10_000 {
         let vector = generate_vector(dim, i);
@@ -167,7 +168,7 @@ fn bench_hnsw_search_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_search_throughput");
 
     let dim = 768;
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
     // Populate with 10k vectors
     for i in 0..10_000 {
@@ -234,7 +235,7 @@ fn bench_distance_metrics(c: &mut Criterion) {
 
     // Only Cosine and Euclidean - DotProduct requires special vector constraints
     for &metric in &[DistanceMetric::Cosine, DistanceMetric::Euclidean] {
-        let index = HnswIndex::new(dim, metric);
+        let index = HnswIndex::new(dim, metric).unwrap();
 
         // Populate
         for i in 0_u64..5000 {
@@ -273,7 +274,7 @@ fn bench_recall_validation(c: &mut Criterion) {
         let k = 10_usize;
 
         // Build index with auto-tuned params
-        let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+        let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
         let vectors: Vec<Vec<f32>> = (0..n_vectors).map(|i| generate_vector(dim, i)).collect();
 
         for (i, v) in vectors.iter().enumerate() {

@@ -21,7 +21,7 @@ use crate::index::VectorIndex;
 #[test]
 fn test_tombstone_count_empty_index() {
     // Arrange
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Act & Assert
     assert_eq!(index.tombstone_count(), 0);
@@ -32,7 +32,7 @@ fn test_tombstone_count_empty_index() {
 #[test]
 fn test_tombstone_count_after_deletions() {
     // Arrange
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Insert 10 vectors
     for i in 0..10 {
@@ -55,7 +55,7 @@ fn test_tombstone_count_after_deletions() {
 #[test]
 fn test_vacuum_rebuilds_index() {
     // Arrange
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Insert 20 vectors
     for i in 0..20 {
@@ -85,7 +85,7 @@ fn test_vacuum_rebuilds_index() {
 #[test]
 fn test_vacuum_preserves_search_results() {
     // Arrange
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors with known patterns
     for i in 0..50 {
@@ -120,7 +120,7 @@ fn test_drop_after_vacuum_and_reload_is_safe() {
 
     let dir = tempdir().expect("Failed to create temp dir");
     {
-        let index = HnswIndex::new(32, DistanceMetric::Euclidean);
+        let index = HnswIndex::new(32, DistanceMetric::Euclidean).unwrap();
 
         for i in 0u64..120 {
             let vector: Vec<f32> = (0..32).map(|j| (i + j as u64) as f32 * 0.01).collect();
@@ -145,7 +145,7 @@ fn test_drop_after_vacuum_and_reload_is_safe() {
 #[test]
 fn test_vacuum_fails_with_fast_insert_mode() {
     // Arrange
-    let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine).unwrap();
 
     for i in 0..10 {
         let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
@@ -163,7 +163,7 @@ fn test_vacuum_fails_with_fast_insert_mode() {
 #[test]
 fn test_vacuum_empty_index() {
     // Arrange
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Act
     let result = index.vacuum();
@@ -180,7 +180,7 @@ fn test_vacuum_empty_index() {
 #[test]
 fn test_hnsw_new_creates_empty_index() {
     // Arrange & Act
-    let index = HnswIndex::new(768, DistanceMetric::Cosine);
+    let index = HnswIndex::new(768, DistanceMetric::Cosine).unwrap();
 
     // Assert
     assert!(index.is_empty());
@@ -193,7 +193,7 @@ fn test_hnsw_new_creates_empty_index() {
 fn test_hnsw_new_turbo_mode() {
     // TDD: Turbo mode uses aggressive params for max insert throughput
     // Target: 5k+ vec/s (vs ~2k/s with auto params)
-    let index = HnswIndex::new_turbo(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new_turbo(64, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors - should be faster than standard mode
     for i in 0..100 {
@@ -213,7 +213,7 @@ fn test_hnsw_new_turbo_mode() {
 #[test]
 fn test_hnsw_new_fast_insert_mode() {
     // Arrange & Act - fast insert mode disables vector storage
-    let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors
     for i in 0..100 {
@@ -233,7 +233,7 @@ fn test_hnsw_new_fast_insert_mode() {
 #[test]
 fn test_hnsw_insert_single_vector() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vector = vec![1.0, 0.0, 0.0];
 
     // Act
@@ -247,7 +247,7 @@ fn test_hnsw_insert_single_vector() {
 #[test]
 fn test_hnsw_insert_multiple_vectors() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
 
     // Act
     index.insert(1, &[1.0, 0.0, 0.0]);
@@ -261,7 +261,7 @@ fn test_hnsw_insert_multiple_vectors() {
 #[test]
 fn test_hnsw_search_returns_k_nearest() {
     // Arrange - use more vectors to make HNSW more stable
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.9, 0.1, 0.0]); // Similar to 1
     index.insert(3, &[0.0, 1.0, 0.0]); // Different
@@ -285,7 +285,7 @@ fn test_hnsw_search_returns_k_nearest() {
 #[test]
 fn test_hnsw_search_empty_index() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
 
     // Act
     let results = index.search(&[1.0, 0.0, 0.0], 10);
@@ -297,7 +297,7 @@ fn test_hnsw_search_empty_index() {
 #[test]
 fn test_hnsw_remove_existing_vector() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0]);
 
@@ -312,7 +312,7 @@ fn test_hnsw_remove_existing_vector() {
 #[test]
 fn test_hnsw_remove_nonexistent_vector() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
     // Act
@@ -326,7 +326,7 @@ fn test_hnsw_remove_nonexistent_vector() {
 #[test]
 fn test_hnsw_euclidean_metric() {
     // Arrange - use more vectors to avoid HNSW flakiness with tiny datasets
-    let index = HnswIndex::new(3, DistanceMetric::Euclidean);
+    let index = HnswIndex::new(3, DistanceMetric::Euclidean).unwrap();
     index.insert(1, &[0.0, 0.0, 0.0]);
     index.insert(2, &[1.0, 0.0, 0.0]); // Distance 1
     index.insert(3, &[3.0, 4.0, 0.0]); // Distance 5
@@ -346,7 +346,7 @@ fn test_hnsw_dot_product_metric() {
     // Arrange - Use normalized positive vectors for dot product
     // DistDot in hnsw_rs requires non-negative dot products
     // Use more vectors to avoid HNSW flakiness with tiny datasets
-    let index = HnswIndex::new(3, DistanceMetric::DotProduct);
+    let index = HnswIndex::new(3, DistanceMetric::DotProduct).unwrap();
 
     // Insert vectors with distinct dot products when queried with [1,0,0]
     index.insert(1, &[1.0, 0.0, 0.0]); // dot=1.0 with query
@@ -368,7 +368,7 @@ fn test_hnsw_dot_product_metric() {
 #[should_panic(expected = "Vector dimension mismatch")]
 fn test_hnsw_insert_wrong_dimension_panics() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
 
     // Act - should panic
     index.insert(1, &[1.0, 0.0]); // Wrong dimension
@@ -378,7 +378,7 @@ fn test_hnsw_insert_wrong_dimension_panics() {
 #[should_panic(expected = "Query dimension mismatch")]
 fn test_hnsw_search_wrong_dimension_panics() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
     // Act - should panic
@@ -388,7 +388,7 @@ fn test_hnsw_search_wrong_dimension_panics() {
 #[test]
 fn test_hnsw_duplicate_insert_is_skipped() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
     // Act - Insert with same ID should be SKIPPED (not updated)
@@ -415,7 +415,7 @@ fn test_hnsw_thread_safety() {
     use std::thread;
 
     // Arrange
-    let index = Arc::new(HnswIndex::new(3, DistanceMetric::Cosine));
+    let index = Arc::new(HnswIndex::new(3, DistanceMetric::Cosine).unwrap());
     let mut handles = vec![];
 
     // Act - Insert from multiple threads (unique IDs)
@@ -444,7 +444,7 @@ fn test_hnsw_persistence() {
 
     // Arrange
     let dir = tempdir().unwrap();
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0]);
 
@@ -472,7 +472,7 @@ fn test_hnsw_load_legacy_snapshot_without_vectors_disables_vacuum() {
 
     // Arrange: create a valid snapshot then remove vector sidecar to simulate legacy format.
     let dir = tempdir().unwrap();
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0]);
     index.save(dir.path()).unwrap();
@@ -496,7 +496,7 @@ fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
-    let index = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0]);
 
@@ -514,13 +514,13 @@ fn test_hnsw_fast_insert_save_removes_stale_vectors_file() {
     let dir = tempdir().unwrap();
 
     // Write a regular snapshot first (with vectors sidecar).
-    let regular = HnswIndex::new(3, DistanceMetric::Cosine);
+    let regular = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     regular.insert(1, &[1.0, 0.0, 0.0]);
     regular.save(dir.path()).unwrap();
     assert!(dir.path().join("native_vectors.bin").exists());
 
     // Overwrite with fast-insert snapshot; stale vectors file must be removed.
-    let fast = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine);
+    let fast = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine).unwrap();
     fast.insert(2, &[0.0, 1.0, 0.0]);
     fast.save(dir.path()).unwrap();
 
@@ -530,7 +530,7 @@ fn test_hnsw_fast_insert_save_removes_stale_vectors_file() {
 #[test]
 fn test_hnsw_insert_batch_parallel() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, Vec<f32>)> = vec![
         (1, vec![1.0, 0.0, 0.0]),
         (2, vec![0.0, 1.0, 0.0]),
@@ -559,7 +559,7 @@ fn test_hnsw_insert_batch_parallel() {
 #[test]
 fn test_hnsw_insert_batch_parallel_skips_duplicates() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
 
     // Insert one vector first
     index.insert(1, &[1.0, 0.0, 0.0]);
@@ -585,7 +585,7 @@ fn test_hnsw_insert_batch_parallel_skips_duplicates() {
 #[allow(deprecated)]
 fn test_hnsw_insert_batch_sequential() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, Vec<f32>)> = vec![
         (1, vec![1.0, 0.0, 0.0]),
         (2, vec![0.0, 1.0, 0.0]),
@@ -612,7 +612,7 @@ fn test_hnsw_insert_batch_sequential() {
 #[allow(deprecated)]
 fn test_hnsw_insert_batch_sequential_skips_duplicates() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
     // Act - Try to insert batch with duplicate ID
@@ -631,7 +631,7 @@ fn test_hnsw_insert_batch_sequential_skips_duplicates() {
 #[allow(deprecated)]
 fn test_hnsw_insert_batch_sequential_empty() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, Vec<f32>)> = vec![];
 
     // Act
@@ -647,7 +647,7 @@ fn test_hnsw_insert_batch_sequential_empty() {
 #[should_panic(expected = "Vector dimension mismatch")]
 fn test_hnsw_insert_batch_sequential_wrong_dimension() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let vectors: Vec<(u64, Vec<f32>)> = vec![(1, vec![1.0, 0.0])]; // Wrong dim
 
     // Act - should panic
@@ -662,7 +662,7 @@ fn test_hnsw_insert_batch_sequential_wrong_dimension() {
 #[test]
 fn test_hnsw_with_params() {
     let params = HnswParams::custom(48, 600, 500_000);
-    let index = HnswIndex::with_params(1536, DistanceMetric::Cosine, params);
+    let index = HnswIndex::with_params(1536, DistanceMetric::Cosine, params).unwrap();
 
     assert_eq!(index.dimension(), 1536);
     assert!(index.is_empty());
@@ -675,7 +675,7 @@ fn test_hnsw_with_params() {
 #[test]
 fn test_search_with_rerank_returns_k_results() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.9, 0.1, 0.0]);
     index.insert(3, &[0.8, 0.2, 0.0]);
@@ -693,7 +693,7 @@ fn test_search_with_rerank_returns_k_results() {
 #[allow(clippy::cast_precision_loss)]
 fn test_search_with_rerank_improves_ranking() {
     // Arrange - vectors with subtle differences
-    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+    let index = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
 
     // Create vectors with known similarity ordering
     let base: Vec<f32> = (0..128).map(|i| (i as f32 * 0.01).sin()).collect();
@@ -722,7 +722,7 @@ fn test_search_with_rerank_improves_ranking() {
 #[test]
 fn test_search_with_rerank_handles_rerank_k_greater_than_index_size() {
     // Arrange - use more vectors to avoid HNSW flakiness
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0]);
     index.insert(3, &[0.0, 0.0, 1.0]);
@@ -741,7 +741,7 @@ fn test_search_with_rerank_handles_rerank_k_greater_than_index_size() {
 #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn test_search_with_rerank_uses_simd_distances() {
     // Arrange
-    let index = HnswIndex::new(768, DistanceMetric::Cosine);
+    let index = HnswIndex::new(768, DistanceMetric::Cosine).unwrap();
 
     // Insert 100 vectors
     for i in 0..100_u64 {
@@ -775,7 +775,7 @@ fn test_search_with_rerank_uses_simd_distances() {
 #[test]
 fn test_search_with_rerank_euclidean_metric() {
     // Arrange
-    let index = HnswIndex::new(3, DistanceMetric::Euclidean);
+    let index = HnswIndex::new(3, DistanceMetric::Euclidean).unwrap();
     index.insert(1, &[0.0, 0.0, 0.0]);
     index.insert(2, &[1.0, 0.0, 0.0]);
     index.insert(3, &[2.0, 0.0, 0.0]);
@@ -814,7 +814,7 @@ fn test_hnsw_multi_tenant_load_unload() {
 
     // Create and save an index
     {
-        let index = HnswIndex::new(128, DistanceMetric::Cosine);
+        let index = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
         for i in 0..100_u64 {
             let v: Vec<f32> = (0..128)
                 .map(|j| ((i + j as u64) as f32 * 0.01).sin())
@@ -862,7 +862,7 @@ fn test_hnsw_drop_cleans_up_properly() {
 
     // Create, save, load, and drop
     {
-        let index = HnswIndex::new(64, DistanceMetric::Euclidean);
+        let index = HnswIndex::new(64, DistanceMetric::Euclidean).unwrap();
         index.insert(1, &vec![0.5; 64]);
         index.insert(2, &vec![0.3; 64]);
         index.save(dir.path()).expect("Failed to save");
@@ -901,7 +901,7 @@ fn test_hnsw_save_load_preserves_all_metrics() {
 
         // Create and save
         {
-            let index = HnswIndex::new(dim, metric);
+            let index = HnswIndex::new(dim, metric).unwrap();
             index.insert(1, &v1);
             index.insert(2, &v2);
             index.save(dir.path()).expect("Failed to save");
@@ -936,7 +936,7 @@ fn test_hnsw_save_load_preserves_all_metrics() {
 
 #[test]
 fn test_search_quality_fast() {
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     // Insert more vectors for stable HNSW graph (small graphs are non-deterministic)
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.9, 0.1, 0.0]);
@@ -952,7 +952,7 @@ fn test_search_quality_fast() {
 
 #[test]
 fn test_search_quality_balanced() {
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.9, 0.1, 0.0]);
 
@@ -969,7 +969,7 @@ fn test_search_quality_balanced() {
 #[test]
 fn test_search_quality_custom_ef() {
     // Use more vectors to make HNSW more stable
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.9, 0.1, 0.0]);
     index.insert(3, &[0.8, 0.2, 0.0]);
@@ -994,7 +994,7 @@ fn test_hnsw_load_nonexistent_path() {
 
 #[test]
 fn test_hnsw_search_with_rerank_empty_index() {
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     let results = index.search_with_rerank(&[1.0, 0.0, 0.0], 10, 50);
     assert!(
         results.is_empty(),
@@ -1004,7 +1004,7 @@ fn test_hnsw_search_with_rerank_empty_index() {
 
 #[test]
 fn test_hnsw_search_with_rerank_dot_product() {
-    let index = HnswIndex::new(3, DistanceMetric::DotProduct);
+    let index = HnswIndex::new(3, DistanceMetric::DotProduct).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.5, 0.5, 0.0]);
     index.insert(3, &[0.0, 1.0, 0.0]);
@@ -1020,7 +1020,7 @@ fn test_hnsw_search_with_rerank_dot_product() {
 #[test]
 fn test_hnsw_io_holder_is_none_for_new_index() {
     // For newly created indices, io_holder should be None
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     // We can't directly access io_holder, but we can verify the index works
     // and drops without issues (no io_holder to manage)
     index.insert(1, &[1.0, 0.0, 0.0]);
@@ -1031,7 +1031,7 @@ fn test_hnsw_io_holder_is_none_for_new_index() {
 #[test]
 #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn test_hnsw_large_batch_parallel_insert() {
-    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+    let index = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
 
     // Create 200 vectors (reduced from 1000 for faster test execution)
     let vectors: Vec<(u64, Vec<f32>)> = (0..200)
@@ -1062,7 +1062,7 @@ fn test_hnsw_large_batch_parallel_insert() {
 fn test_search_with_rerank_768d_prefetch() {
     // Test adaptive prefetch for 768D vectors (3KB each)
     // prefetch_distance should be 768*4/64 = 48, clamped to 16
-    let index = HnswIndex::new(768, DistanceMetric::Cosine);
+    let index = HnswIndex::new(768, DistanceMetric::Cosine).unwrap();
 
     // Insert 100 vectors
     for i in 0u64..100 {
@@ -1084,7 +1084,7 @@ fn test_search_with_rerank_768d_prefetch() {
 fn test_search_with_rerank_small_dim_prefetch() {
     // Test adaptive prefetch for small vectors (32D = 128 bytes)
     // prefetch_distance should be 128/64 = 2, clamped to 4 (minimum)
-    let index = HnswIndex::new(32, DistanceMetric::Cosine);
+    let index = HnswIndex::new(32, DistanceMetric::Cosine).unwrap();
 
     for i in 0u64..50 {
         let v: Vec<f32> = (0..32)
@@ -1106,7 +1106,7 @@ fn test_search_with_rerank_small_dim_prefetch() {
 #[test]
 #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn test_search_batch_parallel_consistency() {
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Insert 100 vectors (reduced from 200 for faster test execution)
     for i in 0u64..100 {
@@ -1144,7 +1144,7 @@ fn test_search_batch_parallel_consistency() {
 
 #[test]
 fn test_search_batch_parallel_empty_queries() {
-    let index = HnswIndex::new(3, DistanceMetric::Cosine);
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
 
     let queries: Vec<&[f32]> = vec![];
@@ -1159,7 +1159,7 @@ fn test_search_batch_parallel_empty_queries() {
 #[test]
 #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn test_search_batch_parallel_large_batch() {
-    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+    let index = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
 
     // Insert 150 vectors (reduced from 500 for faster test execution)
     for i in 0u64..150 {
@@ -1201,7 +1201,7 @@ fn test_recall_quality_minimum_threshold() {
     let n = 500;
     let k = 10;
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
     // Generate deterministic dataset
     let dataset: Vec<Vec<f32>> = (0..n)
@@ -1249,7 +1249,7 @@ fn test_recall_quality_minimum_threshold() {
 
 #[test]
 fn test_rerank_latency_target_configuration_roundtrip() {
-    let index = HnswIndex::new(32, DistanceMetric::Cosine);
+    let index = HnswIndex::new(32, DistanceMetric::Cosine).unwrap();
     assert_eq!(index.rerank_latency_target_us(), 0);
 
     index.set_rerank_latency_target_us(250);
@@ -1258,7 +1258,7 @@ fn test_rerank_latency_target_configuration_roundtrip() {
 
 #[test]
 fn test_rerank_latency_ema_updates_after_two_stage_search() {
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
     index.set_rerank_latency_target_us(1);
 
     for i in 0u64..1500 {
@@ -1276,7 +1276,7 @@ fn test_rerank_latency_ema_updates_after_two_stage_search() {
 
 #[test]
 fn test_update_rerank_latency_ema_large_current_does_not_overflow() {
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     for i in 0u64..400 {
         let v: Vec<f32> = (0..64)
@@ -1301,7 +1301,7 @@ fn test_update_rerank_latency_ema_large_current_does_not_overflow() {
 
 #[test]
 fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression() {
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     for i in 0u64..2000 {
         let v: Vec<f32> = (0..64)
@@ -1319,7 +1319,7 @@ fn test_search_with_quality_custom_ef_uses_high_recall_path_without_regression()
 
 #[test]
 fn test_search_with_quality_accurate_stays_stable_on_medium_dataset() {
-    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+    let index = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
 
     for i in 0u64..5000 {
         let v: Vec<f32> = (0..128)
@@ -1341,7 +1341,7 @@ fn test_search_with_quality_accurate_stays_stable_on_medium_dataset() {
 
 #[test]
 fn test_brute_force_buffered_same_results_as_original() {
-    let index = HnswIndex::new(32, DistanceMetric::Cosine);
+    let index = HnswIndex::new(32, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors
     for i in 0u64..50 {
@@ -1366,7 +1366,7 @@ fn test_brute_force_buffered_same_results_as_original() {
 
 #[test]
 fn test_brute_force_buffered_empty_index() {
-    let index = HnswIndex::new(16, DistanceMetric::Euclidean);
+    let index = HnswIndex::new(16, DistanceMetric::Euclidean).unwrap();
     let query: Vec<f32> = vec![0.0; 16];
 
     let results = index.search_brute_force_buffered(&query, 5);
@@ -1382,7 +1382,7 @@ fn test_brute_force_buffered_all_metrics() {
         DistanceMetric::Hamming,
         DistanceMetric::Jaccard,
     ] {
-        let index = HnswIndex::new(8, metric);
+        let index = HnswIndex::new(8, metric).unwrap();
         index.insert(1, &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         index.insert(2, &[0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         index.insert(3, &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
@@ -1395,7 +1395,7 @@ fn test_brute_force_buffered_all_metrics() {
 
 #[test]
 fn test_brute_force_buffered_repeated_calls_stable() {
-    let index = HnswIndex::new(16, DistanceMetric::Cosine);
+    let index = HnswIndex::new(16, DistanceMetric::Cosine).unwrap();
 
     for i in 0u64..20 {
         let v: Vec<f32> = (0..16)
@@ -1425,7 +1425,7 @@ fn test_concurrent_search_stress() {
     use std::sync::Arc;
     use std::thread;
 
-    let index = Arc::new(HnswIndex::new(64, DistanceMetric::Cosine));
+    let index = Arc::new(HnswIndex::new(64, DistanceMetric::Cosine).unwrap());
 
     // Insert vectors
     for i in 0u64..100 {
@@ -1465,7 +1465,7 @@ fn test_all_distance_metrics_search_with_rerank() {
         DistanceMetric::Hamming,
         DistanceMetric::Jaccard,
     ] {
-        let index = HnswIndex::new(8, metric);
+        let index = HnswIndex::new(8, metric).unwrap();
         index.insert(1, &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         index.insert(2, &[0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
         index.insert(3, &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
@@ -1499,7 +1499,7 @@ fn test_drop_safety_loaded_index_no_segfault() {
 
     // 1. Create and save an index
     {
-        let index = HnswIndex::new(4, DistanceMetric::Cosine);
+        let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
         index.insert(1, &[1.0, 0.0, 0.0, 0.0]);
         index.insert(2, &[0.0, 1.0, 0.0, 0.0]);
         index.insert(3, &[0.0, 0.0, 1.0, 0.0]);
@@ -1530,7 +1530,7 @@ fn test_drop_safety_loaded_index_concurrent_drop() {
 
     // Create and save an index
     {
-        let index = HnswIndex::new(4, DistanceMetric::Cosine);
+        let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
         for i in 0u64..10 {
             let v = vec![i as f32, 0.0, 0.0, 0.0];
             index.insert(i, &v);
@@ -1571,7 +1571,7 @@ fn test_drop_safety_search_after_partial_operations() {
 
     // Create index with various operations
     {
-        let index = HnswIndex::new(8, DistanceMetric::Euclidean);
+        let index = HnswIndex::new(8, DistanceMetric::Euclidean).unwrap();
         for i in 0u64..20 {
             let v: Vec<f32> = (0..8).map(|j| (i + j) as f32 * 0.1).collect();
             index.insert(i, &v);
@@ -1620,7 +1620,7 @@ fn test_drop_stress_concurrent_create_destroy_loop() {
         let success = Arc::clone(&success_count);
 
         // Create index, perform operations, drop
-        let index = Arc::new(HnswIndex::new(16, DistanceMetric::Cosine));
+        let index = Arc::new(HnswIndex::new(16, DistanceMetric::Cosine).unwrap());
 
         // Spawn readers that will race with drop
         let handles: Vec<_> = (0..4)
@@ -1666,7 +1666,7 @@ fn test_drop_stress_load_search_destroy_cycle() {
 
     // Create and save initial index
     {
-        let index = HnswIndex::new(32, DistanceMetric::Euclidean);
+        let index = HnswIndex::new(32, DistanceMetric::Euclidean).unwrap();
         for i in 0u64..100 {
             let v: Vec<f32> = (0..32).map(|j| ((i + j) as f32).sin()).collect();
             index.insert(i, &v);
@@ -1700,7 +1700,7 @@ fn test_drop_stress_parallel_insert_then_drop() {
     // Use Euclidean to avoid cosine normalization requirements
     // Reduced iterations and batch size for faster test execution
     for _ in 0..5 {
-        let index = HnswIndex::new(64, DistanceMetric::Euclidean);
+        let index = HnswIndex::new(64, DistanceMetric::Euclidean).unwrap();
 
         // Generate batch data with reasonable magnitude (reduced from 500)
         let batch: Vec<(u64, Vec<f32>)> = (0..100)
@@ -1728,7 +1728,7 @@ fn test_drop_stress_parallel_insert_then_drop() {
 #[cfg(feature = "gpu")]
 fn test_search_brute_force_gpu_returns_same_results_as_cpu() {
     // TDD: GPU brute force must return identical results to CPU
-    let index = HnswIndex::new(128, DistanceMetric::Cosine);
+    let index = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
 
     // Insert test vectors
     for i in 0u64..100 {
@@ -1768,7 +1768,7 @@ fn test_search_brute_force_gpu_returns_same_results_as_cpu() {
 #[test]
 fn test_search_brute_force_gpu_fallback_to_none_without_gpu() {
     // TDD: Without GPU, should return None gracefully
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
     index.insert(1, &vec![0.5; 64]);
 
     let query = vec![0.5; 64];
@@ -1830,7 +1830,7 @@ mod proptest_tests {
                 1usize..=20
             )
         ) {
-            let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+            let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
             let mut inserted = 0usize;
 
             for (i, v) in vectors.into_iter().enumerate() {
@@ -1850,7 +1850,7 @@ mod proptest_tests {
             k in 1usize..=20,
             num_vectors in 5usize..=50
         ) {
-            let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+            let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
             // Insert random vectors
             for i in 0..num_vectors {
@@ -1870,7 +1870,7 @@ mod proptest_tests {
             dim in 8usize..=32,
             num_vectors in 3usize..=20
         ) {
-            let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+            let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
             // Insert vectors with known distances from origin
             for i in 0..num_vectors {
@@ -1894,7 +1894,7 @@ mod proptest_tests {
             dim in 16usize..=32,
             id_to_remove in 0u64..10
         ) {
-            let index = HnswIndex::new(dim, DistanceMetric::Cosine);
+            let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
 
             // Insert some vectors
             for i in 0u64..10 {
@@ -1917,7 +1917,7 @@ mod proptest_tests {
         fn prop_duplicate_insert_idempotent(
             dim in 16usize..=32
         ) {
-            let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+            let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
             let v: Vec<f32> = (0..dim).map(|j| j as f32 * 0.1).collect();
 
             index.insert(42, &v);
@@ -1935,7 +1935,7 @@ mod proptest_tests {
             dim in 16usize..=32,
             batch_size in 5usize..=30
         ) {
-            let index = HnswIndex::new(dim, DistanceMetric::Euclidean);
+            let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
             let batch: Vec<(u64, Vec<f32>)> = (0..batch_size)
                 .map(|i| {
@@ -1966,7 +1966,7 @@ mod proptest_tests {
 #[test]
 fn test_manuallydrop_pattern_integrity() {
     // Create an index and verify it can be dropped without issues
-    let index = HnswIndex::new(64, DistanceMetric::Cosine);
+    let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
 
     // Insert some data to ensure internal state is populated
     for i in 0..10 {
@@ -1993,7 +1993,7 @@ fn test_load_and_drop_safety() {
 
     // Create, populate, and save an index
     {
-        let index = HnswIndex::new(64, DistanceMetric::Cosine);
+        let index = HnswIndex::new(64, DistanceMetric::Cosine).unwrap();
         for i in 0..50 {
             let v: Vec<f32> = (0..64).map(|j| (i + j) as f32 * 0.01).collect();
             index.insert(i as u64, &v);

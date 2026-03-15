@@ -99,6 +99,7 @@ impl ProceduralMemory {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
 
+    #[allow(deprecated)]
     pub(crate) fn new(
         db: Arc<Database>,
         dimension: usize,
@@ -153,6 +154,7 @@ impl ProceduralMemory {
     ///
     /// Returns an error when embedding dimension is invalid, the collection is
     /// unavailable, or persistence fails.
+    #[allow(deprecated)]
     pub fn learn(
         &self,
         procedure_id: u64,
@@ -230,6 +232,7 @@ impl ProceduralMemory {
     ///
     /// Returns an error when embedding dimension is invalid, collection access fails,
     /// or vector search fails.
+    #[allow(deprecated)]
     pub fn recall(
         &self,
         query_embedding: &[f32],
@@ -295,6 +298,7 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when procedure retrieval or update fails.
+    #[allow(deprecated)]
     pub fn reinforce_with_strategy(
         &self,
         procedure_id: u64,
@@ -398,6 +402,7 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access fails.
+    #[allow(deprecated)]
     pub fn list_all(&self) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
         let collection = self
             .db
@@ -438,6 +443,7 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access or deletion fails.
+    #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
@@ -458,6 +464,7 @@ impl ProceduralMemory {
     /// # Errors
     ///
     /// Returns an error when collection access or JSON encoding fails.
+    #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = self
             .db
@@ -479,6 +486,7 @@ impl ProceduralMemory {
     ///
     /// Returns an error when JSON decoding fails, collection access fails,
     /// or persistence operations fail.
+    #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         if data.is_empty() {
             return Ok(());

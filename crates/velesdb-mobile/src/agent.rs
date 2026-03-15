@@ -36,6 +36,7 @@ pub struct VelesSemanticMemory {
 impl VelesSemanticMemory {
     /// Creates a new `VelesSemanticMemory` with the given embedding dimension.
     #[uniffi::constructor]
+    #[allow(deprecated)]
     pub fn new(db: &VelesDatabase, dimension: u32) -> Result<Self, VelesError> {
         let collection_name = "_semantic_memory";
 

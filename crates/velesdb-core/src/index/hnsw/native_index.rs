@@ -47,23 +47,33 @@ pub struct NativeHnswIndex {
 
 impl NativeHnswIndex {
     /// Creates a new native HNSW index with auto-tuned parameters.
-    #[must_use]
-    pub fn new(dimension: usize, metric: DistanceMetric) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    pub fn new(dimension: usize, metric: DistanceMetric) -> crate::error::Result<Self> {
         Self::with_params(dimension, metric, HnswParams::auto(dimension))
     }
 
     /// Creates a new native HNSW index with custom parameters.
-    #[must_use]
-    pub fn with_params(dimension: usize, metric: DistanceMetric, params: HnswParams) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    pub fn with_params(
+        dimension: usize,
+        metric: DistanceMetric,
+        params: HnswParams,
+    ) -> crate::error::Result<Self> {
         let inner = NativeHnswInner::new(
             metric,
             params.max_connections,
             params.max_elements,
             params.ef_construction,
             dimension,
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             dimension,
             metric,
             inner: RwLock::new(inner),
@@ -71,21 +81,27 @@ impl NativeHnswIndex {
             vectors: ShardedVectors::new(dimension),
             enable_vector_storage: true,
             params,
-        }
+        })
     }
 
     /// Creates a turbo mode index for maximum insert throughput.
-    #[must_use]
-    pub fn new_turbo(dimension: usize, metric: DistanceMetric) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    pub fn new_turbo(dimension: usize, metric: DistanceMetric) -> crate::error::Result<Self> {
         Self::with_params(dimension, metric, HnswParams::turbo())
     }
 
     /// Creates an index optimized for fast inserts (no vector storage).
-    #[must_use]
-    pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Self {
-        let mut index = Self::new(dimension, metric);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> crate::error::Result<Self> {
+        let mut index = Self::new(dimension, metric)?;
         index.enable_vector_storage = false;
-        index
+        Ok(index)
     }
 
     /// Saves the index to disk.
@@ -271,7 +287,11 @@ impl NativeHnswIndex {
     ///
     /// Internal mapping races are handled defensively: if a concurrent
     /// registration race violates the mapping invariant, insertion is skipped.
-    pub fn insert(&self, id: u64, vector: &[f32]) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if allocation or insertion fails.
+    pub fn insert(&self, id: u64, vector: &[f32]) -> crate::error::Result<()> {
         // Register ID and get internal index (or get existing)
         let internal_idx = self
             .mappings
@@ -282,20 +302,25 @@ impl NativeHnswIndex {
                 false,
                 "Invariant violated: register returned None but ID missing from mappings"
             );
-            return;
+            return Ok(());
         };
-        self.inner.read().insert((vector, internal_idx));
+        self.inner.read().insert((vector, internal_idx))?;
 
         if self.enable_vector_storage {
             self.vectors.insert(internal_idx, vector);
         }
+        Ok(())
     }
 
     /// Batch insert multiple vectors.
     ///
     /// Internal mapping races are handled defensively: if a concurrent
     /// registration race violates the mapping invariant, insertion is skipped.
-    pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any insertion fails.
+    pub fn insert_batch(&self, items: &[(u64, Vec<f32>)]) -> crate::error::Result<()> {
         let data: Vec<(Vec<f32>, usize)> = items
             .iter()
             .filter_map(|(id, vec)| {
@@ -315,13 +340,14 @@ impl NativeHnswIndex {
             .collect();
 
         let refs: Vec<(&Vec<f32>, usize)> = data.iter().map(|(v, i)| (v, *i)).collect();
-        self.inner.read().parallel_insert(&refs);
+        self.inner.read().parallel_insert(&refs)?;
 
         if self.enable_vector_storage {
             for (vec, idx) in data {
                 self.vectors.insert(idx, &vec);
             }
         }
+        Ok(())
     }
 
     /// Removes a vector by ID (marks as deleted in mappings).
@@ -350,7 +376,10 @@ impl NativeHnswIndex {
     {
         let items: Vec<_> = items.into_iter().collect();
         let count = items.len();
-        self.insert_batch(items.as_slice());
+        if let Err(e) = self.insert_batch(items.as_slice()) {
+            tracing::error!("insert_batch_parallel failed: {e}");
+            return 0;
+        }
         count
     }
 
@@ -432,7 +461,9 @@ impl NativeHnswIndex {
 
 impl VectorIndex for NativeHnswIndex {
     fn insert(&self, id: u64, vector: &[f32]) {
-        NativeHnswIndex::insert(self, id, vector);
+        if let Err(e) = NativeHnswIndex::insert(self, id, vector) {
+            tracing::error!("NativeHnswIndex::insert failed for id={id}: {e}");
+        }
     }
 
     fn remove(&self, id: u64) -> bool {

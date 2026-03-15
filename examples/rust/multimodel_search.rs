@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use velesdb_core::{Database, DistanceMetric, Point};
 
+#[allow(deprecated)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== VelesDB Multi-Model Search Example ===\n");
 
@@ -161,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 8. Example 5: Text-only search
     println!("--- Example 5: Text Search ---");
-    let text_results = collection.text_search("programming", 3);
+    let text_results = collection.text_search("programming", 3)?;
     println!("  Text search results for 'programming':");
     for result in &text_results {
         println!(

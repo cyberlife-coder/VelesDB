@@ -120,7 +120,17 @@ impl GraphCollection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    /// - Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{GraphCollection, GraphSchema, GraphEdge, DistanceMetric};
+    /// # let coll = GraphCollection::create("./data/kg".into(), "kg", None, DistanceMetric::Cosine, GraphSchema::schemaless())?;
+    /// let edge = GraphEdge::new(1, 100, 200, "KNOWS")?;
+    /// coll.add_edge(edge)?;
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         self.inner.add_edge(edge)
     }
@@ -169,6 +179,20 @@ impl GraphCollection {
     }
 
     /// Performs BFS traversal from a source node.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{GraphCollection, GraphSchema, GraphEdge, DistanceMetric};
+    /// # use velesdb_core::collection::graph::TraversalConfig;
+    /// # let coll = GraphCollection::create("./data/kg".into(), "kg", None, DistanceMetric::Cosine, GraphSchema::schemaless())?;
+    /// let config = TraversalConfig { max_depth: 3, ..TraversalConfig::default() };
+    /// let results = coll.traverse_bfs(100, &config);
+    /// for r in &results {
+    ///     println!("node={} depth={}", r.node_id, r.depth);
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn traverse_bfs(&self, source_id: u64, config: &TraversalConfig) -> Vec<TraversalResult> {
         self.inner.traverse_bfs_config(source_id, config)

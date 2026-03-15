@@ -263,4 +263,4 @@ let fast_sim = simd_native::cosine_similarity_fast(&a, &b);
 
 ## License
 
-VelesDB Core is licensed under Elastic License 2.0 (ELv2).
+VelesDB Core is licensed under VelesDB Core License 1.0.
