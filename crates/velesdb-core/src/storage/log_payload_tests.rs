@@ -1,6 +1,6 @@
 //! Tests for `log_payload` module
 
-use super::log_payload::{LogPayloadStorage, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
+use super::log_payload::{DurabilityMode, LogPayloadStorage, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
 use super::traits::PayloadStorage;
 
 use serde_json::json;
@@ -501,4 +501,102 @@ fn test_snapshot_entry_count_overflow() {
     // Act & Assert - Should NOT panic on overflow, should fall back to WAL
     let result = LogPayloadStorage::new(temp.path());
     assert!(result.is_ok(), "Should handle overflow gracefully");
+}
+
+// -------------------------------------------------------------------------
+// WAL durability mode tests (Phase 1 audit remediation)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_store_and_retrieve_with_fsync_mode() {
+    // Arrange — default mode is Fsync
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+        .expect("Create failed");
+    let payload = json!({"durability": "fsync"});
+
+    // Act
+    storage.store(1, &payload).expect("Store failed");
+    let retrieved = storage.retrieve(1).expect("Retrieve failed");
+
+    // Assert
+    assert_eq!(retrieved, Some(payload));
+}
+
+#[test]
+fn test_delete_persists_with_fsync_mode() {
+    // Arrange
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+        .expect("Create failed");
+    let payload = json!({"to_delete": true});
+    storage.store(1, &payload).expect("Store failed");
+
+    // Act
+    storage.delete(1).expect("Delete failed");
+
+    // Assert — gone from in-memory index
+    assert_eq!(storage.retrieve(1).expect("Retrieve failed"), None);
+
+    // Assert — survives reopen (WAL was synced)
+    drop(storage);
+    let reopened = LogPayloadStorage::new(temp.path()).expect("Reopen failed");
+    assert_eq!(reopened.retrieve(1).expect("Retrieve failed"), None);
+}
+
+#[test]
+fn test_durability_mode_none_does_not_crash() {
+    // Arrange — None mode skips all sync
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::None)
+        .expect("Create failed");
+
+    // Act — multiple operations should succeed without sync
+    for i in 1..=10 {
+        storage.store(i, &json!({"id": i})).expect("Store failed");
+    }
+    storage.delete(5).expect("Delete failed");
+    storage.flush().expect("Flush failed");
+
+    // Assert — data accessible in-memory
+    assert_eq!(storage.ids().len(), 9);
+    assert!(storage.retrieve(1).expect("Retrieve failed").is_some());
+    assert!(storage.retrieve(5).expect("Retrieve failed").is_none());
+}
+
+#[test]
+fn test_durability_mode_flush_only() {
+    // Arrange
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage =
+        LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::FlushOnly)
+            .expect("Create failed");
+
+    // Act
+    storage
+        .store(1, &json!({"mode": "flush_only"}))
+        .expect("Store failed");
+    storage.flush().expect("Flush failed");
+
+    // Assert — data accessible
+    let retrieved = storage.retrieve(1).expect("Retrieve failed");
+    assert_eq!(retrieved, Some(json!({"mode": "flush_only"})));
+}
+
+#[test]
+fn test_new_defaults_to_fsync() {
+    // Arrange & Act — new() should use Fsync by default
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("Create failed");
+    let payload = json!({"default": true});
+
+    storage.store(1, &payload).expect("Store failed");
+
+    // Assert — survives reopen (proves fsync was used)
+    drop(storage);
+    let reopened = LogPayloadStorage::new(temp.path()).expect("Reopen failed");
+    assert_eq!(
+        reopened.retrieve(1).expect("Retrieve failed"),
+        Some(payload)
+    );
 }

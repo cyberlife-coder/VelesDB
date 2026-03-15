@@ -1,4 +1,5 @@
 #![cfg(feature = "persistence")]
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use std::collections::HashMap;
 

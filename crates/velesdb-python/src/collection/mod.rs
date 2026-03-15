@@ -18,6 +18,7 @@ mod search;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+#[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 use velesdb_core::{
     Collection as CoreCollection, Filter, FusionStrategy as CoreFusionStrategy, SearchResult,
 };
@@ -27,11 +28,13 @@ use velesdb_core::{
 /// Collections store vectors with optional metadata (payload) and support
 /// efficient similarity search.
 #[pyclass]
+#[allow(deprecated)] // CoreCollection = legacy Collection, kept for backward compat.
 pub struct Collection {
     pub(crate) inner: Arc<CoreCollection>,
     pub(crate) name: String,
 }
 
+#[allow(deprecated)]
 impl Collection {
     /// Create a new Collection wrapper.
     pub fn new(inner: Arc<CoreCollection>, name: String) -> Self {

@@ -102,7 +102,9 @@ impl HnswIndex {
             to_insert.iter().map(|(idx, vec)| (vec, *idx)).collect();
 
         // RF-1: Using HnswInner parallel_insert method
-        self.inner.read().parallel_insert(&refs_for_hnsw);
+        if let Err(e) = self.inner.read().parallel_insert(&refs_for_hnsw) {
+            tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
+        }
 
         count
     }
@@ -125,7 +127,10 @@ impl HnswIndex {
         let count = to_insert.len();
 
         for (idx, vec) in &to_insert {
-            self.inner.write().insert((vec.as_slice(), *idx));
+            if let Err(e) = self.inner.write().insert((vec.as_slice(), *idx)) {
+                tracing::error!("insert_batch_sequential: insert failed: {e}");
+                continue;
+            }
             if self.enable_vector_storage {
                 self.vectors.insert(*idx, vec);
             }

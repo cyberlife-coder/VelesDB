@@ -1,4 +1,5 @@
 #![allow(clippy::pedantic)]
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;

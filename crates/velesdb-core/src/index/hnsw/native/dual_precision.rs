@@ -84,28 +84,30 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     /// * `max_connections` - M parameter (default: 16-64)
     /// * `ef_construction` - Construction-time ef (default: 100-400)
     /// * `max_elements` - Initial capacity
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
     pub fn new(
         distance: D,
         dimension: usize,
         max_connections: usize,
         ef_construction: usize,
         max_elements: usize,
-    ) -> Self {
-        Self {
+    ) -> crate::error::Result<Self> {
+        Ok(Self {
             inner: NativeHnsw::new_with_dimension(
                 distance,
                 max_connections,
                 ef_construction,
                 max_elements,
                 dimension,
-            ),
+            )?,
             quantizer: None,
             quantized_store: None,
             dimension,
             training_sample_size: 1000.min(max_elements),
             training_buffer: Vec::with_capacity(1000),
-        }
+        })
     }
 
     /// Returns the number of elements in the index.
@@ -130,7 +132,11 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
     ///
     /// The quantizer is trained lazily after `training_sample_size` vectors
     /// are inserted. After training, all subsequent vectors are quantized.
-    pub fn insert(&mut self, vector: Vec<f32>) -> NodeId {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if allocation or insertion fails.
+    pub fn insert(&mut self, vector: Vec<f32>) -> crate::error::Result<NodeId> {
         debug_assert_eq!(vector.len(), self.dimension);
 
         // F-13: Push to quantized store or training buffer using a reference

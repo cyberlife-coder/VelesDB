@@ -4,6 +4,7 @@ use crate::{Error, Result, SearchResult, StorageMode};
 
 use super::Database;
 
+#[allow(deprecated)] // Uses legacy Collection internally for quantizer training.
 impl Database {
     /// Executes a `TRAIN QUANTIZER` statement.
     ///
@@ -49,6 +50,7 @@ impl Database {
     }
 
     /// Resolves the collection referenced by a TRAIN statement.
+    #[allow(deprecated)]
     fn resolve_train_collection(
         &self,
         stmt: &crate::velesql::TrainStatement,

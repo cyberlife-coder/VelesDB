@@ -19,6 +19,7 @@
 //! use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 //! use serde_json::json;
 //!
+//! #[allow(deprecated)]
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Create a new database
 //!     let db = Database::open("./data")?;
@@ -156,9 +157,10 @@ pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 #[cfg(feature = "persistence")]
 pub use collection::streaming::BackpressureError;
 #[cfg(feature = "persistence")]
+#[allow(deprecated)] // Re-exports legacy Collection for backward compat.
 pub use collection::{
-    // Collection: internal executor kept pub for backward compat and internal modules.
-    // Suppression de l'export = PR dédiée (requiert ~40 corrections de références internes).
+    // MIGRATION: Collection is deprecated since 2.0.0.
+    // Use VectorCollection, GraphCollection, or MetadataCollection instead.
     Collection,
     // Diagnostics (US-006: embedded SDK health checks)
     CollectionDiagnostics,
@@ -178,10 +180,14 @@ pub use collection::{
     TraversalResult,
     ValueType,
     VectorCollection,
+    // Dimension validation bounds (VELES-032)
+    MAX_DIMENSION,
+    MIN_DIMENSION,
 };
 pub use distance::DistanceMetric;
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
+pub use perf_optimizations::pad_to_simd_width;
 pub use point::{Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
@@ -215,3 +221,5 @@ pub mod observer;
 pub use database::Database;
 #[cfg(feature = "persistence")]
 pub use observer::DatabaseObserver;
+#[cfg(feature = "persistence")]
+pub use storage::DurabilityMode;

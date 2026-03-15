@@ -191,6 +191,7 @@ fn generate_product_embedding(product: &Product, dim: usize) -> Vec<f32> {
 // MAIN DEMONSTRATION
 // ============================================================================
 
+#[allow(deprecated)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║     VelesDB E-commerce Recommendation Engine Demo                ║");

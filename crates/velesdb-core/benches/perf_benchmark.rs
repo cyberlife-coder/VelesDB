@@ -34,9 +34,9 @@ fn bench_random_access(c: &mut Criterion) {
     let count = 10_000;
 
     let vectors = generate_vectors(count, dimension);
-    let mut contiguous = ContiguousVectors::new(dimension, count);
+    let mut contiguous = ContiguousVectors::new(dimension, count).expect("bench");
     for v in &vectors {
-        contiguous.push(v);
+        contiguous.push(v).expect("bench");
     }
 
     // Random access pattern (simulates HNSW traversal)
@@ -96,9 +96,9 @@ fn bench_batch_dot_products(c: &mut Criterion) {
             .map(|i| i as f32 / dimension as f32)
             .collect();
 
-        let mut contiguous = ContiguousVectors::new(dimension, count);
+        let mut contiguous = ContiguousVectors::new(dimension, count).expect("bench");
         for v in &vectors {
-            contiguous.push(v);
+            contiguous.push(v).expect("bench");
         }
 
         let indices: Vec<usize> = (0..count).collect();
@@ -151,9 +151,9 @@ fn bench_insert_throughput(c: &mut Criterion) {
             &dimension,
             |b, &dim| {
                 b.iter(|| {
-                    let mut cv = ContiguousVectors::new(dim, count);
+                    let mut cv = ContiguousVectors::new(dim, count).expect("bench");
                     for v in &vectors {
-                        cv.push(v);
+                        cv.push(v).expect("bench");
                     }
                     black_box(cv.len())
                 })
@@ -165,9 +165,9 @@ fn bench_insert_throughput(c: &mut Criterion) {
             &dimension,
             |b, &dim| {
                 b.iter(|| {
-                    let mut cv = ContiguousVectors::new(dim, count);
+                    let mut cv = ContiguousVectors::new(dim, count).expect("bench");
                     let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-                    let added = cv.push_batch(refs.into_iter());
+                    let added = cv.push_batch(refs.into_iter()).expect("bench");
                     black_box(added)
                 })
             },
@@ -196,9 +196,9 @@ fn bench_memory_efficiency(c: &mut Criterion) {
     // Measure ContiguousVectors allocation
     group.bench_function("contiguous_allocation", |b| {
         b.iter(|| {
-            let mut cv = ContiguousVectors::new(dimension, count);
+            let mut cv = ContiguousVectors::new(dimension, count).expect("bench");
             for v in &vectors {
-                cv.push(v);
+                cv.push(v).expect("bench");
             }
             black_box(cv.len())
         })

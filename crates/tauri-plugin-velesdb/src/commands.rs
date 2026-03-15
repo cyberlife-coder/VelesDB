@@ -1,5 +1,5 @@
 //! Tauri commands for `VelesDB` operations exposed via IPC.
-#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_errors_doc, deprecated)]
 
 use crate::error::{CommandError, Error};
 use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
@@ -377,9 +377,9 @@ pub async fn text_search<R: Runtime>(
             let search_results = if let Some(ref filter_json) = filter {
                 let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
                     .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
-                coll.text_search_with_filter(&request.query, request.top_k, &filter)
+                coll.text_search_with_filter(&request.query, request.top_k, &filter)?
             } else {
-                coll.text_search(&request.query, request.top_k)
+                coll.text_search(&request.query, request.top_k)?
             };
             Ok(search_results
                 .into_iter()

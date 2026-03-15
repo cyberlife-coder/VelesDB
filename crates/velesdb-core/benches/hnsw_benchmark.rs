@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! HNSW Index Performance Benchmarks
 //!
 //! Run with: `cargo bench --bench hnsw_benchmark`

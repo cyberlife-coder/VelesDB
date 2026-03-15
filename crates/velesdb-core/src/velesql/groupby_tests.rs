@@ -1,5 +1,6 @@
 //! Tests for VelesQL GROUP BY (EPIC-017 US-003).
 #![cfg(all(test, feature = "persistence"))]
+#![allow(deprecated)] // Tests use legacy Collection.
 
 use crate::distance::DistanceMetric;
 use crate::point::Point;

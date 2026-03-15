@@ -176,25 +176,25 @@ impl Collection {
         cond: &crate::velesql::Condition,
         execution_limit: usize,
         skip_metadata_prefilter_for_graph_or: bool,
-    ) -> Vec<SearchResult> {
+    ) -> Result<Vec<SearchResult>> {
         if let crate::velesql::Condition::Match(ref m) = cond {
             return self.text_search(&m.query, execution_limit);
         }
         let empty_filter =
             || crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] });
         if skip_metadata_prefilter_for_graph_or {
-            return self.execute_scan_query(&empty_filter(), execution_limit);
+            return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
         }
         if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
             if let Some(indexed) =
                 self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
             {
-                return indexed;
+                return Ok(indexed);
             }
             let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-            return self.execute_scan_query(&filter, execution_limit);
+            return Ok(self.execute_scan_query(&filter, execution_limit));
         }
-        self.execute_scan_query(&empty_filter(), execution_limit)
+        Ok(self.execute_scan_query(&empty_filter(), execution_limit))
     }
 
     #[allow(clippy::too_many_arguments)] // All arguments come from query extraction in the caller.
@@ -271,7 +271,7 @@ impl Collection {
                 cond,
                 execution_limit,
                 skip_metadata_prefilter_for_graph_or,
-            ),
+            )?,
             // SELECT * (no WHERE)
             (None, None, None) => self.execute_scan_query(
                 &crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] }),

@@ -5,7 +5,8 @@
 #![allow(
     clippy::uninlined_format_args,
     clippy::cast_precision_loss,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    deprecated
 )]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

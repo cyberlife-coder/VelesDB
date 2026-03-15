@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! Multi-distribution PQ recall accuracy benchmark suite (5K vectors, 128d).
 //!
 //! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods across

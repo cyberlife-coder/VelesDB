@@ -1,4 +1,5 @@
 #![cfg(feature = "persistence")]
+#![allow(deprecated)] // Tests use legacy Collection.
 //! Integration tests for completed EPICs features.
 //!
 //! These tests verify end-to-end functionality of features marked as DONE in EPICs.
@@ -561,7 +562,7 @@ mod cross_epic_integration {
         assert!(!vector_results.is_empty());
 
         // Text search
-        let text_results = collection.text_search("programming", 10);
+        let text_results = collection.text_search("programming", 10).unwrap();
         assert!(!text_results.is_empty(), "Text search should find results");
 
         // Hybrid search

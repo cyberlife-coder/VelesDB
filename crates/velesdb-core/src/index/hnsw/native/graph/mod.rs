@@ -80,23 +80,26 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with a known vector dimension.
     ///
     /// Pre-allocates contiguous vector storage for cache-friendly access.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vector storage allocation fails.
     pub fn new_with_dimension(
         distance: D,
         max_connections: usize,
         ef_construction: usize,
         max_elements: usize,
         dimension: usize,
-    ) -> Self {
-        let storage = ContiguousVectors::new(dimension, max_elements);
-        Self::build(
+    ) -> crate::error::Result<Self> {
+        let storage = ContiguousVectors::new(dimension, max_elements)?;
+        Ok(Self::build(
             distance,
             max_connections,
             ef_construction,
             max_elements,
             1.0,
             Some(storage),
-        )
+        ))
     }
 
     /// Creates a new native HNSW index with VAMANA-style diversification.

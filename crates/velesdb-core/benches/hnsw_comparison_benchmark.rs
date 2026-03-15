@@ -43,7 +43,7 @@ fn bench_insert(c: &mut Criterion) {
             let distance = SimdDistance::new(DistanceMetric::Euclidean);
             let hnsw = NativeHnsw::new(distance, 16, 200, N_VECTORS);
             for (i, v) in vectors.iter().enumerate() {
-                hnsw.insert(v.clone());
+                hnsw.insert(v.clone()).expect("bench");
                 black_box(i);
             }
             black_box(&hnsw);
@@ -75,7 +75,7 @@ fn bench_search(c: &mut Criterion) {
     let native_distance = SimdDistance::new(DistanceMetric::Euclidean);
     let native_hnsw = NativeHnsw::new(native_distance, 16, 200, N_VECTORS);
     for v in &vectors {
-        native_hnsw.insert(v.clone());
+        native_hnsw.insert(v.clone()).expect("bench");
     }
 
     // Build hnsw_rs index
@@ -121,7 +121,7 @@ fn bench_parallel_insert(c: &mut Criterion) {
             let hnsw = NativeHnsw::new(distance, 16, 200, N_VECTORS);
             let data: Vec<(&Vec<f32>, usize)> =
                 vectors.iter().enumerate().map(|(i, v)| (v, i)).collect();
-            hnsw.parallel_insert(&data);
+            hnsw.parallel_insert(&data).expect("bench");
             black_box(&hnsw);
         });
     });

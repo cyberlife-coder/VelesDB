@@ -403,18 +403,21 @@ impl VelesCollection {
     /// # Returns
     ///
     /// Vector of search results sorted by BM25 score.
-    pub fn text_search(&self, query: String, limit: u32) -> Vec<SearchResult> {
+    pub fn text_search(&self, query: String, limit: u32) -> Result<Vec<SearchResult>, VelesError> {
         let results = self
             .inner
-            .text_search(&query, usize::try_from(limit).unwrap_or(usize::MAX));
+            .text_search(&query, usize::try_from(limit).unwrap_or(usize::MAX))
+            .map_err(|e| VelesError::Database {
+                message: format!("Text search failed: {e}"),
+            })?;
 
-        results
+        Ok(results
             .into_iter()
             .map(|r| SearchResult {
                 id: r.point.id,
                 score: r.score,
             })
-            .collect()
+            .collect())
     }
 
     /// Performs hybrid search combining vector similarity and BM25 text search.
@@ -564,11 +567,16 @@ impl VelesCollection {
                 message: format!("Invalid filter JSON: {e}"),
             })?;
 
-        let results = self.inner.text_search_with_filter(
-            &query,
-            usize::try_from(limit).unwrap_or(usize::MAX),
-            &filter,
-        );
+        let results = self
+            .inner
+            .text_search_with_filter(
+                &query,
+                usize::try_from(limit).unwrap_or(usize::MAX),
+                &filter,
+            )
+            .map_err(|e| VelesError::Database {
+                message: format!("Text search with filter failed: {e}"),
+            })?;
 
         Ok(results
             .into_iter()

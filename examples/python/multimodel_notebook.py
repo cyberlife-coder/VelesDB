@@ -66,13 +66,15 @@ def generate_embedding(seed: float, dim: int = 384) -> list[float]:
     return np.random.randn(dim).astype(np.float32).tolist()
 
 # Insert documents
+points = []
 for doc in documents:
     embedding = generate_embedding(doc["id"] * 0.1)
-    collection.upsert(
-        id=doc["id"],
-        vector=embedding,
-        payload={"title": doc["title"], "category": doc["category"], "tags": doc["tags"]}
-    )
+    points.append({
+        "id": doc["id"],
+        "vector": embedding,
+        "payload": {"title": doc["title"], "category": doc["category"], "tags": doc["tags"]},
+    })
+collection.upsert(points)
 
 print(f"Inserted {len(documents)} documents")
 

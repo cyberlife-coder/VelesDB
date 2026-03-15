@@ -14,6 +14,7 @@
 //! - Graph collections for knowledge graph storage (nodes, edges, traversal)
 //! - Async operations via `spawn_blocking` (EPIC-034/US-005)
 #![allow(clippy::doc_markdown)] // Collection docs contain many API/algorithm identifiers.
+#![allow(deprecated)] // Collection is deprecated but used internally throughout this module tree.
 
 pub mod async_ops;
 #[cfg(test)]
@@ -47,7 +48,7 @@ mod e2e_integration_tests;
 #[cfg(test)]
 mod set_operations_execution_tests;
 
-pub use core::IndexInfo;
+pub use core::{IndexInfo, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,

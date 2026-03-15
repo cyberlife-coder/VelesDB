@@ -105,3 +105,111 @@ fn test_default_collection_omits_hnsw_params_from_json() {
         "config.json should not contain hnsw_params when None"
     );
 }
+
+// ── Dimension validation tests (VELES-032) ──────────────────────────
+
+/// Helper: extracts the error from a `Result<Collection, Error>`, panicking
+/// if the result is `Ok`. We cannot use `unwrap_err` because `Collection`
+/// does not implement `Debug`.
+fn expect_err(result: crate::error::Result<Collection>) -> crate::Error {
+    match result {
+        Err(e) => e,
+        Ok(_) => panic!("expected Err, got Ok"),
+    }
+}
+
+/// Dimension 0 must be rejected.
+#[test]
+fn test_create_rejects_zero_dimension() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let result = Collection::create(PathBuf::from(temp_dir.path()), 0, DistanceMetric::Cosine);
+    let err = expect_err(result);
+    assert_eq!(err.code(), "VELES-032");
+}
+
+/// Dimension above `MAX_DIMENSION` must be rejected.
+#[test]
+fn test_create_rejects_oversized_dimension() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let result = Collection::create(
+        PathBuf::from(temp_dir.path()),
+        100_000,
+        DistanceMetric::Cosine,
+    );
+    let err = expect_err(result);
+    assert_eq!(err.code(), "VELES-032");
+}
+
+/// Minimum valid dimension (1) must be accepted.
+#[test]
+fn test_create_accepts_min_dimension() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let result = Collection::create(PathBuf::from(temp_dir.path()), 1, DistanceMetric::Cosine);
+    assert!(result.is_ok(), "dimension 1 should be accepted");
+}
+
+/// Maximum valid dimension (65,536) must be accepted.
+#[test]
+fn test_create_accepts_max_dimension() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let result = Collection::create(
+        PathBuf::from(temp_dir.path()),
+        65_536,
+        DistanceMetric::Cosine,
+    );
+    assert!(result.is_ok(), "dimension 65_536 should be accepted");
+}
+
+/// `create_with_hnsw_params` must also validate dimension.
+#[test]
+fn test_create_with_hnsw_params_rejects_zero_dimension() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let params = HnswParams::custom(16, 200, 10_000);
+    let result = Collection::create_with_hnsw_params(
+        PathBuf::from(temp_dir.path()),
+        0,
+        DistanceMetric::Cosine,
+        StorageMode::Full,
+        params,
+    );
+    let err = expect_err(result);
+    assert_eq!(err.code(), "VELES-032");
+}
+
+/// Graph collection with `Some(0)` embedding dim must be rejected.
+#[test]
+fn test_graph_collection_rejects_zero_embedding_dim() {
+    use crate::collection::graph::GraphSchema;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let schema = GraphSchema::new();
+    let result = Collection::create_graph_collection(
+        PathBuf::from(temp_dir.path()),
+        "test_graph",
+        schema,
+        Some(0),
+        DistanceMetric::Cosine,
+    );
+    let err = expect_err(result);
+    assert_eq!(err.code(), "VELES-032");
+}
+
+/// Graph collection with `None` embedding dim must be accepted (no vectors).
+#[test]
+fn test_graph_collection_accepts_none_embedding_dim() {
+    use crate::collection::graph::GraphSchema;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let schema = GraphSchema::new();
+    let result = Collection::create_graph_collection(
+        PathBuf::from(temp_dir.path()),
+        "test_graph",
+        schema,
+        None,
+        DistanceMetric::Cosine,
+    );
+    assert!(
+        result.is_ok(),
+        "embedding_dim None should be accepted for graph collections"
+    );
+}

@@ -1,7 +1,7 @@
 //! Tests for `perf_optimizations` module - Contiguous vector storage.
 
 use crate::perf_optimizations::{
-    batch_cosine_similarities, batch_dot_products_simd, ContiguousVectors,
+    batch_cosine_similarities, batch_dot_products_simd, pad_to_simd_width, ContiguousVectors,
 };
 
 const EPSILON: f32 = 1e-5;
@@ -12,7 +12,7 @@ const EPSILON: f32 = 1e-5;
 
 #[test]
 fn test_contiguous_vectors_new() {
-    let cv = ContiguousVectors::new(768, 100);
+    let cv = ContiguousVectors::new(768, 100).expect("test");
     assert_eq!(cv.dimension(), 768);
     assert_eq!(cv.len(), 0);
     assert!(cv.is_empty());
@@ -21,14 +21,14 @@ fn test_contiguous_vectors_new() {
 
 #[test]
 fn test_contiguous_vectors_push() {
-    let mut cv = ContiguousVectors::new(3, 10);
+    let mut cv = ContiguousVectors::new(3, 10).expect("test");
     let v1 = vec![1.0, 2.0, 3.0];
     let v2 = vec![4.0, 5.0, 6.0];
 
-    cv.push(&v1);
+    cv.push(&v1).expect("test");
     assert_eq!(cv.len(), 1);
 
-    cv.push(&v2);
+    cv.push(&v2).expect("test");
     assert_eq!(cv.len(), 2);
 
     let retrieved = cv.get(0).unwrap();
@@ -41,13 +41,13 @@ fn test_contiguous_vectors_push() {
 #[allow(clippy::cast_precision_loss)]
 #[test]
 fn test_contiguous_vectors_push_batch() {
-    let mut cv = ContiguousVectors::new(128, 100);
+    let mut cv = ContiguousVectors::new(128, 100).expect("test");
     let vectors: Vec<Vec<f32>> = (0..50)
         .map(|i| (0..128).map(|j| (i * 128 + j) as f32).collect())
         .collect();
 
     let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-    let added = cv.push_batch(refs.into_iter());
+    let added = cv.push_batch(refs.into_iter()).expect("test");
 
     assert_eq!(added, 50);
     assert_eq!(cv.len(), 50);
@@ -56,12 +56,12 @@ fn test_contiguous_vectors_push_batch() {
 #[allow(clippy::cast_precision_loss)]
 #[test]
 fn test_contiguous_vectors_grow() {
-    let mut cv = ContiguousVectors::new(64, 16);
+    let mut cv = ContiguousVectors::new(64, 16).expect("test");
     let vector: Vec<f32> = (0..64).map(|i| i as f32).collect();
 
     // Push more than initial capacity
     for _ in 0..50 {
-        cv.push(&vector);
+        cv.push(&vector).expect("test");
     }
 
     assert_eq!(cv.len(), 50);
@@ -76,21 +76,23 @@ fn test_contiguous_vectors_grow() {
 
 #[test]
 fn test_contiguous_vectors_get_out_of_bounds() {
-    let cv = ContiguousVectors::new(3, 10);
+    let cv = ContiguousVectors::new(3, 10).expect("test");
     assert!(cv.get(0).is_none());
     assert!(cv.get(100).is_none());
 }
 
 #[test]
-#[should_panic(expected = "dimension mismatch")]
-fn test_contiguous_vectors_dimension_mismatch() {
-    let mut cv = ContiguousVectors::new(3, 10);
-    cv.push(&[1.0, 2.0]); // Wrong dimension
+fn test_contiguous_vectors_dimension_mismatch_returns_error() {
+    let mut cv = ContiguousVectors::new(3, 10).expect("test");
+    let result = cv.push(&[1.0, 2.0]); // Wrong dimension
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "VELES-004");
 }
 
 #[test]
 fn test_contiguous_vectors_memory_bytes() {
-    let cv = ContiguousVectors::new(768, 1000);
+    let cv = ContiguousVectors::new(768, 1000).expect("test");
     let expected = 1000 * 768 * 4; // capacity * dimension * sizeof(f32)
     assert!(cv.memory_bytes() >= expected);
 }
@@ -98,10 +100,10 @@ fn test_contiguous_vectors_memory_bytes() {
 #[allow(clippy::cast_precision_loss)]
 #[test]
 fn test_contiguous_vectors_prefetch() {
-    let mut cv = ContiguousVectors::new(64, 100);
+    let mut cv = ContiguousVectors::new(64, 100).expect("test");
     for i in 0..50 {
         let v: Vec<f32> = (0..64).map(|j| (i * 64 + j) as f32).collect();
-        cv.push(&v);
+        cv.push(&v).expect("test");
     }
 
     // Should not panic
@@ -113,9 +115,9 @@ fn test_contiguous_vectors_prefetch() {
 
 #[test]
 fn test_contiguous_vectors_dot_product() {
-    let mut cv = ContiguousVectors::new(3, 10);
-    cv.push(&[1.0, 0.0, 0.0]);
-    cv.push(&[0.0, 1.0, 0.0]);
+    let mut cv = ContiguousVectors::new(3, 10).expect("test");
+    cv.push(&[1.0, 0.0, 0.0]).expect("test");
+    cv.push(&[0.0, 1.0, 0.0]).expect("test");
 
     let query = vec![1.0, 0.0, 0.0];
 
@@ -129,7 +131,7 @@ fn test_contiguous_vectors_dot_product() {
 #[allow(clippy::cast_precision_loss)]
 #[test]
 fn test_contiguous_vectors_batch_dot_products() {
-    let mut cv = ContiguousVectors::new(64, 100);
+    let mut cv = ContiguousVectors::new(64, 100).expect("test");
 
     // Add normalized vectors
     for i in 0..50 {
@@ -140,7 +142,7 @@ fn test_contiguous_vectors_batch_dot_products() {
                 *x /= norm;
             }
         }
-        cv.push(&v);
+        cv.push(&v).expect("test");
     }
 
     let query: Vec<f32> = (0..64).map(|i| i as f32 / 64.0).collect();
@@ -185,6 +187,50 @@ fn test_batch_cosine_similarities() {
 }
 
 // =========================================================================
+// SIMD Padding Tests
+// =========================================================================
+
+#[test]
+fn test_pad_to_simd_width_empty() {
+    let padded = pad_to_simd_width(&[]);
+    assert!(padded.is_empty());
+}
+
+#[test]
+fn test_pad_to_simd_width_already_aligned() {
+    let v: Vec<f32> = (0..8_u8).map(f32::from).collect();
+    let padded = pad_to_simd_width(&v);
+    assert_eq!(padded.len(), 8);
+    assert_eq!(&padded[..], &v[..]);
+}
+
+#[test]
+fn test_pad_to_simd_width_needs_padding() {
+    let v = vec![1.0_f32, 2.0, 3.0];
+    let padded = pad_to_simd_width(&v);
+    assert_eq!(padded.len(), 8);
+    assert_eq!(&padded[..3], &[1.0, 2.0, 3.0]);
+    assert_eq!(&padded[3..], &[0.0; 5]);
+}
+
+#[test]
+fn test_pad_to_simd_width_rounds_up_to_next_multiple() {
+    let v = vec![1.0_f32; 9];
+    let padded = pad_to_simd_width(&v);
+    assert_eq!(padded.len(), 16);
+    assert_eq!(&padded[..9], &[1.0; 9]);
+    assert_eq!(&padded[9..], &[0.0; 7]);
+}
+
+#[test]
+fn test_pad_to_simd_width_exact_multiple_16() {
+    let v = vec![0.5_f32; 16];
+    let padded = pad_to_simd_width(&v);
+    assert_eq!(padded.len(), 16);
+    assert_eq!(&padded[..], &v[..]);
+}
+
+// =========================================================================
 // Performance-Critical Tests
 // =========================================================================
 
@@ -192,11 +238,11 @@ fn test_batch_cosine_similarities() {
 #[test]
 fn test_contiguous_large_dimension() {
     // Test with BERT-like dimensions (768D)
-    let mut cv = ContiguousVectors::new(768, 1000);
+    let mut cv = ContiguousVectors::new(768, 1000).expect("test");
 
     for i in 0..100 {
         let v: Vec<f32> = (0..768).map(|j| ((i + j) % 100) as f32 / 100.0).collect();
-        cv.push(&v);
+        cv.push(&v).expect("test");
     }
 
     assert_eq!(cv.len(), 100);
@@ -210,11 +256,11 @@ fn test_contiguous_large_dimension() {
 #[test]
 fn test_contiguous_gpt4_dimension() {
     // Test with GPT-4 dimensions (1536D)
-    let mut cv = ContiguousVectors::new(1536, 100);
+    let mut cv = ContiguousVectors::new(1536, 100).expect("test");
 
     for i in 0..20 {
         let v: Vec<f32> = (0..1536).map(|j| ((i + j) % 100) as f32 / 100.0).collect();
-        cv.push(&v);
+        cv.push(&v).expect("test");
     }
 
     assert_eq!(cv.len(), 20);
@@ -228,9 +274,9 @@ fn test_contiguous_gpt4_dimension() {
 #[test]
 fn test_get_unchecked_valid_index() {
     // Arrange
-    let mut cv = ContiguousVectors::new(3, 10);
-    cv.push(&[1.0, 2.0, 3.0]);
-    cv.push(&[4.0, 5.0, 6.0]);
+    let mut cv = ContiguousVectors::new(3, 10).expect("test");
+    cv.push(&[1.0, 2.0, 3.0]).expect("test");
+    cv.push(&[4.0, 5.0, 6.0]).expect("test");
 
     // Act - Valid indices should work
     // SAFETY: `get_unchecked` requires index < count.
@@ -249,8 +295,8 @@ fn test_get_unchecked_valid_index() {
 #[should_panic(expected = "index out of bounds")]
 fn test_get_unchecked_panics_on_invalid_index_in_debug() {
     // Arrange
-    let mut cv = ContiguousVectors::new(3, 10);
-    cv.push(&[1.0, 2.0, 3.0]);
+    let mut cv = ContiguousVectors::new(3, 10).expect("test");
+    cv.push(&[1.0, 2.0, 3.0]).expect("test");
 
     // Act - Out of bounds index should panic in debug mode
     // SAFETY: Intentionally calling `get_unchecked` with an invalid index.
@@ -264,9 +310,9 @@ fn test_get_unchecked_panics_on_invalid_index_in_debug() {
 #[should_panic(expected = "index out of bounds")]
 fn test_get_unchecked_panics_on_boundary_index_in_debug() {
     // Arrange
-    let mut cv = ContiguousVectors::new(3, 10);
-    cv.push(&[1.0, 2.0, 3.0]);
-    cv.push(&[4.0, 5.0, 6.0]);
+    let mut cv = ContiguousVectors::new(3, 10).expect("test");
+    cv.push(&[1.0, 2.0, 3.0]).expect("test");
+    cv.push(&[4.0, 5.0, 6.0]).expect("test");
 
     // Act - Index == count should panic (off by one)
     // SAFETY: Intentionally calling `get_unchecked` with index == count.
@@ -283,19 +329,19 @@ fn test_get_unchecked_panics_on_boundary_index_in_debug() {
 #[test]
 fn test_resize_preserves_data_integrity() {
     // Arrange
-    let mut cv = ContiguousVectors::new(64, 16);
+    let mut cv = ContiguousVectors::new(64, 16).expect("test");
     let vectors: Vec<Vec<f32>> = (0..10)
         .map(|i| (0..64).map(|j| (i * 64 + j) as f32).collect())
         .collect();
 
     for v in &vectors {
-        cv.push(v);
+        cv.push(v).expect("test");
     }
 
     // Act - Force resize by adding more vectors
     for i in 10..100 {
         let v: Vec<f32> = (0..64).map(|j| (i * 64 + j) as f32).collect();
-        cv.push(&v);
+        cv.push(&v).expect("test");
     }
 
     // Assert - Original vectors should be intact
@@ -313,12 +359,12 @@ fn test_resize_preserves_data_integrity() {
 #[test]
 fn test_resize_multiple_times() {
     // Arrange - Start with minimal capacity
-    let mut cv = ContiguousVectors::new(128, 16);
+    let mut cv = ContiguousVectors::new(128, 16).expect("test");
 
     // Act - Trigger multiple resizes
     for i in 0..500 {
         let v: Vec<f32> = (0..128).map(|j| (i * 128 + j) as f32).collect();
-        cv.push(&v);
+        cv.push(&v).expect("test");
     }
 
     // Assert
@@ -340,12 +386,12 @@ fn test_resize_multiple_times() {
 fn test_drop_after_resize_no_leak() {
     // Arrange - Create and resize multiple times
     for _ in 0..10 {
-        let mut cv = ContiguousVectors::new(256, 8);
+        let mut cv = ContiguousVectors::new(256, 8).expect("test");
 
         // Trigger multiple resizes
         for i in 0..100 {
             let v: Vec<f32> = (0..256).map(|j| (i + j) as f32).collect();
-            cv.push(&v);
+            cv.push(&v).expect("test");
         }
 
         // cv is dropped here - should not leak memory
@@ -358,17 +404,38 @@ fn test_drop_after_resize_no_leak() {
 #[test]
 fn test_ensure_capacity_idempotent() {
     // Arrange
-    let mut cv = ContiguousVectors::new(64, 100);
-    cv.push(&vec![1.0; 64]);
+    let mut cv = ContiguousVectors::new(64, 100).expect("test");
+    cv.push(&vec![1.0; 64]).expect("test");
 
     let initial_capacity = cv.capacity();
 
     // Act - Call ensure_capacity multiple times with same value
-    cv.ensure_capacity(50);
-    cv.ensure_capacity(50);
-    cv.ensure_capacity(50);
+    cv.ensure_capacity(50).expect("test");
+    cv.ensure_capacity(50).expect("test");
+    cv.ensure_capacity(50).expect("test");
 
     // Assert - Capacity should not change
     assert_eq!(cv.capacity(), initial_capacity);
     assert_eq!(cv.len(), 1);
+}
+
+// =========================================================================
+// P2 Audit: Error handling tests (no panics in production)
+// =========================================================================
+
+#[test]
+fn test_new_zero_dimension_returns_error() {
+    let result = ContiguousVectors::new(0, 100);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "VELES-032");
+}
+
+#[test]
+fn test_new_overflow_dimension_returns_error() {
+    // Requesting absurd sizes should return AllocationFailed, not panic
+    let result = ContiguousVectors::new(usize::MAX / 2, usize::MAX / 2);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "VELES-033");
 }

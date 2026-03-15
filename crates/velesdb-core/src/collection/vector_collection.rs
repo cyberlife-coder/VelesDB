@@ -190,16 +190,44 @@ impl VectorCollection {
         self.inner.upsert_bulk(points)
     }
 
-    /// Inserts or updates points.
+    /// Inserts or updates points in the collection.
     ///
     /// # Errors
     ///
-    /// Returns an error if the dimension mismatches or storage fails.
+    /// - Returns an error if any point's dimension does not match the collection.
+    /// - Returns an error if storage operations fail.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, Point, StorageMode};
+    /// # use serde_json::json;
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// coll.upsert(vec![
+    ///     Point::new(1, vec![0.1; 128], Some(json!({"title": "Hello"}))),
+    ///     Point::new(2, vec![0.2; 128], None),
+    /// ])?;
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         self.inner.upsert(points)
     }
 
-    /// Retrieves points by IDs.
+    /// Retrieves points by IDs, returning `None` for missing entries.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let points = coll.get(&[1, 2, 3]);
+    /// for (id, maybe_point) in [1, 2, 3].iter().zip(&points) {
+    ///     if let Some(p) = maybe_point {
+    ///         println!("Found point {id} with payload {:?}", p.metadata);
+    ///     }
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
         self.inner.get(ids)
@@ -207,9 +235,20 @@ impl VectorCollection {
 
     /// Deletes points by IDs.
     ///
+    /// Missing IDs are silently ignored.
+    ///
     /// # Errors
     ///
-    /// Returns an error if storage operations fail.
+    /// - Returns an error if storage operations fail.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// coll.delete(&[1, 2, 3])?;
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
         self.inner.delete(ids)
     }
@@ -218,20 +257,57 @@ impl VectorCollection {
     // Search — all delegate to inner
     // -------------------------------------------------------------------------
 
-    /// Performs kNN vector search.
+    /// Performs kNN vector search using the HNSW index.
+    ///
+    /// Returns the `k` nearest neighbors ordered by ascending distance.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if the HNSW index is not initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let results = coll.search(&vec![0.1; 128], 10)?;
+    /// for r in &results {
+    ///     println!("id={} score={}", r.id, r.score);
+    /// }
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.inner.search(query, k)
     }
 
-    /// Performs full-text BM25 search.
-    #[must_use]
-    pub fn text_search(&self, query: &str, k: usize) -> Vec<SearchResult> {
+    /// Performs full-text BM25 search over indexed payload fields.
+    ///
+    /// Returns up to `k` results ranked by BM25 relevance score.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if storage retrieval fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let results = coll.text_search("machine learning", 5)?;
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
+    pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         self.inner.text_search(query, k)
     }
 
-    /// kNN search with explicit ef_search override.
+    /// Performs kNN search with an explicit `ef_search` override.
+    ///
+    /// Higher `ef_search` values improve recall at the cost of latency.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
     pub fn search_with_ef(
         &self,
         query: &[f32],
@@ -241,8 +317,12 @@ impl VectorCollection {
         self.inner.search_with_ef(query, k, ef_search)
     }
 
-    /// kNN search with metadata filter.
+    /// Performs kNN search with a metadata filter applied post-retrieval.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if the filter references an unsupported field type.
     pub fn search_with_filter(
         &self,
         query: &[f32],
@@ -253,24 +333,48 @@ impl VectorCollection {
     }
 
     /// Returns `(id, score)` pairs without payload hydration.
+    ///
+    /// Faster than [`search`](Self::search) when only IDs and scores are needed.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         self.inner.search_ids(query, k)
     }
 
     /// Full-text search with metadata filter.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage retrieval fails.
     pub fn text_search_with_filter(
         &self,
         query: &str,
         k: usize,
         filter: &crate::filter::Filter,
-    ) -> Vec<SearchResult> {
+    ) -> Result<Vec<SearchResult>> {
         self.inner.text_search_with_filter(query, k, filter)
     }
 
-    /// Hybrid search (vector + BM25 with RRF fusion).
+    /// Performs hybrid search combining vector kNN and BM25 full-text via RRF fusion.
+    ///
+    /// When `alpha` is `None`, a default blending factor is used. Values closer
+    /// to `1.0` weight vector results more; values closer to `0.0` weight text.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if text indexing or storage retrieval fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let results = coll.hybrid_search(&vec![0.1; 128], "machine learning", 10, Some(0.7))?;
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn hybrid_search(
         &self,
         vector: &[f32],
@@ -281,8 +385,12 @@ impl VectorCollection {
         self.inner.hybrid_search(vector, text, k, alpha)
     }
 
-    /// Hybrid search with metadata filter.
+    /// Performs hybrid search (vector + BM25) with a metadata filter.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if text indexing, storage, or filtering fails.
     pub fn hybrid_search_with_filter(
         &self,
         vector: &[f32],
@@ -295,8 +403,31 @@ impl VectorCollection {
             .hybrid_search_with_filter(vector, text, k, alpha, filter)
     }
 
-    /// Batch search with per-query filters.
+    /// Performs batch kNN search with per-query metadata filters.
+    ///
+    /// Each query in `queries` is paired with the filter at the same index in
+    /// `filters`. Pass `None` for queries that should not be filtered.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if any query dimension does not match the collection.
+    /// - Returns an error if `queries` and `filters` have different lengths.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use velesdb_core::{VectorCollection, DistanceMetric, StorageMode};
+    /// # let coll = VectorCollection::create("./data/v".into(), "v", 128, DistanceMetric::Cosine, StorageMode::Full)?;
+    /// let q1 = vec![0.1; 128];
+    /// let q2 = vec![0.2; 128];
+    /// let results = coll.search_batch_with_filters(
+    ///     &[q1.as_slice(), q2.as_slice()],
+    ///     10,
+    ///     &[None, None],
+    /// )?;
+    /// assert_eq!(results.len(), 2);
+    /// # Ok::<(), velesdb_core::Error>(())
+    /// ```
     pub fn search_batch_with_filters(
         &self,
         queries: &[&[f32]],
@@ -306,8 +437,12 @@ impl VectorCollection {
         self.inner.search_batch_with_filters(queries, k, filters)
     }
 
-    /// Multi-query search (multiple vectors fused).
+    /// Performs multi-query search fusing results from multiple query vectors.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if any query dimension does not match the collection.
+    /// - Returns an error if the fusion strategy fails.
     pub fn multi_query_search(
         &self,
         queries: &[&[f32]],
@@ -318,8 +453,12 @@ impl VectorCollection {
         self.inner.multi_query_search(queries, k, strategy, filter)
     }
 
-    /// Multi-query search returning only IDs and fused scores.
+    /// Performs multi-query search returning only IDs and fused scores.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if any query dimension does not match the collection.
+    /// - Returns an error if the fusion strategy fails.
     pub fn multi_query_search_ids(
         &self,
         queries: &[&[f32]],
@@ -334,7 +473,10 @@ impl VectorCollection {
     // -------------------------------------------------------------------------
 
     /// Inserts or updates metadata-only points (no vectors).
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if storage operations fail.
     pub fn upsert_metadata(
         &self,
         points: impl IntoIterator<Item = crate::point::Point>,
@@ -347,7 +489,10 @@ impl VectorCollection {
     // -------------------------------------------------------------------------
 
     /// Creates a secondary metadata index on a payload field.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the index already exists or storage fails.
     pub fn create_index(&self, field: &str) -> Result<()> {
         self.inner.create_index(field)
     }
@@ -359,13 +504,19 @@ impl VectorCollection {
     }
 
     /// Creates a property index for O(1) equality lookups.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the index already exists or storage fails.
     pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
         self.inner.create_property_index(label, property)
     }
 
     /// Creates a range index for O(log n) range queries.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the index already exists or storage fails.
     pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
         self.inner.create_range_index(label, property)
     }
@@ -388,8 +539,11 @@ impl VectorCollection {
         self.inner.list_indexes()
     }
 
-    /// Drops an index. Returns `true` if an index was removed.
+    /// Drops an index, returning `true` if an index was removed.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the drop operation fails.
     pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
         self.inner.drop_index(label, property)
     }
@@ -404,8 +558,12 @@ impl VectorCollection {
     // Match (graph pattern)
     // -------------------------------------------------------------------------
 
-    /// Executes a graph MATCH query.
+    /// Executes a graph MATCH query against the collection's edge store.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the match clause references an invalid label or property.
+    /// - Returns an error if the edge store is not initialized.
     pub fn execute_match(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -415,7 +573,10 @@ impl VectorCollection {
     }
 
     /// Executes a MATCH query with vector similarity filtering.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the match clause is invalid or the query dimension mismatches.
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -432,7 +593,10 @@ impl VectorCollection {
     // -------------------------------------------------------------------------
 
     /// Executes an aggregation query (GROUP BY / COUNT / SUM / AVG / MIN / MAX).
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query is invalid or aggregation computation fails.
     pub fn execute_aggregate(
         &self,
         query: &crate::velesql::Query,
@@ -458,7 +622,10 @@ impl VectorCollection {
     }
 
     /// Analyzes the collection and returns fresh statistics.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if statistics computation fails.
     pub fn analyze(&self) -> Result<crate::collection::stats::CollectionStats> {
         self.inner.analyze()
     }
@@ -548,8 +715,11 @@ impl VectorCollection {
     // VelesQL
     // -------------------------------------------------------------------------
 
-    /// Executes a `VelesQL` query.
+    /// Executes a parsed `VelesQL` query.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the query references missing fields or execution fails.
     pub fn execute_query(
         &self,
         query: &crate::velesql::Query,
@@ -594,8 +764,12 @@ impl VectorCollection {
         self.inner.delta_buffer.is_active()
     }
 
-    /// Executes a raw VelesQL string.
+    /// Executes a raw VelesQL string, parsing it before execution.
+    ///
     /// # Errors
+    ///
+    /// - Returns an error if the SQL string cannot be parsed.
+    /// - Returns an error if query execution fails.
     pub fn execute_query_str(
         &self,
         sql: &str,

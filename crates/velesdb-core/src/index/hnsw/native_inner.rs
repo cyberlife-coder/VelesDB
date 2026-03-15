@@ -24,14 +24,17 @@ pub struct NativeHnswInner {
 
 impl NativeHnswInner {
     /// Creates a new `NativeHnswInner` with the specified metric and parameters.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
     pub fn new(
         metric: DistanceMetric,
         max_connections: usize,
         max_elements: usize,
         ef_construction: usize,
         dimension: usize,
-    ) -> Self {
+    ) -> crate::error::Result<Self> {
         let distance = CachedSimdDistance::new(metric, dimension);
         let inner = if dimension > 0 {
             NativeHnsw::new_with_dimension(
@@ -40,12 +43,12 @@ impl NativeHnswInner {
                 ef_construction,
                 max_elements,
                 dimension,
-            )
+            )?
         } else {
             NativeHnsw::new(distance, max_connections, ef_construction, max_elements)
         };
 
-        Self { inner, metric }
+        Ok(Self { inner, metric })
     }
 
     /// Searches the HNSW graph and returns raw neighbors with distances.
@@ -59,13 +62,21 @@ impl NativeHnswInner {
     ///
     /// Note: Unlike `hnsw_rs`, our native implementation auto-assigns IDs.
     /// The returned node ID should be stored in the mappings.
-    pub fn insert(&self, data: (&[f32], usize)) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if allocation or insertion fails.
+    pub fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<usize> {
         self.inner.insert(data.0.to_vec())
     }
 
     /// Parallel batch insert into the HNSW graph.
-    pub fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) {
-        self.inner.parallel_insert(data);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any insertion fails.
+    pub fn parallel_insert(&self, data: &[(&Vec<f32>, usize)]) -> crate::error::Result<()> {
+        self.inner.parallel_insert(data)
     }
 
     /// Sets the index to searching mode after bulk insertions.

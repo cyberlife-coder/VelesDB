@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark suite for BM25 full-text search operations.
 //!
 //! Run with: `cargo bench --bench bm25_benchmark`
@@ -115,7 +116,7 @@ fn bench_collection_text_search(c: &mut Criterion) {
         collection.upsert(points).unwrap();
 
         group.bench_function(BenchmarkId::new("text_search", doc_count), |b| {
-            b.iter(|| black_box(collection.text_search("rust programming", 10)));
+            b.iter(|| black_box(collection.text_search("rust programming", 10).unwrap()));
         });
     }
 
@@ -162,7 +163,7 @@ fn bench_collection_hybrid_search(c: &mut Criterion) {
 
         // Compare with pure text search
         group.bench_function(BenchmarkId::new("text_only", doc_count), |b| {
-            b.iter(|| black_box(collection.text_search("rust programming", 10)));
+            b.iter(|| black_box(collection.text_search("rust programming", 10).unwrap()));
         });
     }
 

@@ -41,7 +41,7 @@ fn test_parallel_insert_small_batch() {
     let vectors: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 32]).collect();
     let data: Vec<(&Vec<f32>, usize)> = vectors.iter().enumerate().map(|(i, v)| (v, i)).collect();
 
-    hnsw.parallel_insert(&data);
+    hnsw.parallel_insert(&data).expect("test");
 
     assert_eq!(hnsw.len(), 10);
 }
@@ -56,7 +56,7 @@ fn test_parallel_insert_large_batch() {
     let vectors: Vec<Vec<f32>> = (0..50).map(|i| vec![i as f32 * 0.01; 32]).collect();
     let data: Vec<(&Vec<f32>, usize)> = vectors.iter().enumerate().map(|(i, v)| (v, i)).collect();
 
-    hnsw.parallel_insert(&data);
+    hnsw.parallel_insert(&data).expect("test");
 
     assert_eq!(hnsw.len(), 50);
 }
@@ -71,7 +71,7 @@ fn test_search_neighbours_format() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..50 {
-        hnsw.insert(vec![i as f32 * 0.1; 32]);
+        hnsw.insert(vec![i as f32 * 0.1; 32]).expect("test");
     }
 
     let query = vec![0.0; 32];
@@ -125,7 +125,7 @@ fn test_file_dump_creates_files() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..20 {
-        hnsw.insert(vec![i as f32; 32]);
+        hnsw.insert(vec![i as f32; 32]).expect("test");
     }
 
     let dir = tempdir().unwrap();
@@ -147,7 +147,7 @@ fn test_file_dump_and_load_roundtrip() {
         .collect();
 
     for v in &vectors {
-        hnsw.insert(v.clone());
+        hnsw.insert(v.clone()).expect("test");
     }
 
     // Dump to files
@@ -209,7 +209,7 @@ fn test_native_backend_trait_search() {
     // Insert via trait
     for i in 0..20 {
         let vec: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32 * 0.01).collect();
-        <NativeHnsw<SimdDistance> as NativeHnswBackend>::insert(&hnsw, (&vec, i));
+        <NativeHnsw<SimdDistance> as NativeHnswBackend>::insert(&hnsw, (&vec, i)).expect("test");
     }
 
     // Search via trait
@@ -235,7 +235,7 @@ fn test_native_backend_generic_function() {
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
     for i in 0..10 {
-        hnsw.insert(vec![i as f32; 32]);
+        hnsw.insert(vec![i as f32; 32]).expect("test");
     }
 
     let query = vec![0.0; 32];
@@ -257,7 +257,7 @@ fn test_native_backend_len_and_is_empty() {
         0
     );
 
-    hnsw.insert(vec![1.0; 32]);
+    hnsw.insert(vec![1.0; 32]).expect("test");
 
     assert!(!<NativeHnsw<SimdDistance> as NativeHnswBackend>::is_empty(
         &hnsw

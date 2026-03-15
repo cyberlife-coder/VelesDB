@@ -780,7 +780,7 @@ Current question: Can you check the shipping?
 
 ## Next Steps
 
-- **Tutorial**: [Build a Mini Recommender Engine](./tutorials/MINI_RECOMMENDER.md)
+- **Tutorial**: [Build a Mini Recommender Engine](./TUTORIALS/MINI_RECOMMENDER.md)
 - **Reference**: [VelesQL Specification](../VELESQL_SPEC.md)
 - **Integration**: [SDK Examples](../../examples/)
 

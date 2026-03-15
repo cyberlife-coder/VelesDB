@@ -21,6 +21,8 @@
 
 mod aggregation;
 mod distinct;
+#[cfg(test)]
+mod distinct_tests;
 mod execution_paths;
 mod extraction;
 #[cfg(test)]
@@ -41,7 +43,11 @@ pub mod match_planner;
 #[cfg(test)]
 mod match_planner_tests;
 mod multi_vector;
+#[cfg(test)]
+mod multi_vector_tests;
 mod ordering;
+#[cfg(test)]
+mod ordering_tests;
 pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;

@@ -75,6 +75,22 @@ fn crc32_hash(data: &[u8]) -> u32 {
     !crc
 }
 
+/// Controls how payload WAL writes are synced to disk.
+///
+/// - `Fsync` (default): `flush()` + `sync_all()` — full durability, safe against power loss.
+/// - `FlushOnly`: `flush()` only — data reaches OS kernel but may be lost on power failure.
+/// - `None`: No sync — maximum throughput for bulk imports where data can be re-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DurabilityMode {
+    /// Full durability: flush buffer + fsync to disk.
+    #[default]
+    Fsync,
+    /// Flush buffer to OS only (no fsync). Faster but not power-loss safe.
+    FlushOnly,
+    /// No sync at all. Maximum throughput for bulk imports.
+    None,
+}
+
 /// Log-structured payload storage with snapshot support.
 ///
 /// Stores payloads in an append-only log file with an in-memory index.
@@ -91,10 +107,12 @@ pub struct LogPayloadStorage {
     reader: RwLock<File>,
     /// WAL position at last snapshot (0 = no snapshot)
     last_snapshot_wal_pos: RwLock<u64>,
+    /// Durability mode for WAL writes
+    durability: DurabilityMode,
 }
 
 impl LogPayloadStorage {
-    /// Creates a new `LogPayloadStorage` or opens an existing one.
+    /// Creates a new `LogPayloadStorage` with the default durability mode (`Fsync`).
     ///
     /// If a snapshot file exists and is valid, loads from snapshot and replays
     /// only the WAL delta for fast startup. Otherwise, falls back to full WAL replay.
@@ -103,6 +121,20 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::new_with_durability(path, DurabilityMode::default())
+    }
+
+    /// Creates a new `LogPayloadStorage` with the specified durability mode.
+    ///
+    /// See [`DurabilityMode`] for available modes and their trade-offs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file operations fail.
+    pub fn new_with_durability<P: AsRef<Path>>(
+        path: P,
+        durability: DurabilityMode,
+    ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
         let log_path = path.join("payloads.log");
@@ -142,7 +174,23 @@ impl LogPayloadStorage {
             wal: RwLock::new(wal),
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
+            durability,
         })
+    }
+
+    /// Applies the configured durability mode to a WAL writer.
+    fn sync_wal(wal: &mut io::BufWriter<File>, mode: DurabilityMode) -> io::Result<()> {
+        match mode {
+            DurabilityMode::Fsync => {
+                wal.flush()?;
+                wal.get_ref().sync_all()?;
+            }
+            DurabilityMode::FlushOnly => {
+                wal.flush()?;
+            }
+            DurabilityMode::None => {}
+        }
+        Ok(())
     }
 
     /// Replays WAL entries from `start_pos` to `end_pos`, updating the index.
@@ -314,8 +362,11 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn create_snapshot(&mut self) -> io::Result<()> {
-        // Flush WAL first to ensure all writes are on disk
-        self.wal.write().flush()?;
+        // Sync WAL first to ensure all writes are durable before snapshotting
+        {
+            let mut wal = self.wal.write();
+            Self::sync_wal(&mut wal, self.durability)?;
+        }
 
         let snapshot_path = self.path.join("payloads.snapshot");
         let index = self.index.read();
@@ -344,9 +395,15 @@ impl LogPayloadStorage {
         let crc = crc32_hash(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
 
-        // Write atomically via temp file + rename
+        // Write atomically via temp file + fsync + rename
         let temp_path = self.path.join("payloads.snapshot.tmp");
-        std::fs::write(&temp_path, &buf)?;
+        {
+            let file = File::create(&temp_path)?;
+            let mut writer = io::BufWriter::new(file);
+            writer.write_all(&buf)?;
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+        }
         std::fs::rename(&temp_path, &snapshot_path)?;
 
         // Update last snapshot position
@@ -396,8 +453,8 @@ impl PayloadStorage for LogPayloadStorage {
         wal.write_all(&len_u32.to_le_bytes())?;
         wal.write_all(&payload_bytes)?;
 
-        // Flush to ensure reader sees it
-        wal.flush()?;
+        // Sync WAL according to durability mode
+        Self::sync_wal(&mut wal, self.durability)?;
 
         index.insert(id, pos + 9);
 
@@ -434,13 +491,17 @@ impl PayloadStorage for LogPayloadStorage {
         wal.write_all(&[2u8])?;
         wal.write_all(&id.to_le_bytes())?;
 
+        // Sync WAL according to durability mode
+        Self::sync_wal(&mut wal, self.durability)?;
+
         index.remove(&id);
 
         Ok(())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.wal.write().flush()
+        let mut wal = self.wal.write();
+        Self::sync_wal(&mut wal, self.durability)
     }
 
     fn ids(&self) -> Vec<u64> {

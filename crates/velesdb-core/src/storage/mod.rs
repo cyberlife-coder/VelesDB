@@ -29,6 +29,8 @@ pub mod vector_bytes;
 mod vector_bytes_tests;
 
 #[cfg(test)]
+mod compaction_tests;
+#[cfg(test)]
 mod histogram_tests;
 #[cfg(test)]
 mod log_payload_tests;
@@ -43,7 +45,7 @@ mod wal_recovery_tests;
 
 // Re-export public types
 pub use guard::VectorSliceGuard;
-pub use log_payload::LogPayloadStorage;
+pub use log_payload::{DurabilityMode, LogPayloadStorage};
 pub use metrics::{LatencyStats, StorageMetrics};
 pub use mmap::MmapStorage;
 pub use traits::{PayloadStorage, VectorStorage};

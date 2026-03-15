@@ -1,3 +1,4 @@
+#![allow(deprecated)] // Benches use legacy Collection.
 //! Benchmark HNSW search with Full vs SQ8 vs PQ storage modes.
 
 #![allow(clippy::cast_precision_loss)]

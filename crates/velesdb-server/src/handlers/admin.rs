@@ -27,6 +27,7 @@ use crate::AppState;
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
+#[allow(deprecated)]
 pub async fn get_collection_config(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,

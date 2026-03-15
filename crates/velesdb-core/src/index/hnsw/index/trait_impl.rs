@@ -26,7 +26,10 @@ impl VectorIndex for HnswIndex {
 
         // Insert into HNSW index (RF-1: using HnswInner method)
         // Perf: Minimize lock hold time by not explicitly dropping
-        self.inner.write().insert((vector, idx));
+        if let Err(e) = self.inner.write().insert((vector, idx)) {
+            tracing::error!("HnswIndex::insert failed for id={id}: {e}");
+            return;
+        }
 
         // Perf: Conditionally store vector for SIMD re-ranking
         // When disabled, saves ~50% memory and ~2x insert speed

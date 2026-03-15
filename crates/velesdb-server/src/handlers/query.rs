@@ -27,6 +27,7 @@ fn aggregation_result_count(result: &serde_json::Value) -> usize {
     }
 }
 
+#[allow(deprecated)]
 fn execute_aggregation_query(
     state: &Arc<AppState>,
     collection_name: &str,
@@ -110,7 +111,7 @@ fn execute_aggregation_query(
         (status = 404, description = "Collection not found", body = VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::unused_async, deprecated)]
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -379,7 +380,7 @@ pub async fn aggregate(
         (status = 404, description = "Collection not found", body = VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
+#[allow(clippy::unused_async, deprecated)]
 pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,

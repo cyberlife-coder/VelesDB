@@ -41,6 +41,7 @@ impl EpisodicMemory {
         )
     }
 
+    #[allow(deprecated)]
     pub(crate) fn new(
         db: Arc<Database>,
         dimension: usize,
@@ -77,6 +78,7 @@ impl EpisodicMemory {
         })
     }
 
+    #[allow(deprecated)] // Uses legacy Collection internally.
     fn rebuild_temporal_index(collection: &crate::Collection, temporal_index: &TemporalIndex) {
         let all_ids = collection.all_ids();
         let points = collection.get(&all_ids);
@@ -101,6 +103,7 @@ impl EpisodicMemory {
     ///
     /// Returns an error when the embedding dimension is invalid, when the collection
     /// is unavailable, or when storage upsert fails.
+    #[allow(deprecated)]
     pub fn record(
         &self,
         event_id: u64,
@@ -165,6 +168,7 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable.
+    #[allow(deprecated)]
     pub fn recent(
         &self,
         limit: usize,
@@ -217,6 +221,7 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable.
+    #[allow(deprecated)]
     pub fn older_than(
         &self,
         timestamp: i64,
@@ -270,6 +275,7 @@ impl EpisodicMemory {
     ///
     /// Returns an error when the embedding dimension is invalid, when the collection
     /// is unavailable, or when vector search fails.
+    #[allow(deprecated)]
     pub fn recall_similar(
         &self,
         query_embedding: &[f32],
@@ -308,6 +314,7 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable.
+    #[allow(deprecated)]
     pub fn get_with_embedding(
         &self,
         id: u64,
@@ -348,6 +355,7 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable or delete fails.
+    #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
         let collection = self
             .db
@@ -368,6 +376,7 @@ impl EpisodicMemory {
     /// # Errors
     ///
     /// Returns an error when the collection is unavailable or JSON encoding fails.
+    #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
         let collection = self
             .db
@@ -389,6 +398,7 @@ impl EpisodicMemory {
     ///
     /// Returns an error when JSON decoding fails, collection access fails, or
     /// persistence operations fail.
+    #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
         if data.is_empty() {
             return Ok(());

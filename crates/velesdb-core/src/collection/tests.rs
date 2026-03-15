@@ -287,7 +287,7 @@ fn test_collection_text_search() {
     collection.upsert(points).unwrap();
 
     // Search for "rust" - should match docs 1 and 3
-    let results = collection.text_search("rust", 10);
+    let results = collection.text_search("rust", 10).unwrap();
     assert_eq!(results.len(), 2);
 
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
@@ -368,7 +368,7 @@ fn test_text_search_empty_query() {
     collection.upsert(points).unwrap();
 
     // Empty query should return empty results
-    let results = collection.text_search("", 10);
+    let results = collection.text_search("", 10).unwrap();
     assert!(results.is_empty());
 }
 
@@ -387,7 +387,7 @@ fn test_text_search_no_payload() {
     collection.upsert(points).unwrap();
 
     // Text search should return empty (no text indexed)
-    let results = collection.text_search("test", 10);
+    let results = collection.text_search("test", 10).unwrap();
     assert!(results.is_empty());
 }
 
@@ -461,7 +461,7 @@ fn test_bm25_update_document() {
     collection.upsert(points).unwrap();
 
     // Verify it's indexed
-    let results = collection.text_search("rust", 10);
+    let results = collection.text_search("rust", 10).unwrap();
     assert_eq!(results.len(), 1);
 
     // Update document with different text
@@ -473,11 +473,11 @@ fn test_bm25_update_document() {
     collection.upsert(points).unwrap();
 
     // Should no longer match "rust"
-    let results = collection.text_search("rust", 10);
+    let results = collection.text_search("rust", 10).unwrap();
     assert!(results.is_empty());
 
     // Should now match "python"
-    let results = collection.text_search("python", 10);
+    let results = collection.text_search("python", 10).unwrap();
     assert_eq!(results.len(), 1);
 }
 
@@ -506,7 +506,7 @@ fn test_bm25_large_dataset() {
     collection.upsert(points).unwrap();
 
     // Search for "rust" - should find 10 documents (0, 10, 20, ..., 90)
-    let results = collection.text_search("rust", 100);
+    let results = collection.text_search("rust", 100).unwrap();
     assert_eq!(results.len(), 10);
 
     // All results should have IDs divisible by 10
@@ -544,7 +544,7 @@ fn test_bm25_persistence_on_reopen() {
         collection.upsert(points).unwrap();
 
         // Verify search works before closing
-        let results = collection.text_search("rust", 10);
+        let results = collection.text_search("rust", 10).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -553,7 +553,7 @@ fn test_bm25_persistence_on_reopen() {
         let collection = Collection::open(path).unwrap();
 
         // BM25 should be rebuilt from persisted payloads
-        let results = collection.text_search("rust", 10);
+        let results = collection.text_search("rust", 10).unwrap();
         assert_eq!(results.len(), 2);
 
         let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
@@ -692,7 +692,7 @@ fn test_upsert_bulk_bm25_indexing() {
     ];
 
     collection.upsert_bulk(&points).unwrap();
-    let results = collection.text_search("rust", 10);
+    let results = collection.text_search("rust", 10).unwrap();
     assert_eq!(results.len(), 2);
 }
 
@@ -1166,7 +1166,9 @@ fn test_text_search_with_filter() {
 
     // Act - text search for "rust" filtered by category = "tech"
     let filter = crate::filter::Filter::new(crate::filter::Condition::eq("category", "tech"));
-    let results = collection.text_search_with_filter("rust", 10, &filter);
+    let results = collection
+        .text_search_with_filter("rust", 10, &filter)
+        .unwrap();
 
     // Assert - docs 1 and 3 match (rust + tech)
     assert_eq!(results.len(), 2);

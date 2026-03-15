@@ -22,6 +22,7 @@ mod lifecycle_tests;
 mod statistics;
 
 pub use index_management::IndexInfo;
+pub use lifecycle::{MAX_DIMENSION, MIN_DIMENSION};
 
 // All implementations are in submodules, no re-exports needed here
 // as they extend the Collection type defined in types.rs
