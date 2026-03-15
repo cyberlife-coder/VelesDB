@@ -35,6 +35,18 @@ import type {
   ProceduralPattern,
 } from '../types';
 import { BackpressureError, ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../types';
+import {
+  storeSemanticFact as _storeSemanticFact,
+  searchSemanticMemory as _searchSemanticMemory,
+  recordEpisodicEvent as _recordEpisodicEvent,
+  recallEpisodicEvents as _recallEpisodicEvents,
+  storeProceduralPattern as _storeProceduralPattern,
+  matchProceduralPatterns as _matchProceduralPatterns,
+} from './agent-memory-backend';
+import type { AgentMemoryTransport } from './agent-memory-backend';
+
+// Re-export for backward compatibility
+export { generateUniqueId, _resetIdState } from './agent-memory-backend';
 
 /** REST API response wrapper */
 interface ApiResponse<T> {
@@ -96,31 +108,6 @@ interface CollectionSanityApiResponse {
     filter_parse_errors_total: number;
   };
   hints: string[];
-}
-
-/**
- * Monotonic unique ID generator.
- * Combines millisecond timestamp with a sub-ms counter to avoid
- * collisions when multiple IDs are generated within the same millisecond.
- */
-let _idCounter = 0;
-let _lastTimestamp = 0;
-
-export function generateUniqueId(): number {
-  const now = Date.now();
-  if (now === _lastTimestamp) {
-    _idCounter++;
-  } else {
-    _lastTimestamp = now;
-    _idCounter = 0;
-  }
-  return now * 1000 + _idCounter;
-}
-
-/** @internal Reset state — only for tests. */
-export function _resetIdState(): void {
-  _idCounter = 0;
-  _lastTimestamp = 0;
 }
 
 /**
@@ -1290,122 +1277,42 @@ export class RestBackend implements IVelesDBBackend {
   }
 
   // ========================================================================
-  // Agent Memory (Phase 8)
+  // Agent Memory (Phase 8) — delegates to agent-memory-backend.ts
   // ========================================================================
+
+  private asTransport(): AgentMemoryTransport {
+    return {
+      requestJson: <T>(method: string, path: string, body?: unknown) =>
+        this.request<T>(method, path, body),
+      searchVectors: (collection: string, embedding: number[], k: number, filter: Record<string, string>) =>
+        this.search(collection, embedding, { k, filter }),
+    };
+  }
 
   async storeSemanticFact(collection: string, entry: SemanticEntry): Promise<void> {
     this.ensureInitialized();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id: entry.id,
-          vector: entry.embedding,
-          payload: {
-            _memory_type: 'semantic',
-            text: entry.text,
-            ...entry.metadata,
-          },
-        }],
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _storeSemanticFact(this.asTransport(), collection, entry);
   }
 
-  async searchSemanticMemory(
-    collection: string,
-    embedding: number[],
-    k = 5
-  ): Promise<SearchResult[]> {
-    return this.search(collection, embedding, {
-      k,
-      filter: { _memory_type: 'semantic' },
-    });
+  async searchSemanticMemory(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return _searchSemanticMemory(this.asTransport(), collection, embedding, k);
   }
 
   async recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void> {
     this.ensureInitialized();
-
-    const id = generateUniqueId();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id,
-          vector: event.embedding,
-          payload: {
-            _memory_type: 'episodic',
-            event_type: event.eventType,
-            timestamp: new Date().toISOString(),
-            ...event.data,
-            ...event.metadata,
-          },
-        }],
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _recordEpisodicEvent(this.asTransport(), collection, event);
   }
 
-  async recallEpisodicEvents(
-    collection: string,
-    embedding: number[],
-    k = 5
-  ): Promise<SearchResult[]> {
-    return this.search(collection, embedding, {
-      k,
-      filter: { _memory_type: 'episodic' },
-    });
+  async recallEpisodicEvents(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return _recallEpisodicEvents(this.asTransport(), collection, embedding, k);
   }
 
-  async storeProceduralPattern(
-    collection: string,
-    pattern: ProceduralPattern
-  ): Promise<void> {
+  async storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<void> {
     this.ensureInitialized();
-
-    // Procedural patterns are stored as metadata-only points.
-    // The server handles missing vector → zero-vector internally.
-    const id = generateUniqueId();
-
-    const response = await this.request(
-      'POST',
-      `/collections/${encodeURIComponent(collection)}/points`,
-      {
-        points: [{
-          id,
-          payload: {
-            _memory_type: 'procedural',
-            name: pattern.name,
-            steps: pattern.steps,
-            ...pattern.metadata,
-          },
-        }],
-      }
-    );
-
-    if (response.error) {
-      throw new VelesDBError(response.error.message, response.error.code);
-    }
+    return _storeProceduralPattern(this.asTransport(), collection, pattern);
   }
 
-  async matchProceduralPatterns(
-    collection: string,
-    embedding: number[],
-    k = 5
-  ): Promise<SearchResult[]> {
-    return this.search(collection, embedding, {
-      k,
-      filter: { _memory_type: 'procedural' },
-    });
+  async matchProceduralPatterns(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return _matchProceduralPatterns(this.asTransport(), collection, embedding, k);
   }
 }
