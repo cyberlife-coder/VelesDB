@@ -51,6 +51,7 @@ mod pushdown_tests;
 pub mod score_fusion;
 #[cfg(test)]
 mod score_fusion_tests;
+pub(crate) mod set_operations;
 mod similarity_filter;
 mod union_query;
 mod validation;
@@ -75,7 +76,8 @@ impl Collection {
     /// Executes a `VelesQL` query on this collection with the `"default"` client id.
     ///
     /// This method unifies vector search, text search, and metadata filtering
-    /// into a single interface. For per-client rate limiting use
+    /// into a single interface. Compound queries (`UNION`, `INTERSECT`, `EXCEPT`)
+    /// are resolved here before delegation. For per-client rate limiting use
     /// [`execute_query_with_client`](Self::execute_query_with_client).
     ///
     /// # Errors
@@ -86,7 +88,20 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.execute_query_with_client(query, params, "default")
+        let left_results = self.execute_query_with_client(query, params, "default")?;
+
+        // EPIC-040 US-006: Execute compound set operation if present.
+        if let Some(ref compound) = query.compound {
+            let right_query = crate::velesql::Query::new_select(*compound.right.clone());
+            let right_results = self.execute_query_with_client(&right_query, params, "default")?;
+            return Ok(set_operations::apply_set_operation(
+                left_results,
+                right_results,
+                compound.operator,
+            ));
+        }
+
+        Ok(left_results)
     }
 
     /// Executes a `VelesQL` query with a specific client identifier for per-client rate limiting.

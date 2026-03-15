@@ -116,52 +116,99 @@ struct TermPostings {
     postings: Vec<PostingEntry>,
 }
 
-/// `MaxScore` DAAT search over the inverted index.
-fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) -> Vec<ScoredDoc> {
-    // Collect posting lists for each query term
-    let mut term_data: Vec<TermPostings> = Vec::with_capacity(query.nnz());
+/// Prepared term data with precomputed upper-bound prefix sums for `MaxScore`.
+struct PreparedTerms {
+    terms: Vec<TermPostings>,
+    /// `upper_bound[i]` = cumulative max contribution of terms `0..=i`.
+    upper_bound: Vec<f32>,
+}
+
+/// Collects posting lists for each query term, sorts by max contribution
+/// ascending, and computes upper-bound prefix sums.
+///
+/// Returns `None` when no query term has any postings.
+fn prepare_term_data(index: &SparseInvertedIndex, query: &SparseVector) -> Option<PreparedTerms> {
+    let mut terms: Vec<TermPostings> = Vec::with_capacity(query.nnz());
     for (&term_id, &qw) in query.indices.iter().zip(query.values.iter()) {
         let postings = index.get_all_postings(term_id);
         if postings.is_empty() {
             continue;
         }
         let max_dw = index.get_global_max_weight(term_id);
-        term_data.push(TermPostings {
+        terms.push(TermPostings {
             query_weight: qw,
             max_doc_weight: max_dw,
             postings,
         });
     }
 
-    if term_data.is_empty() {
-        return Vec::new();
+    if terms.is_empty() {
+        return None;
     }
 
     // Sort by max_contribution ascending (least contributing first)
-    term_data.sort_by(|a, b| {
+    terms.sort_by(|a, b| {
         let ca = a.query_weight.abs() * a.max_doc_weight;
         let cb = b.query_weight.abs() * b.max_doc_weight;
         ca.total_cmp(&cb)
     });
 
     // Compute prefix sums of max contributions (upper_bound[i] = sum of 0..=i)
-    let n_terms = term_data.len();
-    let mut upper_bound = vec![0.0_f32; n_terms];
-    upper_bound[0] = term_data[0].query_weight.abs() * term_data[0].max_doc_weight;
-    for i in 1..n_terms {
-        upper_bound[i] =
-            upper_bound[i - 1] + term_data[i].query_weight.abs() * term_data[i].max_doc_weight;
+    let n = terms.len();
+    let mut upper_bound = vec![0.0_f32; n];
+    upper_bound[0] = terms[0].query_weight.abs() * terms[0].max_doc_weight;
+    for i in 1..n {
+        upper_bound[i] = upper_bound[i - 1] + terms[i].query_weight.abs() * terms[i].max_doc_weight;
     }
 
-    // Min-heap of top-k results
+    Some(PreparedTerms { terms, upper_bound })
+}
+
+/// Scores a single document by combining essential term contributions (at
+/// cursor positions matching `doc_id`) and non-essential term contributions
+/// (via binary search).
+fn score_document(
+    term_data: &[TermPostings],
+    cursors: &mut [usize],
+    split: usize,
+    doc_id: u64,
+) -> f32 {
+    let mut score = 0.0_f32;
+
+    // Essential terms: advance cursors that match doc_id
+    for i in split..term_data.len() {
+        if cursors[i] < term_data[i].postings.len()
+            && term_data[i].postings[cursors[i]].doc_id == doc_id
+        {
+            score += term_data[i].query_weight * term_data[i].postings[cursors[i]].weight;
+            cursors[i] += 1;
+        }
+    }
+
+    // Non-essential terms: binary search for doc_id
+    for td in &term_data[..split] {
+        if let Ok(pos) = td.postings.binary_search_by_key(&doc_id, |e| e.doc_id) {
+            score += td.query_weight * td.postings[pos].weight;
+        }
+    }
+
+    score
+}
+
+/// `MaxScore` DAAT search over the inverted index.
+fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) -> Vec<ScoredDoc> {
+    let Some(prepared) = prepare_term_data(index, query) else {
+        return Vec::new();
+    };
+    let PreparedTerms {
+        terms: term_data,
+        upper_bound,
+    } = prepared;
+    let n_terms = term_data.len();
+
     let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
     let mut threshold: f32 = 0.0;
-
-    // Find initial split: smallest i where upper_bound[i] >= threshold
     let mut split = find_split(&upper_bound, threshold);
-
-    // Merge-traverse all essential posting lists (split..n_terms) in doc_id order
-    // Use cursor-based merge
     let mut cursors: Vec<usize> = vec![0; n_terms];
 
     loop {
@@ -179,28 +226,11 @@ fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) 
         }
 
         let Some(doc_id) = min_doc_id else {
-            break; // All essential lists exhausted
+            break;
         };
 
-        // Compute score from essential terms
-        let mut score = 0.0_f32;
-        for i in split..n_terms {
-            if cursors[i] < term_data[i].postings.len()
-                && term_data[i].postings[cursors[i]].doc_id == doc_id
-            {
-                score += term_data[i].query_weight * term_data[i].postings[cursors[i]].weight;
-                cursors[i] += 1;
-            }
-        }
+        let score = score_document(&term_data, &mut cursors, split, doc_id);
 
-        // Add contributions from non-essential terms (binary search)
-        for td in &term_data[..split] {
-            if let Ok(pos) = td.postings.binary_search_by_key(&doc_id, |e| e.doc_id) {
-                score += td.query_weight * td.postings[pos].weight;
-            }
-        }
-
-        // Push to heap if score exceeds threshold (or heap not full)
         if heap.len() < k || score > threshold {
             heap.push(Reverse(ScoredDoc { score, doc_id }));
             if heap.len() > k {
@@ -208,7 +238,6 @@ fn maxscore_search(index: &SparseInvertedIndex, query: &SparseVector, k: usize) 
             }
             if heap.len() == k {
                 threshold = heap.peek().map_or(0.0, |Reverse(s)| s.score);
-                // Re-evaluate split
                 split = find_split(&upper_bound, threshold);
             }
         }

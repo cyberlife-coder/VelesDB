@@ -200,6 +200,30 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        let left_results = self.execute_single_select(query, params)?;
+
+        // EPIC-040 US-006: Execute compound set operation if present.
+        if let Some(ref compound) = query.compound {
+            let right_query = crate::velesql::Query::new_select(*compound.right.clone());
+            let right_results = self.execute_single_select(&right_query, params)?;
+            return Ok(
+                crate::collection::search::query::set_operations::apply_set_operation(
+                    left_results,
+                    right_results,
+                    compound.operator,
+                ),
+            );
+        }
+
+        Ok(left_results)
+    }
+
+    /// Executes a single SELECT (no compound), resolving JOINs if present.
+    fn execute_single_select(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
         let base_name = query.select.from.clone();
         // Priority: collections registry first (contains live instances for both legacy
         // create_collection and new create_vector_collection via shared inner Arc<>).

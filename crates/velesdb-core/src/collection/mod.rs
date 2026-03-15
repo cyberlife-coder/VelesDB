@@ -44,6 +44,9 @@ mod guardrails_integration_tests;
 #[cfg(test)]
 mod e2e_integration_tests;
 
+#[cfg(test)]
+mod set_operations_execution_tests;
+
 pub use core::IndexInfo;
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{

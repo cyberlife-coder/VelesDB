@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 mod binary;
 mod pq;
+pub(crate) mod pq_kmeans;
+pub(crate) mod pq_opq;
 mod rabitq;
 mod scalar;
 
@@ -21,9 +23,9 @@ mod scalar;
 pub use binary::BinaryQuantizedVector;
 #[allow(unused_imports)]
 pub(crate) use pq::distance_pq_l2;
-#[cfg(feature = "persistence")]
-pub use pq::train_opq;
 pub use pq::{PQCodebook, PQVector, ProductQuantizer};
+#[cfg(feature = "persistence")]
+pub use pq_opq::train_opq;
 
 // Re-export RaBitQ quantization
 pub use rabitq::{RaBitQCorrection, RaBitQIndex, RaBitQVector};
