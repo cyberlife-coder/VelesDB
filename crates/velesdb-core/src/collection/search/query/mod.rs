@@ -94,11 +94,16 @@ impl Collection {
         if let Some(ref compound) = query.compound {
             let right_query = crate::velesql::Query::new_select(*compound.right.clone());
             let right_results = self.execute_query_with_client(&right_query, params, "default")?;
-            return Ok(set_operations::apply_set_operation(
+            let mut merged = set_operations::apply_set_operation(
                 left_results,
                 right_results,
                 compound.operator,
-            ));
+            );
+            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
+            if let Some(limit) = query.select.limit {
+                merged.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            }
+            return Ok(merged);
         }
 
         Ok(left_results)

@@ -206,13 +206,17 @@ impl Database {
         if let Some(ref compound) = query.compound {
             let right_query = crate::velesql::Query::new_select(*compound.right.clone());
             let right_results = self.execute_single_select(&right_query, params)?;
-            return Ok(
+            let mut merged =
                 crate::collection::search::query::set_operations::apply_set_operation(
                     left_results,
                     right_results,
                     compound.operator,
-                ),
-            );
+                );
+            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
+            if let Some(limit) = query.select.limit {
+                merged.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            }
+            return Ok(merged);
         }
 
         Ok(left_results)
@@ -234,14 +238,20 @@ impl Database {
             .or_else(|| self.get_metadata_collection(&base_name).map(|mc| mc.inner))
             .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
 
-        if query.select.joins.is_empty() {
-            return base_collection.execute_query(query, params);
+        // Strip compound from the query before delegating to Collection::execute_query,
+        // because compound handling is done by execute_select_query (our caller).
+        // Without this, the set operation would be applied twice (once at Collection
+        // level, once here) — causing e.g. UNION ALL to duplicate right-side results.
+        let mut single_query = query.clone();
+        single_query.compound = None;
+
+        if single_query.select.joins.is_empty() {
+            return base_collection.execute_query(&single_query, params);
         }
 
-        let mut base_query = query.clone();
-        base_query.select.joins.clear();
+        single_query.select.joins.clear();
 
-        let mut results = base_collection.execute_query(&base_query, params)?;
+        let mut results = base_collection.execute_query(&single_query, params)?;
         for join in &query.select.joins {
             let join_collection = self
                 .get_collection(&join.table)
