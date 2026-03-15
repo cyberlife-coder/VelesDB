@@ -46,7 +46,7 @@ const DEFAULT_SNAPSHOT_THRESHOLD: u64 = 10 * 1024 * 1024;
 /// Used for snapshot integrity validation.
 #[inline]
 #[allow(clippy::cast_possible_truncation)] // Table index always 0-255
-fn crc32_hash(data: &[u8]) -> u32 {
+pub(crate) fn crc32_hash(data: &[u8]) -> u32 {
     const CRC32_TABLE: [u32; 256] = {
         let mut table = [0u32; 256];
         let mut i = 0;

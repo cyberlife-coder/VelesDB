@@ -198,6 +198,41 @@ fn punch_hole_fallback(file: &File, offset: u64, len: u64) -> io::Result<bool> {
     Ok(false) // No disk space reclaimed, only zeroed
 }
 
+/// Recovers from interrupted compaction on startup.
+///
+/// Issue #318: On Windows, `atomic_replace()` uses a two-step rename
+/// (dst -> `.bak`, src -> dst). A crash between the two leaves either
+/// a `.bak` or `.new` file on disk. This function detects and repairs
+/// such states before the mmap file is opened.
+///
+/// # Recovery Rules
+///
+/// - `.bak` exists, original missing -> restore from `.bak`
+/// - `.bak` exists, original exists -> remove `.bak` (compaction completed)
+/// - `.new` exists -> remove it (incomplete compaction)
+pub fn recover_compaction_artifacts(data_path: &Path) -> io::Result<()> {
+    let bak_path = data_path.with_extension("dat.bak");
+    let new_path = data_path.with_extension("dat.tmp");
+
+    // Handle .bak file
+    if bak_path.exists() {
+        if data_path.exists() {
+            // Both exist: previous compaction completed, clean up backup
+            std::fs::remove_file(&bak_path)?;
+        } else {
+            // Only backup exists: compaction crashed after rename-to-backup
+            std::fs::rename(&bak_path, data_path)?;
+        }
+    }
+
+    // Handle incomplete .tmp file (new data that was never swapped in)
+    if new_path.exists() {
+        std::fs::remove_file(&new_path)?;
+    }
+
+    Ok(())
+}
+
 /// Cross-platform atomic file replacement.
 ///
 /// On Unix, `rename()` atomically replaces the destination.
@@ -353,12 +388,11 @@ impl CompactionContext<'_> {
         // Reason: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
 
-        // 7. Update internal state (EPIC-033/US-004: Clear and repopulate ShardedIndex)
+        // 7. Update internal state
+        // Issue #316: Atomic index swap — replace mmap and index without
+        // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
-        self.index.clear();
-        for (id, offset) in new_index {
-            self.index.insert(id, offset);
-        }
+        self.index.replace_all(new_index);
         self.next_offset.store(new_offset, Ordering::Relaxed);
 
         // 8. Write compaction marker to WAL

@@ -19,8 +19,9 @@
 //! - Explicit `reserve_capacity()` for bulk imports
 
 mod vector_io;
+mod wal_replay;
 
-use super::compaction::CompactionContext;
+use super::compaction::{self, CompactionContext};
 use super::guard::VectorSliceGuard;
 use super::metrics::StorageMetrics;
 use super::sharded_index::ShardedIndex;
@@ -99,8 +100,12 @@ impl MmapStorage {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
 
-        // 1. Open/Create Data File
+        // Issue #318: Recover from interrupted compaction artifacts
+        // (.bak/.tmp files) before opening the data file.
         let data_path = path.join("vectors.dat");
+        compaction::recover_compaction_artifacts(&data_path)?;
+
+        // 1. Open/Create Data File
         let data_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -149,6 +154,21 @@ impl MmapStorage {
         } else {
             (ShardedIndex::new(), 0)
         };
+
+        // Issue #317: Replay WAL to recover writes since last flush.
+        // `mmap` is still a plain MmapMut here (not yet wrapped in RwLock).
+        let mut next_offset = next_offset;
+        let mut mmap = mmap;
+        let replayed = wal_replay::replay_wal_to_index(
+            &wal_path,
+            &index,
+            dimension,
+            &mut mmap,
+            &mut next_offset,
+        )?;
+        if replayed > 0 {
+            mmap.flush()?;
+        }
 
         Ok(Self {
             path,

@@ -37,6 +37,8 @@ mod loom_tests;
 #[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]
+mod storage_reliability_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod wal_recovery_tests;

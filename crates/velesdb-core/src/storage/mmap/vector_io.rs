@@ -10,6 +10,7 @@
 //! `Drop` only performs best-effort sync and must not be relied on as a commit point.
 
 use super::MmapStorage;
+use crate::storage::log_payload::crc32_hash;
 use crate::storage::traits::VectorStorage;
 use crate::storage::vector_bytes::{bytes_to_vector, vector_to_bytes};
 
@@ -17,6 +18,40 @@ use rustc_hash::FxHashMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
+
+/// Writes a CRC32-framed store entry to the WAL.
+///
+/// Format: `[op:1][id:8][len:4][data:N][crc32:4]`
+///
+/// The CRC32 covers `op + id + len + data`.
+fn write_wal_store_entry(wal: &mut io::BufWriter<File>, id: u64, data: &[u8]) -> io::Result<()> {
+    let mut frame = Vec::with_capacity(1 + 8 + 4 + data.len());
+    frame.push(1u8);
+    frame.extend_from_slice(&id.to_le_bytes());
+    // Reason: Vector byte length is dimension * 4. With max dimension 65536,
+    // max bytes = 262144 which fits in u32 (max 4,294,967,295).
+    #[allow(clippy::cast_possible_truncation)]
+    let len_u32 = data.len() as u32;
+    frame.extend_from_slice(&len_u32.to_le_bytes());
+    frame.extend_from_slice(data);
+    let crc = crc32_hash(&frame);
+    wal.write_all(&frame)?;
+    wal.write_all(&crc.to_le_bytes())
+}
+
+/// Writes a CRC32-framed delete entry to the WAL.
+///
+/// Format: `[op:1][id:8][crc32:4]`
+///
+/// The CRC32 covers `op + id`.
+fn write_wal_delete_entry(wal: &mut io::BufWriter<File>, id: u64) -> io::Result<()> {
+    let mut frame = Vec::with_capacity(1 + 8);
+    frame.push(2u8);
+    frame.extend_from_slice(&id.to_le_bytes());
+    let crc = crc32_hash(&frame);
+    wal.write_all(&frame)?;
+    wal.write_all(&crc.to_le_bytes())
+}
 
 impl VectorStorage for MmapStorage {
     fn store(&mut self, id: u64, vector: &[f32]) -> io::Result<()> {
@@ -33,18 +68,10 @@ impl VectorStorage for MmapStorage {
 
         let vector_bytes = vector_to_bytes(vector);
 
-        // 1. Write to WAL (append only; durability barrier is `flush()`)
+        // 1. Write to WAL with CRC32 framing (Issue #317)
         {
             let mut wal = self.wal.write();
-            // Op: Store (1) | ID | Len | Data
-            wal.write_all(&[1u8])?;
-            wal.write_all(&id.to_le_bytes())?;
-            // SAFETY: Vector byte length is dimension * 4 bytes. With max dimension 65536,
-            // max bytes = 262144 which fits in u32 (max 4,294,967,295)
-            #[allow(clippy::cast_possible_truncation)]
-            let len_u32 = vector_bytes.len() as u32;
-            wal.write_all(&len_u32.to_le_bytes())?;
-            wal.write_all(vector_bytes)?;
+            write_wal_store_entry(&mut wal, id, vector_bytes)?;
         }
 
         // 2. Determine offset (EPIC-033/US-004: Use sharded index)
@@ -118,27 +145,12 @@ impl VectorStorage for MmapStorage {
                 .fetch_add(total_new_size, Ordering::Relaxed);
         }
 
-        // 3. Single WAL append for entire batch (Op: BatchStore = 3)
+        // 3. WAL append with CRC32 framing per entry (Issue #317)
         {
             let mut wal = self.wal.write();
-            // Batch header: Op(1) | Count(4)
-            wal.write_all(&[3u8])?;
-            // SAFETY: Batch size is limited by memory constraints. In practice, batches
-            // are < 100K vectors which fits in u32 (max 4,294,967,295)
-            #[allow(clippy::cast_possible_truncation)]
-            let count = vectors.len() as u32;
-            wal.write_all(&count.to_le_bytes())?;
-
-            // Write all vectors contiguously
             for &(id, vector) in vectors {
                 let vector_bytes = vector_to_bytes(vector);
-                wal.write_all(&id.to_le_bytes())?;
-                // SAFETY: Vector byte length is dimension * 4 bytes. With max dimension 65536,
-                // max bytes = 262144 which fits in u32 (max 4,294,967,295)
-                #[allow(clippy::cast_possible_truncation)]
-                let len_u32 = vector_bytes.len() as u32;
-                wal.write_all(&len_u32.to_le_bytes())?;
-                wal.write_all(vector_bytes)?;
+                write_wal_store_entry(&mut wal, id, vector_bytes)?;
             }
             // Note: no fsync here, caller controls durability via `flush()`.
         }
@@ -201,12 +213,10 @@ impl VectorStorage for MmapStorage {
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
-        // 1. Write to WAL (durability barrier remains `flush()`)
+        // 1. Write to WAL with CRC32 framing (Issue #317)
         {
             let mut wal = self.wal.write();
-            // Op: Delete (2) | ID
-            wal.write_all(&[2u8])?;
-            wal.write_all(&id.to_le_bytes())?;
+            write_wal_delete_entry(&mut wal, id)?;
         }
 
         // 2. Get offset before removing from index (for hole-punch)

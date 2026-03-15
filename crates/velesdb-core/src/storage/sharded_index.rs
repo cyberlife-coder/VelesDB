@@ -120,10 +120,39 @@ impl ShardedIndex {
     }
 
     /// Clears all entries from all shards.
+    #[allow(dead_code)] // API completeness; production code uses replace_all()
     pub fn clear(&self) {
         for shard in &self.shards {
             shard.write().entries.clear();
         }
+    }
+
+    /// Atomically replaces all entries in the index.
+    ///
+    /// Locks all 16 shards simultaneously in deterministic order (0..15),
+    /// clears them, and repopulates from the provided map in a single
+    /// critical section. This prevents concurrent readers from seeing an
+    /// intermediate empty state during compaction.
+    ///
+    /// # Issue #316
+    ///
+    /// Without this, `clear()` + per-entry `insert()` creates a window
+    /// where readers see `None` for valid IDs.
+    pub fn replace_all(&self, new_entries: FxHashMap<u64, usize>) {
+        // Lock all shards in deterministic order to prevent deadlocks
+        let mut guards: Vec<_> = self.shards.iter().map(RwLock::write).collect();
+
+        // Clear all shards under the combined lock
+        for guard in &mut guards {
+            guard.entries.clear();
+        }
+
+        // Repopulate from new entries
+        for (id, offset) in new_entries {
+            let shard_idx = Self::shard_index(id);
+            guards[shard_idx].entries.insert(id, offset);
+        }
+        // All guards dropped here, releasing locks simultaneously
     }
 
     /// Collects all IDs from all shards.
