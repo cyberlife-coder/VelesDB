@@ -1,7 +1,5 @@
 [bandit]
-# B101: assert_used — skipped globally because:
-# - pytest relies on assert as its primary assertion mechanism in all test files
-# - Codacy does not support per-file skips natively via .bandit
-# - Production code in this project does not use bare assert for logic (uses Result/?)
-skips = B101
+# Exclude test directories entirely — assert (B101) is idiomatic in pytest
+# and all Python assert statements in this project are in test files only.
+# No global skips: production code scanning remains strict.
 exclude_dirs = tests,test,conftest
