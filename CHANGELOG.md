@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### License
+
+- **Upgrade to VelesDB Core License 1.0** — replaces the previous ELv2-based license with a purpose-built license adapted for VelesDB's multi-model architecture.
+  - **No Competitive Offering clause**: prohibits building competing databases, vector databases, graph databases, columnar stores, search engines, or query engines from VelesDB Core. Internal use, SaaS embedding, and backend integration remain permitted.
+  - **Redistribution rules**: explicit permission for Docker images, package managers (Homebrew, apt, cargo), Helm charts, Terraform templates — with license inclusion, notice preservation, and same-license requirements.
+  - **Benchmarking clause**: public benchmarks allowed with mandatory disclosure of methodology, dataset, hardware, software version, and configuration for transparency and reproducibility.
+  - **Strengthened Hosted or Managed Service definition**: now covers indirect access through APIs, SDKs, gateways, middleware, service layers, application wrappers, proxy layers, webhooks, and message queues.
+  - **Cloud provider protection**: explicit prohibition of DBaaS, managed clusters, hosted indexing/query platforms, and vector database as a service without a commercial license.
+  - **Graph and ColumnStore coverage**: license now explicitly protects the graph database, knowledge graph engine, and columnar store capabilities — matching VelesDB's Vector + Graph + ColumnStore fusion architecture.
+  - **Embedded/local-first clarification**: WASM, mobile (iOS/Android), Tauri desktop, and in-process embedded use expressly permitted.
+  - **VelesQL coverage**: using VelesQL internally is permitted; exposing a general-purpose VelesQL endpoint to third parties requires a commercial license.
+  - **Business model clarity**: explicit Core (source-available) / Enterprise (commercial) / Cloud (proprietary SaaS) tier structure for investor and acquirer readability.
+  - **Expanded FAQ**: 24 developer-friendly Q&As covering RAG, SaaS embedding, API endpoints, cloud providers, MSPs, graph engine, embedded mode, premium features, VelesQL, benchmarks, and more.
+
 ## [1.5.1] - 2026-03-09
 
 ### Fixed
