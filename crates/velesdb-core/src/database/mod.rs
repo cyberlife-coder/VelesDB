@@ -41,6 +41,11 @@ mod database_tests;
 pub struct Database {
     /// Path to the data directory
     data_dir: std::path::PathBuf,
+    /// Exclusive file lock preventing multi-process corruption.
+    ///
+    /// The lock is held for the lifetime of the `Database` and released on `Drop`.
+    /// The `_` prefix signals this field is kept for its RAII side effect.
+    _lock_file: std::fs::File,
     /// Legacy registry (Collection god-object) — kept for backward compatibility during migration.
     collections: parking_lot::RwLock<std::collections::HashMap<String, Collection>>,
     /// New registry: vector collections.
@@ -104,6 +109,12 @@ impl Database {
         let data_dir = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir)?;
 
+        // Acquire exclusive file lock to prevent multi-process corruption
+        let lock_path = data_dir.join("velesdb.lock");
+        let lock_file = std::fs::File::create(&lock_path)?;
+        fs2::FileExt::try_lock_exclusive(&lock_file)
+            .map_err(|_| Error::DatabaseLocked(data_dir.display().to_string()))?;
+
         // Log SIMD features detected at startup
         let features = simd_dispatch::simd_features_info();
         tracing::info!(
@@ -114,6 +125,7 @@ impl Database {
 
         let db = Self {
             data_dir,
+            _lock_file: lock_file,
             collections: parking_lot::RwLock::new(std::collections::HashMap::new()),
             vector_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),
             graph_colls: parking_lot::RwLock::new(std::collections::HashMap::new()),

@@ -160,6 +160,8 @@ pub use collection::{
     // Collection: internal executor kept pub for backward compat and internal modules.
     // Suppression de l'export = PR dédiée (requiert ~40 corrections de références internes).
     Collection,
+    // Diagnostics (US-006: embedded SDK health checks)
+    CollectionDiagnostics,
     // Public user-facing types — 3 typed collections replace Collection as primary API
     CollectionType,
     // Graph API types (user-visible)
@@ -168,6 +170,8 @@ pub use collection::{
     GraphEdge,
     GraphNode,
     GraphSchema,
+    // Diagnostics (US-006: embedded SDK health checks)
+    IndexHealth,
     IndexInfo,
     MetadataCollection,
     NodeType,

@@ -20,6 +20,7 @@ pub mod async_ops;
 mod async_ops_tests;
 pub mod auto_reindex;
 mod core;
+pub mod diagnostics;
 pub mod graph;
 mod graph_collection;
 mod metadata_collection;
@@ -44,6 +45,7 @@ mod guardrails_integration_tests;
 mod e2e_integration_tests;
 
 pub use core::IndexInfo;
+pub use diagnostics::{CollectionDiagnostics, IndexHealth};
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, Element, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, TraversalResult, ValueType,

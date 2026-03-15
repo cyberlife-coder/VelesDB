@@ -163,6 +163,10 @@ pub enum Error {
     /// Sparse index error (VELES-030).
     #[error("[VELES-030] Sparse index error: {0}")]
     SparseIndexError(String),
+
+    /// Database already locked by another process (VELES-031).
+    #[error("[VELES-031] Database is already opened by another process: {0}")]
+    DatabaseLocked(String),
 }
 
 impl Error {
@@ -200,6 +204,7 @@ impl Error {
             Self::InvalidQuantizerConfig(_) => "VELES-028",
             Self::TrainingFailed(_) => "VELES-029",
             Self::SparseIndexError(_) => "VELES-030",
+            Self::DatabaseLocked(_) => "VELES-031",
         }
     }
 

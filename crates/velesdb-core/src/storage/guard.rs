@@ -1,4 +1,15 @@
 //! Zero-copy guard for vector data from mmap storage.
+//!
+//! # Choosing between `as_slice()` / `try_deref()` and `Deref` / `AsRef`
+//!
+//! In **faillible contexts** (anything that returns `Result`), prefer
+//! [`VectorSliceGuard::as_slice()`] or its alias [`VectorSliceGuard::try_deref()`].
+//! They return `Result<&[f32]>` and let callers propagate epoch-mismatch errors
+//! gracefully.
+//!
+//! The `Deref` and `AsRef<[f32]>` implementations exist for ergonomics in
+//! contexts where panicking on epoch mismatch is acceptable (e.g., short-lived
+//! guards within a single function scope where remap cannot happen).
 
 use memmap2::MmapMut;
 use parking_lot::RwLockReadGuard;
@@ -25,8 +36,12 @@ use parking_lot::RwLockReadGuard;
 /// // Get zero-copy access to a vector
 /// let guard: Option<VectorSliceGuard> = storage.retrieve_ref(id)?;
 /// if let Some(guard) = guard {
-///     let slice: &[f32] = guard.as_ref();
-///     // Use slice directly - no allocation occurred
+///     // Prefer as_slice() / try_deref() in faillible contexts:
+///     if let Ok(slice) = guard.as_slice() {
+///         // use slice...
+///     }
+///     // Or use Deref in short-lived, non-faillible scopes:
+///     let slice: &[f32] = &*guard;
 /// }
 /// # Ok(())
 /// # }
@@ -93,6 +108,18 @@ impl VectorSliceGuard<'_> {
         // - Condition 2: Epoch equality above guarantees no remap invalidated `ptr`.
         // Reason: Zero-copy slice access avoids allocations while preserving safety invariants.
         Ok(unsafe { std::slice::from_raw_parts(self.ptr, self.len) })
+    }
+
+    /// Alias for [`as_slice()`](Self::as_slice) — returns the vector data as
+    /// a fallible reference, matching the naming convention of `std` try-methods.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::EpochMismatch` if the underlying mmap has been remapped
+    /// since this guard was created.
+    #[inline]
+    pub fn try_deref(&self) -> crate::error::Result<&[f32]> {
+        self.as_slice()
     }
 }
 

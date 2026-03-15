@@ -554,4 +554,31 @@ impl Database {
             .insert(name.to_string(), coll.clone());
         Some(coll)
     }
+
+    // =========================================================================
+    // Diagnostics (US-006)
+    // =========================================================================
+
+    /// Returns diagnostics for a named collection.
+    ///
+    /// Checks vector, graph, and metadata registries in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CollectionNotFound` if the collection does not exist.
+    pub fn collection_diagnostics(
+        &self,
+        name: &str,
+    ) -> Result<crate::collection::CollectionDiagnostics> {
+        if let Some(c) = self.get_vector_collection(name) {
+            return Ok(c.diagnostics());
+        }
+        if let Some(c) = self.get_graph_collection(name) {
+            return Ok(c.diagnostics());
+        }
+        if let Some(c) = self.get_metadata_collection(name) {
+            return Ok(c.diagnostics());
+        }
+        Err(Error::CollectionNotFound(name.to_string()))
+    }
 }
