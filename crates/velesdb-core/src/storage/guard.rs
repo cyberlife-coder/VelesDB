@@ -2,7 +2,7 @@
 //!
 //! # Choosing between `as_slice()` / `try_deref()` and `Deref` / `AsRef`
 //!
-//! In **faillible contexts** (anything that returns `Result`), prefer
+//! In **fallible contexts** (anything that returns `Result`), prefer
 //! [`VectorSliceGuard::as_slice()`] or its alias [`VectorSliceGuard::try_deref()`].
 //! They return `Result<&[f32]>` and let callers propagate epoch-mismatch errors
 //! gracefully.
@@ -36,11 +36,11 @@ use parking_lot::RwLockReadGuard;
 /// // Get zero-copy access to a vector
 /// let guard: Option<VectorSliceGuard> = storage.retrieve_ref(id)?;
 /// if let Some(guard) = guard {
-///     // Prefer as_slice() / try_deref() in faillible contexts:
+///     // Prefer as_slice() / try_deref() in fallible contexts:
 ///     if let Ok(slice) = guard.as_slice() {
 ///         // use slice...
 ///     }
-///     // Or use Deref in short-lived, non-faillible scopes:
+///     // Or use Deref in short-lived, non-fallible scopes:
 ///     let slice: &[f32] = &*guard;
 /// }
 /// # Ok(())
