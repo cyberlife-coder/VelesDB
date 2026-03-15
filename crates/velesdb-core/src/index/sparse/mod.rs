@@ -5,6 +5,9 @@
 
 #[cfg(feature = "persistence")]
 pub mod persistence;
+#[cfg(test)]
+#[cfg(feature = "persistence")]
+mod persistence_tests;
 
 // Re-export all public types from the always-compiled sparse_index module.
 pub use crate::sparse_index::inverted_index;

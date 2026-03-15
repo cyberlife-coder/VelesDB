@@ -43,6 +43,9 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `INSERT INTO` | `ast/dml.rs:InsertStatement` | `database/query_engine.rs` | DML |
 | `UPDATE ... SET` | `ast/dml.rs:UpdateStatement` | `database/query_engine.rs` | DML |
 | `DELETE FROM` | `ast/dml.rs:DeleteStatement` | `database/query_engine.rs` | DML |
+| `UNION` / `UNION ALL` | `grammar.pest:set_operator`, `ast/mod.rs:CompoundQuery` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; dedup by point ID (UNION) or keep all (UNION ALL) |
+| `INTERSECT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Intersect` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; keep only common point IDs |
+| `EXCEPT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Except` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; remove right-side IDs from left |
 
 ## Parsed but NOT Executed
 
@@ -52,9 +55,6 @@ incorrect or empty results at execution time.
 
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
-| `UNION` / `UNION ALL` | `grammar.pest:set_operator`, `ast/mod.rs:CompoundQuery` | Parsed only | AST populated, query engine ignores `compound` field |
-| `INTERSECT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Intersect` | Parsed only | Same as UNION |
-| `EXCEPT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Except` | Parsed only | Same as UNION |
 | Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed only | EPIC-039; no executor support |
 
 ## Not Parsed (Not in Grammar)
@@ -78,6 +78,7 @@ parse errors.
 - **Cross-crate tests**: `velesql_parser_conformance` integration test runs in each crate
 - **Join tests**: `search/query/join_tests.rs` (374-435)
 - **Set operation parse tests**: `velesql/set_operations_tests.rs`
+- **Set operation execution tests**: `collection/set_operations_execution_tests.rs`, `search/query/set_operations.rs` (unit tests)
 - **Aggregation tests**: `velesql/aggregation_tests.rs`
 - **DML tests**: `velesql/dml_tests.rs`
 - **MATCH tests**: `search/query/match_exec_tests.rs`

@@ -200,30 +200,75 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let base_name = query.select.from.clone();
-        // Priority: collections registry first (contains live instances for both legacy
-        // create_collection and new create_vector_collection via shared inner Arc<>).
-        // Fallback to opening from disk via get_vector_collection for any missed case.
-        let base_collection = self
-            .get_collection(&base_name)
-            .or_else(|| self.get_vector_collection(&base_name).map(|vc| vc.inner))
-            .or_else(|| self.get_metadata_collection(&base_name).map(|mc| mc.inner))
-            .ok_or_else(|| Error::CollectionNotFound(base_name.clone()))?;
+        // EPIC-040 US-006: For compound queries, strip LIMIT from each operand so
+        // the set operation sees the full result sets.  The final LIMIT is applied
+        // once on the merged output (SQL-standard behaviour).
+        // Use MAX_LIMIT (not None) to avoid the default-10 cap downstream.
+        let compound_limit = Some(100_000_u64);
+        let left_results = if query.compound.is_some() {
+            let mut left_query = query.clone();
+            left_query.select.limit = compound_limit;
+            self.execute_single_select(&left_query, params)?
+        } else {
+            return self.execute_single_select(query, params);
+        };
 
-        if query.select.joins.is_empty() {
-            return base_collection.execute_query(query, params);
+        // compound is guaranteed Some here (non-compound returns above).
+        if let Some(ref compound) = query.compound {
+            let mut right_query = crate::velesql::Query::new_select(*compound.right.clone());
+            right_query.select.limit = compound_limit;
+            let right_results = self.execute_single_select(&right_query, params)?;
+            let mut merged = crate::collection::search::query::set_operations::apply_set_operation(
+                left_results,
+                right_results,
+                compound.operator,
+            );
+            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
+            if let Some(limit) = query.select.limit {
+                merged.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            }
+            return Ok(merged);
         }
 
-        let mut base_query = query.clone();
-        base_query.select.joins.clear();
+        Ok(left_results)
+    }
 
-        let mut results = base_collection.execute_query(&base_query, params)?;
+    /// Resolves a collection by name from all registries (legacy, vector, metadata).
+    ///
+    /// Priority: legacy collections registry first (contains live instances for both
+    /// `create_collection` and `create_vector_collection` via shared inner `Arc<>`).
+    /// Falls back to vector collections, then metadata collections.
+    fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
+        self.get_collection(name)
+            .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
+            .or_else(|| self.get_metadata_collection(name).map(|mc| mc.inner))
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+    }
+
+    /// Executes a single SELECT (no compound), resolving JOINs if present.
+    fn execute_single_select(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let base_collection = self.resolve_collection(&query.select.from)?;
+
+        // Strip compound from the query before delegating to Collection::execute_query,
+        // because compound handling is done by execute_select_query (our caller).
+        // Without this, the set operation would be applied twice (once at Collection
+        // level, once here) — causing e.g. UNION ALL to duplicate right-side results.
+        let mut single_query = query.clone();
+        single_query.compound = None;
+
+        if single_query.select.joins.is_empty() {
+            return base_collection.execute_query(&single_query, params);
+        }
+
+        single_query.select.joins.clear();
+
+        let mut results = base_collection.execute_query(&single_query, params)?;
         for join in &query.select.joins {
-            let join_collection = self
-                .get_collection(&join.table)
-                .or_else(|| self.get_vector_collection(&join.table).map(|vc| vc.inner))
-                .or_else(|| self.get_metadata_collection(&join.table).map(|mc| mc.inner))
-                .ok_or_else(|| Error::CollectionNotFound(join.table.clone()))?;
+            let join_collection = self.resolve_collection(&join.table)?;
             let column_store = Self::build_join_column_store(&join_collection)?;
             let joined = crate::collection::search::query::join::execute_join(
                 &results,

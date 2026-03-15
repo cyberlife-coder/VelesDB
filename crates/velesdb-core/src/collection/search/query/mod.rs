@@ -51,6 +51,7 @@ mod pushdown_tests;
 pub mod score_fusion;
 #[cfg(test)]
 mod score_fusion_tests;
+pub(crate) mod set_operations;
 mod similarity_filter;
 mod union_query;
 mod validation;
@@ -75,7 +76,8 @@ impl Collection {
     /// Executes a `VelesQL` query on this collection with the `"default"` client id.
     ///
     /// This method unifies vector search, text search, and metadata filtering
-    /// into a single interface. For per-client rate limiting use
+    /// into a single interface. Compound queries (`UNION`, `INTERSECT`, `EXCEPT`)
+    /// are resolved here before delegation. For per-client rate limiting use
     /// [`execute_query_with_client`](Self::execute_query_with_client).
     ///
     /// # Errors
@@ -86,7 +88,35 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.execute_query_with_client(query, params, "default")
+        // EPIC-040 US-006: For compound queries, execute each operand without the
+        // outer LIMIT so the set operation sees the full result sets.  The final
+        // LIMIT is applied once on the merged output (SQL-standard behaviour).
+        // Use MAX_LIMIT (not None) to avoid the default-10 cap in execute_query_with_client.
+        let compound_limit = Some(u64::try_from(MAX_LIMIT).unwrap_or(u64::MAX));
+        let left_results = if query.compound.is_some() {
+            let mut left_query = query.clone();
+            left_query.select.limit = compound_limit;
+            left_query.compound = None;
+            self.execute_query_with_client(&left_query, params, "default")?
+        } else {
+            return self.execute_query_with_client(query, params, "default");
+        };
+
+        // compound is guaranteed Some here (non-compound returns above).
+        if let Some(ref compound) = query.compound {
+            let mut right_query = crate::velesql::Query::new_select(*compound.right.clone());
+            right_query.select.limit = compound_limit;
+            let right_results = self.execute_query_with_client(&right_query, params, "default")?;
+            let mut merged =
+                set_operations::apply_set_operation(left_results, right_results, compound.operator);
+            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
+            if let Some(limit) = query.select.limit {
+                merged.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            }
+            return Ok(merged);
+        }
+
+        Ok(left_results)
     }
 
     /// Executes a `VelesQL` query with a specific client identifier for per-client rate limiting.

@@ -11,13 +11,147 @@ use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 
+use crate::index::sparse::SparseInvertedIndex;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Pre-built components needed to assemble a [`Collection`].
+///
+/// Used by [`Collection::assemble`] as the single point of truth for the
+/// struct literal, eliminating duplication across the five public constructors.
+struct CollectionParts {
+    path: PathBuf,
+    config: CollectionConfig,
+    vector_storage: Arc<RwLock<MmapStorage>>,
+    payload_storage: Arc<RwLock<LogPayloadStorage>>,
+    index: Arc<HnswIndex>,
+    text_index: Arc<Bm25Index>,
+    property_index: PropertyIndex,
+    range_index: RangeIndex,
+    edge_store: EdgeStore,
+    sparse_indexes: BTreeMap<String, SparseInvertedIndex>,
+}
+
+impl CollectionParts {
+    /// Returns a new `CollectionParts` with empty graph and sparse indexes.
+    ///
+    /// The six storage/index fields must be supplied by the caller; only the
+    /// four optional index fields (`property_index`, `range_index`,
+    /// `edge_store`, `sparse_indexes`) default to empty.
+    fn new_with_empty_indexes(
+        path: PathBuf,
+        config: CollectionConfig,
+        vector_storage: Arc<RwLock<MmapStorage>>,
+        payload_storage: Arc<RwLock<LogPayloadStorage>>,
+        index: Arc<HnswIndex>,
+        text_index: Arc<Bm25Index>,
+    ) -> Self {
+        Self {
+            path,
+            config,
+            vector_storage,
+            payload_storage,
+            index,
+            text_index,
+            property_index: PropertyIndex::new(),
+            range_index: RangeIndex::new(),
+            edge_store: EdgeStore::new(),
+            sparse_indexes: BTreeMap::new(),
+        }
+    }
+}
+
 impl Collection {
+    /// Assembles a `Collection` from pre-built components and default caches.
+    ///
+    /// This is the single point of truth for the `Self { .. }` struct literal,
+    /// eliminating duplication across the five public constructors.
+    fn assemble(parts: CollectionParts) -> Self {
+        Self {
+            path: parts.path,
+            config: Arc::new(RwLock::new(parts.config)),
+            vector_storage: parts.vector_storage,
+            payload_storage: parts.payload_storage,
+            index: parts.index,
+            text_index: parts.text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
+            property_index: Arc::new(RwLock::new(parts.property_index)),
+            range_index: Arc::new(RwLock::new(parts.range_index)),
+            edge_store: Arc::new(RwLock::new(parts.edge_store)),
+            sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
+            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            guard_rails: Arc::new(GuardRails::default()),
+            query_planner: Arc::new(QueryPlanner::new()),
+            query_cache: Arc::new(QueryCache::new(256)),
+            cached_stats: Arc::new(Mutex::new(None)),
+            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "persistence")]
+            stream_ingester: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "persistence")]
+            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
+        }
+    }
+
+    /// Initialises persistent storages and indexes for a new collection.
+    ///
+    /// Returns a complete `CollectionParts` with empty graph/sparse indexes,
+    /// ready to be passed to [`Self::assemble`].
+    fn init_collection_parts(
+        path: PathBuf,
+        config: CollectionConfig,
+        hnsw_params: Option<crate::index::hnsw::HnswParams>,
+    ) -> Result<CollectionParts> {
+        let vector_storage = Arc::new(RwLock::new(
+            MmapStorage::new(&path, config.dimension).map_err(Error::Io)?,
+        ));
+        let payload_storage = Arc::new(RwLock::new(
+            LogPayloadStorage::new(&path).map_err(Error::Io)?,
+        ));
+        let index = if let Some(params) = hnsw_params {
+            Arc::new(HnswIndex::with_params(
+                config.dimension,
+                config.metric,
+                params,
+            ))
+        } else {
+            Arc::new(HnswIndex::new(config.dimension, config.metric))
+        };
+        let text_index = Arc::new(Bm25Index::new());
+        Ok(CollectionParts::new_with_empty_indexes(
+            path,
+            config,
+            vector_storage,
+            payload_storage,
+            index,
+            text_index,
+        ))
+    }
+
+    /// Rebuilds the BM25 full-text index from persisted payloads.
+    fn rebuild_bm25_index(
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+        text_index: &Arc<Bm25Index>,
+    ) {
+        let storage = payload_storage.read();
+        let ids = storage.ids();
+        for id in ids {
+            if let Ok(Some(payload)) = storage.retrieve(id) {
+                let text = Self::extract_text_from_payload(&payload);
+                if !text.is_empty() {
+                    text_index.add_document(id, &text);
+                }
+            }
+        }
+    }
+
     /// Creates a new collection at the specified path.
     ///
     /// # Errors
@@ -66,51 +200,9 @@ impl Collection {
             hnsw_params: None,
         };
 
-        // Initialize persistent storages
-        let vector_storage = Arc::new(RwLock::new(
-            MmapStorage::new(&path, dimension).map_err(Error::Io)?,
-        ));
-
-        let payload_storage = Arc::new(RwLock::new(
-            LogPayloadStorage::new(&path).map_err(Error::Io)?,
-        ));
-
-        // Create HNSW index
-        let index = Arc::new(HnswIndex::new(dimension, metric));
-
-        // Create BM25 index for full-text search
-        let text_index = Arc::new(Bm25Index::new());
-
-        let collection = Self {
-            path,
-            config: Arc::new(RwLock::new(config)),
-            vector_storage,
-            payload_storage,
-            index,
-            text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_quantizer: Arc::new(RwLock::new(None)),
-            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
-            range_index: Arc::new(RwLock::new(RangeIndex::new())),
-            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
-            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
-            guard_rails: Arc::new(GuardRails::default()),
-            query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
-            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            #[cfg(feature = "persistence")]
-            stream_ingester: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "persistence")]
-            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-        };
+        let collection = Self::assemble(Self::init_collection_parts(path, config, None)?);
 
         collection.save_config()?;
-
         Ok(collection)
     }
 
@@ -159,47 +251,13 @@ impl Collection {
             hnsw_params: Some(hnsw_params),
         };
 
-        let vector_storage = Arc::new(RwLock::new(
-            MmapStorage::new(&path, dimension).map_err(Error::Io)?,
-        ));
-
-        let payload_storage = Arc::new(RwLock::new(
-            LogPayloadStorage::new(&path).map_err(Error::Io)?,
-        ));
-
-        let index = Arc::new(HnswIndex::with_params(dimension, metric, hnsw_params));
-        let text_index = Arc::new(Bm25Index::new());
-
-        let collection = Self {
+        let collection = Self::assemble(Self::init_collection_parts(
             path,
-            config: Arc::new(RwLock::new(config)),
-            vector_storage,
-            payload_storage,
-            index,
-            text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_quantizer: Arc::new(RwLock::new(None)),
-            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
-            range_index: Arc::new(RwLock::new(RangeIndex::new())),
-            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
-            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
-            guard_rails: Arc::new(GuardRails::default()),
-            query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
-            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            #[cfg(feature = "persistence")]
-            stream_ingester: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "persistence")]
-            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-        };
+            config,
+            Some(hnsw_params),
+        )?);
 
         collection.save_config()?;
-
         Ok(collection)
     }
 
@@ -261,50 +319,9 @@ impl Collection {
             hnsw_params: None,
         };
 
-        // For metadata-only, we only need payload storage
-        // Vector storage with dimension 0 won't allocate space
-        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, 0).map_err(Error::Io)?));
-
-        let payload_storage = Arc::new(RwLock::new(
-            LogPayloadStorage::new(&path).map_err(Error::Io)?,
-        ));
-
-        // Create minimal HNSW index (won't be used)
-        let index = Arc::new(HnswIndex::new(0, DistanceMetric::Cosine));
-
-        // BM25 index for full-text search (still useful for metadata-only)
-        let text_index = Arc::new(Bm25Index::new());
-
-        let collection = Self {
-            path,
-            config: Arc::new(RwLock::new(config)),
-            vector_storage,
-            payload_storage,
-            index,
-            text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_quantizer: Arc::new(RwLock::new(None)),
-            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
-            range_index: Arc::new(RwLock::new(RangeIndex::new())),
-            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
-            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
-            guard_rails: Arc::new(GuardRails::default()),
-            query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
-            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            #[cfg(feature = "persistence")]
-            stream_ingester: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "persistence")]
-            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-        };
+        let collection = Self::assemble(Self::init_collection_parts(path, config, None)?);
 
         collection.save_config()?;
-
         Ok(collection)
     }
 
@@ -347,7 +364,6 @@ impl Collection {
         let vector_storage = Arc::new(RwLock::new(
             MmapStorage::new(&path, config.dimension).map_err(Error::Io)?,
         ));
-
         let payload_storage = Arc::new(RwLock::new(
             LogPayloadStorage::new(&path).map_err(Error::Io)?,
         ));
@@ -355,70 +371,30 @@ impl Collection {
         // Load HNSW index if it exists, otherwise create new (empty).
         // When hnsw.bin is absent and config.hnsw_params is set, honour the
         // persisted custom params so they survive collection reopen.
-        let index = if path.join("hnsw.bin").exists() {
-            Arc::new(HnswIndex::load(&path, config.dimension, config.metric).map_err(Error::Io)?)
-        } else if let Some(params) = config.hnsw_params {
-            Arc::new(HnswIndex::with_params(
-                config.dimension,
-                config.metric,
-                params,
-            ))
-        } else {
-            Arc::new(HnswIndex::new(config.dimension, config.metric))
-        };
-
-        // Create and rebuild BM25 index from existing payloads
+        let index = Self::load_or_create_hnsw(&path, &config)?;
         let text_index = Arc::new(Bm25Index::new());
 
         // Rebuild BM25 index from persisted payloads
-        {
-            let storage = payload_storage.read();
-            let ids = storage.ids();
-            for id in ids {
-                if let Ok(Some(payload)) = storage.retrieve(id) {
-                    let text = Self::extract_text_from_payload(&payload);
-                    if !text.is_empty() {
-                        text_index.add_document(id, &text);
-                    }
-                }
-            }
-        }
+        Self::rebuild_bm25_index(&payload_storage, &text_index);
 
-        // Load PropertyIndex and RangeIndex if they exist (EPIC-009 US-005)
+        // Load persisted graph/sparse indexes (EPIC-009, EPIC-062)
         let property_index = Self::load_property_index(&path);
         let range_index = Self::load_range_index(&path);
-        // Load EdgeStore if present (graph collections -- D-02)
         let edge_store = Self::load_edge_store(&path);
-        // Load named sparse indexes if present (EPIC-062 / SPARSE-04)
         let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
-        Ok(Self {
+        Ok(Self::assemble(CollectionParts {
             path,
-            config: Arc::new(RwLock::new(config)),
+            config,
             vector_storage,
             payload_storage,
             index,
             text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_quantizer: Arc::new(RwLock::new(None)),
-            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-            property_index: Arc::new(RwLock::new(property_index)),
-            range_index: Arc::new(RwLock::new(range_index)),
-            edge_store: Arc::new(RwLock::new(edge_store)),
-            sparse_indexes: Arc::new(RwLock::new(sparse_indexes)),
-            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
-            guard_rails: Arc::new(GuardRails::default()),
-            query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
-            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            #[cfg(feature = "persistence")]
-            stream_ingester: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "persistence")]
-            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-        })
+            property_index,
+            range_index,
+            edge_store,
+            sparse_indexes,
+        }))
     }
 
     /// Creates a new graph collection (with optional node embeddings).
@@ -451,45 +427,32 @@ impl Collection {
             hnsw_params: None,
         };
 
-        let vector_storage = Arc::new(RwLock::new(
-            MmapStorage::new(&path, dim).map_err(Error::Io)?,
-        ));
-        let payload_storage = Arc::new(RwLock::new(
-            LogPayloadStorage::new(&path).map_err(Error::Io)?,
-        ));
-        let index = Arc::new(HnswIndex::new(dim, metric));
-        let text_index = Arc::new(Bm25Index::new());
-
-        let collection = Self {
-            path,
-            config: Arc::new(RwLock::new(config)),
-            vector_storage,
-            payload_storage,
-            index,
-            text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_quantizer: Arc::new(RwLock::new(None)),
-            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-            property_index: Arc::new(RwLock::new(PropertyIndex::new())),
-            range_index: Arc::new(RwLock::new(RangeIndex::new())),
-            edge_store: Arc::new(RwLock::new(EdgeStore::new())),
-            sparse_indexes: Arc::new(RwLock::new(BTreeMap::new())),
-            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
-            guard_rails: Arc::new(GuardRails::default()),
-            query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
-            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            #[cfg(feature = "persistence")]
-            stream_ingester: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "persistence")]
-            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-        };
+        let collection = Self::assemble(Self::init_collection_parts(path, config, None)?);
 
         collection.save_config()?;
         Ok(collection)
+    }
+
+    /// Loads the HNSW index from `hnsw.bin` or creates an empty one.
+    ///
+    /// When `hnsw.bin` is absent and `config.hnsw_params` is set, the
+    /// persisted custom params are honoured so they survive collection reopen.
+    fn load_or_create_hnsw(
+        path: &std::path::Path,
+        config: &CollectionConfig,
+    ) -> Result<Arc<HnswIndex>> {
+        if path.join("hnsw.bin").exists() {
+            let idx = HnswIndex::load(path, config.dimension, config.metric).map_err(Error::Io)?;
+            Ok(Arc::new(idx))
+        } else if let Some(params) = config.hnsw_params {
+            Ok(Arc::new(HnswIndex::with_params(
+                config.dimension,
+                config.metric,
+                params,
+            )))
+        } else {
+            Ok(Arc::new(HnswIndex::new(config.dimension, config.metric)))
+        }
     }
 
     /// Loads all named sparse indexes from disk.
