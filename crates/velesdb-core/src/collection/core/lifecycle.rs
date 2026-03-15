@@ -143,9 +143,9 @@ impl Collection {
                 config.dimension,
                 config.metric,
                 params,
-            ))
+            )?)
         } else {
-            Arc::new(HnswIndex::new(config.dimension, config.metric))
+            Arc::new(HnswIndex::new(config.dimension, config.metric)?)
         };
         let text_index = Arc::new(Bm25Index::new());
         Ok(CollectionParts::new_with_empty_indexes(
@@ -477,9 +477,9 @@ impl Collection {
                 config.dimension,
                 config.metric,
                 params,
-            )))
+            )?))
         } else {
-            Ok(Arc::new(HnswIndex::new(config.dimension, config.metric)))
+            Ok(Arc::new(HnswIndex::new(config.dimension, config.metric)?))
         }
     }
 
@@ -684,12 +684,23 @@ impl Collection {
     }
 
     /// Saves the collection configuration to disk.
+    ///
+    /// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
     pub(crate) fn save_config(&self) -> Result<()> {
+        use std::io::Write;
+
         let config = self.config.read();
         let config_path = self.path.join("config.json");
+        let tmp_path = self.path.join("config.json.tmp");
         let config_data = serde_json::to_string_pretty(&*config)
             .map_err(|e| Error::Serialization(e.to_string()))?;
-        std::fs::write(config_path, config_data)?;
+
+        let file = std::fs::File::create(&tmp_path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(config_data.as_bytes())?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        std::fs::rename(&tmp_path, &config_path)?;
         Ok(())
     }
 }

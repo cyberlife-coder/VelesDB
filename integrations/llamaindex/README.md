@@ -1,7 +1,7 @@
 # LlamaIndex VelesDB Integration
 
 [![PyPI](https://img.shields.io/pypi/v/llama-index-vector-stores-velesdb)](https://pypi.org/project/llama-index-vector-stores-velesdb/)
-[![License](https://img.shields.io/badge/license-ELv2-blue)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 
@@ -192,4 +192,4 @@ results = vector_store.text_query(
 
 MIT License (this integration)
 
-VelesDB Core is licensed under ELv2. See [LICENSE](./LICENSE) for details.
+VelesDB Core is licensed under VelesDB Core License 1.0 (source-available). See the [root LICENSE](../../LICENSE) for details.

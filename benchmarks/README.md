@@ -140,4 +140,4 @@ let params = HnswParams::million_scale(768);
 
 ## License
 
-Elastic License 2.0 (ELv2)
+VelesDB Core License 1.0

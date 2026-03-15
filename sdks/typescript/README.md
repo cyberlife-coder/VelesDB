@@ -429,4 +429,4 @@ try {
 
 MIT License - See [LICENSE](./LICENSE) for details.
 
-VelesDB Core is licensed under ELv2 (source available).
+VelesDB Core is licensed under VelesDB Core License 1.0 (source-available).

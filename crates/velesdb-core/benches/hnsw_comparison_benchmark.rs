@@ -56,7 +56,8 @@ fn bench_insert(c: &mut Criterion) {
                 DIMENSIONS,
                 DistanceMetric::Euclidean,
                 HnswParams::custom(16, 200, N_VECTORS),
-            );
+            )
+            .unwrap();
             for (i, v) in vectors.iter().enumerate() {
                 index.insert(i as u64, v);
             }
@@ -83,7 +84,8 @@ fn bench_search(c: &mut Criterion) {
         DIMENSIONS,
         DistanceMetric::Euclidean,
         HnswParams::custom(16, 200, N_VECTORS),
-    );
+    )
+    .unwrap();
     for (i, v) in vectors.iter().enumerate() {
         hnsw_rs_index.insert(i as u64, v);
     }
@@ -132,7 +134,8 @@ fn bench_parallel_insert(c: &mut Criterion) {
                 DIMENSIONS,
                 DistanceMetric::Euclidean,
                 HnswParams::custom(16, 200, N_VECTORS),
-            );
+            )
+            .unwrap();
             for (i, v) in vectors.iter().enumerate() {
                 index.insert(i as u64, v);
             }

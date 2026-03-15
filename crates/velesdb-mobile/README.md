@@ -225,7 +225,7 @@ db.createCollectionWithStorage(
 
 ## License
 
-VelesDB is licensed under the [Elastic License 2.0 (ELv2)](../../LICENSE).
+VelesDB is licensed under the [VelesDB Core License 1.0](../../LICENSE).
 
-This is a **source available** license that allows free use for most purposes,
-with restrictions on providing VelesDB as a managed service (DBaaS).
+This is a **source-available** license that allows free use for most purposes,
+with restrictions on providing VelesDB as a managed service (DBaaS) or building a competing product.

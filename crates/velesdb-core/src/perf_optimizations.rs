@@ -474,8 +474,17 @@ impl Drop for ContiguousVectors {
     fn drop(&mut self) {
         // EPIC-032/US-002: No null check needed - NonNull guarantees non-null
         // Layout was valid at construction; it must still be valid at drop.
-        let layout =
-            Self::layout(self.dimension, self.capacity).expect("Layout was valid at construction");
+        let Ok(layout) = Self::layout(self.dimension, self.capacity) else {
+            // Layout was valid at construction; this branch is unreachable
+            // unless memory corruption occurred. Leak memory rather than abort.
+            tracing::error!(
+                "ContiguousVectors::drop: layout computation failed \
+                 (dim={}, cap={}), leaking memory",
+                self.dimension,
+                self.capacity,
+            );
+            return;
+        };
         // SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
         // - Condition 1: Layout matches original allocation parameters.
         // - Condition 2: Pointer is non-null per NonNull invariant.

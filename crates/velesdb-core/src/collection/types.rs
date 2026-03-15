@@ -44,6 +44,7 @@ type PqTrainingSample = (u64, Vec<f32>);
 /// let metadata_type = CollectionType::MetadataOnly;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum CollectionType {
     /// Standard vector collection with HNSW index.
     Vector {

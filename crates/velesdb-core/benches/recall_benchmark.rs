@@ -84,7 +84,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
         // Build HNSW index with max_recall params for high quality
         // M=32, ef_construction=500 for dim<=256
         let params = HnswParams::max_recall(dim);
-        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+        let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
 
         for (idx, vec) in dataset.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
@@ -175,7 +175,7 @@ fn print_recall_stats(c: &mut Criterion) {
 
     // Build HNSW index with max_recall params for high quality
     let params = HnswParams::max_recall(dim);
-    let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params);
+    let index = HnswIndex::with_params(dim, DistanceMetric::Cosine, params).unwrap();
 
     for (idx, vec) in dataset.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]

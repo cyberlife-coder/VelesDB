@@ -124,19 +124,25 @@ impl VectorSliceGuard<'_> {
 }
 
 impl AsRef<[f32]> for VectorSliceGuard<'_> {
-    /// # Panics
+    /// Returns the vector data as a slice, or an empty slice on epoch mismatch.
     ///
-    /// Panics if the underlying mmap was remapped after this guard was created
-    /// (epoch mismatch). Callers that tolerate remap must use
-    /// [`as_slice()`](Self::as_slice) and handle the `Result` instead.
+    /// # Epoch Mismatch Behavior
+    ///
+    /// If the underlying mmap was remapped after this guard was created, this
+    /// returns `&[]` and logs an error instead of panicking. Callers that need
+    /// to distinguish empty-from-mismatch vs. genuinely-empty should use
+    /// [`as_slice()`](Self::as_slice) which returns `Result`.
     #[inline]
     fn as_ref(&self) -> &[f32] {
         match self.as_slice() {
             Ok(slice) => slice,
-            Err(e) => panic!(
-                "VectorSliceGuard::as_ref: epoch mismatch — the mmap was remapped. \
-                 Use as_slice() to handle this gracefully. Error: {e}"
-            ),
+            Err(e) => {
+                tracing::error!(
+                    "VectorSliceGuard::as_ref: epoch mismatch, returning empty slice. \
+                     Use as_slice() to handle this gracefully. Error: {e}"
+                );
+                &[]
+            }
         }
     }
 }
@@ -144,19 +150,25 @@ impl AsRef<[f32]> for VectorSliceGuard<'_> {
 impl std::ops::Deref for VectorSliceGuard<'_> {
     type Target = [f32];
 
-    /// # Panics
+    /// Returns the vector data as a slice, or an empty slice on epoch mismatch.
     ///
-    /// Panics if the underlying mmap was remapped after this guard was created
-    /// (epoch mismatch). Callers that tolerate remap must use
-    /// [`as_slice()`](VectorSliceGuard::as_slice) and handle the `Result` instead.
+    /// # Epoch Mismatch Behavior
+    ///
+    /// If the underlying mmap was remapped after this guard was created, this
+    /// returns `&[]` and logs an error instead of panicking. Callers that need
+    /// to distinguish empty-from-mismatch vs. genuinely-empty should use
+    /// [`as_slice()`](VectorSliceGuard::as_slice) which returns `Result`.
     #[inline]
     fn deref(&self) -> &Self::Target {
         match self.as_slice() {
             Ok(slice) => slice,
-            Err(e) => panic!(
-                "VectorSliceGuard::deref: epoch mismatch — the mmap was remapped. \
-                 Use as_slice() to handle this gracefully. Error: {e}"
-            ),
+            Err(e) => {
+                tracing::error!(
+                    "VectorSliceGuard::deref: epoch mismatch, returning empty slice. \
+                     Use as_slice() to handle this gracefully. Error: {e}"
+                );
+                &[]
+            }
         }
     }
 }

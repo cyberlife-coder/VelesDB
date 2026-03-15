@@ -18,7 +18,7 @@ VelesDB is a local-first vector database that combines Vector, Graph, and Column
 | **WASM Support** | Yes (browser-side search) | No | No | No | No |
 | **Mobile Support** | iOS / Android (UniFFI) | No | No | No | No |
 | **Latency** | Sub-millisecond (in-process) | ~1-5 ms (network) | ~10-50 ms (cloud) | ~1-5 ms (in-process) | ~5-20 ms (network) |
-| **License** | Open source | Apache-2.0 | Proprietary | Apache-2.0 | BSD-3 |
+| **License** | Source-available | Apache-2.0 | Proprietary | Apache-2.0 | BSD-3 |
 
 ---
 

@@ -117,8 +117,7 @@ impl VectorStorage for MmapStorage {
             // M-2: Acquire/AcqRel ordering for cross-platform visibility
             let start_offset = self.next_offset.load(Ordering::Acquire);
             self.ensure_capacity(start_offset + total_new_size)?;
-            self.next_offset
-                .fetch_add(total_new_size, Ordering::AcqRel);
+            self.next_offset.fetch_add(total_new_size, Ordering::AcqRel);
         }
 
         // 3. Single WAL append for entire batch (Op: BatchStore = 3)

@@ -228,7 +228,7 @@ fn bench_scalability_insert(c: &mut Criterion) {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
                         let mem_before = get_memory_usage();
-                        let index = HnswIndex::new(DIMENSION, DistanceMetric::Cosine);
+                        let index = HnswIndex::new(DIMENSION, DistanceMetric::Cosine).unwrap();
 
                         let start = Instant::now();
                         for i in 0..size {
@@ -273,7 +273,7 @@ fn bench_scalability_search_percentiles(c: &mut Criterion) {
     for &size in DATASET_SIZES {
         // Pre-build index
         eprintln!("\nBuilding index with {}k vectors...", size / 1000);
-        let index = HnswIndex::new(DIMENSION, DistanceMetric::Cosine);
+        let index = HnswIndex::new(DIMENSION, DistanceMetric::Cosine).unwrap();
         for i in 0..size {
             let vector = generate_normalized_vector(DIMENSION, i as u64);
             index.insert(i as u64, &vector);
@@ -323,7 +323,7 @@ fn bench_concurrent_queries(c: &mut Criterion) {
         "\nBuilding index with {}k vectors for concurrent tests...",
         dataset_size / 1000
     );
-    let index = Arc::new(HnswIndex::new(DIMENSION, DistanceMetric::Cosine));
+    let index = Arc::new(HnswIndex::new(DIMENSION, DistanceMetric::Cosine).unwrap());
     for i in 0..dataset_size {
         let vector = generate_normalized_vector(DIMENSION, i as u64);
         index.insert(i as u64, &vector);
@@ -393,7 +393,7 @@ fn bench_memory_usage(c: &mut Criterion) {
                         let mem_before = get_memory_usage();
 
                         let start = Instant::now();
-                        let index = HnswIndex::new(DIMENSION, DistanceMetric::Cosine);
+                        let index = HnswIndex::new(DIMENSION, DistanceMetric::Cosine).unwrap();
                         for i in 0..size {
                             let vector = generate_normalized_vector(DIMENSION, i as u64);
                             index.insert(i as u64, &vector);

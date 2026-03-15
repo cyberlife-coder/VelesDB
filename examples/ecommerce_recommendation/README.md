@@ -269,4 +269,4 @@ Running 15 tests using 1 worker
 
 ## 📄 License
 
-This example is part of VelesDB and is licensed under the [Elastic License 2.0 (ELv2)](../../LICENSE).
+This example is part of VelesDB and is licensed under the [VelesDB Core License 1.0](../../LICENSE).

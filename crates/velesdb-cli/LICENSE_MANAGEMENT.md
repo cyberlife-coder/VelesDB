@@ -358,7 +358,7 @@ base64(payload).base64(ed25519_signature)
 
 ## ⚖️ Licence
 
-VelesDB Core : Elastic License 2.0 (ELv2)  
+VelesDB Core : VelesDB Core License 1.0  
 VelesDB Premium : Commercial License
 
 Pour plus d'informations : https://velesdb.com/pricing

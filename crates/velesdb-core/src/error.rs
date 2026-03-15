@@ -13,6 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Each variant includes a descriptive error message suitable for end-users.
 /// Error codes follow the pattern `VELES-XXX` for easy debugging.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Collection already exists (VELES-001).
     #[error("[VELES-001] Collection '{0}' already exists")]
