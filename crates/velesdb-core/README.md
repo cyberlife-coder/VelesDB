@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // BM25 full-text search only
-    let text_results = collection.text_search("rust programming", 10);
+    let text_results = collection.text_search("rust programming", 10)?;
 
     // Fast search (IDs + scores only, no payload retrieval)
     let fast_results = collection.search_ids(&query, 10)?;

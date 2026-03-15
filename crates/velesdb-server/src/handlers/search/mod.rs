@@ -366,7 +366,11 @@ pub async fn text_search(
             };
             Json(response).into_response()
         }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(actionable_search_error(&e)),
+        )
+            .into_response(),
     }
 }
 

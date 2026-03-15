@@ -6,7 +6,9 @@ use crate::{Collection, CollectionType, DistanceMetric, Error, Result, StorageMo
 
 use super::Database;
 
-#[allow(deprecated)] // Uses legacy Collection for backward compat registry.
+// Almost every method below reads/writes `self.collections` (HashMap<String, Collection>),
+// so `#[allow(deprecated)]` is applied at impl-block level rather than per-method.
+#[allow(deprecated)]
 impl Database {
     /// Ensures a collection name is free in memory and on disk.
     ///
