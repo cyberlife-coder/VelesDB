@@ -36,7 +36,11 @@ class GraphOpsMixin:
 
         Returns:
             Query result with nodes and similarities.
+
+        Raises:
+            SecurityError: If query fails validation.
         """
+        validate_query(query_str)
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
         results = self._collection.query(query_str, params)
