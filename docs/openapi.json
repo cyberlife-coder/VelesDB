@@ -224,6 +224,100 @@
         }
       }
     },
+    "/collections/{name}/analyze": {
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Analyze a collection, computing and persisting statistics.",
+        "operationId": "analyze_collection",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection analyzed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionStatsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Analysis failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/config": {
+      "get": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Get detailed collection configuration (HNSW params, storage mode, schema, etc.).",
+        "operationId": "get_collection_config",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionConfigResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/empty": {
       "get": {
         "tags": [
@@ -1357,6 +1451,69 @@
         }
       }
     },
+    "/collections/{name}/search/ids": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Lightweight search returning only IDs and scores (no payload hydration).",
+        "description": "Supports the same search modes as the standard `/search` endpoint:\ndense, sparse, and hybrid. Honors filter, ef_search, mode, fusion,\nand all other `SearchRequest` parameters.",
+        "operationId": "search_ids",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "IDs-only search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchIdsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/search/multi": {
       "post": {
         "tags": [
@@ -1471,6 +1628,58 @@
         }
       }
     },
+    "/collections/{name}/stats": {
+      "get": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Get cached collection statistics (returns 404 if never analyzed).",
+        "operationId": "get_collection_stats",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionStatsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No statistics available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to read stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/stream/insert": {
       "post": {
         "tags": [
@@ -1540,6 +1749,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/guardrails": {
+      "get": {
+        "tags": [
+          "guardrails"
+        ],
+        "summary": "Get current guard-rails configuration.",
+        "operationId": "get_guardrails",
+        "responses": {
+          "200": {
+            "description": "Current guard-rails config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardRailsConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "guardrails"
+        ],
+        "summary": "Update guard-rails configuration (partial update).",
+        "operationId": "update_guardrails",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuardRailsConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated guard-rails config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardRailsConfigResponse"
                 }
               }
             }
@@ -1783,6 +2042,57 @@
           }
         }
       },
+      "CollectionConfigResponse": {
+        "type": "object",
+        "description": "Response with detailed collection configuration.",
+        "required": [
+          "name",
+          "dimension",
+          "metric",
+          "storage_mode",
+          "point_count",
+          "metadata_only"
+        ],
+        "properties": {
+          "dimension": {
+            "type": "integer",
+            "description": "Vector dimension (0 for metadata-only collections).",
+            "minimum": 0
+          },
+          "embedding_dimension": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Embedding dimension for graph node vectors.",
+            "minimum": 0
+          },
+          "graph_schema": {
+            "description": "Graph schema (if this is a graph collection)."
+          },
+          "metadata_only": {
+            "type": "boolean",
+            "description": "Whether this is a metadata-only collection."
+          },
+          "metric": {
+            "type": "string",
+            "description": "Distance metric."
+          },
+          "name": {
+            "type": "string",
+            "description": "Collection name."
+          },
+          "point_count": {
+            "type": "integer",
+            "description": "Number of points in the collection.",
+            "minimum": 0
+          },
+          "storage_mode": {
+            "type": "string",
+            "description": "Storage mode (full, sq8, binary, pq)."
+          }
+        }
+      },
       "CollectionResponse": {
         "type": "object",
         "description": "Response with collection information.",
@@ -1818,6 +2128,129 @@
           }
         }
       },
+      "CollectionStatsResponse": {
+        "type": "object",
+        "description": "Response with collection statistics from ANALYZE.",
+        "required": [
+          "total_points",
+          "total_size_bytes",
+          "row_count",
+          "deleted_count",
+          "avg_row_size_bytes",
+          "payload_size_bytes",
+          "column_stats",
+          "index_stats"
+        ],
+        "properties": {
+          "avg_row_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Average row size in bytes.",
+            "example": 2048,
+            "minimum": 0
+          },
+          "column_stats": {
+            "type": "object",
+            "description": "Per-column statistics."
+          },
+          "deleted_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of deleted/tombstoned rows.",
+            "example": 500,
+            "minimum": 0
+          },
+          "index_stats": {
+            "type": "object",
+            "description": "Per-index statistics."
+          },
+          "last_analyzed_epoch_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp of last ANALYZE (epoch milliseconds), or null if never analyzed.",
+            "minimum": 0
+          },
+          "payload_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total payload storage footprint in bytes.",
+            "example": 5120000,
+            "minimum": 0
+          },
+          "row_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of active rows.",
+            "example": 49500,
+            "minimum": 0
+          },
+          "total_points": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total number of points in the collection.",
+            "example": 50000,
+            "minimum": 0
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total collection size in bytes.",
+            "example": 102400000,
+            "minimum": 0
+          }
+        }
+      },
+      "ColumnStatsResponse": {
+        "type": "object",
+        "description": "Per-column statistics in a collection stats response.",
+        "required": [
+          "name",
+          "null_count",
+          "distinct_count",
+          "avg_size_bytes"
+        ],
+        "properties": {
+          "avg_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Average value size in bytes.",
+            "minimum": 0
+          },
+          "distinct_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of distinct values (cardinality).",
+            "minimum": 0
+          },
+          "max_value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maximum value (serialized string), if available."
+          },
+          "min_value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Minimum value (serialized string), if available."
+          },
+          "name": {
+            "type": "string",
+            "description": "Column name."
+          },
+          "null_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of null values.",
+            "minimum": 0
+          }
+        }
+      },
       "CreateCollectionRequest": {
         "type": "object",
         "description": "Request to create a new collection.",
@@ -1837,6 +2270,24 @@
             ],
             "description": "Vector dimension (required for vector collections, ignored for metadata_only).",
             "example": 768,
+            "minimum": 0
+          },
+          "hnsw_ef_construction": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "HNSW ef_construction parameter (candidate list size during build).\nHigher values improve recall but slow down indexing.\nWhen omitted, auto-tuned based on dimension.",
+            "example": 400,
+            "minimum": 0
+          },
+          "hnsw_m": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "HNSW M parameter (number of bi-directional links per node).\nHigher values improve recall but increase memory and insert time.\nWhen omitted, auto-tuned based on dimension.",
+            "example": 32,
             "minimum": 0
           },
           "metric": {
@@ -2216,6 +2667,135 @@
           }
         }
       },
+      "GuardRailsConfigRequest": {
+        "type": "object",
+        "description": "Request to configure query guard-rails.",
+        "properties": {
+          "circuit_failure_threshold": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Circuit breaker: failure threshold before tripping.",
+            "example": 5,
+            "minimum": 0
+          },
+          "circuit_recovery_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Circuit breaker: recovery time in seconds.",
+            "example": 30,
+            "minimum": 0
+          },
+          "max_cardinality": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Maximum intermediate cardinality.",
+            "example": 100000,
+            "minimum": 0
+          },
+          "max_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Maximum graph traversal depth.",
+            "example": 10,
+            "minimum": 0
+          },
+          "memory_limit_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Memory limit per query in bytes.",
+            "example": 104857600,
+            "minimum": 0
+          },
+          "rate_limit_qps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Rate limit: max queries per second per client.",
+            "example": 100,
+            "minimum": 0
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Query timeout in milliseconds (0 = no timeout).",
+            "example": 30000,
+            "minimum": 0
+          }
+        }
+      },
+      "GuardRailsConfigResponse": {
+        "type": "object",
+        "description": "Response with current guard-rails configuration.",
+        "required": [
+          "max_depth",
+          "max_cardinality",
+          "memory_limit_bytes",
+          "timeout_ms",
+          "rate_limit_qps",
+          "circuit_failure_threshold",
+          "circuit_recovery_seconds"
+        ],
+        "properties": {
+          "circuit_failure_threshold": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Circuit breaker: failure threshold.",
+            "minimum": 0
+          },
+          "circuit_recovery_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Circuit breaker: recovery time in seconds.",
+            "minimum": 0
+          },
+          "max_cardinality": {
+            "type": "integer",
+            "description": "Maximum intermediate cardinality.",
+            "minimum": 0
+          },
+          "max_depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum graph traversal depth.",
+            "minimum": 0
+          },
+          "memory_limit_bytes": {
+            "type": "integer",
+            "description": "Memory limit per query in bytes.",
+            "minimum": 0
+          },
+          "rate_limit_qps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rate limit: max queries per second per client.",
+            "minimum": 0
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Query timeout in milliseconds.",
+            "minimum": 0
+          }
+        }
+      },
       "HybridSearchRequest": {
         "type": "object",
         "description": "Request for hybrid search (vector + text).",
@@ -2254,6 +2834,27 @@
           }
         }
       },
+      "IdScoreResult": {
+        "type": "object",
+        "description": "A single ID+score result from IDs-only search.",
+        "required": [
+          "id",
+          "score"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Point ID.",
+            "minimum": 0
+          },
+          "score": {
+            "type": "number",
+            "format": "float",
+            "description": "Similarity score."
+          }
+        }
+      },
       "IndexResponse": {
         "type": "object",
         "description": "Response with index information.",
@@ -2286,6 +2887,45 @@
           "property": {
             "type": "string",
             "description": "Property name."
+          }
+        }
+      },
+      "IndexStatsResponse": {
+        "type": "object",
+        "description": "Per-index statistics in a collection stats response.",
+        "required": [
+          "name",
+          "index_type",
+          "entry_count",
+          "depth",
+          "size_bytes"
+        ],
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index depth (for tree-based indexes).",
+            "minimum": 0
+          },
+          "entry_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of entries in the index.",
+            "minimum": 0
+          },
+          "index_type": {
+            "type": "string",
+            "description": "Index type (e.g., \"HNSW\", \"PropertyIndex\")."
+          },
+          "name": {
+            "type": "string",
+            "description": "Index name."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Index size in bytes.",
+            "minimum": 0
           }
         }
       },
@@ -2706,6 +3346,22 @@
           "velesql_contract_version": {
             "type": "string",
             "description": "VelesQL contract version used by this response."
+          }
+        }
+      },
+      "SearchIdsResponse": {
+        "type": "object",
+        "description": "Response from IDs-only search (no payload hydration).",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdScoreResult"
+            },
+            "description": "Search results with IDs and scores only."
           }
         }
       },
@@ -3229,6 +3885,10 @@
     {
       "name": "graph",
       "description": "Graph traversal and edge operations"
+    },
+    {
+      "name": "guardrails",
+      "description": "Query guard-rails configuration (EPIC-048)"
     }
   ]
 }

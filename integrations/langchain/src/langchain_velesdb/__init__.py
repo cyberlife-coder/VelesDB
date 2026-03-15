@@ -26,11 +26,16 @@ from langchain_velesdb.security import SecurityError
 
 # Memory classes require full langchain - optional import
 try:
-    from langchain_velesdb.memory import VelesDBChatMemory, VelesDBSemanticMemory
+    from langchain_velesdb.memory import (
+        VelesDBChatMemory,
+        VelesDBSemanticMemory,
+        VelesDBProceduralMemory,
+    )
     _HAS_MEMORY = True
 except ImportError:
     VelesDBChatMemory = None  # type: ignore
     VelesDBSemanticMemory = None  # type: ignore
+    VelesDBProceduralMemory = None  # type: ignore
     _HAS_MEMORY = False
 
 __all__ = [
@@ -41,5 +46,9 @@ __all__ = [
 ]
 
 if _HAS_MEMORY:
-    __all__.extend(["VelesDBChatMemory", "VelesDBSemanticMemory"])
+    __all__.extend([
+        "VelesDBChatMemory",
+        "VelesDBSemanticMemory",
+        "VelesDBProceduralMemory",
+    ])
 __version__ = "1.5.1"

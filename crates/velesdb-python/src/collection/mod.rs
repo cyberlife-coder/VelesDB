@@ -40,27 +40,34 @@ impl Collection {
 
     /// Dispatch to the correct search path based on which arguments are present.
     ///
-    /// Handles all combinations of dense/sparse with optional filter.
+    /// Handles all combinations of dense/sparse with optional filter and
+    /// optional named sparse index selection.
     fn dispatch_search(
         &self,
         dense: Option<Vec<f32>>,
         sparse: Option<velesdb_core::sparse_index::SparseVector>,
         top_k: usize,
         filter: Option<&Filter>,
+        sparse_index_name: Option<&str>,
     ) -> PyResult<Vec<SearchResult>> {
         use pyo3::exceptions::{PyRuntimeError, PyValueError};
+
+        let index_name =
+            sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
 
         match (dense, sparse, filter) {
             (Some(d), Some(s), Some(f)) => {
                 let strategy = CoreFusionStrategy::RRF { k: 60 };
                 self.inner
-                    .hybrid_sparse_search_with_filter(&d, &s, top_k, &strategy, f)
+                    .hybrid_sparse_search_named_with_filter(
+                        &d, &s, top_k, &strategy, index_name, f,
+                    )
                     .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))
             }
             (Some(d), Some(s), None) => {
                 let strategy = CoreFusionStrategy::RRF { k: 60 };
                 self.inner
-                    .hybrid_sparse_search(&d, &s, top_k, &strategy)
+                    .hybrid_sparse_search_named(&d, &s, top_k, &strategy, index_name)
                     .map_err(|e| PyRuntimeError::new_err(format!("Hybrid search failed: {e}")))
             }
             (Some(d), None, Some(f)) => self
@@ -76,7 +83,7 @@ impl Collection {
             )),
             (None, Some(s), None) => self
                 .inner
-                .sparse_search_default(&s, top_k)
+                .sparse_search_named(&s, top_k, index_name)
                 .map_err(|e| PyRuntimeError::new_err(format!("Sparse search failed: {e}"))),
             (None, None, _) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",

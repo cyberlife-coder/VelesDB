@@ -431,11 +431,13 @@ class VelesDBVectorStore(BasePydanticVectorStore):
 
         Args:
             query: Vector store query with embedding and parameters.
-            **kwargs: Additional arguments.
+            **kwargs: Additional arguments.  Accepts ``sparse_vector`` (dict)
+                and ``sparse_index_name`` (str) for hybrid dense+sparse search
+                targeting a specific named sparse index.
 
         Returns:
             Query result with nodes and similarities.
-            
+
         Raises:
             SecurityError: If parameters fail validation.
         """
@@ -450,10 +452,11 @@ class VelesDBVectorStore(BasePydanticVectorStore):
         # Security: Validate k
         validate_k(k)
 
-        # Extract sparse vector from kwargs (v1.5 hybrid dense+sparse)
+        # Extract sparse vector and optional index name from kwargs
         sparse_vector = kwargs.get("sparse_vector")
         if sparse_vector is not None:
             validate_sparse_vector(sparse_vector)
+        sparse_index_name = kwargs.get("sparse_index_name")
 
         core_filter = self._metadata_filters_to_core_filter(query.filters)
 
@@ -462,37 +465,99 @@ class VelesDBVectorStore(BasePydanticVectorStore):
                 "sparse_vector cannot be combined with metadata filters. "
                 "Apply filters separately or omit the sparse_vector."
             )
+
+        results = self._execute_query(
+            collection, query.query_embedding, k,
+            sparse_vector=sparse_vector,
+            sparse_index_name=sparse_index_name,
+            core_filter=core_filter,
+        )
+
+        return self._build_query_result(results)
+
+    def _execute_query(
+        self,
+        collection: Any,
+        query_embedding: List[float],
+        k: int,
+        *,
+        sparse_vector: Optional[dict] = None,
+        sparse_index_name: Optional[str] = None,
+        core_filter: Optional[dict] = None,
+    ) -> List[dict]:
+        """Execute the appropriate search variant on the collection.
+
+        Delegates to filtered, hybrid sparse, or plain dense search
+        depending on which optional arguments are provided.
+
+        Args:
+            collection: VelesDB collection object.
+            query_embedding: Dense query vector.
+            k: Number of results to return.
+            sparse_vector: Optional sparse vector dict for hybrid search.
+            sparse_index_name: Optional named sparse index to query.
+            core_filter: Optional metadata filter dict.
+
+        Returns:
+            List of search result dicts.
+        """
         if core_filter is not None:
             search_with_filter = getattr(collection, "search_with_filter", None)
             if search_with_filter is None:
                 raise NotImplementedError(
                     "Collection does not support 'search_with_filter' required for MetadataFilters."
                 )
-            results = search_with_filter(query.query_embedding, top_k=k, filter=core_filter)
-        elif sparse_vector is not None:
-            # Hybrid dense+sparse search -- SDK handles RRF fusion automatically.
-            # Fall back to dense-only if the collection has no sparse index yet
-            # (e.g. the collection was created before any sparse vectors were inserted).
-            try:
-                results = collection.search(
-                    vector=query.query_embedding,
-                    sparse_vector=sparse_vector,
-                    top_k=k,
-                )
-            except RuntimeError:
-                warnings.warn(
-                    "sparse_vector was provided but the collection does not have a sparse "
-                    "index (no sparse vectors have been inserted). Falling back to "
-                    "dense-only search. Insert points with sparse_vectors to enable "
-                    "hybrid dense+sparse retrieval.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                results = collection.search(query.query_embedding, top_k=k)
-        else:
-            results = collection.search(query.query_embedding, top_k=k)
+            return search_with_filter(query_embedding, top_k=k, filter=core_filter)
 
-        return self._build_query_result(results)
+        if sparse_vector is not None:
+            return self._run_sparse_search(
+                collection, query_embedding, sparse_vector, k,
+                sparse_index_name=sparse_index_name,
+            )
+
+        return collection.search(query_embedding, top_k=k)
+
+    def _run_sparse_search(
+        self,
+        collection: Any,
+        query_embedding: List[float],
+        sparse_vector: dict,
+        k: int,
+        *,
+        sparse_index_name: Optional[str] = None,
+    ) -> List[dict]:
+        """Run hybrid dense+sparse search, degrading to dense-only on failure.
+
+        Args:
+            collection: VelesDB collection object.
+            query_embedding: Dense query vector.
+            sparse_vector: Sparse vector dict mapping int term IDs to float weights.
+            k: Number of results to return.
+            sparse_index_name: Optional named sparse index to target.
+
+        Returns:
+            List of search result dicts.
+        """
+        search_kwargs: dict[str, Any] = {
+            "vector": query_embedding,
+            "sparse_vector": sparse_vector,
+            "top_k": k,
+        }
+        if sparse_index_name is not None:
+            search_kwargs["sparse_index_name"] = sparse_index_name
+
+        try:
+            return collection.search(**search_kwargs)
+        except RuntimeError:
+            warnings.warn(
+                "sparse_vector was provided but the collection does not have a sparse "
+                "index (no sparse vectors have been inserted). Falling back to "
+                "dense-only search. Insert points with sparse_vectors to enable "
+                "hybrid dense+sparse retrieval.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return collection.search(query_embedding, top_k=k)
 
     def query_with_score_threshold(
         self,
@@ -935,3 +1000,75 @@ class VelesDBVectorStore(BasePydanticVectorStore):
             collection.stream_insert(points)
 
         return len(points)
+
+    def add_streaming(
+        self,
+        nodes: List[BaseNode],
+        batch_size: int = 100,
+        **add_kwargs: Any,
+    ) -> List[str]:
+        """Add nodes using streaming insertion for optimal bulk loading.
+
+        Uses VelesDB's stream_insert for better throughput on large datasets.
+        Nodes are batched and sent through the streaming ingestion channel
+        with built-in backpressure.
+
+        Args:
+            nodes: List of nodes with embeddings to add.
+            batch_size: Number of points per streaming batch. Defaults to 100.
+            **add_kwargs: Additional arguments.
+
+        Returns:
+            List of node IDs that were added.
+
+        Raises:
+            SecurityError: If parameters fail validation.
+            ValueError: If nodes lack embeddings.
+        """
+        if not nodes:
+            return []
+
+        # Security: Validate batch size
+        validate_batch_size(len(nodes))
+
+        first_embedding = nodes[0].get_embedding()
+        if first_embedding is None:
+            raise ValueError("Nodes must have embeddings")
+        dimension = len(first_embedding)
+
+        collection = self._get_collection(dimension)
+
+        result_ids: List[str] = []
+        batch: list = []
+
+        for node in nodes:
+            embedding = node.get_embedding()
+            if embedding is None:
+                continue
+
+            node_id = node.node_id
+            result_ids.append(node_id)
+
+            payload = {
+                "text": node.get_content(),
+                "node_id": node_id,
+            }
+            if hasattr(node, "metadata") and node.metadata:
+                for key, value in node.metadata.items():
+                    if isinstance(value, (str, int, float, bool)):
+                        payload[key] = value
+
+            batch.append({
+                "id": _stable_hash_id(node_id),
+                "vector": embedding,
+                "payload": payload,
+            })
+
+            if len(batch) >= batch_size:
+                collection.stream_insert(batch)
+                batch = []
+
+        if batch:
+            collection.stream_insert(batch)
+
+        return result_ids

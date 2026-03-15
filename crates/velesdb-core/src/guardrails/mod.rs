@@ -21,10 +21,14 @@ pub use limits::{
 pub use resilience::{CircuitBreaker, CircuitState, RateLimiter};
 
 /// Global guard-rails manager (EPIC-048).
+///
+/// Holds query limits behind a [`parking_lot::RwLock`] so that the REST
+/// `PUT /guardrails` endpoint can propagate updated limits to every active
+/// collection without replacing the `Arc<GuardRails>`.
 #[derive(Debug)]
 pub struct GuardRails {
-    /// Default query limits.
-    pub limits: QueryLimits,
+    /// Query limits (behind `RwLock` for runtime updates via REST API).
+    limits: parking_lot::RwLock<QueryLimits>,
     /// Rate limiter.
     pub rate_limiter: RateLimiter,
     /// Circuit breaker.
@@ -42,7 +46,7 @@ impl GuardRails {
                 limits.circuit_failure_threshold,
                 limits.circuit_recovery_seconds,
             ),
-            limits,
+            limits: parking_lot::RwLock::new(limits),
         }
     }
 
@@ -55,14 +59,33 @@ impl GuardRails {
                 limits.circuit_failure_threshold,
                 limits.circuit_recovery_seconds,
             ),
-            limits,
+            limits: parking_lot::RwLock::new(limits),
         }
     }
 
     /// Creates a query context for tracking execution.
+    ///
+    /// Snapshots the current limits under a brief read lock so that the
+    /// context owns a consistent copy throughout query execution.
     #[must_use]
     pub fn create_context(&self) -> QueryContext {
-        QueryContext::new(self.limits.clone())
+        QueryContext::new(self.limits.read().clone())
+    }
+
+    /// Returns a snapshot of the current query limits.
+    #[must_use]
+    pub fn limits(&self) -> QueryLimits {
+        self.limits.read().clone()
+    }
+
+    /// Updates query limits at runtime (called from `Database::update_guardrails`).
+    ///
+    /// Only updates the limits snapshot. The `RateLimiter` and `CircuitBreaker`
+    /// are **not** reconstructed — their internal state (token buckets, failure
+    /// counts) is preserved. This is intentional: changing limits mid-flight
+    /// should not reset circuit breaker state or clear rate-limit buckets.
+    pub fn update_limits(&self, new_limits: &QueryLimits) {
+        *self.limits.write() = new_limits.clone();
     }
 
     /// Checks all pre-execution guard-rails for a client.

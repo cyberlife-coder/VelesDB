@@ -17,6 +17,8 @@ mod index_management;
 #[cfg(test)]
 mod index_management_tests;
 mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;
 mod statistics;
 
 pub use index_management::IndexInfo;

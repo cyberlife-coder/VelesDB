@@ -2629,3 +2629,281 @@ async fn test_batch_search_invalid_filter_returns_bad_request() {
     assert!(error.contains("Invalid filter at index 0"));
     assert!(error.contains("Hint"));
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_search_ids_with_filter() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "ids_filter",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points with payloads
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ids_filter/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"category": "a"}},
+                            {"id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"category": "b"}},
+                            {"id": 3, "vector": [0.8, 0.2, 0.0, 0.0], "payload": {"category": "a"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // search/ids with filter — should only return category="a" points
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ids_filter/search/ids")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 10,
+                        "filter": {
+                            "condition": {
+                                "type": "eq",
+                                "field": "category",
+                                "value": "a"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is array");
+
+    // Only IDs 1 and 3 have category="a"
+    let ids: Vec<u64> = results.iter().filter_map(|r| r["id"].as_u64()).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&3));
+    assert!(!ids.contains(&2));
+    // No payload field in the response
+    for r in results {
+        assert!(r.get("payload").is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_search_ids_with_mode() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "ids_mode",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ids_mode/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                            {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // search/ids with mode=accurate — should succeed and return results
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ids_mode/search/ids")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 2,
+                        "mode": "accurate"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is array");
+
+    assert!(!results.is_empty());
+    // Verify id and score fields exist, but no payload
+    for r in results {
+        assert!(r["id"].is_u64());
+        assert!(r["score"].is_number());
+        assert!(r.get("payload").is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_search_ids_sparse() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "ids_sparse",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert points with sparse vectors (auto-creates the sparse index)
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ids_sparse/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {
+                                "id": 1,
+                                "vector": [1.0, 0.0, 0.0, 0.0],
+                                "sparse_vectors": {"": {"indices": [0, 1], "values": [1.0, 0.5]}}
+                            },
+                            {
+                                "id": 2,
+                                "vector": [0.0, 1.0, 0.0, 0.0],
+                                "sparse_vectors": {"": {"indices": [1, 2], "values": [0.8, 0.3]}}
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // search/ids with sparse_vector only — no dense vector
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ids_sparse/search/ids")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "sparse_vector": {"indices": [0, 1], "values": [1.0, 0.5]},
+                        "top_k": 2
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let results = json["results"].as_array().expect("results is array");
+
+    // Should return results as id+score only
+    for r in results {
+        assert!(r["id"].is_u64());
+        assert!(r["score"].is_number());
+        assert!(r.get("payload").is_none());
+    }
+}

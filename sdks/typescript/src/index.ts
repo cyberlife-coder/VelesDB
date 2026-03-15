@@ -23,7 +23,7 @@
  */
 
 export * from './types';
-export { VelesDB } from './client';
+export { VelesDB, AgentMemoryClient } from './client';
 export { WasmBackend } from './backends/wasm';
 export { RestBackend } from './backends/rest';
 export { VelesQLBuilder, velesql } from './query-builder';

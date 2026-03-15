@@ -71,7 +71,14 @@ impl Collection {
         k: usize,
         strategy: &FusionStrategy,
     ) -> Result<Vec<SearchResult>> {
-        self.hybrid_sparse_search_inner(dense_vector, sparse_query, k, strategy, None)
+        self.hybrid_sparse_search_inner(
+            dense_vector,
+            sparse_query,
+            k,
+            strategy,
+            None,
+            DEFAULT_SPARSE_INDEX_NAME,
+        )
     }
 
     /// Hybrid dense+sparse search with metadata filtering.
@@ -90,7 +97,60 @@ impl Collection {
         strategy: &FusionStrategy,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
-        self.hybrid_sparse_search_inner(dense_vector, sparse_query, k, strategy, Some(filter))
+        self.hybrid_sparse_search_inner(
+            dense_vector,
+            sparse_query,
+            k,
+            strategy,
+            Some(filter),
+            DEFAULT_SPARSE_INDEX_NAME,
+        )
+    }
+
+    /// Hybrid dense+sparse search on a named sparse index.
+    ///
+    /// Like [`hybrid_sparse_search`](Self::hybrid_sparse_search) but targets
+    /// a specific named sparse index (e.g. for BGE-M3 multi-model embeddings).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist or fusion fails.
+    pub fn hybrid_sparse_search_named(
+        &self,
+        dense_vector: &[f32],
+        sparse_query: &SparseVector,
+        k: usize,
+        strategy: &FusionStrategy,
+        index_name: &str,
+    ) -> Result<Vec<SearchResult>> {
+        self.hybrid_sparse_search_inner(dense_vector, sparse_query, k, strategy, None, index_name)
+    }
+
+    /// Hybrid dense+sparse search on a named sparse index with filtering.
+    ///
+    /// Combines [`hybrid_sparse_search_named`](Self::hybrid_sparse_search_named)
+    /// with metadata filtering on the sparse branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist or fusion fails.
+    pub fn hybrid_sparse_search_named_with_filter(
+        &self,
+        dense_vector: &[f32],
+        sparse_query: &SparseVector,
+        k: usize,
+        strategy: &FusionStrategy,
+        index_name: &str,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.hybrid_sparse_search_inner(
+            dense_vector,
+            sparse_query,
+            k,
+            strategy,
+            Some(filter),
+            index_name,
+        )
     }
 
     /// Shared implementation for hybrid dense+sparse search with optional filter.
@@ -101,16 +161,12 @@ impl Collection {
         k: usize,
         strategy: &FusionStrategy,
         filter: Option<&crate::filter::Filter>,
+        index_name: &str,
     ) -> Result<Vec<SearchResult>> {
         let candidate_k = k.saturating_mul(2).max(k.saturating_add(10));
 
-        let (dense_results, sparse_results) = self.execute_both_branches(
-            dense_vector,
-            sparse_query,
-            DEFAULT_SPARSE_INDEX_NAME,
-            candidate_k,
-            filter,
-        );
+        let (dense_results, sparse_results) =
+            self.execute_both_branches(dense_vector, sparse_query, index_name, candidate_k, filter);
 
         if dense_results.is_empty() && sparse_results.is_empty() {
             return Ok(Vec::new());

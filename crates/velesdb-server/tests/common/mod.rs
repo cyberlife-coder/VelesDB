@@ -11,7 +11,7 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, aggregate, batch_search, collection_sanity, create_collection, delete_collection,
     delete_point, explain, get_collection, get_edges, get_node_degree, get_point, health_check,
-    hybrid_search, list_collections, query, search, stream_upsert_points, text_search,
+    hybrid_search, list_collections, query, search, search_ids, stream_upsert_points, text_search,
     traverse_graph, upsert_points, AppState, OnboardingMetrics,
 };
 
@@ -22,6 +22,7 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
     let state = Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
+        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
     });
 
     Router::new()
@@ -48,6 +49,7 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
+        .route("/collections/{name}/search/ids", post(search_ids))
         .route("/query", post(query))
         .route("/aggregate", post(aggregate))
         .route("/query/explain", post(explain))

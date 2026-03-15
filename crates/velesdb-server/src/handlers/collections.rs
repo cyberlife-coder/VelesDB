@@ -103,12 +103,23 @@ pub async fn create_collection(
                         .into_response()
                 }
             };
-            state.db.create_vector_collection_with_options(
-                &req.name,
-                dimension,
-                metric,
-                storage_mode,
-            )
+            if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
+                state.db.create_vector_collection_with_hnsw(
+                    &req.name,
+                    dimension,
+                    metric,
+                    storage_mode,
+                    req.hnsw_m,
+                    req.hnsw_ef_construction,
+                )
+            } else {
+                state.db.create_vector_collection_with_options(
+                    &req.name,
+                    dimension,
+                    metric,
+                    storage_mode,
+                )
+            }
         }
         _ => {
             return (

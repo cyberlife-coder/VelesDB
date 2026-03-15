@@ -16,6 +16,20 @@ from llamaindex_velesdb.graph_loader import GraphLoader
 from llamaindex_velesdb.graph_retriever import GraphRetriever, GraphQARetriever
 from llamaindex_velesdb.security import SecurityError
 
+# Memory classes require velesdb native extension - optional import
+try:
+    from llamaindex_velesdb.memory import (
+        VelesDBSemanticMemory,
+        VelesDBEpisodicMemory,
+        VelesDBProceduralMemory,
+    )
+    _HAS_MEMORY = True
+except ImportError:
+    VelesDBSemanticMemory = None  # type: ignore
+    VelesDBEpisodicMemory = None  # type: ignore
+    VelesDBProceduralMemory = None  # type: ignore
+    _HAS_MEMORY = False
+
 __all__ = [
     "VelesDBVectorStore",
     "GraphLoader",
@@ -23,4 +37,11 @@ __all__ = [
     "GraphQARetriever",
     "SecurityError",
 ]
+
+if _HAS_MEMORY:
+    __all__.extend([
+        "VelesDBSemanticMemory",
+        "VelesDBEpisodicMemory",
+        "VelesDBProceduralMemory",
+    ])
 __version__ = "1.5.1"

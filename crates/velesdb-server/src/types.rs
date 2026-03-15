@@ -35,6 +35,18 @@ pub struct CreateCollectionRequest {
     #[serde(default = "default_collection_type")]
     #[schema(example = "vector")]
     pub collection_type: String,
+    /// HNSW M parameter (number of bi-directional links per node).
+    /// Higher values improve recall but increase memory and insert time.
+    /// When omitted, auto-tuned based on dimension.
+    #[serde(default)]
+    #[schema(example = 32, nullable)]
+    pub hnsw_m: Option<usize>,
+    /// HNSW ef_construction parameter (candidate list size during build).
+    /// Higher values improve recall but slow down indexing.
+    /// When omitted, auto-tuned based on dimension.
+    #[serde(default)]
+    #[schema(example = 400, nullable)]
+    pub hnsw_ef_construction: Option<usize>,
 }
 
 fn default_collection_type() -> String {
@@ -293,6 +305,45 @@ pub struct SearchResultResponse {
     pub score: f32,
     /// Point payload.
     pub payload: Option<serde_json::Value>,
+}
+
+/// Response from IDs-only search (no payload hydration).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SearchIdsResponse {
+    /// Search results with IDs and scores only.
+    pub results: Vec<IdScoreResult>,
+}
+
+/// A single ID+score result from IDs-only search.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct IdScoreResult {
+    /// Point ID.
+    pub id: u64,
+    /// Similarity score.
+    pub score: f32,
+}
+
+/// Response with detailed collection configuration.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CollectionConfigResponse {
+    /// Collection name.
+    pub name: String,
+    /// Vector dimension (0 for metadata-only collections).
+    pub dimension: usize,
+    /// Distance metric.
+    pub metric: String,
+    /// Storage mode (full, sq8, binary, pq).
+    pub storage_mode: String,
+    /// Number of points in the collection.
+    pub point_count: usize,
+    /// Whether this is a metadata-only collection.
+    pub metadata_only: bool,
+    /// Graph schema (if this is a graph collection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_schema: Option<serde_json::Value>,
+    /// Embedding dimension for graph node vectors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_dimension: Option<usize>,
 }
 
 /// Error response.
@@ -657,4 +708,120 @@ pub struct ListIndexesResponse {
     pub indexes: Vec<IndexResponse>,
     /// Total number of indexes.
     pub total: usize,
+}
+
+// ============================================================================
+// Collection Statistics Types (EPIC-048)
+// ============================================================================
+
+/// Response with collection statistics from ANALYZE.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CollectionStatsResponse {
+    /// Total number of points in the collection.
+    #[schema(example = 50000)]
+    pub total_points: u64,
+    /// Total collection size in bytes.
+    #[schema(example = 102400000)]
+    pub total_size_bytes: u64,
+    /// Number of active rows.
+    #[schema(example = 49500)]
+    pub row_count: u64,
+    /// Number of deleted/tombstoned rows.
+    #[schema(example = 500)]
+    pub deleted_count: u64,
+    /// Average row size in bytes.
+    #[schema(example = 2048)]
+    pub avg_row_size_bytes: u64,
+    /// Total payload storage footprint in bytes.
+    #[schema(example = 5120000)]
+    pub payload_size_bytes: u64,
+    /// Timestamp of last ANALYZE (epoch milliseconds), or null if never analyzed.
+    pub last_analyzed_epoch_ms: Option<u64>,
+    /// Per-column statistics.
+    #[schema(value_type = Object)]
+    pub column_stats: std::collections::HashMap<String, ColumnStatsResponse>,
+    /// Per-index statistics.
+    #[schema(value_type = Object)]
+    pub index_stats: std::collections::HashMap<String, IndexStatsResponse>,
+}
+
+/// Per-column statistics in a collection stats response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ColumnStatsResponse {
+    /// Column name.
+    pub name: String,
+    /// Number of null values.
+    pub null_count: u64,
+    /// Number of distinct values (cardinality).
+    pub distinct_count: u64,
+    /// Minimum value (serialized string), if available.
+    pub min_value: Option<String>,
+    /// Maximum value (serialized string), if available.
+    pub max_value: Option<String>,
+    /// Average value size in bytes.
+    pub avg_size_bytes: u64,
+}
+
+/// Per-index statistics in a collection stats response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IndexStatsResponse {
+    /// Index name.
+    pub name: String,
+    /// Index type (e.g., "HNSW", "PropertyIndex").
+    pub index_type: String,
+    /// Number of entries in the index.
+    pub entry_count: u64,
+    /// Index depth (for tree-based indexes).
+    pub depth: u32,
+    /// Index size in bytes.
+    pub size_bytes: u64,
+}
+
+// ============================================================================
+// GuardRails Types (EPIC-048)
+// ============================================================================
+
+/// Request to configure query guard-rails.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct GuardRailsConfigRequest {
+    /// Maximum graph traversal depth.
+    #[schema(example = 10)]
+    pub max_depth: Option<u32>,
+    /// Maximum intermediate cardinality.
+    #[schema(example = 100000)]
+    pub max_cardinality: Option<usize>,
+    /// Memory limit per query in bytes.
+    #[schema(example = 104857600)]
+    pub memory_limit_bytes: Option<usize>,
+    /// Query timeout in milliseconds (0 = no timeout).
+    #[schema(example = 30000)]
+    pub timeout_ms: Option<u64>,
+    /// Rate limit: max queries per second per client.
+    #[schema(example = 100)]
+    pub rate_limit_qps: Option<u32>,
+    /// Circuit breaker: failure threshold before tripping.
+    #[schema(example = 5)]
+    pub circuit_failure_threshold: Option<u32>,
+    /// Circuit breaker: recovery time in seconds.
+    #[schema(example = 30)]
+    pub circuit_recovery_seconds: Option<u64>,
+}
+
+/// Response with current guard-rails configuration.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GuardRailsConfigResponse {
+    /// Maximum graph traversal depth.
+    pub max_depth: u32,
+    /// Maximum intermediate cardinality.
+    pub max_cardinality: usize,
+    /// Memory limit per query in bytes.
+    pub memory_limit_bytes: usize,
+    /// Query timeout in milliseconds.
+    pub timeout_ms: u64,
+    /// Rate limit: max queries per second per client.
+    pub rate_limit_qps: u32,
+    /// Circuit breaker: failure threshold.
+    pub circuit_failure_threshold: u32,
+    /// Circuit breaker: recovery time in seconds.
+    pub circuit_recovery_seconds: u64,
 }

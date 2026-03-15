@@ -269,3 +269,168 @@ class VelesDBSemanticMemory:
     def clear(self) -> None:
         """Reset fact counter (facts persist in database)."""
         self._fact_counter = int(time.time() * 1000)
+
+
+class VelesDBProceduralMemory:
+    """Procedural memory for AI agents using VelesDB.
+
+    Stores learned procedures (named sequences of steps) with confidence
+    scoring. Procedures can be recalled by embedding similarity and
+    reinforced through success/failure feedback.
+
+    Args:
+        db_path: Path to VelesDB database directory.
+        dimension: Embedding dimension (default: 384).
+        embeddings: LangChain Embeddings instance used to encode the
+            ``pattern`` string passed to :meth:`recall`.  Required for
+            text-based recall; omit if you will always supply a raw
+            embedding vector directly.
+
+    Example:
+        >>> from langchain_velesdb import VelesDBProceduralMemory
+        >>> from langchain_openai import OpenAIEmbeddings
+        >>> memory = VelesDBProceduralMemory(
+        ...     db_path="./agent_data",
+        ...     dimension=1536,
+        ...     embeddings=OpenAIEmbeddings(),
+        ... )
+        >>> memory.learn("deploy_app", ["build", "test", "deploy"])
+        >>> results = memory.recall("how to deploy")
+        >>> memory.reinforce("deploy_app", success=True)
+    """
+
+    def __init__(
+        self,
+        db_path: str,
+        dimension: int = 384,
+        embeddings: Optional[Any] = None,
+    ) -> None:
+        self._db = velesdb.Database(db_path)
+        self._memory = self._db.agent_memory(dimension=dimension)
+        self._procedural = self._memory.procedural
+        self._embeddings = embeddings
+        self._dimension = dimension
+        # name → procedure_id mapping for reinforce() calls
+        self._name_to_id: Dict[str, int] = {}
+        self._id_counter = int(time.time() * 1000)
+
+    def learn(
+        self,
+        name: str,
+        steps: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+        embedding: Optional[List[float]] = None,
+        confidence: float = 0.5,
+    ) -> None:
+        """Store a procedure under the given name.
+
+        Args:
+            name: Human-readable identifier for the procedure.
+            steps: Ordered list of action steps.
+            metadata: Unused; reserved for future payload support.
+            embedding: Optional vector representation.  When an
+                ``embeddings`` model is configured and ``embedding`` is
+                omitted, the name is embedded automatically.
+            confidence: Initial confidence score in [0.0, 1.0].
+        """
+        if not name:
+            raise ValueError("Procedure name must not be empty")
+        if not steps:
+            raise ValueError("Procedure steps must not be empty")
+
+        emb = embedding
+        if emb is None and self._embeddings is not None:
+            emb = self._embeddings.embed_query(name)
+
+        self._id_counter += 1
+        proc_id = self._id_counter
+        self._name_to_id[name] = proc_id
+        self._procedural.learn(
+            proc_id,
+            name,
+            steps,
+            embedding=emb,
+            confidence=confidence,
+        )
+
+    def recall(
+        self,
+        pattern: str,
+        top_k: int = 5,
+        embedding: Optional[List[float]] = None,
+        min_confidence: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """Recall procedures matching the given pattern.
+
+        Args:
+            pattern: Text description used to generate a query embedding.
+            top_k: Maximum number of results to return.
+            embedding: Pre-computed query vector.  When provided, the
+                ``pattern`` string is ignored for embedding generation.
+            min_confidence: Minimum confidence threshold for results.
+
+        Returns:
+            List of dicts with ``name``, ``steps``, ``confidence``, and
+            ``score`` keys.
+
+        Raises:
+            RuntimeError: If no embeddings model is configured and no
+                pre-computed ``embedding`` is provided.
+        """
+        if top_k < 1:
+            raise ValueError(f"top_k must be >= 1, got {top_k}")
+
+        query_emb = embedding
+        if query_emb is None:
+            if self._embeddings is None:
+                raise RuntimeError(
+                    "An embeddings model is required for text-based recall. "
+                    "Pass embeddings= to VelesDBProceduralMemory() or supply "
+                    "a pre-computed embedding= vector."
+                )
+            query_emb = self._embeddings.embed_query(pattern)
+
+        results = self._procedural.recall(
+            query_emb,
+            top_k=top_k,
+            min_confidence=min_confidence,
+        )
+        return [
+            {
+                "name": r["name"],
+                "steps": r["steps"],
+                "confidence": r["confidence"],
+                "score": r["score"],
+            }
+            for r in results
+        ]
+
+    def reinforce(self, name: str, success: bool = True) -> None:
+        """Reinforce or weaken a stored procedure.
+
+        Args:
+            name: Name of the procedure to update.
+            success: ``True`` increases confidence; ``False`` decreases it.
+
+        Raises:
+            KeyError: If the procedure name has not been learned in this
+                session.
+        """
+        if name not in self._name_to_id:
+            raise KeyError(
+                f"Unknown procedure '{name}'. "
+                "Call learn() before reinforce()."
+            )
+        self._procedural.reinforce(self._name_to_id[name], success)
+
+    def clear(self) -> None:
+        """Reset the in-session procedure registry.
+
+        Resets the name→ID mapping so previously learned names are no
+        longer tracked for reinforcement.  The underlying VelesDB data
+        is not deleted.
+        """
+        self._name_to_id = {}
+        self._id_counter = int(time.time() * 1000)
+        self._memory = self._db.agent_memory(dimension=self._dimension)
+        self._procedural = self._memory.procedural

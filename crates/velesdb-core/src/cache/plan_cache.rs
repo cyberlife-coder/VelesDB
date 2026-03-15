@@ -195,4 +195,11 @@ impl CompiledPlanCache {
     pub fn metrics(&self) -> &PlanCacheMetrics {
         &self.metrics
     }
+
+    /// Clears all cached plans from both L1 and L2 tiers.
+    ///
+    /// This does **not** reset the hit/miss metrics counters.
+    pub fn clear(&self) {
+        self.cache.clear();
+    }
 }

@@ -189,11 +189,22 @@ class VelesDBVectorStore(VectorStore):
         ef_search: Optional[int] = None,
         ids_only: bool = False,
         sparse_vector: Optional[dict] = None,
+        sparse_index_name: Optional[str] = None,
     ) -> List[dict]:
         """Run the appropriate core vector search variant.
 
         When *sparse_vector* is provided alongside a dense *query_embedding*,
         the search becomes a hybrid dense+sparse search (auto RRF k=60).
+
+        Args:
+            query_embedding: Dense query vector.
+            k: Number of results to return.
+            filter: Optional metadata filter dict.
+            ef_search: Optional custom HNSW ef_search parameter.
+            ids_only: If True, return only IDs and scores.
+            sparse_vector: Optional sparse vector dict for hybrid search.
+            sparse_index_name: Optional name of the sparse index to query.
+                When ``None``, the default (unnamed) sparse index is used.
         """
         dimension = len(query_embedding)
         collection = self._get_collection(dimension)
@@ -201,7 +212,8 @@ class VelesDBVectorStore(VectorStore):
         # Hybrid dense+sparse path
         if sparse_vector is not None:
             return self._run_sparse_search(
-                collection, query_embedding, sparse_vector, k, filter=filter
+                collection, query_embedding, sparse_vector, k,
+                filter=filter, sparse_index_name=sparse_index_name,
             )
 
         if ids_only:
@@ -231,14 +243,12 @@ class VelesDBVectorStore(VectorStore):
         k: int,
         *,
         filter: Optional[dict] = None,
+        sparse_index_name: Optional[str] = None,
     ) -> List[dict]:
         """Run hybrid dense+sparse search, degrading to dense-only on failure.
 
-        The PyO3 ``search()`` method accepts ``sparse_vector`` as a keyword
-        argument for hybrid RRF fusion. When a ``filter`` is also requested,
-        the underlying binding does not yet expose a combined
-        sparse+filter surface, so we attempt the hybrid call and fall back to
-        ``search_with_filter`` (dense-only) with a warning rather than raising.
+        The PyO3 ``search()`` method accepts ``sparse_vector`` and
+        ``sparse_index_name`` as keyword arguments for hybrid RRF fusion.
 
         Args:
             collection: VelesDB collection object.
@@ -246,26 +256,24 @@ class VelesDBVectorStore(VectorStore):
             sparse_vector: Sparse vector dict mapping int term IDs to float weights.
             k: Number of results to return.
             filter: Optional metadata filter dict.
+            sparse_index_name: Optional named sparse index to query (e.g. for
+                BGE-M3 multi-model embeddings). ``None`` uses the default index.
 
         Returns:
             List of search result dicts.
         """
+        search_kwargs: dict[str, Any] = {
+            "vector": query_embedding,
+            "sparse_vector": sparse_vector,
+            "top_k": k,
+        }
+        if sparse_index_name is not None:
+            search_kwargs["sparse_index_name"] = sparse_index_name
+        if filter is not None:
+            search_kwargs["filter"] = filter
+
         try:
-            if filter is not None:
-                # The base search() has no filter parameter; attempt sparse search
-                # without filter and let the caller post-filter, or fall back to
-                # dense-only with filter. We choose the dense+filter path to
-                # preserve filter semantics and log a warning.
-                logger.warning(
-                    "sparse_vector combined with filter is not yet supported by "
-                    "the VelesDB binding; falling back to dense-only search with filter."
-                )
-                return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-            return collection.search(
-                vector=query_embedding,
-                sparse_vector=sparse_vector,
-                top_k=k,
-            )
+            return collection.search(**search_kwargs)
         except (RuntimeError, TypeError) as exc:
             logger.warning(
                 "Hybrid sparse search failed (%s); falling back to dense-only search. "
@@ -394,10 +402,14 @@ class VelesDBVectorStore(VectorStore):
         Pass ``sparse_vector={0: 1.5, 3: 0.8}`` in *kwargs* to perform
         hybrid dense+sparse search (auto RRF k=60).
 
+        Pass ``sparse_index_name="bge-m3-sparse"`` in *kwargs* to target a
+        specific named sparse index instead of the default one.
+
         Args:
             query: Query string to search for.
             k: Number of results to return. Defaults to 4.
-            **kwargs: Additional arguments.  Accepts ``sparse_vector``.
+            **kwargs: Additional arguments.  Accepts ``sparse_vector``
+                and ``sparse_index_name``.
 
         Returns:
             List of (Document, score) tuples.
@@ -407,9 +419,12 @@ class VelesDBVectorStore(VectorStore):
         sparse_vector = kwargs.get("sparse_vector")
         if sparse_vector is not None:
             validate_sparse_vector(sparse_vector)
+        sparse_index_name = kwargs.get("sparse_index_name")
         query_embedding = self._embedding.embed_query(query)
         results = self._run_vector_search(
-            query_embedding, k, sparse_vector=sparse_vector,
+            query_embedding, k,
+            sparse_vector=sparse_vector,
+            sparse_index_name=sparse_index_name,
         )
 
         return [(self._to_document(result), result.get("score", 0.0)) for result in results]
@@ -1235,3 +1250,82 @@ class VelesDBVectorStore(VectorStore):
         # Stream insert via collection
         collection.stream_insert(points)
         return len(points)
+
+    def add_texts_streaming(
+        self,
+        texts: Iterable[str],
+        metadatas: Optional[List[dict]] = None,
+        embeddings: Optional[List[List[float]]] = None,
+        ids: Optional[List[str]] = None,
+        batch_size: int = 100,
+        **kwargs: Any,
+    ) -> List[str]:
+        """Add texts using streaming insertion for optimal bulk loading.
+
+        Uses VelesDB's stream_insert for better throughput on large datasets.
+        Texts are batched and sent through the streaming ingestion channel
+        with built-in backpressure.
+
+        Args:
+            texts: Iterable of strings to add.
+            metadatas: Optional list of metadata dicts for each text.
+            embeddings: Optional pre-computed embeddings. If not provided,
+                embeddings are generated via the configured embedding model.
+            ids: Optional list of IDs for each text.
+            batch_size: Number of points per streaming batch. Defaults to 100.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of IDs for the added texts.
+
+        Raises:
+            SecurityError: If parameters fail validation.
+        """
+        texts_list = list(texts)
+        if not texts_list:
+            return []
+
+        # Security: Validate text lengths
+        for text in texts_list:
+            validate_text(text)
+
+        # Generate or use provided embeddings
+        if embeddings is None:
+            embeddings = self._embedding.embed_documents(texts_list)
+
+        if not embeddings:
+            return []
+
+        dimension = len(embeddings[0])
+        collection = self._get_collection(dimension)
+
+        result_ids: List[str] = []
+        batch: list = []
+
+        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
+            if ids and i < len(ids):
+                doc_id = ids[i]
+                int_id = self._to_point_id(doc_id)
+            else:
+                doc_id, int_id = self._generate_auto_id()
+
+            result_ids.append(doc_id)
+
+            payload: dict = {"text": text}
+            if metadatas and i < len(metadatas):
+                payload.update(metadatas[i])
+
+            batch.append({
+                "id": int_id,
+                "vector": embedding,
+                "payload": payload,
+            })
+
+            if len(batch) >= batch_size:
+                collection.stream_insert(batch)
+                batch = []
+
+        if batch:
+            collection.stream_insert(batch)
+
+        return result_ids

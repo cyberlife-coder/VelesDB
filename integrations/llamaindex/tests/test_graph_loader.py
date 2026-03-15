@@ -263,6 +263,119 @@ class TestGraphLoaderIntegration:
         mock_store._get_collection.assert_called_once()
 
 
+class TestGraphLoaderNativeGraph:
+    """Tests for GraphLoader.get_edges when a native graph collection is present.
+
+    Issue #5 (PR-306): get_edges only read self._edges; edges persisted in
+    the native graph were invisible across sessions.
+    """
+
+    def _make_loader_with_native_graph(self, native_graph_mock):
+        """Return a GraphLoader whose _native_graph is pre-set to *native_graph_mock*."""
+        from llamaindex_velesdb import GraphLoader
+
+        mock_store = MagicMock()
+        loader = GraphLoader(mock_store)
+        # Bypass _open_native_graph by injecting the mock directly.
+        loader._native_graph = native_graph_mock
+        return loader
+
+    def test_get_edges_reads_from_native_graph_when_available(self):
+        """get_edges delegates to native graph and normalises the result."""
+        native = MagicMock()
+        native.get_edges.return_value = [
+            {"id": 7, "source": 1, "target": 2, "label": "KNOWS", "properties": {}},
+        ]
+
+        loader = self._make_loader_with_native_graph(native)
+        edges = loader.get_edges()
+
+        native.get_edges.assert_called_once_with(None)
+        assert len(edges) == 1
+        assert edges[0] == {
+            "id": 7,
+            "source": 1,
+            "target": 2,
+            "label": "KNOWS",
+            "properties": {},
+        }
+
+    def test_get_edges_passes_label_filter_to_native_graph(self):
+        """get_edges forwards the label argument to native graph."""
+        native = MagicMock()
+        native.get_edges.return_value = [
+            {"id": 3, "source": 10, "target": 20, "label": "WORKS_AT", "properties": {"since": "2024"}},
+        ]
+
+        loader = self._make_loader_with_native_graph(native)
+        edges = loader.get_edges(label="WORKS_AT")
+
+        native.get_edges.assert_called_once_with("WORKS_AT")
+        assert len(edges) == 1
+        assert edges[0]["label"] == "WORKS_AT"
+        assert edges[0]["properties"] == {"since": "2024"}
+
+    def test_get_edges_normalises_missing_fields_from_native_graph(self):
+        """Native graph entries with missing fields are filled with safe defaults."""
+        native = MagicMock()
+        # Return a partial edge — some implementations may omit optional keys.
+        native.get_edges.return_value = [{"label": "REL"}]
+
+        loader = self._make_loader_with_native_graph(native)
+        edges = loader.get_edges()
+
+        assert edges[0]["id"] == 0
+        assert edges[0]["source"] == 0
+        assert edges[0]["target"] == 0
+        assert edges[0]["properties"] == {}
+
+    def test_get_edges_ignores_in_memory_edges_when_native_graph_present(self):
+        """In-memory self._edges are NOT returned when native graph is available."""
+        native = MagicMock()
+        native.get_edges.return_value = []
+
+        loader = self._make_loader_with_native_graph(native)
+        # Manually pollute the in-memory list — should NOT appear in results.
+        loader._edges.append(
+            {"id": 99, "source": 1, "target": 2, "label": "STALE", "properties": {}}
+        )
+
+        edges = loader.get_edges()
+
+        assert edges == []
+
+    def test_get_edges_falls_back_to_in_memory_when_native_graph_is_none(self):
+        """Without a native graph the existing in-memory behaviour is preserved."""
+        from llamaindex_velesdb import GraphLoader
+
+        mock_store = MagicMock()
+        loader = GraphLoader(mock_store)
+        # Confirm no native graph was injected.
+        loader._native_graph = None
+
+        loader.add_edge(id=5, source=1, target=2, label="KNOWS")
+        edges = loader.get_edges(label="KNOWS")
+
+        assert len(edges) == 1
+        assert edges[0]["id"] == 5
+
+    def test_get_edges_native_graph_exception_falls_back_to_in_memory(self):
+        """If native graph raises, get_edges falls back to in-memory list."""
+        native = MagicMock()
+        native.get_edges.side_effect = RuntimeError("native graph offline")
+
+        loader = self._make_loader_with_native_graph(native)
+        loader._edges.append(
+            {"id": 1, "source": 10, "target": 20, "label": "KNOWS", "properties": {}}
+        )
+
+        edges = loader.get_edges()
+
+        # Fallback: the in-memory edge is returned.
+        assert len(edges) == 1
+        assert edges[0]["id"] == 1
+
+
 class TestGraphRetriever:
     def test_fetch_node_uses_get_nodes(self):
         from llamaindex_velesdb import GraphRetriever

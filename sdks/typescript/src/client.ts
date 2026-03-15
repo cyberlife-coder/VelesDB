@@ -24,6 +24,13 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
   PqTrainOptions,
+  GraphCollectionConfig,
+  CollectionStatsResponse,
+  CollectionConfigResponse,
+  AgentMemoryConfig,
+  SemanticEntry,
+  EpisodicEvent,
+  ProceduralPattern,
 } from './types';
 import { ValidationError } from './types';
 import { WasmBackend } from './backends/wasm';
@@ -750,11 +757,139 @@ export class VelesDB {
    */
   async getNodeDegree(collection: string, nodeId: number): Promise<DegreeResponse> {
     this.ensureInitialized();
-    
+
     if (typeof nodeId !== 'number') {
       throw new ValidationError('Node ID must be a number');
     }
 
     return this.backend.getNodeDegree(collection, nodeId);
+  }
+
+  // ========================================================================
+  // Graph Collection Management (Phase 8)
+  // ========================================================================
+
+  /**
+   * Create a graph collection
+   *
+   * @param name - Collection name
+   * @param config - Optional graph collection configuration
+   */
+  async createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void> {
+    this.ensureInitialized();
+    if (!name || typeof name !== 'string') {
+      throw new ValidationError('Collection name must be a non-empty string');
+    }
+    await this.backend.createGraphCollection(name, config);
+  }
+
+  /**
+   * Get collection statistics (requires prior analyze)
+   *
+   * @param collection - Collection name
+   * @returns Statistics or null if not yet analyzed
+   */
+  async getCollectionStats(collection: string): Promise<CollectionStatsResponse | null> {
+    this.ensureInitialized();
+    return this.backend.getCollectionStats(collection);
+  }
+
+  /**
+   * Analyze a collection to compute statistics
+   *
+   * @param collection - Collection name
+   * @returns Computed statistics
+   */
+  async analyzeCollection(collection: string): Promise<CollectionStatsResponse> {
+    this.ensureInitialized();
+    return this.backend.analyzeCollection(collection);
+  }
+
+  /**
+   * Get collection configuration
+   *
+   * @param collection - Collection name
+   * @returns Collection configuration details
+   */
+  async getCollectionConfig(collection: string): Promise<CollectionConfigResponse> {
+    this.ensureInitialized();
+    return this.backend.getCollectionConfig(collection);
+  }
+
+  /**
+   * Search returning only IDs and scores (lightweight)
+   *
+   * @param collection - Collection name
+   * @param query - Query vector
+   * @param options - Search options
+   * @returns Array of id/score pairs
+   */
+  async searchIds(
+    collection: string,
+    query: number[] | Float32Array,
+    options?: SearchOptions
+  ): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+    return this.backend.searchIds(collection, query, options);
+  }
+
+  // ========================================================================
+  // Agent Memory (Phase 8)
+  // ========================================================================
+
+  /**
+   * Create an agent memory interface
+   *
+   * @param config - Optional agent memory configuration
+   * @returns AgentMemoryClient instance
+   */
+  agentMemory(config?: AgentMemoryConfig): AgentMemoryClient {
+    this.ensureInitialized();
+    return new AgentMemoryClient(this.backend, config);
+  }
+}
+
+/**
+ * Agent Memory client for semantic, episodic, and procedural memory
+ */
+export class AgentMemoryClient {
+  constructor(
+    private readonly backend: IVelesDBBackend,
+    private readonly config?: AgentMemoryConfig
+  ) {}
+
+  /** Configured embedding dimension (default: 384) */
+  get dimension(): number {
+    return this.config?.dimension ?? 384;
+  }
+
+  /** Store a semantic fact */
+  async storeFact(collection: string, entry: SemanticEntry): Promise<void> {
+    return this.backend.storeSemanticFact(collection, entry);
+  }
+
+  /** Search semantic memory */
+  async searchFacts(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return this.backend.searchSemanticMemory(collection, embedding, k);
+  }
+
+  /** Record an episodic event */
+  async recordEvent(collection: string, event: EpisodicEvent): Promise<void> {
+    return this.backend.recordEpisodicEvent(collection, event);
+  }
+
+  /** Recall episodic events */
+  async recallEvents(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return this.backend.recallEpisodicEvents(collection, embedding, k);
+  }
+
+  /** Store a procedural pattern */
+  async learnProcedure(collection: string, pattern: ProceduralPattern): Promise<void> {
+    return this.backend.storeProceduralPattern(collection, pattern);
+  }
+
+  /** Match procedural patterns */
+  async recallProcedures(collection: string, embedding: number[], k = 5): Promise<SearchResult[]> {
+    return this.backend.matchProceduralPatterns(collection, embedding, k);
   }
 }

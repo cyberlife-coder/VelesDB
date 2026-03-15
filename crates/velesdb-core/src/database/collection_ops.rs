@@ -244,6 +244,54 @@ impl Database {
         Ok(())
     }
 
+    /// Creates a new vector collection with custom HNSW parameters.
+    ///
+    /// When `m` or `ef_construction` are `Some`, those values override the
+    /// dimension-based auto-tuned defaults from [`HnswParams::auto`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection with the same name already exists.
+    pub fn create_vector_collection_with_hnsw(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        m: Option<usize>,
+        ef_construction: Option<usize>,
+    ) -> Result<()> {
+        self.ensure_collection_name_available(name)?;
+        let path = self.data_dir.join(name);
+        let coll = VectorCollection::create_with_hnsw(
+            path,
+            name,
+            dimension,
+            metric,
+            storage_mode,
+            m,
+            ef_construction,
+        )?;
+        self.collections
+            .write()
+            .insert(name.to_string(), coll.inner.clone());
+        self.vector_colls.write().insert(name.to_string(), coll);
+
+        if let Some(ref obs) = self.observer {
+            let kind = CollectionType::Vector {
+                dimension,
+                metric,
+                storage_mode,
+            };
+            obs.on_collection_created(name, &kind);
+        }
+
+        self.schema_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        Ok(())
+    }
+
     /// Creates a new graph collection.
     ///
     /// # Errors
@@ -474,6 +522,18 @@ impl Database {
             return Some(c);
         }
         self.open_metadata_collection_from_disk(name)
+    }
+
+    /// Propagates updated query limits to all active collections.
+    ///
+    /// Called by the REST `PUT /guardrails` handler to ensure that runtime
+    /// limit changes take effect for subsequent queries across every
+    /// collection, not just new ones created after the change.
+    pub fn update_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
+        let collections = self.collections.read();
+        for collection in collections.values() {
+            collection.guard_rails.update_limits(limits);
+        }
     }
 
     /// Disk fallback for `get_metadata_collection`.

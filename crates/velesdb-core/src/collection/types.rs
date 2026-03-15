@@ -8,6 +8,7 @@ use crate::collection::streaming::delta::DeltaBuffer;
 use crate::collection::streaming::{BackpressureError, StreamIngester};
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
+use crate::index::hnsw::HnswParams;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 #[cfg(feature = "persistence")]
@@ -161,6 +162,17 @@ pub struct CollectionConfig {
     /// - `Some(n)` where `n > 0`: enables rescore with `n`-fold oversampling.
     #[serde(default = "default_pq_rescore_oversampling")]
     pub pq_rescore_oversampling: Option<u32>,
+
+    /// Custom HNSW index parameters (M, `ef_construction`, etc.).
+    ///
+    /// When `Some`, these parameters are used to rebuild the HNSW index on
+    /// collection reopen if `hnsw.bin` does not yet exist (empty collection).
+    /// When `None`, the default `HnswParams::auto(dimension)` is used.
+    ///
+    /// Backward compatible: old `config.json` files without this field
+    /// deserialize to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hnsw_params: Option<HnswParams>,
 }
 
 /// Returns `Some(4)` as the default PQ rescore oversampling factor.
@@ -364,6 +376,7 @@ mod rescore_config_tests {
             graph_schema: None,
             embedding_dimension: None,
             pq_rescore_oversampling: oversampling,
+            hnsw_params: None,
         }
     }
 

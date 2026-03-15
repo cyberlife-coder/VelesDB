@@ -30,6 +30,14 @@ export interface VelesDBConfig {
 /** Collection type */
 export type CollectionType = 'vector' | 'metadata_only';
 
+/** HNSW index parameters for collection creation */
+export interface HnswParams {
+  /** Number of bi-directional links per node (M parameter) */
+  m?: number;
+  /** Size of dynamic candidate list during construction */
+  efConstruction?: number;
+}
+
 /** Collection configuration */
 export interface CollectionConfig {
   /** Vector dimension (e.g., 768 for BERT, 1536 for GPT). Required for vector collections. */
@@ -46,6 +54,8 @@ export interface CollectionConfig {
   collectionType?: CollectionType;
   /** Optional collection description */
   description?: string;
+  /** Optional HNSW parameters for index tuning */
+  hnsw?: HnswParams;
 }
 
 /** Collection metadata */
@@ -235,6 +245,90 @@ export interface DegreeResponse {
   inDegree: number;
   /** Number of outgoing edges */
   outDegree: number;
+}
+
+// ============================================================================
+// Graph Collection Types (Phase 8)
+// ============================================================================
+
+/** Schema mode for graph collections */
+export type GraphSchemaMode = 'schemaless' | 'strict';
+
+/** Graph collection configuration */
+export interface GraphCollectionConfig {
+  /** Optional embedding dimension for node vectors */
+  dimension?: number;
+  /** Distance metric for embeddings (default: 'cosine') */
+  metric?: DistanceMetric;
+  /** Schema mode (default: 'schemaless') */
+  schemaMode?: GraphSchemaMode;
+}
+
+// ============================================================================
+// Agent Memory Types (Phase 8)
+// ============================================================================
+
+/** Semantic memory entry */
+export interface SemanticEntry {
+  /** Unique fact ID */
+  id: number;
+  /** Fact text content */
+  text: string;
+  /** Embedding vector */
+  embedding: number[];
+  /** Optional metadata */
+  metadata?: Record<string, unknown>;
+}
+
+/** Episodic memory event */
+export interface EpisodicEvent {
+  /** Event type identifier */
+  eventType: string;
+  /** Event data */
+  data: Record<string, unknown>;
+  /** Embedding vector */
+  embedding: number[];
+  /** Optional metadata */
+  metadata?: Record<string, unknown>;
+}
+
+/** Procedural memory pattern */
+export interface ProceduralPattern {
+  /** Procedure name */
+  name: string;
+  /** Ordered steps */
+  steps: string[];
+  /** Optional metadata */
+  metadata?: Record<string, unknown>;
+}
+
+/** Agent memory configuration */
+export interface AgentMemoryConfig {
+  /** Embedding dimension (default: 384) */
+  dimension?: number;
+}
+
+/** Collection statistics response */
+export interface CollectionStatsResponse {
+  totalPoints: number;
+  totalSizeBytes: number;
+  rowCount: number;
+  deletedCount: number;
+  avgRowSizeBytes: number;
+  payloadSizeBytes: number;
+  lastAnalyzedEpochMs: number;
+}
+
+/** Collection configuration response */
+export interface CollectionConfigResponse {
+  name: string;
+  dimension: number;
+  metric: string;
+  storageMode: string;
+  pointCount: number;
+  metadataOnly: boolean;
+  graphSchema?: Record<string, unknown>;
+  embeddingDimension?: number;
 }
 
 // ============================================================================
@@ -516,6 +610,61 @@ export interface IVelesDBBackend {
 
   /** Stream-insert documents with backpressure support */
   streamInsert(collection: string, docs: VectorDocument[]): Promise<void>;
+
+  // Graph Collection Management (Phase 8)
+
+  /** Create a graph collection */
+  createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void>;
+
+  // Collection Stats / Config (Phase 8)
+
+  /** Get collection statistics */
+  getCollectionStats(collection: string): Promise<CollectionStatsResponse | null>;
+
+  /** Analyze a collection */
+  analyzeCollection(collection: string): Promise<CollectionStatsResponse>;
+
+  /** Get collection configuration */
+  getCollectionConfig(collection: string): Promise<CollectionConfigResponse>;
+
+  /** Search returning only IDs and scores */
+  searchIds(
+    collection: string,
+    query: number[] | Float32Array,
+    options?: SearchOptions
+  ): Promise<Array<{ id: number; score: number }>>;
+
+  // Agent Memory (Phase 8)
+
+  /** Store a semantic fact */
+  storeSemanticFact(collection: string, entry: SemanticEntry): Promise<void>;
+
+  /** Search semantic memory */
+  searchSemanticMemory(
+    collection: string,
+    embedding: number[],
+    k?: number
+  ): Promise<SearchResult[]>;
+
+  /** Record an episodic event */
+  recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void>;
+
+  /** Recall episodic events */
+  recallEpisodicEvents(
+    collection: string,
+    embedding: number[],
+    k?: number
+  ): Promise<SearchResult[]>;
+
+  /** Store a procedural pattern */
+  storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<void>;
+
+  /** Match procedural patterns */
+  matchProceduralPatterns(
+    collection: string,
+    embedding: number[],
+    k?: number
+  ): Promise<SearchResult[]>;
 }
 
 /** Error types */

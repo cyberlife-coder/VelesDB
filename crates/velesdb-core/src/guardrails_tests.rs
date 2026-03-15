@@ -75,3 +75,43 @@ fn test_guard_rails_pre_check() {
     let gr = GuardRails::new();
     assert!(gr.pre_check("client1").is_ok());
 }
+
+#[test]
+fn test_guard_rails_update_limits() {
+    let gr = GuardRails::new();
+    assert_eq!(gr.limits().timeout_ms, 30_000);
+
+    let new_limits = QueryLimits::default().with_timeout_ms(5_000);
+    gr.update_limits(&new_limits);
+
+    assert_eq!(gr.limits().timeout_ms, 5_000);
+}
+
+#[test]
+fn test_guard_rails_update_limits_propagates_to_context() {
+    let gr = GuardRails::new();
+
+    let new_limits = QueryLimits::default()
+        .with_max_depth(3)
+        .with_timeout_ms(1_000);
+    gr.update_limits(&new_limits);
+
+    // Contexts created after update should use the new limits.
+    let ctx = gr.create_context();
+    assert!(ctx.check_depth(3).is_ok());
+    assert!(ctx.check_depth(4).is_err());
+}
+
+#[test]
+fn test_guard_rails_update_preserves_circuit_breaker_state() {
+    let gr = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(30_000));
+    // Trip the circuit breaker.
+    for _ in 0..5 {
+        gr.circuit_breaker.record_failure();
+    }
+    assert_eq!(gr.circuit_breaker.state(), CircuitState::Open);
+
+    // Update limits should not reset circuit breaker.
+    gr.update_limits(&QueryLimits::default().with_timeout_ms(1_000));
+    assert_eq!(gr.circuit_breaker.state(), CircuitState::Open);
+}

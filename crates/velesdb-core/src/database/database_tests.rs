@@ -725,3 +725,54 @@ fn test_database_open_loads_sparse_index() {
         assert_eq!(guard.get("").unwrap().doc_count(), 5);
     }
 }
+
+#[test]
+fn test_update_guardrails_propagates_to_collections() {
+    use crate::guardrails::QueryLimits;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    db.create_collection("coll_a", 128, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_collection("coll_b", 64, DistanceMetric::Euclidean)
+        .unwrap();
+
+    // Default timeout is 30_000 ms.
+    let coll_a = db.get_collection("coll_a").unwrap();
+    assert_eq!(coll_a.guard_rails.limits().timeout_ms, 30_000);
+
+    // Update guardrails at the database level.
+    let new_limits = QueryLimits::default()
+        .with_timeout_ms(5_000)
+        .with_max_depth(3);
+    db.update_guardrails(&new_limits);
+
+    // Both collections should reflect the updated limits.
+    let coll_a = db.get_collection("coll_a").unwrap();
+    let coll_b = db.get_collection("coll_b").unwrap();
+    assert_eq!(coll_a.guard_rails.limits().timeout_ms, 5_000);
+    assert_eq!(coll_a.guard_rails.limits().max_depth, 3);
+    assert_eq!(coll_b.guard_rails.limits().timeout_ms, 5_000);
+    assert_eq!(coll_b.guard_rails.limits().max_depth, 3);
+}
+
+#[test]
+fn test_update_guardrails_affects_query_context() {
+    use crate::guardrails::QueryLimits;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("ctx_test", 128, DistanceMetric::Cosine)
+        .unwrap();
+
+    // Tighten the max_depth to 2.
+    let new_limits = QueryLimits::default().with_max_depth(2);
+    db.update_guardrails(&new_limits);
+
+    // A query context created after the update should enforce the new limit.
+    let coll = db.get_collection("ctx_test").unwrap();
+    let ctx = coll.guard_rails.create_context();
+    assert!(ctx.check_depth(2).is_ok());
+    assert!(ctx.check_depth(3).is_err());
+}

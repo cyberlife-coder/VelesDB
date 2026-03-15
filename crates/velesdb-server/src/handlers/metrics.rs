@@ -185,6 +185,9 @@ mod tests {
         Arc::new(AppState {
             db,
             onboarding_metrics: OnboardingMetrics::default(),
+            query_limits: parking_lot::RwLock::new(
+                velesdb_core::guardrails::QueryLimits::default(),
+            ),
         })
     }
 

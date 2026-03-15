@@ -29,6 +29,7 @@ mod types;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use utoipa::OpenApi;
+use velesdb_core::guardrails::QueryLimits;
 use velesdb_core::Database;
 
 // Re-export types for external use
@@ -36,10 +37,12 @@ pub use types::*;
 
 // Re-export handlers for routing
 pub use handlers::{
-    aggregate, batch_search, collection_sanity, create_collection, create_index, delete_collection,
-    delete_index, delete_point, explain, flush_collection, get_collection, get_point, health_check,
-    hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
-    query, search, stream_insert, stream_upsert_points, text_search, upsert_points,
+    aggregate, analyze_collection, batch_search, collection_sanity, create_collection,
+    create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
+    get_collection, get_collection_config, get_collection_stats, get_guardrails, get_point,
+    health_check, hybrid_search, is_empty, list_collections, list_indexes, match_query,
+    multi_query_search, query, search, search_ids, stream_insert, stream_upsert_points,
+    text_search, update_guardrails, upsert_points,
 };
 
 // Graph handlers (EPIC-016/US-031)
@@ -78,7 +81,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         (name = "search", description = "Vector similarity search"),
         (name = "query", description = "VelesQL query execution"),
         (name = "indexes", description = "Property index management (EPIC-009)"),
-        (name = "graph", description = "Graph traversal and edge operations")
+        (name = "graph", description = "Graph traversal and edge operations"),
+        (name = "guardrails", description = "Query guard-rails configuration (EPIC-048)")
     ),
     paths(
         handlers::health::health_check,
@@ -89,6 +93,10 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::collections::collection_sanity,
         handlers::collections::is_empty,
         handlers::collections::flush_collection,
+        handlers::admin::analyze_collection,
+        handlers::admin::get_collection_stats,
+        handlers::admin::get_guardrails,
+        handlers::admin::update_guardrails,
         handlers::points::upsert_points,
         handlers::points::stream_upsert_points,
         handlers::points::stream_insert,
@@ -99,6 +107,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::search::multi_query_search,
         handlers::search::text_search,
         handlers::search::hybrid_search,
+        handlers::search::search_ids,
+        handlers::admin::get_collection_config,
         handlers::query::query,
         handlers::query::aggregate,
         handlers::query::explain,
@@ -127,6 +137,9 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             SearchResponse,
             BatchSearchResponse,
             SearchResultResponse,
+            SearchIdsResponse,
+            IdScoreResult,
+            CollectionConfigResponse,
             ErrorResponse,
             QueryRequest,
             QueryResponse,
@@ -144,6 +157,11 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             CreateIndexRequest,
             IndexResponse,
             ListIndexesResponse,
+            CollectionStatsResponse,
+            ColumnStatsResponse,
+            IndexStatsResponse,
+            GuardRailsConfigRequest,
+            GuardRailsConfigResponse,
             handlers::graph::TraverseRequest,
             handlers::graph::TraverseResponse,
             handlers::graph::TraversalResultItem,
@@ -175,6 +193,8 @@ pub struct AppState {
     pub db: Database,
     /// New-user onboarding diagnostics counters.
     pub onboarding_metrics: OnboardingMetrics,
+    /// Query guard-rails configuration (EPIC-048).
+    pub query_limits: parking_lot::RwLock<QueryLimits>,
 }
 
 /// Lightweight counters for first-hour troubleshooting diagnostics.

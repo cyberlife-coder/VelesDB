@@ -20,11 +20,13 @@ use velesdb_core::Database;
 #[cfg(feature = "swagger-ui")]
 use velesdb_server::ApiDoc;
 use velesdb_server::{
-    add_edge, aggregate, batch_search, collection_sanity, create_collection, create_index,
-    delete_collection, delete_index, delete_point, explain, flush_collection, get_collection,
-    get_edges, get_node_degree, get_point, health_check, hybrid_search, is_empty, list_collections,
-    list_indexes, match_query, multi_query_search, query, search, stream_insert, stream_traverse,
-    stream_upsert_points, text_search, traverse_graph, upsert_points, AppState, OnboardingMetrics,
+    add_edge, aggregate, analyze_collection, batch_search, collection_sanity, create_collection,
+    create_index, delete_collection, delete_index, delete_point, explain, flush_collection,
+    get_collection, get_collection_config, get_collection_stats, get_edges, get_guardrails,
+    get_node_degree, get_point, health_check, hybrid_search, is_empty, list_collections,
+    list_indexes, match_query, multi_query_search, query, search, search_ids, stream_insert,
+    stream_traverse, stream_upsert_points, text_search, traverse_graph, update_guardrails,
+    upsert_points, AppState, OnboardingMetrics,
 };
 
 /// VelesDB Server - A high-performance vector database
@@ -64,6 +66,7 @@ fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
     Ok(Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
+        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
     }))
 }
 
@@ -79,8 +82,12 @@ fn build_router(state: Arc<AppState>) -> Router {
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/{name}/empty", get(is_empty))
+        .route("/collections/{name}/config", get(get_collection_config))
         .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/flush", post(flush_collection))
+        .route("/collections/{name}/analyze", post(analyze_collection))
+        .route("/collections/{name}/stats", get(get_collection_stats))
+        .route("/guardrails", get(get_guardrails).put(update_guardrails))
         // 100MB limit scoped to batch vector upload routes only
         // (1000 vectors × 768D × 4 bytes = ~3MB typical; 100MB covers extreme cases)
         .merge(
@@ -102,6 +109,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/collections/{name}/search/multi", post(multi_query_search))
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
+        .route("/collections/{name}/search/ids", post(search_ids))
         .route(
             "/collections/{name}/indexes",
             get(list_indexes).post(create_index),

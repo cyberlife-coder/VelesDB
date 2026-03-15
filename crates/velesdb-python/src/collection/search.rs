@@ -28,16 +28,20 @@ impl Collection {
     ///     sparse_vector: Sparse query as dict[int, float] or scipy sparse. Optional if vector is given.
     ///     top_k: Number of results to return (default: 10).
     ///     filter: Optional metadata filter dict for pre-filtering results.
+    ///     sparse_index_name: Optional name of the sparse index to query. When ``None``,
+    ///         the default (unnamed) sparse index is used. Named sparse indexes are useful
+    ///         for multi-model embeddings (e.g. BGE-M3 dense + sparse).
     ///
     /// Returns:
     ///     List of dicts with id, score, and payload.
-    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None))]
+    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None))]
     fn search(
         &self,
         vector: Option<PyObject>,
         sparse_vector: Option<PyObject>,
         top_k: usize,
         filter: Option<PyObject>,
+        sparse_index_name: Option<String>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
             let dense = vector.as_ref().map(|v| extract_vector(py, v)).transpose()?;
@@ -47,7 +51,13 @@ impl Collection {
                 .transpose()?;
             let filter_obj = parse_optional_filter(py, filter)?;
 
-            let results = self.dispatch_search(dense, sparse, top_k, filter_obj.as_ref())?;
+            let results = self.dispatch_search(
+                dense,
+                sparse,
+                top_k,
+                filter_obj.as_ref(),
+                sparse_index_name.as_deref(),
+            )?;
             Ok(search_results_to_dicts(py, results))
         })
     }

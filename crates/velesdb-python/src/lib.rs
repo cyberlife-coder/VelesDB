@@ -30,12 +30,14 @@ mod agent;
 mod collection;
 mod collection_helpers;
 mod graph;
+mod graph_collection;
 mod graph_store;
 mod utils;
 mod velesql;
 
 pub use collection::Collection;
 pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversal_to_dict};
+pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -44,7 +46,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use utils::{parse_metric, parse_storage_mode};
-use velesdb_core::{Database as CoreDatabase, FusionStrategy as CoreFusionStrategy};
+use velesdb_core::{
+    CollectionType, Database as CoreDatabase, FusionStrategy as CoreFusionStrategy, GraphSchema,
+};
 
 /// Fusion strategy for combining results from multiple vector searches.
 ///
@@ -255,20 +259,41 @@ impl Database {
     ///     >>> collection = db.create_collection("documents", dimension=768, metric="cosine")
     ///     >>> # With SQ8 quantization for memory savings:
     ///     >>> quantized = db.create_collection("embeddings", dimension=768, storage_mode="sq8")
-    #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full"))]
+    ///     >>> # With custom HNSW parameters:
+    ///     >>> custom = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
+    #[pyo3(signature = (name, dimension, metric = "cosine", storage_mode = "full", m = None, ef_construction = None))]
     fn create_collection(
         &self,
         name: &str,
         dimension: usize,
         metric: &str,
         storage_mode: &str,
+        m: Option<usize>,
+        ef_construction: Option<usize>,
     ) -> PyResult<Collection> {
         let distance_metric = parse_metric(metric)?;
         let mode = parse_storage_mode(storage_mode)?;
 
-        self.inner
-            .create_vector_collection_with_options(name, dimension, distance_metric, mode)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create collection: {}", e)))?;
+        if m.is_some() || ef_construction.is_some() {
+            self.inner
+                .create_vector_collection_with_hnsw(
+                    name,
+                    dimension,
+                    distance_metric,
+                    mode,
+                    m,
+                    ef_construction,
+                )
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to create collection: {e}"))
+                })?;
+        } else {
+            self.inner
+                .create_vector_collection_with_options(name, dimension, distance_metric, mode)
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to create collection: {e}"))
+                })?;
+        }
 
         let collection = self
             .inner
@@ -427,6 +452,176 @@ impl Database {
 
         Ok(format!("PQ training complete: {} results", results.len()))
     }
+
+    /// Create a new persistent graph collection.
+    ///
+    /// Graph collections store typed relationships between nodes, with optional
+    /// node embeddings for vector search.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///     dimension: Optional vector dimension for node embeddings (default: None)
+    ///     metric: Distance metric - "cosine", "euclidean", "dot" (default: "cosine")
+    ///     schema: Optional GraphSchema (default: schemaless)
+    ///
+    /// Returns:
+    ///     GraphCollection instance
+    ///
+    /// Example:
+    ///     >>> graph = db.create_graph_collection("knowledge")
+    ///     >>> graph_with_emb = db.create_graph_collection("kg", dimension=768)
+    #[pyo3(signature = (name, dimension=None, metric="cosine", schema=None))]
+    fn create_graph_collection(
+        &self,
+        name: &str,
+        dimension: Option<usize>,
+        metric: &str,
+        schema: Option<PyGraphSchema>,
+    ) -> PyResult<PyGraphCollection> {
+        let distance_metric = parse_metric(metric)?;
+        let graph_schema = schema
+            .map(|s| s.inner().clone())
+            .unwrap_or_else(GraphSchema::schemaless);
+
+        self.inner
+            .create_collection_typed(
+                name,
+                &CollectionType::Graph {
+                    dimension,
+                    metric: distance_metric,
+                    schema: graph_schema,
+                },
+            )
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to create graph collection: {e}"))
+            })?;
+
+        let coll = self
+            .inner
+            .get_graph_collection(name)
+            .ok_or_else(|| PyRuntimeError::new_err("Graph collection not found after creation"))?;
+
+        Ok(PyGraphCollection::new(coll, name.to_string()))
+    }
+
+    /// Get plan cache statistics.
+    ///
+    /// Returns a dict with keys:
+    ///   - l1_size: Number of entries in L1 (hot) cache
+    ///   - l2_size: Number of entries in L2 (LRU) cache
+    ///   - l1_hits: L1 cache hits
+    ///   - l2_hits: L2 cache hits (L1 miss, L2 hit)
+    ///   - misses: Total cache misses
+    ///   - hits: Total plan-level cache hits
+    ///   - hit_rate: Hit rate as a float in [0.0, 1.0]
+    ///
+    /// Example:
+    ///     >>> stats = db.plan_cache_stats()
+    ///     >>> print(stats["hit_rate"])
+    fn plan_cache_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let cache = self.inner.plan_cache();
+        let stats = cache.stats();
+        let metrics = cache.metrics();
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("l1_size", stats.l1_size)?;
+        dict.set_item("l2_size", stats.l2_size)?;
+        dict.set_item("l1_hits", stats.l1_hits)?;
+        dict.set_item("l2_hits", stats.l2_hits)?;
+        dict.set_item("misses", stats.misses)?;
+        dict.set_item("hits", metrics.hits())?;
+        dict.set_item("hit_rate", metrics.hit_rate())?;
+        Ok(dict.into())
+    }
+
+    /// Clear all cached query plans.
+    ///
+    /// Evicts all compiled plans from both L1 and L2 tiers.
+    /// Hit/miss counters are not reset.
+    ///
+    /// Example:
+    ///     >>> db.clear_plan_cache()
+    fn clear_plan_cache(&self) {
+        self.inner.plan_cache().clear();
+    }
+
+    /// Get an existing graph collection by name.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///
+    /// Returns:
+    ///     GraphCollection instance or None if not found
+    ///
+    /// Example:
+    ///     >>> graph = db.get_graph_collection("knowledge")
+    #[pyo3(signature = (name))]
+    fn get_graph_collection(&self, name: &str) -> PyResult<Option<PyGraphCollection>> {
+        Ok(self
+            .inner
+            .get_graph_collection(name)
+            .map(|c| PyGraphCollection::new(c, name.to_string())))
+    }
+
+    /// Analyze a collection, computing and persisting statistics.
+    ///
+    /// Computes row counts, size metrics, column cardinality, and index
+    /// statistics, then caches them in memory and persists to disk.
+    ///
+    /// Args:
+    ///     name: Collection name to analyze
+    ///
+    /// Returns:
+    ///     dict with statistics (total_points, row_count, deleted_count,
+    ///     total_size_bytes, avg_row_size_bytes, payload_size_bytes,
+    ///     column_stats, index_stats, last_analyzed_epoch_ms, etc.)
+    ///
+    /// Raises:
+    ///     RuntimeError: If the collection does not exist or analysis fails
+    ///
+    /// Example:
+    ///     >>> stats = db.analyze_collection("documents")
+    ///     >>> print(stats["total_points"])
+    #[pyo3(signature = (name))]
+    fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+        let stats = self
+            .inner
+            .analyze_collection(name)
+            .map_err(|e| PyRuntimeError::new_err(format!("Analyze failed: {e}")))?;
+        let json = serde_json::to_value(&stats)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
+        Ok(utils::json_to_python(py, &json))
+    }
+
+    /// Get cached collection statistics (or None if never analyzed).
+    ///
+    /// Returns previously computed statistics from cache or disk.
+    /// Call ``analyze_collection`` first to generate fresh statistics.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///
+    /// Returns:
+    ///     dict with statistics or None if the collection has never been analyzed
+    ///
+    /// Raises:
+    ///     RuntimeError: If on-disk stats exist but cannot be read
+    ///
+    /// Example:
+    ///     >>> stats = db.get_collection_stats("documents")
+    ///     >>> if stats is not None:
+    ///     ...     print(stats["row_count"])
+    #[pyo3(signature = (name))]
+    fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
+        let maybe_stats = self
+            .inner
+            .get_collection_stats(name)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to read stats: {e}")))?;
+        Ok(maybe_stats.map(|stats| {
+            let json = serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null);
+            utils::json_to_python(py, &json)
+        }))
+    }
 }
 
 impl Database {
@@ -478,7 +673,11 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SearchResult>()?;
     m.add_class::<FusionStrategy>()?;
 
-    // Graph classes (EPIC-016/US-030, US-032)
+    // Persistent graph collection (Phase 1)
+    m.add_class::<PyGraphCollection>()?;
+    m.add_class::<PyGraphSchema>()?;
+
+    // In-memory graph classes (EPIC-016/US-030, US-032)
     m.add_class::<GraphStore>()?;
     m.add_class::<StreamingConfig>()?;
     m.add_class::<TraversalResult>()?;

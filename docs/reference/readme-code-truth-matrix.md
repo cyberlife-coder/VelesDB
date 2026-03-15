@@ -20,6 +20,7 @@ Last verification: 2026-03-04.
 | `/collections/{name}/search/multi` | yes | yes |
 | `/collections/{name}/search/text` | yes | yes |
 | `/collections/{name}/search/hybrid` | yes | yes |
+| `/collections/{name}/search/ids` | yes | yes |
 | `/collections/{name}/indexes` | yes | yes |
 | `/collections/{name}/indexes/{label}/{property}` | yes | yes |
 | `/query` | yes | yes |
@@ -29,6 +30,10 @@ Last verification: 2026-03-04.
 | `/collections/{name}/graph/edges` | yes | yes |
 | `/collections/{name}/graph/traverse` | yes | yes |
 | `/collections/{name}/graph/nodes/{node_id}/degree` | yes | yes |
+| `/collections/{name}/config` | yes | yes |
+| `/collections/{name}/analyze` | yes | yes |
+| `/collections/{name}/stats` | yes | yes |
+| `/guardrails` | yes | yes |
 | `/metrics` | feature-gated (`prometheus`) | yes (feature-gated section) |
 
 ## Contract Notes

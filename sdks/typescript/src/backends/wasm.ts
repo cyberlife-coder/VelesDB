@@ -25,6 +25,12 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
   PqTrainOptions,
+  GraphCollectionConfig,
+  CollectionStatsResponse,
+  CollectionConfigResponse,
+  SemanticEntry,
+  EpisodicEvent,
+  ProceduralPattern,
 } from '../types';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { SparseVector } from '../types';
@@ -730,6 +736,117 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     throw new VelesDBError(
       'Streaming insert is not available in WASM mode. Use REST backend for streaming.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  // ========================================================================
+  // Graph Collection / Stats / Agent Memory (Phase 8) - WASM stubs
+  // ========================================================================
+
+  async createGraphCollection(_name: string, _config?: GraphCollectionConfig): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Graph collections are not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async getCollectionStats(_collection: string): Promise<CollectionStatsResponse | null> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Collection stats are not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async analyzeCollection(_collection: string): Promise<CollectionStatsResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Collection analyze is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async getCollectionConfig(_collection: string): Promise<CollectionConfigResponse> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Collection config is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async searchIds(
+    _collection: string,
+    _query: number[] | Float32Array,
+    _options?: SearchOptions
+  ): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'searchIds is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async storeSemanticFact(_collection: string, _entry: SemanticEntry): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Agent memory is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async searchSemanticMemory(
+    _collection: string,
+    _embedding: number[],
+    _k?: number
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Agent memory is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async recordEpisodicEvent(_collection: string, _event: EpisodicEvent): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Agent memory is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async recallEpisodicEvents(
+    _collection: string,
+    _embedding: number[],
+    _k?: number
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Agent memory is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async storeProceduralPattern(
+    _collection: string,
+    _pattern: ProceduralPattern
+  ): Promise<void> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Agent memory is not supported in WASM backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+
+  async matchProceduralPatterns(
+    _collection: string,
+    _embedding: number[],
+    _k?: number
+  ): Promise<SearchResult[]> {
+    this.ensureInitialized();
+    throw new VelesDBError(
+      'Agent memory is not supported in WASM backend. Use REST backend.',
       'NOT_SUPPORTED'
     );
   }

@@ -27,6 +27,12 @@ import type {
   RestPointId,
   PqTrainOptions,
   SparseVector,
+  GraphCollectionConfig,
+  CollectionStatsResponse,
+  CollectionConfigResponse,
+  SemanticEntry,
+  EpisodicEvent,
+  ProceduralPattern,
 } from '../types';
 import { BackpressureError, ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../types';
 
@@ -93,8 +99,33 @@ interface CollectionSanityApiResponse {
 }
 
 /**
+ * Monotonic unique ID generator.
+ * Combines millisecond timestamp with a sub-ms counter to avoid
+ * collisions when multiple IDs are generated within the same millisecond.
+ */
+let _idCounter = 0;
+let _lastTimestamp = 0;
+
+export function generateUniqueId(): number {
+  const now = Date.now();
+  if (now === _lastTimestamp) {
+    _idCounter++;
+  } else {
+    _lastTimestamp = now;
+    _idCounter = 0;
+  }
+  return now * 1000 + _idCounter;
+}
+
+/** @internal Reset state — only for tests. */
+export function _resetIdState(): void {
+  _idCounter = 0;
+  _lastTimestamp = 0;
+}
+
+/**
  * REST Backend
- * 
+ *
  * Provides vector storage via VelesDB REST API server.
  */
 export class RestBackend implements IVelesDBBackend {
@@ -302,6 +333,8 @@ export class RestBackend implements IVelesDBBackend {
       storage_mode: config.storageMode ?? 'full',
       collection_type: config.collectionType ?? 'vector',
       description: config.description,
+      hnsw_m: config.hnsw?.m,
+      hnsw_ef_construction: config.hnsw?.efConstruction,
     });
 
     if (response.error) {
@@ -1099,5 +1132,280 @@ export class RestBackend implements IVelesDBBackend {
       inDegree: response.data?.in_degree ?? 0,
       outDegree: response.data?.out_degree ?? 0,
     };
+  }
+
+  // ========================================================================
+  // Graph Collection Management (Phase 8)
+  // ========================================================================
+
+  async createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request('POST', '/collections', {
+      name,
+      collection_type: 'graph',
+      dimension: config?.dimension,
+      metric: config?.metric ?? 'cosine',
+      schema_mode: config?.schemaMode ?? 'schemaless',
+    });
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  // ========================================================================
+  // Collection Stats / Config (Phase 8)
+  // ========================================================================
+
+  async getCollectionStats(collection: string): Promise<CollectionStatsResponse | null> {
+    this.ensureInitialized();
+
+    const response = await this.request<{
+      total_points: number;
+      total_size_bytes: number;
+      row_count: number;
+      deleted_count: number;
+      avg_row_size_bytes: number;
+      payload_size_bytes: number;
+      last_analyzed_epoch_ms: number;
+    }>('GET', `/collections/${encodeURIComponent(collection)}/stats`);
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        return null;
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return this.mapStatsResponse(response.data!);
+  }
+
+  async analyzeCollection(collection: string): Promise<CollectionStatsResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<{
+      total_points: number;
+      total_size_bytes: number;
+      row_count: number;
+      deleted_count: number;
+      avg_row_size_bytes: number;
+      payload_size_bytes: number;
+      last_analyzed_epoch_ms: number;
+    }>('POST', `/collections/${encodeURIComponent(collection)}/analyze`);
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return this.mapStatsResponse(response.data!);
+  }
+
+  private mapStatsResponse(data: {
+    total_points: number;
+    total_size_bytes: number;
+    row_count: number;
+    deleted_count: number;
+    avg_row_size_bytes: number;
+    payload_size_bytes: number;
+    last_analyzed_epoch_ms: number;
+  }): CollectionStatsResponse {
+    return {
+      totalPoints: data.total_points,
+      totalSizeBytes: data.total_size_bytes,
+      rowCount: data.row_count,
+      deletedCount: data.deleted_count,
+      avgRowSizeBytes: data.avg_row_size_bytes,
+      payloadSizeBytes: data.payload_size_bytes,
+      lastAnalyzedEpochMs: data.last_analyzed_epoch_ms,
+    };
+  }
+
+  async getCollectionConfig(collection: string): Promise<CollectionConfigResponse> {
+    this.ensureInitialized();
+
+    const response = await this.request<{
+      name: string;
+      dimension: number;
+      metric: string;
+      storage_mode: string;
+      point_count: number;
+      metadata_only: boolean;
+      graph_schema?: Record<string, unknown>;
+      embedding_dimension?: number;
+    }>('GET', `/collections/${encodeURIComponent(collection)}/config`);
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    const data = response.data!;
+    return {
+      name: data.name,
+      dimension: data.dimension,
+      metric: data.metric,
+      storageMode: data.storage_mode,
+      pointCount: data.point_count,
+      metadataOnly: data.metadata_only,
+      graphSchema: data.graph_schema,
+      embeddingDimension: data.embedding_dimension,
+    };
+  }
+
+  async searchIds(
+    collection: string,
+    query: number[] | Float32Array,
+    options?: SearchOptions
+  ): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+
+    const queryVector = query instanceof Float32Array ? Array.from(query) : query;
+
+    const response = await this.request<{
+      results: Array<{ id: number; score: number }>;
+    }>(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/search/ids`,
+      {
+        vector: queryVector,
+        top_k: options?.k ?? 10,
+        filter: options?.filter,
+      }
+    );
+
+    if (response.error) {
+      if (response.error.code === 'NOT_FOUND') {
+        throw new NotFoundError(`Collection '${collection}'`);
+      }
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+
+    return response.data?.results ?? [];
+  }
+
+  // ========================================================================
+  // Agent Memory (Phase 8)
+  // ========================================================================
+
+  async storeSemanticFact(collection: string, entry: SemanticEntry): Promise<void> {
+    this.ensureInitialized();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/points`,
+      {
+        points: [{
+          id: entry.id,
+          vector: entry.embedding,
+          payload: {
+            _memory_type: 'semantic',
+            text: entry.text,
+            ...entry.metadata,
+          },
+        }],
+      }
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async searchSemanticMemory(
+    collection: string,
+    embedding: number[],
+    k = 5
+  ): Promise<SearchResult[]> {
+    return this.search(collection, embedding, {
+      k,
+      filter: { _memory_type: 'semantic' },
+    });
+  }
+
+  async recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<void> {
+    this.ensureInitialized();
+
+    const id = generateUniqueId();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/points`,
+      {
+        points: [{
+          id,
+          vector: event.embedding,
+          payload: {
+            _memory_type: 'episodic',
+            event_type: event.eventType,
+            timestamp: new Date().toISOString(),
+            ...event.data,
+            ...event.metadata,
+          },
+        }],
+      }
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async recallEpisodicEvents(
+    collection: string,
+    embedding: number[],
+    k = 5
+  ): Promise<SearchResult[]> {
+    return this.search(collection, embedding, {
+      k,
+      filter: { _memory_type: 'episodic' },
+    });
+  }
+
+  async storeProceduralPattern(
+    collection: string,
+    pattern: ProceduralPattern
+  ): Promise<void> {
+    this.ensureInitialized();
+
+    // Procedural patterns are stored as metadata-only points.
+    // The server handles missing vector → zero-vector internally.
+    const id = generateUniqueId();
+
+    const response = await this.request(
+      'POST',
+      `/collections/${encodeURIComponent(collection)}/points`,
+      {
+        points: [{
+          id,
+          payload: {
+            _memory_type: 'procedural',
+            name: pattern.name,
+            steps: pattern.steps,
+            ...pattern.metadata,
+          },
+        }],
+      }
+    );
+
+    if (response.error) {
+      throw new VelesDBError(response.error.message, response.error.code);
+    }
+  }
+
+  async matchProceduralPatterns(
+    collection: string,
+    embedding: number[],
+    k = 5
+  ): Promise<SearchResult[]> {
+    return this.search(collection, embedding, {
+      k,
+      filter: { _memory_type: 'procedural' },
+    });
   }
 }
