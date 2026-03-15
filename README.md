@@ -43,6 +43,7 @@
   <a href="https://crates.io/crates/tauri-plugin-velesdb"><img src="https://img.shields.io/crates/v/tauri-plugin-velesdb?style=flat-square" alt="tauri-plugin-velesdb version"></a>
 </p>
 
+[![Codacy Badge](https://api.codacy.com/project/badge/Grade/8061a556aa8c406f9b4db974ce9bd446)](https://app.codacy.com/gh/cyberlife-coder/VelesDB?utm_source=github.com&utm_medium=referral&utm_content=cyberlife-coder/VelesDB&utm_campaign=Badge_Grade)
 [![Star History Chart](https://api.star-history.com/svg?repos=cyberlife-coder/velesdb&type=Date)](https://star-history.com/#cyberlife-coder/velesdb&Date)
 
 ---
