@@ -193,3 +193,29 @@ class TestVelesDBSemanticMemory:
 
             assert len(ids) == 3
             assert all(id > 0 for id in ids)
+
+
+class TestVelesDBProceduralMemoryClear:
+    """Tests for procedural memory clear() ID collision fix."""
+
+    def test_learn_after_clear_produces_different_id(self):
+        """learn() after clear() must produce a different ID than learn() before clear()."""
+        from langchain_velesdb.memory import VelesDBProceduralMemory
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory = VelesDBProceduralMemory(path=tmpdir, dimension=4)
+
+            # Learn a procedure before clear
+            memory.learn("greet", ["say hello", "wave"])
+            id_before = memory._name_to_id.get("greet")
+
+            # Clear and learn again with the same name
+            memory.clear()
+            memory.learn("greet", ["say hello", "wave"])
+            id_after = memory._name_to_id.get("greet")
+
+            assert id_before is not None
+            assert id_after is not None
+            assert id_before != id_after, (
+                f"ID collision: learn() before and after clear() produced the same ID {id_before}"
+            )

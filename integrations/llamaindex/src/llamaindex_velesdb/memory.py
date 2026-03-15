@@ -13,6 +13,7 @@ exposes a lightweight, LlamaIndex-friendly API:
 from __future__ import annotations
 
 import logging
+import random
 import time
 from typing import Any, Dict, List, Optional
 
@@ -224,7 +225,7 @@ class VelesDBProceduralMemory:
         self._dimension = dimension
         self._memory = self._db.agent_memory(dimension=dimension)
         self._name_to_id: Dict[str, int] = {}
-        self._id_counter = int(time.time() * 1000)
+        self._id_counter = int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
 
     def learn(
         self,
@@ -327,5 +328,5 @@ class VelesDBProceduralMemory:
         is not deleted.
         """
         self._name_to_id = {}
-        self._id_counter = int(time.time() * 1000)
+        self._id_counter = int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
         self._memory = self._db.agent_memory(dimension=self._dimension)
