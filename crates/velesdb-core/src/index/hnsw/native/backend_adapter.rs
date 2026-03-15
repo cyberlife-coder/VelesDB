@@ -442,7 +442,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
     }
 
     fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<()> {
-        self.insert(data.0.to_vec())?;
+        let (vector, expected_idx) = data;
+        let assigned_id = self.insert(vector.to_vec())?;
+        if assigned_id != expected_idx {
+            tracing::warn!(
+                "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id}"
+            );
+        }
         Ok(())
     }
 

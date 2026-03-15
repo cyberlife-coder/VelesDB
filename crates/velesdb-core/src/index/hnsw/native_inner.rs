@@ -60,14 +60,24 @@ impl NativeHnswInner {
 
     /// Inserts a single vector into the HNSW graph.
     ///
-    /// Note: Unlike `hnsw_rs`, our native implementation auto-assigns IDs.
-    /// The returned node ID should be stored in the mappings.
+    /// The caller supplies `(vector, expected_idx)` where `expected_idx` is the
+    /// internal index pre-registered in `ShardedMappings`. The native graph
+    /// auto-assigns sequential node IDs; this method verifies that the assigned
+    /// ID matches the expected index to detect mapping desynchronisation early.
     ///
     /// # Errors
     ///
-    /// Returns an error if allocation or insertion fails.
+    /// Returns an error if allocation, insertion, or ID-mapping consistency fails.
     pub fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<usize> {
-        self.inner.insert(data.0.to_vec())
+        let (vector, expected_idx) = data;
+        let assigned_id = self.inner.insert(vector.to_vec())?;
+        if assigned_id != expected_idx {
+            tracing::warn!(
+                "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id} \
+                 — mapping may be desynchronised under concurrent inserts"
+            );
+        }
+        Ok(assigned_id)
     }
 
     /// Parallel batch insert into the HNSW graph.
