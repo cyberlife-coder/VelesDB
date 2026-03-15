@@ -776,3 +776,81 @@ fn test_update_guardrails_affects_query_context() {
     assert!(ctx.check_depth(2).is_ok());
     assert!(ctx.check_depth(3).is_err());
 }
+
+// =========================================================================
+// US-001: File locking tests
+// =========================================================================
+
+#[test]
+fn test_database_file_locking_prevents_second_open() {
+    let dir = tempdir().unwrap();
+    let _db1 = Database::open(dir.path()).unwrap();
+
+    // Second open on the same path must fail with DatabaseLocked
+    let result = Database::open(dir.path());
+    match result {
+        Ok(_) => panic!("Expected DatabaseLocked error, got Ok"),
+        Err(err) => assert!(
+            matches!(err, crate::Error::DatabaseLocked(_)),
+            "Expected DatabaseLocked, got: {err:?}"
+        ),
+    }
+}
+
+#[test]
+fn test_database_lock_released_on_drop() {
+    let dir = tempdir().unwrap();
+
+    {
+        let _db = Database::open(dir.path()).unwrap();
+        // lock held inside this scope
+    }
+    // After drop, the lock should be released
+    let _db2 = Database::open(dir.path()).unwrap();
+}
+
+// =========================================================================
+// US-006: Collection diagnostics tests
+// =========================================================================
+
+#[test]
+fn test_diagnostics_healthy_vector_collection() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_vector_collection("diag_test", 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let coll = db.get_vector_collection("diag_test").unwrap();
+    coll.upsert(vec![Point::new(1, vec![0.1, 0.2, 0.3, 0.4], None)])
+        .unwrap();
+
+    let diag = coll.diagnostics();
+    assert!(diag.has_vectors);
+    assert!(diag.search_ready);
+    assert!(diag.dimension_configured);
+    assert_eq!(diag.point_count, 1);
+    assert_eq!(diag.index_health, crate::collection::IndexHealth::Healthy);
+}
+
+#[test]
+fn test_diagnostics_empty_vector_collection() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_vector_collection("empty_diag", 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let diag = db.collection_diagnostics("empty_diag").unwrap();
+    assert!(!diag.has_vectors);
+    assert!(!diag.search_ready);
+    assert!(diag.dimension_configured);
+    assert_eq!(diag.point_count, 0);
+    assert_eq!(diag.index_health, crate::collection::IndexHealth::Empty);
+}
+
+#[test]
+fn test_diagnostics_not_found() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let result = db.collection_diagnostics("nonexistent");
+    assert!(result.is_err());
+}

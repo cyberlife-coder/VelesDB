@@ -254,7 +254,7 @@ EXPLAIN SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 | **Pinecone** | No API keys, no cloud costs, **100x faster locally**, + Graph + Columns |
 | **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile, **unified Vector+Graph** |
 | **Milvus** | Zero config vs complex cluster setup, **embedded mode** |
-| **pgvector** | Purpose-built for vectors, **700x faster search**, native graph support |
+| **pgvector** | Purpose-built for vectors, **12-100x faster search**, native graph support |
 | **ChromaDB** | Production-grade Rust vs Python prototype, **enterprise-ready** |
 | **Neo4j + Pinecone** | **One database instead of two**, unified query language |
 

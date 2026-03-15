@@ -39,7 +39,7 @@ struct Args {
     data_dir: String,
 
     /// Host address to bind to
-    #[arg(long, default_value = "0.0.0.0", env = "VELESDB_HOST")]
+    #[arg(long, default_value = "127.0.0.1", env = "VELESDB_HOST")]
     host: String,
 
     /// Port to listen on
@@ -157,6 +157,12 @@ fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn serve(host: &str, port: u16, app: Router) -> anyhow::Result<()> {
+    if host != "127.0.0.1" && host != "localhost" {
+        tracing::warn!(
+            "VelesDB server exposed on network ({host}). \
+             Consider using 127.0.0.1 for local-first usage."
+        );
+    }
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);

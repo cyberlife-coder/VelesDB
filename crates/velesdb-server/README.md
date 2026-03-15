@@ -249,7 +249,7 @@ curl http://localhost:8080/api-docs/openapi.json
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `VELESDB_PORT` | 8080 | Server port |
-| `VELESDB_HOST` | 0.0.0.0 | Bind address |
+| `VELESDB_HOST` | 127.0.0.1 | Bind address (use 0.0.0.0 for network access) |
 | `VELESDB_DATA_DIR` | ./data | Data directory |
 | `RUST_LOG` | warn | Log level |
 
