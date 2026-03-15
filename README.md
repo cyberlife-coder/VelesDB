@@ -559,6 +559,9 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/empty` | `GET` | Check if a collection has no points |
 | `/collections/{name}/flush` | `POST` | Flush collection data to disk |
 | `/collections/{name}/sanity` | `GET` | Quick collection diagnostics (readiness and counters) |
+| `/collections/{name}/config` | `GET` | Get collection configuration (dimensions, distance metric, HNSW params) |
+| `/collections/{name}/analyze` | `POST` | Run collection analysis (index quality, fragmentation, optimization hints) |
+| `/collections/{name}/stats` | `GET` | Get collection statistics (point count, memory usage, index stats) |
 
 ### Points
 
@@ -578,6 +581,7 @@ curl -X POST http://localhost:8080/query \
 | `/collections/{name}/search/multi` | `POST` | Multi-query search |
 | `/collections/{name}/search/text` | `POST` | BM25 full-text search |
 | `/collections/{name}/search/hybrid` | `POST` | Hybrid vector + text search |
+| `/collections/{name}/search/ids` | `POST` | Search by point IDs (batch ID lookup with optional filtering) |
 
 > **Sparse & hybrid search:** Use `/collections/{name}/search` with a `sparse_vector` field for sparse-only search, or both `vector` and `sparse_vector` for hybrid dense+sparse search (auto-detected, fused via RRF/RSF).
 
@@ -632,6 +636,13 @@ SELECT * FROM active UNION SELECT * FROM archived
 
 > **Note:** ColumnStore operations (INSERT, UPDATE, SELECT on structured data) are performed via the `/query` endpoint using VelesQL syntax.  
 > For top-level `MATCH` on `/query`, include `collection` in the JSON body (or use `/collections/{name}/match`).
+
+### Administration
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/guardrails` | `GET` | Get current query guardrails configuration (limits, timeouts) |
+| `/guardrails` | `PUT` | Update query guardrails configuration |
 
 ### Health
 
