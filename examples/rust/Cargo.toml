@@ -3,7 +3,7 @@ name = "multimodel_search"
 version = "0.1.0"
 edition = "2021"
 description = "VelesDB Multi-Model Search Example"
-license = "Apache-2.0"
+license = "MIT"
 publish = false
 
 [workspace]

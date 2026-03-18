@@ -3,7 +3,7 @@ name = "mini_recommender"
 version = "0.1.0"
 edition = "2021"
 description = "VelesDB Mini Recommender Tutorial Example"
-license = "Apache-2.0"
+license = "MIT"
 publish = false
 
 [[bin]]

@@ -1,7 +1,7 @@
 # VelesDB WASM
 
 [![npm](https://img.shields.io/npm/v/@wiscale/velesdb-wasm)](https://www.npmjs.com/package/@wiscale/velesdb-wasm)
-[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vector search in the browser.
 

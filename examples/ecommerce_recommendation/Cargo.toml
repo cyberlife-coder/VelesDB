@@ -3,7 +3,7 @@ name = "ecommerce_recommendation"
 version = "0.1.0"
 edition = "2021"
 description = "E-commerce recommendation system showcasing VelesDB Vector + Graph + MultiColumn capabilities"
-license = "LicenseRef-VelesDB-Core-1.0"
+license = "MIT"
 
 [dependencies]
 velesdb-core = { path = "../../crates/velesdb-core" }

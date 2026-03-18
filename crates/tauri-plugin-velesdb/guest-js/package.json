@@ -33,7 +33,7 @@
     "desktop"
   ],
   "author": "Cyberlife Coder",
-  "license": "Elastic-2.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/cyberlife-coder/VelesDB.git",

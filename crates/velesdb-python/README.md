@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
-[![License](https://img.shields.io/pypi/l/velesdb)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) - a high-performance vector database for AI applications.
 
