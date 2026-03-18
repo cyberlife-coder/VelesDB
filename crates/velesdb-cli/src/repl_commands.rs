@@ -12,6 +12,7 @@ use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::Database;
 
 use crate::collection_helpers;
+use crate::graph_display;
 use crate::repl::{OutputFormat, ReplConfig};
 
 /// Result of a REPL command execution.
@@ -432,44 +433,24 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
             }
         }
         Some(collection_helpers::TypedCollection::Graph(col)) => {
-            let edges = col.get_edges(None);
-            let all_node_ids: std::collections::BTreeSet<u64> = edges
-                .iter()
-                .flat_map(|e| [e.source(), e.target()])
-                .collect();
-            let total = all_node_ids.len();
-            let total_pages = total.div_ceil(page_size);
-
-            let page_ids: Vec<u64> = all_node_ids
-                .into_iter()
-                .skip(offset)
-                .take(page_size)
-                .collect();
-
-            let mut rows = Vec::new();
-            for node_id in &page_ids {
-                let mut row = HashMap::new();
-                row.insert("id".to_string(), serde_json::json!(node_id));
-                if let Ok(Some(serde_json::Value::Object(map))) = col.get_node_payload(*node_id) {
-                    for (k, v) in map {
-                        row.insert(k, v);
-                    }
-                }
-                rows.push(row);
-            }
+            let node_page = match graph_display::paginate_graph_nodes(&col, page, page_size) {
+                Ok(p) => p,
+                Err(e) => return CommandResult::Error(format!("{e}")),
+            };
 
             println!(
                 "\n{} (Graph) - Page {}/{} ({} unique nodes)",
                 name.green(),
-                page,
-                total_pages.max(1),
-                total
+                node_page.page,
+                node_page.total_pages.max(1),
+                node_page.total_nodes,
             );
             println!();
 
-            if rows.is_empty() {
+            if node_page.entries.is_empty() {
                 println!("No nodes on this page.\n");
             } else {
+                let rows = node_entries_to_rows(&node_page.entries);
                 crate::repl_output::print_table(&rows);
                 println!(
                     "\nUse {} to see next page\n",
@@ -543,52 +524,32 @@ fn cmd_nodes(db: &Database, parts: &[&str]) -> CommandResult {
         .unwrap_or(1)
         .max(1);
     let page_size = 10;
-    let offset = (page - 1) * page_size;
 
     let col = match db.get_graph_collection(name) {
         Some(c) => c,
         None => return CommandResult::Error(format!("Graph collection '{name}' not found")),
     };
 
-    let edges = col.get_edges(None);
-    let all_node_ids: std::collections::BTreeSet<u64> = edges
-        .iter()
-        .flat_map(|e| [e.source(), e.target()])
-        .collect();
-    let total = all_node_ids.len();
-    let total_pages = total.div_ceil(page_size);
-
-    let page_ids: Vec<u64> = all_node_ids
-        .into_iter()
-        .skip(offset)
-        .take(page_size)
-        .collect();
+    let node_page = match graph_display::paginate_graph_nodes(&col, page, page_size) {
+        Ok(p) => p,
+        Err(e) => return CommandResult::Error(format!("{e}")),
+    };
 
     println!(
         "\n{} in '{}' — Page {}/{} ({} unique nodes from {} edges)",
         "Nodes".bold().underline(),
         name.green(),
-        page,
-        total_pages.max(1),
-        total,
-        edges.len()
+        node_page.page,
+        node_page.total_pages.max(1),
+        node_page.total_nodes,
+        node_page.total_edges,
     );
     println!();
 
-    if page_ids.is_empty() {
+    if node_page.entries.is_empty() {
         println!("No nodes on this page.\n");
     } else {
-        let mut rows = Vec::new();
-        for node_id in &page_ids {
-            let mut row = HashMap::new();
-            row.insert("id".to_string(), serde_json::json!(node_id));
-            if let Ok(Some(serde_json::Value::Object(map))) = col.get_node_payload(*node_id) {
-                for (k, v) in map {
-                    row.insert(k, v);
-                }
-            }
-            rows.push(row);
-        }
+        let rows = node_entries_to_rows(&node_page.entries);
         crate::repl_output::print_table(&rows);
         println!(
             "\nUse {} to see next page\n",
@@ -1470,21 +1431,7 @@ fn cmd_graph_edges(db: &Database, parts: &[&str]) -> CommandResult {
 
     let label = parse_flag(parts, "--label");
     let edges = col.get_edges(label.as_deref());
-
-    if edges.is_empty() {
-        println!("  No edges found.\n");
-    } else {
-        for e in &edges {
-            println!(
-                "  {} {} --[{}]--> {}",
-                format!("[{}]", e.id()).cyan(),
-                e.source(),
-                e.label().green(),
-                e.target(),
-            );
-        }
-        println!("\n  Total: {} edge(s)\n", edges.len());
-    }
+    graph_display::print_edge_list(&edges, "No edges found.");
     CommandResult::Continue
 }
 
@@ -1503,12 +1450,7 @@ fn cmd_graph_degree(db: &Database, parts: &[&str]) -> CommandResult {
     };
 
     let (in_deg, out_deg) = col.node_degree(node_id);
-    println!("\n{}", "Node Degree".bold().underline());
-    println!("  {} {}", "Node ID:".cyan(), node_id.to_string().green());
-    println!("  {} {}", "In-degree:".cyan(), in_deg);
-    println!("  {} {}", "Out-degree:".cyan(), out_deg);
-    println!("  {} {}", "Total:".cyan(), in_deg + out_deg);
-    println!();
+    graph_display::print_degree(node_id, in_deg, out_deg);
     CommandResult::Continue
 }
 
@@ -1541,31 +1483,17 @@ fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
         rel_types: Vec::new(),
     };
 
+    let algo_label = match algo.as_str() {
+        "dfs" => "DFS",
+        _ => "BFS",
+    };
+
     let results = match algo.as_str() {
         "dfs" => col.traverse_dfs(source, &config),
         _ => col.traverse_bfs(source, &config),
     };
 
-    println!(
-        "\n{} (algo={}, source={}, max_depth={})\n",
-        "Traversal Results".bold().underline(),
-        algo.green(),
-        source,
-        max_depth,
-    );
-    if results.is_empty() {
-        println!("  No results found.\n");
-    } else {
-        for r in &results {
-            println!(
-                "  depth={} target={} path={:?}",
-                r.depth,
-                r.target_id.to_string().green(),
-                r.path,
-            );
-        }
-        println!("\n  Total: {} result(s)\n", results.len());
-    }
+    graph_display::print_traversal(&results, algo_label, source, max_depth);
     CommandResult::Continue
 }
 
@@ -1601,21 +1529,32 @@ fn cmd_graph_neighbors(db: &Database, parts: &[&str]) -> CommandResult {
         node_id,
         dir.green(),
     );
-    if edges.is_empty() {
-        println!("  No neighbors found.\n");
-    } else {
-        for e in &edges {
-            println!(
-                "  {} {} --[{}]--> {}",
-                format!("[{}]", e.id()).cyan(),
-                e.source(),
-                e.label().green(),
-                e.target(),
-            );
-        }
-        println!("\n  Total: {} edge(s)\n", edges.len());
-    }
+    graph_display::print_edge_list(&edges, "No neighbors found.");
     CommandResult::Continue
+}
+
+// ============================================================================
+// Shared conversion helpers
+// ============================================================================
+
+/// Convert graph node entries (from [`graph_display::paginate_graph_nodes`]) into
+/// row maps suitable for [`crate::repl_output::print_table`].
+fn node_entries_to_rows(
+    entries: &[(u64, Option<serde_json::Value>)],
+) -> Vec<HashMap<String, serde_json::Value>> {
+    entries
+        .iter()
+        .map(|(node_id, payload)| {
+            let mut row = HashMap::new();
+            row.insert("id".to_string(), serde_json::json!(node_id));
+            if let Some(serde_json::Value::Object(map)) = payload {
+                for (k, v) in map {
+                    row.insert(k.clone(), v.clone());
+                }
+            }
+            row
+        })
+        .collect()
 }
 
 // ============================================================================

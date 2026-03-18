@@ -15,6 +15,7 @@
 
 mod collection_helpers;
 mod graph;
+mod graph_display;
 mod import;
 mod license;
 mod repl;

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+use super::common::{create_http_client, extract_id_from_value, json_type_name};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::{PgVectorConfig, SupabaseConfig};
 use crate::error::{Error, Result};
@@ -128,7 +129,7 @@ impl SupabaseConnector {
     pub fn new(config: SupabaseConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: create_http_client(),
         }
     }
 
@@ -179,125 +180,25 @@ impl SourceConnector for SupabaseConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        // Get count from content-range header
-        let resp = self
-            .request(reqwest::Method::HEAD, &self.config.table)
-            .send()
-            .await?;
+        let total_count = self.fetch_total_count().await;
 
-        let total_count = resp
-            .headers()
-            .get("content-range")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| {
-                // Format: "0-0/123" or "*/123"
-                s.split('/').next_back().and_then(|n| n.parse().ok())
-            });
-
-        // Fetch one row to detect all columns and vector dimension
-        let limit_one = "1".to_string();
         let resp = self
             .request(reqwest::Method::GET, &self.config.table)
-            .query(&[("select", &"*".to_string()), ("limit", &limit_one)])
+            .query(&[("select", &"*".to_string()), ("limit", &"1".to_string())])
             .send()
             .await?;
 
-        let mut dimension = 0;
-        let mut fields: Vec<FieldInfo> = Vec::new();
-        let mut detected_vector_col: Option<String> = None;
-        let mut best_vector_dimension = 0;
-
-        if resp.status().is_success() {
+        let (dimension, mut fields, detected_vector_col) = if resp.status().is_success() {
             let rows: Vec<HashMap<String, serde_json::Value>> = resp.json().await?;
-            if let Some(row) = rows.first() {
-                // First pass: find all vector columns and their dimensions
-                let mut vector_candidates: Vec<(String, usize)> = Vec::new();
+            rows.first()
+                .map(|row| {
+                    detect_supabase_schema(row, &self.config.vector_column, &self.config.id_column)
+                })
+                .unwrap_or_default()
+        } else {
+            (0, Vec::new(), None)
+        };
 
-                for (col_name, col_value) in row {
-                    let parsed_vec = parse_pgvector(col_value);
-                    // A vector typically has dimension > 10 (embeddings are usually 128+)
-                    if !parsed_vec.is_empty() && parsed_vec.len() > 10 {
-                        debug!(
-                            "Found potential vector column '{}' with dimension {}",
-                            col_name,
-                            parsed_vec.len()
-                        );
-                        vector_candidates.push((col_name.clone(), parsed_vec.len()));
-                    }
-                }
-
-                // Select the best vector column:
-                // 1. Prefer column matching configured name
-                // 2. Prefer column with "vector" or "embedding" in name
-                // 3. Fall back to first candidate
-                for (col_name, dim) in &vector_candidates {
-                    if col_name == &self.config.vector_column {
-                        detected_vector_col = Some(col_name.clone());
-                        best_vector_dimension = *dim;
-                        break;
-                    }
-                }
-
-                if detected_vector_col.is_none() {
-                    for (col_name, dim) in &vector_candidates {
-                        let lower = col_name.to_lowercase();
-                        if lower.contains("vector")
-                            || lower.contains("embedding")
-                            || lower.contains("emb")
-                        {
-                            detected_vector_col = Some(col_name.clone());
-                            best_vector_dimension = *dim;
-                            break;
-                        }
-                    }
-                }
-
-                if detected_vector_col.is_none() && !vector_candidates.is_empty() {
-                    let (col_name, dim) = &vector_candidates[0];
-                    detected_vector_col = Some(col_name.clone());
-                    best_vector_dimension = *dim;
-                }
-
-                dimension = best_vector_dimension;
-
-                // Second pass: collect metadata fields (non-vector columns)
-                for (col_name, col_value) in row {
-                    // Skip ID column and detected vector column
-                    if col_name == &self.config.id_column {
-                        continue;
-                    }
-                    if let Some(ref vec_col) = detected_vector_col {
-                        if col_name == vec_col {
-                            continue;
-                        }
-                    }
-
-                    // Check if it's a vector column we should skip
-                    let parsed_vec = parse_pgvector(col_value);
-                    if !parsed_vec.is_empty() && parsed_vec.len() > 10 {
-                        continue;
-                    }
-
-                    // Determine field type
-                    let field_type = match col_value {
-                        serde_json::Value::String(_) => "string",
-                        serde_json::Value::Number(_) => "number",
-                        serde_json::Value::Bool(_) => "boolean",
-                        serde_json::Value::Array(_) => "array",
-                        serde_json::Value::Object(_) => "object",
-                        serde_json::Value::Null => "null",
-                    };
-
-                    fields.push(FieldInfo {
-                        name: col_name.clone(),
-                        field_type: field_type.to_string(),
-                        indexed: false,
-                    });
-                }
-            }
-        }
-
-        // If payload_columns is specified, filter to only those
         if !self.config.payload_columns.is_empty() {
             fields = self
                 .config
@@ -311,22 +212,14 @@ impl SourceConnector for SupabaseConnector {
                 .collect();
         }
 
-        info!(
-            "Supabase table '{}': {}D vectors, {:?} rows, {} metadata fields",
-            self.config.table,
+        log_supabase_schema(
+            &self.config.table,
             dimension,
             total_count,
-            fields.len()
+            &fields,
+            &detected_vector_col,
+            &self.config.vector_column,
         );
-
-        if let Some(vec_col) = &detected_vector_col {
-            if vec_col != &self.config.vector_column {
-                info!(
-                    "Note: Detected vector column '{}' differs from configured '{}'",
-                    vec_col, self.config.vector_column
-                );
-            }
-        }
 
         Ok(SourceSchema {
             source_type: "supabase".to_string(),
@@ -384,14 +277,7 @@ impl SourceConnector for SupabaseConnector {
         let mut points = Vec::with_capacity(rows.len());
 
         for mut row in rows {
-            let id = row
-                .remove(&self.config.id_column)
-                .and_then(|v| match v {
-                    serde_json::Value::Number(n) => Some(n.to_string()),
-                    serde_json::Value::String(s) => Some(s),
-                    _ => None,
-                })
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let id = extract_id_from_value(row.remove(&self.config.id_column));
 
             let vector = row
                 .remove(&self.config.vector_column)
@@ -425,6 +311,120 @@ impl SourceConnector for SupabaseConnector {
     async fn close(&mut self) -> Result<()> {
         info!("Closing Supabase connection");
         Ok(())
+    }
+}
+
+impl SupabaseConnector {
+    /// Fetches the total row count from the content-range header.
+    async fn fetch_total_count(&self) -> Option<u64> {
+        let resp = self
+            .request(reqwest::Method::HEAD, &self.config.table)
+            .send()
+            .await
+            .ok()?;
+
+        resp.headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split('/').next_back().and_then(|n| n.parse().ok()))
+    }
+}
+
+/// Detects vector column, dimension, and metadata fields from a sample row.
+fn detect_supabase_schema(
+    row: &HashMap<String, serde_json::Value>,
+    configured_vector_col: &str,
+    id_column: &str,
+) -> (usize, Vec<FieldInfo>, Option<String>) {
+    let candidates = find_vector_candidates(row);
+    let (detected_col, dimension) = pick_best_vector_column(&candidates, configured_vector_col);
+    let fields = collect_metadata_fields(row, id_column, detected_col.as_deref());
+    (dimension, fields, detected_col)
+}
+
+/// Finds columns that look like vector embeddings (dimension > 10).
+fn find_vector_candidates(row: &HashMap<String, serde_json::Value>) -> Vec<(String, usize)> {
+    row.iter()
+        .filter_map(|(col_name, col_value)| {
+            let parsed = parse_pgvector(col_value);
+            if parsed.len() > 10 {
+                Some((col_name.clone(), parsed.len()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Picks the best vector column from candidates.
+fn pick_best_vector_column(
+    candidates: &[(String, usize)],
+    configured: &str,
+) -> (Option<String>, usize) {
+    if let Some((name, dim)) = candidates.iter().find(|(n, _)| n == configured) {
+        return (Some(name.clone()), *dim);
+    }
+    if let Some((name, dim)) = candidates.iter().find(|(n, _)| {
+        let lower = n.to_lowercase();
+        lower.contains("vector") || lower.contains("embedding") || lower.contains("emb")
+    }) {
+        return (Some(name.clone()), *dim);
+    }
+    candidates
+        .first()
+        .map(|(n, d)| (Some(n.clone()), *d))
+        .unwrap_or((None, 0))
+}
+
+/// Collects non-ID, non-vector metadata fields from a sample row.
+fn collect_metadata_fields(
+    row: &HashMap<String, serde_json::Value>,
+    id_column: &str,
+    vector_column: Option<&str>,
+) -> Vec<FieldInfo> {
+    row.iter()
+        .filter(|(col_name, col_value)| {
+            if col_name.as_str() == id_column {
+                return false;
+            }
+            if vector_column.is_some_and(|vc| col_name.as_str() == vc) {
+                return false;
+            }
+            let parsed = parse_pgvector(col_value);
+            parsed.len() <= 10
+        })
+        .map(|(col_name, col_value)| FieldInfo {
+            name: col_name.clone(),
+            field_type: json_type_name(col_value),
+            indexed: false,
+        })
+        .collect()
+}
+
+/// Logs schema detection results for Supabase.
+fn log_supabase_schema(
+    table: &str,
+    dimension: usize,
+    total_count: Option<u64>,
+    fields: &[FieldInfo],
+    detected_vector_col: &Option<String>,
+    configured_vector_col: &str,
+) {
+    info!(
+        "Supabase table '{}': {}D vectors, {:?} rows, {} metadata fields",
+        table,
+        dimension,
+        total_count,
+        fields.len()
+    );
+
+    if let Some(vec_col) = detected_vector_col {
+        if vec_col != configured_vector_col {
+            info!(
+                "Note: Detected vector column '{}' differs from configured '{}'",
+                vec_col, configured_vector_col
+            );
+        }
     }
 }
 

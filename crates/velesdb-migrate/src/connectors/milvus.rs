@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+use super::common::{create_http_client, extract_id_from_value};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::MilvusConfig;
 use crate::error::{Error, Result};
@@ -21,7 +22,7 @@ impl MilvusConnector {
     pub fn new(config: MilvusConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: create_http_client(),
         }
     }
 
@@ -255,14 +256,7 @@ impl SourceConnector for MilvusConnector {
         let mut points = Vec::with_capacity(rows.len());
 
         for mut row in rows {
-            let id = row
-                .remove("id")
-                .and_then(|v| match v {
-                    serde_json::Value::Number(n) => Some(n.to_string()),
-                    serde_json::Value::String(s) => Some(s),
-                    _ => None,
-                })
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let id = extract_id_from_value(row.remove("id"));
 
             let vector = row
                 .remove(&vector_field)

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+use super::common::create_http_client;
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::ChromaDBConfig;
 use crate::error::{Error, Result};
@@ -22,7 +23,7 @@ impl ChromaDBConnector {
     pub fn new(config: ChromaDBConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: create_http_client(),
             collection_id: None,
         }
     }

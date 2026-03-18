@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+use super::common::create_http_client;
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::WeaviateConfig;
 use crate::error::{Error, Result};
@@ -21,7 +22,7 @@ impl WeaviateConnector {
     pub fn new(config: WeaviateConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: create_http_client(),
         }
     }
 

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+use super::common::create_http_client;
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::PineconeConfig;
 use crate::error::{Error, Result};
@@ -22,7 +23,7 @@ impl PineconeConnector {
     pub fn new(config: PineconeConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: create_http_client(),
             host: None,
         }
     }

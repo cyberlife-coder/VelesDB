@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
+use super::common::create_http_client;
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::QdrantConfig;
 use crate::error::{Error, Result};
@@ -21,7 +22,7 @@ impl QdrantConnector {
     pub fn new(config: QdrantConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: create_http_client(),
         }
     }
 

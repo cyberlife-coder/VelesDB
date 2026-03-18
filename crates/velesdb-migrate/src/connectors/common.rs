@@ -121,6 +121,37 @@ pub fn handle_http_error(status_code: u16, body: &str, source_name: &str) -> Err
     }
 }
 
+/// Returns a cached schema or an error indicating the connector is not connected.
+///
+/// Use this in `get_schema()` implementations for connectors that populate
+/// `self.schema` during `connect()`.
+pub fn cached_schema(
+    schema: &Option<crate::connectors::SourceSchema>,
+) -> Result<crate::connectors::SourceSchema> {
+    schema
+        .clone()
+        .ok_or_else(|| Error::SourceConnection("Not connected".to_string()))
+}
+
+/// Extracts a string ID from a JSON value.
+///
+/// Handles numeric IDs (converted to string) and string IDs.
+/// Falls back to a new UUID v4 if the value is missing or has an unexpected type.
+pub fn extract_id_from_value(value: Option<Value>) -> String {
+    value
+        .and_then(|v| match v {
+            Value::Number(n) => Some(n.to_string()),
+            Value::String(s) => Some(s),
+            _ => None,
+        })
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+/// Formats an optional count for display, returning "unknown" when absent.
+pub fn format_count(count: Option<u64>) -> String {
+    count.map_or_else(|| "unknown".to_string(), |c| c.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +250,34 @@ mod tests {
         let client = create_http_client();
         // Client should be created successfully
         assert!(client.get("http://example.com").build().is_ok());
+    }
+
+    #[test]
+    fn test_extract_id_from_number() {
+        let val = Some(serde_json::json!(42));
+        assert_eq!(extract_id_from_value(val), "42");
+    }
+
+    #[test]
+    fn test_extract_id_from_string() {
+        let val = Some(serde_json::json!("doc-123"));
+        assert_eq!(extract_id_from_value(val), "doc-123");
+    }
+
+    #[test]
+    fn test_extract_id_fallback_uuid() {
+        let id = extract_id_from_value(None);
+        // Should be a valid UUID v4 (36 chars with hyphens)
+        assert_eq!(id.len(), 36);
+    }
+
+    #[test]
+    fn test_format_count_some() {
+        assert_eq!(format_count(Some(1000)), "1000");
+    }
+
+    #[test]
+    fn test_format_count_none() {
+        assert_eq!(format_count(None), "unknown");
     }
 }

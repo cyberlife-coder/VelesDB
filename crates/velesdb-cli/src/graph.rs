@@ -2,12 +2,16 @@
 //!
 //! Provides CLI commands for graph operations using direct core calls.
 //! All commands work offline without a running server.
+//!
+//! Display helpers shared with the REPL live in [`crate::graph_display`].
 
 use clap::{Subcommand, ValueEnum};
 use colored::Colorize;
 use std::path::PathBuf;
 use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::GraphEdge;
+
+use crate::graph_display;
 
 /// Traversal algorithm selection.
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -262,7 +266,7 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Command handlers
+// Internal helpers
 // ---------------------------------------------------------------------------
 
 fn open_graph(path: &PathBuf, collection: &str) -> anyhow::Result<velesdb_core::GraphCollection> {
@@ -270,6 +274,10 @@ fn open_graph(path: &PathBuf, collection: &str) -> anyhow::Result<velesdb_core::
     db.get_graph_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Graph collection '{}' not found", collection))
 }
+
+// ---------------------------------------------------------------------------
+// Command handlers
+// ---------------------------------------------------------------------------
 
 fn handle_add_edge(
     path: &PathBuf,
@@ -280,10 +288,10 @@ fn handle_add_edge(
     label: &str,
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
-    let edge = GraphEdge::new(id, source, target, label).map_err(|e| anyhow::anyhow!("{}", e))?;
-    col.add_edge(edge).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let edge = GraphEdge::new(id, source, target, label).map_err(|e| anyhow::anyhow!("{e}"))?;
+    col.add_edge(edge).map_err(|e| anyhow::anyhow!("{e}"))?;
     col.flush()
-        .map_err(|e| anyhow::anyhow!("Flush failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
 
     println!(
         "{} Edge {} added: {} --[{}]--> {}",
@@ -306,26 +314,12 @@ fn handle_get_edges(
     let edges = col.get_edges(label);
 
     if format == "json" {
-        let data: Vec<_> = edges.iter().map(edge_to_json).collect();
+        let data: Vec<_> = edges.iter().map(graph_display::edge_to_json).collect();
         println!("{}", serde_json::to_string_pretty(&data)?);
     } else {
         let filter_msg = label.map_or_else(String::new, |l| format!(" (label={})", l.cyan()));
         println!("\n{}{}\n", "Edges".bold().underline(), filter_msg);
-        if edges.is_empty() {
-            println!("  No edges found.\n");
-        } else {
-            for e in &edges {
-                println!(
-                    "  {} {} --[{}]--> {}  props={}",
-                    format!("[{}]", e.id()).cyan(),
-                    e.source(),
-                    e.label().green(),
-                    e.target(),
-                    serde_json::to_string(e.properties()).unwrap_or_default(),
-                );
-            }
-            println!("\n  Total: {} edge(s)\n", edges.len());
-        }
+        graph_display::print_edge_list(&edges, "No edges found.");
     }
     Ok(())
 }
@@ -350,12 +344,7 @@ fn handle_degree(
             }))?
         );
     } else {
-        println!("\n{}", "Node Degree".bold().underline());
-        println!("  {} {}", "Node ID:".cyan(), node_id.to_string().green());
-        println!("  {} {}", "In-degree:".cyan(), in_deg);
-        println!("  {} {}", "Out-degree:".cyan(), out_deg);
-        println!("  {} {}", "Total:".cyan(), in_deg + out_deg);
-        println!();
+        graph_display::print_degree(node_id, in_deg, out_deg);
     }
     Ok(())
 }
@@ -407,26 +396,7 @@ fn handle_traverse(
             .collect();
         println!("{}", serde_json::to_string_pretty(&data)?);
     } else {
-        println!(
-            "\n{} (algorithm={}, source={}, max_depth={})\n",
-            "Traversal Results".bold().underline(),
-            algo_label.green(),
-            source,
-            max_depth,
-        );
-        if results.is_empty() {
-            println!("  No results found.\n");
-        } else {
-            for r in &results {
-                println!(
-                    "  depth={} target={} path={:?}",
-                    r.depth,
-                    r.target_id.to_string().green(),
-                    r.path,
-                );
-            }
-            println!("\n  Total: {} result(s)\n", results.len());
-        }
+        graph_display::print_traversal(&results, algo_label, source, max_depth);
     }
     Ok(())
 }
@@ -457,7 +427,7 @@ fn handle_neighbors(
     };
 
     if format == "json" {
-        let data: Vec<_> = edges.iter().map(edge_to_json).collect();
+        let data: Vec<_> = edges.iter().map(graph_display::edge_to_json).collect();
         println!("{}", serde_json::to_string_pretty(&data)?);
     } else {
         println!(
@@ -466,20 +436,7 @@ fn handle_neighbors(
             node_id,
             dir_label.green(),
         );
-        if edges.is_empty() {
-            println!("  No neighbors found.\n");
-        } else {
-            for e in &edges {
-                println!(
-                    "  {} {} --[{}]--> {}",
-                    format!("[{}]", e.id()).cyan(),
-                    e.source(),
-                    e.label().green(),
-                    e.target(),
-                );
-            }
-            println!("\n  Total: {} edge(s)\n", edges.len());
-        }
+        graph_display::print_edge_list(&edges, "No neighbors found.");
     }
     Ok(())
 }
@@ -492,17 +449,30 @@ fn handle_store_payload(
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
     let payload: serde_json::Value = serde_json::from_str(payload_str)
-        .map_err(|e| anyhow::anyhow!("Invalid JSON payload: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid JSON payload: {e}"))?;
     col.upsert_node_payload(node_id, &payload)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     col.flush()
-        .map_err(|e| anyhow::anyhow!("Flush failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
 
     println!(
         "{} Payload stored on node {}",
         "✅".green(),
         node_id.to_string().green(),
     );
+    Ok(())
+}
+
+fn handle_get_payload(path: &PathBuf, collection: &str, node_id: u64) -> anyhow::Result<()> {
+    let col = open_graph(path, collection)?;
+    let payload = col
+        .get_node_payload(node_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    match payload {
+        Some(val) => println!("{}", serde_json::to_string_pretty(&val)?),
+        None => println!("null"),
+    }
     Ok(())
 }
 
@@ -513,36 +483,11 @@ fn handle_graph_nodes(
     format: &str,
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
-    let edges = col.get_edges(None);
-
-    let all_node_ids: std::collections::BTreeSet<u64> = edges
-        .iter()
-        .flat_map(|e| [e.source(), e.target()])
-        .collect();
-
-    let total = all_node_ids.len();
-    let page_size = 20_usize;
-    let page = page.max(1);
-    let total_pages = total.div_ceil(page_size);
-    let offset = (page - 1) * page_size;
-
-    let page_ids: Vec<u64> = all_node_ids
-        .into_iter()
-        .skip(offset)
-        .take(page_size)
-        .collect();
-
-    // Collect node data with optional payloads
-    let mut node_data: Vec<(u64, Option<serde_json::Value>)> = Vec::new();
-    for &node_id in &page_ids {
-        let payload = col
-            .get_node_payload(node_id)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        node_data.push((node_id, payload));
-    }
+    let node_page = graph_display::paginate_graph_nodes(&col, page, 20)?;
 
     if format == "json" {
-        let data: Vec<serde_json::Value> = node_data
+        let data: Vec<serde_json::Value> = node_page
+            .entries
             .iter()
             .map(|(id, payload)| {
                 serde_json::json!({
@@ -557,56 +502,36 @@ fn handle_graph_nodes(
             "\n{} in '{}' — Page {}/{} ({} unique nodes from {} edges)\n",
             "Nodes".bold().underline(),
             collection.green(),
-            page,
-            total_pages.max(1),
-            total,
-            edges.len()
+            node_page.page,
+            node_page.total_pages.max(1),
+            node_page.total_nodes,
+            node_page.total_edges,
         );
+        print_node_page_table(&node_page);
+    }
+    Ok(())
+}
 
-        if node_data.is_empty() {
-            println!("  No nodes on this page.\n");
-        } else {
-            for (node_id, payload) in &node_data {
-                let payload_str = match payload {
-                    Some(v) => serde_json::to_string(v).unwrap_or_default(),
-                    None => "null".to_string(),
-                };
-                println!(
-                    "  {} {} payload={}",
-                    format!("[{}]", node_id).cyan(),
-                    node_id.to_string().green(),
-                    payload_str,
-                );
-            }
-            println!("\n  Total: {} node(s) on this page\n", node_data.len());
+/// Print paginated node data in table format.
+fn print_node_page_table(node_page: &graph_display::NodePage) {
+    if node_page.entries.is_empty() {
+        println!("  No nodes on this page.\n");
+    } else {
+        for (node_id, payload) in &node_page.entries {
+            let payload_str = match payload {
+                Some(v) => serde_json::to_string(v).unwrap_or_default(),
+                None => "null".to_string(),
+            };
+            println!(
+                "  {} {} payload={}",
+                format!("[{}]", node_id).cyan(),
+                node_id.to_string().green(),
+                payload_str,
+            );
         }
+        println!(
+            "\n  Total: {} node(s) on this page\n",
+            node_page.entries.len()
+        );
     }
-    Ok(())
-}
-
-fn handle_get_payload(path: &PathBuf, collection: &str, node_id: u64) -> anyhow::Result<()> {
-    let col = open_graph(path, collection)?;
-    let payload = col
-        .get_node_payload(node_id)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    match payload {
-        Some(val) => println!("{}", serde_json::to_string_pretty(&val)?),
-        None => println!("null"),
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn edge_to_json(edge: &GraphEdge) -> serde_json::Value {
-    serde_json::json!({
-        "id": edge.id(),
-        "source": edge.source(),
-        "target": edge.target(),
-        "label": edge.label(),
-        "properties": edge.properties()
-    })
 }
