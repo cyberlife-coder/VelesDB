@@ -20,14 +20,27 @@ pub fn edge_to_json(edge: &GraphEdge) -> serde_json::Value {
 }
 
 /// Print a single edge in the standard `[id] source --[label]--> target` format.
-pub fn print_edge_line(edge: &GraphEdge) {
-    println!(
-        "  {} {} --[{}]--> {}",
-        format!("[{}]", edge.id()).cyan(),
-        edge.source(),
-        edge.label().green(),
-        edge.target(),
-    );
+///
+/// When `show_props` is true, appends `props=<json>` to display edge properties.
+pub fn print_edge_line(edge: &GraphEdge, show_props: bool) {
+    if show_props {
+        println!(
+            "  {} {} --[{}]--> {}  props={}",
+            format!("[{}]", edge.id()).cyan(),
+            edge.source(),
+            edge.label().green(),
+            edge.target(),
+            serde_json::to_string(edge.properties()).unwrap_or_default(),
+        );
+    } else {
+        println!(
+            "  {} {} --[{}]--> {}",
+            format!("[{}]", edge.id()).cyan(),
+            edge.source(),
+            edge.label().green(),
+            edge.target(),
+        );
+    }
 }
 
 /// Print a list of edges to stdout (table format).
@@ -39,7 +52,7 @@ pub fn print_edge_list(edges: &[GraphEdge], empty_msg: &str) {
         println!("  {empty_msg}\n");
     } else {
         for e in edges {
-            print_edge_line(e);
+            print_edge_line(e, true);
         }
         println!("\n  Total: {} edge(s)\n", edges.len());
     }

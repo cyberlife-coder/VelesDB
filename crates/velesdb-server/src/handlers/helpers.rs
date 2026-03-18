@@ -55,20 +55,24 @@ pub(crate) fn extract_client_id(headers: &axum::http::HeaderMap) -> String {
         .to_string()
 }
 
-/// Record query timing via a `tracing` event.
+/// Record query timing via a `tracing` event and notify the `DatabaseObserver`.
 ///
-/// This is a lightweight diagnostic helper; it emits a structured log at
-/// `DEBUG` level so operators can observe per-collection query latencies
-/// without requiring the full Prometheus stack.
+/// Emits a structured log at `DEBUG` level and forwards the query duration
+/// to `state.db.notify_query()` so that `DatabaseObserver` implementations
+/// (audit, RBAC, usage tracking) receive the event.
 pub(crate) fn notify_query_timing(
     state: &AppState,
     collection_name: &str,
     start: std::time::Instant,
 ) {
-    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let duration_us = start.elapsed().as_micros();
+    let elapsed_ms = duration_us as f64 / 1000.0;
     tracing::debug!(collection = collection_name, elapsed_ms, "query completed");
-    // Record as a search request for onboarding diagnostics.
-    let _ = state;
+    // Reason: clamped to u64::MAX above — truncation is impossible
+    #[allow(clippy::cast_possible_truncation)]
+    state
+        .db
+        .notify_query(collection_name, duration_us.min(u128::from(u64::MAX)) as u64);
 }
 
 /// Apply guardrails pre-check (rate limiting + circuit breaker).
