@@ -74,6 +74,13 @@ pub fn create_test_app(temp_dir: &TempDir) -> Router {
     base_routes().with_state(create_app_state(temp_dir))
 }
 
+/// Helper to create test app and return the shared state for direct manipulation.
+pub fn create_test_app_with_state(temp_dir: &TempDir) -> (Router, Arc<AppState>) {
+    let state = create_app_state(temp_dir);
+    let router = base_routes().with_state(Arc::clone(&state));
+    (router, state)
+}
+
 /// Helper to create test app with API key authentication enabled.
 pub fn create_test_app_with_auth(temp_dir: &TempDir, api_keys: Vec<String>) -> Router {
     let state = create_app_state(temp_dir);

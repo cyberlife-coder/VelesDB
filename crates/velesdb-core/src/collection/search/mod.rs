@@ -15,6 +15,8 @@ mod distance_semantics_tests;
 pub mod query;
 #[cfg(test)]
 mod query_validation_tests;
+#[allow(dead_code)]
+pub(crate) mod resolve;
 #[cfg(test)]
 mod similarity_exec_tests;
 mod sparse;

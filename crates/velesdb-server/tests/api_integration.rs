@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::create_test_app;
+use common::{create_test_app, create_test_app_with_state};
 use futures::stream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -2906,4 +2906,382 @@ async fn test_search_ids_sparse() {
         assert!(r["score"].is_number());
         assert!(r.get("payload").is_none());
     }
+}
+
+// ============================================================================
+// EXPLAIN endpoint
+// ============================================================================
+
+#[tokio::test]
+async fn test_explain_endpoint() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    // Create collection so the EXPLAIN handler finds it
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "explain_coll",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // POST /query/explain with a simple SELECT
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT * FROM explain_coll LIMIT 10"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["query_type"], "SELECT");
+    assert_eq!(json["collection"], "explain_coll");
+    assert!(json["plan"].is_array());
+    assert!(!json["plan"].as_array().unwrap().is_empty());
+    assert!(json["estimated_cost"].is_object());
+    assert!(json["features"].is_object());
+}
+
+// ============================================================================
+// GuardRails — rate limit (429)
+// ============================================================================
+
+#[tokio::test]
+async fn test_guardrails_rate_limit_429() {
+    let temp_dir = TempDir::new().unwrap();
+    let (app, state) = create_test_app_with_state(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rate_coll",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Drain all rate-limiter tokens for the default client ("anonymous").
+    // Default rate_limit_qps is 100, so 100 check() calls consume all tokens.
+    let collection = state.db.get_vector_collection("rate_coll").unwrap();
+    let guard_rails = collection.guard_rails();
+    for _ in 0..100 {
+        let _ = guard_rails.rate_limiter.check("anonymous");
+    }
+
+    // The next search request should be rejected with 429
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rate_coll/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 1
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+// ============================================================================
+// GuardRails — circuit breaker (503)
+// ============================================================================
+
+#[tokio::test]
+async fn test_guardrails_circuit_breaker_503() {
+    let temp_dir = TempDir::new().unwrap();
+    let (app, state) = create_test_app_with_state(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "cb_coll",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Trip the circuit breaker by recording enough failures.
+    // Default failure threshold is 5.
+    let collection = state.db.get_vector_collection("cb_coll").unwrap();
+    let guard_rails = collection.guard_rails();
+    for _ in 0..5 {
+        guard_rails.circuit_breaker.record_failure();
+    }
+
+    // The next search request should be rejected with 503
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/cb_coll/search")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "top_k": 1
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// ============================================================================
+// Get point by ID
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_point_by_id() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "get_pt",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert a point with payload
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/get_pt/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [{
+                            "id": 42,
+                            "vector": [1.0, 0.0, 0.0],
+                            "payload": {"color": "red"}
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // GET the point back
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/collections/get_pt/points/42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["id"], 42);
+    assert_eq!(json["vector"], json!([1.0, 0.0, 0.0]));
+    assert_eq!(json["payload"]["color"], "red");
+
+    // GET a non-existent point returns 404
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/get_pt/points/999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ============================================================================
+// Delete point by ID
+// ============================================================================
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_delete_point_by_id() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    // Create collection
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "del_pt",
+                        "dimension": 3,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Upsert a point
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/del_pt/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [{
+                            "id": 7,
+                            "vector": [0.0, 1.0, 0.0],
+                            "payload": {"tag": "ephemeral"}
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Confirm the point exists
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/collections/del_pt/points/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // DELETE the point
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/collections/del_pt/points/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["id"], 7);
+
+    // GET after delete returns 404
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/del_pt/points/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
