@@ -13,16 +13,17 @@ import type {
   RestPointId,
   SparseVector,
 } from '../types';
-import { NotFoundError, ValidationError, VelesDBError } from '../types';
+import { ValidationError } from '../types';
+import type { BaseTransport } from './shared';
+import {
+  throwOnError,
+  returnNullOnNotFound,
+  collectionPath,
+  toNumberArray,
+} from './shared';
 
 /** Minimal transport interface for CRUD operations. */
-export interface CrudTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-}
+export type CrudTransport = BaseTransport;
 
 export function parseRestPointId(id: string | number): RestPointId {
   if (
@@ -62,9 +63,7 @@ export async function createCollection(
     hnsw_m: config.hnsw?.m,
     hnsw_ef_construction: config.hnsw?.efConstruction,
   });
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 }
 
 export async function deleteCollection(
@@ -73,14 +72,9 @@ export async function deleteCollection(
 ): Promise<void> {
   const response = await transport.requestJson(
     'DELETE',
-    `/collections/${encodeURIComponent(name)}`
+    collectionPath(name)
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${name}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${name}'`);
 }
 
 export async function getCollection(
@@ -89,13 +83,10 @@ export async function getCollection(
 ): Promise<Collection | null> {
   const response = await transport.requestJson<Collection>(
     'GET',
-    `/collections/${encodeURIComponent(name)}`
+    collectionPath(name)
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      return null;
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
+  if (returnNullOnNotFound(response)) {
+    return null;
   }
   return response.data ?? null;
 }
@@ -104,9 +95,7 @@ export async function listCollections(
   transport: CrudTransport
 ): Promise<Collection[]> {
   const response = await transport.requestJson<Collection[]>('GET', '/collections');
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
   return response.data ?? [];
 }
 
@@ -116,21 +105,14 @@ export async function insert(
   doc: VectorDocument
 ): Promise<void> {
   const restId = parseRestPointId(doc.id);
-  const vector = doc.vector instanceof Float32Array
-    ? Array.from(doc.vector)
-    : doc.vector;
+  const vector = toNumberArray(doc.vector);
 
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/points`,
+    `${collectionPath(collection)}/points`,
     { points: [{ id: restId, vector, payload: doc.payload }] }
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 }
 
 export async function insertBatch(
@@ -140,21 +122,16 @@ export async function insertBatch(
 ): Promise<void> {
   const vectors = docs.map(doc => ({
     id: parseRestPointId(doc.id),
-    vector: doc.vector instanceof Float32Array ? Array.from(doc.vector) : doc.vector,
+    vector: toNumberArray(doc.vector),
     payload: doc.payload,
   }));
 
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/points`,
+    `${collectionPath(collection)}/points`,
     { points: vectors }
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 }
 
 export async function deletePoint(
@@ -165,13 +142,10 @@ export async function deletePoint(
   const restId = parseRestPointId(id);
   const response = await transport.requestJson<{ deleted: boolean }>(
     'DELETE',
-    `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(restId))}`
+    `${collectionPath(collection)}/points/${encodeURIComponent(String(restId))}`
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      return false;
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
+  if (returnNullOnNotFound(response)) {
+    return false;
   }
   return response.data?.deleted ?? false;
 }
@@ -184,13 +158,10 @@ export async function get(
   const restId = parseRestPointId(id);
   const response = await transport.requestJson<VectorDocument>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/points/${encodeURIComponent(String(restId))}`
+    `${collectionPath(collection)}/points/${encodeURIComponent(String(restId))}`
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      return null;
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
+  if (returnNullOnNotFound(response)) {
+    return null;
   }
   return response.data ?? null;
 }
@@ -201,14 +172,9 @@ export async function isEmpty(
 ): Promise<boolean> {
   const response = await transport.requestJson<{ is_empty: boolean }>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/empty`
+    `${collectionPath(collection)}/empty`
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
   return response.data?.is_empty ?? true;
 }
 
@@ -218,12 +184,7 @@ export async function flush(
 ): Promise<void> {
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/flush`
+    `${collectionPath(collection)}/flush`
   );
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 }

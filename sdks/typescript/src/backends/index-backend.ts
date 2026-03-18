@@ -9,16 +9,11 @@ import type {
   CreateIndexOptions,
   IndexInfo,
 } from '../types';
-import { NotFoundError, VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, returnNullOnNotFound, collectionPath } from './shared';
 
 /** Minimal transport interface for index operations. */
-export interface IndexTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-}
+export type IndexTransport = BaseTransport;
 
 export async function createIndex(
   transport: IndexTransport,
@@ -27,7 +22,7 @@ export async function createIndex(
 ): Promise<void> {
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/indexes`,
+    `${collectionPath(collection)}/indexes`,
     {
       label: options.label,
       property: options.property,
@@ -35,12 +30,7 @@ export async function createIndex(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 }
 
 export async function listIndexes(
@@ -55,15 +45,10 @@ export async function listIndexes(
     memory_bytes: number;
   }>; total: number }>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/indexes`
+    `${collectionPath(collection)}/indexes`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return (response.data?.indexes ?? []).map(idx => ({
     label: idx.label,
@@ -92,14 +77,11 @@ export async function dropIndex(
 ): Promise<boolean> {
   const response = await transport.requestJson<{ dropped: boolean }>(
     'DELETE',
-    `/collections/${encodeURIComponent(collection)}/indexes/${encodeURIComponent(label)}/${encodeURIComponent(property)}`
+    `${collectionPath(collection)}/indexes/${encodeURIComponent(label)}/${encodeURIComponent(property)}`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      return false;  // Index didn't exist
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
+  if (returnNullOnNotFound(response)) {
+    return false;  // Index didn't exist
   }
 
   // BUG-2 FIX: Success without error = index was dropped

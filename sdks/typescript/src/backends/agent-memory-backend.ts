@@ -14,16 +14,11 @@ import type {
   EpisodicEvent,
   ProceduralPattern,
 } from '../types';
-import { VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, collectionPath } from './shared';
 
 /** Minimal transport interface for agent memory operations. */
-export interface AgentMemoryTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-
+export interface AgentMemoryTransport extends BaseTransport {
   searchVectors(
     collection: string,
     embedding: number[],
@@ -80,7 +75,7 @@ export async function storeSemanticFact(
 ): Promise<void> {
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/points`,
+    `${collectionPath(collection)}/points`,
     {
       points: [{
         id: entry.id,
@@ -94,9 +89,7 @@ export async function storeSemanticFact(
     }
   );
 
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 }
 
 export async function searchSemanticMemory(
@@ -117,7 +110,7 @@ export async function recordEpisodicEvent(
 
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/points`,
+    `${collectionPath(collection)}/points`,
     {
       points: [{
         id,
@@ -133,9 +126,7 @@ export async function recordEpisodicEvent(
     }
   );
 
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 }
 
 export async function recallEpisodicEvents(
@@ -156,7 +147,7 @@ export async function storeProceduralPattern(
 
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/points`,
+    `${collectionPath(collection)}/points`,
     {
       points: [{
         id,
@@ -170,9 +161,7 @@ export async function storeProceduralPattern(
     }
   );
 
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 }
 
 export async function matchProceduralPatterns(

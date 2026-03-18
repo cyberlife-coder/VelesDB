@@ -12,15 +12,11 @@ import type {
   RestPointId,
 } from '../types';
 import { BackpressureError, ConnectionError, VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, collectionPath, toNumberArray } from './shared';
 
 /** Minimal transport interface for streaming operations. */
-export interface StreamingTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-
+export interface StreamingTransport extends BaseTransport {
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
   readonly timeout: number;
@@ -49,9 +45,7 @@ export async function trainPq(
     { query: queryString }
   );
 
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 
   return response.data?.message ?? 'PQ training initiated';
 }
@@ -63,9 +57,7 @@ export async function streamInsert(
 ): Promise<void> {
   for (const doc of docs) {
     const restId = transport.parseRestPointId(doc.id);
-    const vector = doc.vector instanceof Float32Array
-      ? Array.from(doc.vector)
-      : doc.vector;
+    const vector = toNumberArray(doc.vector);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body: Record<string, any> = {
@@ -78,7 +70,7 @@ export async function streamInsert(
       body.sparse_vector = transport.sparseVectorToRestFormat(doc.sparseVector);
     }
 
-    const url = `${transport.baseUrl}/collections/${encodeURIComponent(collection)}/stream/insert`;
+    const url = `${transport.baseUrl}${collectionPath(collection)}/stream/insert`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };

@@ -98,18 +98,11 @@ import {
 } from './crud-backend';
 import type { CrudTransport } from './crud-backend';
 
+import type { TransportResponse } from './shared';
+
 // Re-export for backward compatibility
 export { generateUniqueId, _resetIdState } from './agent-memory-backend';
 export type { QueryExplainApiResponse, CollectionSanityApiResponse } from './query-backend';
-
-/** REST API response wrapper */
-interface ApiResponse<T> {
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
 
 /**
  * REST Backend
@@ -203,7 +196,7 @@ export class RestBackend implements IVelesDBBackend {
     return 0;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>> {
+  private async request<T>(method: string, path: string, body?: unknown): Promise<TransportResponse<T>> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) {

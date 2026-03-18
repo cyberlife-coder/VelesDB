@@ -9,16 +9,11 @@ import type {
   CollectionStatsResponse,
   CollectionConfigResponse,
 } from '../types';
-import { NotFoundError, VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, returnNullOnNotFound, collectionPath } from './shared';
 
 /** Minimal transport interface for admin operations. */
-export interface AdminTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-}
+export type AdminTransport = BaseTransport;
 
 /** Raw stats shape returned by the REST API. */
 interface StatsApiResponse {
@@ -49,14 +44,11 @@ export async function getCollectionStats(
 ): Promise<CollectionStatsResponse | null> {
   const response = await transport.requestJson<StatsApiResponse>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/stats`
+    `${collectionPath(collection)}/stats`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      return null;
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
+  if (returnNullOnNotFound(response)) {
+    return null;
   }
 
   return mapStatsResponse(response.data!);
@@ -68,15 +60,10 @@ export async function analyzeCollection(
 ): Promise<CollectionStatsResponse> {
   const response = await transport.requestJson<StatsApiResponse>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/analyze`
+    `${collectionPath(collection)}/analyze`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return mapStatsResponse(response.data!);
 }
@@ -94,14 +81,9 @@ export async function getCollectionConfig(
     metadata_only: boolean;
     graph_schema?: Record<string, unknown>;
     embedding_dimension?: number;
-  }>('GET', `/collections/${encodeURIComponent(collection)}/config`);
+  }>('GET', `${collectionPath(collection)}/config`);
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   const data = response.data!;
   return {

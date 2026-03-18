@@ -15,16 +15,11 @@ import type {
   DegreeResponse,
   GraphCollectionConfig,
 } from '../types';
-import { NotFoundError, VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, collectionPath } from './shared';
 
 /** Minimal transport interface for graph operations. */
-export interface GraphTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-}
+export type GraphTransport = BaseTransport;
 
 export async function addEdge(
   transport: GraphTransport,
@@ -33,7 +28,7 @@ export async function addEdge(
 ): Promise<void> {
   const response = await transport.requestJson(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/graph/edges`,
+    `${collectionPath(collection)}/graph/edges`,
     {
       id: edge.id,
       source: edge.source,
@@ -43,12 +38,7 @@ export async function addEdge(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 }
 
 export async function getEdges(
@@ -60,15 +50,10 @@ export async function getEdges(
 
   const response = await transport.requestJson<{ edges: GraphEdge[]; count: number }>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/graph/edges${queryParams}`
+    `${collectionPath(collection)}/graph/edges${queryParams}`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.edges ?? [];
 }
@@ -85,7 +70,7 @@ export async function traverseGraph(
     stats: { visited: number; depth_reached: number };
   }>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/graph/traverse`,
+    `${collectionPath(collection)}/graph/traverse`,
     {
       source: request.source,
       strategy: request.strategy ?? 'bfs',
@@ -96,12 +81,7 @@ export async function traverseGraph(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   const data = response.data!;
   return {
@@ -126,15 +106,10 @@ export async function getNodeDegree(
 ): Promise<DegreeResponse> {
   const response = await transport.requestJson<{ in_degree: number; out_degree: number }>(
     'GET',
-    `/collections/${encodeURIComponent(collection)}/graph/nodes/${nodeId}/degree`
+    `${collectionPath(collection)}/graph/nodes/${nodeId}/degree`
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return {
     inDegree: response.data?.in_degree ?? 0,
@@ -155,7 +130,5 @@ export async function createGraphCollection(
     schema_mode: config?.schemaMode ?? 'schemaless',
   });
 
-  if (response.error) {
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response);
 }

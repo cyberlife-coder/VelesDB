@@ -12,7 +12,8 @@ import type {
   MultiQuerySearchOptions,
   SparseVector,
 } from '../types';
-import { NotFoundError, VelesDBError } from '../types';
+import type { BaseTransport } from './shared';
+import { throwOnError, collectionPath, toNumberArray } from './shared';
 
 /** Batch search response structure (mirrors rest.ts private type). */
 interface BatchSearchResponse {
@@ -20,13 +21,7 @@ interface BatchSearchResponse {
 }
 
 /** Minimal transport interface for search operations. */
-export interface SearchTransport {
-  requestJson<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<{ data?: T; error?: { code: string; message: string } }>;
-
+export interface SearchTransport extends BaseTransport {
   sparseToRest(sv: SparseVector): Record<string, number>;
 }
 
@@ -36,7 +31,7 @@ export async function search(
   query: number[] | Float32Array,
   options?: SearchOptions
 ): Promise<SearchResult[]> {
-  const queryVector = query instanceof Float32Array ? Array.from(query) : query;
+  const queryVector = toNumberArray(query);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const body: Record<string, any> = {
@@ -52,16 +47,11 @@ export async function search(
 
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/search`,
+    `${collectionPath(collection)}/search`,
     body
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.results ?? [];
 }
@@ -76,23 +66,18 @@ export async function searchBatch(
   }>
 ): Promise<SearchResult[][]> {
   const formattedSearches = searches.map(s => ({
-    vector: s.vector instanceof Float32Array ? Array.from(s.vector) : s.vector,
+    vector: toNumberArray(s.vector),
     top_k: s.k ?? 10,
     filter: s.filter,
   }));
 
   const response = await transport.requestJson<BatchSearchResponse>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/search/batch`,
+    `${collectionPath(collection)}/search/batch`,
     { searches: formattedSearches }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.results.map(r => r.results) ?? [];
 }
@@ -105,7 +90,7 @@ export async function textSearch(
 ): Promise<SearchResult[]> {
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/search/text`,
+    `${collectionPath(collection)}/search/text`,
     {
       query,
       top_k: options?.k ?? 10,
@@ -113,12 +98,7 @@ export async function textSearch(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.results ?? [];
 }
@@ -130,11 +110,11 @@ export async function hybridSearch(
   textQuery: string,
   options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
 ): Promise<SearchResult[]> {
-  const queryVector = vector instanceof Float32Array ? Array.from(vector) : vector;
+  const queryVector = toNumberArray(vector);
 
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/search/hybrid`,
+    `${collectionPath(collection)}/search/hybrid`,
     {
       vector: queryVector,
       query: textQuery,
@@ -144,12 +124,7 @@ export async function hybridSearch(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.results ?? [];
 }
@@ -160,13 +135,11 @@ export async function multiQuerySearch(
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
 ): Promise<SearchResult[]> {
-  const formattedVectors = vectors.map(v =>
-    v instanceof Float32Array ? Array.from(v) : v
-  );
+  const formattedVectors = vectors.map(toNumberArray);
 
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/search/multi`,
+    `${collectionPath(collection)}/search/multi`,
     {
       vectors: formattedVectors,
       top_k: options?.k ?? 10,
@@ -179,12 +152,7 @@ export async function multiQuerySearch(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.results ?? [];
 }
@@ -195,13 +163,13 @@ export async function searchIds(
   query: number[] | Float32Array,
   options?: SearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
-  const queryVector = query instanceof Float32Array ? Array.from(query) : query;
+  const queryVector = toNumberArray(query);
 
   const response = await transport.requestJson<{
     results: Array<{ id: number; score: number }>;
   }>(
     'POST',
-    `/collections/${encodeURIComponent(collection)}/search/ids`,
+    `${collectionPath(collection)}/search/ids`,
     {
       vector: queryVector,
       top_k: options?.k ?? 10,
@@ -209,12 +177,7 @@ export async function searchIds(
     }
   );
 
-  if (response.error) {
-    if (response.error.code === 'NOT_FOUND') {
-      throw new NotFoundError(`Collection '${collection}'`);
-    }
-    throw new VelesDBError(response.error.message, response.error.code);
-  }
+  throwOnError(response, `Collection '${collection}'`);
 
   return response.data?.results ?? [];
 }
