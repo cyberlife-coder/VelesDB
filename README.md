@@ -579,7 +579,7 @@ VelesDB is licensed under the [VelesDB Core License 1.0](LICENSE) — source-ava
 </p>
 
 <p align="center">
-  <strong>Original Author:</strong> <a href="https://github.com/cyberlife-coder">Julien Lange</a> — <a href="https://wiscale.io"><strong>WiScale</strong></a>
+  <strong>Original Author:</strong> <a href="https://github.com/cyberlife-coder">Julien Lange</a> — <a href="https://wiscale.fr"><strong>WiScale</strong></a>
 </p>
 
 <p align="center">

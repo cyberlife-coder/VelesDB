@@ -103,6 +103,7 @@ node_modules/
 **/target/
 
 # Internal docs (confidential/strategy - DO NOT COMMIT)
+**/LICENSE_MANAGEMENT.md
 docs/MESSAGING_GUIDE.md
 docs/SECURITY_AUDIT*.md
 docs/TECHNICAL_AUDIT*.md

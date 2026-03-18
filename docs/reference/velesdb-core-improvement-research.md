@@ -11,7 +11,7 @@ Inputs reviewed:
 - Root `README.md` claims (latency, scale, quality, production readiness, local-first compliance positioning).
 - `crates/velesdb-core/README.md` claims (core performance and capabilities).
 - Existing internal production-readiness assessment (`docs/reference/velesdb-core-production-readiness.md`).
-- Attempted direct fetch of `https://velesdb.com` and `https://www.velesdb.com` from this environment (blocked with HTTP 403 via CONNECT tunnel), so website claims were validated indirectly through repository references to the “velesdb.com + README promise.”
+- Attempted direct fetch of `https://velesdb.com` from this environment (blocked with HTTP 403 via CONNECT tunnel), so website claims were validated indirectly through repository references to the “velesdb.com + README promise.”
 
 ## Promise baseline to protect (contract)
 

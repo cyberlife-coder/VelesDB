@@ -1,5 +1,5 @@
 # Elasticsearch/OpenSearch migration configuration
-# Documentation: https://docs.velesdb.com/migrate/elasticsearch
+# Documentation: https://velesdb.com/migrate/elasticsearch
 
 source:
   type: elasticsearch

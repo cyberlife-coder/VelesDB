@@ -1,5 +1,5 @@
 # CSV File migration configuration
-# Documentation: https://docs.velesdb.com/migrate/csv
+# Documentation: https://velesdb.com/migrate/csv
 
 source:
   type: csv_file

@@ -1,5 +1,5 @@
 # Redis Vector Search migration configuration
-# Documentation: https://docs.velesdb.com/migrate/redis
+# Documentation: https://velesdb.com/migrate/redis
 
 source:
   type: redis

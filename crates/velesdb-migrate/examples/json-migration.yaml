@@ -1,5 +1,5 @@
 # JSON File migration configuration
-# Documentation: https://docs.velesdb.com/migrate/json
+# Documentation: https://velesdb.com/migrate/json
 
 source:
   type: json_file

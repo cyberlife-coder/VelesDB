@@ -1,5 +1,5 @@
 # MongoDB Atlas Vector Search migration configuration
-# Documentation: https://docs.velesdb.com/migrate/mongodb
+# Documentation: https://velesdb.com/migrate/mongodb
 
 source:
   type: mongodb
