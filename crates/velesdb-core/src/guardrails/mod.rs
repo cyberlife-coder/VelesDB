@@ -41,15 +41,7 @@ impl GuardRails {
     /// Creates a new guard-rails manager with default configuration.
     #[must_use]
     pub fn new() -> Self {
-        let limits = QueryLimits::default();
-        Self {
-            rate_limiter: RateLimiter::new(limits.rate_limit_qps),
-            circuit_breaker: CircuitBreaker::new(
-                limits.circuit_failure_threshold,
-                limits.circuit_recovery_seconds,
-            ),
-            limits: parking_lot::RwLock::new(limits),
-        }
+        Self::with_limits(QueryLimits::default())
     }
 
     /// Creates a new guard-rails manager with custom limits.

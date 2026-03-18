@@ -228,6 +228,26 @@ impl LogPayloadStorage {
         Ok(())
     }
 
+    /// Syncs the WAL according to durability mode, resyncing `write_offset`
+    /// with the actual file length on failure to prevent desync on subsequent
+    /// writes.
+    ///
+    /// RF-2: Shared by `store` and `delete` to eliminate duplicated
+    /// sync-and-resync-offset error handling.
+    fn sync_wal_or_resync(
+        wal: &mut io::BufWriter<File>,
+        mode: DurabilityMode,
+        offset: &mut u64,
+    ) -> io::Result<()> {
+        if let Err(e) = Self::sync_wal(wal, mode) {
+            if let Ok(meta) = wal.get_ref().metadata() {
+                *offset = meta.len();
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// Replays WAL entries from `start_pos` to `end_pos`, updating the index.
     fn replay_wal_from(
         log_path: &Path,
@@ -318,16 +338,8 @@ impl PayloadStorage for LogPayloadStorage {
         record.extend_from_slice(&payload_bytes);
         wal.write_all(&record)?;
 
-        // Sync WAL according to durability mode.
-        // If sync fails, the BufWriter may have partially flushed data to disk.
-        // Resync write_offset with the actual file length to prevent desync
-        // on subsequent writes.
-        if let Err(e) = Self::sync_wal(&mut wal, self.durability) {
-            if let Ok(meta) = wal.get_ref().metadata() {
-                *offset = meta.len();
-            }
-            return Err(e);
-        }
+        // Sync WAL according to durability mode (resync offset on failure).
+        Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
 
         // Marker(1) + ID(8) = 9 bytes before the length field
         let bytes_written = 1 + 8 + 4 + u64::from(len_u32);
@@ -380,14 +392,8 @@ impl PayloadStorage for LogPayloadStorage {
         record[1..9].copy_from_slice(&id.to_le_bytes());
         wal.write_all(&record)?;
 
-        // Sync WAL according to durability mode.
-        // On failure, resync write_offset with actual file length (see store()).
-        if let Err(e) = Self::sync_wal(&mut wal, self.durability) {
-            if let Ok(meta) = wal.get_ref().metadata() {
-                *offset = meta.len();
-            }
-            return Err(e);
-        }
+        // Sync WAL according to durability mode (resync offset on failure).
+        Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
 
         *offset += 1 + 8; // Marker(1) + ID(8)
         index.remove(&id);

@@ -102,11 +102,7 @@ impl QueryPlanner {
         }
 
         let estimator = CostEstimator::new(stats);
-        let filter_selectivity = filter.map_or(1.0, |f| {
-            estimator
-                .estimate_condition_selectivity(f)
-                .clamp(0.001, 1.0)
-        });
+        let filter_selectivity = estimate_filter_selectivity(stats, filter);
         let filter_cost = filter.map_or(Cost::new(0.0, 0.0), |f| estimator.estimate_filter_cost(f));
         let vector_cost = estimator.estimate_hnsw_search_cost(k.max(1));
         let total_rows = stats.total_points.max(stats.row_count).max(1) as f64; // usize→f64: planning heuristic
@@ -156,13 +152,7 @@ impl QueryPlanner {
             return (ExecutionStrategy::VectorFirst, 1);
         }
 
-        let estimator = CostEstimator::new(stats);
-        let filter_selectivity = filter.map_or(1.0, |f| {
-            estimator
-                .estimate_condition_selectivity(f)
-                .clamp(0.001, 1.0)
-        });
-
+        let filter_selectivity = estimate_filter_selectivity(stats, filter);
         let strategy = self.choose_strategy_with_cbo(stats, filter, k);
 
         // Derive over-fetch from the CBO selectivity estimate.
@@ -340,6 +330,18 @@ impl Default for HybridExecutionPlan {
             recompute_scores: false,
         }
     }
+}
+
+/// Estimates filter selectivity from collection statistics and an optional condition.
+///
+/// Returns a value clamped to `[0.001, 1.0]`, defaulting to `1.0` when no filter is present.
+fn estimate_filter_selectivity(stats: &CollectionStats, filter: Option<&Condition>) -> f64 {
+    let estimator = CostEstimator::new(stats);
+    filter.map_or(1.0, |f| {
+        estimator
+            .estimate_condition_selectivity(f)
+            .clamp(0.001, 1.0)
+    })
 }
 
 // Tests moved to planner_tests.rs per project rules

@@ -96,21 +96,9 @@ impl Query {
     /// Creates a new MATCH query (EPIC-045).
     #[must_use]
     pub fn new_match(match_clause: crate::velesql::MatchClause) -> Self {
-        let select = SelectStatement {
-            distinct: DistinctMode::None,
-            columns: SelectColumns::All,
-            from: String::new(),
-            from_alias: Vec::new(),
-            joins: Vec::new(),
-            where_clause: match_clause.where_clause.clone(),
-            order_by: None,
-            limit: match_clause.return_clause.limit,
-            offset: None,
-            with_clause: None,
-            group_by: None,
-            having: None,
-            fusion_clause: None,
-        };
+        let mut select = SelectStatement::empty();
+        select.where_clause.clone_from(&match_clause.where_clause);
+        select.limit = match_clause.return_clause.limit;
         Self {
             select,
             compound: None,
@@ -123,23 +111,8 @@ impl Query {
     /// Creates a new DML query.
     #[must_use]
     pub fn new_dml(dml: DmlStatement) -> Self {
-        let select = SelectStatement {
-            distinct: DistinctMode::None,
-            columns: SelectColumns::All,
-            from: String::new(),
-            from_alias: Vec::new(),
-            joins: Vec::new(),
-            where_clause: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-            with_clause: None,
-            group_by: None,
-            having: None,
-            fusion_clause: None,
-        };
         Self {
-            select,
+            select: SelectStatement::empty(),
             compound: None,
             match_clause: None,
             dml: Some(dml),
@@ -150,23 +123,8 @@ impl Query {
     /// Creates a new TRAIN query.
     #[must_use]
     pub fn new_train(train: TrainStatement) -> Self {
-        let select = SelectStatement {
-            distinct: DistinctMode::None,
-            columns: SelectColumns::All,
-            from: String::new(),
-            from_alias: Vec::new(),
-            joins: Vec::new(),
-            where_clause: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-            with_clause: None,
-            group_by: None,
-            having: None,
-            fusion_clause: None,
-        };
         Self {
-            select,
+            select: SelectStatement::empty(),
             compound: None,
             match_clause: None,
             dml: None,

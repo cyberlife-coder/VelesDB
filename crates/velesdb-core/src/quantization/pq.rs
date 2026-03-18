@@ -331,6 +331,52 @@ fn check_degenerate_centroids(centroids: &[Vec<Vec<f32>>]) {
     }
 }
 
+/// RF-2: Serializes `value` with postcard and atomically writes to `dir/filename`.
+///
+/// Write goes to `.tmp` suffix first, then renamed for crash safety.
+#[cfg(feature = "persistence")]
+fn postcard_save_atomic<T: Serialize>(
+    dir: &std::path::Path,
+    filename: &str,
+    value: &T,
+    label: &str,
+) -> Result<(), Error> {
+    let data = postcard::to_allocvec(value).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to serialize {label}: {e}"),
+        ))
+    })?;
+    let tmp_path = dir.join(format!("{filename}.tmp"));
+    let final_path = dir.join(filename);
+    std::fs::write(&tmp_path, &data)?;
+    std::fs::rename(&tmp_path, &final_path)?;
+    Ok(())
+}
+
+/// RF-2: Loads and deserializes a postcard file from `dir/filename`.
+///
+/// Returns `Ok(None)` when the file does not exist.
+#[cfg(feature = "persistence")]
+fn postcard_load<T: for<'de> Deserialize<'de>>(
+    dir: &std::path::Path,
+    filename: &str,
+    label: &str,
+) -> Result<Option<T>, Error> {
+    let path = dir.join(filename);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read(&path)?;
+    let value: T = postcard::from_bytes(&data).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to deserialize {label}: {e}"),
+        ))
+    })?;
+    Ok(Some(value))
+}
+
 /// Persistence methods for codebook and rotation matrix storage.
 #[cfg(feature = "persistence")]
 impl ProductQuantizer {
@@ -341,17 +387,7 @@ impl ProductQuantizer {
     ///
     /// Returns `Error::Io` if serialization or file I/O fails.
     pub fn save_codebook(&self, dir: &std::path::Path) -> Result<(), Error> {
-        let data = postcard::to_allocvec(self).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to serialize PQ codebook: {e}"),
-            ))
-        })?;
-        let tmp_path = dir.join("codebook.pq.tmp");
-        let final_path = dir.join("codebook.pq");
-        std::fs::write(&tmp_path, &data)?;
-        std::fs::rename(&tmp_path, &final_path)?;
-        Ok(())
+        postcard_save_atomic(dir, "codebook.pq", self, "PQ codebook")
     }
 
     /// Load codebook from `<dir>/codebook.pq`. Returns `None` if file doesn't exist.
@@ -360,18 +396,7 @@ impl ProductQuantizer {
     ///
     /// Returns `Error::Io` if deserialization or file I/O fails.
     pub fn load_codebook(dir: &std::path::Path) -> Result<Option<Self>, Error> {
-        let path = dir.join("codebook.pq");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let data = std::fs::read(&path)?;
-        let pq: Self = postcard::from_bytes(&data).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to deserialize PQ codebook: {e}"),
-            ))
-        })?;
-        Ok(Some(pq))
+        postcard_load(dir, "codebook.pq", "PQ codebook")
     }
 
     /// Save OPQ rotation matrix to `<dir>/rotation.opq` using postcard.
@@ -386,17 +411,7 @@ impl ProductQuantizer {
                 "no rotation matrix to save",
             ))
         })?;
-        let data = postcard::to_allocvec(rotation).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to serialize OPQ rotation: {e}"),
-            ))
-        })?;
-        let tmp_path = dir.join("rotation.opq.tmp");
-        let final_path = dir.join("rotation.opq");
-        std::fs::write(&tmp_path, &data)?;
-        std::fs::rename(&tmp_path, &final_path)?;
-        Ok(())
+        postcard_save_atomic(dir, "rotation.opq", rotation, "OPQ rotation")
     }
 
     /// Load OPQ rotation matrix from `<dir>/rotation.opq`. Returns `None` if file doesn't exist.
@@ -405,18 +420,7 @@ impl ProductQuantizer {
     ///
     /// Returns `Error::Io` if deserialization or file I/O fails.
     pub fn load_rotation(dir: &std::path::Path) -> Result<Option<Vec<f32>>, Error> {
-        let path = dir.join("rotation.opq");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let data = std::fs::read(&path)?;
-        let rotation: Vec<f32> = postcard::from_bytes(&data).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to deserialize OPQ rotation: {e}"),
-            ))
-        })?;
-        Ok(Some(rotation))
+        postcard_load(dir, "rotation.opq", "OPQ rotation")
     }
 }
 
@@ -479,33 +483,30 @@ pub(crate) fn distance_pq_l2(
     pq_vector: &PQVector,
     quantizer: &ProductQuantizer,
 ) -> f32 {
-    let codebook = &quantizer.codebook;
-    debug_assert_eq!(query_vector.len(), codebook.dimension);
-    debug_assert_eq!(pq_vector.codes.len(), codebook.num_subspaces);
+    debug_assert_eq!(query_vector.len(), quantizer.codebook.dimension);
+    debug_assert_eq!(pq_vector.codes.len(), quantizer.codebook.num_subspaces);
 
-    // apply_rotation returns Cow::Borrowed when rotation is None (no allocation),
-    // Cow::Owned with the rotated vector otherwise. Centroids are in rotated space when
-    // OPQ is enabled, so the query must be rotated to the same space before computing ADC.
-    let query = quantizer.apply_rotation(query_vector);
+    // RF-2: Reuse precompute_lut to avoid duplicating the rotation + LUT build loop.
+    let lut = quantizer.precompute_lut(query_vector);
+    distance_pq_l2_with_lut(pq_vector, &lut, quantizer.codebook.num_centroids)
+}
 
-    let mut lookup_tables = Vec::with_capacity(codebook.num_subspaces);
-    for subspace in 0..codebook.num_subspaces {
-        let start = subspace * codebook.subspace_dim;
-        let end = start + codebook.subspace_dim;
-        let q_sub = &query[start..end];
-
-        let table: Vec<f32> = codebook.centroids[subspace]
-            .iter()
-            .map(|centroid| l2_squared(q_sub, centroid))
-            .collect();
-        lookup_tables.push(table);
-    }
-
+/// Computes ADC distance from a precomputed lookup table.
+///
+/// The LUT is indexed as `lut[subspace * k + centroid_id]`.
+/// This is the hot inner loop for batch ADC scoring.
+#[must_use]
+#[allow(dead_code)]
+pub(crate) fn distance_pq_l2_with_lut(
+    pq_vector: &PQVector,
+    lut: &[f32],
+    num_centroids: usize,
+) -> f32 {
     pq_vector
         .codes
         .iter()
         .enumerate()
-        .map(|(subspace, &code)| lookup_tables[subspace][usize::from(code)])
+        .map(|(subspace, &code)| lut[subspace * num_centroids + usize::from(code)])
         .sum::<f32>()
         .sqrt()
 }

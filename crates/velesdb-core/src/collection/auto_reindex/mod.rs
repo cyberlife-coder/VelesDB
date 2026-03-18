@@ -282,28 +282,11 @@ impl AutoReindexManager {
             .is_ok()
     }
 
-    /// Starts the reindex process (for manual trigger)
+    /// Attempts to transition from Idle to Building and emits a Started event.
     ///
-    /// Returns `true` if reindex was started, `false` if already in progress
-    pub fn trigger_manual_reindex(&self) -> bool {
-        if self.state() != ReindexState::Idle {
-            return false;
-        }
-
-        if self.transition_to(ReindexState::Building) {
-            self.emit_event(ReindexEvent::Started {
-                reason: ReindexReason::Manual,
-                old_params: HnswParams::default(),
-                new_params: HnswParams::default(),
-            });
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Starts the reindex process with specific parameters
-    pub fn start_reindex(
+    /// Shared by [`trigger_manual_reindex`](Self::trigger_manual_reindex) and
+    /// [`start_reindex`](Self::start_reindex).
+    fn try_start(
         &self,
         reason: ReindexReason,
         old_params: HnswParams,
@@ -312,7 +295,6 @@ impl AutoReindexManager {
         if self.state() != ReindexState::Idle {
             return false;
         }
-
         if self.transition_to(ReindexState::Building) {
             self.emit_event(ReindexEvent::Started {
                 reason,
@@ -323,6 +305,27 @@ impl AutoReindexManager {
         } else {
             false
         }
+    }
+
+    /// Starts the reindex process (for manual trigger)
+    ///
+    /// Returns `true` if reindex was started, `false` if already in progress
+    pub fn trigger_manual_reindex(&self) -> bool {
+        self.try_start(
+            ReindexReason::Manual,
+            HnswParams::default(),
+            HnswParams::default(),
+        )
+    }
+
+    /// Starts the reindex process with specific parameters
+    pub fn start_reindex(
+        &self,
+        reason: ReindexReason,
+        old_params: HnswParams,
+        new_params: HnswParams,
+    ) -> bool {
+        self.try_start(reason, old_params, new_params)
     }
 
     /// Updates progress (0-100)

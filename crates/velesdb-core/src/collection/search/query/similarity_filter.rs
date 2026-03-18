@@ -144,34 +144,15 @@ impl Collection {
 
     /// Compares a similarity score against a threshold using the given operator.
     ///
-    /// For similarity metrics (`higher_is_better=true`), comparisons are direct.
-    /// For distance metrics, comparisons are inverted so "similarity > X" means "distance < X".
+    /// Delegates to [`Self::compare_score`] in `where_eval.rs` for the shared
+    /// metric-aware comparison logic.
     fn compare_similarity(
         score: f32,
         threshold: f32,
         op: crate::velesql::CompareOp,
         higher_is_better: bool,
     ) -> bool {
-        use crate::velesql::CompareOp;
-        if higher_is_better {
-            match op {
-                CompareOp::Gt => score > threshold,
-                CompareOp::Gte => score >= threshold,
-                CompareOp::Lt => score < threshold,
-                CompareOp::Lte => score <= threshold,
-                CompareOp::Eq => (score - threshold).abs() < 0.001,
-                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
-            }
-        } else {
-            match op {
-                CompareOp::Gt => score < threshold,
-                CompareOp::Gte => score <= threshold,
-                CompareOp::Lt => score > threshold,
-                CompareOp::Lte => score >= threshold,
-                CompareOp::Eq => (score - threshold).abs() < 0.001,
-                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
-            }
-        }
+        Self::compare_score(score, threshold, op, higher_is_better)
     }
 
     /// Retrieves a vector for a given field, logging warnings on failure.

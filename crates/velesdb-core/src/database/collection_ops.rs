@@ -190,6 +190,22 @@ impl Database {
         }
     }
 
+    /// Reads and parses `config.json` from a collection directory.
+    ///
+    /// Returns `None` if the config file does not exist or cannot be parsed.
+    pub(super) fn read_collection_config(
+        &self,
+        name: &str,
+    ) -> Option<crate::collection::CollectionConfig> {
+        let path = self.data_dir.join(name);
+        let config_path = path.join("config.json");
+        if !config_path.exists() {
+            return None;
+        }
+        let data = std::fs::read_to_string(&config_path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
     /// Propagates updated query limits to all active collections.
     pub fn update_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
         let collections = self.collections.read();

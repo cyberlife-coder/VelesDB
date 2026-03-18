@@ -207,20 +207,8 @@ impl Collection {
 
         for point in &points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            // Store Payload (metadata-only points must have payload)
-            if let Some(payload) = &point.payload {
-                payload_storage.store(point.id, payload)?;
-
-                // Update BM25 Text Index for full-text search
-                let text = Self::extract_text_from_payload(payload);
-                if !text.is_empty() {
-                    self.text_index.add_document(point.id, &text);
-                }
-            } else {
-                let _ = payload_storage.delete(point.id);
-                self.text_index.remove_document(point.id);
-            }
-
+            Self::store_or_delete_payload(&mut payload_storage, point)?;
+            Self::update_text_index(&self.text_index, point);
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 old_payload.as_ref(),
@@ -234,17 +222,8 @@ impl Collection {
         drop(payload_storage);
 
         // config(1) only — all higher-numbered locks released above.
-        let mut config = self.config.write();
-        config.point_count = point_count;
-        drop(config);
-
-        // Invalidate stats cache so the next get_stats() recomputes fresh data.
-        *self.cached_stats.lock() = None;
-
-        // Bump write generation once per batch (CACHE-01 invalidation counter).
-        self.write_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
+        self.config.write().point_count = point_count;
+        self.invalidate_caches_and_bump_generation();
         Ok(())
     }
 

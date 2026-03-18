@@ -1,13 +1,18 @@
 //! Range indexes and edge property indexes (EPIC-047 US-002, US-003).
 //!
 //! Provides B-tree based range indexes for ordered queries on node and edge properties.
+//!
+//! `CompositeRangeIndex` and `EdgePropertyIndex` share the same underlying
+//! B-tree storage via [`BTreeOrderedIndex`], differing only in their metadata
+//! (label vs relationship-type) and public API surface.
 
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::ops::Bound;
 
 // =============================================================================
-// EPIC-047 US-002: Range Index (B-tree based)
+// OrderedValue: total ordering wrapper for JSON values
 // =============================================================================
 
 /// Wrapper for total ordering on JSON values.
@@ -51,7 +56,95 @@ impl Ord for OrderedValue {
     }
 }
 
-/// B-tree based range index for ordered queries.
+// =============================================================================
+// BTreeOrderedIndex: shared B-tree storage backing both index types
+// =============================================================================
+
+/// Shared B-tree storage for ordered property indexes.
+///
+/// Both [`CompositeRangeIndex`] (node properties) and [`EdgePropertyIndex`]
+/// (edge properties) delegate to this type for all insert/remove/lookup
+/// operations, eliminating code duplication.
+#[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize)]
+struct BTreeOrderedIndex {
+    entries: std::collections::BTreeMap<OrderedValue, Vec<u64>>,
+}
+
+#[allow(dead_code)]
+impl BTreeOrderedIndex {
+    fn new() -> Self {
+        Self {
+            entries: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn insert(&mut self, id: u64, value: &Value) {
+        self.entries
+            .entry(OrderedValue(value.clone()))
+            .or_default()
+            .push(id);
+    }
+
+    fn remove(&mut self, id: u64, value: &Value) -> bool {
+        let key = OrderedValue(value.clone());
+        if let Some(ids) = self.entries.get_mut(&key) {
+            if let Some(pos) = ids.iter().position(|&stored| stored == id) {
+                ids.swap_remove(pos);
+                if ids.is_empty() {
+                    self.entries.remove(&key);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    fn lookup_exact(&self, value: &Value) -> &[u64] {
+        self.entries
+            .get(&OrderedValue(value.clone()))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn collect_range(&self, start: Bound<OrderedValue>, end: Bound<OrderedValue>) -> Vec<u64> {
+        self.entries
+            .range((start, end))
+            .flat_map(|(_, ids)| ids.iter().copied())
+            .collect()
+    }
+
+    fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
+        let start = match lower {
+            Some(v) => Bound::Included(OrderedValue(v.clone())),
+            None => Bound::Unbounded,
+        };
+        let end = match upper {
+            Some(v) => Bound::Included(OrderedValue(v.clone())),
+            None => Bound::Unbounded,
+        };
+        self.collect_range(start, end)
+    }
+
+    fn lookup_gt(&self, value: &Value) -> Vec<u64> {
+        self.collect_range(
+            Bound::Excluded(OrderedValue(value.clone())),
+            Bound::Unbounded,
+        )
+    }
+
+    fn lookup_lt(&self, value: &Value) -> Vec<u64> {
+        self.collect_range(
+            Bound::Unbounded,
+            Bound::Excluded(OrderedValue(value.clone())),
+        )
+    }
+}
+
+// =============================================================================
+// EPIC-047 US-002: Range Index (B-tree based)
+// =============================================================================
+
+/// B-tree based range index for ordered queries on node properties.
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CompositeRangeIndex {
@@ -59,8 +152,8 @@ pub struct CompositeRangeIndex {
     label: String,
     /// Property name
     property: String,
-    /// (value) -> Vec<NodeId>
-    index: std::collections::BTreeMap<OrderedValue, Vec<u64>>,
+    /// Shared B-tree storage
+    index: BTreeOrderedIndex,
 }
 
 #[allow(dead_code)]
@@ -71,7 +164,7 @@ impl CompositeRangeIndex {
         Self {
             label: label.into(),
             property: property.into(),
-            index: std::collections::BTreeMap::new(),
+            index: BTreeOrderedIndex::new(),
         }
     }
 
@@ -89,77 +182,33 @@ impl CompositeRangeIndex {
 
     /// Inserts a node into the index.
     pub fn insert(&mut self, node_id: u64, value: &Value) {
-        self.index
-            .entry(OrderedValue(value.clone()))
-            .or_default()
-            .push(node_id);
+        self.index.insert(node_id, value);
     }
 
     /// Removes a node from the index.
     pub fn remove(&mut self, node_id: u64, value: &Value) -> bool {
-        let key = OrderedValue(value.clone());
-        if let Some(nodes) = self.index.get_mut(&key) {
-            if let Some(pos) = nodes.iter().position(|&id| id == node_id) {
-                nodes.swap_remove(pos);
-                if nodes.is_empty() {
-                    self.index.remove(&key);
-                }
-                return true;
-            }
-        }
-        false
+        self.index.remove(node_id, value)
     }
 
     /// Looks up nodes by exact value.
     #[must_use]
     pub fn lookup_exact(&self, value: &Value) -> &[u64] {
-        self.index
-            .get(&OrderedValue(value.clone()))
-            .map_or(&[], Vec::as_slice)
+        self.index.lookup_exact(value)
     }
 
     /// Range lookup: returns nodes where value is in [lower, upper].
     pub fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
-        use std::ops::Bound;
-
-        let start = match lower {
-            Some(v) => Bound::Included(OrderedValue(v.clone())),
-            None => Bound::Unbounded,
-        };
-
-        let end = match upper {
-            Some(v) => Bound::Included(OrderedValue(v.clone())),
-            None => Bound::Unbounded,
-        };
-
-        self.index
-            .range((start, end))
-            .flat_map(|(_, ids)| ids.iter().copied())
-            .collect()
+        self.index.lookup_range(lower, upper)
     }
 
     /// Greater than lookup.
     pub fn lookup_gt(&self, value: &Value) -> Vec<u64> {
-        use std::ops::Bound;
-        self.index
-            .range((
-                Bound::Excluded(OrderedValue(value.clone())),
-                Bound::Unbounded,
-            ))
-            .flat_map(|(_, ids)| ids.iter().copied())
-            .collect()
+        self.index.lookup_gt(value)
     }
 
     /// Less than lookup.
     pub fn lookup_lt(&self, value: &Value) -> Vec<u64> {
-        use std::ops::Bound;
-        self.index
-            .range((
-                Bound::Unbounded,
-                Bound::Excluded(OrderedValue(value.clone())),
-            ))
-            .flat_map(|(_, ids)| ids.iter().copied())
-            .collect()
+        self.index.lookup_lt(value)
     }
 }
 
@@ -175,8 +224,8 @@ pub struct EdgePropertyIndex {
     rel_type: String,
     /// Property name
     property: String,
-    /// (value) -> Vec<EdgeId>
-    index: std::collections::BTreeMap<OrderedValue, Vec<u64>>,
+    /// Shared B-tree storage
+    index: BTreeOrderedIndex,
 }
 
 #[allow(dead_code)]
@@ -187,7 +236,7 @@ impl EdgePropertyIndex {
         Self {
             rel_type: rel_type.into(),
             property: property.into(),
-            index: std::collections::BTreeMap::new(),
+            index: BTreeOrderedIndex::new(),
         }
     }
 
@@ -205,53 +254,23 @@ impl EdgePropertyIndex {
 
     /// Inserts an edge into the index.
     pub fn insert(&mut self, edge_id: u64, value: &Value) {
-        self.index
-            .entry(OrderedValue(value.clone()))
-            .or_default()
-            .push(edge_id);
+        self.index.insert(edge_id, value);
     }
 
     /// Removes an edge from the index.
     pub fn remove(&mut self, edge_id: u64, value: &Value) -> bool {
-        let key = OrderedValue(value.clone());
-        if let Some(edges) = self.index.get_mut(&key) {
-            if let Some(pos) = edges.iter().position(|&id| id == edge_id) {
-                edges.swap_remove(pos);
-                if edges.is_empty() {
-                    self.index.remove(&key);
-                }
-                return true;
-            }
-        }
-        false
+        self.index.remove(edge_id, value)
     }
 
     /// Looks up edges by exact value.
     #[must_use]
     pub fn lookup_exact(&self, value: &Value) -> &[u64] {
-        self.index
-            .get(&OrderedValue(value.clone()))
-            .map_or(&[], Vec::as_slice)
+        self.index.lookup_exact(value)
     }
 
     /// Range lookup for edges.
     pub fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
-        use std::ops::Bound;
-
-        let start = match lower {
-            Some(v) => Bound::Included(OrderedValue(v.clone())),
-            None => Bound::Unbounded,
-        };
-
-        let end = match upper {
-            Some(v) => Bound::Included(OrderedValue(v.clone())),
-            None => Bound::Unbounded,
-        };
-
-        self.index
-            .range((start, end))
-            .flat_map(|(_, ids)| ids.iter().copied())
-            .collect()
+        self.index.lookup_range(lower, upper)
     }
 }
 

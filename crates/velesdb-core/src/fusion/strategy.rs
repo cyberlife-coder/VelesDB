@@ -105,20 +105,8 @@ impl FusionStrategy {
     /// - Weights do not sum to 1.0 (within 0.001 tolerance)
     /// - Any weight is negative
     pub fn relative_score(dense_weight: f32, sparse_weight: f32) -> Result<Self, FusionError> {
-        if dense_weight < 0.0 {
-            return Err(FusionError::NegativeWeight {
-                weight: dense_weight,
-            });
-        }
-        if sparse_weight < 0.0 {
-            return Err(FusionError::NegativeWeight {
-                weight: sparse_weight,
-            });
-        }
-        let sum = dense_weight + sparse_weight;
-        if (sum - 1.0).abs() > 0.001 {
-            return Err(FusionError::InvalidWeightSum { sum });
-        }
+        validate_non_negative(&[dense_weight, sparse_weight])?;
+        validate_weight_sum(dense_weight + sparse_weight)?;
         Ok(Self::RelativeScore {
             dense_weight,
             sparse_weight,
@@ -137,22 +125,8 @@ impl FusionStrategy {
         max_weight: f32,
         hit_weight: f32,
     ) -> Result<Self, FusionError> {
-        // Validate non-negative
-        if avg_weight < 0.0 {
-            return Err(FusionError::NegativeWeight { weight: avg_weight });
-        }
-        if max_weight < 0.0 {
-            return Err(FusionError::NegativeWeight { weight: max_weight });
-        }
-        if hit_weight < 0.0 {
-            return Err(FusionError::NegativeWeight { weight: hit_weight });
-        }
-
-        // Validate sum to 1.0
-        let sum = avg_weight + max_weight + hit_weight;
-        if (sum - 1.0).abs() > 0.001 {
-            return Err(FusionError::InvalidWeightSum { sum });
-        }
+        validate_non_negative(&[avg_weight, max_weight, hit_weight])?;
+        validate_weight_sum(avg_weight + max_weight + hit_weight)?;
 
         Ok(Self::Weighted {
             avg_weight,
@@ -210,12 +184,14 @@ impl FusionStrategy {
         }
     }
 
-    /// Average fusion: mean of scores for each document.
-    fn fuse_average(results: Vec<Vec<(u64, f32)>>) -> Result<Vec<(u64, f32)>, FusionError> {
+    /// Collects per-document best scores across queries (deduplicates within each query).
+    ///
+    /// Returns a map from document ID to the list of its best scores (one per query
+    /// where it appeared).
+    fn collect_doc_scores(results: Vec<Vec<(u64, f32)>>) -> HashMap<u64, Vec<f32>> {
         let mut doc_scores: HashMap<u64, Vec<f32>> = HashMap::new();
 
         for query_results in results {
-            // Deduplicate within query (take best score for each doc)
             let mut query_best: HashMap<u64, f32> = HashMap::new();
             for (id, score) in query_results {
                 query_best
@@ -229,20 +205,25 @@ impl FusionStrategy {
             }
         }
 
-        let mut fused: Vec<(u64, f32)> = doc_scores
+        doc_scores
+    }
+
+    /// Sorts a fused result set by score descending.
+    fn sort_descending(fused: &mut [(u64, f32)]) {
+        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
+    }
+
+    /// Average fusion: mean of scores for each document.
+    fn fuse_average(results: Vec<Vec<(u64, f32)>>) -> Result<Vec<(u64, f32)>, FusionError> {
+        let mut fused: Vec<(u64, f32)> = Self::collect_doc_scores(results)
             .into_iter()
             .map(|(id, scores)| {
-                // Reason: scores.len() is bounded by result-set size (< 1000 in practice);
-                // usize → f32 precision loss is acceptable for score averaging.
-                #[allow(clippy::cast_precision_loss)]
                 let avg = scores.iter().sum::<f32>() / scores.len() as f32;
                 (id, avg)
             })
             .collect();
 
-        // Sort by score descending
-        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
-
+        Self::sort_descending(&mut fused);
         Ok(fused)
     }
 
@@ -260,8 +241,7 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = doc_max.into_iter().collect();
-        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
-
+        Self::sort_descending(&mut fused);
         Ok(fused)
     }
 
@@ -270,7 +250,6 @@ impl FusionStrategy {
         let mut doc_rrf: HashMap<u64, f32> = HashMap::new();
         // Reason: k is the RRF constant (default 60, max u32); u32 → f32 is
         // exact for values <= 16_777_216, so no precision loss in practice.
-        #[allow(clippy::cast_precision_loss)]
         let k_f32 = k as f32;
 
         for query_results in results {
@@ -282,22 +261,17 @@ impl FusionStrategy {
             }
 
             for (id, rank) in seen {
-                // Reason: rank is a result-set position (< query limit, typically < 1000);
-                // usize → f32 is exact for values <= 16_777_216.
-                #[allow(clippy::cast_precision_loss)]
                 let rrf_score = 1.0 / (k_f32 + (rank + 1) as f32);
                 *doc_rrf.entry(id).or_insert(0.0) += rrf_score;
             }
         }
 
         let mut fused: Vec<(u64, f32)> = doc_rrf.into_iter().collect();
-        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
-
+        Self::sort_descending(&mut fused);
         Ok(fused)
     }
 
     /// Weighted fusion: combination of avg, max, and hit ratio.
-    #[allow(clippy::cast_precision_loss)]
     fn fuse_weighted(
         results: Vec<Vec<(u64, f32)>>,
         avg_weight: f32,
@@ -305,39 +279,13 @@ impl FusionStrategy {
         hit_weight: f32,
         total_queries: usize,
     ) -> Vec<(u64, f32)> {
-        // Collect all scores per document
-        let mut doc_scores: HashMap<u64, Vec<f32>> = HashMap::new();
-
-        for query_results in results {
-            let mut query_best: HashMap<u64, f32> = HashMap::new();
-            for (id, score) in query_results {
-                query_best
-                    .entry(id)
-                    .and_modify(|s| *s = s.max(score))
-                    .or_insert(score);
-            }
-
-            for (id, score) in query_best {
-                doc_scores.entry(id).or_default().push(score);
-            }
-        }
-
-        // Reason: total_queries is the number of input query results (bounded by
-        // the API caller, typically < 100); usize → f32 is exact for such values.
-        #[allow(clippy::cast_precision_loss)]
         let total_q = total_queries as f32;
 
-        let mut fused: Vec<(u64, f32)> = doc_scores
+        let mut fused: Vec<(u64, f32)> = Self::collect_doc_scores(results)
             .into_iter()
             .map(|(id, scores)| {
-                // Reason: scores.len() is bounded by result-set size (< 1000 in practice);
-                // usize → f32 precision loss is acceptable for score computation.
-                #[allow(clippy::cast_precision_loss)]
                 let avg = scores.iter().sum::<f32>() / scores.len() as f32;
                 let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                // Reason: hit ratio is scores.len() / total_queries, both bounded values;
-                // usize → f32 precision loss is acceptable for the ratio.
-                #[allow(clippy::cast_precision_loss)]
                 let hit_ratio = scores.len() as f32 / total_q;
 
                 let combined = avg_weight * avg + max_weight * max + hit_weight * hit_ratio;
@@ -345,8 +293,7 @@ impl FusionStrategy {
             })
             .collect();
 
-        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
-
+        Self::sort_descending(&mut fused);
         fused
     }
 
@@ -373,32 +320,8 @@ impl FusionStrategy {
         let dense = results.first().map_or(&[][..], |v| v.as_slice());
         let sparse = results.get(1).map_or(&[][..], |v| v.as_slice());
 
-        // Min-max normalize a branch. If range < EPSILON, assign 0.5 to all.
-        let normalize = |branch: &[(u64, f32)]| -> HashMap<u64, f32> {
-            if branch.is_empty() {
-                return HashMap::new();
-            }
-            let min = branch.iter().map(|&(_, s)| s).fold(f32::INFINITY, f32::min);
-            let max = branch
-                .iter()
-                .map(|&(_, s)| s)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let range = max - min;
-            branch
-                .iter()
-                .map(|&(id, s)| {
-                    let norm = if range < f32::EPSILON {
-                        0.5
-                    } else {
-                        (s - min) / range
-                    };
-                    (id, norm)
-                })
-                .collect()
-        };
-
-        let norm_dense = normalize(dense);
-        let norm_sparse = normalize(sparse);
+        let norm_dense = min_max_normalize(dense);
+        let norm_sparse = min_max_normalize(sparse);
 
         // Collect all doc IDs
         let mut all_ids: HashMap<u64, f32> = HashMap::new();
@@ -414,7 +337,7 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = all_ids.into_iter().collect();
-        fused.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Self::sort_descending(&mut fused);
         Ok(fused)
     }
 }
@@ -423,4 +346,52 @@ impl Default for FusionStrategy {
     fn default() -> Self {
         Self::RRF { k: 60 }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared validation helpers (extracted from `relative_score` / `weighted`)
+// ---------------------------------------------------------------------------
+
+/// Validates that no weight in the slice is negative.
+fn validate_non_negative(weights: &[f32]) -> Result<(), FusionError> {
+    for &w in weights {
+        if w < 0.0 {
+            return Err(FusionError::NegativeWeight { weight: w });
+        }
+    }
+    Ok(())
+}
+
+/// Validates that a weight sum is 1.0 (within 0.001 tolerance).
+fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
+    if (sum - 1.0).abs() > 0.001 {
+        return Err(FusionError::InvalidWeightSum { sum });
+    }
+    Ok(())
+}
+
+/// Min-max normalize a branch of `(id, score)` pairs.
+///
+/// If the score range is smaller than `f32::EPSILON`, all items receive 0.5.
+fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
+    if branch.is_empty() {
+        return HashMap::new();
+    }
+    let min = branch.iter().map(|&(_, s)| s).fold(f32::INFINITY, f32::min);
+    let max = branch
+        .iter()
+        .map(|&(_, s)| s)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let range = max - min;
+    branch
+        .iter()
+        .map(|&(id, s)| {
+            let norm = if range < f32::EPSILON {
+                0.5
+            } else {
+                (s - min) / range
+            };
+            (id, norm)
+        })
+        .collect()
 }

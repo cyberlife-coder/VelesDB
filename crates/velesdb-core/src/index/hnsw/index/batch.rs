@@ -186,32 +186,18 @@ impl HnswIndex {
             assert_eq!(
                 query.len(),
                 self.dimension,
-                "Query {} dimension mismatch: expected {}, got {}",
-                i,
+                "Query {i} dimension mismatch: expected {}, got {}",
                 self.dimension,
                 query.len()
             );
         }
 
-        // Process queries in parallel
+        // RF-2: Reuse search_hnsw_only to avoid duplicating the
+        // search → map-neighbours → ScoredResult pipeline.
+        let ef_search = quality.ef_search(k);
         queries
             .par_iter()
-            .map(|query| {
-                let ef_search = quality.ef_search(k);
-                let inner = self.inner.read();
-
-                let neighbours = inner.search(query, k, ef_search);
-                let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-
-                for n in &neighbours {
-                    if let Some(id) = self.mappings.get_id(n.d_id) {
-                        let score = inner.transform_score(n.distance);
-                        results.push(ScoredResult::new(id, score));
-                    }
-                }
-
-                results
-            })
+            .map(|query| self.search_hnsw_only(query, k, ef_search))
             .collect()
     }
 

@@ -121,17 +121,11 @@ impl Database {
 
     /// Disk fallback for `get_vector_collection`.
     fn open_vector_collection_from_disk(&self, name: &str) -> Option<VectorCollection> {
-        let path = self.data_dir.join(name);
-        let config_path = path.join("config.json");
-        if !config_path.exists() {
-            return None;
-        }
-        let data = std::fs::read_to_string(&config_path).ok()?;
-        let cfg = serde_json::from_str::<crate::collection::CollectionConfig>(&data).ok()?;
+        let cfg = self.read_collection_config(name)?;
         if cfg.graph_schema.is_some() || cfg.metadata_only {
             return None;
         }
-        let coll = VectorCollection::open(path).ok()?;
+        let coll = VectorCollection::open(self.data_dir.join(name)).ok()?;
         self.vector_colls
             .write()
             .insert(name.to_string(), coll.clone());

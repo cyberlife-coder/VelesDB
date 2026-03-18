@@ -521,9 +521,8 @@ impl SparseInvertedIndex {
         max_w
     }
 
-    /// Returns the number of unique terms across all segments.
-    #[must_use]
-    pub fn term_count(&self) -> usize {
+    /// Collects all unique term IDs from frozen and mutable segments into a set.
+    fn collect_term_ids(&self) -> FxHashSet<u32> {
         let mut terms: FxHashSet<u32> = FxHashSet::default();
 
         {
@@ -538,7 +537,13 @@ impl SparseInvertedIndex {
             terms.extend(seg.postings.keys());
         }
 
-        terms.len()
+        terms
+    }
+
+    /// Returns the number of unique terms across all segments.
+    #[must_use]
+    pub fn term_count(&self) -> usize {
+        self.collect_term_ids().len()
     }
 
     /// Constructs an index from a single frozen segment (used by persistence layer).
@@ -558,21 +563,7 @@ impl SparseInvertedIndex {
     /// Returns all unique term IDs across all segments.
     #[must_use]
     pub fn all_term_ids(&self) -> Vec<u32> {
-        let mut terms: FxHashSet<u32> = FxHashSet::default();
-
-        {
-            let frozen_vec = self.frozen.read();
-            for frozen_seg in frozen_vec.iter() {
-                terms.extend(frozen_seg.postings.keys());
-            }
-        }
-
-        {
-            let seg = self.mutable.read();
-            terms.extend(seg.postings.keys());
-        }
-
-        let mut ids: Vec<u32> = terms.into_iter().collect();
+        let mut ids: Vec<u32> = self.collect_term_ids().into_iter().collect();
         ids.sort_unstable();
         ids
     }

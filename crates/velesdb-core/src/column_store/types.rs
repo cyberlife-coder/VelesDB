@@ -132,6 +132,40 @@ impl TypedColumn {
             Self::Bool(v) => v.push(None),
         }
     }
+
+    /// Pushes a typed value, falling back to null on type mismatch.
+    ///
+    /// This is the unchecked push variant used by `push_row_unchecked`.
+    /// For validated writes, use `ColumnStore::set_column_value` instead.
+    pub fn push_typed(&mut self, value: &ColumnValue) {
+        match (self, value) {
+            (Self::Int(col), ColumnValue::Int(v)) => col.push(Some(*v)),
+            (Self::Float(col), ColumnValue::Float(v)) => col.push(Some(*v)),
+            (Self::String(col), ColumnValue::String(id)) => col.push(Some(*id)),
+            (Self::Bool(col), ColumnValue::Bool(v)) => col.push(Some(*v)),
+            (col, ColumnValue::Null | _) => col.push_null(),
+        }
+    }
+
+    /// Returns the value at `row_idx` as a JSON value, or `None` if null/OOB.
+    ///
+    /// String columns require the `StringTable` to resolve interned IDs, so
+    /// callers must use `ColumnStore::get_value_as_json` for string resolution.
+    #[must_use]
+    pub fn get_as_json_non_string(&self, row_idx: usize) -> Option<serde_json::Value> {
+        match self {
+            Self::Int(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            Self::Float(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            Self::Bool(v) => v
+                .get(row_idx)
+                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            Self::String(_) => None,
+        }
+    }
 }
 
 /// A single update operation for batch processing.

@@ -240,19 +240,32 @@ impl CompositeIndexManager {
         self.indexes.keys().map(String::as_str).collect()
     }
 
-    /// Updates all indexes when a node is added.
-    pub fn on_add_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
+    /// Applies a mutation to all indexes matching a label, extracting property
+    /// values in index-property order for each.
+    fn for_each_matching_index(
+        &mut self,
+        label: &str,
+        node_id: u64,
+        properties: &HashMap<String, Value>,
+        mut apply: impl FnMut(&mut CompositeGraphIndex, u64, &[Value]),
+    ) {
         for index in self.indexes.values_mut() {
             if index.label() == label {
-                // Extract values in the order of index properties
                 let values: Vec<Value> = index
                     .properties()
                     .iter()
                     .map(|p| properties.get(p).cloned().unwrap_or(Value::Null))
                     .collect();
-                index.insert(node_id, &values);
+                apply(index, node_id, &values);
             }
         }
+    }
+
+    /// Updates all indexes when a node is added.
+    pub fn on_add_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
+        self.for_each_matching_index(label, node_id, properties, |idx, id, vals| {
+            idx.insert(id, vals);
+        });
     }
 
     /// Updates all indexes when a node is removed.
@@ -262,15 +275,8 @@ impl CompositeIndexManager {
         node_id: u64,
         properties: &HashMap<String, Value>,
     ) {
-        for index in self.indexes.values_mut() {
-            if index.label() == label {
-                let values: Vec<Value> = index
-                    .properties()
-                    .iter()
-                    .map(|p| properties.get(p).cloned().unwrap_or(Value::Null))
-                    .collect();
-                index.remove(node_id, &values);
-            }
-        }
+        self.for_each_matching_index(label, node_id, properties, |idx, id, vals| {
+            idx.remove(id, vals);
+        });
     }
 }

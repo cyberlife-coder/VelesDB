@@ -93,33 +93,54 @@ impl Database {
 
     /// Loads a graph collection from disk, registering it in both registries.
     fn load_graph_collection(&self, path: &std::path::Path, name: &str) -> bool {
-        match GraphCollection::open(path.to_path_buf()) {
-            Ok(coll) => {
-                self.collections
-                    .write()
-                    .insert(name.to_string(), coll.inner.clone());
-                self.graph_colls.write().insert(name.to_string(), coll);
-                true
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, name = %path.display(), "Failed to load graph collection");
-                false
-            }
-        }
+        self.try_open_and_register(path, name, "graph", |p| {
+            GraphCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Graph(c)))
+        })
     }
 
     /// Loads a metadata collection from disk, registering it in both registries.
     fn load_metadata_collection(&self, path: &std::path::Path, name: &str) -> bool {
-        match MetadataCollection::open(path.to_path_buf()) {
-            Ok(coll) => {
-                self.collections
-                    .write()
-                    .insert(name.to_string(), coll.inner.clone());
-                self.metadata_colls.write().insert(name.to_string(), coll);
+        self.try_open_and_register(path, name, "metadata", |p| {
+            MetadataCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Metadata(c)))
+        })
+    }
+
+    /// Loads a vector collection from disk, registering it in both registries.
+    fn load_vector_collection(&self, path: &std::path::Path, name: &str) -> bool {
+        self.try_open_and_register(path, name, "vector", |p| {
+            VectorCollection::open(p).map(|c| (c.inner.clone(), TypedColl::Vector(c)))
+        })
+    }
+
+    /// Opens a collection from disk and registers it in the legacy + typed registries.
+    ///
+    /// The `open_fn` closure returns `(inner Collection clone, TypedColl variant)`.
+    /// Returns `true` on success, `false` on failure (logged as warning).
+    #[allow(deprecated)]
+    fn try_open_and_register(
+        &self,
+        path: &std::path::Path,
+        name: &str,
+        kind: &str,
+        open_fn: impl FnOnce(std::path::PathBuf) -> crate::Result<(crate::Collection, TypedColl)>,
+    ) -> bool {
+        match open_fn(path.to_path_buf()) {
+            Ok((inner, typed)) => {
+                self.collections.write().insert(name.to_string(), inner);
+                typed.insert_into(
+                    &self.vector_colls,
+                    &self.graph_colls,
+                    &self.metadata_colls,
+                    name,
+                );
                 true
             }
             Err(e) => {
-                tracing::warn!(error = %e, name = %path.display(), "Failed to load metadata collection");
+                tracing::warn!(
+                    error = %e,
+                    name = %path.display(),
+                    "Failed to load {kind} collection"
+                );
                 false
             }
         }
@@ -137,47 +158,84 @@ impl Database {
     pub fn flush_all(&self) -> usize {
         let mut failures: usize = 0;
 
-        // Vector collections
-        for (name, coll) in self.vector_colls.read().iter() {
-            if let Err(e) = coll.flush() {
-                tracing::warn!(error = %e, collection = %name, "Failed to flush vector collection");
-                failures += 1;
-            }
-        }
-
-        // Graph collections
-        for (name, coll) in self.graph_colls.read().iter() {
-            if let Err(e) = coll.flush() {
-                tracing::warn!(error = %e, collection = %name, "Failed to flush graph collection");
-                failures += 1;
-            }
-        }
-
-        // Metadata collections
-        for (name, coll) in self.metadata_colls.read().iter() {
-            if let Err(e) = coll.flush() {
-                tracing::warn!(error = %e, collection = %name, "Failed to flush metadata collection");
-                failures += 1;
-            }
-        }
+        failures += flush_registry(&self.vector_colls, "vector");
+        failures += flush_registry(&self.graph_colls, "graph");
+        failures += flush_registry(&self.metadata_colls, "metadata");
 
         failures
     }
+}
 
-    /// Loads a vector collection from disk, registering it in both registries.
-    fn load_vector_collection(&self, path: &std::path::Path, name: &str) -> bool {
-        match VectorCollection::open(path.to_path_buf()) {
-            Ok(coll) => {
-                self.collections
-                    .write()
-                    .insert(name.to_string(), coll.inner.clone());
-                self.vector_colls.write().insert(name.to_string(), coll);
-                true
+/// Discriminated union for the three typed collection registries.
+///
+/// Used by [`Database::try_open_and_register`] to route a freshly opened
+/// collection into the correct registry without duplicating match arms.
+enum TypedColl {
+    Vector(VectorCollection),
+    Graph(GraphCollection),
+    Metadata(MetadataCollection),
+}
+
+impl TypedColl {
+    fn insert_into(
+        self,
+        vectors: &parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
+        graphs: &parking_lot::RwLock<std::collections::HashMap<String, GraphCollection>>,
+        metadata: &parking_lot::RwLock<std::collections::HashMap<String, MetadataCollection>>,
+        name: &str,
+    ) {
+        match self {
+            Self::Vector(c) => {
+                vectors.write().insert(name.to_string(), c);
             }
-            Err(e) => {
-                tracing::warn!(error = %e, name = %path.display(), "Failed to load vector collection");
-                false
+            Self::Graph(c) => {
+                graphs.write().insert(name.to_string(), c);
+            }
+            Self::Metadata(c) => {
+                metadata.write().insert(name.to_string(), c);
             }
         }
+    }
+}
+
+/// Flushes all collections in a registry, logging failures. Returns failure count.
+fn flush_registry<T: Flushable>(
+    registry: &parking_lot::RwLock<std::collections::HashMap<String, T>>,
+    kind: &str,
+) -> usize {
+    let mut failures = 0;
+    for (name, coll) in registry.read().iter() {
+        if let Err(e) = coll.flush() {
+            tracing::warn!(
+                error = %e,
+                collection = %name,
+                "Failed to flush {kind} collection"
+            );
+            failures += 1;
+        }
+    }
+    failures
+}
+
+/// Internal trait for deduplicating `flush_all` iteration across collection types.
+trait Flushable {
+    fn flush(&self) -> crate::Result<()>;
+}
+
+impl Flushable for VectorCollection {
+    fn flush(&self) -> crate::Result<()> {
+        self.flush()
+    }
+}
+
+impl Flushable for GraphCollection {
+    fn flush(&self) -> crate::Result<()> {
+        self.flush()
+    }
+}
+
+impl Flushable for MetadataCollection {
+    fn flush(&self) -> crate::Result<()> {
+        self.flush()
     }
 }

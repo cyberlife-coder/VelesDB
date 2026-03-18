@@ -174,14 +174,8 @@ impl ShardedVectors {
     /// Warning: This acquires all shard locks sequentially.
     #[allow(dead_code)] // API completeness - prefer collect_for_parallel
     pub fn iter_all(&self) -> Vec<(usize, Vec<f32>)> {
-        let mut result = Vec::new();
-        for shard in &self.shards {
-            let guard = shard.read();
-            for (idx, vec) in &guard.vectors {
-                result.push((*idx, vec.clone()));
-            }
-        }
-        result
+        // RF-2: Delegate to collect_for_parallel to avoid duplicated shard iteration.
+        self.collect_for_parallel()
     }
 
     /// Computes a function over all vectors in parallel-safe manner.
@@ -229,14 +223,7 @@ impl ShardedVectors {
     pub fn collect_for_parallel(&self) -> Vec<(usize, Vec<f32>)> {
         let total_len = self.len();
         let mut result = Vec::with_capacity(total_len);
-
-        for shard in &self.shards {
-            let guard = shard.read();
-            for (idx, vec) in &guard.vectors {
-                result.push((*idx, vec.clone()));
-            }
-        }
-
+        self.drain_shards_into(&mut result);
         result
     }
 
@@ -271,7 +258,14 @@ impl ShardedVectors {
         buffer.clear();
         let total_len = self.len();
         buffer.reserve(total_len.saturating_sub(buffer.capacity()));
+        self.drain_shards_into(buffer);
+    }
 
+    /// Appends all shard contents into the given buffer.
+    ///
+    /// RF-2: Single implementation of the shard-iteration + clone loop,
+    /// shared by `collect_for_parallel`, `collect_into`, and `iter_all`.
+    fn drain_shards_into(&self, buffer: &mut Vec<(usize, Vec<f32>)>) {
         for shard in &self.shards {
             let guard = shard.read();
             for (idx, vec) in &guard.vectors {

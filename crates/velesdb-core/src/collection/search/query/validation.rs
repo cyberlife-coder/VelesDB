@@ -17,6 +17,46 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::velesql::Condition;
 
+// ---------------------------------------------------------------------------
+// Condition tree helpers — generic recursive walks to avoid duplication
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the condition is a vector-type leaf (Similarity, VectorSearch, VectorFusedSearch).
+fn is_vector_leaf(condition: &Condition) -> bool {
+    matches!(
+        condition,
+        Condition::Similarity(_) | Condition::VectorSearch(_) | Condition::VectorFusedSearch(_)
+    )
+}
+
+/// Recursively counts leaves matching `predicate`.
+fn count_matching_leaves(condition: &Condition, predicate: fn(&Condition) -> bool) -> usize {
+    if predicate(condition) {
+        return 1;
+    }
+    match condition {
+        Condition::And(left, right) | Condition::Or(left, right) => {
+            count_matching_leaves(left, predicate) + count_matching_leaves(right, predicate)
+        }
+        Condition::Group(inner) | Condition::Not(inner) => count_matching_leaves(inner, predicate),
+        _ => 0,
+    }
+}
+
+/// Recursively checks whether any subtree satisfies `predicate`.
+fn any_subtree(condition: &Condition, predicate: &dyn Fn(&Condition) -> bool) -> bool {
+    if predicate(condition) {
+        return true;
+    }
+    match condition {
+        Condition::And(left, right) | Condition::Or(left, right) => {
+            any_subtree(left, predicate) || any_subtree(right, predicate)
+        }
+        Condition::Group(inner) | Condition::Not(inner) => any_subtree(inner, predicate),
+        _ => false,
+    }
+}
+
 impl Collection {
     /// Validate that similarity() queries don't use unsupported patterns.
     ///
@@ -69,17 +109,10 @@ impl Collection {
     /// Currently, the parser only supports `IS NOT NULL` and `!=` operators.
     /// When parser is extended (see EPIC-005), this validation will activate.
     pub(crate) fn has_similarity_under_not(condition: &Condition) -> bool {
-        match condition {
-            Condition::Not(inner) => {
-                // If there's any similarity inside NOT, it's unsupported
-                Self::count_similarity_conditions(inner) > 0
-            }
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::has_similarity_under_not(left) || Self::has_similarity_under_not(right)
-            }
-            Condition::Group(inner) => Self::has_similarity_under_not(inner),
-            _ => false,
-        }
+        any_subtree(
+            condition,
+            &|c| matches!(c, Condition::Not(inner) if Self::count_similarity_conditions(inner) > 0),
+        )
     }
 
     /// Check if multiple similarity() conditions appear under the same OR.
@@ -90,93 +123,53 @@ impl Collection {
     /// WHERE similarity(v, $v1) > 0.8 OR similarity(v, $v2) > 0.7
     /// ```
     pub(crate) fn has_multiple_similarity_in_or(condition: &Condition) -> bool {
-        match condition {
-            Condition::Or(left, right) => {
-                let left_sim = Self::count_similarity_conditions(left);
-                let right_sim = Self::count_similarity_conditions(right);
-                // If both sides have similarity(), it's a union (unsupported)
-                (left_sim > 0 && right_sim > 0)
-                    || Self::has_multiple_similarity_in_or(left)
-                    || Self::has_multiple_similarity_in_or(right)
-            }
-            Condition::And(left, right) => {
-                // AND is fine for multiple similarity, but check nested ORs
-                Self::has_multiple_similarity_in_or(left)
-                    || Self::has_multiple_similarity_in_or(right)
-            }
-            Condition::Group(inner) | Condition::Not(inner) => {
-                Self::has_multiple_similarity_in_or(inner)
-            }
-            _ => false,
-        }
+        any_subtree(condition, &|c| {
+            matches!(c, Condition::Or(left, right)
+                if Self::count_similarity_conditions(left) > 0
+                    && Self::count_similarity_conditions(right) > 0
+            )
+        })
     }
 
     /// Count the number of vector search conditions in a condition tree.
     /// Includes Similarity, VectorSearch (NEAR), and VectorFusedSearch (NEAR_FUSED).
     pub(crate) fn count_similarity_conditions(condition: &Condition) -> usize {
-        match condition {
-            // PR #119 Review Fix: Count ALL vector search conditions
-            Condition::Similarity(_)
-            | Condition::VectorSearch(_)
-            | Condition::VectorFusedSearch(_) => 1,
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::count_similarity_conditions(left) + Self::count_similarity_conditions(right)
-            }
-            Condition::Group(inner) | Condition::Not(inner) => {
-                Self::count_similarity_conditions(inner)
-            }
-            _ => 0,
-        }
+        count_matching_leaves(condition, is_vector_leaf)
     }
 
     /// Check if similarity() appears in an OR clause with non-similarity conditions.
     /// This pattern cannot be correctly executed with current architecture.
     pub(crate) fn has_similarity_in_problematic_or(condition: &Condition) -> bool {
-        match condition {
-            Condition::Or(left, right) => {
+        any_subtree(condition, &|c| {
+            if let Condition::Or(left, right) = c {
                 let left_has_sim = Self::count_similarity_conditions(left) > 0;
                 let right_has_sim = Self::count_similarity_conditions(right) > 0;
                 let left_has_other = Self::has_non_similarity_conditions(left);
                 let right_has_other = Self::has_non_similarity_conditions(right);
-
                 // Problematic: one side has similarity, other side has non-similarity
                 // e.g., similarity() > 0.8 OR category = 'tech'
                 (left_has_sim && right_has_other && !right_has_sim)
                     || (right_has_sim && left_has_other && !left_has_sim)
-                    // Also check children recursively
-                    || Self::has_similarity_in_problematic_or(left)
-                    || Self::has_similarity_in_problematic_or(right)
+            } else {
+                false
             }
-            Condition::And(left, right) => {
-                // AND is fine, but check children for nested ORs
-                Self::has_similarity_in_problematic_or(left)
-                    || Self::has_similarity_in_problematic_or(right)
-            }
-            // BUG FIX: Handle Condition::Not to check nested ORs inside NOT clauses
-            Condition::Group(inner) | Condition::Not(inner) => {
-                Self::has_similarity_in_problematic_or(inner)
-            }
-            _ => false,
-        }
+        })
     }
 
     /// Check if a condition contains non-similarity conditions (metadata filters).
     pub(crate) fn has_non_similarity_conditions(condition: &Condition) -> bool {
-        match condition {
-            Condition::Similarity(_)
-            | Condition::VectorSearch(_)
-            | Condition::VectorFusedSearch(_) => false,
-            Condition::And(left, right) | Condition::Or(left, right) => {
-                Self::has_non_similarity_conditions(left)
-                    || Self::has_non_similarity_conditions(right)
-            }
-            // BUG FIX: Handle Condition::Not - NOT wraps another condition
-            Condition::Group(inner) | Condition::Not(inner) => {
-                Self::has_non_similarity_conditions(inner)
-            }
-            // All other conditions (Compare, In, Between, Match, etc.) are non-similarity
-            _ => true,
-        }
+        // A non-similarity leaf is any leaf that is NOT a vector type and NOT a
+        // structural combinator (And/Or/Group/Not).
+        count_matching_leaves(condition, |c| {
+            !is_vector_leaf(c)
+                && !matches!(
+                    c,
+                    Condition::And(..)
+                        | Condition::Or(..)
+                        | Condition::Group(_)
+                        | Condition::Not(_)
+                )
+        }) > 0
     }
 }
 

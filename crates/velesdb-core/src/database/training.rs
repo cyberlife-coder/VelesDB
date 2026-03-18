@@ -112,34 +112,26 @@ impl Database {
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 
         let codebook_size = pq.codebook.num_subspaces * pq.codebook.num_centroids;
-        let n_train = vectors.len();
 
         pq.save_codebook(collection.data_path())
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 
         *collection.pq_quantizer_write() = Some(pq);
 
-        {
-            let mut cfg = collection.config_write();
-            cfg.storage_mode = StorageMode::ProductQuantization;
-            cfg.pq_rescore_oversampling = Some(params.oversampling);
-        }
-        collection.save_config()?;
+        Self::finalize_pq_config(
+            collection,
+            StorageMode::ProductQuantization,
+            params.oversampling,
+        )?;
 
-        Ok(vec![SearchResult::new(
-            crate::Point::metadata_only(
-                0,
-                serde_json::json!({
-                    "status": "trained",
-                    "type": "pq",
-                    "m": params.m,
-                    "k": params.k,
-                    "codebook_size": codebook_size,
-                    "training_vectors": n_train
-                }),
-            ),
-            0.0,
-        )])
+        Ok(train_result_response(serde_json::json!({
+            "status": "trained",
+            "type": "pq",
+            "m": params.m,
+            "k": params.k,
+            "codebook_size": codebook_size,
+            "training_vectors": vectors.len()
+        })))
     }
 
     /// Trains an Optimized Product Quantizer (with rotation) and persists it.
@@ -152,7 +144,6 @@ impl Database {
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 
         let codebook_size = pq.codebook.num_subspaces * pq.codebook.num_centroids;
-        let n_train = vectors.len();
 
         pq.save_codebook(collection.data_path())
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
@@ -161,27 +152,20 @@ impl Database {
 
         *collection.pq_quantizer_write() = Some(pq);
 
-        {
-            let mut cfg = collection.config_write();
-            cfg.storage_mode = StorageMode::ProductQuantization;
-            cfg.pq_rescore_oversampling = Some(params.oversampling);
-        }
-        collection.save_config()?;
+        Self::finalize_pq_config(
+            collection,
+            StorageMode::ProductQuantization,
+            params.oversampling,
+        )?;
 
-        Ok(vec![SearchResult::new(
-            crate::Point::metadata_only(
-                0,
-                serde_json::json!({
-                    "status": "trained",
-                    "type": "opq",
-                    "m": params.m,
-                    "k": params.k,
-                    "codebook_size": codebook_size,
-                    "training_vectors": n_train
-                }),
-            ),
-            0.0,
-        )])
+        Ok(train_result_response(serde_json::json!({
+            "status": "trained",
+            "type": "opq",
+            "m": params.m,
+            "k": params.k,
+            "codebook_size": codebook_size,
+            "training_vectors": vectors.len()
+        })))
     }
 
     /// Trains a `RaBitQ` quantizer and persists it.
@@ -196,27 +180,38 @@ impl Database {
         rbq.save(collection.data_path())
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 
+        // RaBitQ uses default oversampling of 4.
+        Self::finalize_pq_config(collection, StorageMode::RaBitQ, 4)?;
+
+        Ok(train_result_response(serde_json::json!({
+            "status": "trained",
+            "type": "rabitq",
+            "dimension": dim,
+            "training_vectors": vectors.len()
+        })))
+    }
+
+    /// Updates storage mode and oversampling in config, then persists it.
+    fn finalize_pq_config(
+        collection: &crate::Collection,
+        mode: StorageMode,
+        oversampling: u32,
+    ) -> Result<()> {
         {
             let mut cfg = collection.config_write();
-            cfg.storage_mode = StorageMode::RaBitQ;
-            // RaBitQ uses default oversampling of 4.
-            cfg.pq_rescore_oversampling = Some(4);
+            cfg.storage_mode = mode;
+            cfg.pq_rescore_oversampling = Some(oversampling);
         }
-        collection.save_config()?;
-
-        Ok(vec![SearchResult::new(
-            crate::Point::metadata_only(
-                0,
-                serde_json::json!({
-                    "status": "trained",
-                    "type": "rabitq",
-                    "dimension": dim,
-                    "training_vectors": vectors.len()
-                }),
-            ),
-            0.0,
-        )])
+        collection.save_config()
     }
+}
+
+/// Wraps a JSON metadata value into a single-element `SearchResult` vector.
+fn train_result_response(metadata: serde_json::Value) -> Vec<SearchResult> {
+    vec![SearchResult::new(
+        crate::Point::metadata_only(0, metadata),
+        0.0,
+    )]
 }
 
 /// Parsed parameters for a TRAIN QUANTIZER statement.

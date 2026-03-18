@@ -327,12 +327,7 @@ impl GraphCollection {
         sql: &str,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let query = self
-            .inner
-            .query_cache
-            .parse(sql)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
-        self.inner.execute_query(&query, params)
+        self.inner.execute_query_str(sql, params)
     }
 }
 

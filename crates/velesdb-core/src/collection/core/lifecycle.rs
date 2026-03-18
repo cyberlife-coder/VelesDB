@@ -158,6 +158,37 @@ impl Collection {
         Self::create_with_options(path, dimension, metric, StorageMode::default())
     }
 
+    /// Derives the collection name from the directory path.
+    fn name_from_path(path: &std::path::Path) -> String {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
+    /// Shared init-and-persist pipeline for all `create_*` constructors.
+    ///
+    /// Validates dimensions (when non-zero), creates the directory, assembles
+    /// the collection from the supplied config, and persists `config.json`.
+    fn create_from_config(
+        path: PathBuf,
+        config: CollectionConfig,
+        hnsw_params: Option<crate::index::hnsw::HnswParams>,
+    ) -> Result<Self> {
+        let skip_dimension_check = config.metadata_only
+            || (config.graph_schema.is_some() && config.embedding_dimension.is_none());
+        if skip_dimension_check {
+            // dimension=0 is valid for metadata-only and graph-without-embedding
+        } else {
+            validate_dimension(config.dimension)?;
+        }
+        std::fs::create_dir_all(&path)?;
+
+        let collection = Self::assemble(Self::init_collection_parts(path, config, hnsw_params)?);
+        collection.save_config()?;
+        Ok(collection)
+    }
+
     /// Creates a new collection with custom storage options.
     ///
     /// # Arguments
@@ -176,17 +207,8 @@ impl Collection {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) -> Result<Self> {
-        validate_dimension(dimension)?;
-        std::fs::create_dir_all(&path)?;
-
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
         let config = CollectionConfig {
-            name,
+            name: Self::name_from_path(&path),
             dimension,
             metric,
             point_count: 0,
@@ -197,11 +219,7 @@ impl Collection {
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
         };
-
-        let collection = Self::assemble(Self::init_collection_parts(path, config, None)?);
-
-        collection.save_config()?;
-        Ok(collection)
+        Self::create_from_config(path, config, None)
     }
 
     /// Creates a new collection with custom HNSW parameters.
@@ -228,17 +246,8 @@ impl Collection {
         storage_mode: StorageMode,
         hnsw_params: crate::index::hnsw::HnswParams,
     ) -> Result<Self> {
-        validate_dimension(dimension)?;
-        std::fs::create_dir_all(&path)?;
-
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
         let config = CollectionConfig {
-            name,
+            name: Self::name_from_path(&path),
             dimension,
             metric,
             point_count: 0,
@@ -249,15 +258,7 @@ impl Collection {
             pq_rescore_oversampling: Some(4),
             hnsw_params: Some(hnsw_params),
         };
-
-        let collection = Self::assemble(Self::init_collection_parts(
-            path,
-            config,
-            Some(hnsw_params),
-        )?);
-
-        collection.save_config()?;
-        Ok(collection)
+        Self::create_from_config(path, config, Some(hnsw_params))
     }
 
     /// Creates a new collection with a specific type (Vector or `MetadataOnly`).
@@ -303,8 +304,6 @@ impl Collection {
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
     pub fn create_metadata_only(path: PathBuf, name: &str) -> Result<Self> {
-        std::fs::create_dir_all(&path)?;
-
         let config = CollectionConfig {
             name: name.to_string(),
             dimension: 0,                   // No vector dimension
@@ -317,11 +316,7 @@ impl Collection {
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
         };
-
-        let collection = Self::assemble(Self::init_collection_parts(path, config, None)?);
-
-        collection.save_config()?;
-        Ok(collection)
+        Self::create_from_config(path, config, None)
     }
 
     /// Returns true if this is a metadata-only collection.
@@ -406,15 +401,9 @@ impl Collection {
         embedding_dim: Option<usize>,
         metric: DistanceMetric,
     ) -> Result<Self> {
-        let dim = embedding_dim.unwrap_or(0);
-        if let Some(d) = embedding_dim {
-            validate_dimension(d)?;
-        }
-        std::fs::create_dir_all(&path)?;
-
         let config = CollectionConfig {
             name: name.to_string(),
-            dimension: dim,
+            dimension: embedding_dim.unwrap_or(0),
             metric,
             point_count: 0,
             storage_mode: StorageMode::Full,
@@ -424,11 +413,9 @@ impl Collection {
             pq_rescore_oversampling: Some(4),
             hnsw_params: None,
         };
-
-        let collection = Self::assemble(Self::init_collection_parts(path, config, None)?);
-
-        collection.save_config()?;
-        Ok(collection)
+        // NOTE: create_from_config validates dimension only when > 0,
+        // so embedding_dim=None (dimension=0) skips validation correctly.
+        Self::create_from_config(path, config, None)
     }
 
     /// Loads the HNSW index from `hnsw.bin` or creates an empty one.
@@ -530,49 +517,57 @@ impl Collection {
         indexes
     }
 
-    fn load_edge_store(path: &std::path::Path) -> EdgeStore {
-        let edge_path = path.join("edge_store.bin");
-        if edge_path.exists() {
-            match EdgeStore::load_from_file(&edge_path) {
-                Ok(store) => return store,
+    /// Loads a persisted index from disk, falling back to a default on missing
+    /// file or deserialization error.
+    ///
+    /// This is the single implementation for the load-or-default pattern shared
+    /// by `PropertyIndex`, `RangeIndex`, and `EdgeStore`.
+    fn load_or_default<T>(
+        path: &std::path::Path,
+        file_name: &str,
+        load_fn: impl FnOnce(&std::path::Path) -> std::io::Result<T>,
+        default: impl FnOnce() -> T,
+    ) -> T {
+        let full_path = path.join(file_name);
+        if full_path.exists() {
+            match load_fn(&full_path) {
+                Ok(val) => return val,
                 Err(e) => tracing::warn!(
-                    "Failed to load EdgeStore from {:?}: {}. Starting empty.",
-                    edge_path,
+                    "Failed to load {} from {:?}: {}. Starting with empty default.",
+                    file_name,
+                    full_path,
                     e
                 ),
             }
         }
-        EdgeStore::new()
+        default()
+    }
+
+    fn load_edge_store(path: &std::path::Path) -> EdgeStore {
+        Self::load_or_default(
+            path,
+            "edge_store.bin",
+            EdgeStore::load_from_file,
+            EdgeStore::new,
+        )
     }
 
     fn load_property_index(path: &std::path::Path) -> PropertyIndex {
-        let index_path = path.join("property_index.bin");
-        if index_path.exists() {
-            match PropertyIndex::load_from_file(&index_path) {
-                Ok(idx) => return idx,
-                Err(e) => tracing::warn!(
-                    "Failed to load PropertyIndex from {:?}: {}. Starting with empty index.",
-                    index_path,
-                    e
-                ),
-            }
-        }
-        PropertyIndex::new()
+        Self::load_or_default(
+            path,
+            "property_index.bin",
+            PropertyIndex::load_from_file,
+            PropertyIndex::new,
+        )
     }
 
     fn load_range_index(path: &std::path::Path) -> RangeIndex {
-        let index_path = path.join("range_index.bin");
-        if index_path.exists() {
-            match RangeIndex::load_from_file(&index_path) {
-                Ok(idx) => return idx,
-                Err(e) => tracing::warn!(
-                    "Failed to load RangeIndex from {:?}: {}. Starting with empty index.",
-                    index_path,
-                    e
-                ),
-            }
-        }
-        RangeIndex::new()
+        Self::load_or_default(
+            path,
+            "range_index.bin",
+            RangeIndex::load_from_file,
+            RangeIndex::new,
+        )
     }
 
     /// Returns a reference to the collection's guard rails.

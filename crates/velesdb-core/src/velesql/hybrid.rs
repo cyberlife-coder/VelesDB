@@ -82,6 +82,57 @@ impl WeightedConfig {
     }
 }
 
+/// Sorts `ScoredResult` values by score descending and truncates to `limit`.
+///
+/// Shared finalization step for all fusion strategies.
+fn sort_descending_and_truncate(results: &mut Vec<ScoredResult>, limit: usize) {
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit);
+}
+
+/// Converts a score accumulator map into a sorted, truncated result vector.
+fn finalize_scores(scores: HashMap<u64, f32>, limit: usize) -> Vec<ScoredResult> {
+    let mut fused: Vec<ScoredResult> = scores
+        .into_iter()
+        .map(|(id, score)| ScoredResult::new(id, score))
+        .collect();
+    sort_descending_and_truncate(&mut fused, limit);
+    fused
+}
+
+/// Accumulates RRF rank scores from a result list into the score map.
+///
+/// RRF score for rank `r` (1-based): `1 / (k + r)`
+fn accumulate_rrf_scores(scores: &mut HashMap<u64, f32>, results: &[ScoredResult], k: f32) {
+    for (rank, result) in results.iter().enumerate() {
+        let rrf_score = 1.0 / (k + (rank + 1) as f32);
+        *scores.entry(result.id).or_insert(0.0) += rrf_score;
+    }
+}
+
+/// Accumulates weighted scores from normalized results into the score map.
+fn accumulate_weighted_scores(
+    scores: &mut HashMap<u64, f32>,
+    results: &[ScoredResult],
+    weight: f32,
+) {
+    for result in results {
+        *scores.entry(result.id).or_insert(0.0) += result.score * weight;
+    }
+}
+
+/// Accumulates maximum scores from normalized results into the score map.
+fn accumulate_max_scores(scores: &mut HashMap<u64, f32>, results: &[ScoredResult]) {
+    for result in results {
+        let entry = scores.entry(result.id).or_insert(0.0);
+        *entry = entry.max(result.score);
+    }
+}
+
 /// Fuses two ranked result lists using Reciprocal Rank Fusion.
 ///
 /// RRF formula: `score(d) = Σ 1/(k + rank_i(d))`
@@ -111,34 +162,10 @@ pub fn fuse_rrf(
     let mut scores: HashMap<u64, f32> = HashMap::new();
     let k = config.k as f32;
 
-    // Add RRF scores from vector results
-    for (rank, result) in vector_results.iter().enumerate() {
-        let rrf_score = 1.0 / (k + (rank + 1) as f32);
-        *scores.entry(result.id).or_insert(0.0) += rrf_score;
-    }
+    accumulate_rrf_scores(&mut scores, vector_results, k);
+    accumulate_rrf_scores(&mut scores, graph_results, k);
 
-    // Add RRF scores from graph results
-    for (rank, result) in graph_results.iter().enumerate() {
-        let rrf_score = 1.0 / (k + (rank + 1) as f32);
-        *scores.entry(result.id).or_insert(0.0) += rrf_score;
-    }
-
-    // Convert to sorted vector
-    let mut fused: Vec<ScoredResult> = scores
-        .into_iter()
-        .map(|(id, score)| ScoredResult::new(id, score))
-        .collect();
-
-    // Sort by score descending
-    fused.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    // Limit results
-    fused.truncate(limit);
-    fused
+    finalize_scores(scores, limit)
 }
 
 /// Fuses two result lists using weighted sum of normalized scores.
@@ -159,34 +186,14 @@ pub fn fuse_weighted(
     config: &WeightedConfig,
     limit: usize,
 ) -> Vec<ScoredResult> {
-    // Normalize scores to [0, 1]
     let vector_normalized = normalize_scores(vector_results);
     let graph_normalized = normalize_scores(graph_results);
 
-    // Build score map
     let mut scores: HashMap<u64, f32> = HashMap::new();
+    accumulate_weighted_scores(&mut scores, &vector_normalized, config.vector_weight);
+    accumulate_weighted_scores(&mut scores, &graph_normalized, config.graph_weight);
 
-    for result in &vector_normalized {
-        *scores.entry(result.id).or_insert(0.0) += result.score * config.vector_weight;
-    }
-
-    for result in &graph_normalized {
-        *scores.entry(result.id).or_insert(0.0) += result.score * config.graph_weight;
-    }
-
-    // Convert to sorted vector
-    let mut fused: Vec<ScoredResult> = scores
-        .into_iter()
-        .map(|(id, score)| ScoredResult::new(id, score))
-        .collect();
-
-    fused.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    fused.truncate(limit);
-    fused
+    finalize_scores(scores, limit)
 }
 
 /// Fuses results by taking the maximum score from either source.
@@ -196,34 +203,14 @@ pub fn fuse_maximum(
     graph_results: &[ScoredResult],
     limit: usize,
 ) -> Vec<ScoredResult> {
-    // Normalize first
     let vector_normalized = normalize_scores(vector_results);
     let graph_normalized = normalize_scores(graph_results);
 
     let mut scores: HashMap<u64, f32> = HashMap::new();
+    accumulate_max_scores(&mut scores, &vector_normalized);
+    accumulate_max_scores(&mut scores, &graph_normalized);
 
-    for result in &vector_normalized {
-        let entry = scores.entry(result.id).or_insert(0.0);
-        *entry = entry.max(result.score);
-    }
-
-    for result in &graph_normalized {
-        let entry = scores.entry(result.id).or_insert(0.0);
-        *entry = entry.max(result.score);
-    }
-
-    let mut fused: Vec<ScoredResult> = scores
-        .into_iter()
-        .map(|(id, score)| ScoredResult::new(id, score))
-        .collect();
-
-    fused.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    fused.truncate(limit);
-    fused
+    finalize_scores(scores, limit)
 }
 
 /// Normalizes scores to [0, 1] range using min-max normalization.

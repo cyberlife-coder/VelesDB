@@ -81,6 +81,15 @@ pub fn extract_join_tables(joins: &[JoinClause]) -> HashSet<String> {
     tables
 }
 
+/// Routes a condition clone into the appropriate analysis bucket by source.
+fn route_to_bucket(condition: &Condition, source: Source, analysis: &mut PushdownAnalysis) {
+    match source {
+        Source::ColumnStore => analysis.column_store_filters.push(condition.clone()),
+        Source::Graph => analysis.graph_filters.push(condition.clone()),
+        Source::Mixed | Source::Unknown => analysis.post_join_filters.push(condition.clone()),
+    }
+}
+
 /// Classifies a condition and adds it to the appropriate category.
 fn classify_condition(
     condition: &Condition,
@@ -97,33 +106,17 @@ fn classify_condition(
 
         // OR: must keep together, classify based on combined sources
         Condition::Or(left, right) => {
-            let left_source = get_condition_source(left, graph_vars, join_tables);
-            let right_source = get_condition_source(right, graph_vars, join_tables);
-
-            match (left_source, right_source) {
-                (Source::ColumnStore, Source::ColumnStore) => {
-                    analysis.column_store_filters.push(condition.clone());
-                }
-                (Source::Graph, Source::Graph) => {
-                    analysis.graph_filters.push(condition.clone());
-                }
-                _ => {
-                    // Mixed OR must be post-join
-                    analysis.post_join_filters.push(condition.clone());
-                }
-            }
+            let combined = combine_sources(
+                get_condition_source(left, graph_vars, join_tables),
+                get_condition_source(right, graph_vars, join_tables),
+            );
+            route_to_bucket(condition, combined, analysis);
         }
 
         // NOT: classify based on inner condition source
         Condition::Not(inner) => {
             let source = get_condition_source(inner, graph_vars, join_tables);
-            match source {
-                Source::ColumnStore => analysis.column_store_filters.push(condition.clone()),
-                Source::Graph => analysis.graph_filters.push(condition.clone()),
-                Source::Mixed | Source::Unknown => {
-                    analysis.post_join_filters.push(condition.clone());
-                }
-            }
+            route_to_bucket(condition, source, analysis);
         }
 
         // Group: unwrap and classify inner
@@ -134,13 +127,7 @@ fn classify_condition(
         // Leaf conditions: classify by column reference
         _ => {
             let source = get_condition_source(condition, graph_vars, join_tables);
-            match source {
-                Source::ColumnStore => analysis.column_store_filters.push(condition.clone()),
-                Source::Graph => analysis.graph_filters.push(condition.clone()),
-                Source::Mixed | Source::Unknown => {
-                    analysis.post_join_filters.push(condition.clone());
-                }
-            }
+            route_to_bucket(condition, source, analysis);
         }
     }
 }

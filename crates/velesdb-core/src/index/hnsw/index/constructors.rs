@@ -234,25 +234,8 @@ impl HnswIndex {
             mappings_data.next_idx,
         );
 
-        // Load vectors used for brute-force fallback and reranking.
-        let (vectors, enable_vector_storage) = if meta.enable_vector_storage {
-            match persistence::load_vectors(path) {
-                Ok(vectors_data) => {
-                    let vectors = ShardedVectors::new(meta.dimension);
-                    vectors.insert_batch(vectors_data.vectors);
-                    (vectors, true)
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    tracing::debug!(
-                        "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
-                    );
-                    (ShardedVectors::new(meta.dimension), false)
-                }
-                Err(err) => return Err(err),
-            }
-        } else {
-            (ShardedVectors::new(meta.dimension), false)
-        };
+        // Load vectors (gracefully disables if file missing)
+        let (vectors, enable_vector_storage) = persistence::load_vectors_or_disable(path, &meta)?;
 
         Ok(Self {
             dimension: meta.dimension,
@@ -297,7 +280,8 @@ impl HnswIndex {
             },
         )?;
 
-        self.save_or_cleanup_vectors(path)?;
+        // Save or clean up vectors (shared helper)
+        persistence::save_or_cleanup_vectors(path, self.enable_vector_storage, &self.vectors)?;
 
         // Save metadata
         persistence::save_meta(
@@ -309,30 +293,6 @@ impl HnswIndex {
             },
         )?;
 
-        Ok(())
-    }
-
-    /// Persists vectors to disk or removes stale vector files.
-    ///
-    /// When vector storage is enabled, saves the current vectors for brute-force
-    /// fallback and reranking after reload. When disabled, removes any leftover
-    /// vector file from previous runs to avoid stale data.
-    fn save_or_cleanup_vectors(&self, path: &Path) -> std::result::Result<(), std::io::Error> {
-        use crate::index::hnsw::persistence::{self, HnswVectorsData};
-
-        if self.enable_vector_storage {
-            persistence::save_vectors(
-                path,
-                &HnswVectorsData {
-                    vectors: self.vectors.collect_for_parallel(),
-                },
-            )?;
-        } else {
-            let vectors_path = path.join("native_vectors.bin");
-            if vectors_path.exists() {
-                std::fs::remove_file(vectors_path)?;
-            }
-        }
         Ok(())
     }
 

@@ -111,7 +111,7 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if file operations fail.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        use super::persistence::{self, HnswMappingsData, HnswMeta, HnswVectorsData};
+        use super::persistence::{self, HnswMappingsData, HnswMeta};
 
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
@@ -131,20 +131,8 @@ impl NativeHnswIndex {
             },
         )?;
 
-        if self.enable_vector_storage {
-            persistence::save_vectors(
-                path,
-                &HnswVectorsData {
-                    vectors: self.vectors.collect_for_parallel(),
-                },
-            )?;
-        } else {
-            // Keep on-disk state unambiguous in fast-insert mode.
-            let vectors_path = path.join("native_vectors.bin");
-            if vectors_path.exists() {
-                std::fs::remove_file(vectors_path)?;
-            }
-        }
+        // Save or clean up vectors (shared helper)
+        persistence::save_or_cleanup_vectors(path, self.enable_vector_storage, &self.vectors)?;
 
         // Save metadata
         persistence::save_meta(
@@ -192,24 +180,8 @@ impl NativeHnswIndex {
             mappings_data.next_idx,
         );
 
-        let (vectors, enable_vector_storage) = if meta.enable_vector_storage {
-            match persistence::load_vectors(path) {
-                Ok(vectors_data) => {
-                    let vectors = ShardedVectors::new(meta.dimension);
-                    vectors.insert_batch(vectors_data.vectors);
-                    (vectors, true)
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    tracing::debug!(
-                        "native_vectors.bin missing during NativeHNSW load; disabling vector storage"
-                    );
-                    (ShardedVectors::new(meta.dimension), false)
-                }
-                Err(err) => return Err(err),
-            }
-        } else {
-            (ShardedVectors::new(meta.dimension), false)
-        };
+        // Load vectors (gracefully disables if file missing)
+        let (vectors, enable_vector_storage) = persistence::load_vectors_or_disable(path, &meta)?;
 
         Ok(Self {
             dimension: meta.dimension,

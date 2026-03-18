@@ -123,51 +123,8 @@ impl PqGpuContext {
             source: wgpu::ShaderSource::Wgsl(PQ_KMEANS_ASSIGN_SHADER.into()),
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("PQ K-means Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let bind_group_layout =
+            super::helpers::create_quad_bind_group_layout(&device, "PQ K-means Bind Group Layout");
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("PQ K-means Pipeline Layout"),
@@ -217,6 +174,7 @@ pub fn should_use_gpu(n: usize, k: usize, subspace_dim: usize) -> bool {
 /// - Buffer creation fails.
 /// - Compute dispatch fails.
 /// - Result readback fails.
+#[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn gpu_kmeans_assign(
     ctx: &PqGpuContext,
@@ -239,14 +197,8 @@ pub fn gpu_kmeans_assign(
     let k = centroids.len();
 
     // Flatten vectors and centroids into contiguous buffers.
-    let mut flat_vectors = Vec::with_capacity(n * subspace_dim);
-    for v in sub_vectors {
-        flat_vectors.extend_from_slice(v);
-    }
-    let mut flat_centroids = Vec::with_capacity(k * subspace_dim);
-    for c in centroids {
-        flat_centroids.extend_from_slice(c);
-    }
+    let flat_vectors = super::helpers::flatten_vecs(sub_vectors, subspace_dim);
+    let flat_centroids = super::helpers::flatten_vecs(centroids, subspace_dim);
 
     let device = &ctx.device;
     let queue = &ctx.queue;
@@ -338,21 +290,9 @@ pub fn gpu_kmeans_assign(
     encoder.copy_buffer_to_buffer(&assignments_buffer, 0, &staging_buffer, 0, assignments_size);
     queue.submit(std::iter::once(encoder.finish()));
 
-    // Read back results.
-    let buffer_slice = staging_buffer.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-        let _ = tx.send(result);
-    });
-    device.poll(wgpu::Maintain::Wait);
-
-    rx.recv().ok().and_then(Result::ok)?;
-
-    let data = buffer_slice.get_mapped_range();
-    let assignments_u32: &[u32] = bytemuck::cast_slice(&data);
+    // Read back results using shared helper.
+    let assignments_u32 = super::helpers::readback_buffer::<u32>(device, &staging_buffer, n)?;
     let assignments: Vec<usize> = assignments_u32.iter().map(|&a| a as usize).collect();
-    drop(data);
-    staging_buffer.unmap();
 
     Some(assignments)
 }

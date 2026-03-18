@@ -177,37 +177,7 @@ impl ColumnStore {
 
         for (name, column) in &mut self.columns {
             if let Some(value) = value_map.get(name.as_str()) {
-                match value {
-                    ColumnValue::Null => column.push_null(),
-                    ColumnValue::Int(v) => {
-                        if let TypedColumn::Int(col) = column {
-                            col.push(Some(*v));
-                        } else {
-                            column.push_null();
-                        }
-                    }
-                    ColumnValue::Float(v) => {
-                        if let TypedColumn::Float(col) = column {
-                            col.push(Some(*v));
-                        } else {
-                            column.push_null();
-                        }
-                    }
-                    ColumnValue::String(id) => {
-                        if let TypedColumn::String(col) = column {
-                            col.push(Some(*id));
-                        } else {
-                            column.push_null();
-                        }
-                    }
-                    ColumnValue::Bool(v) => {
-                        if let TypedColumn::Bool(col) = column {
-                            col.push(Some(*v));
-                        } else {
-                            column.push_null();
-                        }
-                    }
-                }
+                column.push_typed(value);
             } else {
                 column.push_null();
             }
@@ -278,18 +248,25 @@ impl ColumnStore {
             return Err(ColumnStoreError::DuplicateKey(pk_value));
         }
 
-        Self::validate_row_types(&self.columns, values)?;
+        Self::validate_value_types(&self.columns, values, None)?;
         self.undelete_row(existing_idx);
-        self.overwrite_row_values(values, existing_idx)?;
+        self.set_row_values(values, existing_idx, None)?;
         Ok(existing_idx)
     }
 
     /// Validates that all non-null values match their target column types.
-    fn validate_row_types(
+    ///
+    /// Optionally skips a column (e.g. primary key). Shared by both `insert_row`
+    /// and upsert paths in `batch.rs`.
+    pub(super) fn validate_value_types(
         columns: &HashMap<String, TypedColumn>,
         values: &[(&str, ColumnValue)],
+        skip_col: Option<&str>,
     ) -> Result<(), ColumnStoreError> {
         for (col_name, value) in values {
+            if skip_col.is_some_and(|s| s == *col_name) {
+                continue;
+            }
             if let Some(col) = columns.get(*col_name) {
                 if !matches!(value, ColumnValue::Null) {
                     Self::validate_type_match(col, value)?;
@@ -308,16 +285,23 @@ impl ColumnStore {
         self.row_expiry.remove(&row_idx);
     }
 
-    /// Overwrites column values for an existing row, setting missing columns to null.
-    fn overwrite_row_values(
+    /// Writes column values for a row, optionally skipping a column (e.g. primary key).
+    ///
+    /// Missing columns are set to null. Shared by `reinsert_or_reject` and
+    /// `write_row_values` (batch module) to eliminate duplication.
+    pub(super) fn set_row_values(
         &mut self,
         values: &[(&str, ColumnValue)],
         row_idx: usize,
+        skip_col: Option<&str>,
     ) -> Result<(), ColumnStoreError> {
         let value_map: std::collections::HashMap<&str, &ColumnValue> =
             values.iter().map(|(k, v)| (*k, v)).collect();
         let col_names: Vec<String> = self.columns.keys().cloned().collect();
         for col_name in col_names {
+            if skip_col.is_some_and(|s| s == col_name) {
+                continue;
+            }
             if let Some(col) = self.columns.get_mut(&col_name) {
                 let val = value_map
                     .get(col_name.as_str())
@@ -379,14 +363,7 @@ impl ColumnStore {
             return Err(ColumnStoreError::PrimaryKeyUpdate);
         }
 
-        let row_idx = *self
-            .primary_index
-            .get(&pk)
-            .ok_or(ColumnStoreError::RowNotFound(pk))?;
-
-        if self.deleted_rows.contains(&row_idx) {
-            return Err(ColumnStoreError::RowNotFound(pk));
-        }
+        let row_idx = self.resolve_live_row(pk)?;
 
         let col = self
             .columns
@@ -484,19 +461,12 @@ impl ColumnStore {
         }
 
         let col = self.columns.get(column)?;
-        match col {
-            TypedColumn::Int(v) => v
-                .get(row_idx)
-                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
-            TypedColumn::Float(v) => v
-                .get(row_idx)
-                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
-            TypedColumn::String(v) => v.get(row_idx).and_then(|opt| {
+        // String columns need special handling for intern-table resolution.
+        if let TypedColumn::String(v) = col {
+            return v.get(row_idx).and_then(|opt| {
                 opt.and_then(|id| self.string_table.get(id).map(|s| serde_json::json!(s)))
-            }),
-            TypedColumn::Bool(v) => v
-                .get(row_idx)
-                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            });
         }
+        col.get_as_json_non_string(row_idx)
     }
 }

@@ -147,3 +147,266 @@ fn backpressure_error_drain_task_dead_display() {
     let msg = format!("{err}");
     assert!(msg.contains("dead"));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Drain loop integration tests (moved from ingester.rs inline tests)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_stream_try_send_succeeds_when_capacity_available() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 10,
+        batch_size: 100,
+        flush_interval_ms: 5000,
+    };
+    let ingester = StreamIngester::new(coll, config);
+
+    let result = ingester.try_send(make_point(1, 4));
+    assert!(
+        result.is_ok(),
+        "try_send should succeed when channel has capacity"
+    );
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_stream_try_send_returns_buffer_full_when_at_capacity() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 2,
+        batch_size: 100,
+        flush_interval_ms: 60_000,
+    };
+    let ingester = StreamIngester::new(coll, config);
+
+    assert!(ingester.try_send(make_point(1, 4)).is_ok());
+    assert!(ingester.try_send(make_point(2, 4)).is_ok());
+
+    let result = ingester.try_send(make_point(3, 4));
+    assert!(result.is_err(), "should return error when buffer full");
+    match result.unwrap_err() {
+        BackpressureError::BufferFull => {}
+        other => panic!("expected BufferFull, got: {other}"),
+    }
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_stream_drain_flushes_at_batch_size() {
+    let (_dir, coll) = test_collection(4);
+    let batch_size = 4;
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size,
+        flush_interval_ms: 60_000,
+    };
+    let coll_clone = coll.clone();
+    let ingester = StreamIngester::new(coll, config);
+
+    for i in 0..batch_size {
+        ingester
+            .try_send(make_point(i as u64 + 1, 4))
+            .expect("send should succeed");
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let results = coll_clone.get(&[1, 2, 3, 4]);
+    let found_count = results.iter().filter(|r| r.is_some()).count();
+    assert_eq!(
+        found_count, 4,
+        "all {batch_size} points should be flushed via upsert"
+    );
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_stream_drain_flushes_partial_batch_after_timeout() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size: 100,
+        flush_interval_ms: 50,
+    };
+    let coll_clone = coll.clone();
+    let ingester = StreamIngester::new(coll, config);
+
+    ingester.try_send(make_point(1, 4)).expect("send 1");
+    ingester.try_send(make_point(2, 4)).expect("send 2");
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let results = coll_clone.get(&[1, 2]);
+    let found_count = results.iter().filter(|r| r.is_some()).count();
+    assert_eq!(
+        found_count, 2,
+        "partial batch should be flushed after flush_interval_ms"
+    );
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_stream_shutdown_flushes_remaining_points() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size: 1000,
+        flush_interval_ms: 60_000,
+    };
+    let coll_clone = coll.clone();
+    let ingester = StreamIngester::new(coll, config);
+
+    ingester.try_send(make_point(10, 4)).expect("send");
+    ingester.try_send(make_point(11, 4)).expect("send");
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    ingester.shutdown().await;
+
+    let results = coll_clone.get(&[10, 11]);
+    let found_count = results.iter().filter(|r| r.is_some()).count();
+    assert_eq!(
+        found_count, 2,
+        "shutdown should flush remaining buffered points"
+    );
+}
+
+#[tokio::test]
+async fn test_stream_delta_drain_loop_routes_to_delta_when_active() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size: 4,
+        flush_interval_ms: 50,
+    };
+    let coll_clone = coll.clone();
+
+    coll.delta_buffer.activate();
+
+    let ingester = StreamIngester::new(coll, config);
+
+    for i in 1..=4 {
+        ingester
+            .try_send(make_point(i, 4))
+            .expect("send should succeed");
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let results = coll_clone.get(&[1, 2, 3, 4]);
+    let found = results.iter().filter(|r| r.is_some()).count();
+    assert_eq!(found, 4, "upsert should write all points to storage");
+
+    assert_eq!(
+        coll_clone.delta_buffer.len(),
+        4,
+        "delta buffer should contain the streamed points when active"
+    );
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+#[allow(clippy::cast_possible_truncation)]
+async fn test_stream_searchable_immediately() {
+    let (_dir, coll) = test_collection(4);
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size: 4,
+        flush_interval_ms: 50,
+    };
+    let coll_clone = coll.clone();
+    let ingester = StreamIngester::new(coll, config);
+
+    for i in 1..=4u64 {
+        let mut vec = vec![0.0_f32; 4];
+        vec[(i as usize - 1) % 4] = 1.0;
+        let p = Point {
+            id: i,
+            vector: vec,
+            payload: None,
+            sparse_vectors: None,
+        };
+        ingester.try_send(p).expect("send should succeed");
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let query = vec![1.0, 0.0, 0.0, 0.0];
+    let results = coll_clone.search(&query, 4).expect("search should succeed");
+    assert!(
+        !results.is_empty(),
+        "inserted points should be searchable after drain"
+    );
+    assert_eq!(results[0].point.id, 1, "closest match should be id=1");
+
+    ingester.shutdown().await;
+}
+
+#[tokio::test]
+#[allow(clippy::cast_precision_loss)]
+async fn test_stream_delta_rebuild_no_data_loss() {
+    let (_dir, coll) = test_collection(4);
+    let initial_points: Vec<Point> = (1..=5u64)
+        .map(|i| {
+            let mut vec = vec![0.0_f32; 4];
+            vec[0] = i as f32;
+            Point {
+                id: i,
+                vector: vec,
+                payload: None,
+                sparse_vectors: None,
+            }
+        })
+        .collect();
+    coll.upsert(initial_points).expect("upsert initial points");
+
+    coll.delta_buffer.activate();
+    assert!(coll.delta_buffer.is_active());
+
+    let config = StreamingConfig {
+        buffer_size: 100,
+        batch_size: 4,
+        flush_interval_ms: 50,
+    };
+    let coll_clone = coll.clone();
+    let ingester = StreamIngester::new(coll, config);
+
+    for i in 6..=10u64 {
+        let mut vec = vec![0.0_f32; 4];
+        vec[0] = i as f32;
+        let p = Point {
+            id: i,
+            vector: vec,
+            payload: None,
+            sparse_vectors: None,
+        };
+        ingester.try_send(p).expect("send should succeed");
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let query = vec![10.0, 0.0, 0.0, 0.0];
+    let results = coll_clone
+        .search_ids(&query, 10)
+        .expect("search_ids should succeed");
+    let found_ids: std::collections::HashSet<u64> = results.iter().map(|sr| sr.id).collect();
+
+    for id in 1..=10 {
+        assert!(
+            found_ids.contains(&id),
+            "point id={id} should be in search results"
+        );
+    }
+
+    let drained = coll_clone.delta_buffer.deactivate_and_drain();
+    assert!(!coll_clone.delta_buffer.is_active());
+    assert_eq!(drained.len(), 5, "delta should have had 5 entries");
+
+    ingester.shutdown().await;
+}

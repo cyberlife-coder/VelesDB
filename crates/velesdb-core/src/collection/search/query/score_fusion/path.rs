@@ -72,27 +72,8 @@ impl PathScorer {
     /// - Lower scores for longer paths and weaker relationship types
     #[must_use]
     pub fn score_path(&self, path: &[(u64, u64, &str)]) -> f32 {
-        if path.is_empty() {
-            return 1.0; // Direct match, no traversal needed
-        }
-
-        let mut score = 1.0;
-
-        for (i, (_, _, rel_type)) in path.iter().enumerate() {
-            // Distance decay: exponential decay per hop
-            let hop_decay = self.distance_decay.powi(i as i32 + 1);
-
-            // Relationship type weight
-            let rel_weight = self
-                .rel_type_weights
-                .get(*rel_type)
-                .copied()
-                .unwrap_or(self.default_weight);
-
-            score *= hop_decay * rel_weight;
-        }
-
-        score.clamp(0.0, 1.0)
+        let rel_types: Vec<&str> = path.iter().map(|(_, _, rt)| *rt).collect();
+        self.score_rel_types(&rel_types)
     }
 
     /// Scores a path given only relationship types (simplified API).

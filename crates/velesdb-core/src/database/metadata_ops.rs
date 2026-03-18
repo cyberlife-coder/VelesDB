@@ -48,17 +48,11 @@ impl Database {
 
     /// Disk fallback for `get_metadata_collection`.
     fn open_metadata_collection_from_disk(&self, name: &str) -> Option<MetadataCollection> {
-        let path = self.data_dir.join(name);
-        let config_path = path.join("config.json");
-        if !config_path.exists() {
-            return None;
-        }
-        let data = std::fs::read_to_string(&config_path).ok()?;
-        let cfg = serde_json::from_str::<crate::collection::CollectionConfig>(&data).ok()?;
+        let cfg = self.read_collection_config(name)?;
         if !cfg.metadata_only {
             return None;
         }
-        let coll = MetadataCollection::open(path).ok()?;
+        let coll = MetadataCollection::open(self.data_dir.join(name)).ok()?;
         self.metadata_colls
             .write()
             .insert(name.to_string(), coll.clone());

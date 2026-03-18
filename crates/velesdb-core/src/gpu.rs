@@ -21,6 +21,10 @@
 //! | Browser | WebGPU |
 
 #[cfg(feature = "gpu")]
+#[path = "gpu/helpers.rs"]
+mod helpers;
+
+#[cfg(feature = "gpu")]
 #[path = "gpu/gpu_backend.rs"]
 mod gpu_backend;
 

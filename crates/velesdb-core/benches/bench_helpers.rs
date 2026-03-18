@@ -1,4 +1,4 @@
-//! Shared benchmark utilities for VelesDB benchmarks.
+//! Shared benchmark utilities for `VelesDB` benchmarks.
 //!
 //! Provides deterministic vector generation and normalization helpers
 //! used across multiple benchmark files.
@@ -12,6 +12,7 @@
 
 /// Generates a deterministic pseudo-random vector for benchmarking.
 /// Uses a simple hash-based approach for reproducibility.
+#[must_use]
 pub fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     (0..dim)
         .map(|i| {
@@ -33,6 +34,7 @@ pub fn normalize(v: &mut [f32]) {
 }
 
 /// Generates a normalized vector suitable for cosine similarity.
+#[must_use]
 pub fn generate_normalized_vector(dim: usize, seed: u64) -> Vec<f32> {
     let mut v = generate_vector(dim, seed);
     normalize(&mut v);

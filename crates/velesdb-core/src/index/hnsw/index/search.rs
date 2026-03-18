@@ -63,7 +63,14 @@ impl HnswIndex {
     }
 
     /// Performs HNSW-only search (no reranking).
-    fn search_hnsw_only(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<ScoredResult> {
+    ///
+    /// `pub(crate)` to allow reuse in `batch.rs` for `search_batch_parallel`.
+    pub(crate) fn search_hnsw_only(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
         let neighbours = inner.search(query, k, ef_search);
 
@@ -222,23 +229,7 @@ impl HnswIndex {
         // 1. Get candidates from HNSW (fast approximate search)
         let candidates = self.search_hnsw_only(query, rerank_k, ef_search);
 
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-
-        let rerank_start = Instant::now();
-
-        // 2. Re-rank using SIMD-optimized exact distance computation
-        let mut reranked = self.rerank_candidates(query, &candidates);
-
-        // 3. Sort, truncate, and update latency EMA
-        self.metric.sort_scored_results(&mut reranked);
-        reranked.truncate(k);
-
-        let elapsed_micros = rerank_start.elapsed().as_micros();
-        let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
-        self.update_rerank_latency_ema(elapsed);
-        reranked
+        self.rerank_sort_and_truncate(query, &candidates, k)
     }
 
     /// Searches with SIMD-based re-ranking using a custom quality for initial search.
@@ -265,16 +256,27 @@ impl HnswIndex {
         };
         let candidates = self.search_with_quality(query, rerank_k, actual_quality);
 
+        self.rerank_sort_and_truncate(query, &candidates, k)
+    }
+
+    /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
+    ///
+    /// RF-2: Shared rerank pipeline used by both `search_with_rerank_with_ef`
+    /// and `search_with_rerank_quality` to eliminate 4 duplicated lines.
+    fn rerank_sort_and_truncate(
+        &self,
+        query: &[f32],
+        candidates: &[ScoredResult],
+        k: usize,
+    ) -> Vec<ScoredResult> {
         if candidates.is_empty() {
             return Vec::new();
         }
 
         let rerank_start = Instant::now();
 
-        // 2. Re-rank using SIMD-optimized exact distance computation
-        let mut reranked = self.rerank_candidates(query, &candidates);
+        let mut reranked = self.rerank_candidates(query, candidates);
 
-        // 3. Sort, truncate, and update latency EMA
         self.metric.sort_scored_results(&mut reranked);
         reranked.truncate(k);
 

@@ -113,15 +113,9 @@ impl Database {
 
     /// Disk fallback for `get_graph_collection`.
     fn open_graph_collection_from_disk(&self, name: &str) -> Option<GraphCollection> {
-        let path = self.data_dir.join(name);
-        let config_path = path.join("config.json");
-        if !config_path.exists() {
-            return None;
-        }
-        let data = std::fs::read_to_string(&config_path).ok()?;
-        let cfg = serde_json::from_str::<crate::collection::CollectionConfig>(&data).ok()?;
+        let cfg = self.read_collection_config(name)?;
         cfg.graph_schema.as_ref()?;
-        let coll = GraphCollection::open(path).ok()?;
+        let coll = GraphCollection::open(self.data_dir.join(name)).ok()?;
         self.graph_colls
             .write()
             .insert(name.to_string(), coll.clone());

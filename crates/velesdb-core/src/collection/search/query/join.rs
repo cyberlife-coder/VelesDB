@@ -289,31 +289,7 @@ fn normalize_join_condition(condition: &JoinCondition, join: &JoinClause) -> Joi
     condition.clone()
 }
 
-/// Batch get rows from ColumnStore by primary keys.
-///
-/// Returns a map of pk -> column values (as JSON) for found rows.
-fn batch_get_rows(
-    column_store: &ColumnStore,
-    pks: &[i64],
-) -> HashMap<i64, HashMap<String, serde_json::Value>> {
-    let mut result = HashMap::with_capacity(pks.len());
-
-    for &pk in pks {
-        if let Some(row_idx) = column_store.get_row_idx_by_pk(pk) {
-            // Get all column values for this row
-            let mut row_data = HashMap::new();
-            for col_name in column_store.column_names() {
-                if let Some(value) = column_store.get_value_as_json(col_name, row_idx) {
-                    row_data.insert(col_name.to_string(), value);
-                }
-            }
-            result.insert(pk, row_data);
-        }
-    }
-
-    result
-}
-
+/// Collects all column values for a single row into a JSON map.
 fn row_as_json_map(
     column_store: &ColumnStore,
     row_idx: usize,
@@ -325,6 +301,22 @@ fn row_as_json_map(
         }
     }
     row_data
+}
+
+/// Batch get rows from ColumnStore by primary keys.
+///
+/// Returns a map of pk -> column values (as JSON) for found rows.
+fn batch_get_rows(
+    column_store: &ColumnStore,
+    pks: &[i64],
+) -> HashMap<i64, HashMap<String, serde_json::Value>> {
+    let mut result = HashMap::with_capacity(pks.len());
+    for &pk in pks {
+        if let Some(row_idx) = column_store.get_row_idx_by_pk(pk) {
+            result.insert(pk, row_as_json_map(column_store, row_idx));
+        }
+    }
+    result
 }
 
 fn build_null_row_data(column_store: &ColumnStore) -> HashMap<String, serde_json::Value> {

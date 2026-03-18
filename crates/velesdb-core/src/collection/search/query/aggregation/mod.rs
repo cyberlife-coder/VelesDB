@@ -24,9 +24,7 @@ use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
-use crate::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, Aggregator, Query, SelectColumns,
-};
+use crate::velesql::{AggregateFunction, Aggregator, Query, SelectColumns};
 use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::collections::HashMap;
@@ -402,67 +400,16 @@ impl Collection {
         let mut result = serde_json::Map::new();
 
         for agg in aggregations {
-            let key = Self::aggregation_result_key_from_fn(agg);
-            let value = Self::aggregation_result_value_from_fn(agg, agg_result);
+            let key = Self::aggregation_result_key(agg);
+            let value = Self::aggregation_result_value(agg, agg_result);
             result.insert(key, value);
         }
 
         serde_json::Value::Object(result)
     }
 
-    /// Computes the result key for an aggregation function (used by ungrouped path).
-    fn aggregation_result_key_from_fn(agg: &AggregateFunction) -> String {
-        if let Some(ref alias) = agg.alias {
-            alias.clone()
-        } else {
-            match &agg.argument {
-                AggregateArg::Wildcard => "count".to_string(),
-                AggregateArg::Column(col) => {
-                    let prefix = match agg.function_type {
-                        AggregateType::Count => "count",
-                        AggregateType::Sum => "sum",
-                        AggregateType::Avg => "avg",
-                        AggregateType::Min => "min",
-                        AggregateType::Max => "max",
-                    };
-                    format!("{prefix}_{col}")
-                }
-            }
-        }
-    }
-
-    /// Computes the result value for an aggregation function (used by ungrouped path).
-    fn aggregation_result_value_from_fn(
-        agg: &AggregateFunction,
-        agg_result: &crate::velesql::AggregateResult,
-    ) -> serde_json::Value {
-        match (&agg.function_type, &agg.argument) {
-            (AggregateType::Count, AggregateArg::Wildcard) => {
-                serde_json::json!(agg_result.count)
-            }
-            (AggregateType::Count, AggregateArg::Column(col)) => {
-                let count = agg_result.counts.get(col.as_str()).copied().unwrap_or(0);
-                serde_json::json!(count)
-            }
-            (AggregateType::Sum, AggregateArg::Column(col)) => agg_result
-                .sums
-                .get(col.as_str())
-                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            (AggregateType::Avg, AggregateArg::Column(col)) => agg_result
-                .avgs
-                .get(col.as_str())
-                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            (AggregateType::Min, AggregateArg::Column(col)) => agg_result
-                .mins
-                .get(col.as_str())
-                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            (AggregateType::Max, AggregateArg::Column(col)) => agg_result
-                .maxs
-                .get(col.as_str())
-                .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
-            _ => serde_json::Value::Null,
-        }
-    }
+    // NOTE: aggregation_result_key and aggregation_result_value are in grouped.rs
+    // and shared by both grouped and ungrouped aggregation paths.
 
     /// Get a nested value from JSON payload using dot notation.
     pub(crate) fn get_nested_value<'a>(

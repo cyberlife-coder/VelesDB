@@ -71,21 +71,7 @@ pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
         return Ok(NodePattern::new());
     }
     let mut node = NodePattern::new();
-    let (main_part, properties) = if let Some(ps) = inner.find('{') {
-        let pe = inner
-            .rfind('}')
-            .ok_or_else(|| ParseError::syntax(ps, input, "Expected '}'"))?;
-        if pe <= ps {
-            return Err(ParseError::syntax(
-                ps,
-                input,
-                "Mismatched braces in node pattern",
-            ));
-        }
-        (inner[..ps].trim(), parse_properties(&inner[ps + 1..pe])?)
-    } else {
-        (inner, HashMap::new())
-    };
+    let (main_part, properties) = split_with_braces(inner, input, "node pattern")?;
     node.properties = properties;
     if !main_part.is_empty() {
         let parts: Vec<&str> = main_part.split(':').collect();
@@ -200,21 +186,7 @@ fn parse_rel_details(input: &str, rel: &mut RelationshipPattern) -> Result<(), P
     if input.is_empty() {
         return Ok(());
     }
-    let (main_part, props) = if let Some(ps) = input.find('{') {
-        let pe = input
-            .rfind('}')
-            .ok_or_else(|| ParseError::syntax(ps, input, "Expected '}'"))?;
-        if pe <= ps {
-            return Err(ParseError::syntax(
-                ps,
-                input,
-                "Mismatched braces in relationship properties",
-            ));
-        }
-        (input[..ps].trim(), parse_properties(&input[ps + 1..pe])?)
-    } else {
-        (input, HashMap::new())
-    };
+    let (main_part, props) = split_with_braces(input, input, "relationship properties")?;
     rel.properties = props;
     if let Some(stripped) = main_part.strip_prefix(':') {
         parse_rel_types(stripped, rel);
@@ -249,6 +221,31 @@ fn parse_range(input: &str) -> Option<(u32, u32)> {
     } else {
         input.parse::<u32>().ok().map(|n| (n, n))
     }
+}
+
+/// Splits `inner` at the first `{…}` block, returning `(text_before_brace, parsed_properties)`.
+///
+/// If no braces are present, returns `(inner, empty_map)`.
+/// `error_context` is used in brace-mismatch error messages (e.g. "node pattern").
+fn split_with_braces<'a>(
+    inner: &'a str,
+    error_source: &str,
+    error_context: &str,
+) -> Result<(&'a str, HashMap<String, Value>), ParseError> {
+    let Some(ps) = inner.find('{') else {
+        return Ok((inner, HashMap::new()));
+    };
+    let pe = inner
+        .rfind('}')
+        .ok_or_else(|| ParseError::syntax(ps, error_source, "Expected '}'"))?;
+    if pe <= ps {
+        return Err(ParseError::syntax(
+            ps,
+            error_source,
+            format!("Mismatched braces in {error_context}"),
+        ));
+    }
+    Ok((inner[..ps].trim(), parse_properties(&inner[ps + 1..pe])?))
 }
 
 /// Splits properties respecting string literals (commas inside quotes are preserved).
@@ -400,42 +397,7 @@ fn parse_where_condition(input: &str) -> Result<Condition, ParseError> {
 /// Finds an operator in the input string, respecting string literal boundaries.
 /// Returns the byte position of the operator, or None if not found outside quotes.
 fn find_operator(input: &str, op: &str) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let op_bytes = op.as_bytes();
-    let op_len = op_bytes.len();
-
-    if op_len == 0 || bytes.len() < op_len {
-        return None;
-    }
-
-    let mut in_string = false;
-    let mut i = 0;
-
-    while i <= bytes.len() - op_len {
-        let b = bytes[i];
-
-        // Track string literal boundaries
-        if b == b'\'' {
-            in_string = !in_string;
-            i += 1;
-            continue;
-        }
-
-        // Skip if inside a string literal
-        if in_string {
-            i += 1;
-            continue;
-        }
-
-        // Check if operator matches at this position
-        if &bytes[i..i + op_len] == op_bytes {
-            return Some(i);
-        }
-
-        i += 1;
-    }
-
-    None
+    scan_outside_quotes(input, op, false)
 }
 
 fn parse_return_clause(input: &str) -> ReturnClause {
@@ -471,46 +433,60 @@ fn parse_return_clause(input: &str) -> ReturnClause {
 /// Finds a keyword in the input string, respecting string literal boundaries.
 /// Uses ASCII-only case-insensitive matching to avoid Unicode index issues.
 fn find_keyword(input: &str, kw: &str) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let kw_bytes = kw.as_bytes();
-    let kw_len = kw_bytes.len();
+    scan_outside_quotes(input, kw, true)
+}
 
-    if kw_len == 0 || bytes.len() < kw_len {
+/// Scans `input` for `needle`, skipping regions inside single-quoted string literals.
+///
+/// When `word_boundary` is true, the match must be surrounded by non-word characters
+/// (ASCII alphanumeric or `_`), and matching is ASCII case-insensitive (for SQL keywords).
+/// When `word_boundary` is false, the match is exact and byte-level (for operators).
+fn scan_outside_quotes(input: &str, needle: &str, word_boundary: bool) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let needle_len = needle_bytes.len();
+
+    if needle_len == 0 || bytes.len() < needle_len {
         return None;
     }
 
     let mut in_string = false;
     let mut i = 0;
 
-    while i <= bytes.len() - kw_len {
+    while i <= bytes.len() - needle_len {
         let b = bytes[i];
 
-        // Track string literal boundaries
         if b == b'\'' {
             in_string = !in_string;
             i += 1;
             continue;
         }
 
-        // Skip if inside a string literal
         if in_string {
             i += 1;
             continue;
         }
 
-        // Check if keyword matches at this position (ASCII case-insensitive)
-        if bytes[i..i + kw_len]
-            .iter()
-            .zip(kw_bytes.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        {
-            // Check word boundaries (underscore is part of identifiers)
-            let before_ok =
-                i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
-            let after_ok = i + kw_len >= bytes.len()
-                || !(bytes[i + kw_len].is_ascii_alphanumeric() || bytes[i + kw_len] == b'_');
+        let matched = if word_boundary {
+            bytes[i..i + needle_len]
+                .iter()
+                .zip(needle_bytes.iter())
+                .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        } else {
+            &bytes[i..i + needle_len] == needle_bytes
+        };
 
-            if before_ok && after_ok {
+        if matched {
+            if word_boundary {
+                let before_ok =
+                    i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+                let after_ok = i + needle_len >= bytes.len()
+                    || !(bytes[i + needle_len].is_ascii_alphanumeric()
+                        || bytes[i + needle_len] == b'_');
+                if before_ok && after_ok {
+                    return Some(i);
+                }
+            } else {
                 return Some(i);
             }
         }

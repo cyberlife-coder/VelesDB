@@ -71,55 +71,8 @@ impl GpuAccelerator {
             source: wgpu::ShaderSource::Wgsl(shaders::COSINE_SHADER.into()),
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cosine Bind Group Layout"),
-            entries: &[
-                // Query vector
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Vectors buffer
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Results buffer
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Params (dimension, num_vectors)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let bind_group_layout =
+            super::helpers::create_quad_bind_group_layout(&device, "Cosine Bind Group Layout");
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cosine Pipeline Layout"),
@@ -291,26 +244,11 @@ impl GpuAccelerator {
         encoder.copy_buffer_to_buffer(&results_buffer, 0, &staging_buffer, 0, results_size);
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        // Read back results
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        self.device.poll(wgpu::Maintain::Wait);
-
-        if rx.recv().ok().and_then(Result::ok).is_none() {
-            return Err(crate::error::Error::GpuError(
-                "GPU map-async operation failed".to_string(),
-            ));
-        }
-
-        let data = buffer_slice.get_mapped_range();
-        let results: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-        drop(data);
-        staging_buffer.unmap();
-
-        Ok(results)
+        // Read back results using shared helper
+        super::helpers::readback_buffer::<f32>(&self.device, &staging_buffer, num_vectors)
+            .ok_or_else(|| {
+                crate::error::Error::GpuError("GPU map-async operation failed".to_string())
+            })
     }
 
     /// Computes batch Euclidean distances between a query and multiple vectors.
@@ -323,23 +261,7 @@ impl GpuAccelerator {
         query: &[f32],
         dimension: usize,
     ) -> Vec<f32> {
-        if dimension == 0 || vectors.is_empty() {
-            return Vec::new();
-        }
-        let num_vectors = vectors.len() / dimension;
-        if num_vectors == 0 {
-            return Vec::new();
-        }
-
-        // CPU fallback using direct SIMD dispatch for optimal performance
-        let mut results = Vec::with_capacity(num_vectors);
-        for i in 0..num_vectors {
-            let offset = i * dimension;
-            let vec = &vectors[offset..offset + dimension];
-            let dist = simd_native::euclidean_native(query, vec);
-            results.push(dist);
-        }
-        results
+        batch_flat_simd(vectors, query, dimension, simd_native::euclidean_native)
     }
 
     /// Computes batch dot products between a query and multiple vectors.
@@ -347,22 +269,33 @@ impl GpuAccelerator {
     /// Currently uses CPU SIMD fallback; GPU pipeline ready via `DOT_PRODUCT_SHADER`.
     #[must_use]
     pub fn batch_dot_product(&self, vectors: &[f32], query: &[f32], dimension: usize) -> Vec<f32> {
-        if dimension == 0 || vectors.is_empty() {
-            return Vec::new();
-        }
-        let num_vectors = vectors.len() / dimension;
-        if num_vectors == 0 {
-            return Vec::new();
-        }
-
-        // CPU fallback using direct SIMD dispatch for optimal performance
-        let mut results = Vec::with_capacity(num_vectors);
-        for i in 0..num_vectors {
-            let offset = i * dimension;
-            let vec = &vectors[offset..offset + dimension];
-            let dot = simd_native::dot_product_native(query, vec);
-            results.push(dot);
-        }
-        results
+        batch_flat_simd(vectors, query, dimension, simd_native::dot_product_native)
     }
+}
+
+/// Applies a SIMD distance function over flat-packed vectors.
+///
+/// RF-DEDUP: Eliminates identical loop patterns in `batch_euclidean_distance`
+/// and `batch_dot_product`.
+fn batch_flat_simd(
+    vectors: &[f32],
+    query: &[f32],
+    dimension: usize,
+    distance_fn: fn(&[f32], &[f32]) -> f32,
+) -> Vec<f32> {
+    if dimension == 0 || vectors.is_empty() {
+        return Vec::new();
+    }
+    let num_vectors = vectors.len() / dimension;
+    if num_vectors == 0 {
+        return Vec::new();
+    }
+
+    let mut results = Vec::with_capacity(num_vectors);
+    for i in 0..num_vectors {
+        let offset = i * dimension;
+        let vec = &vectors[offset..offset + dimension];
+        results.push(distance_fn(query, vec));
+    }
+    results
 }

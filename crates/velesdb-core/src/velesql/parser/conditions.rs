@@ -173,15 +173,7 @@ impl Parser {
                     vector = Some(Self::parse_vector_value(inner)?);
                 }
                 Rule::compare_op => {
-                    operator = Some(match inner.as_str() {
-                        "=" => CompareOp::Eq,
-                        "!=" | "<>" => CompareOp::NotEq,
-                        ">" => CompareOp::Gt,
-                        ">=" => CompareOp::Gte,
-                        "<" => CompareOp::Lt,
-                        "<=" => CompareOp::Lte,
-                        _ => return Err(ParseError::syntax(0, inner.as_str(), "Invalid operator")),
-                    });
+                    operator = Some(Self::parse_compare_op(inner.as_str())?);
                 }
                 Rule::numeric_threshold => {
                     // numeric_threshold = { float | integer }

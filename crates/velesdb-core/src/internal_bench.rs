@@ -76,7 +76,7 @@ pub fn velesql_parse_without_stats(cache: &QueryCache, query: &str) -> Result<Qu
     cache.parse_without_stats(query)
 }
 
-/// Computes canonicalize + hash cost using the same Fx hasher family as QueryCache.
+/// Computes canonicalize + hash cost using the same Fx hasher family as `QueryCache`.
 #[must_use]
 pub fn velesql_canonical_hash(query: &str) -> u64 {
     let canonical = query.split_whitespace().collect::<Vec<_>>().join(" ");

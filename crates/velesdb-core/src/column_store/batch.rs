@@ -128,15 +128,7 @@ impl ColumnStore {
     ///
     /// Returns an error when `pk` is missing or points to a deleted row.
     pub fn set_ttl(&mut self, pk: i64, ttl_seconds: u64) -> Result<(), ColumnStoreError> {
-        let row_idx = *self
-            .primary_index
-            .get(&pk)
-            .ok_or(ColumnStoreError::RowNotFound(pk))?;
-
-        if self.deleted_rows.contains(&row_idx) {
-            return Err(ColumnStoreError::RowNotFound(pk));
-        }
-
+        let row_idx = self.resolve_live_row(pk)?;
         let expiry_ts = Self::now_timestamp() + ttl_seconds;
         self.row_expiry.insert(row_idx, expiry_ts);
         Ok(())
@@ -218,57 +210,16 @@ impl ColumnStore {
         pk_col: &str,
     ) -> Result<UpsertResult, ColumnStoreError> {
         if self.deleted_rows.contains(&row_idx) {
-            self.validate_non_pk_types(values, pk_col)?;
+            Self::validate_value_types(&self.columns, values, Some(pk_col))?;
             self.deleted_rows.remove(&row_idx);
             self.row_expiry.remove(&row_idx);
-            self.write_row_values(values, row_idx, pk_col)?;
+            self.set_row_values(values, row_idx, Some(pk_col))?;
             return Ok(UpsertResult::Inserted);
         }
 
-        self.validate_non_pk_types(values, pk_col)?;
+        Self::validate_value_types(&self.columns, values, Some(pk_col))?;
         self.update_non_pk_values(values, row_idx, pk_col)?;
         Ok(UpsertResult::Updated)
-    }
-
-    /// Validates types for all non-pk columns in values.
-    fn validate_non_pk_types(
-        &self,
-        values: &[(&str, ColumnValue)],
-        pk_col: &str,
-    ) -> Result<(), ColumnStoreError> {
-        for (col_name, value) in values {
-            if *col_name == pk_col || matches!(value, ColumnValue::Null) {
-                continue;
-            }
-            if let Some(col) = self.columns.get(*col_name) {
-                Self::validate_type_match(col, value)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Writes all column values for a row, setting missing non-pk columns to null.
-    fn write_row_values(
-        &mut self,
-        values: &[(&str, ColumnValue)],
-        row_idx: usize,
-        pk_col: &str,
-    ) -> Result<(), ColumnStoreError> {
-        let value_map: std::collections::HashMap<&str, &ColumnValue> =
-            values.iter().map(|(k, v)| (*k, v)).collect();
-        let col_names: Vec<String> = self.columns.keys().cloned().collect();
-        for col_name in col_names {
-            if col_name == pk_col {
-                continue;
-            }
-            if let Some(col) = self.columns.get_mut(&col_name) {
-                let val = value_map
-                    .get(col_name.as_str())
-                    .map_or(ColumnValue::Null, |v| (*v).clone());
-                Self::set_column_value(col, row_idx, val)?;
-            }
-        }
-        Ok(())
     }
 
     /// Updates only the non-pk columns that are provided in values.

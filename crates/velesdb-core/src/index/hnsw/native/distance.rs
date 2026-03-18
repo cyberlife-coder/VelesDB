@@ -33,6 +33,47 @@ pub trait DistanceEngine: Send + Sync {
     }
 }
 
+// =============================================================================
+// Shared SIMD distance helpers (RF-DEDUP: eliminates 3x copy-paste)
+// =============================================================================
+
+/// Computes SIMD-accelerated distance for any metric via `simd_native`.
+///
+/// This is the single source of truth for metric-to-SIMD dispatch.
+/// All SIMD-based `DistanceEngine` implementations delegate here.
+#[inline]
+pub(crate) fn simd_distance_for_metric(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
+    match metric {
+        DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
+        DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
+        DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
+        DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
+        DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
+    }
+}
+
+/// Batch distance with CPU prefetch hints to hide memory latency.
+///
+/// Used by `SimdDistance`, `AdaptiveSimdDistance`, and `CachedSimdDistance`.
+#[inline]
+pub(crate) fn batch_distance_with_prefetch(
+    engine: &impl DistanceEngine,
+    query: &[f32],
+    candidates: &[&[f32]],
+) -> Vec<f32> {
+    let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
+    let mut results = Vec::with_capacity(candidates.len());
+
+    for (i, candidate) in candidates.iter().enumerate() {
+        if i + prefetch_distance < candidates.len() {
+            crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
+        }
+        results.push(engine.distance(query, candidate));
+    }
+
+    results
+}
+
 /// CPU scalar distance computation (baseline, no SIMD).
 pub struct CpuDistance {
     metric: DistanceMetric,
@@ -83,32 +124,13 @@ impl SimdDistance {
 }
 
 impl DistanceEngine for SimdDistance {
+    #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        // Use our existing optimized SIMD functions for ALL metrics
-        match self.metric {
-            DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
-            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
-            DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
-            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
-            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
-        }
+        simd_distance_for_metric(self.metric, a, b)
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        // PERF-2: Optimized batch distance with CPU prefetch hints
-        // Prefetch upcoming vectors to hide memory latency
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
-        let mut results = Vec::with_capacity(candidates.len());
-
-        for (i, candidate) in candidates.iter().enumerate() {
-            // Prefetch upcoming candidate vectors into L1 cache
-            if i + prefetch_distance < candidates.len() {
-                crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
-            }
-            results.push(self.distance(query, candidate));
-        }
-
-        results
+        batch_distance_with_prefetch(self, query, candidates)
     }
 
     fn metric(&self) -> DistanceMetric {
@@ -138,15 +160,9 @@ impl NativeSimdDistance {
 }
 
 impl DistanceEngine for NativeSimdDistance {
+    #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        match self.metric {
-            DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
-            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
-            DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
-            // Use simd_native directly for Hamming/Jaccard (EPIC-081 consolidation)
-            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
-            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
-        }
+        simd_distance_for_metric(self.metric, a, b)
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
@@ -169,7 +185,7 @@ impl DistanceEngine for NativeSimdDistance {
 
 /// SIMD distance computation with prefetch-based batching.
 ///
-/// Note: This engine is functionally identical to `SimdDistance` — both
+/// Note: This engine is functionally identical to `SimdDistance` --- both
 /// `distance()` and `batch_distance()` produce the same results via the
 /// same code paths. Retained for backward compatibility.
 pub struct AdaptiveSimdDistance {
@@ -185,31 +201,13 @@ impl AdaptiveSimdDistance {
 }
 
 impl DistanceEngine for AdaptiveSimdDistance {
+    #[inline]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        // Calculate distance directly using simd_native (consolidated implementation)
-        match self.metric {
-            DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
-            DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
-            DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
-            DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
-            DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
-        }
+        simd_distance_for_metric(self.metric, a, b)
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        // Use prefetch optimization for batch operations
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
-        let mut results = Vec::with_capacity(candidates.len());
-
-        for (i, candidate) in candidates.iter().enumerate() {
-            // Prefetch upcoming candidate vectors into L1 cache
-            if i + prefetch_distance < candidates.len() {
-                crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
-            }
-            results.push(self.distance(query, candidate));
-        }
-
-        results
+        batch_distance_with_prefetch(self, query, candidates)
     }
 
     fn metric(&self) -> DistanceMetric {
@@ -254,7 +252,7 @@ impl CachedSimdDistance {
 }
 
 impl DistanceEngine for CachedSimdDistance {
-    #[allow(clippy::inline_always)] // Reason: HNSW hot loop — single branch + fn pointer call
+    #[allow(clippy::inline_always)] // Reason: HNSW hot loop --- single branch + fn pointer call
     #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
         match self.metric {
@@ -270,15 +268,7 @@ impl DistanceEngine for CachedSimdDistance {
     }
 
     fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
-        let mut results = Vec::with_capacity(candidates.len());
-        for (i, candidate) in candidates.iter().enumerate() {
-            if i + prefetch_distance < candidates.len() {
-                crate::simd_native::prefetch_vector(candidates[i + prefetch_distance]);
-            }
-            results.push(self.distance(query, candidate));
-        }
-        results
+        batch_distance_with_prefetch(self, query, candidates)
     }
 
     fn metric(&self) -> DistanceMetric {

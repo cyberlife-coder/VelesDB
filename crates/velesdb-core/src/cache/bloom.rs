@@ -48,15 +48,7 @@ impl BloomFilter {
         // Optimal number of hashes: k = (m/n) * ln(2)
         let num_hashes = Self::optimal_hashes(num_bits, capacity);
 
-        // Round up to multiple of 64 for efficient storage
-        let num_words = num_bits.div_ceil(64);
-
-        Self {
-            bits: RwLock::new(vec![0u64; num_words]),
-            num_bits,
-            num_hashes,
-            count: RwLock::new(0),
-        }
+        Self::with_params(num_bits, num_hashes)
     }
 
     /// Create with explicit parameters.
@@ -76,11 +68,8 @@ impl BloomFilter {
         let mut bits = self.bits.write();
 
         for i in 0..self.num_hashes {
-            let hash = Self::hash_with_seed(item, i);
-            let bit_index = (hash as usize) % self.num_bits;
-            let word_index = bit_index / 64;
-            let bit_offset = bit_index % 64;
-            bits[word_index] |= 1u64 << bit_offset;
+            let (word_index, bit_mask) = self.bit_position(item, i);
+            bits[word_index] |= bit_mask;
         }
 
         *self.count.write() += 1;
@@ -95,12 +84,8 @@ impl BloomFilter {
         let bits = self.bits.read();
 
         for i in 0..self.num_hashes {
-            let hash = Self::hash_with_seed(item, i);
-            let bit_index = (hash as usize) % self.num_bits;
-            let word_index = bit_index / 64;
-            let bit_offset = bit_index % 64;
-
-            if bits[word_index] & (1u64 << bit_offset) == 0 {
+            let (word_index, bit_mask) = self.bit_position(item, i);
+            if bits[word_index] & bit_mask == 0 {
                 return false;
             }
         }
@@ -136,6 +121,14 @@ impl BloomFilter {
         let set_bits: usize = bits.iter().map(|w| w.count_ones() as usize).sum();
         let fill_ratio = set_bits as f64 / self.num_bits as f64;
         fill_ratio.powi(self.num_hashes as i32)
+    }
+
+    /// Computes the (`word_index`, `bit_mask`) for a given item and hash seed.
+    #[inline]
+    fn bit_position<T: Hash>(&self, item: &T, seed: u32) -> (usize, u64) {
+        let hash = Self::hash_with_seed(item, seed);
+        let bit_index = (hash as usize) % self.num_bits;
+        (bit_index / 64, 1u64 << (bit_index % 64))
     }
 
     /// Calculate optimal number of bits.

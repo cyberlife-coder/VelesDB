@@ -205,23 +205,25 @@ impl TrigramIndex {
     /// 3. Return candidate set
     #[must_use]
     pub fn search_like(&self, pattern: &str) -> RoaringBitmap {
-        // Empty pattern matches all documents
-        if pattern.is_empty() {
-            return self.all_docs.clone();
-        }
-
-        // Use pattern extraction (no trailing padding) for substring matching
         let trigrams = extract_trigrams_for_pattern(pattern);
+        self.intersect_trigram_bitmaps(pattern, &trigrams)
+    }
 
-        // Short patterns (< 3 chars after padding) - use prefix matching
-        if trigrams.is_empty() {
+    /// RF-2: Core bitmap intersection logic shared by `search_like` and
+    /// `search_like_ranked` (avoids double trigram extraction).
+    fn intersect_trigram_bitmaps(
+        &self,
+        pattern: &str,
+        trigrams: &HashSet<Trigram>,
+    ) -> RoaringBitmap {
+        // Empty pattern or short patterns match all documents
+        if pattern.is_empty() || trigrams.is_empty() {
             return self.all_docs.clone();
         }
 
-        // Intersect bitmaps for all query trigrams
         let mut result: Option<RoaringBitmap> = None;
 
-        for trigram in &trigrams {
+        for trigram in trigrams {
             match self.inverted.get(trigram) {
                 Some(bitmap) => {
                     result = Some(match result {
@@ -254,12 +256,13 @@ impl TrigramIndex {
             return 0.0;
         }
 
-        // Convert to HashSet for intersection/union
-        let doc_set: HashSet<&Trigram> = doc_trigrams.iter().collect();
-        let query_set: HashSet<&Trigram> = query_trigrams.iter().collect();
-
-        let intersection = doc_set.intersection(&query_set).count();
-        let union = doc_set.union(&query_set).count();
+        // Count intersection directly without building intermediate HashSets.
+        // RF-2: Avoids allocating two HashSet<&Trigram> on every call.
+        let intersection = query_trigrams
+            .iter()
+            .filter(|t: &&Trigram| doc_trigrams.contains::<Trigram>(t))
+            .count();
+        let union = doc_trigrams.len() + query_trigrams.len() - intersection;
 
         if union == 0 {
             0.0
@@ -292,15 +295,13 @@ impl TrigramIndex {
                 .collect();
         }
 
-        // Get candidates from bitmap intersection
-        let candidates = self.search_like(pattern);
+        // RF-2: Extract trigrams once, reuse for both candidate filtering and scoring.
+        let query_trigrams = extract_trigrams_for_pattern(pattern);
+        let candidates = self.intersect_trigram_bitmaps(pattern, &query_trigrams);
 
         if candidates.is_empty() {
             return Vec::new();
         }
-
-        // Extract query trigrams for scoring
-        let query_trigrams = extract_trigrams_for_pattern(pattern);
 
         // Score and filter candidates
         let mut results: Vec<(u64, f32)> = candidates

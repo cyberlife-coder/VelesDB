@@ -10,6 +10,14 @@ use crate::storage::PayloadStorage;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+/// Converts a `usize` to `u64`, saturating to `u64::MAX` on overflow.
+///
+/// Used throughout statistics collection where collection sizes are bounded by
+/// available memory and precision is non-critical.
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 /// TTL for cached collection statistics used by the cost-based query planner.
 const STATS_TTL: Duration = Duration::from_secs(30);
 
@@ -42,8 +50,7 @@ impl Collection {
         // Note: deleted_count and column_stats are placeholders for future tombstone tracking
         // and per-column cardinality analysis (EPIC-046 future work)
         let config = self.config.read();
-        // Reason: Collection sizes are bounded by available memory, always < u64::MAX on 64-bit systems
-        collector.set_row_count(u64::try_from(config.point_count).unwrap_or(u64::MAX));
+        collector.set_row_count(saturating_u64(config.point_count));
         drop(config);
 
         let mut distinct_values: HashMap<String, HashSet<String>> = HashMap::new();
@@ -55,8 +62,8 @@ impl Collection {
         for id in ids.into_iter().take(1_000) {
             if let Ok(Some(payload)) = payload_storage.retrieve(id) {
                 if let Ok(payload_bytes) = serde_json::to_vec(&payload) {
-                    payload_size_bytes = payload_size_bytes
-                        .saturating_add(u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX));
+                    payload_size_bytes =
+                        payload_size_bytes.saturating_add(saturating_u64(payload_bytes.len()));
                 }
 
                 if let Some(obj) = payload.as_object() {
@@ -79,7 +86,7 @@ impl Collection {
 
         for (field, values) in distinct_values {
             let mut col = crate::collection::stats::ColumnStats::new(field.clone())
-                .with_distinct_count(u64::try_from(values.len()).unwrap_or(u64::MAX));
+                .with_distinct_count(saturating_u64(values.len()));
             if let Some(null_count) = null_counts.get(&field) {
                 col = col.with_null_count(*null_count);
             }
@@ -88,15 +95,15 @@ impl Collection {
 
         // HNSW index statistics
         let hnsw_len = self.index.len();
-        let hnsw_stats = IndexStats::new("hnsw_primary", "HNSW")
-            .with_entry_count(u64::try_from(hnsw_len).unwrap_or(u64::MAX));
+        let hnsw_stats =
+            IndexStats::new("hnsw_primary", "HNSW").with_entry_count(saturating_u64(hnsw_len));
         collector.add_index_stats(hnsw_stats);
 
         // BM25 index statistics - use len() if available
         let bm25_len = self.text_index.len();
         if bm25_len > 0 {
-            let bm25_stats = IndexStats::new("bm25_text", "BM25")
-                .with_entry_count(u64::try_from(bm25_len).unwrap_or(u64::MAX));
+            let bm25_stats =
+                IndexStats::new("bm25_text", "BM25").with_entry_count(saturating_u64(bm25_len));
             collector.add_index_stats(bm25_stats);
         }
 

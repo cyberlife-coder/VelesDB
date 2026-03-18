@@ -53,18 +53,21 @@ fn write_wal_delete_entry(wal: &mut io::BufWriter<File>, id: u64) -> io::Result<
     wal.write_all(&crc.to_le_bytes())
 }
 
+/// RF-2: Shared dimension validation for `store` and `store_batch`.
+#[inline]
+fn validate_dimension(expected: usize, actual: usize) -> io::Result<()> {
+    if actual != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Vector dimension mismatch: expected {expected}, got {actual}"),
+        ));
+    }
+    Ok(())
+}
+
 impl VectorStorage for MmapStorage {
     fn store(&mut self, id: u64, vector: &[f32]) -> io::Result<()> {
-        if vector.len() != self.dimension {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "Vector dimension mismatch: expected {}, got {}",
-                    self.dimension,
-                    vector.len()
-                ),
-            ));
-        }
+        validate_dimension(self.dimension, vector.len())?;
 
         let vector_bytes = vector_to_bytes(vector);
 
@@ -111,16 +114,7 @@ impl VectorStorage for MmapStorage {
 
         // Validate all dimensions upfront
         for (_, vector) in vectors {
-            if vector.len() != self.dimension {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "Vector dimension mismatch: expected {}, got {}",
-                        self.dimension,
-                        vector.len()
-                    ),
-                ));
-            }
+            validate_dimension(self.dimension, vector.len())?;
         }
 
         // 1. Calculate total space needed and prepare batch WAL entry

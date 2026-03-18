@@ -207,7 +207,7 @@ impl Collection {
     }
 
     /// Compute the result key for an aggregation function.
-    pub(super) fn aggregation_result_key(agg: &AggregateFunction) -> String {
+    pub(crate) fn aggregation_result_key(agg: &AggregateFunction) -> String {
         if let Some(ref alias) = agg.alias {
             alias.clone()
         } else {
@@ -228,7 +228,7 @@ impl Collection {
     }
 
     /// Compute the result value for an aggregation function.
-    fn aggregation_result_value(
+    pub(crate) fn aggregation_result_value(
         agg: &AggregateFunction,
         agg_result: &AggregateResult,
     ) -> serde_json::Value {

@@ -191,56 +191,35 @@ impl From<&[f32]> for VectorData {
 // Distance calculations for half-precision vectors
 // =============================================================================
 
+/// Applies a SIMD distance function over two `VectorData`.
+///
+/// RF-DEDUP: Eliminates 8+ per-precision-combination match arms. The F32*F32
+/// case uses SIMD directly (zero-copy); all other combinations convert to f32
+/// vecs first, then delegate to the same SIMD path.
+///
+/// Mixed-precision paths (F16, BF16) are not hot — the allocation cost of
+/// `to_f32_vec()` is negligible compared to the element conversion overhead.
+fn with_f32_simd(a: &VectorData, b: &VectorData, simd_fn: fn(&[f32], &[f32]) -> f32) -> f32 {
+    match (a, b) {
+        (VectorData::F32(va), VectorData::F32(vb)) => simd_fn(va, vb),
+        _ => simd_fn(&a.to_f32_vec(), &b.to_f32_vec()),
+    }
+}
+
 /// Computes dot product between two `VectorData` with optimal precision handling.
 ///
 /// For F32 vectors, uses SIMD-optimized f32 path.
-/// For F16/BF16 vectors, converts to f32 on the fly without allocation.
+/// For F16/BF16 vectors, converts to f32 then delegates to SIMD.
 #[must_use]
 pub fn dot_product(a: &VectorData, b: &VectorData) -> f32 {
-    use crate::simd_native;
-
-    match (a, b) {
-        // Direct SIMD dispatch for F32×F32
-        (VectorData::F32(va), VectorData::F32(vb)) => simd_native::dot_product_native(va, vb),
-        (VectorData::F32(va), VectorData::F16(vb)) => {
-            va.iter().zip(vb.iter()).map(|(&x, y)| x * y.to_f32()).sum()
-        }
-        (VectorData::F16(va), VectorData::F32(vb)) => {
-            va.iter().zip(vb.iter()).map(|(x, &y)| x.to_f32() * y).sum()
-        }
-        (VectorData::F16(va), VectorData::F16(vb)) => va
-            .iter()
-            .zip(vb.iter())
-            .map(|(x, y)| x.to_f32() * y.to_f32())
-            .sum(),
-        (VectorData::F32(va), VectorData::BF16(vb)) => {
-            va.iter().zip(vb.iter()).map(|(&x, y)| x * y.to_f32()).sum()
-        }
-        (VectorData::BF16(va), VectorData::F32(vb)) => {
-            va.iter().zip(vb.iter()).map(|(x, &y)| x.to_f32() * y).sum()
-        }
-        (VectorData::BF16(va), VectorData::BF16(vb)) => va
-            .iter()
-            .zip(vb.iter())
-            .map(|(x, y)| x.to_f32() * y.to_f32())
-            .sum(),
-        // Fallback for mixed F16/BF16 (rare) - use simd_native after conversion
-        _ => {
-            let va = a.to_f32_vec();
-            let vb = b.to_f32_vec();
-            simd_native::dot_product_native(&va, &vb)
-        }
-    }
+    with_f32_simd(a, b, crate::simd_native::dot_product_native)
 }
 
 /// Computes cosine similarity between two `VectorData`.
 #[must_use]
 pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
-    use crate::simd_native;
-
     if let (VectorData::F32(va), VectorData::F32(vb)) = (a, b) {
-        // Direct SIMD dispatch for F32×F32
-        simd_native::cosine_similarity_native(va, vb)
+        crate::simd_native::cosine_similarity_native(va, vb)
     } else {
         let dot = dot_product(a, b);
         let norm_a = norm_squared(a).sqrt();
@@ -257,62 +236,18 @@ pub fn cosine_similarity(a: &VectorData, b: &VectorData) -> f32 {
 /// Computes Euclidean distance between two `VectorData`.
 #[must_use]
 pub fn euclidean_distance(a: &VectorData, b: &VectorData) -> f32 {
-    use crate::simd_native;
-
-    match (a, b) {
-        // Direct SIMD dispatch for F32×F32
-        (VectorData::F32(va), VectorData::F32(vb)) => simd_native::euclidean_native(va, vb),
-        (VectorData::F32(va), VectorData::F16(vb)) => va
-            .iter()
-            .zip(vb.iter())
-            .map(|(&x, y)| (x - y.to_f32()).powi(2))
-            .sum::<f32>()
-            .sqrt(),
-        (VectorData::F16(va), VectorData::F32(vb)) => va
-            .iter()
-            .zip(vb.iter())
-            .map(|(x, &y)| (x.to_f32() - y).powi(2))
-            .sum::<f32>()
-            .sqrt(),
-        (VectorData::F16(va), VectorData::F16(vb)) => va
-            .iter()
-            .zip(vb.iter())
-            .map(|(x, y)| (x.to_f32() - y.to_f32()).powi(2))
-            .sum::<f32>()
-            .sqrt(),
-        // Fallback for others - use simd_native after conversion
-        _ => {
-            let va = a.to_f32_vec();
-            let vb = b.to_f32_vec();
-            simd_native::euclidean_native(&va, &vb)
-        }
-    }
+    with_f32_simd(a, b, crate::simd_native::euclidean_native)
 }
 
-/// Helper to compute squared L2 norm without allocation
+/// Computes squared L2 norm without allocation for F32, with conversion for half-precision.
 fn norm_squared(v: &VectorData) -> f32 {
-    use crate::simd_native;
-
     match v {
-        // Direct SIMD dispatch for F32 norm
         VectorData::F32(data) => {
-            let n = simd_native::norm_native(data);
+            let n = crate::simd_native::norm_native(data);
             n * n
         }
-        VectorData::F16(data) => data
-            .iter()
-            .map(|x| {
-                let f = x.to_f32();
-                f * f
-            })
-            .sum(),
-        VectorData::BF16(data) => data
-            .iter()
-            .map(|x| {
-                let f = x.to_f32();
-                f * f
-            })
-            .sum(),
+        VectorData::F16(data) => data.iter().map(|x| x.to_f32().powi(2)).sum(),
+        VectorData::BF16(data) => data.iter().map(|x| x.to_f32().powi(2)).sum(),
     }
 }
 

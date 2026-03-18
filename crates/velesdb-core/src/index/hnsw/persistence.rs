@@ -173,6 +173,70 @@ fn atomic_write_inner(tmp_path: &Path, final_path: &Path, data: &[u8]) -> std::i
     std::fs::rename(tmp_path, final_path)
 }
 
+/// Loads vectors from disk, disabling vector storage gracefully when the file
+/// is missing (e.g., index was saved in fast-insert mode before vectors existed).
+///
+/// RF-DEDUP: This pattern was duplicated in `HnswIndex::load` and
+/// `NativeHnswIndex::load`. Now both delegate here.
+///
+/// # Errors
+///
+/// Returns `io::Error` if the vectors file exists but cannot be read/deserialized.
+pub(crate) fn load_vectors_or_disable(
+    path: &Path,
+    meta: &HnswMeta,
+) -> std::io::Result<(super::sharded_vectors::ShardedVectors, bool)> {
+    use super::sharded_vectors::ShardedVectors;
+
+    if !meta.enable_vector_storage {
+        return Ok((ShardedVectors::new(meta.dimension), false));
+    }
+
+    match load_vectors(path) {
+        Ok(vectors_data) => {
+            let vectors = ShardedVectors::new(meta.dimension);
+            vectors.insert_batch(vectors_data.vectors);
+            Ok((vectors, true))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(
+                "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
+            );
+            Ok((ShardedVectors::new(meta.dimension), false))
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Persists vectors to disk or removes stale vector files.
+///
+/// RF-DEDUP: This pattern was duplicated in `HnswIndex::save` and
+/// `NativeHnswIndex::save`. Now both delegate here.
+///
+/// # Errors
+///
+/// Returns `io::Error` if the file operation fails.
+pub(crate) fn save_or_cleanup_vectors(
+    path: &Path,
+    enable_vector_storage: bool,
+    vectors: &super::sharded_vectors::ShardedVectors,
+) -> std::io::Result<()> {
+    if enable_vector_storage {
+        save_vectors(
+            path,
+            &HnswVectorsData {
+                vectors: vectors.collect_for_parallel(),
+            },
+        )
+    } else {
+        let vectors_path = path.join("native_vectors.bin");
+        if vectors_path.exists() {
+            std::fs::remove_file(vectors_path)?;
+        }
+        Ok(())
+    }
+}
+
 /// Converts a u8 discriminant to a `DistanceMetric`.
 ///
 /// # Errors

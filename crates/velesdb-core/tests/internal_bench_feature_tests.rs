@@ -5,8 +5,18 @@ use velesdb_core::simd_native::{cosine_similarity_native, DistanceEngine};
 use velesdb_core::sparse_index::{sparse_search, SparseInvertedIndex, SparseVector};
 
 fn sample_vectors(dim: usize) -> (Vec<f32>, Vec<f32>) {
-    let a = (0..dim).map(|i| (i as f32 * 0.13).sin()).collect();
-    let b = (0..dim).map(|i| (i as f32 * 0.17 + 1.0).cos()).collect();
+    let a = (0..dim)
+        .map(|i| {
+            let idx = f32::from(u16::try_from(i).expect("test dimensions fit in u16"));
+            (idx * 0.13).sin()
+        })
+        .collect();
+    let b = (0..dim)
+        .map(|i| {
+            let idx = f32::from(u16::try_from(i).expect("test dimensions fit in u16"));
+            (idx * 0.17 + 1.0).cos()
+        })
+        .collect();
     (a, b)
 }
 

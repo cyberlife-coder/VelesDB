@@ -152,6 +152,21 @@ pub fn average_metrics<T: Eq + Hash + Copy>(
     )
 }
 
+/// Computes the Discounted Cumulative Gain for a relevance slice truncated to `k`.
+#[allow(clippy::cast_precision_loss)]
+fn compute_dcg(relevances: &[f64], k: usize) -> f64 {
+    relevances
+        .iter()
+        .take(k)
+        .enumerate()
+        .map(|(i, &rel)| {
+            let gain = 2.0_f64.powf(rel) - 1.0;
+            let discount = (i as f64 + 2.0).log2();
+            gain / discount
+        })
+        .sum()
+}
+
 /// Calculates NDCG@k (Normalized Discounted Cumulative Gain).
 ///
 /// NDCG measures ranking quality by penalizing relevant items appearing
@@ -178,34 +193,11 @@ pub fn ndcg_at_k(relevances: &[f64], k: usize) -> f64 {
 
     let k = k.min(relevances.len());
 
-    // Calculate DCG (Discounted Cumulative Gain)
-    let dcg: f64 = relevances
-        .iter()
-        .take(k)
-        .enumerate()
-        .map(|(i, &rel)| {
-            let gain = 2.0_f64.powf(rel) - 1.0;
-            #[allow(clippy::cast_precision_loss)]
-            let discount = (i as f64 + 2.0).log2();
-            gain / discount
-        })
-        .sum();
+    let dcg = compute_dcg(relevances, k);
 
-    // Calculate IDCG (Ideal DCG) - DCG with perfect ranking
     let mut sorted_relevances = relevances.to_vec();
     sorted_relevances.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-
-    let idcg: f64 = sorted_relevances
-        .iter()
-        .take(k)
-        .enumerate()
-        .map(|(i, &rel)| {
-            let gain = 2.0_f64.powf(rel) - 1.0;
-            #[allow(clippy::cast_precision_loss)]
-            let discount = (i as f64 + 2.0).log2();
-            gain / discount
-        })
-        .sum();
+    let idcg = compute_dcg(&sorted_relevances, k);
 
     if idcg == 0.0 {
         return 0.0;

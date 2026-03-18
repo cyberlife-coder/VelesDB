@@ -213,13 +213,22 @@ impl QueryPlan {
         let (mut nodes, index_used) = Self::build_scan_node(stmt, has_vector_search, index_lookup);
         let filter_strategy = Self::append_filter_nodes(&mut nodes, &filter_conditions, stmt);
 
+        Self::assemble_plan(nodes, index_used, filter_strategy, has_vector_search)
+    }
+
+    /// Collapses a `Vec<PlanNode>` into a single root, estimates cost, and builds the plan.
+    fn assemble_plan(
+        mut nodes: Vec<PlanNode>,
+        index_used: Option<IndexType>,
+        filter_strategy: FilterStrategy,
+        has_vector_search: bool,
+    ) -> Self {
         let root = if nodes.len() == 1 {
             nodes.swap_remove(0)
         } else {
             PlanNode::Sequence(nodes)
         };
         let estimated_cost_ms = Self::estimate_cost(&root, has_vector_search);
-
         Self {
             root,
             estimated_cost_ms,
@@ -422,25 +431,13 @@ impl QueryPlan {
             nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
         }
 
-        let root = if nodes.len() == 1 {
-            nodes.swap_remove(0)
+        let index_used = if has_similarity {
+            Some(IndexType::Hnsw)
         } else {
-            PlanNode::Sequence(nodes)
+            None
         };
-        let estimated_cost_ms = Self::estimate_cost(&root, has_similarity);
 
-        Self {
-            root,
-            estimated_cost_ms,
-            index_used: if has_similarity {
-                Some(IndexType::Hnsw)
-            } else {
-                None
-            },
-            filter_strategy: FilterStrategy::None,
-            cache_hit: None,
-            plan_reuse_count: None,
-        }
+        Self::assemble_plan(nodes, index_used, FilterStrategy::None, has_similarity)
     }
 
     /// Extracts traversal parameters from a `MatchExecutionStrategy`.

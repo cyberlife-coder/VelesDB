@@ -221,7 +221,12 @@ impl Collection {
     }
 
     /// Compares a score against a threshold using the given operator and metric direction.
-    fn compare_score(score: f32, threshold: f32, op: CompareOp, higher_is_better: bool) -> bool {
+    pub(crate) fn compare_score(
+        score: f32,
+        threshold: f32,
+        op: CompareOp,
+        higher_is_better: bool,
+    ) -> bool {
         if higher_is_better {
             match op {
                 CompareOp::Gt => score > threshold,

@@ -92,6 +92,21 @@ pub(crate) fn linear_scan_search(
     }
 }
 
+/// Pushes a scored document into a min-heap of size `k`, evicting the minimum
+/// when full. This is the shared top-k selection primitive for both
+/// accumulator variants.
+#[inline]
+fn topk_push(heap: &mut BinaryHeap<Reverse<ScoredDoc>>, k: usize, doc_id: u64, score: f32) {
+    if heap.len() < k {
+        heap.push(Reverse(ScoredDoc { score, doc_id }));
+    } else if let Some(Reverse(min)) = heap.peek() {
+        if score > min.score {
+            heap.pop();
+            heap.push(Reverse(ScoredDoc { score, doc_id }));
+        }
+    }
+}
+
 /// Dense accumulator variant for linear scan (small doc ID space).
 fn linear_scan_dense(
     k: usize,
@@ -114,19 +129,11 @@ fn linear_scan_dense(
         }
     }
 
-    // Extract top-k from touched doc_ids
     let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
     for &doc_id in &touched {
         #[allow(clippy::cast_possible_truncation)]
         let score = scores[doc_id as usize];
-        if heap.len() < k {
-            heap.push(Reverse(ScoredDoc { score, doc_id }));
-        } else if let Some(Reverse(min)) = heap.peek() {
-            if score > min.score {
-                heap.pop();
-                heap.push(Reverse(ScoredDoc { score, doc_id }));
-            }
-        }
+        topk_push(&mut heap, k, doc_id, score);
     }
 
     extract_sorted_results(heap)
@@ -144,14 +151,7 @@ fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> 
 
     let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
     for (&doc_id, &score) in &scores {
-        if heap.len() < k {
-            heap.push(Reverse(ScoredDoc { score, doc_id }));
-        } else if let Some(Reverse(min)) = heap.peek() {
-            if score > min.score {
-                heap.pop();
-                heap.push(Reverse(ScoredDoc { score, doc_id }));
-            }
-        }
+        topk_push(&mut heap, k, doc_id, score);
     }
 
     extract_sorted_results(heap)

@@ -133,3 +133,28 @@ pub struct SimilarityOrderBy {
     /// Vector to compare against.
     pub vector: VectorExpr,
 }
+
+impl SelectStatement {
+    /// Returns an empty `SelectStatement` with all fields at their defaults.
+    ///
+    /// Used by [`Query::new_dml`], [`Query::new_train`], and [`Query::new_match`]
+    /// to avoid repeating the 14-field struct literal.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            distinct: DistinctMode::None,
+            columns: SelectColumns::All,
+            from: String::new(),
+            from_alias: Vec::new(),
+            joins: Vec::new(),
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            offset: None,
+            with_clause: None,
+            group_by: None,
+            having: None,
+            fusion_clause: None,
+        }
+    }
+}
