@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::types::{CreateIndexRequest, ErrorResponse, IndexResponse, ListIndexesResponse};
 use crate::AppState;
 
-use super::helpers::get_vector_collection_or_404;
+use super::helpers::{error_response, get_vector_collection_or_404};
 
 /// Create a property index on a graph collection.
 #[utoipa::path(
@@ -38,8 +38,7 @@ pub async fn create_index(
         Err(resp) => return resp,
     };
 
-    let result = dispatch_index_creation(&collection, &req);
-    let result = match result {
+    let result = match dispatch_index_creation(&collection, &req) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -56,13 +55,7 @@ pub async fn create_index(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
     }
 }
 
@@ -75,13 +68,10 @@ fn dispatch_index_creation(
     match req.index_type.to_lowercase().as_str() {
         "hash" => Ok(collection.create_property_index(&req.label, &req.property)),
         "range" => Ok(collection.create_range_index(&req.label, &req.property)),
-        _ => Err((
+        _ => Err(error_response(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid index_type: {}. Valid: hash, range", req.index_type),
-            }),
-        )
-            .into_response()),
+            format!("Invalid index_type: {}. Valid: hash, range", req.index_type),
+        )),
     }
 }
 
@@ -157,21 +147,12 @@ pub async fn delete_index(
                 }))
                 .into_response()
             } else {
-                (
+                error_response(
                     StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("Index on {}.{} not found", label, property),
-                    }),
+                    format!("Index on {}.{} not found", label, property),
                 )
-                    .into_response()
             }
         }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
     }
 }

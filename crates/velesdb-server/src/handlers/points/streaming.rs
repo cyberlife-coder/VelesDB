@@ -1,4 +1,4 @@
-//! Point operations handlers.
+//! NDJSON streaming upsert and bounded ingestion channel handlers.
 
 use axum::{
     body::Body,
@@ -11,60 +11,14 @@ use futures::StreamExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::types::{ErrorResponse, SparseVectorInput, StreamInsertRequest, UpsertPointsRequest};
+use crate::types::{ErrorResponse, StreamInsertRequest};
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
-use super::helpers::get_vector_collection_or_404;
-
-use velesdb_core::index::sparse::SparseVector;
+use crate::handlers::helpers::{error_response, get_vector_collection_or_404};
 
 const STREAM_BATCH_SIZE: usize = 100;
 const STREAM_BATCH_MAX_WAIT: Duration = Duration::from_millis(100);
-
-/// Converts sparse vector input fields from a request into a `BTreeMap<String, SparseVector>`.
-///
-/// Merges `sparse_vector` (single, stored under `""`) and `sparse_vectors` (named map).
-/// Named map takes precedence if both provide the same key.
-fn convert_sparse_inputs(
-    sparse_vector: Option<SparseVectorInput>,
-    sparse_vectors: Option<std::collections::BTreeMap<String, SparseVectorInput>>,
-) -> Result<Option<std::collections::BTreeMap<String, SparseVector>>, String> {
-    let has_single = sparse_vector.is_some();
-    let has_named = sparse_vectors.as_ref().is_some_and(|m| !m.is_empty());
-
-    if !has_single && !has_named {
-        return Ok(None);
-    }
-
-    let mut result = std::collections::BTreeMap::new();
-
-    // Single sparse vector goes under default name ""
-    if let Some(sv_input) = sparse_vector {
-        let sv = sv_input.into_sparse_vector()?;
-        result.insert(String::new(), sv);
-    }
-
-    // Named sparse vectors (overwrite default if same key).
-    // If both `sparse_vector` and `sparse_vectors[""]` are supplied, the named map wins.
-    // A debug trace is emitted so operators can detect this (usually unintentional) pattern.
-    if let Some(named) = sparse_vectors {
-        for (name, sv_input) in named {
-            let sv = sv_input
-                .into_sparse_vector()
-                .map_err(|e| format!("sparse_vectors['{name}']: {e}"))?;
-            if name.is_empty() && result.contains_key("") {
-                tracing::debug!(
-                    "sparse_vector (default \"\") is being overwritten by \
-                     sparse_vectors[\"\"] — supply only one to avoid ambiguity"
-                );
-            }
-            result.insert(name, sv);
-        }
-    }
-
-    Ok(Some(result))
-}
 
 /// Accumulates statistics over an NDJSON stream upsert operation.
 #[derive(Default)]
@@ -108,12 +62,8 @@ fn parse_ndjson_line(
     }
 }
 
-/// Flushes a batch and — if the collection's delta buffer is active — also
+/// Flushes a batch and -- if the collection's delta buffer is active -- also
 /// pushes the entries into the buffer for immediate searchability.
-///
-/// This is the correct call-site replacement for `flush_point_batch` in the
-/// NDJSON stream handler. It avoids the ownership problem (collection is moved
-/// into `spawn_blocking`) by snapshotting delta entries before the move.
 async fn flush_point_batch_with_delta(
     collection: &VectorCollection,
     batch: &mut Vec<Point>,
@@ -128,7 +78,6 @@ async fn flush_point_batch_with_delta(
 
     // Snapshot (id, vector) pairs for delta before moving `points` into spawn_blocking.
     // Only allocate when delta is active to keep the hot path allocation-free.
-    // Uses the public `is_delta_active()` API — does not access `inner` directly.
     #[cfg(feature = "persistence")]
     let delta_entries: Vec<(u64, Vec<f32>)> = if collection.is_delta_active() {
         points.iter().map(|p| (p.id, p.vector.clone())).collect()
@@ -165,80 +114,6 @@ async fn flush_point_batch_with_delta(
             );
         }
     }
-}
-
-/// Upsert points to a collection.
-#[utoipa::path(
-    post,
-    path = "/collections/{name}/points",
-    tag = "points",
-    params(
-        ("name" = String, Path, description = "Collection name")
-    ),
-    request_body = UpsertPointsRequest,
-    responses(
-        (status = 200, description = "Points upserted", body = Object),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse)
-    )
-)]
-pub async fn upsert_points(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Json(req): Json<UpsertPointsRequest>,
-) -> impl IntoResponse {
-    let collection = match get_vector_collection_or_404(&state, &name) {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-
-    let points = match build_points_from_request(req) {
-        Ok(p) => p,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
-        }
-    };
-
-    // CRITICAL: upsert_bulk is blocking (HNSW insertion + I/O).
-    // Must use spawn_blocking to avoid blocking the async runtime.
-    let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
-
-    match result {
-        Ok(Ok(inserted)) => {
-            state.db.notify_upsert(&name, inserted);
-            Json(serde_json::json!({
-                "message": "Points upserted",
-                "count": inserted
-            }))
-            .into_response()
-        }
-        Ok(Err(e)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-            }),
-        )
-            .into_response(),
-    }
-}
-
-/// Convert an `UpsertPointsRequest` into a `Vec<Point>`, merging sparse inputs.
-fn build_points_from_request(req: UpsertPointsRequest) -> Result<Vec<Point>, String> {
-    let mut points: Vec<Point> = Vec::with_capacity(req.points.len());
-    for p in req.points {
-        let sparse = convert_sparse_inputs(p.sparse_vector, p.sparse_vectors)?;
-        let mut point = Point::new(p.id, p.vector, p.payload);
-        point.sparse_vectors = sparse;
-        points.push(point);
-    }
-    Ok(points)
 }
 
 /// Stream upsert points using NDJSON.
@@ -401,16 +276,13 @@ fn validate_stream_dimension(
 ) -> Result<(), axum::response::Response> {
     let expected_dim = collection.dimension();
     if req.vector.len() != expected_dim {
-        return Err((
+        return Err(error_response(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "Vector dimension mismatch: collection expects {expected_dim}, got {}",
-                    req.vector.len()
-                ),
-            }),
-        )
-            .into_response());
+            format!(
+                "Vector dimension mismatch: collection expects {expected_dim}, got {}",
+                req.vector.len()
+            ),
+        ));
     }
     Ok(())
 }
@@ -433,101 +305,13 @@ fn stream_insert_result_to_response(
             )
                 .into_response()
         }
-        Err(BackpressureError::DrainTaskDead) => (
+        Err(BackpressureError::DrainTaskDead) => error_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "Streaming drain task has exited; the collection must be reconfigured"
-                    .to_string(),
-            }),
-        )
-            .into_response(),
-        Err(BackpressureError::NotConfigured) => (
+            "Streaming drain task has exited; the collection must be reconfigured".to_string(),
+        ),
+        Err(BackpressureError::NotConfigured) => error_response(
             StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                error: "Streaming not configured for this collection".to_string(),
-            }),
-        )
-            .into_response(),
-    }
-}
-
-/// Get a point by ID.
-#[utoipa::path(
-    get,
-    path = "/collections/{name}/points/{id}",
-    tag = "points",
-    params(
-        ("name" = String, Path, description = "Collection name"),
-        ("id" = u64, Path, description = "Point ID")
-    ),
-    responses(
-        (status = 200, description = "Point found", body = Object),
-        (status = 404, description = "Point or collection not found", body = ErrorResponse)
-    )
-)]
-pub async fn get_point(
-    State(state): State<Arc<AppState>>,
-    Path((name, id)): Path<(String, u64)>,
-) -> impl IntoResponse {
-    let collection = match get_vector_collection_or_404(&state, &name) {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-
-    let points = collection.get(&[id]);
-
-    match points.into_iter().next().flatten() {
-        Some(point) => Json(serde_json::json!({
-            "id": point.id,
-            "vector": point.vector,
-            "payload": point.payload
-        }))
-        .into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Point {} not found", id),
-            }),
-        )
-            .into_response(),
-    }
-}
-
-/// Delete a point by ID.
-#[utoipa::path(
-    delete,
-    path = "/collections/{name}/points/{id}",
-    tag = "points",
-    params(
-        ("name" = String, Path, description = "Collection name"),
-        ("id" = u64, Path, description = "Point ID")
-    ),
-    responses(
-        (status = 200, description = "Point deleted", body = Object),
-        (status = 404, description = "Point or collection not found", body = ErrorResponse)
-    )
-)]
-pub async fn delete_point(
-    State(state): State<Arc<AppState>>,
-    Path((name, id)): Path<(String, u64)>,
-) -> impl IntoResponse {
-    let collection = match get_vector_collection_or_404(&state, &name) {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-
-    match collection.delete(&[id]) {
-        Ok(()) => Json(serde_json::json!({
-            "message": "Point deleted",
-            "id": id
-        }))
-        .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+            "Streaming not configured for this collection".to_string(),
+        ),
     }
 }

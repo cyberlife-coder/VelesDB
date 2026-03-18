@@ -14,6 +14,8 @@ use crate::types::{
 };
 use crate::AppState;
 
+use super::helpers::{error_response, get_collection_or_404};
+
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
 #[utoipa::path(
     get,
@@ -27,39 +29,32 @@ use crate::AppState;
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(deprecated)]
 pub async fn get_collection_config(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => {
-            let config = collection.config();
-            let graph_schema = config
-                .graph_schema
-                .as_ref()
-                .and_then(|gs| serde_json::to_value(gs).ok());
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
-            Json(CollectionConfigResponse {
-                name: config.name,
-                dimension: config.dimension,
-                metric: format!("{:?}", config.metric).to_lowercase(),
-                storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
-                point_count: config.point_count,
-                metadata_only: config.metadata_only,
-                graph_schema,
-                embedding_dimension: config.embedding_dimension,
-            })
-            .into_response()
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
-            }),
-        )
-            .into_response(),
-    }
+    let config = collection.config();
+    let graph_schema = config
+        .graph_schema
+        .as_ref()
+        .and_then(|gs| serde_json::to_value(gs).ok());
+
+    Json(CollectionConfigResponse {
+        name: config.name,
+        dimension: config.dimension,
+        metric: format!("{:?}", config.metric).to_lowercase(),
+        storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
+        point_count: config.point_count,
+        metadata_only: config.metadata_only,
+        graph_schema,
+        embedding_dimension: config.embedding_dimension,
+    })
+    .into_response()
 }
 
 /// Analyze a collection, computing and persisting statistics.
@@ -91,13 +86,7 @@ pub async fn analyze_collection(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            (
-                status,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-                .into_response()
+            error_response(status, e.to_string())
         }
     }
 }
@@ -125,22 +114,11 @@ pub async fn get_collection_stats(
             let response = map_stats_to_response(&stats);
             (StatusCode::OK, Json(response)).into_response()
         }
-        Ok(None) => (
+        Ok(None) => error_response(
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!(
-                    "No stats for '{name}'. Run POST /collections/{name}/analyze first."
-                ),
-            }),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+            format!("No stats for '{name}'. Run POST /collections/{name}/analyze first."),
+        ),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 

@@ -13,15 +13,14 @@ use axum::{
 use std::sync::Arc;
 
 use crate::types::{
-    ErrorResponse, HybridSearchRequest, SearchIdsResponse, SearchRequest, SearchResponse,
-    TextSearchRequest,
+    HybridSearchRequest, SearchIdsResponse, SearchRequest, SearchResponse, TextSearchRequest,
 };
 use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
-    actionable_search_error, build_search_response, execute_search_request, finish_search,
-    finish_search_ids, parse_filter_or_400, validate_query_dimension,
+    execute_search_request, finish_search_cb_status, finish_search_ids, finish_search_with_cb,
+    parse_filter_or_400, record_circuit_breaker, validate_query_dimension,
 };
 
 #[allow(unused_imports)]
@@ -47,8 +46,8 @@ pub use multi::multi_query_search;
     request_body = SearchRequest,
     responses(
         (status = 200, description = "Search results", body = SearchResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
     )
 )]
 #[allow(clippy::unused_async)]
@@ -72,17 +71,14 @@ pub async fn search(
     }
 
     let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
-        Ok(r) => {
-            collection.guard_rails().circuit_breaker.record_success();
-            r
-        }
+        Ok(r) => r,
         Err(resp) => {
             collection.guard_rails().circuit_breaker.record_failure();
             return resp;
         }
     };
 
-    finish_search(&state, &name, start, search_result)
+    finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
 
 /// Search using BM25 full-text search.
@@ -96,7 +92,7 @@ pub async fn search(
     request_body = TextSearchRequest,
     responses(
         (status = 200, description = "Text search results", body = SearchResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = crate::types::ErrorResponse)
     )
 )]
 #[allow(clippy::unused_async)]
@@ -118,7 +114,9 @@ pub async fn text_search(
         return resp;
     }
 
-    let results = if let Some(ref filter_json) = req.filter {
+    let start = std::time::Instant::now();
+
+    let search_result = if let Some(ref filter_json) = req.filter {
         let filter = match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
             Ok(f) => f,
             Err(resp) => return resp,
@@ -128,20 +126,14 @@ pub async fn text_search(
         collection.text_search(&req.query, req.top_k)
     };
 
-    match results {
-        Ok(results) => {
-            collection.guard_rails().circuit_breaker.record_success();
-            Json(build_search_response(results)).into_response()
-        }
-        Err(e) => {
-            collection.guard_rails().circuit_breaker.record_failure();
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(actionable_search_error(&e)),
-            )
-                .into_response()
-        }
-    }
+    finish_search_cb_status(
+        &state,
+        &name,
+        start,
+        &collection,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        search_result,
+    )
 }
 
 /// Hybrid search combining vector similarity and BM25 text search.
@@ -155,8 +147,8 @@ pub async fn text_search(
     request_body = HybridSearchRequest,
     responses(
         (status = 200, description = "Hybrid search results", body = SearchResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
     )
 )]
 #[allow(clippy::unused_async)]
@@ -177,6 +169,8 @@ pub async fn hybrid_search(
     if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
         return resp;
     }
+
+    let start = std::time::Instant::now();
 
     let expected_dimension = collection.config().dimension;
     if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector) {
@@ -199,19 +193,7 @@ pub async fn hybrid_search(
         collection.hybrid_search(&req.vector, &req.query, req.top_k, Some(req.vector_weight))
     };
 
-    match search_result {
-        Ok(results) => {
-            collection.guard_rails().circuit_breaker.record_success();
-            if results.is_empty() {
-                state.onboarding_metrics.record_empty_search_results();
-            }
-            Json(build_search_response(results)).into_response()
-        }
-        Err(e) => {
-            collection.guard_rails().circuit_breaker.record_failure();
-            (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response()
-        }
-    }
+    finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
 
 /// Lightweight search returning only IDs and scores (no payload hydration).
@@ -229,8 +211,8 @@ pub async fn hybrid_search(
     request_body = SearchRequest,
     responses(
         (status = 200, description = "IDs-only search results", body = SearchIdsResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
     )
 )]
 #[allow(clippy::unused_async)]
@@ -254,15 +236,13 @@ pub async fn search_ids(
     }
 
     let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
-        Ok(r) => {
-            collection.guard_rails().circuit_breaker.record_success();
-            r
-        }
+        Ok(r) => r,
         Err(resp) => {
             collection.guard_rails().circuit_breaker.record_failure();
             return resp;
         }
     };
 
+    record_circuit_breaker(&collection, &search_result);
     finish_search_ids(&state, &name, start, search_result)
 }

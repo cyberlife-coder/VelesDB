@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{actionable_search_error, build_search_response, validate_query_dimension};
+use super::pipeline::{finish_search_with_cb, validate_query_dimension};
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Multi-query search with fusion strategies.
@@ -84,24 +84,10 @@ pub async fn multi_query_search(
         }
     }
 
+    let start = std::time::Instant::now();
     let query_refs: Vec<&[f32]> = req.vectors.iter().map(Vec::as_slice).collect();
 
-    let results: Vec<velesdb_core::SearchResult> =
-        match collection.multi_query_search(&query_refs, req.top_k, strategy, None) {
-            Ok(r) => {
-                collection.guard_rails().circuit_breaker.record_success();
-                r
-            }
-            Err(e) => {
-                collection.guard_rails().circuit_breaker.record_failure();
-                return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e)))
-                    .into_response();
-            }
-        };
+    let search_result = collection.multi_query_search(&query_refs, req.top_k, strategy, None);
 
-    if results.is_empty() {
-        state.onboarding_metrics.record_empty_search_results();
-    }
-
-    Json(build_search_response(results)).into_response()
+    finish_search_with_cb(&state, &name, start, &collection, search_result)
 }

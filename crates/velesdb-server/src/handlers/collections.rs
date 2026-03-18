@@ -12,6 +12,8 @@ use crate::types::{CollectionResponse, CreateCollectionRequest, ErrorResponse};
 use crate::AppState;
 use velesdb_core::{DistanceMetric, StorageMode};
 
+use super::helpers::{error_response, get_collection_or_404};
+
 /// List all collections.
 #[utoipa::path(
     get,
@@ -58,13 +60,7 @@ pub async fn create_collection(
 
     match result {
         Ok(()) => create_collection_success_response(&req),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
     }
 }
 
@@ -77,16 +73,13 @@ fn parse_distance_metric(raw: &str) -> Result<DistanceMetric, axum::response::Re
         "dot" | "dotproduct" | "ip" => Ok(DistanceMetric::DotProduct),
         "hamming" => Ok(DistanceMetric::Hamming),
         "jaccard" => Ok(DistanceMetric::Jaccard),
-        _ => Err((
+        _ => Err(error_response(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
-                    raw
-                ),
-            }),
-        )
-            .into_response()),
+            format!(
+                "Invalid metric: {}. Valid: cosine, euclidean, dot, hamming, jaccard",
+                raw
+            ),
+        )),
     }
 }
 
@@ -98,16 +91,13 @@ fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response
         "sq8" | "int8" => Ok(StorageMode::SQ8),
         "binary" | "bit" => Ok(StorageMode::Binary),
         "pq" | "product_quantization" => Ok(StorageMode::ProductQuantization),
-        _ => Err((
+        _ => Err(error_response(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
-                    raw
-                ),
-            }),
-        )
-            .into_response()),
+            format!(
+                "Invalid storage_mode: {}. Valid: full, sq8, binary, pq",
+                raw
+            ),
+        )),
     }
 }
 
@@ -120,13 +110,10 @@ fn create_vector_collection(
     storage_mode: StorageMode,
 ) -> Result<velesdb_core::error::Result<()>, axum::response::Response> {
     let dimension = req.dimension.ok_or_else(|| {
-        (
+        error_response(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "dimension is required for vector collections".to_string(),
-            }),
+            "dimension is required for vector collections".to_string(),
         )
-            .into_response()
     })?;
     if req.hnsw_m.is_some() || req.hnsw_ef_construction.is_some() {
         Ok(state.db.create_vector_collection_with_hnsw(
@@ -166,16 +153,13 @@ fn dispatch_create(
                 .create_graph_collection(&req.name, GraphSchema::schemaless()))
         }
         "vector" | "" => create_vector_collection(state, req, metric, storage_mode),
-        _ => Err((
+        _ => Err(error_response(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "Invalid collection_type: {}. Valid: vector, graph, metadata_only",
-                    req.collection_type
-                ),
-            }),
-        )
-            .into_response()),
+            format!(
+                "Invalid collection_type: {}. Valid: vector, graph, metadata_only",
+                req.collection_type
+            ),
+        )),
     }
 }
 
@@ -213,31 +197,24 @@ fn create_collection_success_response(req: &CreateCollectionRequest) -> axum::re
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(deprecated)]
 pub async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => {
-            let config = collection.config();
-            Json(CollectionResponse {
-                name: config.name,
-                dimension: config.dimension,
-                metric: format!("{:?}", config.metric).to_lowercase(),
-                point_count: config.point_count,
-                storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
-            })
-            .into_response()
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
-            }),
-        )
-            .into_response(),
-    }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let config = collection.config();
+    Json(CollectionResponse {
+        name: config.name,
+        dimension: config.dimension,
+        metric: format!("{:?}", config.metric).to_lowercase(),
+        point_count: config.point_count,
+        storage_mode: format!("{:?}", config.storage_mode).to_lowercase(),
+    })
+    .into_response()
 }
 
 /// Run a quick sanity check for onboarding and troubleshooting.
@@ -253,53 +230,56 @@ pub async fn get_collection(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(deprecated)]
 pub async fn collection_sanity(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => {
-            let config = collection.config();
-            let has_data = config.point_count > 0;
-            Json(serde_json::json!({
-                "collection": config.name,
-                "dimension": config.dimension,
-                "metric": format!("{:?}", config.metric).to_lowercase(),
-                "point_count": config.point_count,
-                "is_empty": collection.is_empty(),
-                "checks": {
-                    "has_vectors": has_data,
-                    "search_ready": has_data,
-                    "dimension_configured": config.dimension > 0
-                },
-                "diagnostics": {
-                    "search_requests_total": state.onboarding_metrics.search_requests_total.load(std::sync::atomic::Ordering::Relaxed),
-                    "dimension_mismatch_total": state.onboarding_metrics.dimension_mismatch_total.load(std::sync::atomic::Ordering::Relaxed),
-                    "empty_search_results_total": state.onboarding_metrics.empty_search_results_total.load(std::sync::atomic::Ordering::Relaxed),
-                    "filter_parse_errors_total": state.onboarding_metrics.filter_parse_errors_total.load(std::sync::atomic::Ordering::Relaxed)
-                },
-                "hints": if has_data {
-                    vec![
-                        "Run a search without strict filters first, then tighten filters progressively."
-                    ]
-                } else {
-                    vec![
-                        "Insert at least one known vector before evaluating search quality.",
-                        "Verify you are querying the intended collection."
-                    ]
-                }
-            }))
-            .into_response()
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let config = collection.config();
+    build_sanity_response(&state, &config, &collection)
+}
+
+/// Build the JSON sanity check response body.
+#[allow(deprecated)]
+fn build_sanity_response(
+    state: &AppState,
+    config: &velesdb_core::collection::CollectionConfig,
+    collection: &velesdb_core::Collection,
+) -> axum::response::Response {
+    let has_data = config.point_count > 0;
+    Json(serde_json::json!({
+        "collection": config.name,
+        "dimension": config.dimension,
+        "metric": format!("{:?}", config.metric).to_lowercase(),
+        "point_count": config.point_count,
+        "is_empty": collection.is_empty(),
+        "checks": {
+            "has_vectors": has_data,
+            "search_ready": has_data,
+            "dimension_configured": config.dimension > 0
+        },
+        "diagnostics": {
+            "search_requests_total": state.onboarding_metrics.search_requests_total.load(std::sync::atomic::Ordering::Relaxed),
+            "dimension_mismatch_total": state.onboarding_metrics.dimension_mismatch_total.load(std::sync::atomic::Ordering::Relaxed),
+            "empty_search_results_total": state.onboarding_metrics.empty_search_results_total.load(std::sync::atomic::Ordering::Relaxed),
+            "filter_parse_errors_total": state.onboarding_metrics.filter_parse_errors_total.load(std::sync::atomic::Ordering::Relaxed)
+        },
+        "hints": if has_data {
+            vec![
+                "Run a search without strict filters first, then tighten filters progressively."
+            ]
+        } else {
+            vec![
+                "Insert at least one known vector before evaluating search quality.",
+                "Verify you are querying the intended collection."
+            ]
         }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
-            }),
-        )
-            .into_response(),
-    }
+    }))
+    .into_response()
 }
 
 /// Delete a collection.
@@ -325,13 +305,7 @@ pub async fn delete_collection(
             "name": name
         }))
         .into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(e) => error_response(StatusCode::NOT_FOUND, e.to_string()),
     }
 }
 
@@ -348,24 +322,19 @@ pub async fn delete_collection(
         (status = 404, description = "Collection not found", body = ErrorResponse)
     )
 )]
-#[allow(deprecated)]
 pub async fn is_empty(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => Json(serde_json::json!({
-            "is_empty": collection.is_empty()
-        }))
-        .into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
-            }),
-        )
-            .into_response(),
-    }
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    Json(serde_json::json!({
+        "is_empty": collection.is_empty()
+    }))
+    .into_response()
 }
 
 /// Flush pending changes to disk.
@@ -382,32 +351,24 @@ pub async fn is_empty(
         (status = 500, description = "Flush failed", body = ErrorResponse)
     )
 )]
-#[allow(deprecated)]
 pub async fn flush_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.get_collection(&name) {
-        Some(collection) => match collection.flush() {
-            Ok(()) => Json(serde_json::json!({
-                "message": "Flushed successfully",
-                "collection": name
-            }))
-            .into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Flush failed: {}", e),
-                }),
-            )
-                .into_response(),
-        },
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Collection '{}' not found", name),
-            }),
-        )
-            .into_response(),
+    let collection = match get_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    match collection.flush() {
+        Ok(()) => Json(serde_json::json!({
+            "message": "Flushed successfully",
+            "collection": name
+        }))
+        .into_response(),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Flush failed: {}", e),
+        ),
     }
 }

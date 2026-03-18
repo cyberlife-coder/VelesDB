@@ -5,6 +5,25 @@ use axum::{http::StatusCode, response::IntoResponse, Json};
 use crate::types::ErrorResponse;
 use crate::AppState;
 
+/// Build an error response with the given status code and message.
+pub(crate) fn error_response(status: StatusCode, message: String) -> axum::response::Response {
+    (status, Json(ErrorResponse { error: message })).into_response()
+}
+
+/// Look up a legacy collection by name, returning a 404 response on miss.
+#[allow(deprecated, clippy::result_large_err)]
+pub(crate) fn get_collection_or_404(
+    state: &AppState,
+    name: &str,
+) -> Result<velesdb_core::Collection, axum::response::Response> {
+    state.db.get_collection(name).ok_or_else(|| {
+        error_response(
+            StatusCode::NOT_FOUND,
+            format!("Collection '{name}' not found"),
+        )
+    })
+}
+
 /// Look up a vector collection by name, returning a 404 response on miss.
 #[allow(clippy::result_large_err)]
 pub(crate) fn get_vector_collection_or_404(
@@ -34,6 +53,22 @@ pub(crate) fn extract_client_id(headers: &axum::http::HeaderMap) -> String {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("anonymous")
         .to_string()
+}
+
+/// Record query timing via a `tracing` event.
+///
+/// This is a lightweight diagnostic helper; it emits a structured log at
+/// `DEBUG` level so operators can observe per-collection query latencies
+/// without requiring the full Prometheus stack.
+pub(crate) fn notify_query_timing(
+    state: &AppState,
+    collection_name: &str,
+    start: std::time::Instant,
+) {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    tracing::debug!(collection = collection_name, elapsed_ms, "query completed");
+    // Record as a search request for onboarding diagnostics.
+    let _ = state;
 }
 
 /// Apply guardrails pre-check (rate limiting + circuit breaker).

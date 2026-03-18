@@ -126,7 +126,6 @@ pub async fn match_query(
 ) -> Result<Json<MatchQueryResponse>, (StatusCode, Json<MatchQueryError>)> {
     let start = std::time::Instant::now();
 
-    // Get collection
     let collection = state
         .db
         .get_vector_collection(&collection_name)

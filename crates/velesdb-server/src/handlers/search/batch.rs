@@ -13,8 +13,10 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::pipeline::{actionable_search_error, validate_query_dimension};
-use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
+use super::pipeline::{actionable_search_error, record_circuit_breaker, validate_query_dimension};
+use crate::handlers::helpers::{
+    apply_pre_check, extract_client_id, get_vector_collection_or_404, notify_query_timing,
+};
 
 /// Batch search for multiple vectors.
 #[utoipa::path(
@@ -63,23 +65,18 @@ pub async fn batch_search(
     let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
     let max_top_k = req.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
-    let all_results = match collection.search_batch_with_filters(&queries, max_top_k, &filters) {
-        Ok(batch_results) => {
-            collection.guard_rails().circuit_breaker.record_success();
-            build_batch_responses(&state, batch_results, &req)
-        }
+    let batch_result = collection.search_batch_with_filters(&queries, max_top_k, &filters);
+    record_circuit_breaker(&collection, &batch_result);
+
+    let all_results = match batch_result {
+        Ok(batch_results) => build_batch_responses(&state, batch_results, &req),
         Err(e) => {
-            collection.guard_rails().circuit_breaker.record_failure();
             return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response();
         }
     };
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let duration_us = start.elapsed().as_micros();
-    #[allow(clippy::cast_possible_truncation)]
-    state
-        .db
-        .notify_query(&name, duration_us.min(u128::from(u64::MAX)) as u64);
+    notify_query_timing(&state, &name, start);
 
     Json(BatchSearchResponse {
         results: all_results,

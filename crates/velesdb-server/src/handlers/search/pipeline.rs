@@ -280,6 +280,18 @@ fn execute_hybrid_sparse(
     )
 }
 
+/// Record empty-results diagnostic and notify the query timing subsystem.
+fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant, is_empty: bool) {
+    if is_empty {
+        state.onboarding_metrics.record_empty_search_results();
+    }
+    let duration_us = start.elapsed().as_micros();
+    #[allow(clippy::cast_possible_truncation)]
+    state
+        .db
+        .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
+}
+
 /// Shared result-handling for all search modes.
 pub(crate) fn finish_search(
     state: &AppState,
@@ -289,15 +301,7 @@ pub(crate) fn finish_search(
 ) -> axum::response::Response {
     match search_result {
         Ok(results) => {
-            if results.is_empty() {
-                state.onboarding_metrics.record_empty_search_results();
-            }
-            let duration_us = start.elapsed().as_micros();
-            #[allow(clippy::cast_possible_truncation)]
-            state
-                .db
-                .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
-
+            record_search_metrics(state, name, start, results.is_empty());
             Json(build_search_response(results)).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
@@ -313,15 +317,7 @@ pub(crate) fn finish_search_ids(
 ) -> axum::response::Response {
     match search_result {
         Ok(results) => {
-            if results.is_empty() {
-                state.onboarding_metrics.record_empty_search_results();
-            }
-            let duration_us = start.elapsed().as_micros();
-            #[allow(clippy::cast_possible_truncation)]
-            state
-                .db
-                .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
-
+            record_search_metrics(state, name, start, results.is_empty());
             let response = SearchIdsResponse {
                 results: results
                     .into_iter()
@@ -334,5 +330,50 @@ pub(crate) fn finish_search_ids(
             Json(response).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
+    }
+}
+
+/// Record circuit-breaker outcome (success/failure) based on a search result.
+pub(crate) fn record_circuit_breaker<T>(
+    collection: &VectorCollection,
+    result: &velesdb_core::Result<T>,
+) {
+    if result.is_ok() {
+        collection.guard_rails().circuit_breaker.record_success();
+    } else {
+        collection.guard_rails().circuit_breaker.record_failure();
+    }
+}
+
+/// Handles `Ok`/`Err` from a core search call: records circuit-breaker
+/// outcome and delegates to [`finish_search`] for metrics + response.
+pub(crate) fn finish_search_with_cb(
+    state: &AppState,
+    name: &str,
+    start: std::time::Instant,
+    collection: &VectorCollection,
+    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+) -> axum::response::Response {
+    record_circuit_breaker(collection, &search_result);
+    finish_search(state, name, start, search_result)
+}
+
+/// Variant of [`finish_search_with_cb`] that uses a custom error status code
+/// instead of the default 400 used by [`finish_search`].
+pub(crate) fn finish_search_cb_status(
+    state: &AppState,
+    name: &str,
+    start: std::time::Instant,
+    collection: &VectorCollection,
+    error_status: StatusCode,
+    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+) -> axum::response::Response {
+    record_circuit_breaker(collection, &search_result);
+    match search_result {
+        Ok(results) => {
+            record_search_metrics(state, name, start, results.is_empty());
+            Json(build_search_response(results)).into_response()
+        }
+        Err(e) => (error_status, Json(actionable_search_error(&e))).into_response(),
     }
 }
