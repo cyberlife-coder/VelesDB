@@ -142,6 +142,14 @@ jobs:
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
+      - name: Audit feature claims vs exports
+        run: python3 scripts/check-feature-claims.py
+        continue-on-error: true  # Advisory — does not block merge
+
+      - name: Audit performance claims consistency
+        run: python3 scripts/check-perf-claims.py --no-criterion
+        continue-on-error: true  # Advisory — does not block merge
+
       - name: Check doctests compile
         run: |
           cargo test --doc --package velesdb-core

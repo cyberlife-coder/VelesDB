@@ -4,11 +4,12 @@
 //! Supports temporal queries and similarity-based retrieval.
 //! Uses a B-tree temporal index for efficient O(log N) time-based queries.
 
-use crate::{Database, DistanceMetric, Point};
+use crate::{Database, Point};
 use serde_json::json;
 use std::sync::Arc;
 
 use super::error::AgentMemoryError;
+use super::memory_helpers;
 use super::temporal_index::TemporalIndex;
 use super::ttl::MemoryTtl;
 
@@ -49,25 +50,14 @@ impl EpisodicMemory {
         temporal_index: Arc<TemporalIndex>,
     ) -> Result<Self, AgentMemoryError> {
         let collection_name = Self::COLLECTION_NAME.to_string();
+        let actual_dimension =
+            memory_helpers::open_or_create_collection(&db, &collection_name, dimension)?;
 
-        let actual_dimension = if let Some(collection) = db.get_collection(&collection_name) {
-            let existing_dim = collection.config().dimension;
-            if existing_dim != dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: existing_dim,
-                    actual: dimension,
-                });
-            }
-
-            if temporal_index.is_empty() {
+        if temporal_index.is_empty() {
+            if let Some(collection) = db.get_collection(&collection_name) {
                 Self::rebuild_temporal_index(&collection, &temporal_index);
             }
-
-            existing_dim
-        } else {
-            db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
-            dimension
-        };
+        }
 
         Ok(Self {
             collection_name,
@@ -112,19 +102,10 @@ impl EpisodicMemory {
         embedding: Option<&[f32]>,
     ) -> Result<(), AgentMemoryError> {
         if let Some(emb) = embedding {
-            if emb.len() != self.dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: self.dimension,
-                    actual: emb.len(),
-                });
-            }
+            memory_helpers::validate_dimension(self.dimension, emb.len())?;
         }
 
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let vector = embedding.map_or_else(|| vec![0.0; self.dimension], <[f32]>::to_vec);
 
         let point = Point::new(
@@ -136,10 +117,7 @@ impl EpisodicMemory {
             })),
         );
 
-        collection
-            .upsert(vec![point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
+        memory_helpers::upsert_points(&collection, vec![point])?;
         self.temporal_index.insert(event_id, timestamp);
 
         Ok(())
@@ -174,10 +152,7 @@ impl EpisodicMemory {
         limit: usize,
         since_timestamp: Option<i64>,
     ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         Ok(self.fetch_temporal_events(
             limit,
@@ -200,10 +175,7 @@ impl EpisodicMemory {
         timestamp: i64,
         limit: usize,
     ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         Ok(self.fetch_temporal_events(
             limit,
@@ -227,16 +199,10 @@ impl EpisodicMemory {
         query_embedding: &[f32],
         k: usize,
     ) -> Result<Vec<(u64, String, i64, f32)>, AgentMemoryError> {
-        self.validate_dimension(query_embedding.len())?;
+        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
 
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let results = collection
-            .search(query_embedding, k)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let results = memory_helpers::search_collection(&collection, query_embedding, k)?;
 
         Ok(results
             .into_iter()
@@ -258,10 +224,7 @@ impl EpisodicMemory {
         &self,
         id: u64,
     ) -> Result<Option<(String, i64, Vec<f32>)>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         let points = collection.get(&[id]);
         let Some(point) = points.into_iter().flatten().next() else {
@@ -296,14 +259,8 @@ impl EpisodicMemory {
     /// Returns an error when the collection is unavailable or delete fails.
     #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        collection
-            .delete(&[id])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        memory_helpers::delete_from_collection(&collection, &[id])?;
 
         self.temporal_index.remove(id);
         self.ttl.remove(id);
@@ -317,18 +274,9 @@ impl EpisodicMemory {
     /// Returns an error when the collection is unavailable or JSON encoding fails.
     #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let all_ids = self.temporal_index.all_ids();
-        let points: Vec<_> = collection.get(&all_ids).into_iter().flatten().collect();
-
-        let serialized =
-            serde_json::to_vec(&points).map_err(|e| AgentMemoryError::IoError(e.to_string()))?;
-
-        Ok(serialized)
+        memory_helpers::serialize_points(&collection, &all_ids)
     }
 
     /// Replaces episodic storage with previously serialized points.
@@ -339,35 +287,9 @@ impl EpisodicMemory {
     /// persistence operations fail.
     #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        let points: Vec<Point> =
-            serde_json::from_slice(data).map_err(|e| AgentMemoryError::IoError(e.to_string()))?;
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        Self::clear_existing_points(&collection)?;
-        self.rebuild_temporal_from_points(&points);
-
-        collection
-            .upsert(points)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Validates that `len` matches the expected embedding dimension.
-    fn validate_dimension(&self, len: usize) -> Result<(), AgentMemoryError> {
-        if len != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: len,
-            });
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        if let Some(points) = memory_helpers::deserialize_into_collection(data, &collection)? {
+            self.rebuild_temporal_from_points(&points);
         }
         Ok(())
     }
@@ -421,18 +343,6 @@ impl EpisodicMemory {
             })
             .take(limit)
             .collect()
-    }
-
-    /// Removes all existing points from the collection.
-    #[allow(deprecated)]
-    fn clear_existing_points(collection: &crate::Collection) -> Result<(), AgentMemoryError> {
-        let existing_ids = collection.all_ids();
-        if !existing_ids.is_empty() {
-            collection
-                .delete(&existing_ids)
-                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-        }
-        Ok(())
     }
 
     /// Clears and rebuilds the temporal index from a set of points.

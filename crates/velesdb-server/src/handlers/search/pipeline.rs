@@ -287,6 +287,7 @@ fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant
     }
     let duration_us = start.elapsed().as_micros();
     #[allow(clippy::cast_possible_truncation)]
+    // Reason: value is clamped to u64::MAX above, so the truncation is lossless.
     state
         .db
         .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
@@ -356,6 +357,19 @@ pub(crate) fn finish_search_with_cb(
 ) -> axum::response::Response {
     record_circuit_breaker(collection, &search_result);
     finish_search(state, name, start, search_result)
+}
+
+/// Handles `Ok`/`Err` from a core search call: records circuit-breaker
+/// outcome and delegates to [`finish_search_ids`] for metrics + response.
+pub(crate) fn finish_search_ids_with_cb(
+    state: &AppState,
+    name: &str,
+    start: std::time::Instant,
+    collection: &VectorCollection,
+    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+) -> axum::response::Response {
+    record_circuit_breaker(collection, &search_result);
+    finish_search_ids(state, name, start, search_result)
 }
 
 /// Variant of [`finish_search_with_cb`] that uses a custom error status code

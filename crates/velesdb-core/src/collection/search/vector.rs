@@ -1,5 +1,6 @@
 //! Vector similarity search methods for Collection.
 
+use super::resolve;
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -61,7 +62,7 @@ impl Collection {
             })
             .collect();
 
-        sort_by_score(&mut rescored, higher_is_better);
+        resolve::sort_scored_by_metric(&mut rescored, higher_is_better);
         rescored.truncate(k);
         rescored
     }
@@ -97,36 +98,6 @@ impl Collection {
     ) -> Vec<ScoredResult> {
         results
     }
-}
-
-/// Sorts search results by score (ascending or descending based on metric).
-fn sort_search_results(results: &mut [SearchResult], higher_is_better: bool) {
-    results.sort_by(|a, b| {
-        if higher_is_better {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
-    });
-}
-
-/// Sorts scored results by score (ascending or descending based on metric).
-fn sort_by_score(results: &mut [ScoredResult], higher_is_better: bool) {
-    results.sort_by(|a, b| {
-        if higher_is_better {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
-    });
 }
 
 fn rescore_with_metric(
@@ -174,26 +145,11 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        // Map index results to SearchResult with full point data
-        let results: Vec<SearchResult> = index_results
-            .into_iter()
-            .filter_map(|sr| {
-                // We need to fetch vector and payload
-                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                let payload = payload_storage.retrieve(sr.id).ok().flatten();
-
-                let point = Point {
-                    id: sr.id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-
-                Some(SearchResult::new(point, sr.score))
-            })
-            .collect();
-
-        Ok(results)
+        Ok(resolve::resolve_scored_results(
+            &index_results,
+            &*vector_storage,
+            &*payload_storage,
+        ))
     }
 
     /// Performs vector similarity search with custom `ef_search` parameter.
@@ -230,24 +186,11 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        let results: Vec<SearchResult> = index_results
-            .into_iter()
-            .filter_map(|sr| {
-                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                let payload = payload_storage.retrieve(sr.id).ok().flatten();
-
-                let point = Point {
-                    id: sr.id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-
-                Some(SearchResult::new(point, sr.score))
-            })
-            .collect();
-
-        Ok(results)
+        Ok(resolve::resolve_scored_results(
+            &index_results,
+            &*vector_storage,
+            &*payload_storage,
+        ))
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
@@ -333,7 +276,7 @@ impl Collection {
             })
             .collect();
 
-        sort_search_results(&mut results, higher_is_better);
+        resolve::sort_results_by_metric(&mut results, higher_is_better);
         results.truncate(k);
         Ok(results)
     }

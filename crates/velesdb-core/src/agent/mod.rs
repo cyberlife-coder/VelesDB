@@ -36,7 +36,6 @@ mod episodic_memory;
 mod episodic_memory_tests;
 mod error;
 mod memory;
-#[allow(dead_code)]
 pub(crate) mod memory_helpers;
 #[cfg(test)]
 mod memory_tests;

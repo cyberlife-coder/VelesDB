@@ -1,5 +1,6 @@
 //! Text and hybrid search methods for Collection.
 
+use super::resolve;
 use super::OrderedFloat;
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -28,22 +29,12 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        Ok(bm25_results
-            .into_iter()
-            .filter_map(|(id, score)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                let payload = payload_storage.retrieve(id).ok().flatten();
-
-                let point = Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-
-                Some(SearchResult::new(point, score))
-            })
-            .collect())
+        Ok(resolve::resolve_id_score_pairs(
+            &bm25_results,
+            bm25_results.len(),
+            &*vector_storage,
+            &*payload_storage,
+        ))
     }
 
     /// Performs full-text search with metadata filtering.
@@ -199,22 +190,12 @@ impl Collection {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        scored_ids
-            .iter()
-            .filter_map(|&(id, score)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                let payload = payload_storage.retrieve(id).ok().flatten();
-                Some(SearchResult::new(
-                    Point {
-                        id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    score,
-                ))
-            })
-            .collect()
+        resolve::resolve_id_score_pairs(
+            scored_ids,
+            scored_ids.len(),
+            &*vector_storage,
+            &*payload_storage,
+        )
     }
 
     /// Performs hybrid search (vector + text) with metadata filtering.

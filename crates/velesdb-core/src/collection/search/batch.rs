@@ -1,5 +1,6 @@
 //! Batch and multi-query search methods for Collection.
 
+use super::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::SearchQuality;
@@ -65,7 +66,7 @@ impl Collection {
                 &*vector_storage,
                 &*payload_storage,
             );
-            Self::sort_results_by_metric(&mut filtered, higher_is_better);
+            resolve::sort_results_by_metric(&mut filtered, higher_is_better);
             filtered.truncate(k);
             all_results.push(filtered);
         }
@@ -105,21 +106,6 @@ impl Collection {
                 })
             })
             .collect()
-    }
-
-    /// Sorts results by score according to metric direction.
-    fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
-        results.sort_by(|a, b| {
-            if higher_is_better {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                a.score
-                    .partial_cmp(&b.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
-        });
     }
 
     /// Performs batch search for multiple query vectors in parallel with a single metadata filter.
@@ -189,22 +175,11 @@ impl Collection {
             .map(|(query_results, query)| {
                 // Merge with delta buffer per query
                 let query_results = self.merge_delta(query_results, query, k, metric);
-                query_results
-                    .into_iter()
-                    .filter_map(|sr| {
-                        let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                        let payload = payload_storage.retrieve(sr.id).ok().flatten();
-                        Some(SearchResult {
-                            point: Point {
-                                id: sr.id,
-                                vector,
-                                payload,
-                                sparse_vectors: None,
-                            },
-                            score: sr.score,
-                        })
-                    })
-                    .collect()
+                resolve::resolve_scored_results(
+                    &query_results,
+                    &*vector_storage,
+                    &*payload_storage,
+                )
             })
             .collect();
 
@@ -253,7 +228,7 @@ impl Collection {
             .fuse(filtered)
             .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
 
-        Ok(self.hydrate_fused_results(fused, top_k))
+        Ok(self.hydrate_fused_results(&fused, top_k))
     }
 
     /// Validates inputs for `multi_query_search` and returns the distance metric.
@@ -345,25 +320,11 @@ impl Collection {
     }
 
     /// Fetches full point data for the top-k fused results.
-    fn hydrate_fused_results(&self, fused: Vec<(u64, f32)>, top_k: usize) -> Vec<SearchResult> {
+    fn hydrate_fused_results(&self, fused: &[(u64, f32)], top_k: usize) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        fused
-            .into_iter()
-            .take(top_k)
-            .filter_map(|(id, score)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                let payload = payload_storage.retrieve(id).ok().flatten();
-                let point = Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-                Some(SearchResult::new(point, score))
-            })
-            .collect()
+        resolve::resolve_id_score_pairs(fused, top_k, &*vector_storage, &*payload_storage)
     }
 
     /// Performs multi-query search returning only IDs and fused scores.

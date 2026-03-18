@@ -11,6 +11,7 @@ use serde::Serialize;
 ///
 /// Implementors only need to derive `Serialize` and `Deserialize` --
 /// all four methods are provided via blanket defaults.
+#[allow(dead_code)] // TODO(EPIC-075): Will be used when EdgeStore/PropertyIndex adopt shared persistence
 pub trait PostcardPersistence: Serialize + DeserializeOwned + Sized {
     /// Serialize to bytes using postcard.
     ///

@@ -5,6 +5,7 @@
 //! accepting raw `SparseVector` directly instead of VelesQL AST nodes.
 //! Designed for SDK wiring (Python, TypeScript, Mobile).
 
+use super::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
@@ -37,16 +38,9 @@ impl Collection {
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
         let indexes = self.sparse_indexes.read();
-        let index = indexes.get(index_name).ok_or_else(|| {
-            Error::Config(format!(
-                "Sparse index '{}' not found",
-                if index_name.is_empty() {
-                    "<default>"
-                } else {
-                    index_name
-                }
-            ))
-        })?;
+        let index = indexes
+            .get(index_name)
+            .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
         let results = sparse_search(index, query, k);
         // Explicit drop: `resolve_sparse_results` acquires the payload_storage read-lock,
         // which is ordered after sparse_indexes in the Collection lock hierarchy.

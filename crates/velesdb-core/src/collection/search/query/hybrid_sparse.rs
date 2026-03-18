@@ -4,6 +4,7 @@
 //! sparse (optionally filtered) and dense searches in parallel, and fuses
 //! results using the requested fusion strategy.
 
+use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
@@ -192,16 +193,9 @@ impl Collection {
         let results = if let Some(ref filter) = metadata_filter {
             let payload_storage = self.payload_storage.read(); // lock 3
             let indexes = self.sparse_indexes.read(); // lock 9
-            let index = indexes.get(index_name).ok_or_else(|| {
-                Error::Config(format!(
-                    "Sparse index '{}' not found",
-                    if index_name.is_empty() {
-                        "<default>"
-                    } else {
-                        index_name
-                    }
-                ))
-            })?;
+            let index = indexes
+                .get(index_name)
+                .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
             let filter_fn = |id: u64| {
                 let payload = payload_storage.retrieve(id).ok().flatten();
                 let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
@@ -213,16 +207,9 @@ impl Collection {
             r
         } else {
             let indexes = self.sparse_indexes.read(); // lock 9 only (no payload needed)
-            let index = indexes.get(index_name).ok_or_else(|| {
-                Error::Config(format!(
-                    "Sparse index '{}' not found",
-                    if index_name.is_empty() {
-                        "<default>"
-                    } else {
-                        index_name
-                    }
-                ))
-            })?;
+            let index = indexes
+                .get(index_name)
+                .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
             let r = sparse_search(index, &query_vec, limit);
             drop(indexes);
             r

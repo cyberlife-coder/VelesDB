@@ -14,13 +14,14 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::{Database, DistanceMetric, Point};
+use crate::{Database, Point};
 use parking_lot::RwLock;
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::error::AgentMemoryError;
+use super::memory_helpers;
 use super::reinforcement::{FixedRate, ReinforcementContext, ReinforcementStrategy};
 use super::ttl::MemoryTtl;
 
@@ -99,37 +100,15 @@ impl ProceduralMemory {
         Self::new(db, dimension, Arc::new(MemoryTtl::new()))
     }
 
-    #[allow(deprecated)]
     pub(crate) fn new(
         db: Arc<Database>,
         dimension: usize,
         ttl: Arc<MemoryTtl>,
     ) -> Result<Self, AgentMemoryError> {
         let collection_name = Self::COLLECTION_NAME.to_string();
-
-        let stored_ids = RwLock::new(HashSet::new());
-
-        let actual_dimension = if let Some(collection) = db.get_collection(&collection_name) {
-            let existing_dim = collection.config().dimension;
-            if existing_dim != dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: existing_dim,
-                    actual: dimension,
-                });
-            }
-
-            let all_ids = collection.all_ids();
-            let mut ids = stored_ids.write();
-            for id in all_ids {
-                ids.insert(id);
-            }
-            drop(ids);
-
-            existing_dim
-        } else {
-            db.create_collection(&collection_name, dimension, DistanceMetric::Cosine)?;
-            dimension
-        };
+        let actual_dimension =
+            memory_helpers::open_or_create_collection(&db, &collection_name, dimension)?;
+        let stored_ids = RwLock::new(memory_helpers::load_stored_ids(&db, &collection_name));
 
         Ok(Self {
             collection_name,
@@ -164,19 +143,10 @@ impl ProceduralMemory {
         confidence: f32,
     ) -> Result<(), AgentMemoryError> {
         if let Some(emb) = embedding {
-            if emb.len() != self.dimension {
-                return Err(AgentMemoryError::DimensionMismatch {
-                    expected: self.dimension,
-                    actual: emb.len(),
-                });
-            }
+            memory_helpers::validate_dimension(self.dimension, emb.len())?;
         }
 
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let vector = embedding.map_or_else(|| vec![0.0; self.dimension], <[f32]>::to_vec);
 
         let now = std::time::SystemTime::now()
@@ -199,10 +169,7 @@ impl ProceduralMemory {
             })),
         );
 
-        collection
-            .upsert(vec![point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
+        memory_helpers::upsert_points(&collection, vec![point])?;
         self.stored_ids.write().insert(procedure_id);
         Ok(())
     }
@@ -239,21 +206,10 @@ impl ProceduralMemory {
         k: usize,
         min_confidence: f32,
     ) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
-        if query_embedding.len() != self.dimension {
-            return Err(AgentMemoryError::DimensionMismatch {
-                expected: self.dimension,
-                actual: query_embedding.len(),
-            });
-        }
+        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
 
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        let results = collection
-            .search(query_embedding, k)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let results = memory_helpers::search_collection(&collection, query_embedding, k)?;
 
         Ok(results
             .into_iter()
@@ -289,10 +245,7 @@ impl ProceduralMemory {
         success: bool,
         strategy: &dyn ReinforcementStrategy,
     ) -> Result<(), AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         let points = collection.get(&[procedure_id]);
         let point = points
@@ -330,9 +283,7 @@ impl ProceduralMemory {
             })),
         );
 
-        collection
-            .upsert(vec![updated_point])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        memory_helpers::upsert_points(&collection, vec![updated_point])?;
 
         Ok(())
     }
@@ -388,10 +339,7 @@ impl ProceduralMemory {
     /// Returns an error when collection access fails.
     #[allow(deprecated)]
     pub fn list_all(&self) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
         let points = collection.get(&all_ids);
@@ -411,14 +359,8 @@ impl ProceduralMemory {
     /// Returns an error when collection access or deletion fails.
     #[allow(deprecated)]
     pub fn delete(&self, id: u64) -> Result<(), AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        collection
-            .delete(&[id])
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        memory_helpers::delete_from_collection(&collection, &[id])?;
 
         self.stored_ids.write().remove(&id);
         self.ttl.remove(id);
@@ -432,18 +374,9 @@ impl ProceduralMemory {
     /// Returns an error when collection access or JSON encoding fails.
     #[allow(deprecated)]
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
-        let points: Vec<_> = collection.get(&all_ids).into_iter().flatten().collect();
-
-        let serialized =
-            serde_json::to_vec(&points).map_err(|e| AgentMemoryError::IoError(e.to_string()))?;
-
-        Ok(serialized)
+        memory_helpers::serialize_points(&collection, &all_ids)
     }
 
     /// Replaces procedural memory state from serialized snapshot bytes.
@@ -454,35 +387,11 @@ impl ProceduralMemory {
     /// or persistence operations fail.
     #[allow(deprecated)]
     pub fn deserialize(&self, data: &[u8]) -> Result<(), AgentMemoryError> {
-        if data.is_empty() {
-            return Ok(());
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        if let Some(points) = memory_helpers::deserialize_into_collection(data, &collection)? {
+            memory_helpers::rebuild_stored_ids(&self.stored_ids, &points);
         }
-
-        let points: Vec<Point> =
-            serde_json::from_slice(data).map_err(|e| AgentMemoryError::IoError(e.to_string()))?;
-
-        let collection = self
-            .db
-            .get_collection(&self.collection_name)
-            .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))?;
-
-        clear_existing_points(&collection)?;
-        self.rebuild_stored_ids(&points);
-
-        collection
-            .upsert(points)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-
         Ok(())
-    }
-
-    /// Clears and rebuilds `stored_ids` from a set of deserialized points.
-    fn rebuild_stored_ids(&self, points: &[Point]) {
-        let mut ids = self.stored_ids.write();
-        ids.clear();
-        for point in points {
-            ids.insert(point.id);
-        }
     }
 }
 
@@ -506,16 +415,4 @@ fn extract_procedure_match(point: &Point, score: f32) -> Option<ProcedureMatch> 
         confidence,
         score,
     })
-}
-
-/// Removes all existing points from a collection.
-#[allow(deprecated)]
-fn clear_existing_points(collection: &crate::Collection) -> Result<(), AgentMemoryError> {
-    let existing_ids = collection.all_ids();
-    if !existing_ids.is_empty() {
-        collection
-            .delete(&existing_ids)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-    }
-    Ok(())
 }

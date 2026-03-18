@@ -19,8 +19,8 @@ use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
-    execute_search_request, finish_search_cb_status, finish_search_ids, finish_search_with_cb,
-    parse_filter_or_400, record_circuit_breaker, validate_query_dimension,
+    execute_search_request, finish_search_cb_status, finish_search_ids_with_cb,
+    finish_search_with_cb, parse_filter_or_400, validate_query_dimension,
 };
 
 #[allow(unused_imports)]
@@ -243,6 +243,5 @@ pub async fn search_ids(
         }
     };
 
-    record_circuit_breaker(&collection, &search_result);
-    finish_search_ids(&state, &name, start, search_result)
+    finish_search_ids_with_cb(&state, &name, start, &collection, search_result)
 }
