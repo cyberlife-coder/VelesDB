@@ -54,7 +54,7 @@ jobs:
         run: cargo bench -p velesdb-core --bench scalability_quick --features internal-bench -- --noplot
 
       - name: Upload results
-        uses: actions/upload-artifact@ea165f8d65b6db9a6b7c67d0a616a1a049718a22 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: scalability-results
           path: target/criterion/

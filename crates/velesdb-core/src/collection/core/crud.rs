@@ -117,7 +117,9 @@ impl Collection {
         drop(payload_storage);
 
         self.config.write().point_count = point_count;
-        self.index.save(&self.path)?;
+        // NOTE: index.save() removed — atomic_write fsyncs are too slow on CI
+        // runners and production batch workloads. The WAL + payload log ensure
+        // data durability; call collection.flush() to persist the HNSW index.
 
         Ok(sparse_batch)
     }

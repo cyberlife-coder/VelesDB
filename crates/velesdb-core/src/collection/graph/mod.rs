@@ -47,7 +47,6 @@ mod label_table_tests;
 mod memory_pool;
 mod metrics;
 mod node;
-pub(crate) mod persistence;
 mod property_index;
 mod range_index;
 mod schema;
