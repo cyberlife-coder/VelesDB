@@ -27,19 +27,45 @@ impl SelectItemAccumulator {
     }
 
     fn into_select_columns(self) -> SelectColumns {
-        let has_sim = !self.similarity_scores.is_empty();
-        let has_qw = !self.qualified_wildcards.is_empty();
-        let has_cols = !self.columns.is_empty();
-        let has_aggs = !self.aggregations.is_empty();
+        let type_count = self.count_nonempty_types();
 
-        // Single-type shorthand variants
-        if !has_sim && !has_qw && !has_aggs && has_cols {
+        // Single-type shorthand: exactly one kind of item present
+        if type_count == 1 {
+            return self.into_single_type();
+        }
+
+        // Mixed: 2+ item types
+        SelectColumns::Mixed {
+            columns: self.columns,
+            aggregations: self.aggregations,
+            similarity_scores: self.similarity_scores,
+            qualified_wildcards: self.qualified_wildcards,
+        }
+    }
+
+    /// Counts how many distinct item types are present.
+    fn count_nonempty_types(&self) -> usize {
+        [
+            !self.columns.is_empty(),
+            !self.aggregations.is_empty(),
+            !self.similarity_scores.is_empty(),
+            !self.qualified_wildcards.is_empty(),
+        ]
+        .iter()
+        .filter(|&&b| b)
+        .count()
+    }
+
+    /// Converts when exactly one item type is present.
+    /// Falls back to `Mixed` for multi-element similarity/wildcard.
+    fn into_single_type(self) -> SelectColumns {
+        if !self.columns.is_empty() {
             return SelectColumns::Columns(self.columns);
         }
-        if !has_sim && !has_qw && has_aggs && !has_cols {
+        if !self.aggregations.is_empty() {
             return SelectColumns::Aggregations(self.aggregations);
         }
-        if has_sim && !has_qw && !has_aggs && !has_cols && self.similarity_scores.len() == 1 {
+        if self.similarity_scores.len() == 1 {
             return SelectColumns::SimilarityScore(
                 self.similarity_scores
                     .into_iter()
@@ -47,7 +73,7 @@ impl SelectItemAccumulator {
                     .expect("checked len==1"),
             );
         }
-        if !has_sim && has_qw && !has_aggs && !has_cols && self.qualified_wildcards.len() == 1 {
+        if self.qualified_wildcards.len() == 1 {
             return SelectColumns::QualifiedWildcard(
                 self.qualified_wildcards
                     .into_iter()
@@ -55,8 +81,7 @@ impl SelectItemAccumulator {
                     .expect("checked len==1"),
             );
         }
-
-        // Mixed: any combination of 2+ item types
+        // Multiple similarity scores or wildcards without other types → Mixed
         SelectColumns::Mixed {
             columns: self.columns,
             aggregations: self.aggregations,
