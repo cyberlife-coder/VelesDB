@@ -133,6 +133,32 @@ try {
     $errors += "TODO-Governance"
 }
 
+# ============================================================================
+# Check: Codacy CLI static analysis (WSL required)
+# ============================================================================
+Write-Step "Check: Codacy CLI static analysis"
+try {
+    $wslCheck = wsl -- bash -c "which codacy-cli 2>/dev/null" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $codacyOutput = wsl -- bash -c "cd /mnt/d/Projets-dev/velesDB/velesdb-core && codacy-cli analyze 2>&1"
+        if ($LASTEXITCODE -ne 0) { throw "Codacy CLI failed" }
+        $findingsLine = $codacyOutput | Select-String "findings\." | Select-Object -Last 1
+        if ($findingsLine -match "0 findings") {
+            Write-Success "Codacy CLI: 0 findings"
+        } else {
+            Write-Fail "Codacy CLI found issues:"
+            Write-Output $findingsLine
+            $errors += "CodacyCLI"
+        }
+    } else {
+        Write-Warn "Codacy CLI not installed in WSL - skipping"
+        Write-Output "   Install: https://docs.codacy.com/related-tools/local-analysis/client-side-tools/"
+    }
+} catch {
+    Write-Fail "Codacy CLI analysis failed!"
+    $errors += "CodacyCLI"
+}
+
 if ($Quick) {
     Write-Warn "Quick mode - skipping tests and security audit"
 } else {

@@ -311,7 +311,7 @@ class GraphRetriever(BaseRetriever):
         retrieval_mode = "graph_expanded" if graph_available else "vector_fallback"
         result_docs: List[Document] = []
 
-        for doc_id, (doc, score) in seed_docs.items():
+        for _doc_id, (doc, score) in seed_docs.items():
             doc.metadata["graph_depth"] = 0
             doc.metadata["relevance_score"] = score
             doc.metadata["retrieval_mode"] = retrieval_mode

@@ -12,6 +12,9 @@
 
 mod growth;
 
+#[cfg(test)]
+mod growth_tests;
+
 /// Node variants for the Compressed Adaptive Radix Tree.
 // Reason: Node256 is larger than other variants by design for high-degree vertices
 #[derive(Debug, Clone)]

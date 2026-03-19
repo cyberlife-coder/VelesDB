@@ -8,6 +8,8 @@ mod accessors;
 mod crud;
 mod lifecycle;
 mod search;
+#[cfg(test)]
+mod search_tests;
 
 use crate::collection::types::Collection;
 

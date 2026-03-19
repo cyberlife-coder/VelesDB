@@ -23,7 +23,6 @@ MAX_SPARSE_VECTOR_SIZE = 100_000  # Max entries in a sparse vector
 
 class SecurityError(ValueError):
     """Raised when a security validation fails."""
-    pass
 
 
 def validate_path(path: str) -> str:

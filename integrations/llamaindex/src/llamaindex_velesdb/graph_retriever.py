@@ -327,7 +327,7 @@ class GraphRetriever(BaseRetriever):
         retrieval_mode = "graph_expanded" if graph_available else "vector_fallback"
         results: List[NodeWithScore] = []
 
-        for node_id, nws in seed_map.items():
+        for _node_id, nws in seed_map.items():
             nws.node.metadata["graph_depth"] = 0
             nws.node.metadata["retrieval_mode"] = retrieval_mode
             results.append(nws)

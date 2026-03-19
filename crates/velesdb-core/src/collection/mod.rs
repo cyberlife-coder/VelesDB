@@ -37,6 +37,9 @@ mod vector_collection;
 mod tests;
 
 #[cfg(test)]
+mod metadata_collection_tests;
+
+#[cfg(test)]
 mod metadata_only_tests;
 
 #[cfg(test)]

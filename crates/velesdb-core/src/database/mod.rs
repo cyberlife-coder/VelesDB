@@ -35,6 +35,8 @@ mod collection_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod database_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod graph_ops_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod stats_tests;

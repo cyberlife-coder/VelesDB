@@ -82,11 +82,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
       - name: Cache apt packages
-        uses: awalsh128/cache-apt-pkgs-action@v1
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@401aff9a7a08acb9d27b64936a90db81024cff97 # v2.8.2
         with:
           shared-key: "validate-all"
       - name: Run workspace tests
@@ -274,7 +274,7 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
-      - uses: PyO3/maturin-action@v1
+      - uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           target: ${{ matrix.target }}
           working-directory: crates/velesdb-python

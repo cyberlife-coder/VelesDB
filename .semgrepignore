@@ -1,0 +1,73 @@
+# =============================================================================
+# VelesDB — Semgrep/Opengrep Ignore Configuration
+# =============================================================================
+#
+# Mirrors .codacy.yml exclude_paths for opengrep/semgrep, which does NOT
+# read .codacy.yml exclusions. Every entry has a documented rationale.
+#
+# Maintainer: Julien L.
+# Last reviewed: 2026-03-19
+# =============================================================================
+
+# --- Test files (different quality standards, assert is idiomatic) ---
+crates/**/src/**/*_tests.rs
+crates/**/src/**/*_test.rs
+crates/**/src/**/tests.rs
+crates/**/tests/
+sdks/**/tests/
+sdks/**/__tests__/
+# Catch-all for any *_tests.rs not under src/ subdirs
+*_tests.rs
+
+# --- Benchmark harnesses (criterion, perf code) ---
+crates/**/benches/
+
+# --- Non-production code ---
+conformance/
+demos/
+docs/
+scripts/
+examples/
+benchmarks/
+fuzz/
+
+# --- Audited unsafe code (SAFETY comments enforced by CI script) ---
+# See docs/SOUNDNESS.md for full audit. CI: scripts/verify_unsafe_safety_template.py
+crates/velesdb-core/src/simd_native/
+crates/velesdb-core/src/index/hnsw/native/graph/
+crates/velesdb-core/src/perf_optimizations.rs
+crates/velesdb-core/src/storage/mmap.rs
+crates/velesdb-core/src/storage/compaction.rs
+crates/velesdb-core/src/storage/guard.rs
+crates/velesdb-core/src/storage/vector_bytes.rs
+crates/velesdb-core/src/index/hnsw/index/mod.rs
+crates/velesdb-core/src/index/hnsw/index/vacuum.rs
+crates/velesdb-core/src/index/hnsw/vector_store.rs
+crates/velesdb-core/src/collection/graph/memory_pool/mod.rs
+# SIMD NEON intrinsics (ARM equivalent of AVX2)
+crates/velesdb-core/src/simd_neon.rs
+crates/velesdb-core/src/simd_neon_prefetch.rs
+# Allocation guard (RAII-guarded aligned alloc/dealloc)
+crates/velesdb-core/src/alloc_guard.rs
+# SIMD trigram (AVX2/NEON distance in trigram index)
+crates/velesdb-core/src/index/trigram/simd.rs
+# Internal benchmark helper (exposes internals, not production)
+crates/velesdb-core/src/internal_bench.rs
+
+# --- FFI bindings (PyO3, JNI, wasm-bindgen) ---
+crates/velesdb-python/
+crates/velesdb-mobile/
+crates/velesdb-wasm/
+
+# --- Non-project directories ---
+.venv/
+.tmp/
+node_modules/
+.claude/
+target/
+
+# --- Generated/build files ---
+crates/**/build.rs
+
+# --- CI workflows (dtolnay/rust-toolchain@stable is intentional) ---
+.github/

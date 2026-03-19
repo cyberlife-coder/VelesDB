@@ -146,7 +146,7 @@ class VelesDBChatMemory(BaseChatMemory):
     def _events_to_messages(self, events: List) -> List[BaseMessage]:
         """Convert episodic events to LangChain messages."""
         messages = []
-        for event_id, description, timestamp in events:
+        for _event_id, description, _timestamp in events:
             try:
                 data = json.loads(description)
                 role = data.get("role", "human")
@@ -165,7 +165,7 @@ class VelesDBChatMemory(BaseChatMemory):
     def _events_to_string(self, events: List) -> str:
         """Convert episodic events to formatted string."""
         lines = []
-        for event_id, description, timestamp in events:
+        for _event_id, description, _timestamp in events:
             try:
                 data = json.loads(description)
                 role = data.get("role", "human")

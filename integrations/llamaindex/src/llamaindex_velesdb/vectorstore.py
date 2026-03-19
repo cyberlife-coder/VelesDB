@@ -13,7 +13,6 @@ from typing import Any, List, Optional
 from llama_index.core.schema import BaseNode, TextNode
 from llama_index.core.vector_stores.types import (
     BasePydanticVectorStore,
-    VectorStoreQuery,
     VectorStoreQueryResult,
 )
 from pydantic import ConfigDict, PrivateAttr
@@ -22,14 +21,10 @@ import velesdb
 
 from llamaindex_velesdb.security import (
     validate_path,
-    validate_k,
-    validate_text,
-    validate_query,
     validate_metric,
     validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
-    validate_weight,
     validate_sparse_vector,
 )
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter

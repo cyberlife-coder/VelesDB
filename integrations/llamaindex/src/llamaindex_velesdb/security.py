@@ -24,7 +24,6 @@ DEFAULT_TIMEOUT_MS = 30_000  # 30 seconds max timeout
 
 class SecurityError(ValueError):
     """Raised when a security validation fails."""
-    pass
 
 
 def validate_path(path: str) -> str:

@@ -10,7 +10,6 @@ import logging
 import warnings
 from typing import Any, List, Optional
 
-from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
