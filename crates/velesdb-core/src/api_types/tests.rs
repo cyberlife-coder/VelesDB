@@ -463,7 +463,7 @@ fn test_default_index_type() {
 
 #[test]
 fn test_velesql_contract_version() {
-    assert_eq!(VELESQL_CONTRACT_VERSION, "2.1.0");
+    assert_eq!(VELESQL_CONTRACT_VERSION, "3.0.0");
 }
 
 #[test]

@@ -54,6 +54,7 @@ fn test_parser_groupby_with_aggregations() {
         crate::velesql::SelectColumns::Mixed {
             columns,
             aggregations,
+            ..
         } => {
             assert_eq!(columns.len(), 1); // category
             assert_eq!(aggregations.len(), 3); // COUNT, SUM, AVG

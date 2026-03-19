@@ -550,7 +550,7 @@ async fn test_velesql_query() {
     assert!(json["timing_ms"].is_number());
     assert!(json["took_ms"].is_number());
     assert!(json["rows_returned"].is_number());
-    assert_eq!(json["meta"]["velesql_contract_version"], "2.1.0");
+    assert_eq!(json["meta"]["velesql_contract_version"], "3.0.0");
     assert!(json["meta"]["count"].is_number());
 }
 
@@ -653,7 +653,7 @@ async fn test_aggregate_endpoint_returns_contract_meta() {
         .expect("Failed to read body");
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
     assert!(json["result"].is_array() || json["result"].is_object());
-    assert_eq!(json["meta"]["velesql_contract_version"], "2.1.0");
+    assert_eq!(json["meta"]["velesql_contract_version"], "3.0.0");
     assert!(json["meta"]["count"].is_number());
 }
 
@@ -1403,7 +1403,8 @@ async fn test_velesql_where_filter() {
     // Should only return tech category items (ids 1, 2, 4)
     assert_eq!(results.len(), 3);
     for r in results {
-        assert_eq!(r["payload"]["category"], "tech");
+        // v3.0.0: projected rows have flattened payload fields (no wrapper)
+        assert_eq!(r["category"], "tech");
     }
 }
 
@@ -1837,7 +1838,8 @@ async fn test_query_insert_metadata_only_via_query_endpoint() {
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
     assert_eq!(json["rows_returned"], 1);
     assert_eq!(json["results"][0]["id"], 1);
-    assert_eq!(json["results"][0]["payload"]["name"], "Alice");
+    // v3.0.0: projected rows have flattened payload fields
+    assert_eq!(json["results"][0]["name"], "Alice");
 }
 
 #[tokio::test]
@@ -1909,7 +1911,8 @@ async fn test_query_update_metadata_only_via_query_endpoint() {
         .expect("Failed to read body");
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
     assert_eq!(json["rows_returned"], 1);
-    assert_eq!(json["results"][0]["payload"]["age"], 31);
+    // v3.0.0: projected rows have flattened payload fields
+    assert_eq!(json["results"][0]["age"], 31);
 }
 // =============================================================================
 // Graph E2E Tests (EPIC-011/US-001)

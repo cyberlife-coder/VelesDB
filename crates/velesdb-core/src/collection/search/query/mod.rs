@@ -51,6 +51,7 @@ mod ordering_tests;
 pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;
+pub mod projection;
 pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;

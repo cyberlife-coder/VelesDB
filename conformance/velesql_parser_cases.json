@@ -135,6 +135,42 @@
       "id": "P026",
       "query": "SELECT * FROM t WHERE vector SPARSE_NEAR {} LIMIT 5",
       "should_parse": false
+    },
+    {
+      "id": "P027",
+      "query": "SELECT similarity() AS score FROM t WHERE vector NEAR $v LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P028",
+      "query": "SELECT similarity() FROM t WHERE vector NEAR $v LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P029",
+      "query": "SELECT ctx.* FROM t AS ctx WHERE vector NEAR $v LIMIT 10",
+      "should_parse": true,
+      "from_alias": ["ctx"]
+    },
+    {
+      "id": "P030",
+      "query": "SELECT title, similarity() AS relevance FROM t WHERE vector NEAR $v LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P031",
+      "query": "SELECT * FROM t WHERE vector NEAR $v ORDER BY similarity() LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P032",
+      "query": "SELECT * FROM t WHERE vector NEAR $v ORDER BY similarity() ASC LIMIT 10",
+      "should_parse": true
+    },
+    {
+      "id": "P033",
+      "query": "SELECT * FROM t WHERE vector NEAR $v ORDER BY similarity() DESC, created_at ASC LIMIT 10",
+      "should_parse": true
     }
   ]
 }

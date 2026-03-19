@@ -13,7 +13,7 @@ pub use requests::*;
 pub use responses::*;
 
 /// Canonical `VelesQL` contract version for REST responses.
-pub const VELESQL_CONTRACT_VERSION: &str = "2.1.0";
+pub const VELESQL_CONTRACT_VERSION: &str = "3.0.0";
 
 // ============================================================================
 // Shared default value functions

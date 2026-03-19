@@ -129,11 +129,16 @@ pub enum QueryType {
 }
 
 /// Response from `VelesQL` query execution.
+///
+/// Results are projected rows: the shape depends on the SELECT clause.
+/// - `SELECT *` → `{id, field1, field2, ...}` (no vector)
+/// - `SELECT col1, col2` → `{col1, col2}`
+/// - `SELECT similarity() AS score, title` → `{score, title}`
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct QueryResponse {
-    /// Query results.
-    pub results: Vec<SearchResultResponse>,
+    /// Projected result rows. Shape depends on SELECT clause.
+    pub results: Vec<serde_json::Value>,
     /// Query execution time in milliseconds.
     pub timing_ms: f64,
     /// Query execution time in whole milliseconds (compat helper).

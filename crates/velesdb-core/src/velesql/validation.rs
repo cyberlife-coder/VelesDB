@@ -1,6 +1,6 @@
 //! Query validation for VelesQL (EPIC-044 US-007).
 
-use super::ast::{Condition, Query};
+use super::ast::{Condition, OrderByExpr, Query, SelectColumns};
 use super::error::{ParseError, ParseErrorKind};
 use std::fmt;
 
@@ -111,6 +111,10 @@ pub enum ValidationErrorKind {
     ReservedKeyword,
     /// Invalid string escaping.
     StringEscaping,
+    /// similarity() in SELECT/ORDER BY without a vector search context.
+    SimilarityWithoutContext,
+    /// Qualified wildcard alias not declared in FROM/JOIN.
+    UndeclaredAlias,
 }
 
 impl ValidationErrorKind {
@@ -123,6 +127,8 @@ impl ValidationErrorKind {
             Self::NotSimilarity => "V003",
             Self::ReservedKeyword => "V004",
             Self::StringEscaping => "V005",
+            Self::SimilarityWithoutContext => "V006",
+            Self::UndeclaredAlias => "V007",
         }
     }
 
@@ -135,6 +141,10 @@ impl ValidationErrorKind {
             Self::NotSimilarity => "NOT similarity() requires full scan",
             Self::ReservedKeyword => "Reserved keyword requires escaping",
             Self::StringEscaping => "Invalid string escaping",
+            Self::SimilarityWithoutContext => {
+                "similarity() requires a vector search context (NEAR or similarity() in WHERE)"
+            }
+            Self::UndeclaredAlias => "Qualified wildcard references an undeclared alias",
         }
     }
 }
@@ -227,6 +237,100 @@ impl QueryValidator {
             if let Some(ref condition) = compound.right.where_clause {
                 Self::validate_condition(condition, compound.right.limit, config)?;
             }
+        }
+
+        Self::validate_similarity_context(&query.select)?;
+        Self::validate_qualified_wildcards(&query.select)?;
+
+        if let Some(ref compound) = query.compound {
+            Self::validate_similarity_context(&compound.right)?;
+            Self::validate_qualified_wildcards(&compound.right)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates that `similarity()` in SELECT or ORDER BY has a score context.
+    fn validate_similarity_context(
+        stmt: &super::ast::SelectStatement,
+    ) -> Result<(), ValidationError> {
+        let has_score_context = stmt
+            .where_clause
+            .as_ref()
+            .is_some_and(Self::has_score_producing_condition);
+
+        if !has_score_context && Self::select_uses_similarity(&stmt.columns) {
+            return Err(ValidationError::new(
+                ValidationErrorKind::SimilarityWithoutContext,
+                None,
+                "similarity()",
+                "Add a vector NEAR or similarity() predicate in WHERE to provide a score context",
+            ));
+        }
+
+        if !has_score_context {
+            if let Some(ref order_by) = stmt.order_by {
+                let uses_bare = order_by
+                    .iter()
+                    .any(|ob| ob.expr == OrderByExpr::SimilarityBare);
+                if uses_bare {
+                    return Err(ValidationError::new(
+                        ValidationErrorKind::SimilarityWithoutContext,
+                        None,
+                        "ORDER BY similarity()",
+                        "Add a vector NEAR or similarity() predicate in WHERE to provide a score context",
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns true if `SelectColumns` references `similarity()`.
+    fn select_uses_similarity(columns: &SelectColumns) -> bool {
+        match columns {
+            SelectColumns::SimilarityScore(_) => true,
+            SelectColumns::Mixed {
+                similarity_scores, ..
+            } => !similarity_scores.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Validates that qualified wildcard aliases are declared in FROM/JOIN.
+    fn validate_qualified_wildcards(
+        stmt: &super::ast::SelectStatement,
+    ) -> Result<(), ValidationError> {
+        let aliases = &stmt.from_alias;
+        let from_name = &stmt.from;
+
+        let check_alias = |alias: &str| -> Result<(), ValidationError> {
+            let is_declared = aliases.iter().any(|a| a == alias) || alias == from_name;
+            if !is_declared {
+                return Err(ValidationError::new(
+                    ValidationErrorKind::UndeclaredAlias,
+                    None,
+                    format!("{alias}.*"),
+                    format!(
+                        "Alias '{alias}' is not declared in FROM or JOIN. Use FROM ... AS {alias}"
+                    ),
+                ));
+            }
+            Ok(())
+        };
+
+        match &stmt.columns {
+            SelectColumns::QualifiedWildcard(alias) => check_alias(alias)?,
+            SelectColumns::Mixed {
+                qualified_wildcards,
+                ..
+            } => {
+                for alias in qualified_wildcards {
+                    check_alias(alias)?;
+                }
+            }
+            _ => {}
         }
 
         Ok(())
@@ -354,6 +458,24 @@ impl QueryValidator {
                 (1 + d, l)
             }
             _ => (1, 0),
+        }
+    }
+
+    /// Returns true if the condition contains any score-producing search
+    /// (vector, similarity, fused, or sparse).
+    fn has_score_producing_condition(condition: &Condition) -> bool {
+        match condition {
+            Condition::Similarity(_)
+            | Condition::VectorSearch(_)
+            | Condition::VectorFusedSearch(_)
+            | Condition::SparseVectorSearch(_) => true,
+            Condition::And(l, r) | Condition::Or(l, r) => {
+                Self::has_score_producing_condition(l) || Self::has_score_producing_condition(r)
+            }
+            Condition::Not(inner) | Condition::Group(inner) => {
+                Self::has_score_producing_condition(inner)
+            }
+            _ => false,
         }
     }
 

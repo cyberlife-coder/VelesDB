@@ -72,6 +72,7 @@ impl Parser {
                 };
                 format!("similarity({}, {vec_str})", s.field)
             }
+            OrderByExpr::SimilarityBare => "similarity()".to_string(),
             OrderByExpr::Aggregate(a) => format!("{:?}()", a.function_type),
         }
     }

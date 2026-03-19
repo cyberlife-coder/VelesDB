@@ -111,15 +111,9 @@ export async function query(
     };
   }
 
+  // v3.0.0: Results are projected rows — shape depends on SELECT clause.
   return {
-    results: (rawData?.results ?? []).map((r: Record<string, unknown>) => ({
-      nodeId: transport.parseNodeId(r.id ?? r.node_id ?? r.nodeId),
-      vectorScore: (r.score ?? r.vector_score ?? r.vectorScore) as number | null,
-      graphScore: (r.graph_score ?? r.graphScore) as number | null,
-      fusedScore: (r.score ?? r.fused_score ?? r.fusedScore ?? 0) as number,
-      bindings: (r.payload ?? r.bindings) as Record<string, unknown> ?? {},
-      columnData: (r.column_data ?? r.columnData) as Record<string, unknown> | null,
-    })),
+    results: (rawData?.results ?? []) as Record<string, unknown>[],
     stats: {
       executionTimeMs: rawData?.timing_ms ?? 0,
       strategy: 'select',

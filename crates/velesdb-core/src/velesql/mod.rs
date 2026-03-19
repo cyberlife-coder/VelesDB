@@ -76,6 +76,8 @@ mod parser_tests;
 mod planner;
 #[cfg(all(test, feature = "persistence"))]
 mod planner_tests;
+#[cfg(test)]
+mod projection_parser_tests;
 #[cfg(feature = "persistence")]
 mod query_stats;
 mod validation;
@@ -157,6 +159,7 @@ pub use ast::{
     SetOperator,
     SimilarityCondition,
     SimilarityOrderBy,
+    SimilarityScoreExpr,
     SparseVectorExpr,
     SparseVectorSearch,
     Subquery,

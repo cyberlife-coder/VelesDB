@@ -178,6 +178,7 @@ impl ParsedStatement {
             SelectColumns::Mixed {
                 columns,
                 aggregations,
+                ..
             } => {
                 let mut result: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 result.extend(
@@ -187,6 +188,13 @@ impl ParsedStatement {
                 );
                 result
             }
+            SelectColumns::SimilarityScore(expr) => {
+                vec![expr
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| "similarity".to_string())]
+            }
+            SelectColumns::QualifiedWildcard(alias) => vec![format!("{alias}.*")],
         }
     }
 

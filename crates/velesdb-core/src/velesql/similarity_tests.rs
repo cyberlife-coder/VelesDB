@@ -307,7 +307,7 @@ mod tests {
                 assert_eq!(sim.field, "embedding");
                 assert!(matches!(sim.vector, VectorExpr::Parameter(ref name) if name == "v"));
             }
-            crate::velesql::OrderByExpr::Field(_) | crate::velesql::OrderByExpr::Aggregate(_) => {
+            _ => {
                 panic!("Expected OrderByExpr::Similarity")
             }
         }
@@ -364,8 +364,7 @@ mod tests {
             crate::velesql::OrderByExpr::Field(name) => {
                 assert_eq!(name, "created_at");
             }
-            crate::velesql::OrderByExpr::Similarity(_)
-            | crate::velesql::OrderByExpr::Aggregate(_) => panic!("Expected OrderByExpr::Field"),
+            _ => panic!("Expected OrderByExpr::Field"),
         }
     }
 

@@ -29,7 +29,7 @@ pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
     Column, DistinctMode, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement,
-    SimilarityOrderBy,
+    SimilarityOrderBy, SimilarityScoreExpr,
 };
 pub use train::TrainStatement;
 pub use values::{

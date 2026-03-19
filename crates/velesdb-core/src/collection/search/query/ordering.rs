@@ -103,9 +103,23 @@ impl Collection {
             indices.iter().map(|&i| results[i].clone()).collect();
         results.clone_from_slice(&sorted_results);
 
-        if let Some(scores) = similarity_scores_map.get(&0) {
-            for (i, result) in results.iter_mut().enumerate() {
-                result.score = scores[indices[i]];
+        // Write back the score from the first similarity column (any position).
+        let first_sim_idx = order_by
+            .iter()
+            .enumerate()
+            .find(|(_, ob)| {
+                matches!(
+                    ob.expr,
+                    crate::velesql::OrderByExpr::Similarity(_)
+                        | crate::velesql::OrderByExpr::SimilarityBare
+                )
+            })
+            .map(|(idx, _)| idx);
+        if let Some(sim_idx) = first_sim_idx {
+            if let Some(scores) = similarity_scores_map.get(&sim_idx) {
+                for (i, result) in results.iter_mut().enumerate() {
+                    result.score = scores[indices[i]];
+                }
             }
         }
 
@@ -122,13 +136,21 @@ impl Collection {
         use crate::velesql::OrderByExpr;
         let mut map = std::collections::HashMap::new();
         for (idx, ob) in order_by.iter().enumerate() {
-            if let OrderByExpr::Similarity(sim) = &ob.expr {
-                let order_vec = Self::resolve_vector(&sim.vector, params)?;
-                let scores: Vec<f32> = results
-                    .iter()
-                    .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
-                    .collect();
-                map.insert(idx, scores);
+            match &ob.expr {
+                OrderByExpr::Similarity(sim) => {
+                    let order_vec = Self::resolve_vector(&sim.vector, params)?;
+                    let scores: Vec<f32> = results
+                        .iter()
+                        .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
+                        .collect();
+                    map.insert(idx, scores);
+                }
+                OrderByExpr::SimilarityBare => {
+                    // Zero-arg similarity(): use existing search scores (no recompute).
+                    let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+                    map.insert(idx, scores);
+                }
+                OrderByExpr::Field(_) | OrderByExpr::Aggregate(_) => {}
             }
         }
         Ok(map)
@@ -146,7 +168,7 @@ impl Collection {
         use crate::velesql::OrderByExpr;
         for (idx, ob) in order_by.iter().enumerate() {
             let cmp = match &ob.expr {
-                OrderByExpr::Similarity(_) => similarity_scores
+                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => similarity_scores
                     .get(&idx)
                     .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
                 OrderByExpr::Field(field_name) => {
@@ -165,7 +187,10 @@ impl Collection {
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
             };
 
-            let is_similarity = matches!(&ob.expr, OrderByExpr::Similarity(_));
+            let is_similarity = matches!(
+                &ob.expr,
+                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
+            );
             let directed_cmp =
                 Self::apply_sort_direction(cmp, ob.descending, is_similarity, higher_is_better);
             if directed_cmp != Ordering::Equal {

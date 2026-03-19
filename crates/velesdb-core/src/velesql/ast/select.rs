@@ -67,13 +67,30 @@ pub enum SelectColumns {
     Columns(Vec<Column>),
     /// Select aggregate functions.
     Aggregations(Vec<AggregateFunction>),
-    /// Mixed: columns + aggregations.
+    /// Mixed: columns + aggregations + similarity scores + qualified wildcards.
     Mixed {
         /// Regular columns.
         columns: Vec<Column>,
         /// Aggregate functions.
         aggregations: Vec<AggregateFunction>,
+        /// similarity() score expressions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        similarity_scores: Vec<SimilarityScoreExpr>,
+        /// Qualified wildcards (e.g., `ctx.*`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        qualified_wildcards: Vec<String>,
     },
+    /// Select similarity() score only (zero-arg form).
+    SimilarityScore(SimilarityScoreExpr),
+    /// Select alias.* (qualified wildcard).
+    QualifiedWildcard(String),
+}
+
+/// A `similarity()` zero-arg expression in SELECT, with optional alias.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarityScoreExpr {
+    /// Optional alias (e.g., `similarity() AS relevance`).
+    pub alias: Option<String>,
 }
 
 /// A column reference.
@@ -119,8 +136,10 @@ pub struct SelectOrderBy {
 pub enum OrderByExpr {
     /// Simple field reference.
     Field(String),
-    /// Similarity function.
+    /// Similarity function with field and vector args.
     Similarity(SimilarityOrderBy),
+    /// Similarity zero-arg: uses pre-computed search score.
+    SimilarityBare,
     /// Aggregate function.
     Aggregate(AggregateFunction),
 }

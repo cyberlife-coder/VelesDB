@@ -21,14 +21,13 @@ describe('VelesQL v2.0', () => {
 
   const mockQueryResponse: QueryResponse = {
     results: [
-      { nodeId: 1, payload: { category: 'tech', count: 5 }, fusedScore: 0.95 },
-      { nodeId: 2, payload: { category: 'science', count: 3 }, fusedScore: 0.85 },
+      { id: 1, category: 'tech', count: 5 },
+      { id: 2, category: 'science', count: 3 },
     ],
     stats: {
-      totalResults: 2,
       executionTimeMs: 1.5,
-      vectorSearchMs: 0.8,
-      graphTraversalMs: 0.5,
+      strategy: 'select',
+      scannedNodes: 2,
     },
   };
 

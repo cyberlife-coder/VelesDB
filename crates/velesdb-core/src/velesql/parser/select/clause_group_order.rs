@@ -141,6 +141,9 @@ impl Parser {
                         true,
                     ));
                 }
+                Rule::order_by_similarity_bare => {
+                    return Ok((OrderByExpr::SimilarityBare, true));
+                }
                 Rule::aggregate_function => {
                     return Ok((
                         OrderByExpr::Aggregate(Self::parse_aggregate_function_only(inner_pair)?),

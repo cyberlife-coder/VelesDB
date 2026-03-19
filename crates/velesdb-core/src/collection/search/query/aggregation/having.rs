@@ -35,7 +35,7 @@ impl Collection {
                     OrderByExpr::Field(name) => name.clone(),
                     OrderByExpr::Aggregate(agg) => Self::aggregation_result_key(agg),
                     // Similarity ordering not applicable to grouped aggregate rows.
-                    OrderByExpr::Similarity(_) => return None,
+                    OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => return None,
                 };
                 Some((column, clause.descending))
             })

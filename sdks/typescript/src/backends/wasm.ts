@@ -504,15 +504,9 @@ export class WasmBackend implements IVelesDBBackend {
       k
     ) as Array<any>;
 
+    // v3.0.0: WASM query returns projected rows directly.
     return {
-      results: raw.map((r: Record<string, unknown>) => ({
-        nodeId: (r.nodeId ?? r.node_id) as bigint | number,
-        vectorScore: ((r.vectorScore ?? r.vector_score) as number | null) ?? null,
-        graphScore: ((r.graphScore ?? r.graph_score) as number | null) ?? null,
-        fusedScore: ((r.fusedScore ?? r.fused_score) as number) ?? 0,
-        bindings: (r.bindings as Record<string, unknown>) ?? {},
-        columnData: ((r.columnData ?? r.column_data) as Record<string, unknown> | null) ?? null,
-      })),
+      results: raw as Record<string, unknown>[],
       stats: {
         executionTimeMs: 0,
         strategy: 'wasm-query',

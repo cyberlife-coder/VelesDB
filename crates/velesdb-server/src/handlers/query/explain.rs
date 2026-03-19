@@ -82,10 +82,11 @@ fn detect_explain_features(select: &velesdb_core::velesql::SelectStatement) -> E
         has_filter: select.where_clause.is_some() && !has_vector_search,
         has_order_by: select.order_by.is_some(),
         has_group_by: select.group_by.is_some(),
-        has_aggregation: matches!(
-            &select.columns,
-            SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
-        ),
+        has_aggregation: match &select.columns {
+            SelectColumns::Aggregations(_) => true,
+            SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
+            _ => false,
+        },
         has_join: !select.joins.is_empty(),
         has_fusion: select.fusion_clause.is_some(),
         limit: select.limit,

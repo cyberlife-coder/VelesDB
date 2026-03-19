@@ -129,8 +129,10 @@ column_ref = @{ identifier ~ "." ~ identifier }
 // ORDER BY clause (EPIC-040 US-002: supports columns, aggregates, similarity)
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_by_item ~ ("," ~ order_by_item)* }
 order_by_item = { order_by_expr ~ sort_direction? }
-order_by_expr = { order_by_similarity | aggregate_function | property_access | identifier }
+order_by_expr = { order_by_similarity | order_by_similarity_bare | aggregate_function | property_access | identifier }
 order_by_similarity = { ^"similarity" ~ "(" ~ similarity_field ~ "," ~ vector_value ~ ")" }
+// similarity() zero-arg in ORDER BY: uses pre-computed search score
+order_by_similarity_bare = { ^"similarity" ~ "(" ~ ")" }
 sort_direction = { ^"DESC" | ^"ASC" }
 
 // WITH clause for query-time configuration overrides
@@ -142,9 +144,15 @@ with_value = { string | float | integer | boolean | identifier }
 // Select list: * or mixed items (columns and/or aggregations for GROUP BY)
 select_list = { "*" | select_item_list }
 
-// Mixed select items: columns and aggregations can be mixed (for GROUP BY)
+// Mixed select items: columns, aggregations, similarity(), and qualified wildcards
 select_item_list = { select_item ~ ("," ~ select_item)* }
-select_item = { aggregation_item | column }
+select_item = { similarity_select | aggregation_item | qualified_wildcard | column }
+
+// similarity() zero-arg in SELECT: SELECT similarity() [AS alias]
+similarity_select = { ^"similarity" ~ "(" ~ ")" ~ (^"AS" ~ identifier)? }
+
+// Qualified wildcard: SELECT alias.* (e.g., SELECT ctx.*)
+qualified_wildcard = { identifier ~ "." ~ "*" }
 
 // Aggregate functions: COUNT, SUM, AVG, MIN, MAX
 aggregation_item = { aggregate_function ~ (^"AS" ~ identifier)? }

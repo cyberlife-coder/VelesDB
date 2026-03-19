@@ -14,8 +14,11 @@ pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Ve
     let column_names: Vec<String> = match columns {
         SelectColumns::Columns(cols) => cols.iter().map(|c| c.name.clone()).collect(),
         SelectColumns::Mixed { columns: cols, .. } => cols.iter().map(|c| c.name.clone()).collect(),
-        // All or Aggregations: use full payload or no deduplication
-        SelectColumns::All | SelectColumns::Aggregations(_) => Vec::new(),
+        // All, Aggregations, SimilarityScore, QualifiedWildcard: use full payload or no dedup
+        SelectColumns::All
+        | SelectColumns::Aggregations(_)
+        | SelectColumns::SimilarityScore(_)
+        | SelectColumns::QualifiedWildcard(_) => Vec::new(),
     };
 
     let mut seen: FxHashSet<String> = FxHashSet::default();

@@ -419,7 +419,7 @@ export class VelesDB {
    * `, { q: queryVector });
    * 
    * for (const r of response.results) {
-   *   console.log(`Node ${r.nodeId}: ${r.fusedScore}`);
+   *   console.log(`ID ${r.id}, title: ${r.title}`);
    * }
    * ```
    */

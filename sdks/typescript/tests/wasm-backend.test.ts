@@ -25,14 +25,7 @@ class MockVectorStore {
   text_search = vi.fn(() => [{ id: BigInt(1), score: 0.88, payload: { title: 'Text' } }]);
   hybrid_search = vi.fn(() => [{ id: BigInt(1), score: 0.91, payload: { title: 'Hybrid' } }]);
   query = vi.fn(() => [
-    {
-      nodeId: BigInt(1),
-      vectorScore: 0.9,
-      graphScore: null,
-      fusedScore: 0.9,
-      bindings: { a: 1 },
-      columnData: null,
-    },
+    { id: 1, a: 1 },
   ]);
   multi_query_search = vi.fn(() => [[BigInt(1), 0.95]]);
   remove = vi.fn(() => true);

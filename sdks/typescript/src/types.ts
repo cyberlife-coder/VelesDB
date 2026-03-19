@@ -343,21 +343,15 @@ export interface QueryOptions {
   stream?: boolean;
 }
 
-/** Query result from multi-model VelesQL query */
-export interface QueryResult {
-  /** Node/point ID */
-  nodeId: bigint | number;
-  /** Vector similarity score (if applicable) */
-  vectorScore: number | null;
-  /** Graph relevance score (if applicable) */
-  graphScore: number | null;
-  /** Combined fused score */
-  fusedScore: number;
-  /** Variable bindings from MATCH clause */
-  bindings: Record<string, unknown>;
-  /** Column data from JOIN (if applicable) */
-  columnData: Record<string, unknown> | null;
-}
+/**
+ * Query result row from VelesQL query.
+ *
+ * Shape depends on the SELECT clause:
+ * - `SELECT *` → `{id, field1, field2, ...}` (no vector)
+ * - `SELECT col1, col2` → `{col1, col2}`
+ * - `SELECT similarity() AS score, title` → `{score, title}`
+ */
+export type QueryResult = Record<string, unknown>;
 
 /** Query execution statistics */
 export interface QueryStats {

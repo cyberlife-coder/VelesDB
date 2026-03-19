@@ -7,6 +7,7 @@ pub use explain::{__path_explain, explain};
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
+use velesdb_core::collection::search::query::projection;
 #[cfg(test)]
 use velesdb_core::velesql;
 use velesdb_core::velesql::{Query, SelectColumns};
@@ -14,7 +15,7 @@ use velesdb_core::velesql::{Query, SelectColumns};
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
     AggregationResponse, QueryRequest, QueryResponse, QueryResponseMeta, QueryType,
-    SearchResultResponse, VELESQL_CONTRACT_VERSION,
+    VELESQL_CONTRACT_VERSION,
 };
 use crate::AppState;
 
@@ -22,10 +23,12 @@ use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
 fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
-    matches!(
-        &select.columns,
-        SelectColumns::Aggregations(_) | SelectColumns::Mixed { .. }
-    ) || select.group_by.is_some()
+    let has_aggs = match &select.columns {
+        SelectColumns::Aggregations(_) => true,
+        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
+        _ => false,
+    };
+    has_aggs || select.group_by.is_some()
 }
 
 fn aggregation_result_count(result: &serde_json::Value) -> usize {
@@ -120,7 +123,13 @@ pub async fn query(
         Err(resp) => return resp,
     };
 
-    build_query_response(&state, &collection_name, start, results)
+    build_query_response(
+        &state,
+        &collection_name,
+        start,
+        results,
+        &parsed.select.columns,
+    )
 }
 
 /// Determine the target collection from the parsed query and request body.
@@ -183,28 +192,24 @@ fn execute_standard_query(
     })
 }
 
-/// Build the final query response with timing metrics.
+/// Build the final query response with timing metrics and SQL projection.
 fn build_query_response(
     state: &Arc<AppState>,
     collection_name: &str,
     start: std::time::Instant,
     results: Vec<velesdb_core::SearchResult>,
+    select_columns: &SelectColumns,
 ) -> axum::response::Response {
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
     #[allow(clippy::cast_possible_truncation)]
+    // Reason: timing_ms is always < u64::MAX (query durations < 585 millennia)
     let took_ms = timing_ms.round() as u64;
     notify_query_timing(state, collection_name, start);
-    let rows_returned = results.len();
+    let projected = projection::project_results(&results, select_columns);
+    let rows_returned = projected.len();
 
     Json(QueryResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
-            })
-            .collect(),
+        results: projected,
         timing_ms,
         took_ms,
         rows_returned,
