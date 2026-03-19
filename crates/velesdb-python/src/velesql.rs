@@ -305,7 +305,8 @@ impl ParsedStatement {
                     let dir = if item.descending { "DESC" } else { "ASC" };
                     let col = match &item.expr {
                         velesdb_core::velesql::OrderByExpr::Field(f) => f.clone(),
-                        velesdb_core::velesql::OrderByExpr::Similarity(_) => {
+                        velesdb_core::velesql::OrderByExpr::Similarity(_)
+                        | velesdb_core::velesql::OrderByExpr::SimilarityBare => {
                             "similarity()".to_string()
                         }
                         velesdb_core::velesql::OrderByExpr::Aggregate(agg) => {
