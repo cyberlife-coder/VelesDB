@@ -179,8 +179,8 @@ Le REPL supporte l'autocomplétion avec Tab :
 **Exemples :**
 
 ```
-velesdb> \set search_mode high_recall
-Search mode set to: HighRecall (ef_search=1024)
+velesdb> \set search_mode accurate
+Search mode set to: Accurate (ef_search=512)
 
 velesdb> \set ef_search 512
 ef_search set to: 512
@@ -362,8 +362,8 @@ Collections:
 velesdb> \use products
 Collection 'products' selected.
 
-velesdb[products]> \set search_mode high_recall
-Search mode set to: HighRecall (ef_search=1024)
+velesdb[products]> \set search_mode accurate
+Search mode set to: Accurate (ef_search=512)
 
 velesdb[products]> SELECT * WHERE category = 'electronics' LIMIT 5;
 ┌────────┬─────────────────────┬─────────────┐

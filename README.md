@@ -233,7 +233,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.6.0"}
+# {"status":"ok","version":"1.6.0"}
 ```
 
 > **Full installation guide:** [docs/guides/INSTALLATION.md](docs/guides/INSTALLATION.md) — Linux .deb, Docker, portable archives, mobile builds, WASM, and more.
