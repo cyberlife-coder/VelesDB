@@ -11,21 +11,28 @@ use rustc_hash::FxHashSet;
 /// Uses HashSet for O(n) complexity and preserves insertion order.
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
     // If SELECT *, deduplicate by all payload fields
-    let column_names: Vec<String> = match columns {
-        SelectColumns::Columns(cols) => cols.iter().map(|c| c.name.clone()).collect(),
-        SelectColumns::Mixed { columns: cols, .. } => cols.iter().map(|c| c.name.clone()).collect(),
-        // All, Aggregations, SimilarityScore, QualifiedWildcard: use full payload or no dedup
+    let (column_names, include_score) = match columns {
+        SelectColumns::Columns(cols) => (cols.iter().map(|c| c.name.clone()).collect(), false),
+        SelectColumns::Mixed {
+            columns: cols,
+            similarity_scores,
+            ..
+        } => (
+            cols.iter().map(|c| c.name.clone()).collect(),
+            !similarity_scores.is_empty(),
+        ),
+        SelectColumns::SimilarityScore(_) => (Vec::new(), true),
+        // All, Aggregations, QualifiedWildcard: use full payload or no dedup
         SelectColumns::All
         | SelectColumns::Aggregations(_)
-        | SelectColumns::SimilarityScore(_)
-        | SelectColumns::QualifiedWildcard(_) => Vec::new(),
+        | SelectColumns::QualifiedWildcard(_) => (Vec::new(), false),
     };
 
     let mut seen: FxHashSet<String> = FxHashSet::default();
     results
         .into_iter()
         .filter(|r| {
-            let key = compute_distinct_key(r, &column_names);
+            let key = compute_distinct_key(r, &column_names, include_score);
             seen.insert(key)
         })
         .collect()
@@ -35,10 +42,16 @@ pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Ve
 ///
 /// Uses canonical JSON representation with sorted keys to ensure
 /// logically equal objects produce identical keys.
-pub fn compute_distinct_key(result: &SearchResult, columns: &[String]) -> String {
+/// When `include_score` is true, the similarity score is appended to the key
+/// so rows differing only by score are not collapsed.
+pub fn compute_distinct_key(
+    result: &SearchResult,
+    columns: &[String],
+    include_score: bool,
+) -> String {
     let payload = result.point.payload.as_ref();
 
-    if columns.is_empty() {
+    let mut key = if columns.is_empty() {
         // SELECT * or SELECT DISTINCT *: use full payload as key
         payload.map_or_else(|| "null".to_string(), canonical_json_string)
     } else {
@@ -52,7 +65,14 @@ pub fn compute_distinct_key(result: &SearchResult, columns: &[String]) -> String
             })
             .collect::<Vec<_>>()
             .join("\x1F") // ASCII Unit Separator
+    };
+
+    if include_score {
+        key.push('\x1F');
+        key.push_str(&result.score.to_string());
     }
+
+    key
 }
 
 /// Produce a canonical JSON string with sorted object keys.
@@ -86,14 +106,18 @@ mod tests {
     use crate::point::Point;
 
     fn make_result(id: u64, payload: serde_json::Value) -> SearchResult {
+        make_result_with_score(id, payload, 1.0)
+    }
+
+    fn make_result_with_score(id: u64, payload: serde_json::Value, score: f32) -> SearchResult {
         SearchResult {
             point: Point {
                 id,
-                vector: vec![0.0; 4], // Dummy vector for tests
+                vector: vec![0.0; 4],
                 payload: Some(payload),
                 sparse_vectors: None,
             },
-            score: 1.0,
+            score,
         }
     }
 
@@ -117,14 +141,14 @@ mod tests {
     #[test]
     fn test_compute_distinct_key_empty_columns() {
         let result = make_result(1, serde_json::json!({"a": 1, "b": 2}));
-        let key = compute_distinct_key(&result, &[]);
+        let key = compute_distinct_key(&result, &[], false);
         assert!(key.contains('1')); // Full payload serialized
     }
 
     #[test]
     fn test_compute_distinct_key_specific_columns() {
         let result = make_result(1, serde_json::json!({"name": "Alice", "age": 30}));
-        let key = compute_distinct_key(&result, &["name".to_string()]);
+        let key = compute_distinct_key(&result, &["name".to_string()], false);
         assert!(key.contains("Alice"));
         assert!(!key.contains("30"));
     }
@@ -135,8 +159,8 @@ mod tests {
         let result1 = make_result(1, serde_json::json!({"a": 1, "b": 2}));
         let result2 = make_result(2, serde_json::json!({"b": 2, "a": 1}));
 
-        let key1 = compute_distinct_key(&result1, &[]);
-        let key2 = compute_distinct_key(&result2, &[]);
+        let key1 = compute_distinct_key(&result1, &[], false);
+        let key2 = compute_distinct_key(&result2, &[], false);
 
         // Keys should be identical regardless of original key order
         assert_eq!(
@@ -150,9 +174,56 @@ mod tests {
         let result1 = make_result(1, serde_json::json!({"outer": {"z": 1, "a": 2}}));
         let result2 = make_result(2, serde_json::json!({"outer": {"a": 2, "z": 1}}));
 
-        let key1 = compute_distinct_key(&result1, &[]);
-        let key2 = compute_distinct_key(&result2, &[]);
+        let key1 = compute_distinct_key(&result1, &[], false);
+        let key2 = compute_distinct_key(&result2, &[], false);
 
         assert_eq!(key1, key2, "Nested objects should also be canonicalized");
+    }
+
+    #[test]
+    fn test_distinct_mixed_with_similarity_preserves_different_scores() {
+        let results = vec![
+            make_result_with_score(1, serde_json::json!({"title": "Rust"}), 0.95),
+            make_result_with_score(2, serde_json::json!({"title": "Rust"}), 0.80),
+            make_result_with_score(3, serde_json::json!({"title": "Go"}), 0.70),
+        ];
+
+        let columns = SelectColumns::Mixed {
+            columns: vec![crate::velesql::Column {
+                name: "title".to_string(),
+                alias: None,
+            }],
+            aggregations: vec![],
+            similarity_scores: vec![crate::velesql::SimilarityScoreExpr {
+                alias: Some("score".to_string()),
+            }],
+            qualified_wildcards: vec![],
+        };
+
+        let distinct = apply_distinct(results, &columns);
+        // Both "Rust" rows should be kept because scores differ
+        assert_eq!(distinct.len(), 3);
+    }
+
+    #[test]
+    fn test_distinct_mixed_without_similarity_collapses_same_payload() {
+        let results = vec![
+            make_result_with_score(1, serde_json::json!({"title": "Rust"}), 0.95),
+            make_result_with_score(2, serde_json::json!({"title": "Rust"}), 0.80),
+        ];
+
+        let columns = SelectColumns::Mixed {
+            columns: vec![crate::velesql::Column {
+                name: "title".to_string(),
+                alias: None,
+            }],
+            aggregations: vec![],
+            similarity_scores: vec![],
+            qualified_wildcards: vec![],
+        };
+
+        let distinct = apply_distinct(results, &columns);
+        // Without similarity in SELECT, same title → collapsed
+        assert_eq!(distinct.len(), 1);
     }
 }

@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn test_distinct_key_missing_column_is_null() {
         let r = make_result(1, Some(serde_json::json!({"name": "Alice"})));
-        let key = compute_distinct_key(&r, &["missing_field".to_string()]);
+        let key = compute_distinct_key(&r, &["missing_field".to_string()], false);
         assert_eq!(key, "null", "missing column should produce 'null' key");
     }
 
