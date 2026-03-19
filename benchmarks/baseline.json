@@ -1,7 +1,7 @@
 {
   "version": "1.5.2",
-  "description": "VelesDB Performance Baseline v1.5.2 — re-baselined 2026-03-12 for ubuntu-latest CI runners",
-  "recorded_at": "2026-03-12",
+  "description": "VelesDB Performance Baseline v1.5.2 — re-baselined 2026-03-19 for ubuntu-latest CI runners",
+  "recorded_at": "2026-03-19",
   "environment": {
     "rust_version": "stable",
     "features": "default",
@@ -9,13 +9,13 @@
   },
   "benchmarks": {
     "smoke_insert/10k_128d": {
-      "mean_ns": 5067700000.0,
-      "std_ns": 160000000,
+      "mean_ns": 8800000000.0,
+      "std_ns": 400000000,
       "threshold_percent": 15
     },
     "smoke_search/10k_128d_k10": {
-      "mean_ns": 328510.0,
-      "std_ns": 8000,
+      "mean_ns": 337970.0,
+      "std_ns": 10000,
       "threshold_percent": 15
     },
     "smoke_hybrid/vector_plus_filter": {
@@ -55,9 +55,9 @@
     }
   },
   "notes": [
-    "Re-baselined 2026-03-12 for ubuntu-latest GitHub Actions runners (2-core AMD)",
-    "Previous baseline (v1.5.1) was measured on local i9-14900KF Windows 11 — 1.75-2x faster than CI",
-    "smoke_insert 5.0677s / smoke_search 328.51µs measured from CI run on commit 8f10e9136f",
+    "Re-baselined 2026-03-19 for ubuntu-latest GitHub Actions runners (2-core AMD)",
+    "Previous baseline (v1.5.2 / 2026-03-12) had smoke_insert=5.07s — CI runner performance shifted",
+    "smoke_insert 8.80s / smoke_search 337.97µs measured from CI run on commit 5bd58fcf",
     "smoke_hybrid baseline estimated from CI runner scaling (not directly measured by export script)",
     "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",
     "pq_recall entries hardened in Phase 11 — 6 variants with explicit m=8 k=256 training via VelesQL",
