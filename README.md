@@ -8,7 +8,7 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 39µs HNSW Search • 16ns SIMD • 3,670+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 43µs HNSW Search • 24ns SIMD • 3,950+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
@@ -26,13 +26,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🏎️_Dot_768D-16.2ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
+  <img src="https://img.shields.io/badge/🏎️_Dot_768D-23.6ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&label=tests&style=for-the-badge" alt="Tests"/></a>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
   <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
-  <img src="https://img.shields.io/badge/⚡_Throughput-47.4Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
+  <img src="https://img.shields.io/badge/⚡_Throughput-32.5Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
   <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
-  <img src="https://img.shields.io/badge/Sparse_Search-732µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
+  <img src="https://img.shields.io/badge/Sparse_Search-958µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
 </p>
 
 <p align="center">
@@ -48,7 +48,7 @@
 
 ---
 
-## 🆕 What's New in v1.5
+## 🆕 What's New in v1.6
 
 ### Product Quantization (PQ) -- 4x Memory Compression
 
@@ -112,8 +112,8 @@ Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automati
 <p>Unified semantic search, relationships, AND structured data.<br/><strong>No glue code needed.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>⚡ 16.2ns SIMD</h3>
-<p>Native HNSW + AVX2 SIMD.<br/><strong>47.4 Gelem/s throughput.</strong></p>
+<h3>⚡ 23.6ns SIMD</h3>
+<p>Native HNSW + AVX2 SIMD.<br/><strong>32.5 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>📦 15MB Binary</h3>
@@ -352,7 +352,7 @@ cargo run --release
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
-| **SIMD Dot Product (768D)** | **16.2 ns** | **47.4 Gelem/s** |
+| **SIMD Dot Product (768D)** | **23.6 ns** | **32.5 Gelem/s** |
 | **Euclidean** | **19.7 ns** | **39.0 Gelem/s** |
 | **Cosine** | **29.6 ns** | **25.9 Gelem/s** |
 | **Hamming** | **35.3 ns** | — |
@@ -361,9 +361,9 @@ cargo run --release
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search (10K vectors)** | **38.6 µs** (k=10) |
+| **HNSW Search (10K vectors)** | **42.8 µs** (k=10) |
 | **VelesQL Cache Hit** | **1.05 µs** (~952K QPS) |
-| **Sparse Search** | **732 µs** (MaxScore DAAT) |
+| **Sparse Search** | **958 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
 
 ### Search Quality (Recall)
@@ -378,7 +378,7 @@ cargo run --release
 
 > **Full benchmarks & methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
-*Measured on i9-14900KF, Windows 11, Rust 1.92.0. Latency depends on CPU/flags/dataset.*
+*Measured March 19, 2026 on i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0. Sequential runs on idle machine. Latency depends on CPU/flags/dataset.*
 
 ---
 
