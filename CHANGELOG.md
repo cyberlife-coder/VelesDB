@@ -233,7 +233,7 @@ Major release delivering **production-grade server security** (API key auth, TLS
 
 #### REST API & VelesQL
 - REST API endpoints for sparse upsert and sparse search
-- VelesQL grammar extended with `SPARSE_NEAR` and `FUSE BY` clauses
+- VelesQL grammar extended with `SPARSE_NEAR` and `USING FUSION` clauses
 
 #### SDK Parity
 - Python SDK: `sparse_search()`, `train_pq()`, `stream_insert()` methods
@@ -248,7 +248,7 @@ Major release delivering **production-grade server security** (API key auth, TLS
 
 - bincode serialization replaced with postcard (RUSTSEC-2025-0141 migration)
 - `Point` struct now includes `sparse_vector: Option<BTreeMap<String, SparseVector>>` field
-- VelesQL grammar extended with `SPARSE_NEAR` and `FUSE BY` clauses
+- VelesQL grammar extended with `SPARSE_NEAR` and `USING FUSION` clauses
 - Default PQ rescore oversampling reduced from 8x to configurable 4x
 - SIMD modules consolidated into `simd_native/` (EPIC-075)
 - Query planner integrates compiled plan cache (cache-aside pattern)

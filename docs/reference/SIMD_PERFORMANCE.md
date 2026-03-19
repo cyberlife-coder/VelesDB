@@ -52,22 +52,24 @@ AVX2 implementations adapt based on vector size to minimize register pressure:
 
 | Function | Latency | Throughput | vs Previous |
 |----------|---------|------------|-------------|
-| `dot_product_native` | **16.2ns** | 47.4 Gelem/s | Baseline |
-| `euclidean_native` | **19.7ns** | 39.0 Gelem/s | Improved |
-| `cosine_similarity_native` | **29.6ns** | 25.9 Gelem/s | Optimized (4-acc) |
-| `cosine_normalized_native` | **16.2ns** | 47.4 Gelem/s | Same as dot |
-| `hamming_distance_native` | **35.3ns** | 21.8M ops/s | Stable |
-| `jaccard_similarity_native` | **26.9ns** | 28.6 Gelem/s | Improved |
+| `dot_product_native` | **23.6ns** | 32.5 Gelem/s | Baseline |
+| `euclidean_native` | **22.7ns** | 33.8 Gelem/s | Improved |
+| `cosine_similarity_native` | **34.0ns** | 22.6 Gelem/s | Optimized (4-acc) |
+| `cosine_normalized_native` | **23.6ns** | 32.5 Gelem/s | Same as dot |
+| `hamming_distance_native` | **52.4ns** | 14.7M ops/s | Stable |
+| `jaccard_similarity_native` | **30.1ns** | 25.5 Gelem/s | Improved |
+
+*Measured March 19, 2026 on i9-14900KF, 64GB DDR5, sequential run on idle machine.*
 
 ### Scaling by Dimension (simd_native)
 
 | Dimension | Cosine | Dot Product | Model |
 |-----------|--------|-------------|-------|
-| 128 | 6.9ns | 4.0ns | MiniLM |
-| 384 | 17.5ns | 8.3ns | all-MiniLM-L6-v2 |
-| 768 | 29.6ns | 16.2ns | BERT, ada-002 |
-| 1536 | 55.9ns | 31.3ns | text-embedding-3-small |
-| 3072 | 109.8ns | 69.4ns | text-embedding-3-large |
+| 128 | 8.1ns | 5.4ns | MiniLM |
+| 384 | 20.1ns | 12.0ns | all-MiniLM-L6-v2 |
+| 768 | 34.0ns | 23.6ns | BERT, ada-002 |
+| 1536 | 69.0ns | 43.8ns | text-embedding-3-small |
+| 3072 | 112.2ns | 91.2ns | text-embedding-3-large |
 
 ## Optimization Techniques
 
