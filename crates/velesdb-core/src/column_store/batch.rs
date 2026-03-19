@@ -212,6 +212,9 @@ impl ColumnStore {
         if self.deleted_rows.contains(&row_idx) {
             Self::validate_value_types(&self.columns, values, Some(pk_col))?;
             self.deleted_rows.remove(&row_idx);
+            if let Ok(idx) = u32::try_from(row_idx) {
+                self.deletion_bitmap.remove(idx);
+            }
             self.row_expiry.remove(&row_idx);
             self.set_row_values(values, row_idx, Some(pk_col))?;
             return Ok(UpsertResult::Inserted);
