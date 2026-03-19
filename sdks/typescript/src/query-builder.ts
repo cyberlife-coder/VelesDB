@@ -5,7 +5,7 @@
  * 
  * @example
  * ```typescript
- * import { velesql } from '@velesdb/sdk';
+ * import { velesql } from '@wiscale/velesdb-sdk';
  * 
  * const query = velesql()
  *   .match('d', 'Document')

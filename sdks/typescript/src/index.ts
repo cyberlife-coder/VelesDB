@@ -5,7 +5,7 @@
  * 
  * @example
  * ```typescript
- * import { VelesDB } from '@velesdb/sdk';
+ * import { VelesDB } from '@wiscale/velesdb-sdk';
  * 
  * // WASM backend (browser/Node.js)
  * const db = new VelesDB({ backend: 'wasm' });

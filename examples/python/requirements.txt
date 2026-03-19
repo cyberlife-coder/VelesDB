@@ -1,5 +1,5 @@
 # Core VelesDB SDK (native Python bindings)
-velesdb>=1.5.1
+velesdb>=1.6.0
 numpy>=1.22.0
 
 # Optional: LangChain integration (for examples/langchain/ and graphrag_langchain.py)

@@ -1,6 +1,22 @@
 # @wiscale/velesdb-sdk
 
-Official TypeScript SDK for VelesDB - Vector Search in Microseconds.
+Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
+
+**v1.6.0** | Node.js >= 18 | Browser (WASM) | MIT License
+
+## What's New in v1.6.0
+
+- **Agent Memory API** -- semantic, episodic, and procedural memory for AI agents
+- **Graph collections** -- dedicated `createGraphCollection()` for knowledge graphs
+- **Metadata-only collections** -- reference tables with no vectors, joinable via VelesQL
+- **Sparse vector support** -- hybrid sparse+dense search on insert and query
+- **Stream insert with backpressure** -- `streamInsert()` for high-throughput ingestion
+- **Product Quantization training** -- `trainPq()` for further memory compression
+- **Collection analytics** -- `analyzeCollection()`, `getCollectionStats()`, `getCollectionConfig()`
+- **Property indexes** -- `createIndex()` / `listIndexes()` / `dropIndex()` for O(1) lookups
+- **Query introspection** -- `queryExplain()` and `collectionSanity()` diagnostics
+- **Batch search** -- `searchBatch()` for parallel multi-query execution
+- **Lightweight search** -- `searchIds()` returns only IDs and scores
 
 ## Installation
 
@@ -10,44 +26,48 @@ npm install @wiscale/velesdb-sdk
 
 ## Quick Start
 
-### WASM Backend (Browser/Node.js)
+### WASM Backend (Browser / Node.js)
+
+The WASM backend runs entirely in-process -- no server required. Ideal for browser apps, prototyping, and edge deployments.
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
 
-// Initialize with WASM backend
+// 1. Create a client with WASM backend
 const db = new VelesDB({ backend: 'wasm' });
 await db.init();
 
-// Create a collection
+// 2. Create a collection (768 dimensions for BERT, 1536 for OpenAI, etc.)
 await db.createCollection('documents', {
-  dimension: 768,  // BERT embedding dimension
+  dimension: 768,
   metric: 'cosine'
 });
 
-// Insert vectors
+// 3. Insert vectors with metadata
 await db.insert('documents', {
   id: 'doc-1',
   vector: new Float32Array(768).fill(0.1),
   payload: { title: 'Hello World', category: 'greeting' }
 });
 
-// Batch insert
+// 4. Batch insert for better throughput
 await db.insertBatch('documents', [
-  { id: 'doc-2', vector: [...], payload: { title: 'Second doc' } },
-  { id: 'doc-3', vector: [...], payload: { title: 'Third doc' } },
+  { id: 'doc-2', vector: new Float32Array(768).fill(0.2), payload: { title: 'Second doc' } },
+  { id: 'doc-3', vector: new Float32Array(768).fill(0.3), payload: { title: 'Third doc' } },
 ]);
 
-// Search
+// 5. Search for similar vectors
 const results = await db.search('documents', queryVector, { k: 5 });
 console.log(results);
-// [{ id: 'doc-1', score: 0.95, payload: { title: '...' } }, ...]
+// [{ id: 'doc-1', score: 0.95, payload: { title: 'Hello World', ... } }, ...]
 
-// Cleanup
+// 6. Cleanup
 await db.close();
 ```
 
 ### REST Backend (Server)
+
+The REST backend connects to a running VelesDB server. Use this for production deployments, multi-client access, and persistent storage.
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
@@ -55,20 +75,24 @@ import { VelesDB } from '@wiscale/velesdb-sdk';
 const db = new VelesDB({
   backend: 'rest',
   url: 'http://localhost:8080',
-  apiKey: 'your-api-key' // optional
+  apiKey: 'your-api-key'  // optional
 });
 
 await db.init();
 
 // Same API as WASM backend
 await db.createCollection('products', { dimension: 1536 });
-await db.insert('products', { id: 1, vector: [...] });
-const results = await db.search('products', query, { k: 10 });
+await db.insert('products', { id: 1, vector: embedding });
+const results = await db.search('products', queryVector, { k: 10 });
 ```
+
+> **REST backend note:** Document IDs must be numeric integers in the range `0..Number.MAX_SAFE_INTEGER`. String IDs are only supported with the WASM backend.
 
 ## API Reference
 
-### `new VelesDB(config)`
+### Client
+
+#### `new VelesDB(config)`
 
 Create a new VelesDB client.
 
@@ -77,313 +101,348 @@ Create a new VelesDB client.
 | `backend` | `'wasm' \| 'rest'` | Yes | Backend type |
 | `url` | `string` | REST only | Server URL |
 | `apiKey` | `string` | No | API key for authentication |
-| `timeout` | `number` | No | Request timeout (ms, default: 30000) |
+| `timeout` | `number` | No | Request timeout in ms (default: 30000) |
 
-### `db.init()`
+#### `db.init()`
 
-Initialize the client. Must be called before any operations.
+Initialize the client. **Must be called before any operations.** For the REST backend, this verifies connectivity to the server.
 
-### `db.createCollection(name, config)`
+#### `db.close()`
 
-Create a new collection.
+Close the client and release resources.
+
+---
+
+### Collection Management
+
+#### `db.createCollection(name, config)`
+
+Create a vector collection.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `dimension` | `number` | Required | Vector dimension |
 | `metric` | `'cosine' \| 'euclidean' \| 'dot' \| 'hamming' \| 'jaccard'` | `'cosine'` | Distance metric |
-| `storageMode` | `'full' \| 'sq8' \| 'binary'` | `'full'` | Memory optimization mode |
+| `storageMode` | `'full' \| 'sq8' \| 'binary'` | `'full'` | Quantization mode |
+| `hnsw` | `{ m?: number, efConstruction?: number }` | - | HNSW index tuning |
+| `description` | `string` | - | Optional description |
 
-#### Storage Modes
+##### Storage Modes
 
 | Mode | Memory (768D) | Compression | Use Case |
 |------|---------------|-------------|----------|
 | `full` | 3 KB/vector | 1x | Default, max precision |
-| `sq8` | 776 B/vector | **4x** | Scale, RAM-constrained |
-| `binary` | 96 B/vector | **32x** | Edge, IoT |
+| `sq8` | 776 B/vector | **4x** | Production scale, RAM-constrained |
+| `binary` | 96 B/vector | **32x** | Edge devices, IoT |
 
 ```typescript
-// Memory-optimized collection
 await db.createCollection('embeddings', {
   dimension: 768,
   metric: 'cosine',
-  storageMode: 'sq8'  // 4x memory reduction
+  storageMode: 'sq8',
+  hnsw: { m: 16, efConstruction: 200 }
 });
 ```
 
-### `db.insert(collection, document)`
+#### `db.createGraphCollection(name, config?)`
 
-Insert a single vector.
+Create a dedicated graph collection for knowledge graph workloads.
+
+```typescript
+await db.createGraphCollection('social', {
+  dimension: 384,       // optional: embed nodes for vector+graph queries
+  metric: 'cosine',
+  schemaMode: 'schemaless'  // or 'strict'
+});
+```
+
+#### `db.createMetadataCollection(name)`
+
+Create a metadata-only collection (no vectors). Useful for reference tables that can be JOINed with vector collections via VelesQL.
+
+```typescript
+await db.createMetadataCollection('products');
+```
+
+#### `db.deleteCollection(name)`
+
+Delete a collection and all its data.
+
+#### `db.getCollection(name)`
+
+Get collection info. Returns `null` if not found.
+
+#### `db.listCollections()`
+
+List all collections. Returns an array of `Collection` objects.
+
+---
+
+### Insert and Retrieve
+
+#### `db.insert(collection, document)`
+
+Insert a single vector document.
 
 ```typescript
 await db.insert('docs', {
   id: 'unique-id',
-  vector: [0.1, 0.2, ...],  // or Float32Array
-  payload: { key: 'value' } // optional metadata
+  vector: [0.1, 0.2, 0.3],    // number[] or Float32Array
+  payload: { key: 'value' },   // optional metadata
+  sparseVector: { 42: 0.8, 99: 0.3 }  // optional sparse vector for hybrid search
 });
-
-// REST backend note:
-// IDs must be numeric and within JS safe integer range (0..Number.MAX_SAFE_INTEGER).
-// Non-numeric strings are rejected.
 ```
 
-### `db.insertBatch(collection, documents)`
+#### `db.insertBatch(collection, documents)`
 
-Insert multiple vectors efficiently.
+Insert multiple vectors in a single call. More efficient than repeated `insert()`.
 
-### `db.search(collection, query, options)`
+```typescript
+await db.insertBatch('docs', [
+  { id: 'a', vector: vecA, payload: { title: 'First' } },
+  { id: 'b', vector: vecB, payload: { title: 'Second' } },
+]);
+```
 
-Search for similar vectors.
+#### `db.streamInsert(collection, documents)`
+
+Insert documents with server backpressure support. Sends documents sequentially, respecting 429 rate limits. Throws `BackpressureError` if the server pushes back.
+
+```typescript
+await db.streamInsert('docs', largeDocumentArray);
+```
+
+#### `db.get(collection, id)`
+
+Get a document by ID. Returns `null` if not found.
+
+#### `db.delete(collection, id)`
+
+Delete a document by ID. Returns `true` if deleted, `false` if not found.
+
+---
+
+### Search
+
+#### `db.search(collection, query, options?)`
+
+Vector similarity search.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
-| `filter` | `object` | - | Filter expression |
+| `filter` | `object` | - | Payload filter expression |
 | `includeVectors` | `boolean` | `false` | Include vectors in results |
+| `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 
-### `db.delete(collection, id)`
+```typescript
+const results = await db.search('docs', queryVector, {
+  k: 10,
+  filter: { category: 'tech' },
+  includeVectors: true
+});
+// Returns: SearchResult[] = [{ id, score, payload?, vector? }, ...]
+```
 
-Delete a vector by ID. Returns `true` if deleted.
+#### `db.searchBatch(collection, searches)`
 
-### `db.get(collection, id)`
+Execute multiple search queries in parallel.
 
-Get a vector by ID. Returns `null` if not found.
+```typescript
+const batchResults = await db.searchBatch('docs', [
+  { vector: queryA, k: 5 },
+  { vector: queryB, k: 10, filter: { type: 'article' } },
+]);
+// Returns: SearchResult[][] (one result array per query)
+```
 
-### `db.textSearch(collection, query, options)` (v0.8.5+)
+#### `db.searchIds(collection, query, options?)`
 
-Full-text search using BM25 algorithm.
+Lightweight search returning only IDs and scores (no payloads).
+
+```typescript
+const hits = await db.searchIds('docs', queryVector, { k: 100 });
+// Returns: Array<{ id: number, score: number }>
+```
+
+#### `db.textSearch(collection, query, options?)`
+
+Full-text search using BM25 scoring.
 
 ```typescript
 const results = await db.textSearch('docs', 'machine learning', { k: 10 });
 ```
 
-### `db.hybridSearch(collection, vector, textQuery, options)` (v0.8.5+)
+#### `db.hybridSearch(collection, vector, textQuery, options?)`
 
-Combined vector + text search with RRF fusion.
+Combined vector similarity + BM25 text search with RRF fusion.
 
 ```typescript
 const results = await db.hybridSearch(
   'docs',
   queryVector,
   'machine learning',
-  { k: 10, vectorWeight: 0.7 }  // 0.7 = 70% vector, 30% text
+  { k: 10, vectorWeight: 0.7 }  // 70% vector, 30% text
 );
 ```
 
-### `db.query(collection, queryString, params?, options?)` (v0.8.5+)
+#### `db.multiQuerySearch(collection, vectors, options?)`
 
-Execute a VelesQL query.
-
-```typescript
-// Simple query
-const results = await db.query(
-  'documents',
-  "SELECT * FROM documents WHERE category = 'tech' LIMIT 10"
-);
-
-// With vector parameter
-const results = await db.query(
-  'documents',
-  "SELECT * FROM documents WHERE VECTOR NEAR $query LIMIT 5",
-  { query: [0.1, 0.2, ...] }
-);
-
-// Hybrid query
-const results = await db.query(
-  'docs',
-  "SELECT * FROM docs WHERE VECTOR NEAR $v AND content MATCH 'rust' LIMIT 10",
-  { v: queryVector }
-);
-
-// Aggregation query (returns { result, stats })
-const agg = await db.query(
-  'documents',
-  "SELECT COUNT(*) AS total FROM documents"
-);
-```
-
-### `db.multiQuerySearch(collection, vectors, options)` (v1.1.0+) ⭐ NEW
-
-Multi-query fusion search for RAG pipelines using Multiple Query Generation (MQG).
+Multi-query fusion search for RAG pipelines using Multiple Query Generation (MQG). Combines results from several query vectors into a single ranked list.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
 | `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted'` | `'rrf'` | Fusion strategy |
 | `fusionParams` | `object` | `{ k: 60 }` | Strategy-specific parameters |
-| `filter` | `object` | - | Filter expression |
+| `filter` | `object` | - | Payload filter expression |
 
 ```typescript
-// RRF fusion (default) - best for most RAG use cases
+// RRF fusion (default) -- best for most RAG use cases
 const results = await db.multiQuerySearch('docs', [emb1, emb2, emb3], {
   k: 10,
   fusion: 'rrf',
   fusionParams: { k: 60 }
 });
 
-// Weighted fusion - like SearchXP scoring
+// Weighted fusion
 const results = await db.multiQuerySearch('docs', [emb1, emb2], {
   k: 10,
   fusion: 'weighted',
   fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 }
 });
-
-// Average/Maximum fusion
-const results = await db.multiQuerySearch('docs', vectors, {
-  k: 10,
-  fusion: 'average'  // or 'maximum'
-});
 ```
 
-> **Note:** WASM supports `rrf`, `average`, `maximum`. `weighted` is REST-only.
+> **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` strategy is REST-only.
 
-### `db.isEmpty(collection)` (v0.8.11+)
+---
 
-Check if a collection is empty.
+### Collection Utilities
 
-```typescript
-const empty = await db.isEmpty('documents');
-if (empty) {
-  console.log('No vectors in collection');
-}
-```
+#### `db.isEmpty(collection)`
 
-### `db.flush(collection)` (v0.8.11+)
+Returns `true` if the collection contains no vectors.
+
+#### `db.flush(collection)`
 
 Flush pending changes to disk.
 
-```typescript
-await db.flush('documents');
-```
+#### `db.analyzeCollection(collection)`
 
-### `db.close()`
-
-Close the client and release resources.
-
-## Knowledge Graph API (v1.2.0+)
-
-VelesDB supports hybrid vector + graph queries.
-
-### `db.addEdge(collection, edge)`
+Compute and return collection statistics.
 
 ```typescript
-await db.addEdge('social', {
-  id: 1, source: 100, target: 200,
-  label: 'FOLLOWS',
-  properties: { since: '2024-01-01' }
-});
+const stats = await db.analyzeCollection('docs');
+console.log(stats.totalPoints, stats.totalSizeBytes);
 ```
 
-### `db.getEdges(collection, options?)`
+#### `db.getCollectionStats(collection)`
+
+Get previously computed statistics. Returns `null` if the collection has not been analyzed yet.
+
+#### `db.getCollectionConfig(collection)`
+
+Get detailed collection configuration (dimension, metric, storage mode, point count, schema).
+
+---
+
+### VelesQL Queries
+
+#### `db.query(collection, queryString, params?, options?)`
+
+Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, ORDER BY, JOIN, UNION/INTERSECT/EXCEPT, and USING FUSION.
 
 ```typescript
-const edges = await db.getEdges('social', { label: 'FOLLOWS' });
+// Vector similarity search
+const result = await db.query(
+  'documents',
+  'SELECT * FROM documents WHERE VECTOR NEAR $query LIMIT 5',
+  { query: [0.1, 0.2, 0.3] }
+);
+
+// Aggregation
+const agg = await db.query(
+  'products',
+  `SELECT category, COUNT(*), AVG(price)
+   FROM products
+   GROUP BY category
+   HAVING COUNT(*) > 5`
+);
+
+// Hybrid vector + text
+const hybrid = await db.query(
+  'docs',
+  "SELECT * FROM docs WHERE VECTOR NEAR $v AND content MATCH 'rust' LIMIT 10",
+  { v: queryVector }
+);
+
+// Cross-collection JOIN
+const joined = await db.query(
+  'orders',
+  `SELECT * FROM orders
+   JOIN customers AS c ON orders.customer_id = c.id
+   WHERE status = $status`,
+  { status: 'active' }
+);
+
+// Set operations
+const combined = await db.query('users',
+  'SELECT * FROM active_users UNION SELECT * FROM archived_users'
+);
+
+// Fusion strategy
+const fused = await db.query('docs',
+  "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20"
+);
 ```
 
-### `db.traverseGraph(collection, request)`
+Query options:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `timeoutMs` | `number` | `30000` | Query timeout in milliseconds |
+| `stream` | `boolean` | `false` | Enable streaming response |
+
+#### `db.queryExplain(queryString, params?)`
+
+Get the execution plan for a VelesQL query without running it. Returns plan steps, estimated cost, index usage, and detected features.
 
 ```typescript
-const result = await db.traverseGraph('social', {
-  source: 100, strategy: 'bfs', maxDepth: 3
-});
+const plan = await db.queryExplain(
+  'SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10',
+  { v: queryVector }
+);
+console.log(plan.plan);           // step-by-step execution plan
+console.log(plan.estimatedCost);  // { usesIndex, selectivity, complexity }
+console.log(plan.features);       // { hasVectorSearch, hasFilter, hasJoin, ... }
 ```
 
-### `db.getNodeDegree(collection, nodeId)`
+#### `db.collectionSanity(collection)`
+
+Run diagnostic checks on a collection (dimensions, search readiness, error counts, hints).
 
 ```typescript
-const degree = await db.getNodeDegree('social', 100);
+const report = await db.collectionSanity('docs');
+console.log(report.checks);       // { hasVectors, searchReady, dimensionConfigured }
+console.log(report.diagnostics);   // { searchRequestsTotal, dimensionMismatchTotal, ... }
+console.log(report.hints);         // actionable suggestions
 ```
 
-## VelesQL v2.0 Queries (v1.4.0+)
+---
 
-Execute advanced SQL-like queries with aggregation, joins, and set operations.
+### VelesQL Query Builder
 
-### Aggregation with GROUP BY / HAVING
-
-```typescript
-// Group by with aggregates
-const result = await db.query('products', `
-  SELECT category, COUNT(*), AVG(price) 
-  FROM products 
-  GROUP BY category 
-  HAVING COUNT(*) > 5 AND AVG(price) > 50
-`);
-
-// Access results
-for (const row of result.results) {
-  console.log(row.payload.category, row.payload.count);
-}
-```
-
-### ORDER BY with similarity()
-
-```typescript
-// Order by semantic similarity
-const result = await db.query('docs', `
-  SELECT * FROM docs 
-  ORDER BY similarity(vector, $v) DESC 
-  LIMIT 10
-`, { v: queryVector });
-```
-
-### JOIN across collections
-
-```typescript
-// Cross-collection join
-const result = await db.query('orders', `
-  SELECT * FROM orders 
-  JOIN customers AS c ON orders.customer_id = c.id 
-  WHERE status = $status
-`, { status: 'active' });
-```
-
-### Set Operations (UNION / INTERSECT / EXCEPT)
-
-```typescript
-// Combine query results
-const result = await db.query('users', `
-  SELECT * FROM active_users 
-  UNION 
-  SELECT * FROM archived_users
-`);
-
-// Find common elements
-const result = await db.query('users', `
-  SELECT id FROM premium_users 
-  INTERSECT 
-  SELECT id FROM active_users
-`);
-```
-
-### Hybrid Search with USING FUSION
-
-```typescript
-// RRF fusion (default)
-const result = await db.query('docs', `
-  SELECT * FROM docs 
-  USING FUSION(strategy = 'rrf', k = 60) 
-  LIMIT 20
-`);
-
-// Weighted fusion
-const result = await db.query('docs', `
-  SELECT * FROM docs 
-  USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3) 
-  LIMIT 20
-`);
-```
-
-## VelesQL Query Builder (v1.2.0+)
-
-Build type-safe VelesQL queries with the fluent builder API.
+Build type-safe VelesQL queries with a fluent API instead of raw strings.
 
 ```typescript
 import { velesql } from '@wiscale/velesdb-sdk';
 
-// Graph pattern query
+// Vector similarity with filters
 const builder = velesql()
   .match('d', 'Document')
   .nearVector('$queryVector', queryVector)
   .andWhere('d.category = $cat', { cat: 'tech' })
+  .orderBy('similarity()', 'DESC')
   .limit(10);
 
 const queryString = builder.toVelesQL();
@@ -398,35 +457,261 @@ const graphQuery = velesql()
   .where('p.age > 25')
   .return(['p.name', 'f.name'])
   .toVelesQL();
+// => "MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.age > 25 RETURN p.name, f.name"
 ```
+
+Builder methods: `match()`, `rel()`, `to()`, `where()`, `andWhere()`, `orWhere()`, `nearVector()`, `limit()`, `offset()`, `orderBy()`, `return()`, `returnAll()`, `fusion()`.
+
+---
+
+### Knowledge Graph API
+
+#### `db.addEdge(collection, edge)`
+
+Add a directed edge between two nodes.
+
+```typescript
+await db.addEdge('social', {
+  id: 1,
+  source: 100,
+  target: 200,
+  label: 'FOLLOWS',
+  properties: { since: '2024-01-01' }
+});
+```
+
+#### `db.getEdges(collection, options?)`
+
+Query edges, optionally filtered by label.
+
+```typescript
+const edges = await db.getEdges('social', { label: 'FOLLOWS' });
+```
+
+#### `db.traverseGraph(collection, request)`
+
+Traverse the graph using BFS or DFS from a source node.
+
+```typescript
+const result = await db.traverseGraph('social', {
+  source: 100,
+  strategy: 'bfs',
+  maxDepth: 3,
+  limit: 100,
+  relTypes: ['FOLLOWS', 'KNOWS']
+});
+
+for (const node of result.results) {
+  console.log(`Node ${node.targetId} at depth ${node.depth}`);
+}
+```
+
+#### `db.getNodeDegree(collection, nodeId)`
+
+Get the in-degree and out-degree of a node.
+
+```typescript
+const degree = await db.getNodeDegree('social', 100);
+console.log(`In: ${degree.inDegree}, Out: ${degree.outDegree}`);
+```
+
+---
+
+### Property Indexes
+
+Create secondary indexes for fast lookups on payload fields.
+
+#### `db.createIndex(collection, options)`
+
+```typescript
+// Hash index for O(1) equality lookups
+await db.createIndex('users', { label: 'Person', property: 'email' });
+
+// Range index for O(log n) range queries
+await db.createIndex('events', {
+  label: 'Event',
+  property: 'timestamp',
+  indexType: 'range'
+});
+```
+
+#### `db.listIndexes(collection)`
+
+```typescript
+const indexes = await db.listIndexes('users');
+// [{ label, property, indexType, cardinality, memoryBytes }, ...]
+```
+
+#### `db.hasIndex(collection, label, property)`
+
+Returns `true` if the specified index exists.
+
+#### `db.dropIndex(collection, label, property)`
+
+Drop an index. Returns `true` if the index existed and was removed.
+
+---
+
+### Product Quantization
+
+#### `db.trainPq(collection, options?)`
+
+Train Product Quantization on a collection for further memory compression beyond SQ8.
+
+```typescript
+const result = await db.trainPq('embeddings', {
+  m: 8,       // number of subquantizers
+  k: 256,     // centroids per subquantizer
+  opq: true   // enable Optimized PQ
+});
+```
+
+---
+
+### Agent Memory API
+
+The Agent Memory API provides three memory types for AI agents, built on top of VelesDB's vector and graph storage.
+
+```typescript
+import { VelesDB } from '@wiscale/velesdb-sdk';
+
+const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+await db.init();
+
+const memory = db.agentMemory({ dimension: 384 });
+```
+
+#### Semantic Memory (facts and knowledge)
+
+```typescript
+// Store a fact
+await memory.storeFact('knowledge', {
+  id: 1,
+  text: 'VelesDB uses HNSW for vector indexing',
+  embedding: factEmbedding,
+  metadata: { source: 'docs', confidence: 0.95 }
+});
+
+// Recall similar facts
+const facts = await memory.searchFacts('knowledge', queryEmbedding, 5);
+```
+
+#### Episodic Memory (events and experiences)
+
+```typescript
+// Record an event
+await memory.recordEvent('events', {
+  eventType: 'user_query',
+  data: { query: 'How does HNSW work?', response: '...' },
+  embedding: eventEmbedding,
+  metadata: { timestamp: Date.now() }
+});
+
+// Recall similar events
+const events = await memory.recallEvents('events', queryEmbedding, 5);
+```
+
+#### Procedural Memory (learned patterns)
+
+```typescript
+// Store a procedure
+await memory.learnProcedure('procedures', {
+  name: 'deploy-to-prod',
+  steps: ['Run tests', 'Build artifacts', 'Push to registry', 'Deploy'],
+  metadata: { lastUsed: Date.now() }
+});
+
+// Find matching procedures
+const procs = await memory.recallProcedures('procedures', queryEmbedding, 3);
+```
+
+---
 
 ## Error Handling
 
+All error classes extend `VelesDBError` and include a `code` property for programmatic handling.
+
 ```typescript
-import { VelesDBError, ValidationError, ConnectionError, NotFoundError } from '@wiscale/velesdb-sdk';
+import {
+  VelesDBError,
+  ValidationError,
+  ConnectionError,
+  NotFoundError,
+  BackpressureError
+} from '@wiscale/velesdb-sdk';
 
 try {
-  await db.search('nonexistent', query);
+  await db.search('nonexistent', queryVector);
 } catch (error) {
   if (error instanceof NotFoundError) {
     console.log('Collection not found');
   } else if (error instanceof ValidationError) {
     console.log('Invalid input:', error.message);
   } else if (error instanceof ConnectionError) {
-    console.log('Connection failed:', error.message);
+    console.log('Server unreachable:', error.message);
+  } else if (error instanceof BackpressureError) {
+    console.log('Server overloaded, retry later');
   }
 }
 ```
 
+## Exports
+
+Everything is importable from the package root:
+
+```typescript
+import {
+  // Client
+  VelesDB,
+  AgentMemoryClient,
+
+  // Backends (advanced: use VelesDB client instead)
+  WasmBackend,
+  RestBackend,
+
+  // Query builder
+  VelesQLBuilder,
+  velesql,
+
+  // Error classes
+  VelesDBError,
+  ValidationError,
+  ConnectionError,
+  NotFoundError,
+  BackpressureError,
+
+  // Types (selected)
+  type VelesDBConfig,
+  type CollectionConfig,
+  type VectorDocument,
+  type SearchOptions,
+  type SearchResult,
+  type SparseVector,
+  type MultiQuerySearchOptions,
+  type GraphEdge,
+  type AddEdgeRequest,
+  type TraverseRequest,
+  type TraverseResponse,
+  type QueryApiResponse,
+  type AgentMemoryConfig,
+  type SemanticEntry,
+  type EpisodicEvent,
+  type ProceduralPattern,
+} from '@wiscale/velesdb-sdk';
+```
+
 ## Performance Tips
 
-1. **Use batch operations** for multiple inserts
-2. **Reuse Float32Array** for queries when possible
-3. **Use WASM backend** for browser apps (no network latency)
-4. **Pre-initialize** the client at app startup
+1. **Use `insertBatch()`** instead of repeated `insert()` calls
+2. **Reuse `Float32Array`** buffers for query vectors when possible
+3. **Use WASM backend** for browser apps (zero network latency)
+4. **Use `searchIds()`** when you only need IDs and scores (skips payload transfer)
+5. **Use `streamInsert()`** for high-throughput ingestion with backpressure handling
+6. **Pre-initialize** the client at app startup (`await db.init()`)
+7. **Tune HNSW** with `hnsw: { m: 16, efConstruction: 200 }` for higher recall
 
 ## License
 
-MIT License - See [LICENSE](./LICENSE) for details.
+MIT License -- See [LICENSE](./LICENSE) for details.
 
 VelesDB Core is licensed under VelesDB Core License 1.0 (source-available).

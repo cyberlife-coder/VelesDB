@@ -1,5 +1,7 @@
 # 🛒 E-commerce Recommendation Engine with VelesDB
 
+> **Difficulty: Advanced** | Showcases: Vector search (HNSW), knowledge graph traversal, multi-column filtering, combined queries, VelesQL
+
 A comprehensive example demonstrating VelesDB's **Vector + Graph + MultiColumn** combined capabilities for building a production-grade recommendation system.
 
 ## 🎯 What This Example Demonstrates

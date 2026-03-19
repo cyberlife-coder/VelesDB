@@ -1,10 +1,12 @@
 # VelesDB Python Examples
 
+> **Difficulty: Beginner to Intermediate** | Showcases: Python SDK (PyO3), vector search, graph traversal, fusion strategies, VelesQL, hybrid queries
+
 Runnable examples demonstrating the VelesDB Python SDK (PyO3 bindings).
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - Rust toolchain (for building the SDK from source)
 - maturin (`pip install maturin`)
 

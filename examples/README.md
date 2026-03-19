@@ -1,21 +1,30 @@
 # VelesDB Examples
 
-This directory contains examples demonstrating various VelesDB features and integrations.
+This directory contains examples demonstrating various VelesDB features and integrations. Every example uses synthetic data (random or deterministic vectors) and requires no external API keys unless noted.
 
 ## Quick Overview
 
-| Example | Language | Description |
-|---------|----------|-------------|
-| [**ecommerce_recommendation/**](./ecommerce_recommendation/) | Rust | ⭐ **Full demo**: Vector + Graph + MultiColumn (5000 products) |
-| [mini_recommender/](./mini_recommender/) | Rust | Product recommendation system with VelesQL |
-| [rust/](./rust/) | Rust | Multi-model search (vector + graph + hybrid) |
-| [python/](./python/) | Python | SDK usage patterns and use cases |
-| [python_example.py](./python_example.py) | Python | REST API client example |
-| [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Browser-based vector search demo |
+| Example | Language | Difficulty | Description |
+|---------|----------|------------|-------------|
+| [**ecommerce_recommendation/**](./ecommerce_recommendation/) | Rust | Advanced | Vector + Graph + MultiColumn (5000 products) |
+| [mini_recommender/](./mini_recommender/) | Rust | Beginner | Product recommendation with VelesQL |
+| [rust/](./rust/) | Rust | Intermediate | Multi-model search (vector + hybrid + text) |
+| [langchain/](./langchain/) | Python | Intermediate | LangChain VectorStore with hybrid search |
+| [llamaindex/](./llamaindex/) | Python | Intermediate | LlamaIndex VectorStore with Product Quantization |
+| [python/](./python/) | Python | Beginner | SDK usage patterns (fusion, graph, hybrid) |
+| [python_example.py](./python_example.py) | Python | Beginner | REST API client (legacy) |
+| [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Beginner | Browser-based vector search, no server needed |
+
+Also see the [demos/](../demos/) directory for full-stack applications:
+
+| Demo | Stack | Difficulty | Description |
+|------|-------|------------|-------------|
+| [rag-pdf-demo/](../demos/rag-pdf-demo/) | Python + FastAPI | Intermediate | PDF upload, chunking, semantic search with UI |
+| [tauri-rag-app/](../demos/tauri-rag-app/) | Rust + React + Tauri | Advanced | Offline desktop RAG app with knowledge graph |
 
 ## Rust Examples
 
-### ⭐ E-commerce Recommendation (`ecommerce_recommendation/`)
+### E-commerce Recommendation (`ecommerce_recommendation/`) -- Advanced
 
 **The flagship example** demonstrating VelesDB's combined Vector + Graph + MultiColumn capabilities:
 
@@ -33,18 +42,18 @@ Features demonstrated:
 | Query Type | Description |
 |------------|-------------|
 | Vector Similarity | Find semantically similar products |
-| Vector + Filter | Similar products that are in-stock, under $500, rating ≥4.0 |
+| Vector + Filter | Similar products that are in-stock, under $500, rating >= 4.0 |
 | Graph Traversal | Products frequently bought together |
 | **Combined** | Union of vector + graph, filtered by business rules |
 
 See [ecommerce_recommendation/README.md](./ecommerce_recommendation/README.md) for full documentation.
 
-### Mini Recommender (`mini_recommender/`)
+### Mini Recommender (`mini_recommender/`) -- Beginner
 
-A complete product recommendation system demonstrating:
+**Start here.** A complete product recommendation system in ~250 lines:
 - Collection creation and product ingestion
 - Similarity search for recommendations
-- Filtered recommendations by category
+- Filtered recommendations by category and price
 - VelesQL query parsing
 - Catalog analytics
 
@@ -53,36 +62,52 @@ cd examples/mini_recommender
 cargo run
 ```
 
-### Multi-Model Search (`rust/`)
+See [mini_recommender/README.md](./mini_recommender/README.md) for expected output.
 
-Advanced multi-model queries combining:
+### Multi-Model Search (`rust/`) -- Intermediate
+
+Multi-model queries combining five search modes in one binary:
 - Vector similarity search
-- Graph traversal
-- Custom ORDER BY expressions
+- VelesQL with filters and ORDER BY similarity
 - Hybrid search (vector + BM25 text)
+- Pure text search
 
 ```bash
 cd examples/rust
 cargo run --bin multimodel_search
 ```
 
+See [rust/README.md](./rust/README.md) for expected output.
+
 ## Python Examples
 
-### REST API Client (`python_example.py`)
+### LangChain Integration (`langchain/`) -- Intermediate
 
-Simple HTTP client for VelesDB server:
+VelesDB as a single-engine hybrid dense+sparse VectorStore for LangChain:
 
 ```bash
-# Start VelesDB server first
-velesdb-server -d ./data
-
-# Run example
-python examples/python_example.py
+pip install velesdb langchain-core
+cd examples/langchain
+python hybrid_search.py
 ```
 
-### SDK Patterns (`python/`)
+See [langchain/README.md](./langchain/README.md) for details.
 
-Conceptual examples showing VelesDB Python SDK usage:
+### LlamaIndex Integration (`llamaindex/`) -- Intermediate
+
+VelesDB as a LlamaIndex VectorStore with Product Quantization support:
+
+```bash
+pip install velesdb llama-index-core
+cd examples/llamaindex
+python hybrid_search.py
+```
+
+See [llamaindex/README.md](./llamaindex/README.md) for details.
+
+### SDK Patterns (`python/`) -- Beginner
+
+Self-contained examples using the VelesDB Python SDK (PyO3 bindings):
 
 | File | Description |
 |------|-------------|
@@ -93,20 +118,46 @@ Conceptual examples showing VelesDB Python SDK usage:
 | `hybrid_queries.py` | Vector + metadata filtering use cases |
 | `multimodel_notebook.py` | Jupyter notebook tutorial format |
 
-> **Note**: Python SDK examples require `velesdb-python` package (PyO3 bindings).
-> Build from source: `cd crates/velesdb-python && maturin develop`
+```bash
+# Install SDK from source
+cd crates/velesdb-python && maturin develop && cd -
 
-## WASM Browser Demo (`wasm-browser-demo/`)
+# Run any self-contained example
+cd examples/python
+pip install -r requirements.txt
+python fusion_strategies.py
+```
 
-Interactive demo running VelesDB entirely in the browser via WebAssembly.
+> **Note**: The `graphrag_langchain.py` and `graphrag_llamaindex.py` examples require an OpenAI API key and a running VelesDB server. All other examples are fully self-contained.
+
+### REST API Client (`python_example.py`) -- Beginner
+
+Legacy HTTP client for the VelesDB REST API. Requires a running `velesdb-server`:
 
 ```bash
-# Option 1: Open directly
-open examples/wasm-browser-demo/index.html
+# Terminal 1: start server
+velesdb-server -d ./data
 
-# Option 2: Local server
+# Terminal 2: run example
+python examples/python_example.py
+```
+
+> For new projects, use the native Python SDK instead (`pip install velesdb`).
+
+## WASM Browser Demo (`wasm-browser-demo/`) -- Beginner
+
+Interactive demo running VelesDB entirely in the browser via WebAssembly. No build step, no server:
+
+```bash
+# Option 1: Open directly in your browser
+start examples/wasm-browser-demo/index.html   # Windows
+open examples/wasm-browser-demo/index.html     # macOS
+xdg-open examples/wasm-browser-demo/index.html # Linux
+
+# Option 2: Local server (needed if Option 1 has CORS issues)
 cd examples/wasm-browser-demo
 python -m http.server 8080
+# Then visit http://localhost:8080
 ```
 
 See [wasm-browser-demo/README.md](./wasm-browser-demo/README.md) for details.
@@ -136,28 +187,28 @@ See [wasm-browser-demo/README.md](./wasm-browser-demo/README.md) for details.
 SELECT * FROM documents WHERE vector NEAR $query LIMIT 10
 
 -- Filtered search
-SELECT * FROM articles 
-WHERE vector NEAR $query 
+SELECT * FROM articles
+WHERE vector NEAR $query
   AND category = 'tech'
   AND price < 100
 LIMIT 20
 
 -- Hybrid search (vector + text)
-SELECT * FROM docs 
+SELECT * FROM docs
 WHERE vector NEAR $vec AND text MATCH 'machine learning'
 FUSION rrf(k=60)
 LIMIT 10
 
 -- Aggregations
-SELECT category, COUNT(*), AVG(price) 
-FROM products 
+SELECT category, COUNT(*), AVG(price)
+FROM products
 GROUP BY category
 ```
 
 ## Requirements
 
 - **Rust examples**: Rust 1.83+ with Cargo
-- **Python examples**: Python 3.9+, `requests` library
+- **Python examples**: Python 3.9+, `velesdb` package (PyO3 bindings or `pip install velesdb`)
 - **WASM demo**: Modern browser (Chrome, Firefox, Edge, Safari)
 
 ## License

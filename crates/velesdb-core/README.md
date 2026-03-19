@@ -11,6 +11,10 @@ High-performance vector database engine written in Rust.
 
 - **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (38.6µs search, 16.2ns dot product)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
+- **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion
+- **Streaming Inserts**: Bounded-channel ingestion with backpressure and insert-and-search via delta buffer
+- **Agent Memory SDK**: Semantic, Episodic, and Procedural memory with TTL, snapshots, and reinforcement
+- **Query Plan Cache**: Two-tier LRU cache with write-generation invalidation for repeated queries
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **ColumnStore Filtering**: 122x faster than JSON filtering at scale
@@ -184,13 +188,13 @@ db.create_collection_with_options(
 
 | Operation | Time | Throughput |
 |-----------|------|------------|
-| Dot Product | **16.2 ns** | 47.4 Gelem/s |
-| Euclidean Distance | **19.7 ns** | 39.0 Gelem/s |
-| Cosine Similarity | **29.6 ns** | 25.9 Gelem/s |
-| Hamming Distance | **35.3 ns** | — |
-| Jaccard Similarity | **26.9 ns** | — |
+| Dot Product | **23.6 ns** | 32.5 Gelem/s |
+| Euclidean Distance | **22.7 ns** | 33.8 Gelem/s |
+| Cosine Similarity | **34.0 ns** | 22.6 Gelem/s |
+| Hamming Distance | **52.4 ns** | — |
+| Jaccard Similarity | **30.1 ns** | — |
 
-*Measured 2026-03-11 on Intel Core i9-14900KF, Rust 1.92.0, `--release`.*
+*Measured 2026-03-19 on Intel Core i9-14900KF, Rust 1.92.0, `--release`, sequential on idle machine.*
 
 ### End-to-End Benchmark (10k vectors, 768D)
 
@@ -364,6 +368,356 @@ WITH (ef_search = 512, timeout_ms = 5000);
 | IS NOT NULL | `IS NOT NULL` | `phone IS NOT NULL` |
 | Full-text | `MATCH` | `content MATCH 'rust'` |
 
+## Sparse Vector Search
+
+VelesDB supports sparse vectors (e.g., SPLADE, BM25 term weights) alongside dense embeddings.
+You can store named sparse vectors per point, search them independently, or combine dense+sparse
+results using Reciprocal Rank Fusion (RRF).
+
+### Upserting points with sparse vectors
+
+```rust
+use std::collections::BTreeMap;
+use velesdb_core::{Database, DistanceMetric, Point};
+use velesdb_core::sparse_index::SparseVector;
+
+let db = Database::open("./data")?;
+db.create_collection("docs", 768, DistanceMetric::Cosine)?;
+let collection = db.get_collection("docs")
+    .ok_or("Collection not found")?;
+
+// Build a sparse vector from (term_index, weight) pairs
+let sparse = SparseVector::new(vec![
+    (42, 1.2),   // term 42, weight 1.2
+    (187, 0.8),  // term 187, weight 0.8
+    (1024, 0.3),
+]);
+
+// Attach named sparse vectors to a point
+let mut sparse_map = BTreeMap::new();
+sparse_map.insert("".to_string(), sparse); // "" = default sparse index
+
+let point = Point::with_sparse(
+    1,
+    vec![0.1; 768],                          // dense embedding
+    Some(serde_json::json!({"title": "My doc"})),
+    Some(sparse_map),
+);
+collection.upsert(vec![point])?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### Sparse-only search (DAAT MaxScore)
+
+The sparse search engine uses a DAAT (Document-At-A-Time) MaxScore algorithm for fast
+top-k retrieval by inner product. It automatically falls back to linear scan for
+high-coverage queries.
+
+```rust
+# use velesdb_core::sparse_index::SparseVector;
+// Build a query with term weights
+let query = SparseVector::new(vec![(42, 1.0), (187, 0.5)]);
+
+// Search the default sparse index for top-5 results
+let results = collection.sparse_search_default(&query, 5)?;
+for result in &results {
+    println!("ID: {}, Score: {:.4}", result.point.id, result.score);
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### Hybrid dense+sparse with RRF fusion
+
+Combine dense vector search (HNSW) with sparse term matching. Both branches run
+in parallel via rayon, then results are fused using Reciprocal Rank Fusion (RRF) or
+Relative Score Fusion (RSF).
+
+```rust
+# use velesdb_core::sparse_index::SparseVector;
+# use velesdb_core::FusionStrategy;
+let dense_query = vec![0.15; 768];
+let sparse_query = SparseVector::new(vec![(42, 1.0), (187, 0.5)]);
+
+// RRF fusion with default k=60
+let strategy = FusionStrategy::rrf_default();
+let results = collection.hybrid_sparse_search(
+    &dense_query,
+    &sparse_query,
+    10,         // top-k
+    &strategy,
+)?;
+
+for result in &results {
+    println!("ID: {}, Fused score: {:.4}", result.point.id, result.score);
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+You can also use `RelativeScore` fusion for explicit weight control:
+
+```rust
+# use velesdb_core::FusionStrategy;
+// 70% dense, 30% sparse (validated constructor)
+let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
+```
+
+### Key types and parameters
+
+| Type | Path | Description |
+|------|------|-------------|
+| `SparseVector` | `velesdb_core::sparse_index` | Sorted `(u32 index, f32 weight)` pairs; deduplicates and filters zeros on construction |
+| `FusionStrategy` | `velesdb_core` | `RRF { k }`, `RelativeScore { dense_weight, sparse_weight }` |
+| `ScoredDoc` | `velesdb_core::sparse_index` | Raw sparse search result: `doc_id: u64`, `score: f32` |
+
+| Method | On | Description |
+|--------|-----|-------------|
+| `sparse_search_default(query, k)` | `Collection` | Sparse search on the default (`""`) index |
+| `sparse_search_named(query, k, name)` | `Collection` | Sparse search on a named index |
+| `hybrid_sparse_search(dense, sparse, k, strategy)` | `Collection` | Dense + sparse with fusion |
+| `hybrid_sparse_search_with_filter(dense, sparse, k, strategy, filter)` | `Collection` | Same with metadata filter |
+
+## Streaming Inserts
+
+For high-throughput, continuously arriving data (IoT sensors, live embeddings, log streams),
+`StreamIngester` provides a bounded-channel ingestion pipeline with automatic micro-batch
+flushing and backpressure signaling.
+
+### Basic usage
+
+```rust,no_run
+use velesdb_core::collection::streaming::{StreamIngester, StreamingConfig};
+use velesdb_core::Point;
+
+// Configure the pipeline
+let config = StreamingConfig {
+    buffer_size: 10_000,     // channel capacity (backpressure threshold)
+    batch_size: 128,         // flush every 128 points
+    flush_interval_ms: 50,   // or every 50ms, whichever comes first
+};
+
+// `collection` is a Collection obtained from db.get_collection(...)
+let ingester = StreamIngester::new(collection, config);
+
+// Send points — returns immediately
+let point = Point::new(1, vec![0.1; 384], None);
+match ingester.try_send(point) {
+    Ok(()) => { /* accepted */ }
+    Err(e) => eprintln!("Backpressure: {e}"),
+}
+
+// Gracefully drain remaining points before shutdown
+ingester.shutdown().await;
+```
+
+### Backpressure
+
+`try_send` is non-blocking. When the bounded channel is at capacity, it returns
+`BackpressureError::BufferFull` -- the caller should retry after a short delay or
+drop the point. If the background drain task exits unexpectedly, `DrainTaskDead` is
+returned.
+
+### Delta buffer (insert-and-search)
+
+During an HNSW rebuild, newly inserted vectors are not yet in the index. The delta buffer
+accumulates these vectors and merges them into search results via brute-force scan, so
+freshly inserted data is searchable immediately without waiting for the rebuild to complete.
+
+```rust,ignore
+// The delta buffer is managed automatically by the streaming pipeline.
+// When active, search results transparently include delta-buffered vectors.
+let results = collection.search(&query, 10)?;
+// ^ includes both HNSW-indexed and delta-buffered vectors
+```
+
+## Agent Memory Patterns
+
+The Agent Memory SDK provides three memory subsystems designed for AI agent workloads:
+chatbots, RAG pipelines, and autonomous learning agents. Each memory type is backed by
+VelesDB collections with vector similarity search, TTL-based expiration, and snapshot
+persistence.
+
+### Initialization
+
+```rust,no_run
+use std::sync::Arc;
+use velesdb_core::Database;
+use velesdb_core::agent::AgentMemory;
+
+let db = Arc::new(Database::open("./agent_data")?);
+let memory = AgentMemory::new(Arc::clone(&db))?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### Semantic Memory (long-term knowledge)
+
+Stores facts as vector embeddings for similarity-based retrieval. Use this for RAG
+knowledge bases, persistent world knowledge, or any data your agent should "know" long-term.
+
+```rust,ignore
+// Store a fact
+let embedding = vec![0.1; 384]; // from your embedding model
+memory.semantic().store(1, "Paris is the capital of France", &embedding)?;
+
+// Query by similarity
+let query_embedding = vec![0.12; 384];
+let results = memory.semantic().query(&query_embedding, 5)?;
+for (id, score, content) in &results {
+    println!("[{score:.3}] {content}");
+}
+```
+
+### Episodic Memory (event timeline)
+
+Records events with timestamps for temporal and similarity-based retrieval. Use this
+for conversation history, user interaction logs, or any time-sequenced data.
+
+```rust,ignore
+// Record an event
+let timestamp = 1710000000_i64; // Unix timestamp
+let embedding = vec![0.2; 384];
+memory.episodic().record(1, "User asked about French geography", timestamp, Some(&embedding))?;
+
+// Retrieve recent events
+let recent = memory.episodic().recent(10, None)?;
+for (id, description, ts) in &recent {
+    println!("[{ts}] {description}");
+}
+
+// Recall similar events
+let results = memory.episodic().recall_similar(&query_embedding, 5)?;
+```
+
+### Procedural Memory (learned patterns)
+
+Stores action sequences with confidence scoring and reinforcement learning. Use this
+for agents that learn from experience -- task automation, decision-making, or any
+workflow where past success/failure should influence future behavior.
+
+```rust,ignore
+// Learn a procedure
+let steps = vec!["parse query".into(), "search index".into(), "format results".into()];
+let embedding = vec![0.3; 384];
+memory.procedural().learn(1, "answer_question", &steps, Some(&embedding), 0.8)?;
+
+// Recall matching procedures (min confidence 0.5)
+let matches = memory.procedural().recall(&query_embedding, 5, 0.5)?;
+for m in &matches {
+    println!("{} (confidence: {:.2}): {:?}", m.name, m.confidence, m.steps);
+}
+
+// Reinforce after success/failure
+memory.procedural().reinforce(1, true)?;  // increases confidence
+memory.procedural().reinforce(1, false)?; // decreases confidence
+```
+
+### TTL, eviction, and snapshots
+
+```rust,ignore
+// Set TTL on individual entries
+memory.set_semantic_ttl(1, 3600);  // expires in 1 hour
+memory.set_episodic_ttl(2, 86400); // expires in 24 hours
+
+// Run periodic expiration
+let stats = memory.auto_expire()?;
+println!("Expired: {} semantic, {} episodic", stats.semantic_expired, stats.episodic_expired);
+
+// Evict low-confidence procedures
+let evicted = memory.evict_low_confidence_procedures(0.3)?;
+
+// Snapshot and restore
+let memory = memory
+    .with_snapshots("./snapshots", 5)  // keep last 5 snapshots
+    .with_eviction_config(EvictionConfig::default());
+
+let version = memory.snapshot()?;
+memory.load_snapshot_version(version)?;
+```
+
+### When to use each memory type
+
+| Memory Type | Use Case | Example |
+|-------------|----------|---------|
+| **Semantic** | Persistent knowledge that rarely changes | RAG knowledge base, world facts, documentation |
+| **Episodic** | Time-sequenced events and interactions | Chat history, user sessions, audit logs |
+| **Procedural** | Learned behaviors that improve over time | Task automation, decision trees, API call patterns |
+
+### Key types and parameters
+
+| Type | Description |
+|------|-------------|
+| `AgentMemory` | Unified interface; holds `SemanticMemory`, `EpisodicMemory`, `ProceduralMemory` |
+| `SemanticMemory` | `store(id, content, embedding)`, `query(embedding, k)` returns `Vec<(id, score, content)>` |
+| `EpisodicMemory` | `record(id, description, timestamp, embedding)`, `recent(limit, since)`, `recall_similar(embedding, k)` |
+| `ProceduralMemory` | `learn(id, name, steps, embedding, confidence)`, `recall(embedding, k, min_confidence)`, `reinforce(id, success)` |
+| `ProcedureMatch` | Result struct: `id`, `name`, `steps: Vec<String>`, `confidence: f32`, `score: f32` |
+| `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
+| `SnapshotManager` | `new(dir, max_snapshots)` -- versioned state persistence with automatic rotation |
+| `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `episodic_consolidated` counts |
+
+Default embedding dimension is **384** (configurable via `AgentMemory::with_dimension(db, dim)`).
+
+## Query Plan Cache
+
+VelesDB automatically caches compiled query plans in a two-tier LRU cache (L1 lock-free +
+L2 LRU). Repeated queries skip parsing and planning entirely when the cache key matches.
+
+### How it works
+
+- **Automatic**: The cache is enabled by default on every `Database` instance. No configuration
+  required.
+- **Write-generation invalidation**: Each collection tracks a monotonic write generation counter.
+  When data is inserted, updated, or deleted, the generation increments. Cached plans whose
+  key includes a stale generation are automatically bypassed -- no explicit invalidation needed.
+- **LRU eviction**: The cache has bounded capacity. Least-recently-used plans are evicted when
+  the cache is full.
+
+### Inspecting cache behavior with EXPLAIN
+
+The `EXPLAIN` output includes `cache_hit` and `plan_reuse_count` fields that show whether
+a query plan was served from the cache:
+
+```sql
+EXPLAIN SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10;
+```
+
+```json
+{
+  "root": { "VectorSearch": { "collection": "docs", "ef_search": 100, "candidates": 10 } },
+  "estimated_cost_ms": 0.1,
+  "index_used": "Hnsw",
+  "filter_strategy": "None",
+  "cache_hit": true,
+  "plan_reuse_count": 42
+}
+```
+
+- `cache_hit: true` -- the plan was found in cache (parsing and planning were skipped).
+- `cache_hit: false` -- cache miss; a fresh plan was compiled and inserted into the cache.
+- `plan_reuse_count` -- how many times this cached plan has been reused across all callers.
+
+### Cache metrics
+
+```rust,ignore
+let metrics = db.plan_cache().metrics();
+println!("Hit rate: {:.1}%", metrics.hit_rate() * 100.0);
+println!("Hits: {}, Misses: {}", metrics.hits(), metrics.misses());
+```
+
+### Key types and parameters
+
+| Type | Path | Description |
+|------|------|-------------|
+| `CompiledPlanCache` | `velesdb_core::cache` | Two-tier cache (L1 lock-free DashMap + L2 LRU). Default: 1K L1 / 10K L2 entries |
+| `PlanKey` | `velesdb_core::cache` | Cache key: `query_hash: u64`, `schema_version: u64`, `collection_generations: SmallVec<[u64; 4]>` |
+| `CompiledPlan` | `velesdb_core::cache` | Cached plan: `plan: QueryPlan`, `referenced_collections: Vec<String>`, `reuse_count: AtomicU64` |
+| `PlanCacheMetrics` | `velesdb_core::cache` | `hits()`, `misses()`, `hit_rate() -> f64` (ratio 0.0--1.0) |
+
+| Method | On | Description |
+|--------|-----|-------------|
+| `plan_cache()` | `Database` | Returns `&CompiledPlanCache` |
+| `plan_cache().metrics()` | `CompiledPlanCache` | Returns `&PlanCacheMetrics` |
+| `plan_cache().stats()` | `CompiledPlanCache` | Returns `LockFreeCacheStats` (L1/L2 sizes, hit counts) |
+
 ## Public API Reference
 
 ```rust
@@ -377,11 +731,41 @@ use velesdb_core::{
     Error, Result,      // Error types
 };
 
+// Sparse vectors and fusion
+use velesdb_core::sparse_index::SparseVector; // Sparse vector (indices + weights)
+use velesdb_core::FusionStrategy;             // RRF, RelativeScore, Average, Maximum, Weighted
+
+// Streaming ingestion
+use velesdb_core::collection::streaming::{
+    StreamIngester,     // Bounded-channel ingestion pipeline
+    StreamingConfig,    // Buffer size, batch size, flush interval
+    BackpressureError,  // BufferFull, NotConfigured, DrainTaskDead
+};
+
+// Agent memory
+use velesdb_core::agent::{
+    AgentMemory,        // Unified memory interface (semantic + episodic + procedural)
+    SemanticMemory,     // Long-term knowledge storage
+    EpisodicMemory,     // Event timeline with temporal queries
+    ProceduralMemory,   // Learned patterns with reinforcement
+    ProcedureMatch,     // Recall result with confidence and steps
+    EvictionConfig,     // TTL and eviction policies
+    SnapshotManager,    // Versioned snapshot persistence
+    TemporalIndex,      // B-tree temporal index for O(log N) time queries
+};
+
 // Index types
 use velesdb_core::{
     HnswIndex,          // HNSW index
     HnswParams,         // Index parameters
     SearchQuality,      // Fast, Balanced, Accurate, Perfect
+};
+
+// Query plan cache
+use velesdb_core::cache::{
+    CompiledPlanCache,  // Two-tier LRU cache for compiled query plans
+    PlanCacheMetrics,   // Hit/miss counters with hit_rate()
+    PlanKey,            // Deterministic cache key (query hash + write generation)
 };
 
 // Filtering

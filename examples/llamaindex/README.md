@@ -1,5 +1,7 @@
 # VelesDB + LlamaIndex Integration
 
+> **Difficulty: Intermediate** | Showcases: Hybrid search (dense + sparse), RRF fusion, Product Quantization, LlamaIndex VectorStore interface
+
 Example integration showing VelesDB as a hybrid dense+sparse vector store for LlamaIndex with Product Quantization (PQ) support.
 
 > **Note:** This is an example integration, not a published package. It demonstrates the integration pattern for building your own LlamaIndex-compatible VelesDB wrapper.
@@ -47,6 +49,30 @@ status = store.train_pq(m=8, k=256)
 ```
 
 PQ divides each vector into `m` sub-spaces and quantizes each with `k` centroids, reducing memory from `dim * 4 bytes` to `m * 1 byte` per vector (when k=256). This enables scaling to millions of vectors on modest hardware.
+
+## Expected Output
+
+```
+=== VelesDB + LlamaIndex Hybrid Search Demo ===
+
+--- Inserting 5 documents ---
+Inserted 5 nodes
+
+--- Training Product Quantization ---
+PQ trained: 8 sub-quantizers, 256 centroids
+
+--- Dense Search (3 results) ---
+  [1] node_xxx (score: 0.xxx)
+  ...
+
+--- Sparse Search (3 results) ---
+  [1] node_xxx (score: 0.xxx)
+  ...
+
+--- Hybrid Search (RRF fusion, 3 results) ---
+  [1] node_xxx (score: 0.xxx)
+  ...
+```
 
 ## Adapting for Production
 

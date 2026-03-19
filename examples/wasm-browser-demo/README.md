@@ -1,5 +1,7 @@
 # VelesDB WASM Browser Demo
 
+> **Difficulty: Beginner** | Showcases: WebAssembly vector search, client-side computation, zero-server setup
+
 Interactive demo of VelesDB running entirely in the browser via WebAssembly.
 
 ## Features
@@ -30,6 +32,16 @@ Then visit http://localhost:8080
 
 Open `index.html` directly in your browser - no build step required!
 
+## Expected Output
+
+When you open the page in a browser you will see an interactive panel where you can:
+1. Choose the number of vectors and dimensions
+2. Click "Insert" to generate and index random vectors
+3. Click "Search" to run a nearest-neighbor query
+4. Results appear instantly with IDs, scores, and latency in microseconds
+
+No console output or build step is needed -- everything runs visually in the page.
+
 ## How it Works
 
 1. The page loads the `velesdb-wasm` npm package from unpkg CDN
@@ -57,7 +69,7 @@ Typical results on modern hardware:
 
 ```html
 <script type="module">
-  import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@latest/velesdb_wasm.js';
+  import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@1.6.0/velesdb_wasm.js';
 
   await init();
   

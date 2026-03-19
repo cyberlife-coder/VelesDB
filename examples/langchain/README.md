@@ -1,5 +1,7 @@
 # VelesDB + LangChain Integration
 
+> **Difficulty: Intermediate** | Showcases: Hybrid search (dense + sparse), RRF fusion, LangChain VectorStore interface
+
 Example integration showing VelesDB as a hybrid dense+sparse vector store for LangChain applications.
 
 > **Note:** This is an example integration, not a published package. It demonstrates the integration pattern for building your own LangChain-compatible VelesDB wrapper.
@@ -36,6 +38,25 @@ The example uses synthetic embeddings (random vectors) so it runs without an emb
 3. **Dense-only search** using just embedding vectors
 4. **Sparse-only search** using just keyword weights
 5. **Hybrid search** combining both signals via VelesDB's built-in RRF fusion
+
+## Expected Output
+
+```
+=== VelesDB + LangChain Hybrid Search Demo ===
+
+--- Dense Search Results (3) ---
+  [1] Machine learning is ... (score: 0.xxx)
+  [2] Neural networks ...     (score: 0.xxx)
+  ...
+
+--- Sparse Search Results (3) ---
+  [1] ... (score: 0.xxx)
+  ...
+
+--- Hybrid Search Results (RRF fusion, 3) ---
+  [1] ... (score: 0.xxx)
+  ...
+```
 
 ## Adapting for Production
 

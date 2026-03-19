@@ -1,5 +1,7 @@
 # VelesDB RAG Desktop App
 
+> **Difficulty: Advanced** | Showcases: Vector search, Tauri desktop integration, RAG pipeline, knowledge graph, real-time events
+
 Build a local **Retrieval-Augmented Generation (RAG)** desktop application using:
 - **Tauri 2.0** - Rust-based desktop framework
 - **VelesDB** - Lightning-fast vector search (microseconds!)
@@ -16,7 +18,7 @@ A desktop app that:
 
 ## 📋 Prerequisites
 
-- [Rust](https://rustup.rs/) (1.70+)
+- [Rust](https://rustup.rs/) (1.83+)
 - [Node.js](https://nodejs.org/) (18+)
 - [Tauri CLI](https://v2.tauri.app/start/prerequisites/)
 
@@ -175,7 +177,7 @@ This makes it perfect for:
 - No cloud dependencies
 - Use local LLMs (Ollama, llama.cpp) for complete privacy
 
-## �️ Knowledge Graph (NEW)
+## Knowledge Graph (NEW)
 
 Build relationships between documents:
 
@@ -219,7 +221,7 @@ await listen('velesdb://collection-updated', (event) => {
 });
 ```
 
-## �📚 Next Steps
+## Next Steps
 
 1. **Add local LLM** - Integrate Ollama for complete offline RAG
 2. **PDF support** - Use `pdf-extract` crate for PDFs
