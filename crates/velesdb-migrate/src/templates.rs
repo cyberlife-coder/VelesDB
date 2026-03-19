@@ -545,10 +545,7 @@ mod tests {
         }
     }
 
-    fn make_params<'a>(
-        source_type: &'a str,
-        schema: &'a SourceSchema,
-    ) -> AutoConfigParams<'a> {
+    fn make_params<'a>(source_type: &'a str, schema: &'a SourceSchema) -> AutoConfigParams<'a> {
         AutoConfigParams {
             source_type,
             url: "http://localhost:6333",
@@ -568,7 +565,10 @@ mod tests {
         assert!(yaml.contains("source:"), "missing source key");
         assert!(yaml.contains("type: qdrant"), "missing source type");
         assert!(yaml.contains("destination:"), "missing destination key");
-        assert!(yaml.contains("collection: my_collection"), "missing collection");
+        assert!(
+            yaml.contains("collection: my_collection"),
+            "missing collection"
+        );
         assert!(yaml.contains("dimension: 384"), "missing dimension");
         assert!(yaml.contains("api_key: secret-key"), "missing api_key");
         assert!(yaml.contains("5000"), "missing total count");
@@ -612,11 +612,20 @@ mod tests {
         let yaml = generate_auto_config(&params);
 
         assert!(yaml.contains("type: supabase"), "missing source type");
-        assert!(yaml.contains("vector_column: embedding"), "missing vector column");
+        assert!(
+            yaml.contains("vector_column: embedding"),
+            "missing vector column"
+        );
         assert!(yaml.contains("id_column: doc_id"), "missing id column");
         assert!(yaml.contains("- title"), "missing payload field 'title'");
-        assert!(!yaml.contains("- embedding"), "vector col should be excluded from fields");
-        assert!(!yaml.contains("- doc_id"), "id col should be excluded from fields");
+        assert!(
+            !yaml.contains("- embedding"),
+            "vector col should be excluded from fields"
+        );
+        assert!(
+            !yaml.contains("- doc_id"),
+            "id col should be excluded from fields"
+        );
     }
 
     #[test]
@@ -645,7 +654,10 @@ mod tests {
         let params = make_params("milvus", &schema);
         let yaml = generate_auto_config(&params);
 
-        assert!(yaml.contains("dimension: 768"), "zero dimension should default to 768");
+        assert!(
+            yaml.contains("dimension: 768"),
+            "zero dimension should default to 768"
+        );
     }
 
     #[test]
@@ -762,6 +774,9 @@ mod tests {
     fn test_build_fields_list_empty_returns_comment() {
         let schema = make_schema(vec![]);
         let list = build_fields_list(&schema, "id", "embedding");
-        assert!(list.contains("automatically"), "empty fields should produce a comment");
+        assert!(
+            list.contains("automatically"),
+            "empty fields should produce a comment"
+        );
     }
 }

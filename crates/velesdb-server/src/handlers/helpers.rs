@@ -70,9 +70,10 @@ pub(crate) fn notify_query_timing(
     tracing::debug!(collection = collection_name, elapsed_ms, "query completed");
     // Reason: clamped to u64::MAX above — truncation is impossible
     #[allow(clippy::cast_possible_truncation)]
-    state
-        .db
-        .notify_query(collection_name, duration_us.min(u128::from(u64::MAX)) as u64);
+    state.db.notify_query(
+        collection_name,
+        duration_us.min(u128::from(u64::MAX)) as u64,
+    );
 }
 
 /// Apply guardrails pre-check (rate limiting + circuit breaker).

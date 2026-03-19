@@ -175,11 +175,7 @@ impl Collection {
             .map(|(query_results, query)| {
                 // Merge with delta buffer per query
                 let query_results = self.merge_delta(query_results, query, k, metric);
-                resolve::resolve_scored_results(
-                    &query_results,
-                    &*vector_storage,
-                    &*payload_storage,
-                )
+                resolve::resolve_scored_results(&query_results, &*vector_storage, &*payload_storage)
             })
             .collect();
 

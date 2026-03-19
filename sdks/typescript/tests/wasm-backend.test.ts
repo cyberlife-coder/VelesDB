@@ -280,7 +280,7 @@ describe('WasmBackend', () => {
 
     it('should include helpful error message for graph operations', async () => {
       await expect(backend.getEdges('social'))
-        .rejects.toThrow('Knowledge Graph operations is not supported in WASM backend. Use REST backend.');
+        .rejects.toThrow('Knowledge Graph operations: not supported in WASM backend. Use REST backend.');
     });
   });
 

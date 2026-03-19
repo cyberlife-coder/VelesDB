@@ -106,7 +106,7 @@ export function toNumberArray(v: number[] | Float32Array): number[] {
  */
 export function wasmNotSupported(feature: string): never {
   throw new VelesDBError(
-    `${feature} is not supported in WASM backend. Use REST backend.`,
+    `${feature}: not supported in WASM backend. Use REST backend.`,
     'NOT_SUPPORTED'
   );
 }

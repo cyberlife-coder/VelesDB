@@ -2302,7 +2302,13 @@ components:
           description: The `VelesQL` query string.
     QueryResponse:
       type: object
-      description: Response from `VelesQL` query execution.
+      description: |-
+        Response from `VelesQL` query execution.
+
+        Results are projected rows: the shape depends on the SELECT clause.
+        - `SELECT *` → `{id, field1, field2, ...}` (no vector)
+        - `SELECT col1, col2` → `{col1, col2}`
+        - `SELECT similarity() AS score, title` → `{score, title}`
       required:
       - results
       - timing_ms
@@ -2315,9 +2321,8 @@ components:
           description: Query response metadata.
         results:
           type: array
-          items:
-            $ref: '#/components/schemas/SearchResultResponse'
-          description: Query results.
+          items: {}
+          description: Projected result rows. Shape depends on SELECT clause.
         rows_returned:
           type: integer
           description: Number of rows returned.

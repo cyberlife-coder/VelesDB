@@ -196,10 +196,7 @@ mod tests {
 
     #[test]
     fn sort_results_descending_equal_scores_stable_enough() {
-        let mut results = vec![
-            make_search_result(1, 0.5),
-            make_search_result(2, 0.5),
-        ];
+        let mut results = vec![make_search_result(1, 0.5), make_search_result(2, 0.5)];
         sort_results_descending(&mut results);
         // Both have the same score; we just verify no panic and both are present.
         let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
