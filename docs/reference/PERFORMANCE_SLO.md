@@ -1,6 +1,6 @@
 # VelesDB Performance SLO
 
-Last updated: 2026-03-12
+Last updated: 2026-03-19
 
 This file defines measurable performance objectives used as CI regression gates.
 
@@ -17,8 +17,11 @@ This file defines measurable performance objectives used as CI regression gates.
 
 | Metric | Target | Source |
 |--------|--------|--------|
-| insert mean (`smoke_insert/10k_128d`) | no regression > 15% vs baseline | `benchmarks/baseline.json` |
+| insert mean (`smoke_insert/10k_128d`) | no regression > 25% vs baseline | `benchmarks/baseline.json` |
 | search mean (`smoke_search/10k_128d_k10`) | no regression > 15% vs baseline | `benchmarks/baseline.json` |
+
+> **Note:** Insert uses a wider 25% threshold because it is IO-bound on shared CI runners
+> with high variance (7.86–10.42s across 5 runs). Search is CPU-bound and stable at 15%.
 
 ## CI Enforcement
 
