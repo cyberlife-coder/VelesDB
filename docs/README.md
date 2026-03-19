@@ -20,7 +20,7 @@ Detailed guides for using VelesDB features:
 |-------|-------------|
 | [Installation](./guides/INSTALLATION.md) | All installation methods (cargo, binaries, Docker) |
 | [Configuration](./guides/CONFIGURATION.md) | `velesdb.toml` configuration reference |
-| [Search Modes](./guides/SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/HighRecall/Perfect modes |
+| [Search Modes](./guides/SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
 | [CLI & REPL](./guides/CLI_REPL.md) | Command-line interface and interactive shell |
 | [Quantization](./guides/QUANTIZATION.md) | Vector compression (SQ8, Binary) |
 | [Tuning Guide](./guides/TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |

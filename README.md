@@ -353,16 +353,16 @@ cargo run --release
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
 | **SIMD Dot Product (768D)** | **23.6 ns** | **32.5 Gelem/s** |
-| **Euclidean** | **19.7 ns** | **39.0 Gelem/s** |
-| **Cosine** | **29.6 ns** | **25.9 Gelem/s** |
-| **Hamming** | **35.3 ns** | — |
+| **Euclidean** | **22.7 ns** | **33.8 Gelem/s** |
+| **Cosine** | **34.0 ns** | **22.6 Gelem/s** |
+| **Hamming** | **52.4 ns** | — |
 
 ### System Benchmarks (10K Vectors, 768D)
 
 | Benchmark | Result |
 |-----------|--------|
 | **HNSW Search (10K vectors)** | **42.8 µs** (k=10) |
-| **VelesQL Cache Hit** | **1.05 µs** (~952K QPS) |
+| **VelesQL Cache Hit** | **1.06 µs** (~943K QPS) |
 | **Sparse Search** | **958 µs** (MaxScore DAAT) |
 | **Recall@10 (Accurate)** | **100%** |
 

@@ -63,7 +63,7 @@ This design ensures:
 |------------|---------|---------------------|
 | Unified Vector + Graph engine | Yes | Separate systems |
 | Single binary (~15 MB) | Yes | Containers / clusters |
-| Sub-millisecond latency (57 us) | Yes | 50-100 ms (cloud) |
+| Sub-millisecond latency (43 us) | Yes | 50-100 ms (cloud) |
 | WASM / Mobile native | Yes | Server-only |
 | SQL-like query language (VelesQL) | Yes | JSON DSL / SDK-only |
 

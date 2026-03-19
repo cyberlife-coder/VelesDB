@@ -62,7 +62,7 @@ data_dir = "./data"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 0.8.0
+# Version: 1.6.0
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -652,7 +652,6 @@ pub enum SearchMode {
     Fast,
     Balanced,
     Accurate,
-    HighRecall,
     Perfect,
 }
 
@@ -677,4 +676,4 @@ impl VelesConfig {
 
 ---
 
-*VelesDB Documentation — January 2026*
+*VelesDB Documentation — March 2026*

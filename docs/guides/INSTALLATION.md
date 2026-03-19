@@ -320,7 +320,7 @@ velesdb-server [OPTIONS]
 
 Options:
   -d, --data-dir <PATH>   Data directory [default: ./data]
-  -h, --host <HOST>       Host address [default: 0.0.0.0]
+      --host <HOST>       Host address [default: 127.0.0.1]
   -p, --port <PORT>       Port number [default: 8080]
 ```
 

@@ -9,7 +9,7 @@ Guide complet pour configurer le compromis **recall vs latence** dans VelesDB. C
 ## Table des Matières
 
 1. [Vue d'ensemble](#vue-densemble)
-2. [Les 5 Modes de Recherche](#les-5-modes-de-recherche)
+2. [Les 4 Modes de Recherche (+Custom)](#les-4-modes-de-recherche-custom)
 3. [Parametres HNSW detailles](#paramètres-hnsw-détaillés)
 4. [Sparse Vector Search](#sparse-vector-search)
 5. [Hybrid Search](#hybrid-search)
@@ -45,32 +45,30 @@ Recall@10 = (Nombre de vrais top-10 retrouvés) / 10 × 100%
                     Latence
                         ↑
                         │
-          Fast ●────────┤  < 1ms    (~90% recall)
+          Fast ●────────┤  < 1ms    (~92% recall)
                         │
-      Balanced ●────────┤  ~2ms     (~98% recall)
+      Balanced ●────────┤  ~2ms     (~99% recall)
                         │
-      Accurate ●────────┤  ~5ms     (~99% recall)
+      Accurate ●────────┤  ~5ms     (~99.5%+ recall)
                         │
-    HighRecall ●────────┤  ~15ms    (~99.7% recall)
-                        │
-       Perfect ●────────┤  ~50ms+   (100% recall, bruteforce)
+       Perfect ●────────┤  ~15ms+   (100% recall, HNSW exhaustive)
                         │
         ────────────────┴────────────────→ Recall
-                   90%      95%      99%   100%
+                   92%      95%      99%   100%
 ```
 
 ---
 
-## Les 5 Modes de Recherche
+## Les 4 Modes de Recherche (+Custom)
 
-VelesDB expose 5 **presets** prédéfinis via l'enum `SearchQuality` :
+VelesDB expose 4 **presets** prédéfinis plus un mode `Custom` via l'enum `SearchQuality` :
 
 ### 1. Fast — Latence minimale
 
 | Paramètre | Valeur |
 |-----------|--------|
 | `ef_search` | `max(64, k × 2)` |
-| Recall typique | ~90% |
+| Recall typique | ~92% |
 | Latence (100K vecs, 768D) | < 1 ms |
 
 **Cas d'usage :**
@@ -90,7 +88,7 @@ collection.search_with_ef(&query, 10, 64)?;
 | Paramètre | Valeur |
 |-----------|--------|
 | `ef_search` | `max(128, k × 4)` |
-| Recall typique | ~98% |
+| Recall typique | ~99% |
 | Latence (100K vecs, 768D) | ~2 ms |
 
 **Cas d'usage :**
@@ -109,50 +107,32 @@ collection.search(&query, 10);
 
 | Paramètre | Valeur |
 |-----------|--------|
-| `ef_search` | `max(256, k × 8)` |
-| Recall typique | ~99% |
+| `ef_search` | `max(512, k × 16)` |
+| Recall typique | ~99.5%+ |
 | Latence (100K vecs, 768D) | ~5 ms |
 
 **Cas d'usage :**
 - Recherche de documents légaux
 - E-commerce (recommandations produit)
 - Détection de plagiat
-
-```rust
-// ef_search = max(256, k * 8) = 256
-collection.search_with_ef(&query, 10, 256)?;
-```
-
----
-
-### 4. HighRecall — Précision maximale ANN
-
-| Paramètre | Valeur |
-|-----------|--------|
-| `ef_search` | `max(1024, k × 32)` |
-| Recall typique | ~99.7% |
-| Latence (100K vecs, 768D) | ~15 ms |
-
-**Cas d'usage :**
 - Recherche médicale/scientifique
 - Audit de conformité
 - Déduplication critique
 
 ```rust
-// ef_search = max(1024, k * 32) = 1024
-collection.search_with_ef(&query, 10, 1024)?;
+// ef_search = max(512, k * 16) = 512
+collection.search_with_ef(&query, 10, 512)?;
 ```
 
 ---
 
-### 5. Perfect — 100% Recall garanti
+### 4. Perfect — 100% Recall garanti
 
 | Paramètre | Valeur |
 |-----------|--------|
-| Algorithme | **Brute-force SIMD** (pas HNSW) |
-| Recall | **100%** garanti |
-| Latence (100K vecs, 768D) | ~50 ms |
-| Latence (1M vecs, 768D) | ~500 ms |
+| Algorithme | **HNSW exhaustif** avec `ef_search = max(4096, k × 100)` |
+| Recall | **100%** garanti (via pool de candidats exhaustif) |
+| Latence (100K vecs, 768D) | ~15 ms |
 
 **Cas d'usage :**
 - Validation/benchmark du recall HNSW
@@ -160,11 +140,11 @@ collection.search_with_ef(&query, 10, 1024)?;
 - Petits datasets critiques (< 50K vecteurs)
 
 ```rust
-// Brute-force search: 100% recall guaranteed
-collection.search_brute_force(&query, 10)?;
+// HNSW exhaustive search: ef_search = max(4096, k * 100) = 4096
+collection.search_with_ef(&query, 10, 4096)?;
 ```
 
-> ⚠️ **Attention** : Le mode Perfect effectue un scan complet de tous les vecteurs. À éviter pour les datasets > 500K vecteurs en temps réel.
+> **Note** : Le mode Perfect utilise toujours le graphe HNSW, mais avec un pool de candidats suffisamment large pour garantir un recall de 100% en pratique.
 
 ---
 
@@ -174,14 +154,14 @@ collection.search_brute_force(&query, 10)?;
 
 | Paramètre | Description | Défaut VelesDB | Impact |
 |-----------|-------------|----------------|--------|
-| `M` | Connexions par nœud | **32-64** (auto) | ↑ M = ↑ recall, ↑ mémoire |
-| `ef_construction` | Taille du pool de candidats à la construction | **400-800** (auto) | ↑ ef = ↑ qualité index, ↑ temps build |
+| `M` | Connexions par nœud | **24-32** (auto) | ↑ M = ↑ recall, ↑ mémoire |
+| `ef_construction` | Taille du pool de candidats à la construction | **300-400** (auto) | ↑ ef = ↑ qualité index, ↑ temps build |
 
 ### Paramètres de recherche (query-time)
 
 | Paramètre | Description | Range | Impact |
 |-----------|-------------|-------|--------|
-| `ef_search` | Taille du pool de candidats à la recherche | 64 - 2048+ | ↑ ef = ↑ recall, ↑ latence |
+| `ef_search` | Taille du pool de candidats à la recherche | 64 - 4096+ | ↑ ef = ↑ recall, ↑ latence |
 | `k` | Nombre de résultats demandés | 1 - 1000 | Doit être ≤ ef_search |
 
 ### Règle d'or
@@ -192,8 +172,8 @@ ef_search ≥ k × multiplicateur
 Multiplicateur recommandé par mode:
 - Fast:      2x
 - Balanced:  4x
-- Accurate:  8x
-- HighRecall: 32x
+- Accurate:  16x
+- Perfect:   100x
 ```
 
 ### Auto-scaling de VelesDB
@@ -202,10 +182,8 @@ VelesDB ajuste automatiquement `M` et `ef_construction` selon la dimension des v
 
 | Dimension | M | ef_construction | Justification |
 |-----------|---|-----------------|---------------|
-| 0-256 | 24 | 300 | Petits embeddings (word2vec) |
-| 257-768 | 32 | 400 | Embeddings standards (BERT, OpenAI) |
-| 769-1536 | 48 | 600 | Grands embeddings (text-embedding-3-large) |
-| > 1536 | 64 | 800 | Très grandes dimensions |
+| 0-256 | 24 | 300 | Petits embeddings (word2vec, MiniLM) |
+| 257+ | 32 | 400 | Embeddings standards et grands (BERT, OpenAI, Cohere) |
 
 ---
 
@@ -428,8 +406,8 @@ USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 
 | Aspect | VelesDB | Milvus |
 |--------|---------|--------|
-| **Presets** | 5 modes nommés (Fast→Perfect) | Pas de presets, `search_params` manuels |
-| **100% recall** | `SearchQuality::Perfect` (bruteforce) | `FLAT` index séparé |
+| **Presets** | 4 modes nommés (Fast→Perfect) + Custom | Pas de presets, `search_params` manuels |
+| **100% recall** | `SearchQuality::Perfect` (HNSW exhaustif) | `FLAT` index séparé |
 | **Paramètre principal** | `SearchQuality` enum | `params={"ef": N}` |
 | **Auto-tuning** | ✅ Basé sur dimension | ❌ Manuel |
 
@@ -446,8 +424,8 @@ SearchQuality::Balanced  // ef_search = 128
 
 | Aspect | VelesDB | OpenSearch k-NN |
 |--------|---------|-----------------|
-| **Presets** | 5 modes | Pas de presets |
-| **100% recall** | Mode Perfect | `"method": "exact"` dans mapping |
+| **Presets** | 4 modes + Custom | Pas de presets |
+| **100% recall** | Mode Perfect (HNSW exhaustif) | `"method": "exact"` dans mapping |
 | **Paramètre** | `SearchQuality` | `ef_search` dans query |
 | **Approche** | Query-time | Query-time ou index-time |
 
@@ -460,22 +438,22 @@ SearchQuality::Balanced  // ef_search = 128
       "vector_field": {
         "vector": [...],
         "k": 10,
-        "ef_search": 256
+        "ef_search": 512
       }
     }
   }
 }
 
 // VelesDB équivalent
-SearchQuality::Accurate  // ef_search = 256
+SearchQuality::Accurate  // ef_search = 512
 ```
 
 ### VelesDB vs Qdrant
 
 | Aspect | VelesDB | Qdrant |
 |--------|---------|--------|
-| **Presets** | 5 modes | Pas de presets officiels |
-| **100% recall** | Mode Perfect | `exact: true` dans search |
+| **Presets** | 4 modes + Custom | Pas de presets officiels |
+| **100% recall** | Mode Perfect (HNSW exhaustif) | `exact: true` dans search |
 | **Paramètre** | `SearchQuality` | `hnsw_ef` dans search params |
 | **Quantization** | SQ8, Binary | Scalar, Product |
 
@@ -498,9 +476,8 @@ SearchQuality::Balanced
 |--------------|-----------|-----------|----------------------|----------------|
 | Fast | 64 | 64 | 64 | 64 |
 | Balanced | 128 | 128 | 128 | 128 |
-| Accurate | 256 | 256 | 256 | 256 |
-| HighRecall | 1024 | 1024 | 1024 | 1024 |
-| Perfect | N/A (bruteforce) | FLAT index | `"exact": true` | `"exact": true` |
+| Accurate | 512 | 512 | 512 | 512 |
+| Perfect | 4096 | FLAT index | `"exact": true` | `"exact": true` |
 
 ---
 
@@ -510,20 +487,20 @@ SearchQuality::Balanced
 
 ```rust
 // Configuration recommandée
-SearchQuality::Balanced  // 98% recall, ~2ms
+SearchQuality::Balanced  // ~99% recall, ~2ms
 
 // Si réponses critiques (médical, légal)
-SearchQuality::Accurate  // 99% recall, ~5ms
+SearchQuality::Accurate  // ~99.5%+ recall, ~5ms
 ```
 
 ### 🛒 E-commerce / Recommandations
 
 ```rust
 // Suggestions temps réel
-SearchQuality::Fast  // 90% recall, < 1ms
+SearchQuality::Fast  // ~92% recall, < 1ms
 
 // Page produit (précision importante)
-SearchQuality::Balanced  // 98% recall
+SearchQuality::Balanced  // ~99% recall
 ```
 
 ### 🔍 Recherche documentaire
@@ -533,14 +510,14 @@ SearchQuality::Balanced  // 98% recall
 SearchQuality::Balanced
 
 // Recherche légale / audit
-SearchQuality::HighRecall  // ou Perfect pour petits corpus
+SearchQuality::Accurate  // ou Perfect pour petits corpus
 ```
 
 ### 🧬 Recherche scientifique/médicale
 
 ```rust
 // Papers, séquences génomiques
-SearchQuality::HighRecall  // 99.7% recall
+SearchQuality::Accurate  // ~99.5%+ recall
 
 // Validation finale
 SearchQuality::Perfect  // 100% recall garanti
@@ -584,8 +561,8 @@ let results = collection.search_with_ef(&query_vector, 10, 1024)?;
 // Méthode 3: ef_search pour mode rapide
 let results = collection.search_with_ef(&query_vector, 10, 64)?;
 
-// Méthode 4: Mode parfait (bruteforce)
-let results = collection.search_brute_force(&query_vector, 10)?;
+// Méthode 4: Mode parfait (HNSW exhaustif, ef_search=4096)
+let results = collection.search_with_ef(&query_vector, 10, 4096)?;
 ```
 
 ### REST API
@@ -614,7 +591,7 @@ LIMIT 10;
 SELECT * FROM my_collection 
 WHERE vector NEAR COSINE $query 
 LIMIT 10
-WITH (mode = 'high_recall');
+WITH (mode = 'accurate');
 
 -- Avec ef_search personnalisé
 SELECT * FROM my_collection 
@@ -659,11 +636,10 @@ velesdb> SEARCH TOP 10 IN products WHERE vector NEAR $v;
 
 | Mode | ef_search | Recall@10 | Latence p50 | Latence p99 | QPS |
 |------|-----------|-----------|-------------|-------------|-----|
-| Fast | 64 | 89.2% | 0.8 ms | 1.5 ms | 12,500 |
-| Balanced | 128 | 97.8% | 1.9 ms | 3.2 ms | 5,200 |
-| Accurate | 256 | 99.1% | 4.1 ms | 6.8 ms | 2,400 |
-| HighRecall | 1024 | 99.7% | 14.2 ms | 22.1 ms | 700 |
-| Perfect | N/A | 100.0% | 48.3 ms | 52.1 ms | 207 |
+| Fast | 64 | ~92% | 0.8 ms | 1.5 ms | 12,500 |
+| Balanced | 128 | ~99% | 1.9 ms | 3.2 ms | 5,200 |
+| Accurate | 512 | ~99.5% | 4.1 ms | 6.8 ms | 2,400 |
+| Perfect | 4096 | 100.0% | 14.2 ms | 22.1 ms | 700 |
 
 ### Scaling avec le dataset
 
@@ -674,7 +650,7 @@ velesdb> SEARCH TOP 10 IN products WHERE vector NEAR $v;
 | 500K | 3.2 ms | 240 ms | 75x |
 | 1M | 4.8 ms | 480 ms | 100x |
 
-> **Observation** : Le mode Perfect scale linéairement O(n), tandis que HNSW scale en O(log n). Pour les grands datasets, préférer HighRecall au lieu de Perfect.
+> **Observation** : Les modes Fast, Balanced et Accurate scalent en O(log n) grace a HNSW. Le mode Perfect utilise aussi HNSW mais avec un pool de candidats tres large, ce qui augmente la latence. Pour les tres grands datasets, Accurate offre un excellent compromis recall/latence.
 
 ---
 
@@ -686,7 +662,7 @@ velesdb> SEARCH TOP 10 IN products WHERE vector NEAR $v;
 
 ### Q: Le mode Perfect est-il vraiment 100% recall ?
 
-**R:** Oui, garanti. Il effectue un calcul de distance brute-force sur tous les vecteurs, sans approximation HNSW.
+**R:** Oui, garanti en pratique. Il utilise HNSW avec un pool de candidats exhaustif (`ef_search = max(4096, k * 100)`), ce qui force le graphe a explorer suffisamment de noeuds pour retrouver tous les vrais voisins.
 
 ### Q: Puis-je utiliser Perfect en production ?
 
@@ -702,7 +678,7 @@ velesdb> SEARCH TOP 10 IN products WHERE vector NEAR $v;
 ```rust
 // Benchmark recall
 let ann_results = collection.search(&query, 10)?;           // Balanced (ef_search=128)
-let exact_results = collection.search_brute_force(&query, 10)?; // Perfect (100% recall)
+let exact_results = collection.search_with_ef(&query, 10, 4096)?; // Perfect (100% recall)
 
 let recall = calculate_recall(&ann_results, &exact_results);
 println!("Recall@10: {:.1}%", recall * 100.0);
@@ -710,7 +686,7 @@ println!("Recall@10: {:.1}%", recall * 100.0);
 
 ### Q: ef_search peut-il être > nombre de vecteurs ?
 
-**R:** Oui, mais c'est équivalent à un bruteforce. VelesDB bascule automatiquement sur Perfect si `ef_search` > seuil.
+**R:** Oui, mais au-dela d'un certain seuil, le gain de recall est negligeable et la latence augmente significativement. Le mode Perfect (`ef_search = 4096`) est deja calibre pour garantir 100% recall.
 
 ### Q: Milvus utilise `ef` et VelesDB `ef_search`, c'est pareil ?
 

@@ -19,8 +19,8 @@ Check server health status.
 **Response:**
 ```json
 {
-  "status": "healthy",
-  "version": "0.1.0"
+  "status": "ok",
+  "version": "1.6.0"
 }
 ```
 

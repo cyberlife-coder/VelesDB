@@ -17,7 +17,7 @@ High-performance vector database engine written in Rust.
 - **Query Plan Cache**: Two-tier LRU cache with write-generation invalidation for repeated queries
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
-- **ColumnStore Filtering**: 122x faster than JSON filtering at scale
+- **ColumnStore Filtering**: Up to 130x faster than JSON filtering at scale
 - **VelesQL**: SQL-like query language with MATCH support for full-text search
 - **Bulk Operations**: Optimized batch insert with parallel HNSW indexing
 - **Quantization**: SQ8 (4x) and Binary (32x) memory compression
@@ -73,8 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fast search (IDs + scores only, no payload retrieval)
     let fast_results = collection.search_ids(&query, 10)?;
-    for (id, score) in fast_results {
-        println!("ID: {id}, Score: {score:.4}");
+    for result in fast_results {
+        println!("ID: {}, Score: {:.4}", result.id, result.score);
     }
 
     Ok(())
@@ -208,7 +208,7 @@ db.create_collection_with_options(
 
 - Search latency: **< 5ms** for 10k vectors
 - Bulk import: **3,300 vectors/sec** with `upsert_bulk()`
-- ColumnStore filtering: **122x faster** than JSON at 100k items
+- ColumnStore filtering: **up to 130x faster** than JSON at 100k items
 
 ### Recall by Configuration (Native Rust, Criterion)
 

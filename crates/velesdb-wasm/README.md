@@ -11,6 +11,10 @@ WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vec
 - **SIMD optimized** - Uses WASM SIMD128 for fast distance calculations
 - **Multiple metrics** - Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **Memory optimization** - SQ8 (4x) and Binary (32x) quantization
+- **Knowledge Graph** - In-memory graph store with BFS/DFS traversal
+- **Agent Memory** - Semantic memory for AI agents (store/query knowledge facts)
+- **VelesQL parser** - Parse and validate VelesQL queries client-side
+- **Sparse search** - Inverted index with RRF hybrid fusion
 - **Lightweight** - Minimal bundle size
 
 ## Installation
@@ -102,9 +106,13 @@ class VectorStore {
   
   //
   multi_query_search(vectors: Float32Array, num_vectors: number, k: number, strategy?: string, rrf_k?: number): Array<[bigint, number]>;
-  hybrid_search(vector: Float32Array, text_query: string, k: number, vector_weight?: number, field?: string): Array<{id, score, payload}>;
+  hybrid_search(vector: Float32Array, text_query: string, k: number, vector_weight?: number): Array<{id, score, payload}>;
   batch_search(vectors: Float32Array, num_vectors: number, k: number): Array<Array<[bigint, number]>>;
   
+  // Sparse search (inverted index)
+  sparse_insert(doc_id: bigint, indices: Uint32Array, values: Float32Array): void;
+  sparse_search(indices: Uint32Array, values: Float32Array, k: number): Array<{doc_id, score}>;
+
   // Metadata-only store
   static new_metadata_only(): VectorStore;
   readonly is_metadata_only: boolean;
@@ -260,38 +268,114 @@ The WASM build is optimized for client-side use cases but has some limitations c
 | Full-text search (BM25) | ✅ | ✅ |
 | Multi-query fusion (MQG) | ✅ | ✅ |
 | Batch search | ✅ | ✅ |
-| Full VelesQL queries | ❌ | ✅ |
-| Knowledge Graph operations | ❌ | ✅ |
+| Sparse search | ✅ | ✅ |
+| Knowledge Graph (nodes, edges, traversal) | ✅ | ✅ |
+| Agent Memory (SemanticMemory) | ✅ | ✅ |
+| VelesQL parsing & validation | ✅ | ✅ |
+| VelesQL query execution | ❌ | ✅ |
 | JOIN operations | ❌ | ✅ |
 | Aggregations (GROUP BY) | ❌ | ✅ |
 | Persistence | IndexedDB | Disk (mmap) |
 | Max vectors | ~100K (browser RAM) | Millions |
 
-### Unsupported Operations
+### VelesQL (Parser Only)
 
-When you try to use unsupported features, you'll get clear error messages:
+VelesQL parsing and validation are available in WASM. You can parse queries, inspect their AST, and validate syntax client-side. However, query **execution** (running queries against data) requires the REST server.
 
 ```javascript
-// ❌ VelesQL string queries not supported in WASM
-// Use the native API instead:
+import { VelesQL } from '@wiscale/velesdb-wasm';
 
-// Instead of: store.query("SELECT * FROM docs WHERE vector NEAR $v")
-// Use:
-const results = store.search(queryVector, 10);
+// Parse and inspect a query
+const parsed = VelesQL.parse("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10");
+console.log(parsed.tableName);       // "docs"
+console.log(parsed.hasVectorSearch); // true
+console.log(parsed.limit);          // 10
 
-// Instead of: store.query("SELECT * FROM docs WHERE category = 'tech'")
-// Use:
-const results = store.search_with_filter(queryVector, 10, {
-  condition: { type: "eq", field: "category", value: "tech" }
-});
+// Validate syntax
+VelesQL.isValid("SELECT * FROM docs");        // true
+VelesQL.isValid("SELEC * FROM docs");         // false
+
+// Parse MATCH (graph) queries
+const match = VelesQL.parse("MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN f.name");
+console.log(match.isMatch);              // true
+console.log(match.matchNodeCount);       // 2
+console.log(match.matchRelationshipCount); // 1
+```
+
+### Knowledge Graph (GraphStore)
+
+Build and traverse in-memory knowledge graphs entirely in the browser:
+
+```javascript
+import { GraphStore, GraphNode, GraphEdge } from '@wiscale/velesdb-wasm';
+
+const graph = new GraphStore();
+
+// Create nodes
+const alice = new GraphNode(1n, "Person");
+alice.set_string_property("name", "Alice");
+const bob = new GraphNode(2n, "Person");
+bob.set_string_property("name", "Bob");
+
+graph.add_node(alice);
+graph.add_node(bob);
+
+// Create edges
+const edge = new GraphEdge(1n, 1n, 2n, "KNOWS");
+graph.add_edge(edge);
+
+// Traverse
+const neighbors = graph.get_neighbors(1n);   // [2n]
+const outgoing = graph.get_outgoing(1n);      // [GraphEdge]
+const bfsResults = graph.bfs_traverse(1n, 3, 100); // BFS up to depth 3
+```
+
+### Agent Memory (SemanticMemory)
+
+Store and retrieve knowledge facts by semantic similarity for AI agent workloads:
+
+```javascript
+import { SemanticMemory } from '@wiscale/velesdb-wasm';
+
+const memory = new SemanticMemory(384);
+
+// Store knowledge with embedding vectors
+memory.store(1n, "Paris is the capital of France", embedding1);
+memory.store(2n, "Berlin is the capital of Germany", embedding2);
+
+// Query by similarity
+const results = memory.query(queryEmbedding, 5);
+// [{id, score, content}, ...]
+
+console.log(memory.len);       // 2
+console.log(memory.dimension); // 384
+```
+
+### Sparse Search (SparseIndex)
+
+Inverted-index search with sparse vectors and RRF hybrid fusion:
+
+```javascript
+import { SparseIndex, hybrid_search_fuse } from '@wiscale/velesdb-wasm';
+
+const index = new SparseIndex();
+
+// Insert sparse vectors (term indices + weights)
+index.insert(1n, new Uint32Array([10, 20, 30]), new Float32Array([1.0, 0.5, 0.3]));
+index.insert(2n, new Uint32Array([10, 40]),     new Float32Array([0.8, 1.2]));
+
+// Search
+const results = index.search(new Uint32Array([10, 20]), new Float32Array([1.0, 1.0]), 5);
+
+// Fuse dense + sparse results with RRF
+const fused = hybrid_search_fuse(denseResults, sparseResults, 60, 10);
 ```
 
 ### When to Use REST Backend
 
 Consider using the [REST server](https://github.com/cyberlife-coder/VelesDB) if you need:
 
-- **Full VelesQL support** - Complex SQL-like queries with JOINs and aggregations
-- **Knowledge Graph** - Entity relationships and graph traversal
+- **VelesQL query execution** - Running queries against data (JOINs, aggregations, server-side filtering)
 - **Large datasets** - More than 100K vectors
 - **Server-side processing** - Centralized vector database
 

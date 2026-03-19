@@ -72,7 +72,7 @@ can improve results for specific workloads.
 
 | Parameter | Field | Default | Effect |
 |-----------|-------|---------|--------|
-| M | `max_connections` | auto (16-64 based on dim) | Bi-directional links per node. Higher = better recall, more memory |
+| M | `max_connections` | auto (24-32 based on dim) | Bi-directional links per node. Higher = better recall, more memory |
 | ef_construction | `ef_construction` | auto (300-400 based on dim) | Build-time candidate list size. Higher = better graph quality, slower build |
 | max_elements | `max_elements` | 100,000 | Initial capacity (grows automatically if exceeded) |
 | storage_mode | `storage_mode` | `StorageMode::Full` | Vector compression mode |
@@ -81,19 +81,19 @@ can improve results for specific workloads.
 
 | Dimension | M (`max_connections`) | `ef_construction` |
 |-----------|----------------------|-------------------|
-| <= 256 | 16 | 300 |
+| <= 256 | 24 | 300 |
 | >= 257 | 32 | 400 |
 
 ### Dataset-Size-Aware Parameters
 
 Use `HnswParams::for_dataset_size(dimension, count)` for optimal parameters at scale:
 
-| Dataset Size | M (384D) | M (768D) | ef_construction |
-|-------------|----------|----------|-----------------|
-| <= 10K | 16 | 32 | 200-400 |
-| <= 100K | 32-64 | 64-128 | 800-1600 |
-| <= 500K | 64-96 | 96-128 | 1200-2000 |
-| <= 1M | 64-96 | 96-128 | 800-1600 |
+| Dataset Size | M (dim <= 256) | M (dim > 256) | ef_construction |
+|-------------|----------------|---------------|-----------------|
+| <= 10K | 24 | 32 | 200-400 |
+| <= 100K | 64 | 128 | 800-1600 |
+| <= 500K | 96 | 128 | 1200-2000 |
+| <= 1M | 64 | 128 | 800-1600 |
 
 ### Convenience Constructors
 
@@ -112,7 +112,7 @@ let params = HnswParams::million_scale(768);
 // Maximum recall: aggressive params for evaluation
 let params = HnswParams::max_recall(768);
 
-// Fastest build: M=8, ef_construction=100 (for bulk import)
+// Fastest build: M=12, ef_construction=100 (for bulk import)
 let params = HnswParams::turbo();
 
 // Fully custom

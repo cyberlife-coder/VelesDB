@@ -411,10 +411,10 @@ readinessProbe:
 
 ## Performance
 
-- **Cosine similarity**: ~93 ns per operation (768d)
-- **Dot product**: ~36 ns per operation (768d)
+- **Cosine similarity**: ~34 ns per operation (768d)
+- **Dot product**: ~24 ns per operation (768d)
 - **Search latency**: < 1ms for 100k vectors
-- **Throughput**: 28M+ distance calculations/sec
+- **Throughput**: 32M+ distance calculations/sec
 
 ## Configuration Reference
 

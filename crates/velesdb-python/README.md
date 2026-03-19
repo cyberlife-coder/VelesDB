@@ -765,10 +765,10 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 
 | Operation | Time (768d) | Throughput |
 |-----------|-------------|------------|
-| Cosine | ~93 ns | 11M ops/sec |
-| Euclidean | ~46 ns | 22M ops/sec |
-| Dot Product | ~36 ns | 28M ops/sec |
-| Hamming | ~6 ns | 164M ops/sec |
+| Cosine | ~34 ns | 22M ops/sec |
+| Euclidean | ~23 ns | 33M ops/sec |
+| Dot Product | ~24 ns | 32M ops/sec |
+| Hamming | ~52 ns | 15M ops/sec |
 
 ### Benchmark: VelesDB vs pgvector (HNSW)
 
