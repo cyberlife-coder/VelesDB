@@ -788,10 +788,10 @@ class TestV15Features:
             validate_sparse_vector({True: 1.0})
 
     def test_version_is_1_5_1(self):
-        """Test that __version__ is 1.5.1."""
+        """Test that __version__ is 1.6.0."""
         from llamaindex_velesdb import __version__
 
-        assert __version__ == "1.5.1"
+        assert __version__ == "1.6.0"
 
 
 if __name__ == "__main__":

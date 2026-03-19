@@ -1,6 +1,6 @@
 # 🎯 Search Modes - Guide de Configuration du Recall
 
-*Version 1.5.1 -- Mars 2026*
+*Version 1.6.0 -- Mars 2026*
 
 Guide complet pour configurer le compromis **recall vs latence** dans VelesDB. Couvre la recherche dense (HNSW), sparse (SPLADE/BM42), et hybride (dense+sparse avec fusion). Comparaison avec les pratiques Milvus, OpenSearch et Qdrant.
 

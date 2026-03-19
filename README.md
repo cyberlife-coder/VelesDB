@@ -12,8 +12,8 @@
 </h3>
 
 <p align="center">
-  <strong>🚀 v1.5.1 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.5.1">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
+  <strong>🚀 v1.6.0 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.6.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
 </p>
 
 <p align="center">
@@ -233,7 +233,7 @@ velesdb repl
 
 # Verify server is running
 curl http://localhost:8080/health
-# {"status":"healthy","version":"1.5.1"}
+# {"status":"healthy","version":"1.6.0"}
 ```
 
 > **Full installation guide:** [docs/guides/INSTALLATION.md](docs/guides/INSTALLATION.md) — Linux .deb, Docker, portable archives, mobile builds, WASM, and more.
@@ -466,7 +466,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 |---------|--------|------------|
 | **v1.2.0** | Released | Knowledge Graph, Vector-Graph Fusion, ColumnStore, 15 EPICs |
 | **v1.4.0** | Released | VelesQL v2.2.0, Multi-Score Fusion, Parallel Graph, 2,765 tests |
-| **v1.5.1** | Released | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
+| **v1.6.0** | Released | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
 
 <details>
 <summary><b>v1.2.0 — 15 EPICs Completed (click to expand)</b></summary>
@@ -510,7 +510,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 </details>
 
 <details>
-<summary><b>v1.5.1 — 5 Major Features (click to expand)</b></summary>
+<summary><b>v1.6.0 — 5 Major Features (click to expand)</b></summary>
 
 | Feature | Description | Impact |
 |---------|-------------|--------|

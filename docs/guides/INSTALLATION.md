@@ -45,13 +45,13 @@ The MSI installer provides the easiest installation experience with:
 
 ```powershell
 # Install with PATH modification (default)
-msiexec /i velesdb-1.5.1-x86_64.msi /quiet ADDTOPATH=1
+msiexec /i velesdb-1.6.0-x86_64.msi /quiet ADDTOPATH=1
 
 # Install without PATH modification
-msiexec /i velesdb-1.5.1-x86_64.msi /quiet ADDTOPATH=0
+msiexec /i velesdb-1.6.0-x86_64.msi /quiet ADDTOPATH=0
 
 # Install to custom directory
-msiexec /i velesdb-1.5.1-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
+msiexec /i velesdb-1.6.0-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
 ```
 
 #### Uninstall
@@ -59,7 +59,7 @@ msiexec /i velesdb-1.5.1-x86_64.msi /quiet APPLICATIONFOLDER="D:\VelesDB"
 Via **Control Panel > Programs > Uninstall**, or:
 
 ```powershell
-msiexec /x velesdb-1.5.1-x86_64.msi /quiet
+msiexec /x velesdb-1.6.0-x86_64.msi /quiet
 ```
 
 ### Portable ZIP
@@ -68,7 +68,7 @@ For portable installations without admin rights:
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v1.5.1/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
+Invoke-WebRequest -Uri "https://github.com/cyberlife-coder/VelesDB/releases/download/v1.6.0/velesdb-windows-x86_64.zip" -OutFile velesdb.zip
 Expand-Archive velesdb.zip -DestinationPath C:\VelesDB
 
 # Add to PATH (optional, current session only)
@@ -85,10 +85,10 @@ $env:PATH += ";C:\VelesDB"
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.5.1/velesdb-1.5.1-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.6.0/velesdb-1.6.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-1.5.1-amd64.deb
+sudo dpkg -i velesdb-1.6.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -110,7 +110,7 @@ sudo dpkg -r velesdb
 
 ```bash
 # Download and extract
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.5.1/velesdb-linux-x86_64.tar.gz
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.6.0/velesdb-linux-x86_64.tar.gz
 tar -xzf velesdb-linux-x86_64.tar.gz -C /opt/velesdb
 
 # Add to PATH
@@ -160,7 +160,7 @@ results = collection.search(vector=query_vector, top_k=10)
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "1.5"
+velesdb-core = "1.6"
 ```
 
 ### As CLI Tools

@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 11, 2026 (v1.5.1 — full re-benchmark after perf audit)*
+*Last updated: March 11, 2026 (v1.6.0 — full re-benchmark after perf audit)*
 
 ---
 
@@ -21,7 +21,7 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via `simd_dispatch`. Re-measured March 11, 2026 (v1.5.1) on Intel Core i9-14900KF.
+SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via `simd_dispatch`. Re-measured March 11, 2026 (v1.6.0) on Intel Core i9-14900KF.
 
 ### SIMD Kernel Latency
 
