@@ -304,9 +304,15 @@ fn test_set_ttl_functions() {
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
 
     memory.semantic().store(1, "sem fact", &embedding).unwrap();
-    memory.episodic().record(2, "epi event", 1000, Some(&embedding)).unwrap();
+    memory
+        .episodic()
+        .record(2, "epi event", 1000, Some(&embedding))
+        .unwrap();
     let steps = vec!["s1".to_string()];
-    memory.procedural().learn(3, "proc", &steps, Some(&embedding), 0.9).unwrap();
+    memory
+        .procedural()
+        .learn(3, "proc", &steps, Some(&embedding), 0.9)
+        .unwrap();
 
     // Setting TTLs should not panic
     memory.set_semantic_ttl(1, 3600);
@@ -326,7 +332,10 @@ fn test_auto_expire_removes_expired() {
     let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).unwrap();
 
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
-    memory.semantic().store(1, "will expire", &embedding).unwrap();
+    memory
+        .semantic()
+        .store(1, "will expire", &embedding)
+        .unwrap();
 
     // Set a TTL of 0 seconds — expires immediately
     memory.set_semantic_ttl(1, 0);
@@ -374,9 +383,15 @@ fn test_evict_low_confidence_procedures() {
     let steps = vec!["step".to_string()];
 
     // Low confidence — should be evicted
-    memory.procedural().learn(1, "weak", &steps, Some(&embedding), 0.1).unwrap();
+    memory
+        .procedural()
+        .learn(1, "weak", &steps, Some(&embedding), 0.1)
+        .unwrap();
     // High confidence — should survive
-    memory.procedural().learn(2, "strong", &steps, Some(&embedding), 0.9).unwrap();
+    memory
+        .procedural()
+        .learn(2, "strong", &steps, Some(&embedding), 0.9)
+        .unwrap();
 
     let evicted = memory.evict_low_confidence_procedures(0.5).unwrap();
     assert_eq!(evicted, 1);
@@ -397,8 +412,14 @@ fn test_evict_low_confidence_none_evicted() {
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
     let steps = vec!["step".to_string()];
 
-    memory.procedural().learn(1, "good", &steps, Some(&embedding), 0.8).unwrap();
-    memory.procedural().learn(2, "also good", &steps, Some(&embedding), 0.7).unwrap();
+    memory
+        .procedural()
+        .learn(1, "good", &steps, Some(&embedding), 0.8)
+        .unwrap();
+    memory
+        .procedural()
+        .learn(2, "also good", &steps, Some(&embedding), 0.7)
+        .unwrap();
 
     let evicted = memory.evict_low_confidence_procedures(0.5).unwrap();
     assert_eq!(evicted, 0);
@@ -418,9 +439,15 @@ fn test_snapshot_round_trip() {
     // Store data across all subsystems
     let embedding = vec![1.0, 0.0, 0.0, 0.0];
     memory.semantic().store(1, "fact one", &embedding).unwrap();
-    memory.episodic().record(2, "event one", 1000, Some(&embedding)).unwrap();
+    memory
+        .episodic()
+        .record(2, "event one", 1000, Some(&embedding))
+        .unwrap();
     let steps = vec!["step1".to_string()];
-    memory.procedural().learn(3, "proc one", &steps, Some(&embedding), 0.8).unwrap();
+    memory
+        .procedural()
+        .learn(3, "proc one", &steps, Some(&embedding), 0.8)
+        .unwrap();
 
     // Create snapshot
     let version = memory.snapshot().unwrap();

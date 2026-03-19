@@ -59,6 +59,7 @@ logs/
 *.profraw
 coverage/
 lcov.info
+lcov-*.info
 
 # Benchmarks
 /benches/results/

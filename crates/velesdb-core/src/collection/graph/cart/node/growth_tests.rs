@@ -3,8 +3,8 @@
 use super::CARTNode;
 
 /// Helper: builds a leaf node containing a single value.
-fn leaf(value: u64) -> Option<Box<CARTNode>> {
-    Some(Box::new(CARTNode::new_leaf(value)))
+fn leaf(value: u64) -> Box<CARTNode> {
+    Box::new(CARTNode::new_leaf(value))
 }
 
 // =========================================================================
@@ -16,7 +16,12 @@ fn grow_node4_to_node16_preserves_children() {
     let node = CARTNode::Node4 {
         num_children: 4,
         keys: [30, 10, 40, 20],
-        children: [leaf(300), leaf(100), leaf(400), leaf(200)],
+        children: [
+            Some(leaf(300)),
+            Some(leaf(100)),
+            Some(leaf(400)),
+            Some(leaf(200)),
+        ],
     };
 
     let grown = node.grow_to_node16();
@@ -52,7 +57,7 @@ fn grow_node4_to_node16_partial_fill() {
     let node = CARTNode::Node4 {
         num_children: 2,
         keys: [5, 3, 0, 0],
-        children: [leaf(50), leaf(30), None, None],
+        children: [Some(leaf(50)), Some(leaf(30)), None, None],
     };
 
     let grown = node.grow_to_node16();
@@ -88,7 +93,7 @@ fn grow_node16_to_node48_preserves_children() {
     for i in 0u8..16 {
         let key = i * 10; // 0, 10, 20, ... 150
         keys[i as usize] = key;
-        children[i as usize] = leaf(u64::from(key) * 100);
+        children[i as usize] = Some(leaf(u64::from(key) * 100));
     }
 
     let node = CARTNode::Node16 {
@@ -129,9 +134,9 @@ fn grow_node16_to_node48_empty_slots_are_255() {
     keys[0] = 5;
     keys[1] = 100;
     keys[2] = 200;
-    children[0] = leaf(1);
-    children[1] = leaf(2);
-    children[2] = leaf(3);
+    children[0] = Some(leaf(1));
+    children[1] = Some(leaf(2));
+    children[2] = Some(leaf(3));
 
     let node = CARTNode::Node16 {
         num_children: 3,
@@ -146,12 +151,12 @@ fn grow_node16_to_node48_empty_slots_are_255() {
         } => {
             assert_eq!(*num_children, 3);
             // Bytes without a child must map to 255
-            let occupied: Vec<usize> = vec![5, 100, 200];
-            for byte in 0..256usize {
+            let occupied: [usize; 3] = [5, 100, 200];
+            for (byte, &key_val) in keys.iter().enumerate() {
                 if occupied.contains(&byte) {
-                    assert_ne!(keys[byte], 255);
+                    assert_ne!(key_val, 255);
                 } else {
-                    assert_eq!(keys[byte], 255, "byte {byte} should be empty (255)");
+                    assert_eq!(key_val, 255, "byte {byte} should be empty (255)");
                 }
             }
         }
@@ -172,7 +177,7 @@ fn grow_node48_to_node256_preserves_children() {
     let entries: [(u8, u64); 5] = [(0, 10), (42, 420), (128, 1280), (200, 2000), (255, 2550)];
     for (slot, &(byte, val)) in entries.iter().enumerate() {
         keys[byte as usize] = slot as u8;
-        children[slot] = leaf(val);
+        children[slot] = Some(leaf(val));
     }
 
     let node = CARTNode::Node48 {
@@ -217,13 +222,19 @@ fn grow_to_node16_on_node16_returns_clone() {
         },
         children: {
             let mut c: [Option<Box<CARTNode>>; 16] = Default::default();
-            c[0] = leaf(99);
+            c[0] = Some(leaf(99));
             c
         },
     };
 
     let result = node.grow_to_node16();
-    assert!(matches!(result, CARTNode::Node16 { num_children: 1, .. }));
+    assert!(matches!(
+        result,
+        CARTNode::Node16 {
+            num_children: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -238,11 +249,17 @@ fn grow_to_node48_on_node4_returns_clone() {
     let node = CARTNode::Node4 {
         num_children: 1,
         keys: [10, 0, 0, 0],
-        children: [leaf(1), None, None, None],
+        children: [Some(leaf(1)), None, None, None],
     };
 
     let result = node.grow_to_node48();
-    assert!(matches!(result, CARTNode::Node4 { num_children: 1, .. }));
+    assert!(matches!(
+        result,
+        CARTNode::Node4 {
+            num_children: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -256,6 +273,9 @@ fn grow_to_node256_on_node16_returns_clone() {
     let result = node.grow_to_node256();
     assert!(matches!(
         result,
-        CARTNode::Node16 { num_children: 0, .. }
+        CARTNode::Node16 {
+            num_children: 0,
+            ..
+        }
     ));
 }

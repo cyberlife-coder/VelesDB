@@ -15,20 +15,39 @@ use crate::VectorCollection;
 fn create_test_vc() -> (VectorCollection, TempDir) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test_coll");
-    let coll =
-        VectorCollection::create(path, "test", 4, DistanceMetric::Cosine, StorageMode::Full)
-            .unwrap();
+    let coll = VectorCollection::create(path, "test", 4, DistanceMetric::Cosine, StorageMode::Full)
+        .unwrap();
     (coll, dir)
 }
 
 /// Inserts five orthogonal-ish points with text payloads.
 fn seed_points(coll: &VectorCollection) {
     let points = vec![
-        Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"text": "hello world", "cat": "a"}))),
-        Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"text": "foo bar", "cat": "b"}))),
-        Point::new(3, vec![0.0, 0.0, 1.0, 0.0], Some(json!({"text": "hello foo", "cat": "a"}))),
-        Point::new(4, vec![0.0, 0.0, 0.0, 1.0], Some(json!({"text": "baz qux", "cat": "b"}))),
-        Point::new(5, vec![1.0, 1.0, 0.0, 0.0], Some(json!({"text": "hello bar", "cat": "a"}))),
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(json!({"text": "hello world", "cat": "a"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(json!({"text": "foo bar", "cat": "b"})),
+        ),
+        Point::new(
+            3,
+            vec![0.0, 0.0, 1.0, 0.0],
+            Some(json!({"text": "hello foo", "cat": "a"})),
+        ),
+        Point::new(
+            4,
+            vec![0.0, 0.0, 0.0, 1.0],
+            Some(json!({"text": "baz qux", "cat": "b"})),
+        ),
+        Point::new(
+            5,
+            vec![1.0, 1.0, 0.0, 0.0],
+            Some(json!({"text": "hello bar", "cat": "a"})),
+        ),
     ];
     coll.upsert(points).unwrap();
 }
