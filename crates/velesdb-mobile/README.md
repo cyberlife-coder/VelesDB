@@ -225,7 +225,6 @@ db.createCollectionWithStorage(
 
 ## License
 
-VelesDB is licensed under the [VelesDB Core License 1.0](../../LICENSE).
+MIT License (mobile bindings). The core engine (velesdb-core and velesdb-server) is under VelesDB Core License 1.0.
 
-This is a **source-available** license that allows free use for most purposes,
-with restrictions on providing VelesDB as a managed service (DBaaS) or building a competing product.
+See [LICENSE](./LICENSE) for bindings license, [root LICENSE](../../LICENSE) for core engine.

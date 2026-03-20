@@ -192,4 +192,4 @@ results = vector_store.text_query(
 
 MIT License (this integration)
 
-VelesDB Core is licensed under VelesDB Core License 1.0 (source-available). See the [root LICENSE](../../LICENSE) for details.
+VelesDB Core and Server are licensed under VelesDB Core License 1.0 (source-available). See the [root LICENSE](../../LICENSE) for details.

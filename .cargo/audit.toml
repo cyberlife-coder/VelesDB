@@ -1,0 +1,9 @@
+# Cargo audit configuration
+# https://rustsec.org/advisories/
+
+[advisories]
+# RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel
+# Transitive dep: sqlx-macros-core → sqlx-mysql → rsa
+# VelesDB only uses PostgreSQL (never MySQL) — rsa code is never executed.
+# No upstream fix available as of 2026-03-20.
+ignore = ["RUSTSEC-2023-0071"]

@@ -167,15 +167,27 @@ def extract_claims_from_file(path: Path) -> list[Claim]:
     source = _source_name(path)
     claims: list[Claim] = []
 
+    # Track current section heading to disambiguate same-label rows
+    # in different tables (e.g. "String filter 100K" vs "Int filter 100K").
+    current_section = ""
     for line in text.splitlines():
-        _extract_from_line(line, source, claims)
+        heading_match = re.match(r"^#{1,4}\s+(.+)", line)
+        if heading_match:
+            current_section = heading_match.group(1).strip()
+        _extract_from_line(line, source, claims, section_ctx=current_section)
 
     return claims
 
 
-def _extract_from_line(line: str, source: str, claims: list[Claim]) -> None:
+def _extract_from_line(
+    line: str, source: str, claims: list[Claim], *, section_ctx: str = ""
+) -> None:
     """Parse a single line and append any discovered claims into `claims`."""
     seen_spans: list[tuple[int, int]] = []
+
+    # Prefix label with section context to disambiguate identical row labels
+    # that appear under different headings (e.g. "String filter" vs "Integer filter").
+    ctx_prefix = _normalise_name(section_ctx) + " " if section_ctx else ""
 
     def _overlaps(span: tuple[int, int]) -> bool:
         for s, e in seen_spans:
@@ -188,7 +200,7 @@ def _extract_from_line(line: str, source: str, claims: list[Claim]) -> None:
         if _overlaps(m.span()):
             continue
         label_raw, num_raw, unit = m.group(1), m.group(2), m.group(3)
-        if _append_claim(label_raw, num_raw, unit, line.strip(), source, claims):
+        if _append_claim(ctx_prefix + label_raw, num_raw, unit, line.strip(), source, claims):
             seen_spans.append(m.span())
 
     # 2. Inline "Label: value unit"

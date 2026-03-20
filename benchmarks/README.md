@@ -9,9 +9,12 @@ Benchmark suite comparing VelesDB against pgvector (HNSW).
 - Do not claim superiority over FAISS, Qdrant, SimSIMD, or other systems unless the dataset, recall target, hardware, and methodology are matched.
 - For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
 
-## 🚀 v0.7.3 Results: VelesDB Recall ≥95% Guaranteed
+## v1.6.0 Results: VelesDB Recall ≥95% Guaranteed
 
-### Search Performance (100K vectors, 768D, Docker)
+> Legacy note: The table below was originally captured under v0.7.3 Docker benchmarks.
+> For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
+
+### Search Performance (100K vectors, 768D, Docker — Legacy v0.7.3)
 
 | Mode | ef_search | Recall@10 | Latency P50 |
 |------|-----------|-----------|-------------|
@@ -21,14 +24,14 @@ Benchmark suite comparing VelesDB against pgvector (HNSW).
 | **HighRecall** | **1024** | **96.1%** ✅ | 73.0ms |
 | **Perfect** | **2048** | **100.0%** | 42.1ms |
 
-### Insert Performance (100K vectors, 768D)
+### Insert Performance (100K vectors, 768D — Legacy v0.7.3)
 
 | Dataset | VelesDB | pgvector | Speedup |
 |---------|---------|----------|--------|
 | 10K | ~5s | ~19s | **3.8x** |
 | 100K | ~52s | ~365s | **7x** |
 
-### Key Optimizations in v0.7.x
+### Key Optimizations (v1.6.0)
 
 - **SIMD AVX-512/AVX2** - 32-wide processing with FMA
 - **Adaptive HNSW params** - `HnswParams::for_dataset_size()` for optimal recall
@@ -140,4 +143,4 @@ let params = HnswParams::million_scale(768);
 
 ## License
 
-VelesDB Core License 1.0
+MIT License

@@ -473,23 +473,18 @@ instructions for distance calculations via the `simd_native` module, with both
 
 - **GPU Acceleration**: CUDA kernels for large-scale (wgpu-based, optional)
 
-### v0.9.0 Architecture Improvements (Q1 2026)
+### v1.6.0 Architecture Improvements (Shipped)
 
-Based on the technical audit (January 2026), the following architectural changes are planned:
+The following architectural changes, originally identified in the January 2026 technical audit, have been implemented as of v1.6.0:
 
-| Change | Current | Target |
+| Change | Before (v0.8.x) | After (v1.6.0) |
 |--------|---------|--------|
 | **Concurrency** | Global `RwLock<HashMap>` | `DashMap` + 16-shard storage |
 | **Memory** | `Vec<f32>` allocations per read | Zero-copy `&[f32]` from mmap |
 | **SIMD Dispatch** | Per-call feature detection | `OnceLock` function pointer |
 | **Unsafe** | `'static` lifetime tricks | Safe self-referential via `ouroboros` |
 
-**Expected Impact**:
-- Insert throughput: 50k/s → 150k/s (16 threads)
-- Search p99 latency: 15ms → 10ms
-- Allocations per search: ~10k → 0
-
-See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for full details.
+See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for the original audit plan.
 
 ## Code-Truth Matrix (2026-02-26)
 

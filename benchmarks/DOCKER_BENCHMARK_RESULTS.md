@@ -1,7 +1,7 @@
 # VelesDB Docker Benchmark Results
 
-*Date: January 2, 2026*
-*Version: 0.7.3*
+*Date: March 20, 2026*
+*Version: 1.6.0*
 
 ## Test Environment
 

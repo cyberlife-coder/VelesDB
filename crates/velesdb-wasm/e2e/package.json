@@ -2,6 +2,7 @@
   "name": "velesdb-wasm-e2e",
   "version": "1.0.0",
   "description": "E2E browser tests for VelesDB WASM",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "build:wasm": "cd .. && wasm-pack build --target web --out-dir e2e/pkg",

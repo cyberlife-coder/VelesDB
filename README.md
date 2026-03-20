@@ -29,7 +29,7 @@
   <img src="https://img.shields.io/badge/🏎️_Dot_768D-23.6ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&label=tests&style=for-the-badge" alt="Tests"/></a>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
-  <img src="https://img.shields.io/badge/🎯_Recall@10_(Accurate)-100%25-success?style=for-the-badge" alt="Recall@10 Accurate mode"/>
+  <img src="https://img.shields.io/badge/🎯_Recall@10_(Accurate,_10K/128D)-100%25-success?style=for-the-badge" alt="Recall@10 Accurate mode, 10K vectors 128D"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-32.5Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
   <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
   <img src="https://img.shields.io/badge/Sparse_Search-958µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
@@ -135,7 +135,7 @@ Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automati
 | **Pinecone** | No API keys, no cloud costs, **local-first with sub-ms latency**, + Graph + Columns |
 | **Qdrant** | Single compact binary, native WASM/Mobile, **unified Vector+Graph** |
 | **Milvus** | Zero config vs complex cluster setup, **embedded mode** |
-| **pgvector** | Purpose-built for vectors, **3.8-7x faster inserts** ([benchmark](benchmarks/README.md)), native graph support |
+| **pgvector** | Purpose-built for vectors, **native SIMD kernels** ([benchmark](benchmarks/README.md)), native graph support |
 | **ChromaDB** | Production-grade Rust vs Python prototype, **enterprise-ready** |
 | **Neo4j + Pinecone** | **One database instead of two**, unified query language |
 
@@ -668,7 +668,9 @@ export VELESDB_NO_UPDATE_CHECK=1
 
 ## 📜 License
 
-VelesDB is licensed under the [VelesDB Core License 1.0](LICENSE) — source-available, free use/modification/distribution, with restrictions only on managed services and competing products.
+**VelesDB Core License 1.0** (source-available) — `velesdb-core` and `velesdb-server`. Free use, modification, and distribution with restrictions only on managed services and competing products. See [LICENSE](LICENSE).
+
+**MIT** — all other components: CLI, Python/WASM/mobile bindings, Tauri plugin, TypeScript SDK, LangChain/LlamaIndex integrations, migration tool, examples, and demos.
 
 ---
 

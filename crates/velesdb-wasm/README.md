@@ -430,6 +430,6 @@ Typical latencies on modern browsers:
 
 ## License
 
-MIT License (bindings). The core engine (`velesdb-core`) is under VelesDB Core License 1.0.
+MIT License (bindings). The core engine (`velesdb-core` and `velesdb-server`) is under VelesDB Core License 1.0.
 
 See [LICENSE](./LICENSE) for WASM bindings license, [root LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for core engine.

@@ -236,17 +236,27 @@ def _audit_core(root: Path) -> AuditResult:
 
 
 def _audit_server(root: Path) -> AuditResult:
-    main_rs = root / "crates" / "velesdb-server" / "src" / "main.rs"
+    server_src = root / "crates" / "velesdb-server" / "src"
     readme = root / "crates" / "velesdb-server" / "README.md"
-    actual = _parse_rust_public_api(main_rs)
+    # Scan all .rs files in the server (handlers contain the real API surface)
+    combined = ""
+    if server_src.exists():
+        for rs_file in server_src.glob("**/*.rs"):
+            combined += _read_text(rs_file) + "\n"
+    actual = _capabilities_from_text(combined, CAPABILITIES)
     claimed = _parse_readme(readme)
     return AuditResult(name="velesdb-server", actual=actual, claimed=claimed, notes=[])
 
 
 def _audit_typescript(root: Path) -> AuditResult:
-    entry = root / "sdks" / "typescript" / "src" / "index.ts"
+    ts_src = root / "sdks" / "typescript" / "src"
     readme = root / "sdks" / "typescript" / "README.md"
-    actual = _parse_typescript_exports(entry)
+    # Scan all .ts files (backends contain the real API surface)
+    combined = ""
+    if ts_src.exists():
+        for ts_file in ts_src.glob("**/*.ts"):
+            combined += _read_text(ts_file) + "\n"
+    actual = _capabilities_from_text(combined, CAPABILITIES)
     claimed = _parse_readme(readme)
     return AuditResult(name="typescript-sdk", actual=actual, claimed=claimed, notes=[])
 

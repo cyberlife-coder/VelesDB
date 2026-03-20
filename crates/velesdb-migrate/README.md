@@ -817,4 +817,4 @@ velesdb-server --port 8080
 
 ## 📄 License
 
-VelesDB Core License 1.0 — Same as VelesDB Core.
+MIT License

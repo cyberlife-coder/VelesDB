@@ -213,4 +213,4 @@ GROUP BY category
 
 ## License
 
-VelesDB Core License 1.0
+MIT License

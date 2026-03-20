@@ -38,7 +38,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
 
 # Database clients
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json"], default-features = false, optional = true }
 
 # Config parsing
 serde_yaml = "0.9"

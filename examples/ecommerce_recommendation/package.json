@@ -2,6 +2,7 @@
   "name": "ecommerce-recommendation-e2e",
   "version": "1.0.0",
   "description": "E2E tests for VelesDB e-commerce recommendation example",
+  "license": "MIT",
   "scripts": {
     "test": "npx playwright test",
     "test:headed": "npx playwright test --headed",

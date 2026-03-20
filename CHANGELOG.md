@@ -7,17 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Performance
-
-- **Cosine SIMD finish optimization**: replace `2×sqrt + div` with `dot / sqrt(na² × nb²)` — saves one `sqrtss` instruction across AVX2, AVX-512, and NEON kernels. 768D: 34.0 ns → 33.6 ns (−1.2%). Measured March 20, 2026 on i9-14900KF (AVX2+FMA), 64GB DDR5.
-- **Hamming AVX2 FP-domain accumulation**: replace `castps_si256 → xor_si256 → srli_epi32 → add_epi32` with `xor_ps → and_ps(1.0) → add_ps` to eliminate FP→INT domain-crossing penalty on Intel P-cores. 768D: 36.0 ns → 34.3 ns (−4.7%).
-- NEON (ARM64) Hamming & Jaccard kernels with 1-acc/4-acc ILP variants
-- AVX-512 4-accumulator Hamming & Jaccard kernels for dim >= 512
-- AVX2 vectorized 8-wide remainder for Hamming & Jaccard (reduces scalar tail from 31 to 7 elements)
-- Batch operations with L1/L2 prefetch for Hamming & Jaccard
-- Native binary Hamming u64 POPCNT via AVX-512 XOR + extract
-
-## [1.6.0] - 2026-03-19
+## [1.6.0] - 2026-03-20
 
 ### Highlights
 
@@ -39,6 +29,13 @@ Major release delivering **production-grade server security** (API key auth, TLS
 
 ### Performance
 
+- **Cosine SIMD finish optimization** — Replace `2×sqrt + div` with `dot / sqrt(na² × nb²)`, saves one `sqrtss` across AVX2, AVX-512, and NEON kernels. 768D: 34.0 ns → 33.6 ns (−1.2%).
+- **Hamming AVX2 FP-domain accumulation** — Replace INT-domain pipeline with FP-domain `xor_ps → and_ps(1.0) → add_ps` to eliminate domain-crossing penalty on Intel P-cores. 768D: 36.0 ns → 34.3 ns (−4.7%).
+- **NEON (ARM64) Hamming & Jaccard** — 1-acc/4-acc ILP kernel variants.
+- **AVX-512 Hamming & Jaccard** — 4-accumulator kernels for dim >= 512.
+- **AVX2 8-wide remainder** — Vectorized remainder for Hamming & Jaccard (scalar tail from 31 to 7 elements).
+- **Batch prefetch** — L1/L2 prefetch for Hamming & Jaccard batch operations.
+- **Native binary Hamming** — u64 POPCNT via AVX-512 XOR + extract.
 - **HNSW lock optimizations** — Lock-rank gating, SIMD dispatch cleanup (Phases 1-2).
 - **ContiguousVectors** — Replace `Vec<Vec<f32>>` with cache-friendly contiguous memory layout.
 - **LRU single-lock get** — Eliminate double-locking on cache reads.
@@ -92,6 +89,7 @@ Major release delivering **production-grade server security** (API key auth, TLS
   - **VelesQL coverage**: using VelesQL internally is permitted; exposing a general-purpose VelesQL endpoint to third parties requires a commercial license.
   - **Business model clarity**: explicit Core (source-available) / Enterprise (commercial) / Cloud (proprietary SaaS) tier structure for investor and acquirer readability.
   - **Expanded FAQ**: 24 developer-friendly Q&As covering RAG, SaaS embedding, API endpoints, cloud providers, MSPs, graph engine, embedded mode, premium features, VelesQL, benchmarks, and more.
+  - **CLI moved to MIT** — `velesdb-cli` relicensed from VelesDB Core License 1.0 to MIT. Scope: `velesdb-core` and `velesdb-server` remain under VelesDB Core License 1.0; all SDKs, bindings, tools, integrations, examples, and demos are MIT.
 
 ### Security
 

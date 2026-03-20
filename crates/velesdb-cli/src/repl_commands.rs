@@ -237,7 +237,7 @@ fn cmd_count(db: &Database, parts: &[&str]) -> CommandResult {
     let name = parts[1];
     match collection_helpers::resolve_collection(db, name) {
         Some(collection_helpers::TypedCollection::Vector(col)) => {
-            let count = col.config().point_count;
+            let count = col.len();
             println!("Count: {} records\n", count.to_string().green());
         }
         Some(collection_helpers::TypedCollection::Graph(col)) => {

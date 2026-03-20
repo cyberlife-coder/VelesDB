@@ -6,7 +6,7 @@
 
 ## Performance
 
-*Benchmarked January 8, 2026 — Intel Core i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0*
+*Benchmarked March 20, 2026 — Intel Core i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0*
 
 | Operation | Native HNSW | External libs | Improvement |
 |-----------|-------------|---------------|-------------|

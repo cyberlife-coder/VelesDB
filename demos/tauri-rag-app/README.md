@@ -231,4 +231,4 @@ await listen('velesdb://collection-updated', (event) => {
 
 ## 📝 License
 
-BUSL-1.1 - See [LICENSE](../../LICENSE)
+MIT License

@@ -352,6 +352,6 @@ See [`demos/tauri-rag-app`](../../../demos/tauri-rag-app) for a complete desktop
 
 ## License
 
-MIT License (plugin bindings). The core engine (`velesdb-core`) is under VelesDB Core License 1.0.
+MIT License (plugin bindings). The core engine (`velesdb-core` and `velesdb-server`) is under VelesDB Core License 1.0.
 
 See [LICENSE](./LICENSE) for plugin license, [root LICENSE](../../LICENSE) for core engine.

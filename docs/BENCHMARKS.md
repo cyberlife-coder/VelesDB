@@ -179,7 +179,7 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive**
 
 ## 6. ColumnStore Filtering
 
-**String equality filter** (`filter_eq_string`, measured 2026-03-19):
+#### String Equality Filter (`filter_eq_string`, measured 2026-03-19)
 
 | Scale | ColumnStore | JSON Scan | Speedup |
 |-------|-------------|-----------|---------|
@@ -187,7 +187,7 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive**
 | 10K rows | 4.06 µs | 138.0 µs | 34x |
 | 100K rows | 46.5 µs | 3.50 ms | 75x |
 
-**Integer equality filter** (`filter_eq_int`, measured 2026-03-19):
+#### Integer Equality Filter (`filter_eq_int`, measured 2026-03-19)
 
 | Scale | ColumnStore | JSON Scan | Speedup |
 |-------|-------------|-----------|---------|

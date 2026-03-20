@@ -2,6 +2,7 @@
   "name": "tauri-rag-app",
   "version": "0.1.0",
   "description": "Local RAG Desktop App with VelesDB + Tauri",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

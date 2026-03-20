@@ -132,6 +132,25 @@ engines:
       - "crates/velesdb-core/src/velesql/parser/conditions.rs"
       - "crates/velesdb-core/src/agent/reinforcement.rs"
 
+      # --- CLI dispatch loops and parsers ---
+      # REPL main loop is a single giant match (CC=136), import parsers
+      # handle many CSV/JSONL edge cases. Cannot be split without
+      # fragmenting the user-facing command table.
+      - "crates/velesdb-cli/src/main.rs"
+      - "crates/velesdb-cli/src/import.rs"
+      - "crates/velesdb-cli/src/repl_commands.rs"
+
+      # --- Migration pipeline (multi-source orchestration) ---
+      # Pipeline.run() orchestrates Qdrant/Pinecone/Elasticsearch
+      # sources with retries, pagination, and progress tracking.
+      - "crates/velesdb-migrate/src/pipeline.rs"
+      - "crates/velesdb-migrate/src/retry.rs"
+
+      # --- Graph algorithmic complexity (CART tree operations) ---
+      # Binary tree insert/remove with rebalancing — inherently recursive
+      # and branch-heavy. Covered by extensive unit tests.
+      - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
+
       # --- CLI / REPL (interactive tool, not production engine) ---
       - "crates/velesdb-cli/src/**"
 

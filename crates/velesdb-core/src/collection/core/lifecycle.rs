@@ -373,6 +373,16 @@ impl Collection {
         let edge_store = Self::load_edge_store(&path);
         let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
+        // Reconcile point_count from storage (config.json may be stale if
+        // the previous process exited without calling save_config).
+        let actual_count = if config.metadata_only {
+            payload_storage.read().ids().len()
+        } else {
+            vector_storage.read().len()
+        };
+        let mut config = config;
+        config.point_count = actual_count;
+
         Ok(Self::assemble(CollectionParts {
             path,
             config,

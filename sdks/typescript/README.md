@@ -6,17 +6,17 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 ## What's New in v1.6.0
 
-- **Agent Memory API** -- semantic, episodic, and procedural memory for AI agents
-- **Graph collections** -- dedicated `createGraphCollection()` for knowledge graphs
+- **Agent Memory API** -- semantic, episodic, and procedural memory for AI agents (REST only)
+- **Graph collections** -- dedicated `createGraphCollection()` for knowledge graphs (REST only)
 - **Metadata-only collections** -- reference tables with no vectors, joinable via VelesQL
-- **Sparse vector support** -- hybrid sparse+dense search on insert and query
-- **Stream insert with backpressure** -- `streamInsert()` for high-throughput ingestion
-- **Product Quantization training** -- `trainPq()` for further memory compression
-- **Collection analytics** -- `analyzeCollection()`, `getCollectionStats()`, `getCollectionConfig()`
-- **Property indexes** -- `createIndex()` / `listIndexes()` / `dropIndex()` for O(1) lookups
-- **Query introspection** -- `queryExplain()` and `collectionSanity()` diagnostics
+- **Sparse vector support** -- hybrid sparse+dense search on insert and query (REST + WASM)
+- **Stream insert with backpressure** -- `streamInsert()` for high-throughput ingestion (REST only)
+- **Product Quantization training** -- `trainPq()` for further memory compression (REST only)
+- **Collection analytics** -- `analyzeCollection()`, `getCollectionStats()`, `getCollectionConfig()` (REST only)
+- **Property indexes** -- `createIndex()` / `listIndexes()` / `dropIndex()` for O(1) lookups (REST only)
+- **Query introspection** -- `queryExplain()` and `collectionSanity()` diagnostics (REST only)
 - **Batch search** -- `searchBatch()` for parallel multi-query execution
-- **Lightweight search** -- `searchIds()` returns only IDs and scores
+- **Lightweight search** -- `searchIds()` returns only IDs and scores (REST only)
 
 ## Installation
 
@@ -325,7 +325,7 @@ Returns `true` if the collection contains no vectors.
 
 #### `db.flush(collection)`
 
-Flush pending changes to disk.
+Flush pending changes to disk. **REST backend only** -- the WASM backend runs in-memory and this is a no-op.
 
 #### `db.analyzeCollection(collection)`
 
@@ -556,7 +556,7 @@ Drop an index. Returns `true` if the index existed and was removed.
 
 #### `db.trainPq(collection, options?)`
 
-Train Product Quantization on a collection for further memory compression beyond SQ8.
+Train Product Quantization on a collection for further memory compression beyond SQ8. **REST backend only** -- delegates to velesdb-server; not available in the WASM backend.
 
 ```typescript
 const result = await db.trainPq('embeddings', {
@@ -714,4 +714,4 @@ import {
 
 MIT License -- See [LICENSE](./LICENSE) for details.
 
-VelesDB Core is licensed under VelesDB Core License 1.0 (source-available).
+VelesDB Core and Server are licensed under VelesDB Core License 1.0 (source-available).

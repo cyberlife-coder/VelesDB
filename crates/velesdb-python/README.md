@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
-[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](../../LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Version](https://img.shields.io/badge/version-1.6.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.6.0 - a high-performance vector database for AI applications.
@@ -856,9 +856,9 @@ See [SERVER_SECURITY.md](../../docs/guides/SERVER_SECURITY.md) for server authen
 
 ## License
 
-VelesDB Core License 1.0
+MIT License (Python bindings). The core engine (velesdb-core and velesdb-server) is under VelesDB Core License 1.0.
 
-See [LICENSE](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE) for details.
+See [LICENSE](./LICENSE) for details.
 
 ## Links
 

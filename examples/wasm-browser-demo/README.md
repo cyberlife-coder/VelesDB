@@ -96,4 +96,4 @@ Typical results on modern hardware:
 
 ## License
 
-VelesDB Core License 1.0
+MIT License
