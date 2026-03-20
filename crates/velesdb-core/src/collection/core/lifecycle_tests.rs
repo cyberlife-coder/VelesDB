@@ -221,3 +221,55 @@ fn test_graph_collection_accepts_none_embedding_dim() {
         "embedding_dim None should be accepted for graph collections"
     );
 }
+
+// ── Regression: stale point_count on reopen ──────────────────────────
+
+/// Regression test: `Collection::open()` must reconcile `point_count` from
+/// actual vector storage, not trust the (potentially stale) `config.json`.
+///
+/// Before the fix, `config.json` was only written at creation time (count=0)
+/// and on explicit `flush()`. If the process exited after `upsert()` but
+/// before `flush()`, the reopened collection would report `len() == 0`
+/// despite vectors being present on disk.
+#[test]
+fn test_reopen_collection_reconciles_point_count_from_storage() {
+    use crate::point::Point;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let n = 25_usize;
+
+    // 1. Create collection and upsert N points
+    let collection =
+        Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+            .expect("collection should be created");
+
+    #[allow(clippy::cast_precision_loss)]
+    let points: Vec<Point> = (0..n)
+        .map(|i| {
+            let f = i as f32 / n as f32;
+            Point::without_payload(i as u64, vec![f, 1.0 - f, 0.5, 0.1])
+        })
+        .collect();
+    collection.upsert(points).expect("upsert should succeed");
+
+    // Verify in-memory state is correct before drop
+    assert_eq!(collection.len(), n, "in-memory len should equal N");
+
+    // 2. Intentionally do NOT call flush() — simulates an unclean shutdown
+    //    where config.json still has the stale count from creation (0).
+    drop(collection);
+
+    // 3. Reopen and verify reconciliation
+    let reopened =
+        Collection::open(PathBuf::from(temp_dir.path())).expect("collection should reopen");
+
+    assert_eq!(
+        reopened.config().point_count, n,
+        "config.point_count must be reconciled from storage on open"
+    );
+    assert_eq!(
+        reopened.len(),
+        n,
+        "len() must reflect actual vector count after reopen"
+    );
+}

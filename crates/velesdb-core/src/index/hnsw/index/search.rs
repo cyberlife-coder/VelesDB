@@ -223,16 +223,20 @@ impl HnswIndex {
             return results;
         }
 
-        // Check result spread to determine if this is a hard query
-        let min_score = results.last().map_or(0.0, |r| r.score);
-        let max_score = results.first().map_or(0.0, |r| r.score);
+        // Check result spread to determine if this is a hard query.
+        // Use first/last scores — ordering differs by metric (similarity=desc,
+        // distance=asc) so we take the absolute spread.
+        let score_a = results.first().map_or(0.0, |r| r.score);
+        let score_b = results.last().map_or(0.0, |r| r.score);
+        let diff = (score_a - score_b).abs();
 
-        // Spread threshold: if results are tightly clustered, the query is easy
-        // Use absolute difference for metrics where scores can be near zero
-        let spread = if min_score.abs() > f32::EPSILON {
-            (max_score - min_score) / min_score.abs()
+        // Relative spread: normalize by the smaller absolute score to handle
+        // both similarity metrics (high scores) and distance metrics (low scores).
+        let baseline = score_a.abs().min(score_b.abs());
+        let spread = if baseline > f32::EPSILON {
+            diff / baseline
         } else {
-            max_score - min_score
+            diff
         };
 
         // Threshold 2.0: empirically tuned. Easy queries have spread < 1.0,

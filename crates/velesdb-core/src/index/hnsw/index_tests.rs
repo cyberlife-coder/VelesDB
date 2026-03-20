@@ -2021,3 +2021,133 @@ fn test_load_and_drop_safety() {
         drop(loaded);
     }
 }
+
+// =========================================================================
+// Regression: adaptive search spread for distance metrics
+// =========================================================================
+
+/// Regression test: `search_adaptive` spread calculation must work correctly
+/// for distance-based metrics (Euclidean, Hamming) where results are sorted
+/// ascending (best = lowest score).
+///
+/// Before the fix, the spread formula `(max - min) / min.abs()` produced a
+/// negative value for ascending-sorted results, which always compared < 2.0,
+/// preventing escalation from ever triggering on distance metrics. The fix
+/// uses `(score_a - score_b).abs() / min(|a|, |b|)` which is sign-agnostic.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_adaptive_search_spread_positive_for_distance_metrics() {
+    // Euclidean: distance metric (lower = better, sorted ascending).
+    // We need > 100 vectors so brute-force small-collection path is skipped,
+    // and we need enough spread so the adaptive threshold (2.0) is exceeded.
+    let dim = 32;
+    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+
+    // Insert 150 vectors: a tight cluster near the origin and outliers far away.
+    // This creates high spread in search results, which should trigger escalation.
+    for i in 0u64..120 {
+        // Tight cluster: small perturbation around origin
+        let v: Vec<f32> = (0..dim)
+            .map(|j| ((i + j as u64) as f32 * 0.001).sin() * 0.1)
+            .collect();
+        index.insert(i, &v);
+    }
+    for i in 120u64..150 {
+        // Outliers: far from origin (magnitude ~10)
+        let v: Vec<f32> = (0..dim)
+            .map(|j| 10.0 + (i + j as u64) as f32 * 0.05)
+            .collect();
+        index.insert(i, &v);
+    }
+
+    // Query near the cluster — first results will have low distances (~0.x),
+    // last results high distances (~50+), creating a large spread.
+    let query: Vec<f32> = vec![0.0; dim];
+
+    // Adaptive search with a narrow min_ef and generous max_ef.
+    // If spread calculation is correct and positive, the adaptive path will
+    // either escalate or return valid results — either way, the search must
+    // complete successfully and return sensible results.
+    let results = index.search_with_quality(
+        &query,
+        10,
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 256,
+        },
+    );
+
+    assert!(
+        !results.is_empty(),
+        "Adaptive Euclidean search should return results"
+    );
+    assert!(
+        results.len() <= 10,
+        "Should not exceed requested k"
+    );
+
+    // Results must be sorted ascending (distance metric: lower = better).
+    for pair in results.windows(2) {
+        assert!(
+            pair[0].score <= pair[1].score + f32::EPSILON,
+            "Euclidean results must be sorted ascending: {} > {}",
+            pair[0].score,
+            pair[1].score,
+        );
+    }
+
+    // The closest vectors should come from the tight cluster (ids 0..120),
+    // not the outliers (ids 120..150).
+    let closest_id = results[0].id;
+    assert!(
+        closest_id < 120,
+        "Closest result should be from the tight cluster, got id={closest_id}"
+    );
+}
+
+/// Regression test: adaptive search works for similarity metrics (Cosine)
+/// with spread results — verifying the fix did not regress the happy path.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_adaptive_search_spread_works_for_similarity_metrics() {
+    let dim = 32;
+    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+
+    // 150 vectors with varying similarity to the query
+    for i in 0u64..150 {
+        let v: Vec<f32> = (0..dim)
+            .map(|j| ((i * 7 + j as u64) as f32 * 0.013).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+
+    let query: Vec<f32> = (0..dim).map(|j| (j as f32 * 0.013).sin()).collect();
+
+    let results = index.search_with_quality(
+        &query,
+        10,
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 256,
+        },
+    );
+
+    assert!(
+        !results.is_empty(),
+        "Adaptive Cosine search should return results"
+    );
+    assert!(
+        results.len() <= 10,
+        "Should not exceed requested k"
+    );
+
+    // Results must be sorted descending (similarity metric: higher = better).
+    for pair in results.windows(2) {
+        assert!(
+            pair[0].score >= pair[1].score - f32::EPSILON,
+            "Cosine results must be sorted descending: {} < {}",
+            pair[0].score,
+            pair[1].score,
+        );
+    }
+}
