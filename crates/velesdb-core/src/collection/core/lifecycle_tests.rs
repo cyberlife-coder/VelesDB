@@ -239,9 +239,8 @@ fn test_reopen_collection_reconciles_point_count_from_storage() {
     let n = 25_usize;
 
     // 1. Create collection and upsert N points
-    let collection =
-        Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
-            .expect("collection should be created");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
 
     #[allow(clippy::cast_precision_loss)]
     let points: Vec<Point> = (0..n)
@@ -264,7 +263,8 @@ fn test_reopen_collection_reconciles_point_count_from_storage() {
         Collection::open(PathBuf::from(temp_dir.path())).expect("collection should reopen");
 
     assert_eq!(
-        reopened.config().point_count, n,
+        reopened.config().point_count,
+        n,
         "config.point_count must be reconciled from storage on open"
     );
     assert_eq!(

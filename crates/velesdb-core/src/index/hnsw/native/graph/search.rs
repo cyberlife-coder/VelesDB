@@ -71,7 +71,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return self.search_multi_entry(query, k, ef_search, probes);
         }
 
-        let candidates = self.search_layer(query, vec![current_ep], ef_search, 0, self.stagnation_limit);
+        let candidates =
+            self.search_layer(query, vec![current_ep], ef_search, 0, self.stagnation_limit);
         candidates.into_iter().take(k).collect()
     }
 
@@ -144,7 +145,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             }
         }
 
-        let candidates = self.search_layer(query, entry_points, ef_search, 0, self.stagnation_limit);
+        let candidates =
+            self.search_layer(query, entry_points, ef_search, 0, self.stagnation_limit);
         candidates.into_iter().take(k).collect()
     }
 

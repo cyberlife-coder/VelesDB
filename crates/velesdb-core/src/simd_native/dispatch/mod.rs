@@ -119,11 +119,9 @@ pub fn has_avx512vnni() -> bool {
 ///
 /// Logs the detected SIMD level on non-WASM targets for diagnostics.
 pub fn warmup_simd_cache() {
-    let level = simd_level();
-
     // Log detected SIMD level for diagnostics (skipped in WASM)
     #[cfg(feature = "persistence")]
-    eprintln!("[velesdb] SIMD dispatch: {level:?} detected");
+    eprintln!("[velesdb] SIMD dispatch: {:?} detected", simd_level());
 
     let warmup_size = 768;
     let a: Vec<f32> = vec![0.01; warmup_size];

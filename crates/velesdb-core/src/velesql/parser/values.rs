@@ -136,7 +136,11 @@ impl Parser {
     ) -> Result<(TemporalExpr, bool, TemporalExpr), ParseError> {
         let parts: Vec<_> = pair.into_inner().collect();
         if parts.len() < 3 {
-            return Err(ParseError::syntax(0, "", "Expected left operand, operator, right operand"));
+            return Err(ParseError::syntax(
+                0,
+                "",
+                "Expected left operand, operator, right operand",
+            ));
         }
         let left = Self::parse_temporal_operand(parts[0].clone())?;
         let is_subtract = parts[1].as_str() == "-";

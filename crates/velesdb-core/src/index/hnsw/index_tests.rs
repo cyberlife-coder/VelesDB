@@ -2081,10 +2081,7 @@ fn test_adaptive_search_spread_positive_for_distance_metrics() {
         !results.is_empty(),
         "Adaptive Euclidean search should return results"
     );
-    assert!(
-        results.len() <= 10,
-        "Should not exceed requested k"
-    );
+    assert!(results.len() <= 10, "Should not exceed requested k");
 
     // Results must be sorted ascending (distance metric: lower = better).
     for pair in results.windows(2) {
@@ -2136,10 +2133,7 @@ fn test_adaptive_search_spread_works_for_similarity_metrics() {
         !results.is_empty(),
         "Adaptive Cosine search should return results"
     );
-    assert!(
-        results.len() <= 10,
-        "Should not exceed requested k"
-    );
+    assert!(results.len() <= 10, "Should not exceed requested k");
 
     // Results must be sorted descending (similarity metric: higher = better).
     for pair in results.windows(2) {
