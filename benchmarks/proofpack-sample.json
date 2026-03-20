@@ -1,8 +1,0 @@
-{
-  "profiles": [
-    {"profile": "Fast", "p50_ms": 0.41, "p95_ms": 0.76, "p99_ms": 0.98, "recall_at_10": 90.2},
-    {"profile": "Balanced", "p50_ms": 0.63, "p95_ms": 0.95, "p99_ms": 1.21, "recall_at_10": 98.8},
-    {"profile": "Accurate", "p50_ms": 0.82, "p95_ms": 1.31, "p99_ms": 1.67, "recall_at_10": 100.0},
-    {"profile": "Perfect", "p50_ms": 1.24, "p95_ms": 1.91, "p99_ms": 2.43, "recall_at_10": 100.0}
-  ]
-}

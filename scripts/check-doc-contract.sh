@@ -3,7 +3,6 @@ set -euo pipefail
 
 SERVER_FILE="crates/velesdb-server/src/main.rs"
 README_FILE="README.md"
-MATRIX_FILE="docs/reference/readme-code-truth-matrix.md"
 
 if [[ ! -f "$SERVER_FILE" ]]; then
   echo "ERROR: missing $SERVER_FILE"
@@ -12,11 +11,6 @@ fi
 
 if [[ ! -f "$README_FILE" ]]; then
   echo "ERROR: missing $README_FILE"
-  exit 1
-fi
-
-if [[ ! -f "$MATRIX_FILE" ]]; then
-  echo "ERROR: missing $MATRIX_FILE"
   exit 1
 fi
 
@@ -49,21 +43,6 @@ fi
 
 if ! grep -Fq '`/aggregate`' "$README_FILE"; then
   echo "README must document /aggregate"
-  exit 1
-fi
-
-if ! grep -Fq '| `/query` | yes | yes |' "$MATRIX_FILE"; then
-  echo "Matrix must assert /query parity (runtime/readme)."
-  exit 1
-fi
-
-if ! grep -Fq '| `/aggregate` | yes | yes |' "$MATRIX_FILE"; then
-  echo "Matrix must assert /aggregate parity (runtime/readme)."
-  exit 1
-fi
-
-if ! grep -Fq 'LEFT/RIGHT/FULL' "$MATRIX_FILE"; then
-  echo "Matrix must document JOIN runtime status."
   exit 1
 fi
 

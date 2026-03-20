@@ -41,7 +41,7 @@ Please describe the tests that you ran to verify your changes. Provide instructi
 ## Unsafe Code Checklist
 
 > **Skip this section if your PR does not add or modify `unsafe` code.**
-> See [docs/UNSAFE_REVIEW_CHECKLIST.md](../docs/UNSAFE_REVIEW_CHECKLIST.md) for details.
+> See [docs/SOUNDNESS.md](../docs/SOUNDNESS.md) for unsafe code documentation.
 
 - [ ] All `unsafe fn` have `# Safety` documentation describing preconditions
 - [ ] All `unsafe {}` blocks have `// SAFETY:` comments explaining why it's sound

@@ -11,9 +11,6 @@ VelesDB core architecture is explicitly **hybrid by design**:
 - **Multi-column engine** (`ColumnStore`) for typed filtering and bitmap operations.
 - **VelesQL control plane** (parser/validation/planning/cache) orchestrating cross-domain execution paths.
 
-For the current expert review and target architecture roadmap, see:
-`docs/reviews/velesdb-core-velesql-expert-review-2026-02-26.md`.
-
 ## High-Level Overview
 
 ```
@@ -498,6 +495,4 @@ See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for the original audit plan.
 | Storage + WAL/recovery | `crates/velesdb-core/src/storage/*` | mmap storage and recovery tests |
 
 ### Governance links
-- Expert architecture review: `docs/reviews/velesdb-core-velesql-expert-review-2026-02-26.md`
-- INVEST user stories backlog: `docs/reviews/velesdb-core-velesql-us-invest-2026-02-26.md`
 - Operations runbook: `docs/reference/OPERATIONS_RUNBOOK.md`
