@@ -134,23 +134,13 @@ impl Parser {
     fn extract_temporal_operands(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<(TemporalExpr, bool, TemporalExpr), ParseError> {
-        let mut inner = pair.into_inner();
-
-        let left_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected left operand"))?;
-        let left = Self::parse_temporal_operand(left_pair)?;
-
-        let op_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected temporal operator"))?;
-        let is_subtract = op_pair.as_str() == "-";
-
-        let right_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected right operand"))?;
-        let right = Self::parse_temporal_operand(right_pair)?;
-
+        let parts: Vec<_> = pair.into_inner().collect();
+        if parts.len() < 3 {
+            return Err(ParseError::syntax(0, "", "Expected left operand, operator, right operand"));
+        }
+        let left = Self::parse_temporal_operand(parts[0].clone())?;
+        let is_subtract = parts[1].as_str() == "-";
+        let right = Self::parse_temporal_operand(parts[2].clone())?;
         Ok((left, is_subtract, right))
     }
 

@@ -151,6 +151,12 @@ engines:
       # and branch-heavy. Covered by extensive unit tests.
       - "crates/velesdb-core/src/collection/graph/cart/node/mod.rs"
 
+      # --- Query execution internals (parameter-heavy dispatch) ---
+      # These functions pass through many query context fields; wrapping
+      # in a struct would add indirection without clarity gain.
+      - "crates/velesdb-core/src/collection/search/query/execution_paths.rs"
+      - "crates/velesdb-core/src/collection/search/query/join.rs"
+
       # --- CLI / REPL (interactive tool, not production engine) ---
       - "crates/velesdb-cli/src/**"
 

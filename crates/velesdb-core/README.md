@@ -478,7 +478,7 @@ You can also use `RelativeScore` fusion for explicit weight control:
 let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
 ```
 
-### Key types and parameters
+### Fusion types and parameters
 
 | Type | Path | Description |
 |------|------|-------------|
@@ -658,7 +658,7 @@ memory.load_snapshot_version(version)?;
 | **Episodic** | Time-sequenced events and interactions | Chat history, user sessions, audit logs |
 | **Procedural** | Learned behaviors that improve over time | Task automation, decision trees, API call patterns |
 
-### Key types and parameters
+### Agent Memory types
 
 | Type | Description |
 |------|-------------|
@@ -667,6 +667,8 @@ memory.load_snapshot_version(version)?;
 | `EpisodicMemory` | `record(id, description, timestamp, embedding)`, `recent(limit, since)`, `recall_similar(embedding, k)` |
 | `ProceduralMemory` | `learn(id, name, steps, embedding, confidence)`, `recall(embedding, k, min_confidence)`, `reinforce(id, success)` |
 | `ProcedureMatch` | Result struct: `id`, `name`, `steps: Vec<String>`, `confidence: f32`, `score: f32` |
+
+
 | `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
 | `SnapshotManager` | `new(dir, max_snapshots)` -- versioned state persistence with automatic rotation |
 | `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `episodic_consolidated` counts |
@@ -720,7 +722,7 @@ println!("Hit rate: {:.1}%", metrics.hit_rate() * 100.0);
 println!("Hits: {}, Misses: {}", metrics.hits(), metrics.misses());
 ```
 
-### Key types and parameters
+### Cache types and parameters
 
 | Type | Path | Description |
 |------|------|-------------|
