@@ -109,7 +109,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 self.max_connections
             };
             let neighbors =
-                self.search_layer(query, vec![current_ep], self.ef_construction, layer_idx);
+                // Stagnation disabled during construction (0) to ensure
+                // optimal neighbor selection — see Devin review PR #336.
+                self.search_layer(query, vec![current_ep], self.ef_construction, layer_idx, 0);
             let selected = self.select_neighbors(&neighbors, max_conn);
             self.connect_neighbors_batch(node_id, &selected, layer_idx, max_conn);
             if !neighbors.is_empty() {

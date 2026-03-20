@@ -71,7 +71,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             return self.search_multi_entry(query, k, ef_search, probes);
         }
 
-        let candidates = self.search_layer(query, vec![current_ep], ef_search, 0);
+        let candidates = self.search_layer(query, vec![current_ep], ef_search, 0, self.stagnation_limit);
         candidates.into_iter().take(k).collect()
     }
 
@@ -144,7 +144,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             }
         }
 
-        let candidates = self.search_layer(query, entry_points, ef_search, 0);
+        let candidates = self.search_layer(query, entry_points, ef_search, 0, self.stagnation_limit);
         candidates.into_iter().take(k).collect()
     }
 
@@ -263,6 +263,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// F-03 optimization: acquires both vectors and layers read locks once
     /// before the search loop, avoiding ~ef lock acquire/release cycles.
+    ///
+    /// `stagnation_limit` controls early termination: 0 disables it (use
+    /// during index construction to avoid degrading neighbor quality).
+    /// For search queries, pass `self.stagnation_limit`.
     #[inline]
     pub(in crate::index::hnsw::native::graph) fn search_layer(
         &self,
@@ -270,6 +274,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         entry_points: Vec<NodeId>,
         ef: usize,
         layer: usize,
+        stagnation_limit: usize,
     ) -> Vec<(NodeId, f32)> {
         use std::cmp::Reverse;
 
@@ -280,7 +285,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.with_vectors_and_layers_read(|vectors, layers| {
             let dimension = vectors.dimension();
             let prefetch_distance = crate::simd_native::calculate_prefetch_distance(dimension);
-            let stagnation_limit = self.stagnation_limit;
             let mut stagnation_count: usize = 0;
 
             for ep in entry_points {
