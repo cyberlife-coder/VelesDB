@@ -326,6 +326,26 @@ impl Database {
             .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
 
+        let (id, vector, payload) = Self::resolve_insert_fields(stmt, params)?;
+        let point_id =
+            id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
+        let point = Self::build_insert_point(&collection, point_id, vector, payload)?;
+
+        let result = SearchResult::new(point.clone(), 0.0);
+        collection.upsert(vec![point])?;
+        Ok(vec![result])
+    }
+
+    /// Resolves column values from an INSERT statement into id, vector, and payload fields.
+    #[allow(clippy::type_complexity)] // Reason: one-off tuple return for internal helper.
+    fn resolve_insert_fields(
+        stmt: &crate::velesql::InsertStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(
+        Option<u64>,
+        Option<Vec<f32>>,
+        serde_json::Map<String, serde_json::Value>,
+    )> {
         let mut id: Option<u64> = None;
         let mut payload = serde_json::Map::new();
         let mut vector: Option<Vec<f32>> = None;
@@ -343,13 +363,7 @@ impl Database {
             payload.insert(column.clone(), resolved);
         }
 
-        let point_id =
-            id.ok_or_else(|| Error::Query("INSERT requires integer 'id' column".to_string()))?;
-        let point = Self::build_insert_point(&collection, point_id, vector, payload)?;
-
-        let result = SearchResult::new(point.clone(), 0.0);
-        collection.upsert(vec![point])?;
-        Ok(vec![result])
+        Ok((id, vector, payload))
     }
 
     /// Builds a `Point` for an INSERT statement, validating vector presence.
@@ -393,6 +407,22 @@ impl Database {
             .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
 
+        let assignments = Self::resolve_update_assignments(stmt, params)?;
+        let filter = Self::build_update_filter(stmt.where_clause.as_ref())?;
+
+        let all_ids = collection.all_ids();
+        let rows = collection.get(&all_ids);
+        let updated_points =
+            Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;
+
+        Self::upsert_and_collect(&collection, updated_points)
+    }
+
+    /// Resolves and validates UPDATE assignment values.
+    fn resolve_update_assignments(
+        stmt: &crate::velesql::UpdateStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<(String, serde_json::Value)>> {
         let assignments = stmt
             .assignments
             .iter()
@@ -404,18 +434,18 @@ impl Database {
                 "UPDATE cannot modify primary key column 'id'".to_string(),
             ));
         }
+        Ok(assignments)
+    }
 
-        let all_ids = collection.all_ids();
-        let rows = collection.get(&all_ids);
-        let filter = Self::build_update_filter(stmt.where_clause.as_ref())?;
-
-        let updated_points =
-            Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;
-
+    /// Upserts updated points and returns them as search results.
+    #[allow(deprecated)]
+    fn upsert_and_collect(
+        collection: &crate::Collection,
+        updated_points: Vec<crate::Point>,
+    ) -> Result<Vec<SearchResult>> {
         if updated_points.is_empty() {
             return Ok(Vec::new());
         }
-
         let results = updated_points
             .iter()
             .map(|p| SearchResult::new(p.clone(), 0.0))

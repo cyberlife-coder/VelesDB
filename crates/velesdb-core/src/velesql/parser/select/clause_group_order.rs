@@ -3,11 +3,19 @@
 use super::super::{extract_identifier, Rule};
 use super::validation;
 use crate::velesql::ast::{
-    AggregateFunction, GroupByClause, HavingClause, HavingCondition, OrderByExpr, SelectOrderBy,
-    SimilarityOrderBy,
+    AggregateFunction, CompareOp, GroupByClause, HavingClause, HavingCondition, OrderByExpr,
+    SelectOrderBy, SimilarityOrderBy, Value,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
+
+/// Intermediate accumulator for the three required parts of a HAVING term.
+#[derive(Default)]
+struct HavingParts {
+    aggregate: Option<AggregateFunction>,
+    operator: Option<CompareOp>,
+    value: Option<Value>,
+}
 
 impl Parser {
     pub(crate) fn parse_group_by_clause(pair: pest::iterators::Pair<Rule>) -> GroupByClause {
@@ -59,25 +67,40 @@ impl Parser {
     }
 
     fn parse_having_term(pair: pest::iterators::Pair<Rule>) -> Result<HavingCondition, ParseError> {
-        let mut aggregate = None;
-        let mut operator = None;
-        let mut value = None;
+        let parts = Self::extract_having_parts(pair)?;
+        Self::build_having_condition(parts)
+    }
+
+    /// Collects the optional aggregate, operator, and value from a `having_term` node.
+    fn extract_having_parts(pair: pest::iterators::Pair<Rule>) -> Result<HavingParts, ParseError> {
+        let mut parts = HavingParts::default();
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::aggregate_function => {
-                    aggregate = Some(Self::parse_aggregate_function_only(inner_pair)?);
+                    parts.aggregate = Some(Self::parse_aggregate_function_only(inner_pair)?);
                 }
-                Rule::compare_op => operator = Some(validation::parse_compare_op(&inner_pair)?),
-                Rule::value => value = Some(Self::parse_value(inner_pair)?),
+                Rule::compare_op => {
+                    parts.operator = Some(validation::parse_compare_op(&inner_pair)?);
+                }
+                Rule::value => parts.value = Some(Self::parse_value(inner_pair)?),
                 _ => {}
             }
         }
+        Ok(parts)
+    }
+
+    /// Validates that all required HAVING fields are present and builds the condition.
+    fn build_having_condition(parts: HavingParts) -> Result<HavingCondition, ParseError> {
         Ok(HavingCondition {
-            aggregate: aggregate
+            aggregate: parts
+                .aggregate
                 .ok_or_else(|| ParseError::syntax(0, "", "HAVING requires aggregate function"))?,
-            operator: operator
+            operator: parts
+                .operator
                 .ok_or_else(|| ParseError::syntax(0, "", "HAVING requires comparison operator"))?,
-            value: value.ok_or_else(|| ParseError::syntax(0, "", "HAVING requires value"))?,
+            value: parts
+                .value
+                .ok_or_else(|| ParseError::syntax(0, "", "HAVING requires value"))?,
         })
     }
 

@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](../../LICENSE)
 [![Version](https://img.shields.io/badge/version-1.6.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) v1.6.0 - a high-performance vector database for AI applications.
@@ -38,6 +38,8 @@ import velesdb
 db = velesdb.Database("./my_vectors")
 
 # Create a collection for 768-dimensional vectors (e.g., BERT embeddings)
+# Note: create_collection() uses the legacy Collection API. For new projects,
+# prefer create_vector_collection() which returns a typed VectorCollection.
 collection = db.create_collection(
     name="documents",
     dimension=768,
@@ -68,6 +70,47 @@ for result in results:
     print(f"ID: {result['id']}, Score: {result['score']:.4f}")
     print(f"Payload: {result['payload']}")
 ```
+
+### End-to-End: Text to Search Results (RAG Pipeline)
+
+VelesDB stores and searches vectors — it does not generate embeddings. Use any embedding model to convert text to vectors first.
+
+```python
+# pip install velesdb sentence-transformers
+import velesdb
+from sentence_transformers import SentenceTransformer
+
+# 1. Load an embedding model (runs locally, no API key needed)
+model = SentenceTransformer("all-MiniLM-L6-v2")  # outputs 384-dim vectors
+
+# 2. Create a collection matching the model's dimension
+db = velesdb.Database("./rag_data")
+collection = db.create_collection("docs", dimension=384, metric="cosine")
+
+# 3. Embed and store documents
+texts = [
+    "VelesDB is a local-first vector database written in Rust.",
+    "HNSW is an approximate nearest neighbor search algorithm.",
+    "RAG combines retrieval with language model generation.",
+]
+vectors = model.encode(texts).tolist()
+
+collection.upsert([
+    {"id": i, "vector": v, "payload": {"text": t}}
+    for i, (v, t) in enumerate(zip(vectors, texts))
+])
+
+# 4. Search with a natural language query
+query_vector = model.encode("How does vector search work?").tolist()
+results = collection.search(vector=query_vector, top_k=2)
+
+for r in results:
+    print(f"Score: {r['score']:.4f} | {r['payload']['text']}")
+# Score: 0.5621 | HNSW is an approximate nearest neighbor search algorithm.
+# Score: 0.4238 | VelesDB is a local-first vector database written in Rust.
+```
+
+> **Full RAG demo with PDF ingestion:** [demos/rag-pdf-demo/](../../demos/rag-pdf-demo/)
 
 ## API Reference
 
@@ -746,7 +789,7 @@ import numpy as np
 vectors = np.random.rand(10000, 768).astype('float32')
 points = [{"id": i, "vector": v.tolist()} for i, v in enumerate(vectors)]
 
-collection.upsert_bulk(points)  # 7x faster than upsert()
+collection.upsert_bulk(points)  # Batch-optimized: parallel HNSW + single flush
 ```
 
 ## Distance Metrics
@@ -765,24 +808,20 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 
 | Operation | Time (768d) | Throughput |
 |-----------|-------------|------------|
-| Cosine | ~34 ns | 22M ops/sec |
-| Euclidean | ~23 ns | 33M ops/sec |
-| Dot Product | ~24 ns | 32M ops/sec |
-| Hamming | ~52 ns | 15M ops/sec |
+| Cosine | ~33.6 ns | 22.9 Gelem/s |
+| Euclidean | ~22.7 ns | 33.8 Gelem/s |
+| Dot Product | ~23.6 ns | 32.5 Gelem/s |
+| Hamming | ~34.3 ns | -- |
 
-### Benchmark: VelesDB vs pgvector (HNSW)
+### System Benchmarks (Native Rust Engine)
 
-Tested on clustered embeddings (768D) — realistic AI workloads:
+| Benchmark | Result |
+|-----------|--------|
+| **HNSW Search (10K/768D)** | **42.8 µs** (k=10, Balanced mode) |
+| **Recall@10 (Accurate)** | **100%** |
+| **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors) |
 
-| Dataset Size | VelesDB Recall | VelesDB P50 | pgvector P50 | **Speedup** |
-|--------------|----------------|-------------|--------------|-------------|
-| **1,000** | 100.0% | **0.5ms** | 50ms | **100x** |
-| **10,000** | 99.0% | **2.5ms** | 50ms | **20x** |
-| **100,000** | 97.8% | **4.3ms** | 50ms | **12x** |
-
-- **12-100x faster** than pgvector depending on dataset size
-- **97-100% recall** across all scales
-- **Sub-5ms latency** even at 100k vectors
+*Measured with Criterion.rs on i9-14900KF. See [benchmarks/](../../benchmarks/) for methodology.*
 
 ## Connecting to velesdb-server
 
@@ -817,9 +856,9 @@ See [SERVER_SECURITY.md](../../docs/guides/SERVER_SECURITY.md) for server authen
 
 ## License
 
-MIT
+VelesDB Core License 1.0
 
-See [LICENSE](./LICENSE) for details.
+See [LICENSE](https://github.com/cyberlife-coder/velesdb/blob/main/LICENSE) for details.
 
 ## Links
 

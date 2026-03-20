@@ -389,6 +389,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             ef_construction: graph.ef_construction,
             level_mult,
             alpha: 1.0,
+            stagnation_limit: graph.ef_construction / 4,
         })
     }
 

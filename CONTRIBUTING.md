@@ -60,7 +60,7 @@ Unsure where to begin? Look for issues labeled:
 
 ### Prerequisites
 
-- Rust 1.83+ (stable)
+- Rust 1.83+ (stable) — enforced as MSRV
 - Docker (optional, for integration tests)
 
 ### Building from Source
@@ -71,10 +71,15 @@ git clone https://github.com/YOUR_USERNAME/velesdb.git
 cd velesdb
 
 # Build the project
-cargo build
+cargo build --workspace
 
-# Run tests
-cargo test
+# Run tests (single-threaded — required for file system isolation)
+cargo test --workspace --features persistence,gpu,update-check \
+  --exclude velesdb-python -- --test-threads=1
+
+# Lint (strict — mirrors CI)
+cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
+  --exclude velesdb-python -- -D warnings -D clippy::pedantic
 
 # Run the server locally
 cargo run --bin velesdb-server -- --data-dir ./data
@@ -83,12 +88,12 @@ cargo run --bin velesdb-server -- --data-dir ./data
 ### Running Benchmarks
 
 ```bash
-cargo bench
+cargo bench -p velesdb-core --features internal-bench -- --noplot
 ```
 
 ## Pull Request Process
 
-1. **Ensure all tests pass** - Run `cargo test` before submitting
+1. **Ensure all tests pass** - Run `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1` before submitting
 2. **Update documentation** - If you're adding new features, update the relevant docs
 3. **Follow the style guidelines** - Run `cargo fmt` and `cargo clippy`
 4. **Write meaningful commit messages** - Follow conventional commits format
@@ -164,9 +169,9 @@ VelesDB utilise **3 workflows GitHub Actions simplifiés** :
 ```bash
 # 1. Mettre à jour version dans Cargo.toml
 # 2. Commit et tag
-git commit -am "release: v0.8.6"
-git tag v0.8.6
-git push origin main v0.8.6
+git commit -am "release: v1.6.0"
+git tag v1.6.0
+git push origin main v1.6.0
 ```
 
 Le workflow `release.yml` publie automatiquement sur :

@@ -3,6 +3,23 @@
 //! Stores payloads in an append-only log file with an in-memory index.
 //! Supports periodic snapshots for fast cold-start recovery.
 //!
+//! ## WAL Entry Formats
+//!
+//! **CRC32-protected (current, markers 0xC3/0xC4):**
+//! ```text
+//! Store:  [0xC3: 1B] [id: 8B LE] [len: 4B LE] [payload: len B] [crc32: 4B LE]
+//! Delete: [0xC4: 1B] [id: 8B LE] [crc32: 4B LE]
+//! ```
+//!
+//! **Legacy (markers 1/2, read-only for backward compatibility):**
+//! ```text
+//! Store:  [1: 1B] [id: 8B LE] [len: 4B LE] [payload: len B]
+//! Delete: [2: 1B] [id: 8B LE]
+//! ```
+//!
+//! CRC32 covers all bytes preceding the CRC field. On CRC mismatch during
+//! replay, the corrupted entry is skipped and a warning is logged.
+//!
 //! Snapshot format and I/O are handled by the [`super::snapshot`] module.
 
 use super::snapshot;
@@ -57,6 +74,49 @@ pub struct LogPayloadStorage {
 }
 
 // ---------------------------------------------------------------------------
+// WAL format markers
+// ---------------------------------------------------------------------------
+
+/// Legacy WAL store marker (no CRC).
+const LEGACY_STORE_MARKER: u8 = 1;
+/// Legacy WAL delete marker (no CRC).
+const LEGACY_DELETE_MARKER: u8 = 2;
+/// CRC32-protected store marker.
+const CRC_STORE_MARKER: u8 = 0xC3;
+/// CRC32-protected delete marker.
+const CRC_DELETE_MARKER: u8 = 0xC4;
+
+// ---------------------------------------------------------------------------
+// CRC32 helpers
+// ---------------------------------------------------------------------------
+
+/// Computes CRC32 for a WAL store record (marker + id + len + payload).
+///
+/// # Panics
+///
+/// Panics if `payload.len()` exceeds `u32::MAX`. Callers must validate length first.
+fn compute_store_crc(id: u64, payload: &[u8]) -> u32 {
+    // Reason: caller validates payload fits in u32 before calling (store validates
+    // via try_from, replay reads a u32 length field).
+    #[allow(clippy::cast_possible_truncation)]
+    let len_u32 = payload.len() as u32;
+    let mut buf = Vec::with_capacity(1 + 8 + 4 + payload.len());
+    buf.push(CRC_STORE_MARKER);
+    buf.extend_from_slice(&id.to_le_bytes());
+    buf.extend_from_slice(&len_u32.to_le_bytes());
+    buf.extend_from_slice(payload);
+    crc32_hash(&buf)
+}
+
+/// Computes CRC32 for a WAL delete record (marker + id).
+fn compute_delete_crc(id: u64) -> u32 {
+    let mut buf = [0u8; 1 + 8];
+    buf[0] = CRC_DELETE_MARKER;
+    buf[1..9].copy_from_slice(&id.to_le_bytes());
+    crc32_hash(&buf)
+}
+
+// ---------------------------------------------------------------------------
 // WAL entry domain type — separates parsing from application
 // ---------------------------------------------------------------------------
 
@@ -65,6 +125,8 @@ struct WalEntry {
     op: WalOp,
     /// File position after the marker + ID header (start of payload length for Store).
     pos_after_header: u64,
+    /// Whether this entry uses CRC32 integrity checking.
+    has_crc: bool,
 }
 
 /// The two WAL operations: store (upsert) or delete.
@@ -75,6 +137,8 @@ enum WalOp {
 
 impl WalEntry {
     /// Reads one WAL entry from the reader. Returns `None` on EOF.
+    ///
+    /// Supports both legacy (markers 1/2) and CRC-protected (markers 0xC3/0xC4) formats.
     fn read(reader: &mut BufReader<File>, pos: u64) -> io::Result<Option<Self>> {
         let mut marker = [0u8; 1];
         if reader.read_exact(&mut marker).is_err() {
@@ -86,9 +150,11 @@ impl WalEntry {
         let id = u64::from_le_bytes(id_bytes);
         let pos_after_header = pos + 1 + 8;
 
-        let op = match marker[0] {
-            1 => WalOp::Store { id },
-            2 => WalOp::Delete { id },
+        let (op, has_crc) = match marker[0] {
+            LEGACY_STORE_MARKER => (WalOp::Store { id }, false),
+            LEGACY_DELETE_MARKER => (WalOp::Delete { id }, false),
+            CRC_STORE_MARKER => (WalOp::Store { id }, true),
+            CRC_DELETE_MARKER => (WalOp::Delete { id }, true),
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -100,6 +166,7 @@ impl WalEntry {
         Ok(Some(Self {
             op,
             pos_after_header,
+            has_crc,
         }))
     }
 
@@ -110,23 +177,97 @@ impl WalEntry {
         reader: &mut BufReader<File>,
     ) -> io::Result<u64> {
         match self.op {
-            WalOp::Store { id } => {
-                let len_offset = self.pos_after_header;
-                let mut len_bytes = [0u8; 4];
-                reader.read_exact(&mut len_bytes)?;
-                let payload_len = u64::from(u32::from_le_bytes(len_bytes));
+            WalOp::Store { id } => self.apply_store(id, index, reader),
+            WalOp::Delete { id } => self.apply_delete(id, index, reader),
+        }
+    }
 
-                index.insert(id, len_offset);
+    /// Applies a store entry, verifying CRC if present.
+    fn apply_store(
+        &self,
+        id: u64,
+        index: &mut FxHashMap<u64, u64>,
+        reader: &mut BufReader<File>,
+    ) -> io::Result<u64> {
+        let len_offset = self.pos_after_header;
+        let mut len_bytes = [0u8; 4];
+        reader.read_exact(&mut len_bytes)?;
+        let payload_len = u64::from(u32::from_le_bytes(len_bytes));
 
-                let skip = i64::try_from(payload_len)
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
-                reader.seek(SeekFrom::Current(skip))?;
-                Ok(self.pos_after_header + 4 + payload_len)
-            }
-            WalOp::Delete { id } => {
+        let end_pos = if self.has_crc {
+            self.apply_store_with_crc(id, payload_len, index, reader, len_offset)?
+        } else {
+            let skip = i64::try_from(payload_len)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
+            reader.seek(SeekFrom::Current(skip))?;
+            index.insert(id, len_offset);
+            self.pos_after_header + 4 + payload_len
+        };
+
+        Ok(end_pos)
+    }
+
+    /// Reads payload + CRC for a CRC-protected store entry.
+    ///
+    /// Returns the file position after the CRC field on success.
+    /// On CRC mismatch, skips the entry (does not insert into index).
+    fn apply_store_with_crc(
+        &self,
+        id: u64,
+        payload_len: u64,
+        index: &mut FxHashMap<u64, u64>,
+        reader: &mut BufReader<File>,
+        len_offset: u64,
+    ) -> io::Result<u64> {
+        let payload_usize = usize::try_from(payload_len)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Payload too large"))?;
+        let mut payload_buf = vec![0u8; payload_usize];
+        reader.read_exact(&mut payload_buf)?;
+
+        let mut crc_bytes = [0u8; 4];
+        reader.read_exact(&mut crc_bytes)?;
+        let stored_crc = u32::from_le_bytes(crc_bytes);
+        let computed_crc = compute_store_crc(id, &payload_buf);
+
+        if stored_crc == computed_crc {
+            index.insert(id, len_offset);
+        } else {
+            tracing::warn!(
+                id,
+                "WAL CRC mismatch on store entry — skipping corrupted entry"
+            );
+        }
+
+        // Position after header(9) + len(4) + payload + crc(4)
+        Ok(self.pos_after_header + 4 + payload_len + 4)
+    }
+
+    /// Applies a delete entry, verifying CRC if present.
+    fn apply_delete(
+        &self,
+        id: u64,
+        index: &mut FxHashMap<u64, u64>,
+        reader: &mut BufReader<File>,
+    ) -> io::Result<u64> {
+        if self.has_crc {
+            let mut crc_bytes = [0u8; 4];
+            reader.read_exact(&mut crc_bytes)?;
+            let stored_crc = u32::from_le_bytes(crc_bytes);
+            let computed_crc = compute_delete_crc(id);
+
+            if stored_crc == computed_crc {
                 index.remove(&id);
-                Ok(self.pos_after_header)
+            } else {
+                tracing::warn!(
+                    id,
+                    "WAL CRC mismatch on delete entry — skipping corrupted entry"
+                );
             }
+
+            Ok(self.pos_after_header + 4)
+        } else {
+            index.remove(&id);
+            Ok(self.pos_after_header)
         }
     }
 }
@@ -313,6 +454,21 @@ impl LogPayloadStorage {
             *self.write_offset.read(),
         )
     }
+
+    /// Attempts to create a snapshot if the WAL has grown past the threshold.
+    ///
+    /// Best-effort: on failure the error is logged but not propagated,
+    /// because the WAL write that triggered the check already succeeded.
+    fn maybe_auto_snapshot(&mut self) {
+        if self.should_create_snapshot() {
+            if let Err(e) = self.create_snapshot() {
+                tracing::warn!(
+                    error = %e,
+                    "Auto-snapshot after WAL growth failed; will retry on next write"
+                );
+            }
+        }
+    }
 }
 
 impl PayloadStorage for LogPayloadStorage {
@@ -323,29 +479,37 @@ impl PayloadStorage for LogPayloadStorage {
         let len_u32 = u32::try_from(payload_bytes.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Payload too large"))?;
 
-        let mut wal = self.wal.write();
-        let mut index = self.index.write();
-        let mut offset = self.write_offset.write();
+        let crc = compute_store_crc(id, &payload_bytes);
 
-        let record_start = *offset;
+        // Scoped block: all lock guards are released before the auto-snapshot
+        // check, which itself acquires locks (see `create_snapshot`).
+        {
+            let mut wal = self.wal.write();
+            let mut index = self.index.write();
+            let mut offset = self.write_offset.write();
 
-        // H-3: Build complete record in one buffer to minimize partial-write window.
-        // Op: Store (1) | ID (8) | Len (4) | Data (N)
-        let mut record = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len());
-        record.push(1u8);
-        record.extend_from_slice(&id.to_le_bytes());
-        record.extend_from_slice(&len_u32.to_le_bytes());
-        record.extend_from_slice(&payload_bytes);
-        wal.write_all(&record)?;
+            let record_start = *offset;
 
-        // Sync WAL according to durability mode (resync offset on failure).
-        Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
+            // H-3: Build complete record in one buffer to minimize partial-write window.
+            // CRC-protected format: Marker(0xC3) | ID(8) | Len(4) | Data(N) | CRC32(4)
+            let mut record = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len() + 4);
+            record.push(CRC_STORE_MARKER);
+            record.extend_from_slice(&id.to_le_bytes());
+            record.extend_from_slice(&len_u32.to_le_bytes());
+            record.extend_from_slice(&payload_bytes);
+            record.extend_from_slice(&crc.to_le_bytes());
+            wal.write_all(&record)?;
 
-        // Marker(1) + ID(8) = 9 bytes before the length field
-        let bytes_written = 1 + 8 + 4 + u64::from(len_u32);
-        *offset += bytes_written;
-        index.insert(id, record_start + 9);
+            // Sync WAL according to durability mode (resync offset on failure).
+            Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
 
+            // Marker(1) + ID(8) = 9 bytes before the length field
+            let bytes_written = 1 + 8 + 4 + u64::from(len_u32) + 4;
+            *offset += bytes_written;
+            index.insert(id, record_start + 9);
+        }
+
+        self.maybe_auto_snapshot();
         Ok(())
     }
 
@@ -381,23 +545,31 @@ impl PayloadStorage for LogPayloadStorage {
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
-        let mut wal = self.wal.write();
-        let mut index = self.index.write();
-        let mut offset = self.write_offset.write();
+        let crc = compute_delete_crc(id);
 
-        // H-3: Build complete delete record in one buffer to minimize partial-write window.
-        // Op: Delete (1) | ID (8)
-        let mut record = [0u8; 1 + 8];
-        record[0] = 2u8;
-        record[1..9].copy_from_slice(&id.to_le_bytes());
-        wal.write_all(&record)?;
+        // Scoped block: all lock guards are released before the auto-snapshot
+        // check, which itself acquires locks (see `create_snapshot`).
+        {
+            let mut wal = self.wal.write();
+            let mut index = self.index.write();
+            let mut offset = self.write_offset.write();
 
-        // Sync WAL according to durability mode (resync offset on failure).
-        Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
+            // H-3: Build complete delete record in one buffer to minimize partial-write window.
+            // CRC-protected format: Marker(0xC4) | ID(8) | CRC32(4)
+            let mut record = [0u8; 1 + 8 + 4];
+            record[0] = CRC_DELETE_MARKER;
+            record[1..9].copy_from_slice(&id.to_le_bytes());
+            record[9..13].copy_from_slice(&crc.to_le_bytes());
+            wal.write_all(&record)?;
 
-        *offset += 1 + 8; // Marker(1) + ID(8)
-        index.remove(&id);
+            // Sync WAL according to durability mode (resync offset on failure).
+            Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
 
+            *offset += 1 + 8 + 4; // Marker(1) + ID(8) + CRC32(4)
+            index.remove(&id);
+        }
+
+        self.maybe_auto_snapshot();
         Ok(())
     }
 

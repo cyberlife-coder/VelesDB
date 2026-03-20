@@ -37,12 +37,13 @@ impl HnswIndex {
         Self::with_params(dimension, metric, params)
     }
 
-    /// Creates a new HNSW index optimized for maximum insert throughput.
+    /// Creates a new HNSW index optimized for fast insert throughput.
     ///
     /// # Performance
     ///
-    /// - **~2x faster inserts** than `new()` (vectors not stored for re-ranking)
+    /// - **~2-3x faster inserts** than `new()` (M/2, ef/2 + no vector storage)
     /// - **~50% less memory** (no `ShardedVectors` duplication)
+    /// - **Recall**: ~90% (vs ≥95% with standard params)
     ///
     /// # Limitations
     ///
@@ -70,17 +71,19 @@ impl HnswIndex {
     /// let index = HnswIndex::new_fast_insert(768, DistanceMetric::Cosine)?;
     /// ```
     pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Result<Self> {
-        let params = HnswParams::auto(dimension);
+        let params = HnswParams::fast_indexing(dimension);
         Self::with_params_internal(dimension, metric, params, false)
     }
 
-    /// Creates a new HNSW index optimized for high performance.
+    /// Creates a new HNSW index optimized for maximum insert throughput.
     ///
-    /// # Parameters
+    /// # Trade-offs
     ///
-    /// Uses auto-tuned parameters for the dimension, plus:
-    /// - Higher `ef_construction` for better graph quality
-    /// - Optimized for modern hardware
+    /// - **~3-5x faster inserts** than `new()` (M=12, ef=100 vs M=32, ef=400)
+    /// - **Recall**: ~85% (vs ≥95% with standard params)
+    /// - **Best for**: Bulk loading, development, benchmarking
+    ///
+    /// After bulk loading, consider rebuilding with higher params for production.
     ///
     /// # Errors
     ///
@@ -92,13 +95,11 @@ impl HnswIndex {
     /// use velesdb_core::index::HnswIndex;
     /// use velesdb_core::DistanceMetric;
     ///
-    /// // Turbo mode: auto-tuned for high-performance workloads
+    /// // Turbo mode: M=12, ef=100 for maximum insert speed
     /// let index = HnswIndex::new_turbo(768, DistanceMetric::Cosine)?;
     /// ```
     pub fn new_turbo(dimension: usize, metric: DistanceMetric) -> Result<Self> {
-        let mut params = HnswParams::auto(dimension);
-        // Turbo: increase ef_construction by 50% for better graph quality
-        params.ef_construction = (params.ef_construction * 3) / 2;
+        let params = HnswParams::turbo();
         Self::with_params(dimension, metric, params)
     }
 

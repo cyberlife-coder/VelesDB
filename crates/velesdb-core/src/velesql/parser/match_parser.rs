@@ -144,38 +144,48 @@ impl Parser {
     pub(super) fn parse_node_properties(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<std::collections::HashMap<String, crate::velesql::Value>, ParseError> {
-        use std::collections::HashMap;
-
-        let mut props = HashMap::new();
+        let mut props = std::collections::HashMap::new();
 
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::property_list {
-                for prop_pair in inner_pair.into_inner() {
-                    if prop_pair.as_rule() == Rule::property {
-                        let mut key = String::new();
-                        let mut value = crate::velesql::Value::Null;
-
-                        for p in prop_pair.into_inner() {
-                            match p.as_rule() {
-                                Rule::identifier => {
-                                    key = extract_identifier(&p);
-                                }
-                                Rule::property_value => {
-                                    value = Self::parse_property_value(p)?;
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        if !key.is_empty() {
-                            props.insert(key, value);
-                        }
-                    }
-                }
+                Self::collect_property_list(inner_pair, &mut props)?;
             }
         }
 
         Ok(props)
+    }
+
+    /// Collects key-value pairs from a `property_list` pest node.
+    fn collect_property_list(
+        list_pair: pest::iterators::Pair<Rule>,
+        props: &mut std::collections::HashMap<String, crate::velesql::Value>,
+    ) -> Result<(), ParseError> {
+        for prop_pair in list_pair.into_inner() {
+            if prop_pair.as_rule() == Rule::property {
+                let (key, value) = Self::parse_single_property(prop_pair)?;
+                if !key.is_empty() {
+                    props.insert(key, value);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Parses a single property pair into `(key, value)`.
+    fn parse_single_property(
+        prop_pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(String, crate::velesql::Value), ParseError> {
+        let mut key = String::new();
+        let mut value = crate::velesql::Value::Null;
+
+        for p in prop_pair.into_inner() {
+            match p.as_rule() {
+                Rule::identifier => key = extract_identifier(&p),
+                Rule::property_value => value = Self::parse_property_value(p)?,
+                _ => {}
+            }
+        }
+        Ok((key, value))
     }
 
     /// Parse a property value (EPIC-045 US-001).
@@ -254,34 +264,51 @@ impl Parser {
     ) -> Result<(), ParseError> {
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::rel_spec {
-                for spec_pair in inner_pair.into_inner() {
-                    if spec_pair.as_rule() == Rule::rel_details {
-                        for detail_pair in spec_pair.into_inner() {
-                            match detail_pair.as_rule() {
-                                Rule::rel_alias => {
-                                    rel.alias = Some(detail_pair.as_str().to_string());
-                                }
-                                Rule::rel_types => {
-                                    for type_pair in detail_pair.into_inner() {
-                                        if type_pair.as_rule() == Rule::rel_type_name {
-                                            rel.types.push(type_pair.as_str().to_string());
-                                        }
-                                    }
-                                }
-                                Rule::rel_range => {
-                                    rel.range = Self::parse_rel_range(detail_pair);
-                                }
-                                Rule::node_properties => {
-                                    rel.properties = Self::parse_node_properties(detail_pair)?;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
+                Self::parse_rel_spec(rel, inner_pair)?;
             }
         }
         Ok(())
+    }
+
+    /// Parses the contents of a `rel_spec` node, delegating to `rel_details`.
+    fn parse_rel_spec(
+        rel: &mut RelationshipPattern,
+        spec_pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(), ParseError> {
+        for detail_pair in spec_pair.into_inner() {
+            if detail_pair.as_rule() == Rule::rel_details {
+                Self::apply_rel_details(rel, detail_pair)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies each detail field from a `rel_details` node to the relationship.
+    fn apply_rel_details(
+        rel: &mut RelationshipPattern,
+        details_pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(), ParseError> {
+        for detail_pair in details_pair.into_inner() {
+            match detail_pair.as_rule() {
+                Rule::rel_alias => rel.alias = Some(detail_pair.as_str().to_string()),
+                Rule::rel_types => Self::collect_rel_types(detail_pair, &mut rel.types),
+                Rule::rel_range => rel.range = Self::parse_rel_range(detail_pair),
+                Rule::node_properties => {
+                    rel.properties = Self::parse_node_properties(detail_pair)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Collects relationship type names from a `rel_types` node.
+    fn collect_rel_types(pair: pest::iterators::Pair<Rule>, types: &mut Vec<String>) {
+        for type_pair in pair.into_inner() {
+            if type_pair.as_rule() == Rule::rel_type_name {
+                types.push(type_pair.as_str().to_string());
+            }
+        }
     }
 
     /// Parse relationship range (EPIC-045 US-001).

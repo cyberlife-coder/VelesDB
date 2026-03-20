@@ -91,7 +91,7 @@ pub fn mode_to_ef_search(mode: &str) -> Option<usize> {
     match mode.to_lowercase().as_str() {
         "fast" => Some(64),
         "balanced" => Some(128),
-        "accurate" => Some(256),
+        "accurate" => Some(512),
         "perfect" => Some(usize::MAX),
         _ => None,
     }

@@ -13,7 +13,7 @@ mod tests {
         // Arrange & Act & Assert
         assert_eq!(SearchMode::Fast.ef_search(), 64);
         assert_eq!(SearchMode::Balanced.ef_search(), 128);
-        assert_eq!(SearchMode::Accurate.ef_search(), 256);
+        assert_eq!(SearchMode::Accurate.ef_search(), 512);
         assert_eq!(SearchMode::Perfect.ef_search(), usize::MAX);
     }
 
@@ -452,5 +452,84 @@ default_mode = "ultra_fast"
             }
             other => panic!("Expected PQ, got {other:?}"),
         }
+    }
+
+    // ========================================================================
+    // WalBatchConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_wal_batch_config_default() {
+        let config = WalBatchConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.commit_delay_us, 100);
+        assert_eq!(config.max_batch_size, 128);
+    }
+
+    #[test]
+    fn test_wal_batch_config_json_roundtrip() {
+        let config = WalBatchConfig {
+            enabled: true,
+            commit_delay_us: 200,
+            max_batch_size: 256,
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        let parsed: WalBatchConfig = serde_json::from_str(&json).expect("deserialize");
+        assert!(parsed.enabled);
+        assert_eq!(parsed.commit_delay_us, 200);
+        assert_eq!(parsed.max_batch_size, 256);
+    }
+
+    #[test]
+    fn test_wal_batch_config_serde_defaults() {
+        // Empty JSON object should fill defaults
+        let json = r"{}";
+        let config: WalBatchConfig = serde_json::from_str(json).expect("deserialize");
+        assert!(!config.enabled);
+        assert_eq!(config.commit_delay_us, 100);
+        assert_eq!(config.max_batch_size, 128);
+    }
+
+    #[test]
+    fn test_wal_batch_config_partial_override() {
+        let json = r#"{"enabled": true}"#;
+        let config: WalBatchConfig = serde_json::from_str(json).expect("deserialize");
+        assert!(config.enabled);
+        assert_eq!(config.commit_delay_us, 100);
+        assert_eq!(config.max_batch_size, 128);
+    }
+
+    #[test]
+    fn test_veles_config_includes_wal_batch() {
+        let config = VelesConfig::default();
+        assert!(!config.wal_batch.enabled);
+        assert_eq!(config.wal_batch.max_batch_size, 128);
+    }
+
+    #[test]
+    fn test_veles_config_toml_with_wal_batch() {
+        let toml = r"
+[wal_batch]
+enabled = true
+commit_delay_us = 500
+max_batch_size = 64
+";
+        let config = VelesConfig::from_toml(toml).expect("parse");
+        assert!(config.wal_batch.enabled);
+        assert_eq!(config.wal_batch.commit_delay_us, 500);
+        assert_eq!(config.wal_batch.max_batch_size, 64);
+    }
+
+    #[test]
+    fn test_veles_config_toml_roundtrip_with_wal_batch() {
+        let mut config = VelesConfig::default();
+        config.wal_batch.enabled = true;
+        config.wal_batch.max_batch_size = 64;
+
+        let toml_str = config.to_toml().expect("serialize");
+        let parsed = VelesConfig::from_toml(&toml_str).expect("parse");
+
+        assert!(parsed.wal_batch.enabled);
+        assert_eq!(parsed.wal_batch.max_batch_size, 64);
     }
 }

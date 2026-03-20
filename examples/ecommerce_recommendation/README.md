@@ -54,6 +54,11 @@ A comprehensive example demonstrating VelesDB's **Vector + Graph + MultiColumn**
 - **AddedToCart**: User added to shopping cart
 - **Purchased**: User completed purchase
 
+## Prerequisites
+
+- **Rust 1.83+** with Cargo
+- **Node.js 18+** and npm (required only for E2E tests)
+
 ## 🚀 Running the Example
 
 ```bash
@@ -153,7 +158,7 @@ These results are **production-ready** and compare favorably to VelesDB's benchm
 
 | Comparison | Benchmark | E-commerce Demo | Analysis |
 |------------|-----------|-----------------|----------|
-| HNSW Search (10K, 768D) | 57µs | 187µs (5K, 128D) | ✅ Includes I/O + payload retrieval |
+| HNSW Search (10K, 768D) | 42.8µs | 187µs (5K, 128D) | ✅ Includes I/O + payload retrieval |
 | Filter overhead | — | +55µs | ✅ Minimal (metadata in memory) |
 | Graph lookup | — | 88µs | ✅ O(1) relationship access |
 
@@ -265,8 +270,8 @@ Running 15 tests using 1 worker
 ## 📚 Related Documentation
 
 - [VelesDB README](../../README.md) - Main documentation
-- [VelesQL Guide](../../docs/VELESQL.md) - SQL query syntax
-- [Graph Features](../../docs/GRAPH_FEATURES.md) - Knowledge graph capabilities
+- [VelesQL Specification](../../docs/VELESQL_SPEC.md) - SQL query syntax
+- [Concurrency Model](../../docs/CONCURRENCY_MODEL.md) - Concurrency and locking model
 - [Examples Overview](../README.md) - All available examples
 
 ## 📄 License

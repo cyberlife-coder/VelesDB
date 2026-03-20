@@ -94,7 +94,11 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Option<usize> {
         // Skip reranking for Fast quality or if vector storage is disabled
-        if matches!(quality, SearchQuality::Fast) || !self.enable_vector_storage {
+        if matches!(
+            quality,
+            SearchQuality::Fast | SearchQuality::Adaptive { .. }
+        ) || !self.enable_vector_storage
+        {
             return None;
         }
 
@@ -103,7 +107,9 @@ impl HnswIndex {
         let min_rerank_k = match quality {
             SearchQuality::Balanced => k * 2,
             SearchQuality::Accurate | SearchQuality::Custom(_) => k * 4,
-            SearchQuality::Fast | SearchQuality::Perfect => return None,
+            SearchQuality::Fast | SearchQuality::Perfect | SearchQuality::Adaptive { .. } => {
+                return None;
+            }
         };
 
         let rerank_k = min_rerank_k.max(ef_search / 2);
@@ -184,6 +190,11 @@ impl HnswIndex {
             return self.search_brute_force(query, k);
         }
 
+        // Adaptive two-phase: start with min_ef, escalate if query is hard
+        if let SearchQuality::Adaptive { min_ef, max_ef } = quality {
+            return self.search_adaptive(query, k, min_ef.max(k), max_ef);
+        }
+
         let ef_search = quality.ef_search(k);
 
         // Two-stage mode: larger candidate pool + exact SIMD reranking.
@@ -192,6 +203,51 @@ impl HnswIndex {
         }
 
         self.search_hnsw_only(query, k, ef_search)
+    }
+
+    /// Two-phase adaptive search that starts with a low ef and escalates if needed.
+    ///
+    /// Phase 1: search with `min_ef`. If the result spread (max_dist / min_dist)
+    /// indicates a hard query (scattered results), re-search with doubled ef.
+    /// This saves 2-4x latency on easy queries while maintaining recall on hard ones.
+    fn search_adaptive(
+        &self,
+        query: &[f32],
+        k: usize,
+        min_ef: usize,
+        max_ef: usize,
+    ) -> Vec<ScoredResult> {
+        // Phase 1: fast search with min_ef
+        let results = self.search_hnsw_only(query, k, min_ef);
+        if results.len() < 2 {
+            return results;
+        }
+
+        // Check result spread to determine if this is a hard query
+        let min_score = results.last().map_or(0.0, |r| r.score);
+        let max_score = results.first().map_or(0.0, |r| r.score);
+
+        // Spread threshold: if results are tightly clustered, the query is easy
+        // Use absolute difference for metrics where scores can be near zero
+        let spread = if min_score.abs() > f32::EPSILON {
+            (max_score - min_score) / min_score.abs()
+        } else {
+            max_score - min_score
+        };
+
+        // Threshold 2.0: empirically tuned. Easy queries have spread < 1.0,
+        // hard queries typically > 3.0.
+        if spread < 2.0 {
+            return results;
+        }
+
+        // Phase 2: re-search with doubled ef (capped at max_ef)
+        let escalated_ef = (min_ef * 2).min(max_ef);
+        if escalated_ef <= min_ef {
+            return results;
+        }
+
+        self.search_hnsw_only(query, k, escalated_ef)
     }
 
     /// Searches with SIMD-based re-ranking for improved precision.

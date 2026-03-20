@@ -877,6 +877,153 @@ fn test_concurrent_insert_16_threads_256_shards() {
             .expect("Thread panicked - possible deadlock with 256 shards");
     }
 
-    // 16 threads × 1000 edges = 16000 edges
+    // 16 threads x 1000 edges = 16000 edges
     assert_eq!(store.edge_count(), 16000);
+}
+
+// =============================================================================
+// Concurrency hardening tests (Issue #330)
+// =============================================================================
+
+/// Multiple writer threads insert disjoint edges, then we verify every single
+/// edge is individually retrievable via `get_edge`. This catches any silent
+/// data loss from lock contention (not just count mismatches).
+#[test]
+fn test_concurrent_insertions_all_edges_retrievable() {
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(16));
+    let threads = 8;
+    let edges_per_thread = 200;
+
+    let mut handles = vec![];
+    for t in 0..threads {
+        let s = Arc::clone(&store);
+        handles.push(thread::spawn(move || {
+            for i in 0..edges_per_thread {
+                let id = (t * edges_per_thread + i) as u64;
+                let source = id * 7; // spread across shards
+                let target = source + 1;
+                s.add_edge(GraphEdge::new(id, source, target, "LINK").expect("valid"))
+                    .expect("add");
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().expect("writer panicked");
+    }
+
+    let expected_total = threads * edges_per_thread;
+    assert_eq!(store.edge_count(), expected_total);
+
+    // Every edge must be individually retrievable with correct endpoints.
+    for t in 0..threads {
+        for i in 0..edges_per_thread {
+            let id = (t * edges_per_thread + i) as u64;
+            let edge = store
+                .get_edge(id)
+                .unwrap_or_else(|| panic!("edge {id} missing after concurrent insert"));
+            assert_eq!(edge.source(), id * 7);
+            assert_eq!(edge.target(), id * 7 + 1);
+        }
+    }
+}
+
+/// One writer thread continuously inserts edges while a reader thread
+/// continuously reads. The reader must observe a monotonically
+/// non-decreasing edge count (no transient drops from partial state).
+#[test]
+fn test_concurrent_read_write_monotonic_count() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let store = Arc::new(ConcurrentEdgeStore::with_shards(16));
+    let done = Arc::new(AtomicBool::new(false));
+
+    let store_w = Arc::clone(&store);
+    let done_w = Arc::clone(&done);
+    let writer = thread::spawn(move || {
+        for i in 0..500u64 {
+            store_w
+                .add_edge(GraphEdge::new(i, i * 3, i * 3 + 1, "W").expect("valid"))
+                .expect("add");
+        }
+        done_w.store(true, Ordering::Release);
+    });
+
+    let store_r = Arc::clone(&store);
+    let done_r = Arc::clone(&done);
+    let reader = thread::spawn(move || {
+        let mut max_seen = 0usize;
+        loop {
+            let count = store_r.edge_count();
+            assert!(
+                count >= max_seen,
+                "edge_count went backwards: was {max_seen}, now {count}"
+            );
+            max_seen = count;
+
+            // Also exercise per-edge reads to verify no panics.
+            for id in 0..max_seen as u64 {
+                let _ = store_r.get_edge(id);
+            }
+
+            if done_r.load(Ordering::Acquire) {
+                break;
+            }
+            thread::yield_now();
+        }
+    });
+
+    writer.join().expect("writer panicked");
+    reader.join().expect("reader panicked");
+    assert_eq!(store.edge_count(), 500);
+}
+
+/// Explicit verification that `shard_index()` is deterministic and consistent
+/// with the modulo formula. The same node ID must always map to the same shard.
+#[test]
+fn test_shard_index_deterministic_and_consistent() {
+    for num_shards in [1, 4, 16, 64, 256] {
+        let store = ConcurrentEdgeStore::with_shards(num_shards);
+
+        for node_id in [0u64, 1, 255, 256, 1000, u64::MAX] {
+            let expected = (node_id as usize) % num_shards;
+            let actual = store.shard_index(node_id);
+            assert_eq!(
+                actual, expected,
+                "shard_index({node_id}) with {num_shards} shards: expected {expected}, got {actual}"
+            );
+
+            // Calling twice must yield the same result (determinism).
+            assert_eq!(
+                store.shard_index(node_id),
+                actual,
+                "shard_index must be deterministic"
+            );
+        }
+    }
+}
+
+/// Edges with the same source always land in the same shard regardless of
+/// insertion order or concurrency. Verified by checking that outgoing edges
+/// are always retrievable from the expected shard's perspective.
+#[test]
+fn test_same_source_always_same_shard() {
+    let store = ConcurrentEdgeStore::with_shards(8);
+    let source_id = 42u64;
+    let expected_shard = (source_id as usize) % 8;
+
+    // Insert multiple edges from the same source.
+    for i in 0..20u64 {
+        store
+            .add_edge(GraphEdge::new(i, source_id, i + 1000, "REL").expect("valid"))
+            .expect("add");
+    }
+
+    // All 20 must be retrievable via get_outgoing (which reads from the
+    // source's shard).
+    let outgoing = store.get_outgoing(source_id);
+    assert_eq!(outgoing.len(), 20);
+
+    // Verify the shard index is what we expect.
+    assert_eq!(store.shard_index(source_id), expected_shard);
 }

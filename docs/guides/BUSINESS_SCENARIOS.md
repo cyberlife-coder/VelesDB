@@ -99,7 +99,7 @@ LIMIT 10
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Context retrieval | 100-200ms | **< 1ms** |
-| Memory footprint | 500MB+ | **15MB binary** |
+| Memory footprint | 500MB+ | **6 MB binary** |
 | Works offline | No | **Yes** |
 
 ---
@@ -303,7 +303,7 @@ LIMIT 20
 
 | Metric | Latency | Throughput | SIMD Optimized |
 |--------|---------|------------|----------------|
-| **Cosine** | 34.0 ns | 22M ops/sec | AVX-512 |
+| **Cosine** | 33.6 ns | 23M ops/sec | AVX2/AVX-512 |
 | **Euclidean** | 22.7 ns | 33M ops/sec | AVX-512 |
 | **DotProduct** | 23.6 ns | 32M ops/sec | AVX-512 |
 | **Hamming** | **52.4 ns** | **15M ops/sec** | POPCNT |

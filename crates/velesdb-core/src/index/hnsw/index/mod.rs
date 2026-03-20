@@ -8,8 +8,8 @@
 //! The index supports different quality profiles for search:
 //! - `Fast`: `ef_search=64`, ~92% recall, lowest latency
 //! - `Balanced`: `ef_search=128`, ~99% recall, good tradeoff (default)
-//! - `Accurate`: `ef_search=256`, ~100% recall, high precision
-//! - `Perfect`: `ef_search=2048`, 100% recall, maximum accuracy
+//! - `Accurate`: `ef_search=512`, ~100% recall, high precision
+//! - `Perfect`: `ef_search=4096`, 100% recall, maximum accuracy
 //!
 //! # Recommended Parameters by Vector Dimension
 //!

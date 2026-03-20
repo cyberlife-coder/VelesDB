@@ -62,7 +62,7 @@ This design ensures:
 | Capability | VelesDB | Typical Competitors |
 |------------|---------|---------------------|
 | Unified Vector + Graph engine | Yes | Separate systems |
-| Single binary (~15 MB) | Yes | Containers / clusters |
+| Self-contained single binary (~6 MB) | Yes | Containers / clusters |
 | Sub-millisecond latency (43 us) | Yes | 50-100 ms (cloud) |
 | WASM / Mobile native | Yes | Server-only |
 | SQL-like query language (VelesQL) | Yes | JSON DSL / SDK-only |

@@ -302,7 +302,7 @@ fn test_default_rrf_k() {
 fn test_mode_to_ef_search_all_modes() {
     assert_eq!(mode_to_ef_search("fast"), Some(64));
     assert_eq!(mode_to_ef_search("balanced"), Some(128));
-    assert_eq!(mode_to_ef_search("accurate"), Some(256));
+    assert_eq!(mode_to_ef_search("accurate"), Some(512));
     assert_eq!(mode_to_ef_search("perfect"), Some(usize::MAX));
     assert_eq!(mode_to_ef_search("unknown_mode"), None);
     assert_eq!(mode_to_ef_search(""), None);
@@ -452,7 +452,7 @@ fn filter_with_nested_conditions() {
 fn test_mode_to_ef_search_case_insensitive() {
     assert_eq!(mode_to_ef_search("FAST"), Some(64));
     assert_eq!(mode_to_ef_search("Balanced"), Some(128));
-    assert_eq!(mode_to_ef_search("ACCURATE"), Some(256));
+    assert_eq!(mode_to_ef_search("ACCURATE"), Some(512));
     assert_eq!(mode_to_ef_search("Perfect"), Some(usize::MAX));
 }
 

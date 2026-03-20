@@ -112,12 +112,12 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
-    /// Fast search with `ef_search=64`, ~90% recall.
+    /// Fast search with `ef_search=64`, ~92% recall.
     Fast,
-    /// Balanced search with `ef_search=128`, ~98% recall (default).
+    /// Balanced search with `ef_search=128`, ~99% recall (default).
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=256`, ~100% recall.
+    /// Accurate search with `ef_search=512`, ~100% recall.
     Accurate,
     /// Perfect recall with bruteforce, 100% guaranteed.
     Perfect,
@@ -130,7 +130,7 @@ impl SearchMode {
         match self {
             Self::Fast => 64,
             Self::Balanced => 128,
-            Self::Accurate => 256,
+            Self::Accurate => 512,
             Self::Perfect => usize::MAX, // Signals bruteforce
         }
     }
@@ -408,6 +408,56 @@ impl<'de> Deserialize<'de> for QuantizationConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WAL batch commit configuration
+// ---------------------------------------------------------------------------
+
+/// Default commit delay in microseconds for WAL group commit.
+const fn default_commit_delay_us() -> u64 {
+    100
+}
+
+/// Default maximum entries per WAL batch.
+const fn default_max_batch_size() -> usize {
+    128
+}
+
+/// Configuration for WAL group commit batching.
+///
+/// When enabled, multiple concurrent writes are batched into a single
+/// `sync_all()` call, amortizing the fsync cost across the batch.
+///
+/// # Example (TOML)
+///
+/// ```toml
+/// [wal_batch]
+/// enabled = true
+/// commit_delay_us = 200
+/// max_batch_size = 256
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalBatchConfig {
+    /// Whether group commit is enabled. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum delay in microseconds before flushing a batch. Default: `100`.
+    #[serde(default = "default_commit_delay_us")]
+    pub commit_delay_us: u64,
+    /// Maximum number of entries per batch. Default: `128`.
+    #[serde(default = "default_max_batch_size")]
+    pub max_batch_size: usize,
+}
+
+impl Default for WalBatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            commit_delay_us: 100,
+            max_batch_size: 128,
+        }
+    }
+}
+
 /// Main `VelesDB` configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -426,6 +476,8 @@ pub struct VelesConfig {
     pub logging: LoggingConfig,
     /// Quantization configuration.
     pub quantization: QuantizationConfig,
+    /// WAL group commit batching configuration.
+    pub wal_batch: WalBatchConfig,
 }
 
 impl VelesConfig {

@@ -834,13 +834,15 @@ LIMIT 20;
 
 > **Note:** `LEFT JOIN` and `RIGHT JOIN` are parsed but raise runtime errors. `INNER JOIN` is fully supported.
 
-### Subqueries
+### Subqueries (parsed, not yet executable)
+
+> **Note:** Subqueries are recognized by the VelesQL parser but raise runtime errors during execution. This syntax is reserved for future support.
 
 ```sql
--- IN subquery
+-- IN subquery (parsed, execution not yet supported)
 SELECT * FROM docs WHERE id IN (SELECT doc_id FROM comments) LIMIT 10;
 
--- Scalar subquery comparison
+-- Scalar subquery comparison (parsed, execution not yet supported)
 SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 20;
 ```
 
@@ -887,7 +889,7 @@ WITH (quantization = 'dual', oversampling = 4);
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` |
 | `ef_search` | integer | HNSW ef_search (16--4096) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
 | `rerank` | boolean | Enable reranking after quantized search |
@@ -912,7 +914,7 @@ Session settings control REPL search behavior. Set with `\set`, view with `\show
 
 | Setting | Range / Values | Default | Description |
 |---------|---------------|---------|-------------|
-| `mode` | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` | `balanced` | Search quality preset (sets `ef_search` automatically) |
+| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | `balanced` | Search quality preset (sets `ef_search` automatically) |
 | `ef_search` | 16--4096 (or `auto` from mode) | auto | HNSW graph exploration factor |
 | `timeout_ms` | >= 100 | 30000 | Query timeout in milliseconds. Also accepts the alias `timeout`. |
 | `rerank` | `true`/`false`, `on`/`off`, `1`/`0`, `yes`/`no` | `true` | Reranking after quantized search |

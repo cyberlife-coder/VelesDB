@@ -9,7 +9,8 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (42.8µs search, 23.6ns dot product)
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD (42.8µs search at 768D, 23.6ns dot product)
+- **Adaptive Search**: Two-phase ef_search that auto-escalates only for hard queries (2-4x faster median)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion
 - **Streaming Inserts**: Bounded-channel ingestion with backpressure and insert-and-search via delta buffer
@@ -18,9 +19,9 @@ High-performance vector database engine written in Rust.
 - **Persistent Storage**: Memory-mapped files for efficient disk access
 - **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 - **ColumnStore Filtering**: Up to 130x faster than JSON filtering at scale
-- **VelesQL**: SQL-like query language with MATCH support for full-text search
-- **Bulk Operations**: Optimized batch insert with parallel HNSW indexing
-- **Quantization**: SQ8 (4x) and Binary (32x) memory compression
+- **VelesQL**: SQL-like query language with MATCH support for graph pattern queries
+- **Bulk Operations**: Optimized batch insert with turbo/fast modes and parallel HNSW indexing
+- **Quantization**: SQ8 (4x), Binary (32x), Product Quantization (8-32x), RaBitQ compression
 
 ## Installation
 
@@ -112,6 +113,19 @@ let jaccard = DistanceMetric::Jaccard;
 | `Hamming` | Binary vectors | Lower = more similar |
 | `Jaccard` | Set similarity | Higher = more similar |
 
+### Common Embedding Dimensions
+
+| Model | Dimension | Metric |
+|-------|-----------|--------|
+| OpenAI `text-embedding-3-small` | 1536 | Cosine |
+| OpenAI `text-embedding-3-large` | 3072 | Cosine |
+| Sentence-Transformers `all-MiniLM-L6-v2` | 384 | Cosine |
+| Cohere `embed-english-v3.0` | 1024 | Cosine |
+| BAAI `bge-large-en-v1.5` | 1024 | Cosine |
+| CLIP (image+text) | 512 or 768 | Cosine |
+
+The `dimension` parameter must match your embedding model's output size exactly.
+
 ## Bulk Operations
 
 For high-throughput import (3,300+ vectors/sec):
@@ -121,7 +135,8 @@ use velesdb_core::{Database, DistanceMetric, Point};
 
 let db = Database::open("./data")?;
 db.create_collection("bulk_test", 768, DistanceMetric::Cosine)?;
-let collection = db.get_collection("bulk_test").unwrap();
+let collection = db.get_collection("bulk_test")
+    .ok_or("Collection not found")?;
 
 // Generate 10,000 vectors
 let points: Vec<Point> = (0..10_000)
@@ -190,35 +205,37 @@ db.create_collection_with_options(
 |-----------|------|------------|
 | Dot Product | **23.6 ns** | 32.5 Gelem/s |
 | Euclidean Distance | **22.7 ns** | 33.8 Gelem/s |
-| Cosine Similarity | **34.0 ns** | 22.6 Gelem/s |
-| Hamming Distance | **52.4 ns** | — |
-| Jaccard Similarity | **30.1 ns** | — |
+| Cosine Similarity | **33.6 ns** | 22.9 Gelem/s |
+| Hamming Distance | **34.3 ns** | — |
+| Jaccard Similarity | **29.3 ns** | — |
 
-*Measured 2026-03-19 on Intel Core i9-14900KF, Rust 1.92.0, `--release`, sequential on idle machine.*
+*Measured March 2026 on Intel Core i9-14900KF, 64GB DDR5, Rust 1.92.0, `--release`, sequential on idle machine.*
 
-### End-to-End Benchmark (10k vectors, 768D)
+### System Benchmarks (10K vectors, 768D)
 
-| Metric | pgvectorscale | VelesDB | Speedup |
-|--------|---------------|---------|---------|
-| **Ingest** | 22.3s | **3.0s** | 7.4x |
-| **Search Latency** | 52.8ms | **4.0ms** | 13x |
-| **Throughput** | 18.9 QPS | **246.8 QPS** | 13x |
+| Benchmark | Result |
+|-----------|--------|
+| **HNSW Search** | **42.8 µs** (k=10, Balanced mode) |
+| **VelesQL Cache Hit** | **1.06 µs** (~943K QPS) |
+| **Sparse Search** | **958 µs** (MaxScore DAAT) |
+| **Recall@10 (Accurate)** | **100%** |
 
 ### Key Performance Features
 
-- Search latency: **< 5ms** for 10k vectors
-- Bulk import: **3,300 vectors/sec** with `upsert_bulk()`
-- ColumnStore filtering: **up to 130x faster** than JSON at 100k items
+- Search latency: **42.8µs** for 10K/768D vectors (k=10)
+- Insert throughput: **3.8-7x faster** than pgvector (10K-100K vectors, [benchmark](../../benchmarks/README.md))
+- ColumnStore filtering: faster than JSON scanning at scale
 
 ### Recall by Configuration (Native Rust, Criterion)
 
 | Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
 |--------|------|-----------|-----------|-------------|--------|
 | **10K/128D** | Balanced | 128 | **98.8%** | 85µs | ✅ |
-| **10K/128D** | Accurate | 256 | **100%** | 112µs | ✅ |
-| **10K/128D** | Perfect | 2048 | **100%** | 163µs | ✅ |
+| **10K/128D** | Accurate | 512 | **100%** | 112µs | ✅ |
+| **10K/128D** | Perfect | 4096 | **100%** | 163µs | ✅ |
+| **10K/128D** | Adaptive | 32-512 | **95%+** | ~40µs (easy) | ✅ |
 
-> *Latency P50 = median over 100 queries.*
+> *Latency P50 = median over 100 queries. The headline "42.8µs" is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement.*
 
 > 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
 
@@ -337,7 +354,7 @@ Override search parameters on a per-query basis:
 ```sql
 -- Set search mode
 SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
-WITH (mode = 'high_recall');
+WITH (mode = 'accurate');
 
 -- Set ef_search and timeout
 SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
@@ -346,7 +363,7 @@ WITH (ef_search = 512, timeout_ms = 5000);
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | fast, balanced, accurate, high_recall, perfect |
+| `mode` | string | fast, balanced, accurate, perfect, adaptive |
 | `ef_search` | integer | HNSW ef_search (higher = better recall) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
 | `rerank` | boolean | Enable result reranking |
@@ -727,7 +744,7 @@ use velesdb_core::{
     Collection,         // Vector collection
     Point,              // Vector with metadata
     DistanceMetric,     // Cosine, Euclidean, DotProduct, Hamming, Jaccard
-    StorageMode,        // Full, SQ8, Binary
+    StorageMode,        // Full, SQ8, Binary, ProductQuantization, RaBitQ
     Error, Result,      // Error types
 };
 
@@ -758,7 +775,7 @@ use velesdb_core::agent::{
 use velesdb_core::{
     HnswIndex,          // HNSW index
     HnswParams,         // Index parameters
-    SearchQuality,      // Fast, Balanced, Accurate, Perfect
+    SearchQuality,      // Fast, Balanced, Accurate, Perfect, Custom, Adaptive
 };
 
 // Query plan cache

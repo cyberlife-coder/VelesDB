@@ -240,18 +240,26 @@ fn test_should_create_snapshot_false_when_fresh() {
 #[test]
 fn test_should_create_snapshot_true_after_threshold() {
     // Arrange
-    let (mut storage, _temp) = create_test_storage();
+    let (mut storage, temp) = create_test_storage();
 
     // Add enough data to exceed threshold (simulate large WAL)
-    // Each payload ~100 bytes, need ~100k payloads for 10MB
-    // For test, we'll use a smaller threshold
-    let large_payload = json!({"data": "x".repeat(10000)});
+    // Each payload ~10 KB, 1100 payloads ~= 11 MB > 10 MB threshold
+    let large_payload = json!({"data": "x".repeat(10_000)});
     for i in 1..=1100 {
         storage.store(i, &large_payload).expect("Store failed");
     }
 
-    // Act & Assert - Should recommend snapshot after ~11MB of writes
-    assert!(storage.should_create_snapshot());
+    // Act & Assert — Auto-snapshot fires during store(), so the heuristic
+    // returns false (snapshot is fresh). Verify by checking the snapshot file.
+    assert!(
+        !storage.should_create_snapshot(),
+        "Auto-snapshot should have already fired, resetting the heuristic"
+    );
+    let snapshot_path = temp.path().join("payloads.snapshot");
+    assert!(
+        snapshot_path.exists(),
+        "Snapshot file should exist after exceeding WAL threshold"
+    );
 }
 
 #[test]
@@ -598,5 +606,71 @@ fn test_new_defaults_to_fsync() {
     assert_eq!(
         reopened.retrieve(1).expect("Retrieve failed"),
         Some(payload)
+    );
+}
+
+// -------------------------------------------------------------------------
+// Auto-snapshot trigger tests
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_auto_snapshot_triggers_after_threshold() {
+    // Arrange — write enough data to exceed the 10 MB snapshot threshold
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("Create failed");
+
+    let large_payload = json!({"data": "x".repeat(10_000)});
+    for i in 1..=1100 {
+        storage.store(i, &large_payload).expect("Store failed");
+    }
+
+    // Assert — snapshot should have been auto-created
+    let snapshot_path = temp.path().join("payloads.snapshot");
+    assert!(
+        snapshot_path.exists(),
+        "Snapshot file should be auto-created after exceeding WAL threshold"
+    );
+
+    // The heuristic should now report false (snapshot is fresh)
+    assert!(
+        !storage.should_create_snapshot(),
+        "should_create_snapshot must be false immediately after auto-snapshot"
+    );
+}
+
+#[test]
+fn test_auto_snapshot_data_survives_reopen() {
+    // Arrange — trigger auto-snapshot via writes, then reopen
+    let temp = TempDir::new().expect("Failed to create temp dir");
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("Create failed");
+        let large_payload = json!({"data": "x".repeat(10_000)});
+        for i in 1..=1100 {
+            storage.store(i, &large_payload).expect("Store failed");
+        }
+    }
+
+    // Act — reopen (should load from auto-snapshot + replay delta)
+    let storage = LogPayloadStorage::new(temp.path()).expect("Reopen failed");
+
+    // Assert — all data present
+    assert_eq!(storage.ids().len(), 1100);
+    assert!(storage.retrieve(1).expect("Retrieve failed").is_some());
+    assert!(storage.retrieve(1100).expect("Retrieve failed").is_some());
+}
+
+#[test]
+fn test_no_auto_snapshot_below_threshold() {
+    // Arrange — write a small amount of data (well below 10 MB)
+    let (mut storage, temp) = create_test_storage();
+    for i in 1..=10 {
+        storage.store(i, &json!({"id": i})).expect("Store failed");
+    }
+
+    // Assert — no snapshot file should exist
+    let snapshot_path = temp.path().join("payloads.snapshot");
+    assert!(
+        !snapshot_path.exists(),
+        "Snapshot file should NOT be created when WAL is below threshold"
     );
 }

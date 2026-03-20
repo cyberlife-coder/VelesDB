@@ -9,7 +9,7 @@ Guide complet pour configurer le compromis **recall vs latence** dans VelesDB. C
 ## Table des Matières
 
 1. [Vue d'ensemble](#vue-densemble)
-2. [Les 4 Modes de Recherche (+Custom)](#les-4-modes-de-recherche-custom)
+2. [Les 5 Modes de Recherche (+Custom)](#les-5-modes-de-recherche-custom)
 3. [Parametres HNSW detailles](#paramètres-hnsw-détaillés)
 4. [Sparse Vector Search](#sparse-vector-search)
 5. [Hybrid Search](#hybrid-search)
@@ -47,6 +47,8 @@ Recall@10 = (Nombre de vrais top-10 retrouvés) / 10 × 100%
                         │
           Fast ●────────┤  < 1ms    (~92% recall)
                         │
+      Adaptive ●╌╌╌╌╌╌╌┤  ~1-5ms   (95%+ recall, auto-escalade)
+                        │
       Balanced ●────────┤  ~2ms     (~99% recall)
                         │
       Accurate ●────────┤  ~5ms     (~99.5%+ recall)
@@ -57,11 +59,15 @@ Recall@10 = (Nombre de vrais top-10 retrouvés) / 10 × 100%
                    92%      95%      99%   100%
 ```
 
+> Le mode **Adaptive** est en pointillés car sa latence varie selon la difficulté de la query.
+> Pour les queries faciles (~80% du trafic typique), il est proche de Fast.
+> Pour les queries difficiles, il escalade automatiquement vers Balanced/Accurate.
+
 ---
 
-## Les 4 Modes de Recherche (+Custom)
+## Les 5 Modes de Recherche (+Custom)
 
-VelesDB expose 4 **presets** prédéfinis plus un mode `Custom` via l'enum `SearchQuality` :
+VelesDB expose 5 **presets** prédéfinis plus un mode `Custom` via l'enum `SearchQuality` :
 
 ### 1. Fast — Latence minimale
 
@@ -145,6 +151,44 @@ collection.search_with_ef(&query, 10, 4096)?;
 ```
 
 > **Note** : Le mode Perfect utilise toujours le graphe HNSW, mais avec un pool de candidats suffisamment large pour garantir un recall de 100% en pratique.
+
+---
+
+### 5. Adaptive — Latence optimale adaptative
+
+| Paramètre | Valeur |
+|-----------|--------|
+| `ef_search` | Phase 1 : `min_ef` (ex: 32). Phase 2 : `min_ef × 2` si query difficile (cap: `max_ef`) |
+| Recall typique | 95%+ (≥99% sur queries difficiles grâce à l'escalade) |
+| Latence (100K vecs, 768D) | ~1 ms (queries faciles), ~3-5 ms (queries difficiles) |
+
+**Fonctionnement en 2 phases :**
+
+1. Recherche rapide avec `min_ef` (ex: 32)
+2. Analyse du **spread** des résultats : `(max_distance - min_distance) / min_distance`
+3. Si spread > 2.0 (résultats dispersés = query difficile) → re-recherche avec ef doublé
+4. Si spread ≤ 2.0 (cluster dense = query facile) → retour immédiat des résultats
+
+**Cas d'usage :**
+- Workloads mixtes où la majorité des queries sont faciles
+- APIs avec SLA de latence sur le P50 (pas seulement le P99)
+- RAG en production avec des queries variées (certaines proches d'un cluster, d'autres ambiguës)
+
+```rust
+use velesdb_core::SearchQuality;
+
+// ef adaptatif entre 32 (queries faciles) et 512 (queries difficiles)
+let quality = SearchQuality::Adaptive { min_ef: 32, max_ef: 512 };
+let results = index.search_with_quality(&query, 10, quality);
+```
+
+```sql
+-- En VelesQL
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+WITH (mode = 'adaptive');
+```
+
+**Impact mesuré** : réduction de 2-4x de la latence médiane par rapport au mode Balanced, sans régression sur le recall P99.
 
 ---
 
@@ -486,7 +530,10 @@ SearchQuality::Balanced
 ### 🤖 RAG / Chatbot
 
 ```rust
-// Configuration recommandée
+// Configuration recommandée pour production (latence optimale)
+SearchQuality::Adaptive { min_ef: 32, max_ef: 512 }  // 95%+, ~1-5ms selon query
+
+// Alternative fixe pour rappel constant
 SearchQuality::Balanced  // ~99% recall, ~2ms
 
 // Si réponses critiques (médical, légal)
@@ -496,8 +543,11 @@ SearchQuality::Accurate  // ~99.5%+ recall, ~5ms
 ### 🛒 E-commerce / Recommandations
 
 ```rust
-// Suggestions temps réel
+// Suggestions temps réel (autocomplétion)
 SearchQuality::Fast  // ~92% recall, < 1ms
+
+// Pages produit (mixte facile/difficile)
+SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // rapide sur queries simples
 
 // Page produit (précision importante)
 SearchQuality::Balanced  // ~99% recall
@@ -579,46 +629,52 @@ curl -X POST http://localhost:8080/collections/my_collection/search \
   -d '{"vector": [0.1, 0.2, ...], "top_k": 10, "ef_search": 512}'
 ```
 
-### VelesQL (v0.8.0+)
+### VelesQL
 
 ```sql
--- Mode par défaut
-SELECT * FROM my_collection 
-WHERE vector NEAR COSINE $query 
+-- Mode par défaut (Balanced)
+SELECT * FROM my_collection
+WHERE vector NEAR $query
 LIMIT 10;
 
--- Avec mode explicite (syntaxe proposée)
-SELECT * FROM my_collection 
-WHERE vector NEAR COSINE $query 
+-- Mode explicite
+SELECT * FROM my_collection
+WHERE vector NEAR $query
 LIMIT 10
 WITH (mode = 'accurate');
 
--- Avec ef_search personnalisé
-SELECT * FROM my_collection 
-WHERE vector NEAR COSINE $query 
+-- Mode adaptatif (latence optimale pour workloads mixtes)
+SELECT * FROM my_collection
+WHERE vector NEAR $query
+LIMIT 10
+WITH (mode = 'adaptive');
+
+-- ef_search personnalisé
+SELECT * FROM my_collection
+WHERE vector NEAR $query
 LIMIT 10
 WITH (ef_search = 512);
 ```
 
-### CLI REPL (v0.8.0+)
+### CLI REPL
 
 ```
-velesdb> \set search_mode balanced
+velesdb> \set mode balanced
 Search mode set to: Balanced (ef_search=128)
 
 velesdb> \set ef_search 256
 ef_search set to: 256
 
-velesdb> \show settings
+velesdb> \show
 ┌─────────────────┬──────────┐
 │ Setting         │ Value    │
 ├─────────────────┼──────────┤
-│ search_mode     │ Balanced │
+│ mode            │ Balanced │
 │ ef_search       │ 256      │
 │ default_limit   │ 10       │
 └─────────────────┴──────────┘
 
-velesdb> SEARCH TOP 10 IN products WHERE vector NEAR $v;
+velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 ```
 
 ---

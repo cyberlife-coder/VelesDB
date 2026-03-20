@@ -159,7 +159,7 @@ Le REPL supporte l'autocomplétion avec Tab :
 | `.schema <name>` | | Afficher le schéma d'une collection |
 | `.timing on\|off` | | Activer/désactiver l'affichage du temps d'exécution |
 
-### Nouvelles commandes (v0.8.0)
+### Session commands
 
 #### `\set` — Configurer un paramètre de session
 
@@ -169,7 +169,7 @@ Le REPL supporte l'autocomplétion avec Tab :
 
 | Setting | Values | Description |
 |---------|--------|-------------|
-| `search_mode` | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` | Mode de recherche par défaut |
+| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | Mode de recherche par défaut |
 | `ef_search` | 16-4096 | Valeur ef_search personnalisée |
 | `output_format` | `table`, `json`, `csv` | Format de sortie |
 | `timing` | `on`, `off` | Affichage du temps d'exécution |
@@ -179,7 +179,7 @@ Le REPL supporte l'autocomplétion avec Tab :
 **Exemples :**
 
 ```
-velesdb> \set search_mode accurate
+velesdb> \set mode accurate
 Search mode set to: Accurate (ef_search=512)
 
 velesdb> \set ef_search 512
@@ -205,7 +205,7 @@ velesdb> \show
 ┌─────────────────┬─────────────┐
 │ Setting         │ Value       │
 ├─────────────────┼─────────────┤
-│ search_mode     │ balanced    │
+│ mode     │ balanced    │
 │ ef_search       │ 128         │
 │ output_format   │ table       │
 │ timing          │ off         │
@@ -218,11 +218,11 @@ velesdb> \show
 **Avec argument** — affiche un paramètre spécifique :
 
 ```
-velesdb> \show search_mode
-search_mode: balanced (ef_search=128)
+velesdb> \show mode
+mode: balanced (ef_search=128)
 
 velesdb> \show ef_search  
-ef_search: 128 (from search_mode)
+ef_search: 128 (from mode)
 ```
 
 #### `\reset` — Réinitialiser les paramètres
@@ -242,7 +242,7 @@ All settings reset to defaults.
 
 ```
 velesdb> \reset ef_search
-ef_search reset to: 128 (from search_mode=balanced)
+ef_search reset to: 128 (from mode=balanced)
 ```
 
 #### `\use` — Sélectionner une collection
@@ -310,7 +310,7 @@ Running 100 random searches with k=10...
 Les settings de session s'appliquent dans cet ordre (du plus haut au plus bas) :
 
 1. **Query-time** — `WITH (mode = 'fast')` dans VelesQL
-2. **Session** — `\set search_mode fast`
+2. **Session** — `\set mode fast`
 3. **Environment** — `VELESDB_SEARCH_DEFAULT_MODE=fast`
 4. **Config file** — `velesdb.toml`
 5. **Defaults** — Valeurs hardcodées
@@ -325,8 +325,8 @@ Les settings de session **ne sont pas persistés** entre les sessions REPL. Pour
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `search_mode` | enum | `balanced` | Mode de recherche |
-| `ef_search` | int | `null` | Override ef_search (null = utilise search_mode) |
+| `mode` | enum | `balanced` | Mode de recherche |
+| `ef_search` | int | `null` | Override ef_search (null = utilise mode) |
 | `output_format` | enum | `table` | Format de sortie |
 | `timing` | bool | `false` | Afficher le temps d'exécution |
 | `limit` | int | `10` | Limite par défaut |
@@ -342,14 +342,14 @@ Les settings de session **ne sont pas persistés** entre les sessions REPL. Pour
 ```
 $ velesdb repl ./my_db
 
-VelesDB v0.8.0 - Interactive REPL
+VelesDB v1.6.0 - Interactive REPL
 Type \help for help, \quit to exit.
 
 velesdb> \show
 ┌─────────────────┬─────────────┐
 │ Setting         │ Value       │
 ├─────────────────┼─────────────┤
-│ search_mode     │ balanced    │
+│ mode     │ balanced    │
 │ ef_search       │ 128         │
 │ ...             │ ...         │
 └─────────────────┴─────────────┘
@@ -362,7 +362,7 @@ Collections:
 velesdb> \use products
 Collection 'products' selected.
 
-velesdb[products]> \set search_mode accurate
+velesdb[products]> \set mode accurate
 Search mode set to: Accurate (ef_search=512)
 
 velesdb[products]> SELECT * WHERE category = 'electronics' LIMIT 5;
@@ -386,12 +386,12 @@ velesdb> \use test_collection
 velesdb[test_collection]> \set timing on
 
 -- Mode Fast
-velesdb[test_collection]> \set search_mode fast
+velesdb[test_collection]> \set mode fast
 velesdb[test_collection]> SELECT * WHERE vector NEAR $v LIMIT 10;
 10 rows (0.8 ms)
 
 -- Mode Perfect (bruteforce)
-velesdb[test_collection]> \set search_mode perfect
+velesdb[test_collection]> \set mode perfect
 velesdb[test_collection]> SELECT * WHERE vector NEAR $v LIMIT 10;
 10 rows (48.3 ms)
 
@@ -420,7 +420,7 @@ velesdb> SELECT * FROM products WHERE category = 'books' LIMIT 3;
 ```rust
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
-    pub search_mode: SearchMode,
+    pub mode: SearchMode,
     pub ef_search: Option<usize>,
     pub output_format: OutputFormat,
     pub timing: bool,
@@ -433,7 +433,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            search_mode: SearchMode::Balanced,
+            mode: SearchMode::Balanced,
             ef_search: None,
             output_format: OutputFormat::Table,
             timing: false,
@@ -484,21 +484,10 @@ fn parse_repl_command(line: &str) -> Option<ReplCommand> {
 
 ---
 
-## Migration depuis v0.7
+## Command Format
 
-### Changements
-
-| v0.7 | v0.8 | Notes |
-|------|------|-------|
-| `.timing on` | `\set timing on` | Legacy `.timing` toujours supporté |
-| N/A | `\set search_mode` | Nouveau |
-| N/A | `\show` | Nouveau |
-| N/A | `\reset` | Nouveau |
-
-### Backward Compatibility
-
-Les commandes `.xxx` (dot commands) restent supportées pour compatibilité. Les nouvelles commandes utilisent le format `\xxx` (backslash) pour cohérence avec PostgreSQL.
+VelesDB CLI supports both backslash commands (`\help`, `\set`) and dot commands (`.collections`, `.timing`). Backslash commands follow PostgreSQL conventions. Both formats work interchangeably.
 
 ---
 
-*Documentation VelesDB — Janvier 2026*
+*Documentation VelesDB v1.6.0 — Mars 2026*

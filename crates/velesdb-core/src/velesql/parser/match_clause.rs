@@ -29,24 +29,32 @@ pub fn parse_match_clause(input: &str) -> Result<MatchClause, ParseError> {
         return Err(ParseError::syntax(6, input, "Expected pattern after MATCH"));
     }
     let patterns = parse_pattern_list(pattern_str)?;
-    let where_clause = if let Some(wp) = where_pos {
-        // Validate slice bounds: wp + 5 (after "WHERE") must be <= return_pos
-        let where_end = wp + 5;
-        if where_end > return_pos {
-            return Err(ParseError::syntax(wp, input, "Empty WHERE condition"));
-        }
-        Some(parse_where_condition(
-            after_match[where_end..return_pos].trim(),
-        )?)
-    } else {
-        None
-    };
+    let where_clause = extract_where_clause(after_match, where_pos, return_pos, input)?;
     let return_clause = parse_return_clause(after_match[return_pos + 6..].trim());
     Ok(MatchClause {
         patterns,
         where_clause,
         return_clause,
     })
+}
+
+/// Extracts and parses the optional WHERE clause between the pattern and RETURN.
+fn extract_where_clause(
+    after_match: &str,
+    where_pos: Option<usize>,
+    return_pos: usize,
+    input: &str,
+) -> Result<Option<Condition>, ParseError> {
+    let Some(wp) = where_pos else {
+        return Ok(None);
+    };
+    // Validate slice bounds: wp + 5 (after "WHERE") must be <= return_pos
+    let where_end = wp + 5;
+    if where_end > return_pos {
+        return Err(ParseError::syntax(wp, input, "Empty WHERE condition"));
+    }
+    let condition = parse_where_condition(after_match[where_end..return_pos].trim())?;
+    Ok(Some(condition))
 }
 
 /// Parses a single node pattern.
@@ -56,6 +64,20 @@ pub fn parse_match_clause(input: &str) -> Result<MatchClause, ParseError> {
 /// Returns [`ParseError`] when delimiters are invalid or properties cannot be parsed.
 pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
     let input = input.trim();
+    validate_node_delimiters(input)?;
+    let inner = input[1..input.len() - 1].trim();
+    if inner.is_empty() {
+        return Ok(NodePattern::new());
+    }
+    let mut node = NodePattern::new();
+    let (main_part, properties) = split_with_braces(inner, input, "node pattern")?;
+    node.properties = properties;
+    apply_alias_and_labels(main_part, &mut node);
+    Ok(node)
+}
+
+/// Validates that a node pattern string starts with `(` and ends with `)`.
+fn validate_node_delimiters(input: &str) -> Result<(), ParseError> {
     if !input.starts_with('(') {
         return Err(ParseError::syntax(
             0,
@@ -66,25 +88,24 @@ pub fn parse_node_pattern(input: &str) -> Result<NodePattern, ParseError> {
     if !input.ends_with(')') {
         return Err(ParseError::syntax(input.len(), input, "Expected ')'"));
     }
-    let inner = input[1..input.len() - 1].trim();
-    if inner.is_empty() {
-        return Ok(NodePattern::new());
+    Ok(())
+}
+
+/// Extracts alias and labels from a colon-separated node identifier (e.g. `n:Person:Author`).
+fn apply_alias_and_labels(main_part: &str, node: &mut NodePattern) {
+    if main_part.is_empty() {
+        return;
     }
-    let mut node = NodePattern::new();
-    let (main_part, properties) = split_with_braces(inner, input, "node pattern")?;
-    node.properties = properties;
-    if !main_part.is_empty() {
-        let parts: Vec<&str> = main_part.split(':').collect();
-        if !parts[0].trim().is_empty() {
-            node.alias = Some(parts[0].trim().to_string());
-        }
-        for label in &parts[1..] {
-            if !label.trim().is_empty() {
-                node.labels.push(label.trim().to_string());
-            }
+    let parts: Vec<&str> = main_part.split(':').collect();
+    if !parts[0].trim().is_empty() {
+        node.alias = Some(parts[0].trim().to_string());
+    }
+    for label in &parts[1..] {
+        let trimmed = label.trim();
+        if !trimmed.is_empty() {
+            node.labels.push(trimmed.to_string());
         }
     }
-    Ok(node)
 }
 
 /// Parses a relationship pattern.

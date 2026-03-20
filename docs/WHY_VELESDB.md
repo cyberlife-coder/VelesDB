@@ -78,7 +78,7 @@ The integrated architecture directly supports AI agent memory requirements:
 
 VelesDB achieves sub-millisecond latency through:
 
-- **Native HNSW implementation** that is 1.2x faster than the widely-used `hnsw_rs` crate
+- **Native HNSW implementation** that is 1.2x faster than the widely-used `hnsw_rs` crate (26.9ms vs ~32ms on 100 queries, 5K/128D vectors)
 - **Explicit SIMD kernels** (AVX-512, AVX2, NEON) with runtime feature detection
 - **Memory-mapped storage** for zero-copy vector access
 - **Lock-free read paths** using `parking_lot::RwLock` with 256-shard concurrent edge stores

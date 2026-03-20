@@ -11,12 +11,14 @@
 //! - [`VectorSliceGuard`]: Zero-copy vector slice guard
 //! - [`metrics`]: Storage operation metrics (P0 audit - latency monitoring)
 //! - [`async_ops`]: Async wrappers for blocking I/O (EPIC-034/US-001)
+//! - [`hnsw_delta_wal`]: HNSW graph mutation WAL for O(delta) crash recovery
 #![allow(clippy::doc_markdown)] // Storage docs include API and platform identifiers.
 
 pub mod async_ops;
 mod compaction;
 mod guard;
 mod histogram;
+pub mod hnsw_delta_wal;
 mod log_payload;
 pub mod metrics;
 mod mmap;
@@ -28,6 +30,9 @@ mod traits;
 pub mod vector_bytes;
 #[cfg(test)]
 mod vector_bytes_tests;
+pub mod wal_batcher;
+#[cfg(test)]
+mod wal_batcher_tests;
 
 #[cfg(test)]
 mod compaction_tests;
@@ -35,6 +40,8 @@ mod compaction_tests;
 mod guard_tests;
 #[cfg(test)]
 mod histogram_tests;
+#[cfg(test)]
+mod hnsw_delta_wal_tests;
 #[cfg(test)]
 mod log_payload_tests;
 #[cfg(test)]

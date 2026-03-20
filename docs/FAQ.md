@@ -34,7 +34,7 @@ VelesDB uses a **two minor-version deprecation window**:
 2. **Supported in version X+1**: The deprecated API still works but emits warnings.
 3. **Removed in version X+2**: The deprecated API is removed entirely.
 
-For example, the legacy `Collection` type was deprecated in v1.4 and will be removed in v1.6. Code using it should migrate to the typed APIs (`VectorCollection`, `GraphCollection`, `MetadataCollection`).
+For example, the legacy `Collection` type was deprecated in v1.4 and is marked `#[deprecated]` since v1.6.0. It still compiles and works but emits warnings. Migrate to the typed APIs (`VectorCollection`, `GraphCollection`, `MetadataCollection`) at your convenience — removal is planned for v2.0.
 
 ### Are on-disk formats stable?
 
@@ -133,7 +133,7 @@ coll = db.create_collection("docs", dimension=768, m=48, ef_construction=600)
 results = coll.search_with_ef(vector=query, top_k=10, ef_search=256)
 ```
 
-Default values (m=16, ef_construction=200) work well for most workloads. Increase `m` and `ef_construction` for datasets over 1M vectors or when recall above 0.99 is required.
+Default values are auto-tuned by dimension: `m=24, ef_construction=300` for dim <= 256, and `m=32, ef_construction=400` for dim >= 257. These work well for most workloads up to 100K vectors. Use `HnswParams::for_dataset_size()` for larger datasets.
 
 ### How do I use batch and streaming ingestion?
 
@@ -169,7 +169,7 @@ coll.stream_insert([
 
 ### Query limitations
 
-- VelesQL does not support subqueries or CTEs.
+- VelesQL parses subqueries but does not execute them yet. CTEs are not supported.
 - `UPDATE` and `DELETE ... WHERE` statements are not supported in VelesQL (use the programmatic API).
 - Graph traversal in VelesQL is limited to `MATCH` patterns; recursive CTEs are not available.
 
@@ -220,8 +220,8 @@ cargo build -p velesdb-wasm --no-default-features --target wasm32-unknown-unknow
 ### What features are available in WASM?
 
 - In-memory vector collections (HNSW search, quantization).
-- VelesQL parsing and execution.
-- All distance metrics (cosine, euclidean, dot product).
+- VelesQL parsing and validation (query execution requires the REST server).
+- All distance metrics (cosine, euclidean, dot product, hamming, jaccard).
 
 ### What features are NOT available in WASM?
 

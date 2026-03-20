@@ -84,4 +84,47 @@ impl Layer {
             self.neighbors[node_id].write().push(neighbor);
         }
     }
+
+    /// Remaps all neighbor IDs using the provided old-to-new mapping.
+    ///
+    /// After graph reordering, node IDs change. This method updates every
+    /// neighbor reference in the layer to use the new IDs, and reorders the
+    /// adjacency lists themselves so that slot `new_id` contains the neighbors
+    /// of the node that was formerly at `old_id`.
+    pub(crate) fn remap_ids(&mut self, old_to_new: &[usize]) {
+        let count = old_to_new.len();
+
+        // Phase 1: Remap neighbor IDs within each adjacency list.
+        for lock in &self.neighbors {
+            let mut neighbors = lock.write();
+            for id in neighbors.iter_mut() {
+                if *id < count {
+                    *id = old_to_new[*id];
+                }
+            }
+        }
+
+        // Phase 2: Reorder the adjacency lists themselves.
+        // Extract all lists, then place each at its new position.
+        let mut extracted: Vec<Vec<NodeId>> = self
+            .neighbors
+            .iter()
+            .map(|lock| std::mem::take(&mut *lock.write()))
+            .collect();
+
+        // Build reordered lists: new slot `old_to_new[old]` gets `extracted[old]`
+        let mut reordered: Vec<Vec<NodeId>> = vec![Vec::new(); extracted.len()];
+        for (old_id, list) in extracted.drain(..).enumerate() {
+            if old_id < count {
+                reordered[old_to_new[old_id]] = list;
+            }
+        }
+
+        // Write back
+        for (i, lock) in self.neighbors.iter().enumerate() {
+            if i < reordered.len() {
+                *lock.write() = std::mem::take(&mut reordered[i]);
+            }
+        }
+    }
 }

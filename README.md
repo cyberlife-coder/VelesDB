@@ -8,12 +8,12 @@
 
 <h3 align="center">
   🧠 <strong>The Local Knowledge Engine for AI Agents</strong> 🧠<br/>
-  <em>Vector + Graph + ColumnStore Fusion • 43µs HNSW Search • 24ns SIMD • 3,950+ Tests • 82% Coverage</em>
+  <em>Vector + Graph + ColumnStore Fusion • 42.8µs HNSW Search • 23.6ns SIMD • 4,300+ Tests • 82% Coverage</em>
 </h3>
 
 <p align="center">
   <strong>🚀 v1.6.0 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
-  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.6.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v15">What's New</a>
+  <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.6.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v16">What's New</a>
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
   <img src="https://img.shields.io/badge/🏎️_Dot_768D-23.6ns-blue?style=for-the-badge" alt="Dot Product Latency"/>
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main&label=tests&style=for-the-badge" alt="Tests"/></a>
   <img src="https://img.shields.io/badge/📊_Coverage-82.30%25-success?style=for-the-badge" alt="Coverage"/>
-  <img src="https://img.shields.io/badge/🎯_Recall-100%25-success?style=for-the-badge" alt="Recall"/>
+  <img src="https://img.shields.io/badge/🎯_Recall@10_(Accurate)-100%25-success?style=for-the-badge" alt="Recall@10 Accurate mode"/>
   <img src="https://img.shields.io/badge/⚡_Throughput-32.5Gelem/s-purple?style=for-the-badge" alt="Throughput"/>
   <img src="https://img.shields.io/badge/SQ8_Recall-100%25-success?style=for-the-badge" alt="SQ8 Recall"/>
   <img src="https://img.shields.io/badge/Sparse_Search-958µs-blue?style=for-the-badge" alt="Sparse Search Latency"/>
@@ -97,9 +97,9 @@ Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automati
 
 | Pain Point | Business Impact | VelesDB Solution |
 |------------|-----------------|------------------|
-| **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **<0.11ms local** — network-free retrieval |
+| **Latency kills UX** | Cloud vector DBs add 50-100ms/query | **42.8µs local** (k=10, 10K vectors) — network-free retrieval |
 | **Vectors alone aren't enough** | Semantic similarity misses relationships | **Vector + Graph unified** in one query |
-| **Privacy & deployment friction** | Cloud dependencies, GDPR concerns | **15MB binary** — works offline, air-gapped |
+| **Privacy & deployment friction** | Cloud dependencies, GDPR concerns | **6 MB self-contained binary** — works offline, air-gapped |
 
 ---
 
@@ -113,11 +113,11 @@ Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automati
 </td>
 <td align="center" width="25%">
 <h3>⚡ 23.6ns SIMD</h3>
-<p>Native HNSW + AVX2 SIMD.<br/><strong>32.5 Gelem/s throughput.</strong></p>
+<p>Native HNSW + AVX-512/AVX2/NEON SIMD.<br/><strong>32.5 Gelem/s throughput.</strong></p>
 </td>
 <td align="center" width="25%">
-<h3>📦 15MB Binary</h3>
-<p>Zero dependencies.<br/><strong>Works offline, air-gapped.</strong></p>
+<h3>📦 6 MB Self-Contained</h3>
+<p>No external services required.<br/><strong>Works offline, air-gapped.</strong></p>
 </td>
 <td align="center" width="25%">
 <h3>🌍 Run Anywhere</h3>
@@ -132,10 +132,10 @@ Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automati
 
 | If you use... | VelesDB gives you... |
 |---------------|----------------------|
-| **Pinecone** | No API keys, no cloud costs, **100x faster locally**, + Graph + Columns |
-| **Qdrant** | Single binary (15MB vs 100MB+), native WASM/Mobile, **unified Vector+Graph** |
+| **Pinecone** | No API keys, no cloud costs, **local-first with sub-ms latency**, + Graph + Columns |
+| **Qdrant** | Single compact binary, native WASM/Mobile, **unified Vector+Graph** |
 | **Milvus** | Zero config vs complex cluster setup, **embedded mode** |
-| **pgvector** | Purpose-built for vectors, **12-100x faster search**, native graph support |
+| **pgvector** | Purpose-built for vectors, **3.8-7x faster inserts** ([benchmark](benchmarks/README.md)), native graph support |
 | **ChromaDB** | Production-grade Rust vs Python prototype, **enterprise-ready** |
 | **Neo4j + Pinecone** | **One database instead of two**, unified query language |
 
@@ -149,7 +149,7 @@ ORDER BY similarity() DESC
 LIMIT 5;
 ```
 
-> **Full business scenarios:** [docs/guides/BUSINESS_SCENARIOS.md](docs/guides/BUSINESS_SCENARIOS.md) — E-commerce, fraud detection, healthcare, AI agents, multi-vector fusion, distance metrics guide.
+> **Business scenarios & demos:** [examples/](examples/) — E-commerce recommendation engine, GraphRAG, hybrid search, LangChain/LlamaIndex integration.
 
 ---
 
@@ -160,15 +160,15 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | Domain      | Component                          | Description                              | Install                     |
 |-------------|------------------------------------|------------------------------------------|----------------------------|
 | **🦀 Core** | [velesdb-core](crates/velesdb-core) | Core engine (HNSW, SIMD, VelesQL)        | `cargo add velesdb-core`   |
-| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (25 endpoints, OpenAPI optionnelle) | `cargo install velesdb-server` |
+| **🌐 Server**| [velesdb-server](crates/velesdb-server) | REST API (37 endpoints, OpenAPI)         | `cargo install velesdb-server` |
 | **💻 CLI**  | [velesdb-cli](crates/velesdb-cli)   | Interactive REPL for VelesQL             | `cargo install velesdb-cli` |
-| **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb`      |
-| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | `npm i @wiscale/velesdb-sdk`   |
-| **🌍 WASM** | [velesdb-wasm](crates/velesdb-wasm) | Browser-side vector search               | `npm i @wiscale/velesdb-wasm` |
+| **🐍 Python** | [velesdb-python](crates/velesdb-python) | PyO3 bindings + NumPy                    | `pip install velesdb` |
+| **📜 TypeScript** | [typescript-sdk](sdks/typescript) | Node.js & Browser SDK                    | [From source](sdks/typescript/README.md) |
+| **🌍 WASM** | [velesdb-wasm](crates/velesdb-wasm) | Browser-side vector search               | [From source](crates/velesdb-wasm/README.md) |
 | **📱 Mobile** | [velesdb-mobile](crates/velesdb-mobile) | iOS (Swift) & Android (Kotlin)           | [Build instructions](docs/guides/INSTALLATION.md#-mobile-iosandroid) |
 | **🖥️ Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) | Tauri v2 AI-powered apps               | `cargo add tauri-plugin-velesdb` |
-| **🦜 LangChain** | [langchain-velesdb](integrations/langchain) | Official VectorStore                   | `pip install langchain-velesdb` |
-| **🦙 LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) | Document indexing                     | `pip install llama-index-vector-stores-velesdb` |
+| **🦜 LangChain** | [langchain-velesdb](integrations/langchain) | Official VectorStore                   | [From source](integrations/langchain/README.md) |
+| **🦙 LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) | Document indexing                     | [From source](integrations/llamaindex/README.md) |
 | **🔄 Migration** | [velesdb-migrate](crates/velesdb-migrate) | From Qdrant, Pinecone, Supabase        | `cargo install velesdb-migrate` |
 
 ---
@@ -182,7 +182,7 @@ VelesDB is designed to run **where your agents live** — from cloud servers to 
 | **Desktop Apps (Tauri/Electron)** | Single binary, no server needed     |
 | **Mobile AI (iOS/Android)**   | Native SDKs with 32x memory compression |
 | **Browser-side Search**       | WASM module, zero backend           |
-| **Edge/IoT Devices**          | 15MB footprint, ARM NEON optimized  |
+| **Edge/IoT Devices**          | 6 MB footprint, ARM NEON optimized  |
 | **On-Prem / Air-Gapped**      | No cloud dependency, full data sovereignty |
 
 ---
@@ -211,9 +211,17 @@ pip install velesdb
 import velesdb
 
 db = velesdb.Database("./my_vectors")
-collection = db.create_collection("docs", dimension=768, metric="cosine")
-collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Hello"}}])
-results = collection.search(vector=[...], top_k=10)
+collection = db.create_collection("docs", dimension=4, metric="cosine")
+
+# Vectors come from your embedding model (OpenAI, Sentence-Transformers, etc.)
+collection.upsert([
+    {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"title": "AI Intro"}},
+    {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"title": "ML Basics"}},
+])
+
+results = collection.search(vector=[0.9, 0.1, 0.0, 0.0], top_k=2)
+for r in results:
+    print(f"ID: {r['id']}, Score: {r['score']:.4f}, Title: {r['payload']['title']}")
 ```
 
 ### Option 3: Rust
@@ -242,13 +250,17 @@ curl http://localhost:8080/health
 
 ## 📖 Your First Vector Search
 
+**1. Create a collection**
+
 ```bash
-# 1. Create a collection
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "my_vectors", "dimension": 4, "metric": "cosine"}'
+```
 
-# 2. Insert vectors with metadata
+**2. Insert vectors with metadata**
+
+```bash
 curl -X POST http://localhost:8080/collections/my_vectors/points \
   -H "Content-Type: application/json" \
   -d '{
@@ -258,13 +270,41 @@ curl -X POST http://localhost:8080/collections/my_vectors/points \
       {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": {"title": "History of Computing", "category": "history"}}
     ]
   }'
+```
 
-# 3. Search for similar vectors
+**3. Search for similar vectors**
+
+```bash
 curl -X POST http://localhost:8080/collections/my_vectors/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.9, 0.1, 0.0, 0.0], "top_k": 2}'
+```
 
-# 4. Or use VelesQL (SQL-like queries)
+Response:
+```json
+{
+  "results": [
+    {"id": 1, "score": 0.9950, "payload": {"title": "AI Introduction", "category": "tech"}},
+    {"id": 2, "score": 0.1104, "payload": {"title": "ML Basics", "category": "tech"}}
+  ]
+}
+```
+
+**4. Search with metadata filter**
+
+```bash
+curl -X POST http://localhost:8080/collections/my_vectors/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector": [0.9, 0.1, 0.0, 0.0],
+    "top_k": 5,
+    "filter": {"type": "eq", "field": "category", "value": "tech"}
+  }'
+```
+
+**5. Use VelesQL (SQL-like syntax)**
+
+```bash
 curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
   -d '{
@@ -273,27 +313,93 @@ curl -X POST http://localhost:8080/query \
   }'
 ```
 
+**Why VelesQL?** REST endpoints handle one operation at a time. VelesQL combines vector search + graph traversal + metadata filters + aggregation in a single statement:
+
+| Task | REST API | VelesQL |
+|------|----------|---------|
+| Vector search | `POST .../search` | `SELECT * FROM docs WHERE vector NEAR $v LIMIT 10` |
+| Vector + filter | `POST .../search` with `filter` field | `SELECT ... WHERE vector NEAR $v AND category = 'tech' LIMIT 10` |
+| Vector + graph | 2 calls (search + traverse), merge in app | `MATCH (doc)-[:CITES]->(ref) WHERE similarity(doc.embedding, $v) > 0.8 RETURN ref` |
+| Aggregation | Not available via search endpoints | `SELECT category, COUNT(*) FROM docs GROUP BY category` |
+
+---
+
+## 🔧 How VelesDB Works
+
+```
+INSERT                      INDEX                       SEARCH
+┌──────────┐  upsert   ┌──────────────┐  build   ┌──────────────┐
+│ Your App │──────────▶│ WAL (append) │────────▶│  HNSW Graph  │
+│          │           │ + mmap store │         │  (in-memory) │
+└──────────┘           └──────────────┘         └──────┬───────┘
+                                                       │
+                        RESULT                         │ search
+┌──────────┐  top-k    ┌──────────────┐  rank    ┌────▼─────────┐
+│ Your App │◀──────────│   Payload    │◀────────│ SIMD Distance│
+│          │           │  Hydration   │         │(AVX-512/NEON)│
+└──────────┘           └──────────────┘         └──────────────┘
+```
+
+1. **Insert**: Vectors + metadata are appended to a Write-Ahead Log (WAL) for crash safety, then stored in memory-mapped files.
+2. **Index**: Each vector is inserted into an HNSW graph — a multi-layer structure where similar vectors are connected by edges.
+3. **Search**: A query vector enters the HNSW graph. SIMD-accelerated distance kernels (AVX-512, AVX2, or NEON) compare candidates at hardware speed. The `ef_search` parameter controls how many candidates to explore.
+4. **Result**: Top-k nearest neighbors are returned with similarity scores and their JSON payloads.
+
+**Key design choices:**
+- **Local-first**: Runs in-process or as a single binary — no network hops, no cloud dependency.
+- **Memory-mapped storage**: The OS manages paging between RAM and disk. Practical limit ≈ available RAM + swap.
+- **WAL durability**: Every write is journaled. Crash-safe by default (`fsync` mode).
+
+---
+
+## 💾 Persistence & Durability
+
+All data is persisted to disk by default. No configuration needed for basic durability.
+
+| Question | Answer |
+|----------|--------|
+| **Is data persisted?** | Yes. Vectors, payloads, and HNSW index are stored in the `--data-dir` directory. |
+| **What if the process crashes?** | The WAL replays uncommitted operations on restart. Default mode is `fsync` (power-loss safe). |
+| **What if I kill the server?** | Graceful shutdown (SIGTERM / Ctrl+C) drains connections and flushes WALs before exit. |
+| **Where is my data?** | Each collection is a directory: `vectors.bin`, `payloads.log`, `hnsw.bin`, WAL files. |
+| **Can I trade durability for speed?** | Yes. Bulk imports can disable `fsync` for higher throughput, then call `flush()`. |
+
 ---
 
 ## 🔌 API Reference
 
-VelesDB exposes **25+ REST endpoints** organized by domain: Collections, Points, Search, Graph, Indexes, VelesQL, and Administration.
+VelesDB exposes **37 REST endpoints** organized by domain: Collections, Points, Search, Graph, Indexes, VelesQL, and Administration.
 
 | Category | Key Endpoints | Description |
 |----------|--------------|-------------|
-| **Collections** | `POST /collections`, `GET /collections/{name}/stats` | Create, inspect, analyze collections |
-| **Points** | `POST /collections/{name}/points`, `POST /collections/{name}/stream/insert` | Upsert & streaming insert |
-| **Search** | `POST /collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid` | Vector, sparse, hybrid, text search |
-| **Graph** | `POST /collections/{name}/graph/edges`, `/collections/{name}/graph/traverse` | Edge management, BFS/DFS traversal |
+| **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` | Create, list, inspect, delete collections |
+| **Points** | `POST /collections/{name}/points`, `GET/DELETE /points/{id}`, `POST /stream/insert` | CRUD & streaming insert |
+| **Search** | `POST .../search`, `.../search/batch`, `.../search/hybrid`, `.../search/text`, `.../search/multi`, `.../search/ids` | Vector, sparse, hybrid, text, multi, ID-only search |
+| **Graph** | `GET/POST .../graph/edges`, `.../graph/traverse`, `.../graph/traverse/stream`, `.../graph/nodes/{id}/degree` | Edge CRUD, BFS/DFS traversal, streaming, degree query |
+| **Indexes** | `GET/POST .../indexes`, `DELETE .../indexes/{label}/{property}` | Secondary index management |
 | **VelesQL** | `POST /query`, `/aggregate`, `/query/explain` | Unified query language with EXPLAIN |
-| **Admin** | `GET /health`, `/ready`, `/metrics`, `/guardrails` | Liveness, readiness, Prometheus, guard-rails |
+| **Admin** | `GET /health`, `/ready`, `/metrics`, `/guardrails`, `.../stats`, `.../config`, `.../flush`, `.../empty`, `.../sanity`, `.../analyze` | Liveness, readiness, Prometheus, collection ops |
 
 <details>
-<summary>All 25 REST endpoints</summary>
+<summary>All 37 REST endpoints</summary>
 
-`/health` · `/ready` · `/metrics` · `/guardrails` · `/query` · `/query/explain` · `/aggregate` · `/collections/{name}/search` · `/collections/{name}/search/batch` · `/collections/{name}/search/text` · `/collections/{name}/search/hybrid` · `/collections/{name}/search/multi` · `/collections/{name}/search/ids` · `/collections/{name}/match` · `/collections/{name}/points` · `/collections/{name}/stream/insert` · `/collections/{name}/graph/traverse` · `/collections/{name}/analyze` · `/collections/{name}/config` · `/collections/{name}/stats` · `/collections/{name}/flush` · `/collections/{name}/empty` · `/collections/{name}/sanity`
+**Admin:** `GET /health` · `GET /ready` · `GET /metrics`¹ · `GET /guardrails` · `PUT /guardrails`
+
+**Collections:** `GET /collections` · `POST /collections` · `GET /collections/{name}` · `DELETE /collections/{name}` · `GET /collections/{name}/stats` · `GET /collections/{name}/config` · `POST /collections/{name}/analyze` · `POST /collections/{name}/flush` · `GET /collections/{name}/empty` · `GET /collections/{name}/sanity`
+
+**Points:** `POST /collections/{name}/points` · `GET /collections/{name}/points/{id}` · `DELETE /collections/{name}/points/{id}` · `POST /collections/{name}/stream/insert` · `POST /collections/{name}/points/stream`
+
+**Search:** `POST /collections/{name}/search` · `POST /collections/{name}/search/batch` · `POST /collections/{name}/search/text` · `POST /collections/{name}/search/hybrid` · `POST /collections/{name}/search/multi` · `POST /collections/{name}/search/ids` · `POST /collections/{name}/match`
+
+**Graph:** `GET /collections/{name}/graph/edges` · `POST /collections/{name}/graph/edges` · `POST /collections/{name}/graph/traverse` · `GET /collections/{name}/graph/traverse/stream` · `GET /collections/{name}/graph/nodes/{node_id}/degree`
+
+**Indexes:** `GET /collections/{name}/indexes` · `POST /collections/{name}/indexes` · `DELETE /collections/{name}/indexes/{label}/{property}`
+
+**VelesQL:** `POST /query` · `POST /query/explain` · `POST /aggregate`
 
 </details>
+
+¹ `/metrics` requires the `prometheus` feature flag.
 
 > **Full API reference:** [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) — all endpoints with request/response examples.
 > **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
@@ -328,12 +434,14 @@ cd examples/ecommerce_recommendation
 cargo run --release
 ```
 
-| Query Type | Latency | Description |
-|------------|---------|-------------|
+| Query Type | Typical Latency | Description |
+|------------|-----------------|-------------|
 | **Vector Similarity** | **187 µs** | Find semantically similar products |
 | **Vector + Filter** | **55 µs** | In-stock, price < $500, rating >= 4.0 |
 | **Graph Lookup** | **88 µs** | Co-purchased products (BOUGHT_TOGETHER) |
 | **Combined (Full Power)** | **202 µs** | Union of Vector + Graph + Filters |
+
+*Latencies measured with `Instant::now()` instrumentation in the demo. Results vary by hardware.*
 
 ### Other Demos
 
@@ -354,8 +462,9 @@ cargo run --release
 |-----------|---------|------------|
 | **SIMD Dot Product (768D)** | **23.6 ns** | **32.5 Gelem/s** |
 | **Euclidean** | **22.7 ns** | **33.8 Gelem/s** |
-| **Cosine** | **34.0 ns** | **22.6 Gelem/s** |
-| **Hamming** | **52.4 ns** | — |
+| **Cosine** | **33.6 ns** | **22.9 Gelem/s** |
+| **Hamming** | **34.3 ns** | — |
+| **Jaccard** | **29.3 ns** | — |
 
 ### System Benchmarks (10K Vectors, 768D)
 
@@ -368,17 +477,19 @@ cargo run --release
 
 ### Search Quality (Recall)
 
-| Mode | Recall@10 | Latency (10K/128D) |
-|------|-----------|--------------------|
-| Fast (ef=64) | 92.2% | 36µs |
-| Balanced (ef=128) | 98.8% | ~102µs |
-| Accurate (ef=256) | 100% | 130µs |
+| Mode | ef_search | Recall@10 | Latency (10K/128D) |
+|------|-----------|-----------|---------------------|
+| Fast | 64 | 92.2% | 36µs |
+| Balanced (default) | 128 | 98.8% | ~102µs |
+| Accurate | 512 | 100% | 130µs |
+| Perfect | 4096 | 100% | 163µs |
+| Adaptive | 32–512 | 95%+ | ~15-40µs (easy queries) |
 
-**Optimizations:** AVX-512/AVX2 auto-detection, zero-dispatch DistanceEngine, CPU prefetch (+12%), 64-byte aligned memory, batch WAL, memory-mapped files.
+**Optimizations:** AVX-512/AVX2/NEON auto-detection, 4-accumulator ILP, zero-dispatch DistanceEngine, batch prefetch L1/L2, 64-byte aligned memory, batch WAL, memory-mapped files.
 
 > **Full benchmarks & methodology:** [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | **Quantization guide:** [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md)
 
-*Measured March 19, 2026 on i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0. Sequential runs on idle machine. Latency depends on CPU/flags/dataset.*
+*Measured March 20, 2026 on i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0. Criterion.rs, sequential runs on idle machine. Results depend on CPU, SIMD support, and dataset.*
 
 ---
 
@@ -386,17 +497,17 @@ cargo run --release
 
 <table align="center">
 <tr>
-<td align="center" width="20%"><h3>3,670+</h3><p><strong>Tests</strong></p></td>
+<td align="center" width="20%"><h3>4,300+</h3><p><strong>Tests</strong></p></td>
 <td align="center" width="20%"><h3>82.30%</h3><p><strong>Coverage</strong></p></td>
 <td align="center" width="20%"><h3>0</h3><p><strong>Security Issues</strong></p></td>
-<td align="center" width="20%"><h3>48K</h3><p><strong>Rust LoC</strong></p></td>
+<td align="center" width="20%"><h3>60K</h3><p><strong>Rust LoC</strong></p></td>
 <td align="center" width="20%"><h3>8</h3><p><strong>Crates</strong></p></td>
 </tr>
 </table>
 
 ```
 cargo check --workspace          cargo clippy -- -D warnings
-cargo test --workspace (3,670+)  cargo deny check (0 advisories)
+cargo test --workspace (4,300+)  cargo deny check (0 advisories)
 cargo fmt --check                Coverage > 75% (82.30%)
 ```
 
@@ -407,12 +518,13 @@ cargo fmt --check                Coverage > 75% (82.30%)
 | Feature | Technical Capability | Real-World Impact |
 |---------|----------------------|-------------------|
 | **Vector + Graph Fusion** | Unified query language for semantic + relationship queries | **Build smarter AI agents** with contextual understanding |
-| **~102µs Search** | Native HNSW + AVX-512 SIMD | **Create real-time experiences** previously impossible |
-| **15MB Binary** | Zero dependencies, single executable | **Deploy anywhere** - from servers to edge devices |
+| **42.8µs Search** | Native HNSW + AVX-512/AVX2/NEON SIMD | **Create real-time experiences** previously impossible |
+| **6 MB Self-Contained** | No external services, single executable | **Deploy anywhere** — from servers to edge devices |
 | **Air-Gapped Deployment** | Full functionality without internet | **Meet strict compliance** in healthcare/finance |
 | **Everywhere Runtime** | Consistent API across server/mobile/browser | **Massive code reuse** across platforms |
 | **PQ + SQ8 Quantization** | 4-32x memory reduction (PQ, SQ8, Binary, RaBitQ) | **Run complex AI** on resource-constrained devices |
 | **Hybrid Dense+Sparse** | SPLADE/BM42 sparse index + RRF/RSF fusion | **Best lexical + semantic** retrieval in one query |
+| **Adaptive Search** | Two-phase ef_search that starts low and escalates only for hard queries | **2-4x faster median latency** without sacrificing recall |
 | **VelesQL** | SQL-like unified query language with SPARSE_NEAR, TRAIN QUANTIZER | **Simplify complex queries** - no DSL learning curve |
 
 ---
@@ -430,13 +542,25 @@ VelesDB's server component supports **opt-in security features** for deployments
 
 ---
 
+## ⚠️ Known Limitations
+
+| Limitation | Details | Workaround |
+|------------|---------|------------|
+| **Single-node only** | No distributed mode, no sharding, no replication | Planned for 2026 H2 |
+| **No multi-operation transactions** | Each upsert/delete is individually WAL-backed, but no BEGIN/COMMIT | Design idempotent operations |
+| **Dataset size ≈ RAM** | Vector data is memory-mapped; practical limit is available RAM + swap | Use SQ8 (4x) or Binary (32x) quantization |
+| **No real-time replication** | No built-in primary/replica or CDC | Backup the data directory; HA planned for 2027 |
+| **VelesQL subset** | No subquery execution, no UPDATE/DELETE WHERE, no CTEs | Use the programmatic API for mutations |
+
+---
+
 ## 🤝 Contributing
 
 ```bash
 git clone https://github.com/cyberlife-coder/VelesDB.git
 cd VelesDB
-cargo test --all-features
-cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1
+cargo fmt --all && cargo clippy --workspace --all-targets --features persistence,gpu,update-check --exclude velesdb-python -- -D warnings -D clippy::pedantic
 ```
 
 ### Project Structure
@@ -474,7 +598,7 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 | EPIC | Feature | Impact |
 |------|---------|--------|
 | EPIC-001 | Code Quality Refactoring | Clean architecture |
-| EPIC-002 | GPU Acceleration (wgpu) | 10x throughput |
+| EPIC-002 | GPU Acceleration (wgpu) | Batch similarity offload |
 | EPIC-003 | PyO3 Migration | Python 3.12+ support |
 | EPIC-004 | Knowledge Graph Storage | GraphNode, GraphEdge, BFS |
 | EPIC-005 | VelesQL MATCH Clause | Cypher-inspired queries |
@@ -526,7 +650,6 @@ Looking for a place to start? Check out issues labeled [`good first issue`](http
 
 | Horizon | Features |
 |---------|----------|
-| **2026 H1** | Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache |
 | **2026 H2** | Distributed mode, Multi-tenancy |
 | **2027** | Cluster HA, Agent Hooks & Triggers |
 
@@ -555,7 +678,7 @@ VelesDB is licensed under the [VelesDB Core License 1.0](LICENSE) — source-ava
   <a href="https://github.com/cyberlife-coder/VelesDB">
     <img src="https://img.shields.io/badge/⭐_Star_on_GitHub-181717?style=for-the-badge&logo=github" alt="Star on GitHub"/>
   </a>
-  <a href="https://twitter.com/intent/tweet?text=🚀%20Check%20out%20VelesDB%20-%20The%20Local%20Knowledge%20Engine%20for%20AI%20Agents!%20Vector%20%2B%20Graph%20%2B%20ColumnStore%20in%20one%2015MB%20binary.&url=https://github.com/cyberlife-coder/VelesDB&hashtags=VectorDatabase,AI,Rust,OpenSource">
+  <a href="https://twitter.com/intent/tweet?text=🚀%20Check%20out%20VelesDB%20-%20The%20Local%20Knowledge%20Engine%20for%20AI%20Agents!%20Vector%20%2B%20Graph%20%2B%20ColumnStore%20in%20one%206MB%20binary.&url=https://github.com/cyberlife-coder/VelesDB&hashtags=VectorDatabase,AI,Rust,OpenSource">
     <img src="https://img.shields.io/badge/Share_on_Twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white" alt="Share on Twitter"/>
   </a>
 </p>

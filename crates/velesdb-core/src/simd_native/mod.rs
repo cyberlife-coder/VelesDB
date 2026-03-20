@@ -91,8 +91,10 @@ mod neon;
 // Re-export ISA kernels so dispatch.rs can access them via `super::`
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_avx512::{
-    cosine_fused_avx512, dot_product_avx512, dot_product_avx512_4acc, hamming_avx512,
-    jaccard_avx512, squared_l2_avx512, squared_l2_avx512_4acc,
+    cosine_fused_avx512, cosine_fused_avx512_4acc, cosine_fused_avx512_8acc, dot_product_avx512,
+    dot_product_avx512_4acc, dot_product_avx512_8acc, hamming_avx512, hamming_avx512_4acc,
+    hamming_binary_avx512, jaccard_avx512, jaccard_avx512_4acc, jaccard_avx512_8acc,
+    squared_l2_avx512, squared_l2_avx512_4acc, squared_l2_avx512_8acc,
 };
 
 #[cfg(target_arch = "x86_64")]
@@ -103,11 +105,13 @@ pub(crate) use x86_avx2::{
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_avx2_similarity::{
-    cosine_fused_avx2, cosine_fused_avx2_2acc, hamming_avx2, jaccard_avx2,
+    cosine_fused_avx2, cosine_fused_avx2_2acc, hamming_avx2, hamming_binary_avx2, jaccard_avx2,
 };
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use neon::{cosine_neon, dot_product_neon, squared_l2_neon};
+pub(crate) use neon::{
+    cosine_neon, dot_product_neon, hamming_binary_neon, hamming_neon, jaccard_neon, squared_l2_neon,
+};
 
 // =============================================================================
 // ADC (Asymmetric Distance Computation) for PQ search
@@ -122,10 +126,11 @@ pub mod adc;
 mod dispatch;
 
 pub use dispatch::{
-    batch_dot_product_native, cosine_normalized_native, cosine_similarity_native,
-    dot_product_native, euclidean_native, hamming_distance_native, jaccard_similarity_native,
-    norm_native, normalize_inplace_native, simd_level, squared_l2_native, warmup_simd_cache,
-    DistanceEngine, SimdLevel,
+    batch_cosine_native, batch_dot_product_native, batch_euclidean_native, batch_hamming_native,
+    batch_jaccard_native, batch_squared_l2_native, cosine_normalized_native,
+    cosine_similarity_native, dot_product_native, euclidean_native, hamming_binary_native,
+    hamming_distance_native, jaccard_similarity_native, norm_native, normalize_inplace_native,
+    simd_level, squared_l2_native, warmup_simd_cache, DistanceEngine, SimdLevel,
 };
 
 // =============================================================================
@@ -146,3 +151,6 @@ mod warmup_tests;
 
 #[cfg(test)]
 mod distance_engine_tests;
+
+#[cfg(test)]
+mod hamming_jaccard_tests;

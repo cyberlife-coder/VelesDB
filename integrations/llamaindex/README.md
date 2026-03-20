@@ -8,7 +8,7 @@ VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
 ## Features
 
 - 🚀 **Microsecond latency** — SIMD-optimized vector search
-- 📦 **Zero dependencies** — Single VelesDB binary, no external services
+- 📦 **Self-contained** — Single VelesDB binary, no external services required
 - 🔒 **Local-first** — All data stays on your machine
 - 🧠 **RAG-ready** — Built for Retrieval-Augmented Generation
 - 🔀 **Multi-Query Fusion** — Native MQG support with RRF/Weighted strategies

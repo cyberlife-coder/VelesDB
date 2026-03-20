@@ -42,7 +42,7 @@ velesdb-core/
 │   │   ├── benches/           # Criterion benchmarks
 │   │   └── tests/             # Integration tests
 │   │
-│   ├── velesdb-server/        # Axum REST API server (22+ endpoints)
+│   ├── velesdb-server/        # Axum REST API server (37 endpoints)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │
@@ -89,7 +89,7 @@ velesdb-core/
 ### `velesdb-core`
 
 Core engine. Contains:
-- **HNSW Index**: Native implementation (1.2x faster than hnsw_rs) with AVX-512, AVX2, and NEON SIMD acceleration via runtime feature detection
+- **HNSW Index**: Native implementation (1.2x faster than hnsw_rs (benchmarked: 26.9ms vs ~32ms on 100 queries, 5K vectors)) with AVX-512, AVX2, and NEON SIMD acceleration via runtime feature detection
 - **Typed Collections**: `VectorCollection`, `GraphCollection`, `MetadataCollection` (plus legacy `Collection` for backward compatibility)
 - **VelesQL**: SQL-like query language with vector and graph extensions (pest-based parser)
 - **Storage**: Memory-mapped files, WAL, sharded vectors, compaction
@@ -98,7 +98,7 @@ Core engine. Contains:
 
 ### `velesdb-server`
 
-Axum-based REST API server with 22+ endpoints. Exposes:
+Axum-based REST API server with 37 endpoints. Exposes:
 - CRUD endpoints for collections and points
 - `/search`, `/search/batch`, `/search/hybrid` endpoints
 - `/query` endpoint for VelesQL execution

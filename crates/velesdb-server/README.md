@@ -34,11 +34,23 @@ cargo build --release -p velesdb-server
 velesdb-server
 
 # Custom port and data directory
-velesdb-server --port 9000 --data ./my_vectors
+velesdb-server --port 9000 --data-dir ./my_vectors
 
 # With logging
 RUST_LOG=info velesdb-server
 ```
+
+### Quick Start Flow
+
+After starting the server, follow this sequence:
+
+1. **Create a collection** — `POST /collections` (define dimension and metric)
+2. **Insert vectors** — `POST /collections/{name}/points` (with optional payloads)
+3. **Search** — `POST /collections/{name}/search` (send a query vector, get top-k results)
+4. **Add filters** — Add metadata conditions to narrow results
+5. **Tune** — Adjust `ef_search` or use `SearchQuality::Adaptive` for production
+
+The data directory auto-creates if it doesn't exist. Default: `./velesdb_data`.
 
 ## API Reference
 
@@ -49,7 +61,14 @@ RUST_LOG=info velesdb-server
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "documents", "dimension": 768, "metric": "cosine"}'
+```
 
+Response (`201 Created`):
+```json
+{"name": "documents", "dimension": 768, "metric": "cosine", "point_count": 0}
+```
+
+```bash
 # Create collection with quantization (SQ8 = 4x memory reduction)
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
@@ -98,14 +117,38 @@ curl -X POST http://localhost:8080/collections/documents/search \
   -d '{
     "vector": [0.15, 0.25, ...],
     "top_k": 5,
-    "filter": {"category": {"$eq": "tech"}}
+    "filter": {"type": "eq", "field": "category", "value": "tech"}
   }'
+```
 
+Response:
+```json
+{
+  "results": [
+    {"id": 1, "score": 0.9523, "payload": {"title": "Hello", "category": "tech"}},
+    {"id": 2, "score": 0.8712, "payload": {"title": "World", "category": "tech"}}
+  ]
+}
+```
+
+```bash
 # BM25 full-text search
 curl -X POST http://localhost:8080/collections/documents/search/text \
   -H "Content-Type: application/json" \
   -d '{"query": "rust programming", "top_k": 10}'
+```
 
+Response:
+```json
+{
+  "results": [
+    {"id": 5, "score": 2.134, "payload": {"title": "Rust Programming Guide"}},
+    {"id": 12, "score": 1.892, "payload": {"title": "Systems Programming in Rust"}}
+  ]
+}
+```
+
+```bash
 # Hybrid search (vector + text)
 curl -X POST http://localhost:8080/collections/documents/search/hybrid \
   -H "Content-Type: application/json" \
@@ -132,8 +175,8 @@ curl -X POST http://localhost:8080/collections/documents/search/multi \
   -d '{
     "vectors": [[0.1, 0.2, ...], [0.3, 0.4, ...], [0.5, 0.6, ...]],
     "top_k": 10,
-    "fusion": "rrf",
-    "fusion_params": {"k": 60}
+    "strategy": "rrf",
+    "rrf_k": 60
   }'
 
 # Weighted fusion strategy
@@ -142,8 +185,10 @@ curl -X POST http://localhost:8080/collections/documents/search/multi \
   -d '{
     "vectors": [[...], [...], [...]],
     "top_k": 10,
-    "fusion": "weighted",
-    "fusion_params": {"avgWeight": 0.6, "maxWeight": 0.3, "hitWeight": 0.1}
+    "strategy": "weighted",
+    "avg_weight": 0.6,
+    "max_weight": 0.3,
+    "hit_weight": 0.1
   }'
 
 # VelesQL query
@@ -153,7 +198,22 @@ curl -X POST http://localhost:8080/query \
     "query": "SELECT * FROM documents WHERE VECTOR NEAR $v LIMIT 5",
     "params": {"v": [0.15, 0.25, ...]}
   }'
+```
 
+Response:
+```json
+{
+  "columns": ["id", "score", "title"],
+  "rows": [
+    [1, 0.95, "Hello"],
+    [3, 0.88, "World"]
+  ],
+  "count": 2,
+  "timing_ms": 0.42
+}
+```
+
+```bash
 # VelesQL with MATCH (full-text)
 curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
@@ -177,6 +237,17 @@ curl -X POST http://localhost:8080/query/explain \
     "query": "SELECT * FROM documents WHERE VECTOR NEAR $v LIMIT 5",
     "params": {"v": [0.15, 0.25, 0.35, 0.45]}
   }'
+```
+
+Response:
+```json
+{
+  "root": {"VectorSearch": {"collection": "documents", "ef_search": 128, "candidates": 5}},
+  "estimated_cost_ms": 0.1,
+  "index_used": "Hnsw",
+  "cache_hit": false,
+  "plan_reuse_count": 0
+}
 ```
 
 ### Graph API
@@ -412,9 +483,9 @@ readinessProbe:
 ## Performance
 
 - **Cosine similarity**: ~34 ns per operation (768d)
-- **Dot product**: ~24 ns per operation (768d)
-- **Search latency**: < 1ms for 100k vectors
-- **Throughput**: 32M+ distance calculations/sec
+- **Dot product**: ~23.6 ns per operation (768d)
+- **Search latency**: 42.8 µs for 10K vectors (768D, Balanced mode)
+- **Throughput**: 32.5 Gelem/s (dot product, 768D)
 
 ## Configuration Reference
 

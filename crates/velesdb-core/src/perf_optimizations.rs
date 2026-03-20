@@ -328,34 +328,23 @@ impl ContiguousVectors {
         std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
     }
 
-    /// Prefetches a vector for upcoming access.
+    /// Prefetches a vector into multiple cache levels for upcoming access.
     ///
-    /// This hints the CPU to load the vector into L2 cache.
+    /// Uses cross-platform multi-cache-line prefetch (`x86_64` + `aarch64` + no-op fallback)
+    /// to warm CPU caches before SIMD distance computation.
     #[inline]
     pub fn prefetch(&self, index: usize) {
         if index < self.count {
             let offset = index * self.dimension;
-            // SAFETY: index < count implies valid offset, data is non-null (NonNull invariant)
-            // - Condition 1: Bounds check ensures offset is within allocated range.
-            // - Condition 2: NonNull guarantees pointer is valid.
-            // Reason: Prefetch hint requires pointer to target cache line.
-            let ptr = unsafe { self.data.as_ptr().add(offset) };
-
-            #[cfg(target_arch = "x86_64")]
-            // SAFETY: _mm_prefetch is a hint instruction that cannot cause undefined behavior.
-            // - Condition 1: The pointer is valid (derived from data.as_ptr() with bounds-checked offset).
-            // - Condition 2: Prefetch hints are architecturally safe even on invalid addresses.
-            // Reason: CPU cache warming for upcoming vector access.
-            unsafe {
-                use std::arch::x86_64::_mm_prefetch;
-                // Prefetch for read, into L2 cache
-                _mm_prefetch(ptr.cast::<i8>(), std::arch::x86_64::_MM_HINT_T1);
-            }
-
-            // aarch64 prefetch requires nightly (stdarch_aarch64_prefetch)
-            // For now, we skip prefetch on ARM64 until the feature is stabilized
-            #[cfg(not(target_arch = "x86_64"))]
-            let _ = ptr;
+            // SAFETY: index < count implies offset is within allocated range,
+            // data is non-null per NonNull invariant.
+            // - Condition 1: Bounds check ensures offset + dimension <= capacity * dimension.
+            // - Condition 2: NonNull guarantees pointer validity.
+            // Reason: Create slice for cross-platform multi-cache-line prefetch.
+            let vector = unsafe {
+                std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension)
+            };
+            crate::simd_native::prefetch_vector_multi_cache_line(vector);
         }
     }
 
@@ -447,6 +436,102 @@ impl ContiguousVectors {
         let _ = guard.into_raw();
 
         Ok(new_data)
+    }
+
+    /// Reorders vectors according to the given permutation.
+    ///
+    /// `new_order[i]` contains the old index of the vector that should occupy
+    /// position `i` after reordering. The permutation must have exactly
+    /// `self.len()` elements and every index must be `< self.len()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `new_order.len() != self.len()`
+    /// - Any index in `new_order` is out of bounds
+    /// - The new buffer allocation fails
+    pub fn reorder(&mut self, new_order: &[usize]) -> crate::error::Result<()> {
+        if new_order.len() != self.count {
+            return Err(crate::error::Error::Internal(format!(
+                "Reorder permutation length {} != vector count {}",
+                new_order.len(),
+                self.count
+            )));
+        }
+        if self.count == 0 {
+            return Ok(());
+        }
+
+        self.reorder_copy(new_order)
+    }
+
+    /// Performs the out-of-place vector copy for reordering.
+    ///
+    /// Allocates a temporary buffer, copies vectors in permuted order, then
+    /// swaps the buffer into place. Uses `AllocGuard` for panic-safety.
+    fn reorder_copy(&mut self, new_order: &[usize]) -> crate::error::Result<()> {
+        use crate::alloc_guard::AllocGuard;
+
+        let new_layout = Self::layout(self.dimension, self.count)?;
+        let guard = AllocGuard::new(new_layout).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(format!(
+                "Reorder: failed to allocate {} bytes",
+                new_layout.size()
+            ))
+        })?;
+        let new_ptr = NonNull::new(guard.cast::<f32>()).ok_or_else(|| {
+            crate::error::Error::AllocationFailed(
+                "Reorder: AllocGuard returned null pointer".to_string(),
+            )
+        })?;
+
+        self.copy_permuted_vectors(new_ptr.as_ptr(), new_order)?;
+
+        // Transfer ownership — guard will not free on drop
+        let _ = guard.into_raw();
+
+        // Deallocate old buffer
+        let old_layout = Self::layout(self.dimension, self.capacity)?;
+        // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant).
+        // - Condition 1: old_layout matches the allocation parameters.
+        // - Condition 2: Pointer is non-null per NonNull invariant.
+        // Reason: Free old buffer after data migration to reordered buffer.
+        unsafe { dealloc(self.data.as_ptr().cast::<u8>(), old_layout) };
+
+        self.data = new_ptr;
+        self.capacity = self.count;
+        Ok(())
+    }
+
+    /// Copies vectors from the current buffer to `dst` in permuted order.
+    fn copy_permuted_vectors(
+        &self,
+        dst: *mut f32,
+        new_order: &[usize],
+    ) -> crate::error::Result<()> {
+        let dim = self.dimension;
+        for (new_idx, &old_idx) in new_order.iter().enumerate() {
+            if old_idx >= self.count {
+                return Err(crate::error::Error::Internal(format!(
+                    "Reorder index {old_idx} out of bounds (count={})",
+                    self.count
+                )));
+            }
+            // SAFETY: src is within the current allocation (old_idx < count, count <= capacity).
+            // dst is within the new allocation (new_idx < new_order.len() == count).
+            // Both buffers are distinct (non-overlapping) allocations with room for `dim` f32s.
+            // - Condition 1: old_idx < count ensures src offset is in bounds.
+            // - Condition 2: new_idx < count ensures dst offset is in bounds.
+            // Reason: Out-of-place copy for cache-locality reordering.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    self.data.as_ptr().add(old_idx * dim),
+                    dst.add(new_idx * dim),
+                    dim,
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Computes dot product with another vector using SIMD.

@@ -212,7 +212,19 @@ async fn test_stream_drain_flushes_at_batch_size() {
             .expect("send should succeed");
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Poll until batch-size flush completes (max 5s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found_count = coll_clone.get(&[1, 2, 3, 4]).iter().flatten().count();
+        if found_count == 4 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for batch flush (found {found_count}/4)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     let results = coll_clone.get(&[1, 2, 3, 4]);
     let found_count = results.iter().filter(|r| r.is_some()).count();
@@ -238,7 +250,19 @@ async fn test_stream_drain_flushes_partial_batch_after_timeout() {
     ingester.try_send(make_point(1, 4)).expect("send 1");
     ingester.try_send(make_point(2, 4)).expect("send 2");
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Poll until timer-triggered partial flush completes (max 5s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found_count = coll_clone.get(&[1, 2]).iter().flatten().count();
+        if found_count == 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for partial batch flush (found {found_count}/2)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     let results = coll_clone.get(&[1, 2]);
     let found_count = results.iter().filter(|r| r.is_some()).count();
@@ -296,7 +320,20 @@ async fn test_stream_delta_drain_loop_routes_to_delta_when_active() {
             .expect("send should succeed");
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Poll until all 4 points are flushed to storage AND delta buffer (max 5s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = coll_clone.get(&[1, 2, 3, 4]).iter().flatten().count();
+        if found == 4 && coll_clone.delta_buffer.len() == 4 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for delta drain flush (storage={found}/4, delta={})",
+            coll_clone.delta_buffer.len()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     let results = coll_clone.get(&[1, 2, 3, 4]);
     let found = results.iter().filter(|r| r.is_some()).count();
@@ -335,7 +372,19 @@ async fn test_stream_searchable_immediately() {
         ingester.try_send(p).expect("send should succeed");
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Poll until all 4 points are flushed and searchable (max 5s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = coll_clone.get(&[1, 2, 3, 4]).iter().flatten().count();
+        if found == 4 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for search-ready flush (found {found}/4)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     let query = vec![1.0, 0.0, 0.0, 0.0];
     let results = coll_clone.search(&query, 4).expect("search should succeed");
@@ -389,7 +438,20 @@ async fn test_stream_delta_rebuild_no_data_loss() {
         ingester.try_send(p).expect("send should succeed");
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Poll until all 5 streamed points are visible (max 5s), avoiding
+    // a fixed sleep that is fragile under load.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let count = coll_clone.get(&[6, 7, 8, 9, 10]).iter().flatten().count();
+        if count == 5 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for streamed points to flush (found {count}/5)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 
     let query = vec![10.0, 0.0, 0.0, 0.0];
     let results = coll_clone

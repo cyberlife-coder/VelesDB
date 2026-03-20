@@ -40,14 +40,32 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         from_aliases: &[String],
     ) -> Result<HashSet<u64>> {
-        let pattern = &predicate.pattern;
-        let first_node = pattern.nodes.first().ok_or_else(|| {
+        let anchor_alias = Self::resolve_anchor_alias(predicate, from_aliases)?;
+        let clause = Self::build_anchor_match_clause(predicate);
+
+        let matches = self.execute_match(&clause, params)?;
+        let mut ids = HashSet::with_capacity(matches.len());
+        for m in matches {
+            if let Some(id) = m.bindings.get(&anchor_alias) {
+                ids.insert(*id);
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Extracts and validates the anchor alias from the first node in a MATCH predicate.
+    fn resolve_anchor_alias(
+        predicate: &crate::velesql::GraphMatchPredicate,
+        from_aliases: &[String],
+    ) -> Result<String> {
+        let first_node = predicate.pattern.nodes.first().ok_or_else(|| {
             crate::error::Error::Config("MATCH predicate requires at least one node".to_string())
         })?;
 
         let anchor_alias = first_node.alias.clone().ok_or_else(|| {
             crate::error::Error::Config(
-                "MATCH predicate in SELECT WHERE requires an alias on the first node, e.g. MATCH (d:Doc)-[:REL]->(x)"
+                "MATCH predicate in SELECT WHERE requires an alias on the first node, \
+                 e.g. MATCH (d:Doc)-[:REL]->(x)"
                     .to_string(),
             )
         })?;
@@ -60,7 +78,14 @@ impl Collection {
             )));
         }
 
-        let clause = crate::velesql::MatchClause {
+        Ok(anchor_alias)
+    }
+
+    /// Builds a `MatchClause` that returns all bindings for anchor evaluation.
+    fn build_anchor_match_clause(
+        predicate: &crate::velesql::GraphMatchPredicate,
+    ) -> crate::velesql::MatchClause {
+        crate::velesql::MatchClause {
             patterns: vec![predicate.pattern.clone()],
             where_clause: None,
             return_clause: crate::velesql::ReturnClause {
@@ -72,16 +97,7 @@ impl Collection {
                 // Internal anchor evaluation must not silently cap MATCH results.
                 limit: Some(u64::MAX),
             },
-        };
-
-        let matches = self.execute_match(&clause, params)?;
-        let mut ids = HashSet::with_capacity(matches.len());
-        for m in matches {
-            if let Some(id) = m.bindings.get(&anchor_alias) {
-                ids.insert(*id);
-            }
         }
-        Ok(ids)
     }
 
     /// Dispatches the core vector / similarity / metadata query based on extracted components.
@@ -210,45 +226,16 @@ impl Collection {
         cbo_strategy: crate::velesql::ExecutionStrategy,
         cbo_over_fetch: usize,
     ) -> Result<Vec<SearchResult>> {
-        let results = match (vector_search, first_similarity, filter_condition) {
-            // similarity() — search by first vector, cascade-filter, optional metadata
-            (None, Some(sim), filter_cond) => {
-                let k = execution_limit
-                    .saturating_mul(10 * similarity_conditions.len().max(1))
-                    .min(MAX_LIMIT);
-                let candidates = self.search(&sim.1, k)?;
-                let filtered = self.apply_similarity_cascade(
-                    candidates,
-                    sim,
-                    similarity_conditions,
-                    execution_limit.saturating_mul(2),
-                );
-                Self::apply_optional_metadata_filter(
-                    filtered,
-                    filter_cond,
-                    skip_metadata_prefilter_for_graph_or,
-                    execution_limit,
-                )
-            }
-            // NEAR + similarity() + optional metadata
-            (Some(vector), Some(sim), filter_cond) => {
-                let k = execution_limit
-                    .saturating_mul(10 * similarity_conditions.len().max(1))
-                    .min(MAX_LIMIT);
-                let candidates = self.search(vector, k)?;
-                let filtered = self.apply_similarity_cascade(
-                    candidates,
-                    sim,
-                    similarity_conditions,
-                    execution_limit.saturating_mul(2),
-                );
-                Self::apply_optional_metadata_filter(
-                    filtered,
-                    filter_cond,
-                    skip_metadata_prefilter_for_graph_or,
-                    execution_limit,
-                )
-            }
+        match (vector_search, first_similarity, filter_condition) {
+            // similarity() with optional NEAR vector and optional metadata filter
+            (search_vec, Some(sim), filter_cond) => self.dispatch_similarity_query(
+                search_vec.map(Vec::as_slice),
+                sim,
+                similarity_conditions,
+                filter_cond,
+                execution_limit,
+                skip_metadata_prefilter_for_graph_or,
+            ),
             // NEAR + metadata filter (no similarity threshold)
             (Some(vector), None, Some(cond)) => self.dispatch_near_with_filter(
                 vector,
@@ -257,27 +244,65 @@ impl Collection {
                 skip_metadata_prefilter_for_graph_or,
                 cbo_strategy,
                 cbo_over_fetch,
-            )?,
+            ),
             // Pure NEAR (no filter, no similarity threshold)
-            (Some(vector), _, None) => {
-                if let Some(ef) = ef_search {
-                    self.search_with_ef(vector, execution_limit, ef)?
-                } else {
-                    self.search(vector, execution_limit)?
-                }
+            (Some(vector), None, None) => {
+                self.dispatch_pure_near(vector, execution_limit, ef_search)
             }
             // Metadata-only
             (None, None, Some(cond)) => self.dispatch_metadata_only(
                 cond,
                 execution_limit,
                 skip_metadata_prefilter_for_graph_or,
-            )?,
+            ),
             // SELECT * (no WHERE)
-            (None, None, None) => self.execute_scan_query(
+            (None, None, None) => Ok(self.execute_scan_query(
                 &crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] }),
                 execution_limit,
-            ),
-        };
-        Ok(results)
+            )),
+        }
+    }
+
+    /// Handles the similarity() path with optional NEAR vector and optional metadata filter.
+    fn dispatch_similarity_query(
+        &self,
+        search_vector: Option<&[f32]>,
+        sim: &(String, Vec<f32>, crate::velesql::CompareOp, f64),
+        similarity_conditions: &[(String, Vec<f32>, crate::velesql::CompareOp, f64)],
+        filter_cond: Option<&crate::velesql::Condition>,
+        execution_limit: usize,
+        skip_metadata_prefilter_for_graph_or: bool,
+    ) -> Result<Vec<SearchResult>> {
+        let k = execution_limit
+            .saturating_mul(10 * similarity_conditions.len().max(1))
+            .min(MAX_LIMIT);
+        let search_vec = search_vector.unwrap_or(&sim.1);
+        let candidates = self.search(search_vec, k)?;
+        let filtered = self.apply_similarity_cascade(
+            candidates,
+            sim,
+            similarity_conditions,
+            execution_limit.saturating_mul(2),
+        );
+        Ok(Self::apply_optional_metadata_filter(
+            filtered,
+            filter_cond,
+            skip_metadata_prefilter_for_graph_or,
+            execution_limit,
+        ))
+    }
+
+    /// Handles the pure NEAR path (no similarity threshold, no metadata filter).
+    fn dispatch_pure_near(
+        &self,
+        vector: &[f32],
+        execution_limit: usize,
+        ef_search: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(ef) = ef_search {
+            self.search_with_ef(vector, execution_limit, ef)
+        } else {
+            self.search(vector, execution_limit)
+        }
     }
 }

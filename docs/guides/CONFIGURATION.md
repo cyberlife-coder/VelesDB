@@ -71,7 +71,7 @@ data_dir = "./data"
 # -----------------------------------------------------------------------------
 [search]
 # Mode de recherche par défaut
-# Valeurs: "fast" | "balanced" | "accurate" | "high_recall" | "perfect"
+# Valeurs: "fast" | "balanced" | "accurate" | "perfect"
 # Default: "balanced"
 default_mode = "balanced"
 
@@ -283,7 +283,7 @@ rerank_multiplier = 2
 hot_reload = false
 
 # Profil de recherche prédéfini (Premium)
-# Valeurs: "default" | "low_latency" | "high_recall" | "memory_optimized"
+# Valeurs: "default" | "low_latency" | "accurate" | "memory_optimized"
 # Default: "default"
 # profile = "default"
 ```
@@ -324,12 +324,12 @@ VELESDB_{SECTION}_{KEY} (uppercase, underscores)
 
 ```bash
 # Linux/macOS
-export VELESDB_SEARCH_DEFAULT_MODE=high_recall
+export VELESDB_SEARCH_DEFAULT_MODE=accurate
 export VELESDB_SERVER_PORT=9090
 export VELESDB_LOGGING_LEVEL=debug
 
 # Windows PowerShell
-$env:VELESDB_SEARCH_DEFAULT_MODE = "high_recall"
+$env:VELESDB_SEARCH_DEFAULT_MODE = "accurate"
 $env:VELESDB_SERVER_PORT = "9090"
 
 # Docker
@@ -522,7 +522,7 @@ file = "/var/log/velesdb/velesdb.log"
 
 ```toml
 [search]
-default_mode = "high_recall"
+default_mode = "accurate"
 query_timeout_ms = 60000
 
 [hnsw]
@@ -584,7 +584,7 @@ VelesDB validates the configuration at startup and displays errors clearly:
 
 ```
 ERROR: Configuration validation failed:
-  - search.default_mode: invalid value "ultra_fast", expected one of: fast, balanced, accurate, high_recall, perfect
+  - search.default_mode: invalid value "ultra_fast", expected one of: fast, balanced, accurate, perfect, adaptive
   - hnsw.m: value 256 exceeds maximum 128
   - storage.data_dir: directory "/nonexistent" does not exist and cannot be created
 ```

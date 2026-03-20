@@ -59,7 +59,7 @@ For the current expert review and target architecture roadmap, see:
 │  │                     DISTANCE LAYER (SIMD)                        │   │
 │  ├─────────────────────────────────────────────────────────────────┤   │
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
-│  │  (81ns)  │   (49ns)    │    (39ns)     │   (6ns)   │   (SIMD)   │   │
+│  │  (34ns)  │   (23ns)    │    (24ns)     │  (51ns)   │   (29ns)   │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ WASM SIMD128 │ ARM64 NEON │ Auto-vectorization │   │
 │  │               │              │ (simd_neon)│     Fallback       │   │
@@ -103,7 +103,7 @@ For the current expert review and target architecture roadmap, see:
 #### velesdb-server
 - Axum-based REST API server
 - OpenAPI/Swagger documentation
-- 11 REST endpoints
+- 37 REST endpoints (method+path combinations)
 - Prometheus metrics (planned)
 
 #### velesdb-python
@@ -145,7 +145,7 @@ For the current expert review and target architecture roadmap, see:
 #### Filter Engine
 - ColumnStore-based filtering
 - RoaringBitmap for set operations
-- 122x faster than JSON filtering
+- Up to 130x faster than JSON filtering
 
 #### Aggregation Engine (EPIC-017/018)
 - Streaming aggregation executor
@@ -215,9 +215,9 @@ For the current expert review and target architecture roadmap, see:
 ```
 
 - **Parameters**:
-  - `M`: Max connections per node (default: 16)
-  - `ef_construction`: Build-time search width (default: 100)
-  - `ef_search`: Query-time search width (default: 50)
+  - `M`: Max connections per node (default: 24-32, auto-tuned by dimension)
+  - `ef_construction`: Build-time search width (default: 300-400, auto-tuned by dimension)
+  - `ef_search`: Query-time search width (default: 128, Balanced mode)
 
 - **Features**:
   - Thread-safe parallel insertions
@@ -238,16 +238,17 @@ For the current expert review and target architecture roadmap, see:
 
 | Metric | Implementation | Latency (768D) |
 |--------|---------------|----------------|
-| Dot Product | AVX2 FMA | **39 ns** |
-| Euclidean | AVX2 FMA | **49 ns** |
-| Cosine | AVX2 FMA | **81 ns** |
-| Hamming | POPCNT | **6 ns** |
-| Jaccard | Auto-vectorized | ~100 ns |
+| Dot Product | AVX2 FMA | **23.6 ns** |
+| Euclidean | AVX2 FMA | **22.7 ns** |
+| Cosine | AVX2 4-acc, single-sqrt finish | **33.6 ns** |
+| Hamming | AVX2 FP-domain 4-acc | **34.3 ns** |
+| Jaccard | AVX-512 4-acc | **29.3 ns** |
 
 **SIMD Strategy**:
-1. **Native (x86_64)**: AVX2/AVX-512 via `wide` crate
-2. **WASM**: SIMD128 (128-bit vectors)
-3. **Fallback**: Scalar with loop unrolling
+1. **Native (x86_64)**: AVX2/AVX-512 via `core::arch` intrinsics with 4-accumulator ILP
+2. **Native (aarch64)**: NEON 128-bit with 1-acc/4-acc variants
+3. **WASM**: SIMD128 (128-bit vectors)
+4. **Fallback**: Scalar with loop unrolling
 
 ### 6. Storage Layer
 
@@ -426,9 +427,9 @@ LIMIT 20
 
 | Operation | Throughput |
 |-----------|------------|
-| Insert | ~50K vec/sec |
-| Search (10K vectors) | ~1ms |
-| Search (100K vectors) | ~10ms |
+| Insert | ~3.8K-6.4K vec/sec (768D) |
+| Search k=10 (10K vectors, 768D) | ~42.8 µs |
+| Search (100K vectors) | < 5 ms |
 | VelesQL Parse | 1.3M queries/sec |
 | Export (WASM) | 4,479 MB/s |
 | Import (WASM) | 2,943 MB/s |
@@ -440,36 +441,23 @@ LIMIT 20
 | Linux x86_64 | ✅ Full | AVX2/AVX-512 | 100% |
 | Windows x86_64 | ✅ Full | AVX2 | 100% |
 | macOS x86_64 | ✅ Full | AVX2 | 100% |
-| **macOS ARM64** | ✅ Full | **Fallback** | **~80%** |
+| **macOS ARM64** | ✅ Full | **NEON** | **~90%** |
 | WASM (Browser) | ✅ Full | SIMD128 | ~70% |
 | WASM (Node.js) | ✅ Full | SIMD128 | ~70% |
 | **iOS (ARM64)** | ✅ Full | NEON | ~90% |
 | **Android (ARM64)** | ✅ Full | NEON | ~90% |
 | **Android (ARMv7)** | ✅ Full | Fallback | ~70% |
 
-### ARM64 (Apple Silicon) Note
+### ARM64 (Apple Silicon / Mobile) Note
 
-On macOS ARM64 (M1/M2/M3), VelesDB uses a **scalar fallback** for distance calculations 
-instead of SIMD. This is because the underlying `hnsw_rs` library's `simdeez` feature 
-only supports x86 SIMD instructions (AVX2/SSE).
+On ARM64 platforms (macOS M1/M2/M3, iOS, Android), VelesDB uses native **NEON SIMD**
+instructions for distance calculations via the `simd_native` module, with both
+1-accumulator and 4-accumulator variants depending on vector size.
 
 **Impact:**
-- Distance calculations are ~20% slower than x86_64 with AVX2
+- Distance calculations are ~10% slower than x86_64 with AVX2
 - All other operations (indexing, storage, queries) are unaffected
 - Overall search latency remains in the microsecond range
-
-**Technical details:**
-```toml
-# Cargo.toml - Conditional compilation
-[dependencies.hnsw_rs]
-version = "0.3"
-default-features = false  # ARM64: no SIMD
-
-[target.'cfg(target_arch = "x86_64")'.dependencies.hnsw_rs]
-features = ["simdeez_f"]   # x86_64: AVX2/SSE enabled
-```
-
-**Future:** NEON SIMD support for ARM64 may be added when `hnsw_rs` upstream supports it.
 
 ## Future Architecture
 
@@ -483,9 +471,7 @@ features = ["simdeez_f"]   # x86_64: AVX2/SSE enabled
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Product Quantization (PQ)**: 8-32x compression
-- **Sparse Vectors**: For hybrid sparse-dense search
-- **GPU Acceleration**: CUDA kernels for large-scale
+- **GPU Acceleration**: CUDA kernels for large-scale (wgpu-based, optional)
 
 ### v0.9.0 Architecture Improvements (Q1 2026)
 

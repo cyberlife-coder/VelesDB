@@ -111,47 +111,53 @@ pub fn prefetch_write_l1(ptr: *const u8) {
 
 /// Prefetch a vector (f32 slice) for reading into L1 cache.
 ///
-/// This is the main function used in HNSW traversal to prefetch
-/// upcoming candidate vectors.
+/// Uses 128-byte stride to match Apple Silicon cache lines (M1-M4).
+/// On Graviton/other ARM64 with 64B lines, this still works correctly
+/// — it just prefetches every other line, which is acceptable.
 ///
-/// # Arguments
+/// # Coverage
 ///
-/// * `vector` - The f32 slice to prefetch
-///
-/// # Performance Notes
-///
-/// - Each cache line is typically 64 bytes (16 f32 values)
-/// - For 768D vectors, this prefetches the first cache line
-/// - Call multiple times with offset for larger vectors
+/// Prefetches 4 cache lines at offsets 0, 128, 256, 384 bytes:
+/// - 768D vector (3072B): covers 512B = 16.7%
+/// - 128D vector (512B): covers 384B = 75%
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub fn prefetch_vector_neon(vector: &[f32]) {
-    if !vector.is_empty() {
-        prefetch_read_l1(vector.as_ptr().cast::<u8>());
+    if vector.is_empty() {
+        return;
+    }
 
-        // Prefetch additional cache lines for larger vectors
-        let cache_line_size = 64; // bytes
-        let vector_bytes = vector.len() * std::mem::size_of::<f32>();
+    // Apple Silicon (M1-M4) uses 128-byte cache lines.
+    // Graviton uses 64B but 128B stride still improves locality.
+    const ARM_CACHE_LINE: usize = 128;
 
-        if vector_bytes > cache_line_size {
-            // Prefetch second cache line
-            // SAFETY: Pointer arithmetic stays within `vector` bounds.
-            // - Condition 1: This branch only runs when at least one full extra cache line exists (>64 bytes).
-            // - Condition 2: The offset is exactly one cache line (64 bytes) from the start.
-            // Reason: Prefetch second cache line for large vectors.
-            let ptr = unsafe { vector.as_ptr().cast::<u8>().add(cache_line_size) };
-            prefetch_read_l2(ptr);
-        }
+    let base = vector.as_ptr().cast::<u8>();
+    let vector_bytes = vector.len() * std::mem::size_of::<f32>();
 
-        if vector_bytes > cache_line_size * 2 {
-            // Prefetch third cache line into L3
-            // SAFETY: Pointer arithmetic stays within `vector` bounds.
-            // - Condition 1: This branch only runs when at least two full extra cache lines exist (>128 bytes).
-            // - Condition 2: The offset is exactly two cache lines (128 bytes) from the start.
-            // Reason: Prefetch third cache line for very large vectors.
-            let ptr = unsafe { vector.as_ptr().cast::<u8>().add(cache_line_size * 2) };
-            prefetch_read_l3(ptr);
-        }
+    // Line 0 → L1
+    prefetch_read_l1(base);
+
+    // Line 1 → L2 (offset 128B)
+    if vector_bytes > ARM_CACHE_LINE {
+        // SAFETY: Prefetch is a non-faulting hint; pointer within vector bounds.
+        // - Condition 1: vector_bytes > 128 guarantees the offset is in range.
+        // Reason: Prefetch second Apple Silicon cache line.
+        let ptr = unsafe { base.add(ARM_CACHE_LINE) };
+        prefetch_read_l2(ptr);
+    }
+
+    // Line 2 → L3 (offset 256B)
+    if vector_bytes > ARM_CACHE_LINE * 2 {
+        // SAFETY: Same as above; offset 256 < vector_bytes.
+        let ptr = unsafe { base.add(ARM_CACHE_LINE * 2) };
+        prefetch_read_l3(ptr);
+    }
+
+    // Line 3 → L3 (offset 384B) for large vectors (>= 128D)
+    if vector_bytes > ARM_CACHE_LINE * 3 {
+        // SAFETY: Same as above; offset 384 < vector_bytes.
+        let ptr = unsafe { base.add(ARM_CACHE_LINE * 3) };
+        prefetch_read_l3(ptr);
     }
 }
 

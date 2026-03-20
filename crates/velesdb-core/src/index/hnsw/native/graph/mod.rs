@@ -12,6 +12,7 @@
 mod insert;
 pub(crate) mod locking;
 mod neighbors;
+mod reorder;
 pub(crate) mod safety_counters;
 mod search;
 
@@ -53,6 +54,9 @@ pub struct NativeHnsw<D: DistanceEngine> {
     pub(in crate::index::hnsw::native) level_mult: f64,
     /// VAMANA alpha parameter for neighbor diversification (default: 1.0)
     pub(in crate::index::hnsw::native) alpha: f32,
+    /// Maximum consecutive candidates without improving top-k before early termination.
+    /// Default: `ef_construction / 4`. Set to `0` to disable.
+    pub(crate) stagnation_limit: usize,
 }
 
 impl<D: DistanceEngine> NativeHnsw<D> {
@@ -145,6 +149,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             ef_construction,
             level_mult,
             alpha,
+            stagnation_limit: ef_construction / 4,
         }
     }
 

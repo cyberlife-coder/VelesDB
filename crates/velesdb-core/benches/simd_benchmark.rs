@@ -11,8 +11,9 @@ use velesdb_core::internal_bench;
 #[cfg(feature = "internal-bench")]
 use velesdb_core::simd_native::SimdLevel;
 use velesdb_core::simd_native::{
-    cosine_similarity_native, dot_product_native, euclidean_native, hamming_distance_native,
-    jaccard_similarity_native, DistanceEngine,
+    batch_hamming_native, batch_jaccard_native, cosine_similarity_native, dot_product_native,
+    euclidean_native, hamming_binary_native, hamming_distance_native, jaccard_similarity_native,
+    DistanceEngine,
 };
 
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
@@ -172,9 +173,28 @@ fn bench_hamming_f32(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_hamming_binary(_c: &mut Criterion) {
-    // Binary Hamming benchmarks removed - EPIC-075 consolidation
-    // The simd_native implementation focuses on f32 vectors.
+fn bench_hamming_binary(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hamming_binary_u64");
+
+    for dim_bits in &[512, 1024, 2048, 4096] {
+        let words = dim_bits / 64;
+        let a: Vec<u64> = (0..words)
+            .map(|i: u64| i.wrapping_mul(0x517c_c1b7_2722_0a95))
+            .collect();
+        let b: Vec<u64> = (0..words)
+            .map(|i: u64| (i + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("dispatch", dim_bits),
+            dim_bits,
+            |bencher, _| {
+                bencher.iter(|| hamming_binary_native(black_box(&a), black_box(&b)));
+            },
+        );
+    }
+
+    group.finish();
 }
 
 /// Generate set-like vectors for Jaccard similarity benchmarks.
@@ -321,6 +341,46 @@ fn bench_engine_batch_simulation(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// Batch Hamming & Jaccard benchmarks
+// =============================================================================
+
+fn bench_batch_hamming(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batch_hamming_f32");
+
+    for dim in &[128, 384, 768, 1536] {
+        let query = generate_binary_vector(*dim, 0);
+        let candidates: Vec<Vec<f32>> = (0..100)
+            .map(|seed| generate_binary_vector(*dim, seed + 10))
+            .collect();
+        let refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
+
+        group.bench_with_input(BenchmarkId::new("batch_100", dim), dim, |bencher, _| {
+            bencher.iter(|| batch_hamming_native(black_box(&refs), black_box(&query)));
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_batch_jaccard(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batch_jaccard");
+
+    for dim in &[128, 384, 768, 1536] {
+        let query = generate_set_vector(*dim, 0.3, 42);
+        let candidates: Vec<Vec<f32>> = (0..100)
+            .map(|seed| generate_set_vector(*dim, 0.3, seed + 100))
+            .collect();
+        let refs: Vec<&[f32]> = candidates.iter().map(Vec::as_slice).collect();
+
+        group.bench_with_input(BenchmarkId::new("batch_100", dim), dim, |bencher, _| {
+            bencher.iter(|| batch_jaccard_native(black_box(&refs), black_box(&query)));
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dot_product,
@@ -333,5 +393,7 @@ criterion_group!(
     bench_engine_vs_native_dot_product,
     bench_engine_vs_native_cosine,
     bench_engine_batch_simulation,
+    bench_batch_hamming,
+    bench_batch_jaccard,
 );
 criterion_main!(benches);

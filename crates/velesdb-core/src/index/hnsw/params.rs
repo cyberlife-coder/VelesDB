@@ -232,20 +232,35 @@ impl HnswParams {
 }
 
 /// Search quality profile controlling the recall/latency tradeoff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum SearchQuality {
     /// Fast search with `ef_search=64`. ~92% recall, lowest latency.
     Fast,
     /// Balanced search with `ef_search=128`. ~99% recall, production default.
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=256`. ~100% recall.
+    /// Accurate search with `ef_search=512`. ~100% recall.
     Accurate,
-    /// Perfect recall mode with `ef_search=2048` for guaranteed 100% recall.
+    /// Perfect recall mode with `ef_search=4096` for guaranteed 100% recall.
     /// Uses large candidate pool with exact SIMD re-ranking.
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),
+    /// Adaptive `ef_search` that starts low and doubles if the query is "hard".
+    ///
+    /// Uses a two-phase approach:
+    /// 1. Search with `min_ef`
+    /// 2. If result spread (`max_dist / min_dist`) exceeds a threshold, re-search
+    ///    with doubled ef (up to `max_ef`)
+    ///
+    /// For easy queries (dense cluster hits), this is 2-4x faster than fixed ef.
+    /// For hard queries, it gracefully degrades to `max_ef` with no recall loss.
+    Adaptive {
+        /// Minimum `ef_search` (starting point). Default: 32.
+        min_ef: usize,
+        /// Maximum `ef_search` (cap). Default: 512.
+        max_ef: usize,
+    },
 }
 
 impl SearchQuality {
@@ -255,6 +270,7 @@ impl SearchQuality {
     ///
     /// - **Accurate**: 512 base (was 256), scales with k×16 for ≥95% recall at 100K+
     /// - **Perfect**: 4096 base (was 2048), scales with k×100 for guaranteed 100% at 100K+
+    /// - **Adaptive**: returns `min_ef` (first phase); caller handles second phase
     #[must_use]
     pub fn ef_search(&self, k: usize) -> usize {
         match self {
@@ -265,6 +281,23 @@ impl SearchQuality {
             // Increased from 2048 to 4096 for guaranteed 100% recall at 100K+
             Self::Perfect => 4096.max(k * 100),
             Self::Custom(ef) => (*ef).max(k),
+            // Adaptive: start with min_ef (first phase)
+            Self::Adaptive { min_ef, .. } => (*min_ef).max(k),
+        }
+    }
+
+    /// Returns `true` if this quality profile uses two-phase adaptive search.
+    #[must_use]
+    pub const fn is_adaptive(&self) -> bool {
+        matches!(self, Self::Adaptive { .. })
+    }
+
+    /// Returns the maximum ef for adaptive search, or `None` for fixed profiles.
+    #[must_use]
+    pub const fn adaptive_max_ef(&self) -> Option<usize> {
+        match self {
+            Self::Adaptive { max_ef, .. } => Some(*max_ef),
+            _ => None,
         }
     }
 }

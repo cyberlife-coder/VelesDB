@@ -125,113 +125,164 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
 /// - the JOIN condition is missing or invalid,
 /// - the target `ColumnStore` has no primary key,
 /// - the JOIN column does not match the target primary key.
-#[allow(clippy::cognitive_complexity)] // Reason: Linear flow with early returns, splitting would reduce readability
 pub fn execute_join(
     results: &[SearchResult],
     join: &JoinClause,
     column_store: &ColumnStore,
 ) -> Result<Vec<JoinedResult>> {
-    let Some(condition) = resolve_join_condition(join) else {
-        return Err(Error::Query(format!(
-            "JOIN on table '{}' must use ON condition or USING(single_column).",
-            join.table
-        )));
-    };
-
-    // 1. Validate that join column matches ColumnStore's primary key
-    // This prevents silent incorrect results when joining on non-PK columns
-    let join_column = &condition.left.column;
-    if let Some(pk_column) = column_store.primary_key_column() {
-        if join_column != pk_column {
-            return Err(Error::Query(format!(
-                "JOIN on table '{}' requires primary key '{}', got '{}'.",
-                join.table, pk_column, join_column
-            )));
-        }
-    } else {
-        return Err(Error::Query(format!(
-            "JOIN target '{}' has no primary key configured.",
-            join.table
-        )));
-    }
-
-    // 2. Extract join keys from search results
+    let condition = validate_join_condition(join, column_store)?;
     let join_keys = extract_join_keys(results, &condition);
 
     if join_keys.is_empty() {
         return Ok(Vec::new());
     }
 
-    // 3. Determine adaptive batch size
     let batch_size = adaptive_batch_size(join_keys.len());
-
-    // 4. Build result map: pk -> row_data and merge based on join semantics
-    let mut joined_results = Vec::with_capacity(join_keys.len());
-    let mut matched_left_indices = vec![false; results.len()];
-    let mut matched_right_pks: HashSet<i64> = HashSet::with_capacity(join_keys.len());
     let null_row_data = build_null_row_data(column_store);
 
-    // Process in batches
-    for chunk in join_keys.chunks(batch_size) {
-        // Extract just the keys for this batch
-        let pks: Vec<i64> = chunk.iter().map(|(_, pk)| *pk).collect();
+    let mut matched_left_indices = vec![false; results.len()];
+    let mut matched_right_pks: HashSet<i64> = HashSet::with_capacity(join_keys.len());
 
-        // Batch lookup in ColumnStore
-        let rows = batch_get_rows(column_store, &pks);
-
-        // Build map of pk -> column data for this batch
-        let row_map = rows;
-
-        // Merge with search results
-        for (result_idx, pk) in chunk {
-            if let Some(column_data) = row_map.get(pk) {
-                let search_result = results[*result_idx].clone();
-                joined_results.push(JoinedResult::new(search_result, column_data.clone()));
-                matched_left_indices[*result_idx] = true;
-                matched_right_pks.insert(*pk);
-            } else if matches!(join.join_type, JoinType::Left | JoinType::Full) {
-                let search_result = results[*result_idx].clone();
-                joined_results.push(JoinedResult::new(search_result, null_row_data.clone()));
-                matched_left_indices[*result_idx] = true;
-            }
-        }
-    }
+    let mut joined_results = process_join_batches(
+        results,
+        &join_keys,
+        batch_size,
+        join.join_type,
+        column_store,
+        &null_row_data,
+        &mut matched_left_indices,
+        &mut matched_right_pks,
+    );
 
     if matches!(join.join_type, JoinType::Right | JoinType::Full) {
-        for row_idx in column_store.live_row_indices() {
-            let Some(pk_value) = column_store.get_value_as_json(join_column, row_idx) else {
-                continue;
-            };
-            let Some(pk) = pk_value.as_i64() else {
-                continue;
-            };
-            if matched_right_pks.contains(&pk) {
-                continue;
-            }
-
-            let Ok(point_id) = u64::try_from(pk) else {
-                continue;
-            };
-            let row_data = row_as_json_map(column_store, row_idx);
-            let synthetic_result =
-                SearchResult::new(Point::metadata_only(point_id, serde_json::json!({})), 0.0);
-            joined_results.push(JoinedResult::new(synthetic_result, row_data));
-        }
+        append_unmatched_right_rows(
+            column_store,
+            &condition.left.column,
+            &matched_right_pks,
+            &mut joined_results,
+        );
     }
 
-    // LEFT/FULL should include left rows that had no join key extraction at all.
     if matches!(join.join_type, JoinType::Left | JoinType::Full) {
-        for (idx, left_result) in results.iter().enumerate() {
-            if !matched_left_indices[idx] {
-                joined_results.push(JoinedResult::new(
-                    left_result.clone(),
-                    null_row_data.clone(),
-                ));
-            }
-        }
+        append_unmatched_left_rows(
+            results,
+            &matched_left_indices,
+            &null_row_data,
+            &mut joined_results,
+        );
     }
 
     Ok(joined_results)
+}
+
+/// Validates the JOIN condition and verifies it targets the column store primary key.
+fn validate_join_condition(join: &JoinClause, column_store: &ColumnStore) -> Result<JoinCondition> {
+    let condition = resolve_join_condition(join).ok_or_else(|| {
+        Error::Query(format!(
+            "JOIN on table '{}' must use ON condition or USING(single_column).",
+            join.table
+        ))
+    })?;
+
+    let join_column = &condition.left.column;
+    let pk_column = column_store.primary_key_column().ok_or_else(|| {
+        Error::Query(format!(
+            "JOIN target '{}' has no primary key configured.",
+            join.table
+        ))
+    })?;
+
+    if join_column != pk_column {
+        return Err(Error::Query(format!(
+            "JOIN on table '{}' requires primary key '{}', got '{}'.",
+            join.table, pk_column, join_column
+        )));
+    }
+
+    Ok(condition)
+}
+
+/// Processes join key batches, merging matching rows with search results.
+#[allow(clippy::too_many_arguments)]
+fn process_join_batches(
+    results: &[SearchResult],
+    join_keys: &[(usize, i64)],
+    batch_size: usize,
+    join_type: JoinType,
+    column_store: &ColumnStore,
+    null_row_data: &HashMap<String, serde_json::Value>,
+    matched_left_indices: &mut [bool],
+    matched_right_pks: &mut HashSet<i64>,
+) -> Vec<JoinedResult> {
+    let mut joined_results = Vec::with_capacity(join_keys.len());
+
+    for chunk in join_keys.chunks(batch_size) {
+        let pks: Vec<i64> = chunk.iter().map(|(_, pk)| *pk).collect();
+        let row_map = batch_get_rows(column_store, &pks);
+
+        for (result_idx, pk) in chunk {
+            if let Some(column_data) = row_map.get(pk) {
+                joined_results.push(JoinedResult::new(
+                    results[*result_idx].clone(),
+                    column_data.clone(),
+                ));
+                matched_left_indices[*result_idx] = true;
+                matched_right_pks.insert(*pk);
+            } else if matches!(join_type, JoinType::Left | JoinType::Full) {
+                joined_results.push(JoinedResult::new(
+                    results[*result_idx].clone(),
+                    null_row_data.clone(),
+                ));
+                matched_left_indices[*result_idx] = true;
+            }
+        }
+    }
+
+    joined_results
+}
+
+/// Appends unmatched right-side rows for RIGHT/FULL JOINs.
+fn append_unmatched_right_rows(
+    column_store: &ColumnStore,
+    join_column: &str,
+    matched_right_pks: &HashSet<i64>,
+    joined_results: &mut Vec<JoinedResult>,
+) {
+    for row_idx in column_store.live_row_indices() {
+        let Some(pk_value) = column_store.get_value_as_json(join_column, row_idx) else {
+            continue;
+        };
+        let Some(pk) = pk_value.as_i64() else {
+            continue;
+        };
+        if matched_right_pks.contains(&pk) {
+            continue;
+        }
+        let Ok(point_id) = u64::try_from(pk) else {
+            continue;
+        };
+        let row_data = row_as_json_map(column_store, row_idx);
+        let synthetic_result =
+            SearchResult::new(Point::metadata_only(point_id, serde_json::json!({})), 0.0);
+        joined_results.push(JoinedResult::new(synthetic_result, row_data));
+    }
+}
+
+/// Appends unmatched left-side rows for LEFT/FULL JOINs.
+fn append_unmatched_left_rows(
+    results: &[SearchResult],
+    matched_left_indices: &[bool],
+    null_row_data: &HashMap<String, serde_json::Value>,
+    joined_results: &mut Vec<JoinedResult>,
+) {
+    for (idx, left_result) in results.iter().enumerate() {
+        if !matched_left_indices[idx] {
+            joined_results.push(JoinedResult::new(
+                left_result.clone(),
+                null_row_data.clone(),
+            ));
+        }
+    }
 }
 
 /// Resolves JOIN condition for execution from either `ON` or `USING` syntax.

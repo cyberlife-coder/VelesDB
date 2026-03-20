@@ -10,11 +10,11 @@ Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lift
 
 > **Why migrate to VelesDB?**
 > 
-> - ⚡ **Microsecond latency** — 10-100x faster than cloud vector databases
+> - ⚡ **Microsecond latency** — 42.8µs search (10K/768D), no network round-trip
 > - 🎯 **SQL-native queries** — Use familiar VelesQL syntax, no new APIs to learn
 > - 💾 **4-32x compression** — SQ8 and Binary quantization built-in
 > - 🔒 **Self-hosted** — Your data stays on your infrastructure
-> - 📦 **Single binary** — Zero dependencies, zero configuration
+> - 📦 **Self-contained** — No external services, single binary, zero configuration
 >
 > ```bash
 > # Quick test after migration
@@ -805,9 +805,9 @@ velesdb-server --port 8080
 
 ### Why developers choose VelesDB:
 
-- ✅ **10-100x faster** than cloud vector DBs
+- ✅ **42.8µs local search** — no network overhead
 - ✅ **SQL syntax** you already know  
-- ✅ **Single binary**, no dependencies
+- ✅ **Self-contained** — single 6 MB binary, no external services
 - ✅ **Self-hosted**, your data stays private
 - ✅ **4-32x compression** with SQ8/Binary quantization
 

@@ -34,6 +34,17 @@ impl GraphMatchEvalCache {
     }
 }
 
+/// Bundled record context for WHERE condition evaluation.
+///
+/// Groups the per-record fields to reduce argument count in recursive calls.
+struct WhereEvalCtx<'a> {
+    id: u64,
+    payload: Option<&'a serde_json::Value>,
+    vector: Option<&'a [f32]>,
+    params: &'a std::collections::HashMap<String, serde_json::Value>,
+    from_aliases: &'a [String],
+}
+
 impl Collection {
     /// Returns true when condition tree contains graph MATCH predicates.
     pub(crate) fn condition_contains_graph_match(condition: &Condition) -> bool {
@@ -123,77 +134,67 @@ impl Collection {
         from_aliases: &[String],
         graph_cache: &mut GraphMatchEvalCache,
     ) -> Result<bool> {
+        let ctx = WhereEvalCtx {
+            id,
+            payload,
+            vector,
+            params,
+            from_aliases,
+        };
+        self.eval_condition(condition, &ctx, graph_cache)
+    }
+
+    /// Recursively evaluates a single condition node.
+    fn eval_condition(
+        &self,
+        condition: &Condition,
+        ctx: &WhereEvalCtx<'_>,
+        graph_cache: &mut GraphMatchEvalCache,
+    ) -> Result<bool> {
         match condition {
             Condition::GraphMatch(predicate) => {
-                let ids = graph_cache.get_or_compute(self, predicate, params, from_aliases)?;
-                Ok(ids.contains(&id))
+                let ids =
+                    graph_cache.get_or_compute(self, predicate, ctx.params, ctx.from_aliases)?;
+                Ok(ids.contains(&ctx.id))
             }
             Condition::And(left, right) => {
-                let l = self.evaluate_where_condition_for_record(
-                    left,
-                    id,
-                    payload,
-                    vector,
-                    params,
-                    from_aliases,
-                    graph_cache,
-                )?;
-                if !l {
-                    return Ok(false);
-                }
-                self.evaluate_where_condition_for_record(
-                    right,
-                    id,
-                    payload,
-                    vector,
-                    params,
-                    from_aliases,
-                    graph_cache,
-                )
+                self.eval_short_circuit_and(left, right, ctx, graph_cache)
             }
-            Condition::Or(left, right) => {
-                let l = self.evaluate_where_condition_for_record(
-                    left,
-                    id,
-                    payload,
-                    vector,
-                    params,
-                    from_aliases,
-                    graph_cache,
-                )?;
-                if l {
-                    return Ok(true);
-                }
-                self.evaluate_where_condition_for_record(
-                    right,
-                    id,
-                    payload,
-                    vector,
-                    params,
-                    from_aliases,
-                    graph_cache,
-                )
-            }
-            Condition::Not(inner) | Condition::Group(inner) => {
-                let val = self.evaluate_where_condition_for_record(
-                    inner,
-                    id,
-                    payload,
-                    vector,
-                    params,
-                    from_aliases,
-                    graph_cache,
-                )?;
-                Ok(if matches!(condition, Condition::Not(_)) {
-                    !val
-                } else {
-                    val
-                })
-            }
-            Condition::Similarity(sim) => self.evaluate_similarity(sim, vector, params),
+            Condition::Or(left, right) => self.eval_short_circuit_or(left, right, ctx, graph_cache),
+            Condition::Not(inner) => self.eval_condition(inner, ctx, graph_cache).map(|v| !v),
+            Condition::Group(inner) => self.eval_condition(inner, ctx, graph_cache),
+            Condition::Similarity(sim) => self.evaluate_similarity(sim, ctx.vector, ctx.params),
             Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
-            other => Ok(Self::evaluate_metadata_filter(other, payload)),
+            other => Ok(Self::evaluate_metadata_filter(other, ctx.payload)),
         }
+    }
+
+    /// Evaluates AND with short-circuit: returns false immediately if left is false.
+    fn eval_short_circuit_and(
+        &self,
+        left: &Condition,
+        right: &Condition,
+        ctx: &WhereEvalCtx<'_>,
+        graph_cache: &mut GraphMatchEvalCache,
+    ) -> Result<bool> {
+        if !self.eval_condition(left, ctx, graph_cache)? {
+            return Ok(false);
+        }
+        self.eval_condition(right, ctx, graph_cache)
+    }
+
+    /// Evaluates OR with short-circuit: returns true immediately if left is true.
+    fn eval_short_circuit_or(
+        &self,
+        left: &Condition,
+        right: &Condition,
+        ctx: &WhereEvalCtx<'_>,
+        graph_cache: &mut GraphMatchEvalCache,
+    ) -> Result<bool> {
+        if self.eval_condition(left, ctx, graph_cache)? {
+            return Ok(true);
+        }
+        self.eval_condition(right, ctx, graph_cache)
     }
 
     /// Evaluates a similarity condition against a record's vector.

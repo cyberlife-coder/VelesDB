@@ -271,7 +271,7 @@ Configure search parameters per-query:
 
 ```sql
 -- Set search mode
-SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'high_recall');
+SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (mode = 'accurate');
 
 -- Set ef_search directly
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 WITH (ef_search = 512);
@@ -285,7 +285,7 @@ WITH (mode = 'accurate', timeout_ms = 5000);
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `'fast'`, `'balanced'`, `'accurate'`, `'high_recall'`, `'perfect'` | Search quality preset |
+| `mode` | string | `'fast'`, `'balanced'`, `'accurate'`, `'perfect'`, `'adaptive'` | Search quality preset |
 | `ef_search` | integer | 16-4096 | HNSW ef_search parameter (overrides mode) |
 | `timeout_ms` | integer | 100-300000 | Query timeout in milliseconds |
 | `rerank` | boolean | `true`, `false` | Enable/disable reranking for quantized vectors |

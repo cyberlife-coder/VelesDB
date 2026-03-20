@@ -136,7 +136,7 @@ Legacy HTTP client for the VelesDB REST API. Requires a running `velesdb-server`
 
 ```bash
 # Terminal 1: start server
-velesdb-server -d ./data
+velesdb-server --data-dir ./data
 
 # Terminal 2: run example
 python examples/python_example.py
@@ -146,7 +146,7 @@ python examples/python_example.py
 
 ## WASM Browser Demo (`wasm-browser-demo/`) -- Beginner
 
-Interactive demo running VelesDB entirely in the browser via WebAssembly. No build step, no server:
+Interactive demo running VelesDB entirely in the browser via WebAssembly:
 
 ```bash
 # Option 1: Open directly in your browser
@@ -196,7 +196,7 @@ LIMIT 20
 -- Hybrid search (vector + text)
 SELECT * FROM docs
 WHERE vector NEAR $vec AND text MATCH 'machine learning'
-FUSION rrf(k=60)
+USING FUSION(strategy = 'rrf', k = 60)
 LIMIT 10
 
 -- Aggregations

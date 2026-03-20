@@ -14,6 +14,38 @@ use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+/// Returns `true` if the edge's label is accepted by the relationship filter.
+///
+/// An empty `rel_types` slice means "accept all".
+#[inline]
+fn edge_passes_rel_filter(edge: &GraphEdge, rel_types: &[&str]) -> bool {
+    rel_types.is_empty() || rel_types.contains(&edge.label())
+}
+
+/// Collects unvisited, rel-type-filtered neighbor expansions for a node.
+///
+/// Each returned tuple is `(target_id, next_depth, path_to_target)`.
+/// Visited targets are inserted into `visited` before returning, so
+/// duplicate expansion is impossible even when the caller enqueues lazily.
+#[inline]
+fn collect_neighbor_expansions<'a>(
+    edges: impl Iterator<Item = &'a GraphEdge>,
+    depth: u32,
+    path: &[u64],
+    rel_types: &[&str],
+    visited: &mut HashSet<u64>,
+) -> Vec<(u64, u32, Vec<u64>)> {
+    edges
+        .filter(|e| edge_passes_rel_filter(e, rel_types))
+        .filter(|e| visited.insert(e.target()))
+        .map(|e| {
+            let mut new_path = path.to_vec();
+            new_path.push(e.id());
+            (e.target(), depth + 1, new_path)
+        })
+        .collect()
+}
+
 /// Pushes unvisited, rel-type-filtered neighbors onto the DFS stack.
 ///
 /// Iterates outgoing edges in reverse so that the first outgoing edge
@@ -165,9 +197,10 @@ impl Collection {
         rel_types: Option<&[&str]>,
         limit: usize,
     ) -> Result<Vec<TraversalResult>> {
-        use std::collections::{HashSet, VecDeque};
+        use std::collections::VecDeque;
 
         let store = self.edge_store.read();
+        let filter: &[&str] = rel_types.unwrap_or(&[]);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         let mut results = Vec::new();
@@ -179,35 +212,28 @@ impl Collection {
             if results.len() >= limit {
                 break;
             }
-
             if depth >= max_depth {
                 continue;
             }
 
-            for edge in store.get_outgoing(node) {
-                // Filter by relationship type if specified
-                if let Some(types) = rel_types {
-                    if !types.contains(&edge.label()) {
-                        continue;
-                    }
+            let neighbors = collect_neighbor_expansions(
+                store.get_outgoing(node).into_iter(),
+                depth,
+                &path,
+                filter,
+                &mut visited,
+            );
+
+            for (target, next_depth, new_path) in neighbors {
+                results.push(TraversalResult {
+                    target_id: target,
+                    depth: next_depth,
+                    path: new_path.clone(),
+                });
+                if results.len() >= limit {
+                    break;
                 }
-
-                let target = edge.target();
-                if !visited.contains(&target) {
-                    visited.insert(target);
-                    let mut new_path = path.clone();
-                    new_path.push(edge.id());
-
-                    results.push(TraversalResult {
-                        target_id: target,
-                        depth: depth + 1,
-                        path: new_path.clone(),
-                    });
-
-                    if results.len() < limit {
-                        queue.push_back((target, depth + 1, new_path));
-                    }
-                }
+                queue.push_back((target, next_depth, new_path));
             }
         }
 
@@ -237,9 +263,8 @@ impl Collection {
         rel_types: Option<&[&str]>,
         limit: usize,
     ) -> Result<Vec<TraversalResult>> {
-        use std::collections::HashSet;
-
         let store = self.edge_store.read();
+        let filter: &[&str] = rel_types.unwrap_or(&[]);
         let mut visited = HashSet::new();
         let mut stack = Vec::new();
         let mut results = Vec::new();
@@ -251,35 +276,28 @@ impl Collection {
             if results.len() >= limit {
                 break;
             }
-
             if depth >= max_depth {
                 continue;
             }
 
-            for edge in store.get_outgoing(node) {
-                // Filter by relationship type if specified
-                if let Some(types) = rel_types {
-                    if !types.contains(&edge.label()) {
-                        continue;
-                    }
+            let neighbors = collect_neighbor_expansions(
+                store.get_outgoing(node).into_iter(),
+                depth,
+                &path,
+                filter,
+                &mut visited,
+            );
+
+            for (target, next_depth, new_path) in neighbors {
+                results.push(TraversalResult {
+                    target_id: target,
+                    depth: next_depth,
+                    path: new_path.clone(),
+                });
+                if results.len() >= limit {
+                    break;
                 }
-
-                let target = edge.target();
-                if !visited.contains(&target) {
-                    visited.insert(target);
-                    let mut new_path = path.clone();
-                    new_path.push(edge.id());
-
-                    results.push(TraversalResult {
-                        target_id: target,
-                        depth: depth + 1,
-                        path: new_path.clone(),
-                    });
-
-                    if results.len() < limit {
-                        stack.push((target, depth + 1, new_path));
-                    }
-                }
+                stack.push((target, next_depth, new_path));
             }
         }
 

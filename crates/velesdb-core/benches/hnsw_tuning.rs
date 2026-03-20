@@ -146,7 +146,7 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
     println!("\n💡 Quality Profiles:");
     println!("   • fast:     ef_search=64  (lower recall, faster)");
     println!("   • balanced: ef_search=128 (good tradeoff)");
-    println!("   • accurate: ef_search=256 (best recall, still <10ms)\n");
+    println!("   • accurate: ef_search=512 (best recall, still <10ms)\n");
 }
 
 /// Test recall at different k values.

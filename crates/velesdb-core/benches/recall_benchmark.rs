@@ -120,6 +120,7 @@ fn bench_hnsw_recall(c: &mut Criterion) {
                     SearchQuality::Accurate => "accurate",
                     SearchQuality::Perfect => "perfect",
                     SearchQuality::Custom(_) => "custom",
+                    SearchQuality::Adaptive { .. } => "adaptive",
                 };
 
                 group.bench_function(
@@ -214,8 +215,8 @@ fn print_recall_stats(c: &mut Criterion) {
     println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}, M=32, ef_c=500) ===");
     println!("Fast (ef=64):        {:.1}%", final_recalls[0] * 100.0);
     println!("Balanced (ef=128):   {:.1}%", final_recalls[1] * 100.0);
-    println!("Accurate (ef=256):   {:.1}%", final_recalls[2] * 100.0);
-    println!("Perfect (ef=2048):   {:.1}%", final_recalls[3] * 100.0);
+    println!("Accurate (ef=512):   {:.1}%", final_recalls[2] * 100.0);
+    println!("Perfect (ef=4096):   {:.1}%", final_recalls[3] * 100.0);
 
     // Benchmark the computation (no print inside)
     group.bench_function("compute_recall_stats", |b| {

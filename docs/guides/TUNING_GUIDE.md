@@ -100,8 +100,8 @@ Use `HnswParams::for_dataset_size(dimension, count)` for optimal parameters at s
 ```rust
 use velesdb_core::index::hnsw::HnswParams;
 
-// Auto-tune for dimension (default)
-let params = HnswParams::default_for_dimension(768);
+// Auto-tune for dimension (default: M=32, ef=400 for 768D)
+let params = HnswParams::auto(768);
 
 // Scale-aware: optimized for 500K vectors at 768D
 let params = HnswParams::for_dataset_size(768, 500_000);
@@ -112,12 +112,28 @@ let params = HnswParams::million_scale(768);
 // Maximum recall: aggressive params for evaluation
 let params = HnswParams::max_recall(768);
 
-// Fastest build: M=12, ef_construction=100 (for bulk import)
+// Turbo: M=12, ef=100 — fastest build, ~85% recall
 let params = HnswParams::turbo();
+
+// Fast indexing: M/2, ef/2 of auto — balanced speed/recall, ~90% recall
+let params = HnswParams::fast_indexing(768);
 
 // Fully custom
 let params = HnswParams::custom(48, 800, 200_000);
 ```
+
+### Index Construction Modes
+
+VelesDB offers three index constructors with different speed/recall tradeoffs:
+
+| Constructor | HNSW Params | Recall | Insert Speed | Use Case |
+|-------------|-------------|--------|-------------|----------|
+| `HnswIndex::new(dim, metric)` | `auto()` (M=32, ef=400) | ≥95% | Baseline | Production workloads |
+| `HnswIndex::new_fast_insert(dim, metric)` | `fast_indexing()` (M/2, ef/2) | ~90% | ~2-3x faster | High-velocity streaming, memory-constrained |
+| `HnswIndex::new_turbo(dim, metric)` | `turbo()` (M=12, ef=100) | ~85% | ~3-5x faster | Bulk loading, development, benchmarks |
+
+**Recommended pattern**: Use `new_turbo()` for initial bulk import, then rebuild with
+`new()` or `with_params()` for production search quality.
 
 ### Tuning Guidelines
 
@@ -145,6 +161,28 @@ parameter with dynamic scaling based on the requested result count `k`.
 | `Accurate` | 512 | max(512, k*16) | ~100% | Analytics, batch processing |
 | `Perfect` | 4096 | max(4096, k*100) | 100% | Ground truth, evaluation |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
+| `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | 95%+ | Mixed workloads, latency-sensitive |
+
+### Adaptive Search
+
+The `Adaptive` variant uses a two-phase approach to reduce median latency by 2-4x
+while maintaining recall on hard queries:
+
+1. **Phase 1**: Search with `min_ef` (e.g., 32). Fast result for easy queries.
+2. **Phase 2**: Compute result spread (`max_dist / min_dist`). If spread > 2.0
+   (hard query with scattered results), re-search with doubled ef (up to `max_ef`).
+
+```rust
+use velesdb_core::SearchQuality;
+
+// Typical configuration: start at ef=32, cap at ef=512
+let quality = SearchQuality::Adaptive { min_ef: 32, max_ef: 512 };
+let results = index.search_with_quality(&query, 10, quality);
+```
+
+**When to use**: Production workloads where most queries are "easy" (hit a dense
+cluster) but some are "hard" (scattered results). Adaptive saves 2-4x latency on
+easy queries while gracefully escalating for hard ones.
 
 ### SearchMode (Collection-level)
 
@@ -155,7 +193,7 @@ configuration level.
 |---------|-----------|----------|
 | `Fast` | 64 | Real-time serving |
 | `Balanced` (default) | 128 | General purpose |
-| `Accurate` | 256 | Analytics |
+| `Accurate` | 512 | Analytics |
 | `Perfect` | exhaustive | Ground truth |
 
 ### Choosing Between Them
@@ -276,7 +314,7 @@ Low-dimensional feature vectors for near-duplicate detection.
 
 ```rust
 // 128D, small dataset ~50K images
-let params = HnswParams::default_for_dimension(128);
+let params = HnswParams::auto(128);
 // Full precision is fine at 128D (only ~6 MB for vectors)
 ```
 
@@ -373,7 +411,7 @@ built-in search handles alignment internally.
    when dimensions are multiples of 16. Pad vectors if needed.
 
 2. **Avoid over-provisioning M**: Doubling M roughly doubles memory and insert time.
-   Start with `HnswParams::default_for_dimension()` and increase only if recall is
+   Start with `HnswParams::auto()` and increase only if recall is
    insufficient.
 
 3. **ef_search scales with k**: `SearchQuality` automatically scales `ef_search` with
@@ -386,3 +424,13 @@ built-in search handles alignment internally.
 5. **Monitor guard-rails**: If queries hit `VELES-027` (GuardRail), you are exceeding
    configured limits. Tune the guard-rail thresholds or narrow your queries with
    filters.
+
+6. **Use Adaptive for mixed workloads**: If your query distribution has both easy
+   (cluster-adjacent) and hard (scattered) queries, `SearchQuality::Adaptive`
+   automatically detects query difficulty and only escalates ef for hard queries.
+   This can cut median latency by 2-4x compared to a fixed `Balanced` mode.
+
+7. **Filter-then-hydrate**: When using `search_with_filter`, VelesDB tests metadata
+   filters before retrieving vectors. For selective filters (<25% pass rate), this
+   avoids loading hundreds of KB of unnecessary vector data. The over-fetch factor
+   adapts automatically based on estimated filter selectivity.

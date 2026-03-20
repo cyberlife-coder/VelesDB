@@ -67,13 +67,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let entry_point = *self.entry_point.read();
         if let Some(ep) = entry_point {
             self.insert_with_entry_point(node_id, &query, node_layer, ep);
-        } else {
-            *self.entry_point.write() = Some(node_id);
         }
 
-        if node_layer > self.max_layer.load(Ordering::Relaxed) {
-            self.max_layer.store(node_layer, Ordering::Relaxed);
+        // Update entry point: set if empty, or promote when node reaches a higher layer.
+        // Single write-lock acquisition avoids redundant contention on `entry_point`.
+        let current_max = self.max_layer.load(Ordering::Relaxed);
+        if entry_point.is_none() || node_layer > current_max {
             *self.entry_point.write() = Some(node_id);
+            if node_layer > current_max {
+                self.max_layer.store(node_layer, Ordering::Relaxed);
+            }
         }
         self.count.fetch_add(1, Ordering::Relaxed);
         Ok(node_id)
@@ -108,12 +111,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let neighbors =
                 self.search_layer(query, vec![current_ep], self.ef_construction, layer_idx);
             let selected = self.select_neighbors(&neighbors, max_conn);
-            self.with_layers_read(|layers| {
-                layers[layer_idx].set_neighbors(node_id, selected.clone());
-            });
-            for &neighbor in &selected {
-                self.add_bidirectional_connection(node_id, neighbor, layer_idx, max_conn);
-            }
+            self.connect_neighbors_batch(node_id, &selected, layer_idx, max_conn);
             if !neighbors.is_empty() {
                 current_ep = neighbors[0].0;
             }

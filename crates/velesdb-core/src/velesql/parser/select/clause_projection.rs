@@ -196,6 +196,15 @@ impl Parser {
     pub(crate) fn parse_aggregate_function(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<(AggregateType, AggregateArg), ParseError> {
+        let (agg_type, arg) = Self::extract_aggregate_parts(pair)?;
+        validation::validate_aggregate_wildcard(agg_type, &arg)?;
+        Ok((agg_type, arg))
+    }
+
+    /// Extracts the aggregate type and argument from an `aggregate_function` node.
+    fn extract_aggregate_parts(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<(AggregateType, AggregateArg), ParseError> {
         let mut agg_type = None;
         let mut arg = None;
         for inner_pair in pair.into_inner() {
@@ -207,11 +216,10 @@ impl Parser {
                 _ => {}
             }
         }
-        let agg_type =
-            agg_type.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate type"))?;
-        let arg = arg.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate argument"))?;
-        validation::validate_aggregate_wildcard(agg_type, &arg)?;
-        Ok((agg_type, arg))
+        Ok((
+            agg_type.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate type"))?,
+            arg.ok_or_else(|| ParseError::syntax(0, "", "Expected aggregate argument"))?,
+        ))
     }
 
     pub(crate) fn parse_aggregate_arg(pair: pest::iterators::Pair<Rule>) -> AggregateArg {

@@ -67,62 +67,82 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         selected
     }
 
-    /// Adds a bidirectional connection between nodes.
+    /// Batch-connects a new node to all its selected neighbors in a single lock scope.
     ///
-    /// # Lock Ordering (BUG-CORE-001 fix)
+    /// Acquires vectors + layers read locks ONCE, sets forward neighbors for the
+    /// new node, then connects back each neighbor (with pruning if needed).
+    /// This reduces lock acquisitions from ~2-4 per neighbor to 1 total.
     ///
-    /// This method respects the global lock order: `vectors` → `layers` → `neighbors`
-    /// to prevent deadlocks with `search_layer()` which also follows this order.
+    /// # Lock Ordering
+    ///
+    /// Respects `vectors (10) → layers (20) → neighbors (30)`.
     #[inline]
-    pub(in crate::index::hnsw::native::graph) fn add_bidirectional_connection(
+    pub(in crate::index::hnsw::native::graph) fn connect_neighbors_batch(
+        &self,
+        new_node: NodeId,
+        selected: &[NodeId],
+        layer: usize,
+        max_conn: usize,
+    ) {
+        self.with_vectors_and_layers_read(|vectors, layers| {
+            // Forward: set the new node's neighbor list
+            layers[layer].set_neighbors(new_node, selected.to_vec());
+
+            // Backward: connect each neighbor back to the new node
+            for &neighbor in selected {
+                self.connect_back_with_pruning(
+                    new_node, neighbor, layer, max_conn, vectors, layers,
+                );
+            }
+        });
+    }
+
+    /// Connects a neighbor back to `new_node`, pruning if the neighbor's list
+    /// exceeds `max_conn`. Called under an existing vectors+layers read lock.
+    #[inline]
+    fn connect_back_with_pruning(
         &self,
         new_node: NodeId,
         neighbor: NodeId,
         layer: usize,
         max_conn: usize,
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        layers: &[super::super::layer::Layer],
     ) {
-        // Phase 1: Check neighbor count without cloning the full list (F-15)
-        let neighbor_count = self.with_layers_read(|layers| {
-            layers[layer]
-                .with_neighbors(neighbor, <[usize]>::len)
-                .unwrap_or(0)
-        });
+        let neighbor_count = layers[layer]
+            .with_neighbors(neighbor, <[usize]>::len)
+            .unwrap_or(0);
 
         if neighbor_count < max_conn {
-            // Simple case: append if absent under a single node write lock
-            self.with_layers_read(|layers| {
-                let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
-                    if !neighbors.contains(&new_node) {
-                        neighbors.push(new_node);
-                    }
-                });
+            // Simple case: append under the per-node write lock (rank 30)
+            let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
+                if !neighbors.contains(&new_node) {
+                    neighbors.push(new_node);
+                }
             });
         } else {
-            // Pruning case: get current neighbors + new_node, compute distances
-            let mut all_neighbors =
-                self.with_layers_read(|layers| layers[layer].get_neighbors(neighbor));
+            // Pruning case: collect all candidates, compute distances, keep best
+            let mut all_neighbors = layers[layer].get_neighbors(neighbor);
             all_neighbors.push(new_node);
 
-            let mut with_dist: Vec<(NodeId, f32)> = self.with_vectors_read(|vectors| {
-                // SAFETY: neighbor is a valid node_id from the graph's neighbor list.
-                // - Condition 1: neighbor < vectors.len().
-                // Reason: Distance computation for neighbor pruning.
-                let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
-                all_neighbors
-                    .iter()
-                    .map(|&n| {
-                        // SAFETY: n is a valid node_id from the graph's neighbor list
-                        // or a just-inserted node_id.
-                        // - Condition 1: n < vectors.len().
-                        // Reason: Pairwise distance for pruning decision.
-                        (
-                            n,
-                            self.distance
-                                .distance(neighbor_vec, unsafe { vectors.get_unchecked(n) }),
-                        )
-                    })
-                    .collect()
-            });
+            // SAFETY: neighbor is a valid node_id from the graph's neighbor list.
+            // - Condition 1: neighbor < vectors.len().
+            // Reason: Distance computation for neighbor pruning.
+            let neighbor_vec = unsafe { vectors.get_unchecked(neighbor) };
+            let mut with_dist: Vec<(NodeId, f32)> = all_neighbors
+                .iter()
+                .map(|&n| {
+                    // SAFETY: n is a valid node_id from the graph's neighbor list
+                    // or a just-inserted node_id.
+                    // - Condition 1: n < vectors.len().
+                    // Reason: Pairwise distance for pruning decision.
+                    (
+                        n,
+                        self.distance
+                            .distance(neighbor_vec, unsafe { vectors.get_unchecked(n) }),
+                    )
+                })
+                .collect();
 
             with_dist.sort_by(|a, b| a.1.total_cmp(&b.1));
             let pruned: Vec<NodeId> = with_dist
@@ -131,11 +151,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 .map(|(n, _)| n)
                 .collect();
 
-            // Phase 3: Write pruned neighbors under single node write lock
-            self.with_layers_read(|layers| {
-                let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
-                    *neighbors = pruned;
-                });
+            let _ = layers[layer].with_neighbors_mut(neighbor, |neighbors| {
+                *neighbors = pruned;
             });
         }
     }

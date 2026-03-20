@@ -73,12 +73,12 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 
 ### Construction
 
-| Method | Description |
-|--------|-------------|
-| `new(dim, metric)` | Create with auto-tuned params |
-| `with_params(dim, metric, params)` | Create with custom params |
-| `new_turbo(dim, metric)` | Optimized for speed |
-| `new_fast_insert(dim, metric)` | Optimized for bulk loading |
+| Method | Params | Recall | Speed | Description |
+|--------|--------|--------|-------|-------------|
+| `new(dim, metric)` | M=32, ef=400 | ≥95% | Baseline | Production workloads |
+| `with_params(dim, metric, params)` | Custom | Custom | Custom | Full control |
+| `new_turbo(dim, metric)` | M=12, ef=100 | ~85% | 3-5x faster | Bulk import, dev, benchmarks |
+| `new_fast_insert(dim, metric)` | M/2, ef/2 | ~90% | 2-3x faster | Streaming, no vector storage |
 
 ### Operations
 
@@ -87,8 +87,9 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert(id, vector)` | Insert single vector |
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
-| `search(query, k)` | Standard search |
-| `search_with_ef(query, k, ef_search)` | Search with custom ef_search |
+| `search(query, k)` | Standard search (Balanced mode) |
+| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive) |
+| `search_with_ef(query, k, ef_search)` | Search with explicit ef_search value |
 | `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
 | `brute_force_search_parallel(query, k)` | Exact search (100% recall) |
 | `remove(id)` | Remove vector |

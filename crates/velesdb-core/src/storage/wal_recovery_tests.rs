@@ -5,6 +5,13 @@
 //!
 //! # WAL Binary Format (LogPayloadStorage)
 //!
+//! ## CRC32-protected (current, written by new code):
+//! ```text
+//! Store:  [0xC3: 1B] [id: 8B LE] [len: 4B LE] [payload: len B] [crc32: 4B LE]
+//! Delete: [0xC4: 1B] [id: 8B LE] [crc32: 4B LE]
+//! ```
+//!
+//! ## Legacy (markers 1/2, read-only for backward compatibility):
 //! ```text
 //! Store:  [marker=1: 1B] [id: 8B LE] [len: 4B LE] [payload: len bytes]
 //! Delete: [marker=2: 1B] [id: 8B LE]
@@ -17,9 +24,10 @@
 //! `replay_wal_from()` iterates WAL entries:
 //! - Reads marker (1B) — `read_exact` failure → break (tolerant at entry boundary)
 //! - Reads id (8B) — failure → propagated as error
-//! - marker=1 → reads len (4B), inserts into index, seeks over payload
-//! - marker=2 → removes from index
+//! - marker=1/0xC3 → reads len (4B), payload; if 0xC3, reads + verifies CRC32
+//! - marker=2/0xC4 → removes from index; if 0xC4, reads + verifies CRC32
 //! - unknown marker → returns `InvalidData` error
+//! - CRC mismatch → entry skipped (not inserted/deleted), warning logged
 //!
 //! # Snapshot Format
 //!
@@ -29,6 +37,7 @@
 //! ```
 
 use super::log_payload::{LogPayloadStorage, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
+use super::snapshot::crc32_hash;
 use super::traits::PayloadStorage;
 use serde_json::json;
 use std::fs;
@@ -340,35 +349,7 @@ fn test_wal_recovery_valid_entries_then_garbage() {
 // Task 3b: Snapshot Corruption Detection Tests
 // ===========================================================================
 
-/// Simple CRC32 (IEEE 802.3) — mirrors the implementation in log_payload.rs
-#[allow(clippy::cast_possible_truncation)]
-fn crc32_hash(data: &[u8]) -> u32 {
-    const CRC32_TABLE: [u32; 256] = {
-        let mut table = [0u32; 256];
-        let mut i = 0;
-        while i < 256 {
-            let mut crc = i as u32;
-            let mut j = 0;
-            while j < 8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ 0xEDB8_8320;
-                } else {
-                    crc >>= 1;
-                }
-                j += 1;
-            }
-            table[i] = crc;
-            i += 1;
-        }
-        table
-    };
-    let mut crc = 0xFFFF_FFFF_u32;
-    for &byte in data {
-        let idx = ((crc ^ u32::from(byte)) & 0xFF) as usize;
-        crc = (crc >> 8) ^ CRC32_TABLE[idx];
-    }
-    !crc
-}
+// `crc32_hash` is imported from `log_payload` (re-exported from `snapshot`).
 
 /// Builds a valid snapshot binary blob with the given entries and WAL position.
 fn build_snapshot(entries: &[(u64, u64)], wal_pos: u64) -> Vec<u8> {
@@ -656,4 +637,221 @@ fn test_crash_recovery_wal_store_delete_re_store() {
     assert_eq!(storage.ids().len(), 1);
     let val = storage.retrieve(1).expect("retrieve").expect("exists");
     assert_eq!(val["version"], 2, "Should have version 2 after re-store");
+}
+
+// ===========================================================================
+// CRC32 Integrity: Helpers
+// ===========================================================================
+
+/// Writes a CRC32-protected store WAL entry.
+/// Format: [0xC3: 1B] [id: 8B LE] [len: 4B LE] [payload: len B] [crc32: 4B LE]
+fn write_crc_store_entry(buf: &mut Vec<u8>, id: u64, payload: &serde_json::Value) {
+    let payload_bytes = serde_json::to_vec(payload).expect("serialize");
+    #[allow(clippy::cast_possible_truncation)]
+    let len = payload_bytes.len() as u32;
+
+    // Build CRC input: marker + id + len + payload
+    let mut crc_input = Vec::with_capacity(1 + 8 + 4 + payload_bytes.len());
+    crc_input.push(0xC3);
+    crc_input.extend_from_slice(&id.to_le_bytes());
+    crc_input.extend_from_slice(&len.to_le_bytes());
+    crc_input.extend_from_slice(&payload_bytes);
+    let crc = crc32_hash(&crc_input);
+
+    buf.extend_from_slice(&crc_input);
+    buf.extend_from_slice(&crc.to_le_bytes());
+}
+
+/// Writes a CRC32-protected delete WAL entry.
+/// Format: [0xC4: 1B] [id: 8B LE] [crc32: 4B LE]
+fn write_crc_delete_entry(buf: &mut Vec<u8>, id: u64) {
+    let mut crc_input = [0u8; 1 + 8];
+    crc_input[0] = 0xC4;
+    crc_input[1..9].copy_from_slice(&id.to_le_bytes());
+    let crc = crc32_hash(&crc_input);
+
+    buf.extend_from_slice(&crc_input);
+    buf.extend_from_slice(&crc.to_le_bytes());
+}
+
+// ===========================================================================
+// CRC32 Integrity: Round-trip Tests
+// ===========================================================================
+
+#[test]
+fn test_crc_store_and_retrieve_round_trip() {
+    // New-format entries written by the API should be readable after reopen
+    let temp = TempDir::new().expect("temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("create");
+        storage
+            .store(1, &json!({"crc": "protected"}))
+            .expect("store");
+        storage.store(2, &json!({"also": "safe"})).expect("store");
+        storage.flush().expect("flush");
+    }
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("reopen");
+    assert_eq!(storage.ids().len(), 2);
+    let v1 = storage.retrieve(1).expect("retrieve").expect("exists");
+    assert_eq!(v1["crc"], "protected");
+    let v2 = storage.retrieve(2).expect("retrieve").expect("exists");
+    assert_eq!(v2["also"], "safe");
+}
+
+#[test]
+fn test_crc_delete_round_trip() {
+    // Delete entries with CRC should persist correctly across reopen
+    let temp = TempDir::new().expect("temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("create");
+        storage.store(1, &json!({"keep": true})).expect("store");
+        storage.store(2, &json!({"remove": true})).expect("store");
+        storage.delete(2).expect("delete");
+        storage.flush().expect("flush");
+    }
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("reopen");
+    assert_eq!(storage.ids().len(), 1);
+    assert!(storage.retrieve(1).expect("retrieve").is_some());
+    assert!(storage.retrieve(2).expect("retrieve").is_none());
+}
+
+// ===========================================================================
+// CRC32 Integrity: Corruption Detection Tests
+// ===========================================================================
+
+#[test]
+fn test_crc_store_corrupted_payload_skipped() {
+    // CRC-protected store with flipped payload bit → entry skipped on replay
+    let mut wal = Vec::new();
+    write_crc_store_entry(&mut wal, 1, &json!({"good": true}));
+
+    // Write a second entry with corrupted payload (flip a byte after the CRC is written)
+    let corrupt_start = wal.len();
+    write_crc_store_entry(&mut wal, 2, &json!({"will_corrupt": true}));
+    // Corrupt a payload byte (offset: marker(1) + id(8) + len(4) = 13 into entry)
+    wal[corrupt_start + 13] ^= 0xFF;
+
+    write_crc_store_entry(&mut wal, 3, &json!({"after_corrupt": true}));
+
+    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
+    let ids = storage.ids();
+    assert!(ids.contains(&1), "Entry 1 should survive (valid CRC)");
+    assert!(!ids.contains(&2), "Entry 2 should be skipped (corrupt CRC)");
+    assert!(ids.contains(&3), "Entry 3 should survive (valid CRC)");
+}
+
+#[test]
+fn test_crc_store_corrupted_crc_field_skipped() {
+    // CRC-protected store with flipped CRC byte → entry skipped
+    let mut wal = Vec::new();
+    write_crc_store_entry(&mut wal, 1, &json!({"test": "data"}));
+
+    // Flip the last byte of the CRC (the very last 4 bytes of the entry)
+    let last_idx = wal.len() - 1;
+    wal[last_idx] ^= 0xFF;
+
+    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "Corrupted CRC entry should be skipped"
+    );
+}
+
+#[test]
+fn test_crc_delete_corrupted_skipped() {
+    // CRC-protected delete with corrupted CRC → delete is NOT applied
+    let mut wal = Vec::new();
+    // First, store an entry (legacy format for simplicity — tests backward compat)
+    write_store_entry(&mut wal, 1, &json!({"keep_me": true}));
+
+    // Then write a corrupted CRC delete for id=1
+    let delete_start = wal.len();
+    write_crc_delete_entry(&mut wal, 1);
+    // Corrupt the CRC of the delete entry
+    wal[delete_start + 9] ^= 0xFF; // first byte of CRC field
+
+    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
+    assert!(
+        storage.ids().contains(&1),
+        "Entry 1 should survive — corrupted delete was skipped"
+    );
+}
+
+// ===========================================================================
+// CRC32 Integrity: Mixed Legacy + CRC Format Tests
+// ===========================================================================
+
+#[test]
+fn test_mixed_legacy_and_crc_entries() {
+    // WAL containing legacy entries followed by CRC entries — both should replay
+    let mut wal = Vec::new();
+    write_store_entry(&mut wal, 1, &json!({"format": "legacy"}));
+    write_store_entry(&mut wal, 2, &json!({"format": "legacy"}));
+    write_crc_store_entry(&mut wal, 3, &json!({"format": "crc"}));
+    write_crc_store_entry(&mut wal, 4, &json!({"format": "crc"}));
+
+    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
+    assert_eq!(storage.ids().len(), 4);
+    for i in 1..=4 {
+        assert!(
+            storage.retrieve(i).expect("retrieve").is_some(),
+            "Entry {i} should exist"
+        );
+    }
+}
+
+#[test]
+fn test_mixed_legacy_store_crc_delete() {
+    // Legacy store followed by CRC delete of the same ID
+    let mut wal = Vec::new();
+    write_store_entry(&mut wal, 1, &json!({"legacy": true}));
+    write_crc_delete_entry(&mut wal, 1);
+
+    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "CRC delete should remove legacy entry"
+    );
+}
+
+#[test]
+fn test_crc_store_legacy_delete() {
+    // CRC store followed by legacy delete
+    let mut wal = Vec::new();
+    write_crc_store_entry(&mut wal, 1, &json!({"crc": true}));
+    write_delete_entry(&mut wal, 1);
+
+    let (_dir, storage) = open_storage_with_wal(&wal).expect("should open");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "Legacy delete should remove CRC-stored entry"
+    );
+}
+
+#[test]
+fn test_crc_entries_survive_snapshot_cycle() {
+    // Store with CRC → snapshot → reopen → entries intact
+    let temp = TempDir::new().expect("temp dir");
+
+    {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("create");
+        for i in 1..=20 {
+            storage
+                .store(i, &json!({"id": i, "crc": true}))
+                .expect("store");
+        }
+        storage.create_snapshot().expect("snapshot");
+    }
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("reopen");
+    assert_eq!(storage.ids().len(), 20);
+    let val = storage.retrieve(10).expect("retrieve").expect("exists");
+    assert_eq!(val["id"], 10);
 }

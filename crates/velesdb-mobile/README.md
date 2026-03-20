@@ -6,7 +6,7 @@ VelesDB Mobile brings microsecond vector search to edge devices - perfect for on
 
 ## Features
 
-- **Native Performance**: Direct Rust bindings, no FFI overhead
+- **Native Performance**: Direct Rust bindings, minimal FFI overhead
 - **Multi-Query Fusion**: Native MQG with RRF/Weighted strategies
 - **Binary Quantization**: 32x memory reduction for constrained devices
 - **ARM NEON SIMD**: Optimized for mobile processors (Apple A-series, Snapdragon)
@@ -158,7 +158,7 @@ cargo run --bin uniffi-bindgen generate \
 |--------|-------------|
 | `search(vector, limit)` | Finds k nearest neighbors |
 | `searchWithFilter(vector, limit, filterJson)` | Search with metadata filter |
-| `multiQuerySearch(vectors, limit, fusion, fusionParams)` | Multi-query fusion (MQG) |
+| `multiQuerySearch(vectors, limit, strategy)` | Multi-query fusion (MQG) |
 | `textSearch(query, limit)` | BM25 full-text search |
 | `textSearchWithFilter(query, limit, filterJson)` | Text search with filter |
 | `hybridSearch(vector, query, limit, vectorWeight)` | Combined vector + text search |

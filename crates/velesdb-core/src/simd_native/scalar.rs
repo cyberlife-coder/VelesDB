@@ -43,6 +43,23 @@ pub fn fast_rsqrt(x: f32) -> f32 {
     y * (1.5 - half_x * y * y)
 }
 
+/// Fast cosine finish: computes `dot / (||a|| × ||b||)` with 1 sqrt instead of 2.
+///
+/// Algebraic identity: `dot / (sqrt(na²) × sqrt(nb²)) = dot / sqrt(na² × nb²)`.
+/// Saves one `sqrtss` (~3 cycles throughput on modern x86), exact precision.
+/// Used by all SIMD cosine kernels (AVX2, AVX-512, NEON) as the final step.
+#[inline]
+#[must_use]
+pub(crate) fn cosine_finish_fast(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
+    // Guard: both norms must be significant for meaningful cosine
+    let denom_sq = norm_a_sq * norm_b_sq;
+    if denom_sq < f32::EPSILON * f32::EPSILON {
+        return 0.0;
+    }
+    // 1 sqrt + 1 div instead of 2 sqrt + 1 mul + 1 div (~3 cycles saved)
+    (dot / denom_sq.sqrt()).clamp(-1.0, 1.0)
+}
+
 /// Fast cosine similarity using Newton-Raphson rsqrt.
 ///
 /// Optimized version that avoids two `sqrt()` calls by using fast_rsqrt.
@@ -138,4 +155,16 @@ pub(super) fn jaccard_scalar_accum(a: &[f32], b: &[f32]) -> (f32, f32) {
         .fold((0.0_f32, 0.0_f32), |(inter, uni), (x, y)| {
             (inter + x.min(*y), uni + x.max(*y))
         })
+}
+
+/// Scalar Hamming distance for binary-packed u64 vectors.
+///
+/// Each bit represents a binary dimension. XOR + popcount gives the
+/// number of differing bits (Hamming distance).
+#[inline]
+pub(crate) fn hamming_binary_scalar(a: &[u64], b: &[u64]) -> u32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x ^ y).count_ones())
+        .sum()
 }

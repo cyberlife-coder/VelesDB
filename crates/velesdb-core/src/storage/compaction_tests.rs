@@ -533,3 +533,192 @@ fn test_context_fragmentation_ratio_precise() {
         "Expected ratio {expected}, got {ratio}"
     );
 }
+
+// -------------------------------------------------------------------------
+// Concurrency tests — EPIC-033: Thread-safe compaction
+// -------------------------------------------------------------------------
+
+/// Verifies that concurrent readers see consistent data during compaction.
+///
+/// Spawns reader threads that continuously retrieve vectors while the main
+/// thread compacts storage. Readers must never observe a partial/corrupt
+/// vector or hit a panic.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_concurrent_reads_during_compaction() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let dir = tempdir().expect("tempdir");
+    let dim = 4;
+
+    // Insert 20 vectors, then delete half to create fragmentation.
+    let mut storage = storage_with_vectors(dir.path(), dim, &(1..=20).collect::<Vec<_>>());
+    for id in (1..=20).filter(|x| x % 2 == 0) {
+        storage.delete(id).expect("delete");
+    }
+
+    let storage = Arc::new(parking_lot::Mutex::new(storage));
+
+    // Spawn readers that continuously retrieve surviving vectors.
+    let barrier = Arc::new(std::sync::Barrier::new(5));
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let s = Arc::clone(&storage);
+        let b = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            b.wait();
+            for _ in 0..50 {
+                let guard = s.lock();
+                for id in (1..=20).filter(|x| x % 2 != 0) {
+                    // Reads must never panic or return corrupt data.
+                    if let Ok(Some(v)) = guard.retrieve(id) {
+                        assert_eq!(v.len(), dim, "vector dimension mismatch for id={id}");
+                    }
+                }
+                drop(guard);
+                thread::yield_now();
+            }
+        }));
+    }
+
+    // Main thread: compact while readers are active.
+    barrier.wait();
+    {
+        let mut guard = storage.lock();
+        let reclaimed = guard.compact().expect("compact should succeed");
+        assert!(reclaimed > 0, "should reclaim space from deleted vectors");
+    }
+
+    for h in handles {
+        h.join().expect("reader thread panicked");
+    }
+
+    // Post-compaction: all survivors are intact.
+    let guard = storage.lock();
+    for id in (1..=20).filter(|x| x % 2 != 0) {
+        let v = guard.retrieve(id).expect("retrieve").expect("exists");
+        let expected: Vec<f32> = (0..dim).map(|d| id as f32 + d as f32).collect();
+        assert_eq!(
+            v, expected,
+            "vector {id} corrupted after concurrent compaction"
+        );
+    }
+}
+
+/// Verifies `ShardedIndex::replace_all` atomicity: no reader sees an empty
+/// index during the swap.
+#[test]
+#[allow(clippy::cast_possible_truncation)] // Test IDs are small u64, safe to cast.
+fn test_replace_all_readers_see_consistent_state() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let index = Arc::new(ShardedIndex::new());
+
+    // Populate with initial entries.
+    for id in 0..100u64 {
+        index.insert(id, id as usize * 16);
+    }
+
+    let barrier = Arc::new(std::sync::Barrier::new(5));
+    let mut handles = Vec::new();
+
+    // Spawn readers that check the index is never empty.
+    for _ in 0..4 {
+        let idx = Arc::clone(&index);
+        let b = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            b.wait();
+            for _ in 0..200 {
+                let len = idx.len();
+                // The index should always contain entries: either the
+                // original 100 or the replacement 50. It must never be
+                // observed as empty (the window that replace_all prevents).
+                assert!(len > 0, "reader observed empty index during replace_all");
+                thread::yield_now();
+            }
+        }));
+    }
+
+    // Writer: replace_all with a smaller set.
+    barrier.wait();
+    let mut new_entries = rustc_hash::FxHashMap::default();
+    for id in 0..50u64 {
+        new_entries.insert(id, id as usize * 32);
+    }
+    index.replace_all(new_entries);
+
+    for h in handles {
+        h.join().expect("reader thread panicked");
+    }
+
+    // After replacement, exactly 50 entries with new offsets.
+    assert_eq!(index.len(), 50);
+    for id in 0..50u64 {
+        assert_eq!(
+            index.get(id),
+            Some(id as usize * 32),
+            "entry {id} has wrong offset after replace_all"
+        );
+    }
+    for id in 50..100u64 {
+        assert!(
+            index.get(id).is_none(),
+            "entry {id} should have been removed by replace_all"
+        );
+    }
+}
+
+/// Roundtrip: compact then verify every surviving vector is byte-identical.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn test_compact_roundtrip_data_integrity() {
+    let dir = tempdir().expect("tempdir");
+    let dim = 8;
+
+    let ids: Vec<u64> = (1..=50).collect();
+    let mut storage = storage_with_vectors(dir.path(), dim, &ids);
+
+    // Capture expected vectors for survivors before deletion.
+    let survivors: Vec<u64> = ids.iter().copied().filter(|x| x % 3 != 0).collect();
+    let expected: Vec<(u64, Vec<f32>)> = survivors
+        .iter()
+        .map(|&id| {
+            let v: Vec<f32> = (0..dim).map(|d| id as f32 + d as f32).collect();
+            (id, v)
+        })
+        .collect();
+
+    // Delete every 3rd vector.
+    for &id in &ids {
+        if id % 3 == 0 {
+            storage.delete(id).expect("delete");
+        }
+    }
+
+    let reclaimed = storage.compact().expect("compact");
+    assert!(reclaimed > 0, "should reclaim deleted vector space");
+
+    // Verify every survivor is byte-identical.
+    for (id, exp_vec) in &expected {
+        let got = storage.retrieve(*id).expect("retrieve").expect("exists");
+        assert_eq!(
+            &got, exp_vec,
+            "vector {id} data mismatch after compact roundtrip"
+        );
+    }
+
+    // Verify deleted vectors are absent.
+    for &id in &ids {
+        if id % 3 == 0 {
+            assert!(
+                storage.retrieve(id).expect("retrieve").is_none(),
+                "deleted vector {id} should not exist after compaction"
+            );
+        }
+    }
+
+    // Index length matches survivors.
+    assert_eq!(storage.len(), survivors.len());
+}

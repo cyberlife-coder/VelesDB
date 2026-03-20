@@ -43,7 +43,14 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
             // Reason: call gather-based ADC kernel for higher throughput.
             codes
                 .iter()
-                .map(|c| unsafe { adc_single_avx2(lut, c, m, k) })
+                .enumerate()
+                .map(|(i, c)| {
+                    // Prefetch next code vector into cache
+                    if i + 1 < codes.len() {
+                        super::prefetch::prefetch_vector_from_u16(codes[i + 1]);
+                    }
+                    unsafe { adc_single_avx2(lut, c, m, k) }
+                })
                 .collect()
         }
         #[cfg(target_arch = "aarch64")]
@@ -53,7 +60,14 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
             // Reason: call NEON ADC kernel for higher throughput.
             codes
                 .iter()
-                .map(|c| unsafe { adc_single_neon(lut, c, m, k) })
+                .enumerate()
+                .map(|(i, c)| {
+                    // Prefetch next code vector into cache
+                    if i + 1 < codes.len() {
+                        super::prefetch::prefetch_vector_from_u16(codes[i + 1]);
+                    }
+                    unsafe { adc_single_neon(lut, c, m, k) }
+                })
                 .collect()
         }
         _ => adc_batch_scalar(lut, codes, m, k),

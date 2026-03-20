@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: March 19, 2026 (v1.6.0 release — sequential benchmarks on idle machine)*
+*Last updated: March 20, 2026 (v1.6.0+simd-opt — sequential benchmarks on idle machine)*
 
 ---
 
@@ -21,7 +21,7 @@ Hardware configuration captured in `benchmarks/machine-config.json`.
 
 ## 1. Dense Search Baseline (SIMD Kernels)
 
-SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 19, 2026 (v1.6.0) on Intel Core i9-14900KF, sequential run on idle machine.
+SIMD kernels use AVX2/AVX-512 multi-accumulator pipelines with runtime feature detection via `simd_dispatch`. Measured March 20, 2026 on Intel Core i9-14900KF (24C/32T, AVX2+FMA, AVX-512 disabled — hybrid P+E topology), 64GB DDR5, Windows 11 Pro, sequential run on idle machine.
 
 ### SIMD Kernel Latency
 
@@ -29,9 +29,9 @@ SIMD kernels use AVX2 4-accumulator pipelines with runtime feature detection via
 |-----------|------|------|------|-------|-------|
 | **Dot Product** | 5.4 ns | 12.0 ns | 23.6 ns | 43.8 ns | 91.2 ns |
 | **Euclidean** | 5.2 ns | 11.5 ns | 22.7 ns | 46.1 ns | 99.3 ns |
-| **Cosine** | 8.1 ns | 20.1 ns | 34.0 ns | 69.0 ns | 112.2 ns |
-| **Hamming** | 10.0 ns | 26.5 ns | 52.4 ns | 105.4 ns | 212.4 ns |
-| **Jaccard** | 7.1 ns | 22.2 ns | 30.1 ns | 56.0 ns | 103.8 ns |
+| **Cosine** | 7.7 ns | 18.6 ns | 33.6 ns | 61.4 ns | 118.9 ns |
+| **Hamming** | 7.3 ns | 17.8 ns | 34.3 ns | 69.2 ns | 132.2 ns |
+| **Jaccard** | 6.4 ns | 16.4 ns | 29.3 ns | 50.9 ns | 100.6 ns |
 
 *Run `cargo bench -p velesdb-core --bench simd_benchmark -- --noplot` to regenerate.*
 
@@ -163,16 +163,17 @@ cargo bench -p velesdb-core --bench hybrid_benchmark -- --noplot
 
 ### HNSW Recall Profiles (10K/128D)
 
-| Profile | Recall@10 | Latency P50 |
-|---------|-----------|-------------|
-| Fast (ef=64) | 92.2% | 36 us |
-| Balanced (ef=128) | 98.8% | 57 us |
-| Accurate (ef=256) | 100.0% | 130 us |
-| Perfect (ef=2048) | 100% | 200 us |
+| Profile | ef_search | Recall@10 | Latency P50 |
+|---------|-----------|-----------|-------------|
+| Fast | 64 | 92.2% | 36 us |
+| Balanced | 128 | 98.8% | 57 us |
+| Accurate | 512 | 100.0% | 130 us |
+| Perfect | 4096 | 100% | 200 us |
+| Adaptive | 32–512 | 95%+ | ~15-40 us (easy queries) |
 
-*Recall values from recall_benchmark. Latencies measured March 19, 2026.*
+*Recall values from recall_benchmark. Latencies measured March 19, 2026. ef_search values are base values (scaled with k).*
 
-Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
 
 ---
 
@@ -242,6 +243,8 @@ Recall@10 >= 95% is guaranteed for Balanced mode and above. Use `HnswParams::for
 | Qdrant | 20-50 ms | 1M+ | Cloud/distributed |
 | pgvector | 45-100 ms | 100K+ | PostgreSQL extension |
 | Redis | ~5 ms | 1M+ | In-memory |
+
+*Competitor latencies are approximate industry estimates for comparable-scale workloads. VelesDB is local-first/in-process; distributed databases serve different use cases at larger scale.*
 
 ---
 

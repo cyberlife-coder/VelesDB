@@ -655,14 +655,14 @@ Control search behavior with the `WITH` clause:
 
 ```sql
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
-WITH (mode = 'accurate', ef_search = 256, timeout_ms = 5000)
+WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 ```
 
 ### Available Options
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `high_recall`, `perfect` | Search mode preset |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | Search mode preset |
 | `ef_search` | integer | 16-4096 | HNSW ef_search parameter |
 | `timeout_ms` | integer | >=100 | Query timeout in milliseconds |
 | `rerank` | boolean | `true`/`false` | Enable reranking for quantized vectors |
@@ -966,7 +966,7 @@ LIMIT 5
 
 -- High-accuracy search
 SELECT * FROM legal_docs WHERE vector NEAR $q LIMIT 10 
-WITH (mode = 'high_recall')
+WITH (mode = 'accurate')
 ```
 
 ### Hybrid Search (Dense + Sparse)

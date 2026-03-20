@@ -107,9 +107,10 @@ fn bench_comprehensive(c: &mut Criterion) {
             let (quality_name, ef) = match quality {
                 SearchQuality::Fast => ("Fast", 64),
                 SearchQuality::Balanced => ("Balanced", 128),
-                SearchQuality::Accurate => ("Accurate", 256),
-                SearchQuality::Perfect => ("Perfect", 2048),
+                SearchQuality::Accurate => ("Accurate", 512),
+                SearchQuality::Perfect => ("Perfect", 4096),
                 SearchQuality::Custom(e) => ("Custom", e),
+                SearchQuality::Adaptive { min_ef, .. } => ("Adaptive", min_ef),
             };
 
             // Measure latencies

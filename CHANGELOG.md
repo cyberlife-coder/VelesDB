@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **Cosine SIMD finish optimization**: replace `2×sqrt + div` with `dot / sqrt(na² × nb²)` — saves one `sqrtss` instruction across AVX2, AVX-512, and NEON kernels. 768D: 34.0 ns → 33.6 ns (−1.2%). Measured March 20, 2026 on i9-14900KF (AVX2+FMA), 64GB DDR5.
+- **Hamming AVX2 FP-domain accumulation**: replace `castps_si256 → xor_si256 → srli_epi32 → add_epi32` with `xor_ps → and_ps(1.0) → add_ps` to eliminate FP→INT domain-crossing penalty on Intel P-cores. 768D: 36.0 ns → 34.3 ns (−4.7%).
+- NEON (ARM64) Hamming & Jaccard kernels with 1-acc/4-acc ILP variants
+- AVX-512 4-accumulator Hamming & Jaccard kernels for dim >= 512
+- AVX2 vectorized 8-wide remainder for Hamming & Jaccard (reduces scalar tail from 31 to 7 elements)
+- Batch operations with L1/L2 prefetch for Hamming & Jaccard
+- Native binary Hamming u64 POPCNT via AVX-512 XOR + extract
+
 ## [1.6.0] - 2026-03-19
 
 ### Highlights

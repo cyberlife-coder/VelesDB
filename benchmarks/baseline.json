@@ -1,6 +1,6 @@
 {
-  "version": "1.5.2",
-  "description": "VelesDB Performance Baseline v1.5.2 — re-baselined 2026-03-19 for ubuntu-latest CI runners",
+  "version": "1.6.0",
+  "description": "VelesDB Performance Baseline v1.6.0 — re-baselined 2026-03-19 for ubuntu-latest CI runners",
   "recorded_at": "2026-03-19",
   "environment": {
     "rust_version": "stable",
@@ -56,7 +56,7 @@
   },
   "notes": [
     "Re-baselined 2026-03-19 for ubuntu-latest GitHub Actions runners (2-core AMD)",
-    "Previous baseline (v1.5.2 / 2026-03-12) had smoke_insert=5.07s — CI runner performance shifted",
+    "Previous baseline (v1.6.0 / 2026-03-19) had smoke_insert=5.07s — CI runner performance shifted",
     "smoke_insert avg 9.3s (7.86/9.87/9.47/8.80/10.42 across 5 CI runs) — high variance (IO-bound), threshold=25%",
     "smoke_hybrid baseline estimated from CI runner scaling (not directly measured by export script)",
     "Threshold of 15% aligned with docs/reference/PERFORMANCE_SLO.md",

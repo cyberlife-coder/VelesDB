@@ -80,11 +80,13 @@ impl Collection {
         k: usize,
         metric: DistanceMetric,
     ) -> Vec<ScoredResult> {
-        let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        crate::collection::streaming::merge_with_delta(tuples, &self.delta_buffer, query, k, metric)
-            .into_iter()
-            .map(ScoredResult::from)
-            .collect()
+        crate::collection::streaming::merge_with_delta_scored(
+            results,
+            &self.delta_buffer,
+            query,
+            k,
+            metric,
+        )
     }
 
     #[cfg(not(feature = "persistence"))]
@@ -175,7 +177,7 @@ impl Collection {
         let quality = match ef_search {
             0..=64 => crate::SearchQuality::Fast,
             65..=128 => crate::SearchQuality::Balanced,
-            129..=256 => crate::SearchQuality::Accurate,
+            129..=512 => crate::SearchQuality::Accurate,
             _ => crate::SearchQuality::Perfect,
         };
 
@@ -246,7 +248,15 @@ impl Collection {
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
-        let candidates_k = k.saturating_mul(4).max(k + 10);
+        let selectivity = estimate_filter_selectivity(filter);
+        // Reason: k is a small search count (typically <1000); f64 has 52-bit mantissa.
+        #[allow(clippy::cast_precision_loss)]
+        let k_f64 = k as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let lower = (k + 10) as f64;
+        // Reason: result is clamped to [k+10, 10_000] so no truncation risk.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let candidates_k = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
         let index_results = self.search_ids_with_adc_if_pq(query, candidates_k);
 
         let vector_storage = self.vector_storage.read();
@@ -255,7 +265,8 @@ impl Collection {
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|sr| {
-                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
+                // Filter-then-hydrate: test payload filter BEFORE retrieving the vector
+                // to avoid expensive vector reads for non-matching candidates.
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
@@ -264,6 +275,7 @@ impl Collection {
                 if !matches {
                     return None;
                 }
+                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
                 Some(SearchResult::new(
                     Point {
                         id: sr.id,
@@ -279,5 +291,45 @@ impl Collection {
         resolve::sort_results_by_metric(&mut results, higher_is_better);
         results.truncate(k);
         Ok(results)
+    }
+}
+
+/// Heuristic selectivity estimate based on filter structure.
+///
+/// Returns a value in `(0, 1]` where 1.0 = no filtering, 0.01 = very selective.
+/// Used to compute dynamic over-fetch factor for `search_with_filter`.
+fn estimate_filter_selectivity(filter: &crate::filter::Filter) -> f64 {
+    estimate_condition_selectivity(&filter.condition)
+}
+
+fn estimate_condition_selectivity(cond: &crate::filter::Condition) -> f64 {
+    use crate::filter::Condition;
+    match cond {
+        Condition::Eq { .. } | Condition::IsNull { .. } => 0.1,
+        Condition::Gt { .. }
+        | Condition::Gte { .. }
+        | Condition::Lt { .. }
+        | Condition::Lte { .. }
+        | Condition::Contains { .. }
+        | Condition::Like { .. }
+        | Condition::ILike { .. } => 0.3,
+        Condition::In { values, .. } => {
+            // Reason: values.len() is a small count; f64 precision is sufficient.
+            #[allow(clippy::cast_precision_loss)]
+            let sel = values.len() as f64 * 0.05;
+            sel.min(0.8)
+        }
+        Condition::Neq { .. } | Condition::IsNotNull { .. } => 0.9,
+        Condition::And { conditions } => conditions
+            .iter()
+            .map(estimate_condition_selectivity)
+            .product::<f64>()
+            .max(0.01),
+        Condition::Or { conditions } => conditions
+            .iter()
+            .map(estimate_condition_selectivity)
+            .sum::<f64>()
+            .min(1.0),
+        Condition::Not { condition } => (1.0 - estimate_condition_selectivity(condition)).max(0.01),
     }
 }

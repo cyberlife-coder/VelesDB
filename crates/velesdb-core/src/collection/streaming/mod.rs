@@ -12,7 +12,7 @@ pub mod delta;
 mod ingester;
 
 #[cfg(feature = "persistence")]
-pub use delta::merge_with_delta;
+pub use delta::{merge_with_delta, merge_with_delta_scored};
 #[cfg(feature = "persistence")]
 pub use ingester::{BackpressureError, StreamIngester, StreamingConfig};
 

@@ -12,18 +12,28 @@ Interactive demo of VelesDB running entirely in the browser via WebAssembly.
 
 ## Quick Start
 
-### Option 1: Open directly
+### Prerequisites
 
-Simply open `index.html` in a modern browser (Chrome, Firefox, Edge, Safari).
-
-### Option 2: Local server
+The demo loads the WASM module from npm CDN (unpkg/jsdelivr). If `velesdb-wasm` is not yet published on npm, build it locally first:
 
 ```bash
-# Python
-python -m http.server 8080
+# Build the WASM package locally
+cd crates/velesdb-wasm
+wasm-pack build --target web --out-dir ../../examples/wasm-browser-demo/pkg
 
-# Node.js
-npx serve .
+# Then update index.html to use the local path instead of CDN:
+# Change: import init from 'https://unpkg.com/velesdb-wasm@1.6.0/velesdb_wasm.js'
+# To:     import init from './pkg/velesdb_wasm.js'
+```
+
+### Run
+
+```bash
+cd examples/wasm-browser-demo
+
+# Serve locally (required for WASM module loading)
+python -m http.server 8080
+# or: npx serve .
 ```
 
 Then visit http://localhost:8080
@@ -69,13 +79,16 @@ Typical results on modern hardware:
 
 ```html
 <script type="module">
-  import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@1.6.0/velesdb_wasm.js';
+  // If published on npm:
+  // import init, { VectorStore } from 'https://unpkg.com/velesdb-wasm@1.6.0/velesdb_wasm.js';
+  // If built locally with wasm-pack:
+  import init, { VectorStore } from './pkg/velesdb_wasm.js';
 
   await init();
-  
+
   const store = new VectorStore(768, 'cosine');
   store.insert(1n, new Float32Array([0.1, 0.2, ...]));  // Note: ID is BigInt
-  
+
   const results = store.search(query, 10);
   // results: Array of [id: BigInt, score: number]
 </script>
