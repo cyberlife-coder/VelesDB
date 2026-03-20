@@ -12,7 +12,7 @@
 </h3>
 
 <p align="center">
-  <strong>🚀 v1.6.0 Released</strong> — Product Quantization, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Plan Cache<br/>
+  <strong>🚀 v1.6.0 Released</strong> — Server Security (Auth + TLS), 6 New REST Endpoints, SIMD Perf Gains, PQ/Sparse/Graph Enhancements<br/>
   <a href="https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.6.0">Download Now</a> • <a href="#-quick-start">Quick Start</a> • <a href="#-whats-new-in-v16">What's New</a>
 </p>
 
@@ -50,44 +50,70 @@
 
 ## 🆕 What's New in v1.6
 
-### Product Quantization (PQ) -- 4x Memory Compression
+> v1.6 is a **production-hardening release**: server security, new REST endpoints, major SIMD gains, and deep enhancements to PQ, Sparse Search, Graph, and VelesQL. Core features (PQ, Sparse Vectors, Hybrid Search, Streaming Inserts, Query Cache) were introduced in v1.5 and are significantly improved here.
 
-Train a codebook on your vectors and compress them from 32-bit floats to compact codes. Configurable subspaces (m) and centroids (k), with OPQ pre-rotation for clustered data and RaBitQ binary quantization (32x compression). ADC search uses SIMD-accelerated lookup tables that fit in L1 cache. Rescore oversampling (default 4x) prevents silent recall collapse.
+### Server Security & Operations (NEW)
 
-```sql
--- Train a PQ quantizer on your collection
-TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)
+- **API Key Authentication** — Bearer token middleware, configurable via `VELESDB_API_KEYS` env or `velesdb.toml`
+- **TLS Support** — HTTPS via rustls (`VELESDB_TLS_CERT` / `VELESDB_TLS_KEY`)
+- **Graceful Shutdown** — SIGTERM/SIGINT handling with connection drain (30s) + WAL flush
+- **Server Configuration** — Unified `ServerConfig` from TOML + CLI + env with priority chain
 
--- Search uses PQ automatically after training (ADC + rescore)
-SELECT * FROM my_collection WHERE vector NEAR $query LIMIT 10
-```
+### 6 New REST Endpoints (NEW)
 
-### Sparse Vector Search -- SPLADE/BM42-Compatible
+| Endpoint | Description |
+|----------|-------------|
+| `GET /ready` | Readiness probe (503 during startup, bypasses auth) |
+| `GET /collections/{name}/config` | Collection configuration (HNSW params, schema) |
+| `GET /collections/{name}/stats` | Collection statistics (row count, index stats) |
+| `GET /guardrails` / `PATCH /guardrails` | Rate limit & circuit breaker management |
+| `POST /collections/{name}/analyze` | Collection diagnostics |
+| `GET /search/{name}/ids` | Lightweight ID+score-only search |
 
-Native inverted index with SPLADE/BM42-compatible term_id:weight format. MaxScore DAAT algorithm with early termination for sub-millisecond ANN search.
+### SIMD Performance Gains (ENHANCED)
 
-```sql
-SELECT * FROM docs WHERE vector SPARSE_NEAR $sv LIMIT 10
-```
+- **4-accumulator ILP kernels** for Hamming & Jaccard (AVX-512, AVX2, NEON)
+- **Hamming AVX2 FP-domain fix** — eliminated INT-FP domain crossing penalty (~5% gain)
+- **Cosine finish optimization** — `2*sqrt + div` replaced by `dot / sqrt(a² * b²)`
+- **Horizontal sum deduplication** across all distance kernels
 
-### Hybrid Dense+Sparse Search -- Best of Both Worlds
+### Product Quantization (ENHANCED from v1.5)
 
-Combine dense semantic similarity with sparse lexical matching in a single query. RRF and RSF fusion strategies merge results from both branches with parallel execution via rayon.
+- **OPQ pre-rotation** now applied to non-Euclidean rescore path (was broken in v1.5)
+- Modularized into `pq_kmeans.rs` + `pq_opq.rs` with dedicated test suite (880 lines)
+- New quantization serialization trait for cross-format compatibility
 
-```sql
-SELECT * FROM docs
-WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
-USING FUSION(strategy='rrf', k=60)
-LIMIT 10
-```
+### Sparse Vector Search (ENHANCED from v1.5)
 
-### Streaming Inserts -- Immediately Searchable
+- **Scoring strategies exposed** — BM25, TF-IDF variants now configurable
+- **Batch insert enabled** (was disabled in v1.5)
+- Modularized search into `scoring.rs` + `strategy.rs` with 650+ lines of new tests
 
-Bounded channel with backpressure (HTTP 429 when full). Inserted vectors are immediately searchable via a delta buffer that merges with HNSW results at query time.
+### VelesQL Extensions (ENHANCED from v1.5)
 
-### Query Plan Cache -- Compiled Plan Reuse
+- `similarity()` zero-arg syntax in SELECT and ORDER BY (uses pre-computed search score)
+- Qualified wildcard `SELECT alias.*`
+- New set operations module (UNION, INTERSECT, EXCEPT)
+- New projection engine (383 lines)
 
-Two-level compiled plan cache (AST + execution plan) with LRU eviction. Automatic invalidation via per-collection `write_generation` counter. Observable via `EXPLAIN` output.
+### Graph Engine (ENHANCED from v1.5)
+
+- **Composite property index** for multi-field lookups
+- **Parallel traversal sharding** for large graph walks
+- **FxHashMap** for edge lookups (faster specialized hash)
+
+### Storage & WAL (ENHANCED from v1.5)
+
+- **HNSW delta WAL** — incremental encoding instead of full graph serialization
+- **Micro-batch WAL** — amortized fsync across grouped writes
+- **WAL replay redesign** — robust recovery from partial writes
+- Atomic index swap with cross-process safety (PID-tagged temp files)
+
+### SDK Improvements (ENHANCED)
+
+- **Python**: collection.rs split into 5 modules, new graph API (`graph_collection.rs`), sparse vector support
+- **TypeScript**: rest.ts split into 8 focused backends, new streaming + agent memory backends
+- **CLI**: graph/metadata collection support in REPL, new integration + E2E tests
 
 ---
 
