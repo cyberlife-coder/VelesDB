@@ -72,11 +72,12 @@ install_velesdb() {
     
     echo -e "${GREEN}📦 Latest version: v${version}${NC}"
     
-    # Construct download URL
+    # Construct download URL (matches GitHub Release asset names)
     case "$platform" in
-        linux-x86_64)  archive_name="velesdb-linux-x86_64.tar.gz" ;;
-        macos-x86_64)  archive_name="velesdb-macos-x86_64.tar.gz" ;;
-        macos-aarch64) archive_name="velesdb-macos-aarch64.tar.gz" ;;
+        linux-x86_64)  archive_name="velesdb-x86_64-unknown-linux-gnu.tar.gz" ;;
+        macos-x86_64)  archive_name="velesdb-x86_64-apple-darwin.tar.gz" ;;
+        macos-aarch64) archive_name="velesdb-aarch64-apple-darwin.tar.gz" ;;
+        linux-aarch64) archive_name="velesdb-aarch64-unknown-linux-gnu.tar.gz" ;;
         *)             echo -e "${RED}❌ No binary available for ${platform}${NC}"; exit 1 ;;
     esac
     
@@ -100,6 +101,7 @@ install_velesdb() {
     echo -e "${YELLOW}🔗 Creating symlinks...${NC}"
     ln -sf "$INSTALL_DIR/velesdb" "$BIN_DIR/velesdb"
     ln -sf "$INSTALL_DIR/velesdb-server" "$BIN_DIR/velesdb-server"
+    [ -f "$INSTALL_DIR/velesdb-migrate" ] && ln -sf "$INSTALL_DIR/velesdb-migrate" "$BIN_DIR/velesdb-migrate"
     
     # Cleanup
     rm -rf "$tmp_dir"

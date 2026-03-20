@@ -38,7 +38,7 @@ function Install-VelesDB {
     
     Write-Host "📦 Latest version: v$version" -ForegroundColor Green
     
-    $archiveName = "velesdb-windows-x86_64.zip"
+    $archiveName = "velesdb-x86_64-pc-windows-msvc.zip"
     $downloadUrl = "https://github.com/$Repo/releases/download/v$version/$archiveName"
     
     # Create install directory
