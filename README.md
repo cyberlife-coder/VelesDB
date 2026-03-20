@@ -373,12 +373,12 @@ VelesDB exposes **37 REST endpoints** organized by domain: Collections, Points, 
 | Category | Key Endpoints | Description |
 |----------|--------------|-------------|
 | **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` | Create, list, inspect, delete collections |
-| **Points** | `POST /collections/{name}/points`, `GET/DELETE /points/{id}`, `POST /stream/insert` | CRUD & streaming insert |
-| **Search** | `POST .../search`, `.../search/batch`, `.../search/hybrid`, `.../search/text`, `.../search/multi`, `.../search/ids` | Vector, sparse, hybrid, text, multi, ID-only search |
-| **Graph** | `GET/POST .../graph/edges`, `.../graph/traverse`, `.../graph/traverse/stream`, `.../graph/nodes/{id}/degree` | Edge CRUD, BFS/DFS traversal, streaming, degree query |
+| **Points** | `/collections/{name}/points`, `/collections/{name}/stream/insert` | CRUD & streaming insert |
+| **Search** | `/collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid`, `/collections/{name}/search/text`, `/collections/{name}/search/multi`, `/collections/{name}/search/ids`, `/collections/{name}/match` | Vector, sparse, hybrid, text, multi, ID-only search |
+| **Graph** | `/collections/{name}/graph/edges`, `/collections/{name}/graph/traverse`, `.../graph/traverse/stream`, `.../graph/nodes/{id}/degree` | Edge CRUD, BFS/DFS traversal, streaming, degree query |
 | **Indexes** | `GET/POST .../indexes`, `DELETE .../indexes/{label}/{property}` | Secondary index management |
-| **VelesQL** | `POST /query`, `/aggregate`, `/query/explain` | Unified query language with EXPLAIN |
-| **Admin** | `GET /health`, `/ready`, `/metrics`, `/guardrails`, `.../stats`, `.../config`, `.../flush`, `.../empty`, `.../sanity`, `.../analyze` | Liveness, readiness, Prometheus, collection ops |
+| **VelesQL** | `/query`, `/aggregate`, `/query/explain` | Unified query language with EXPLAIN |
+| **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/empty`, `/collections/{name}/sanity`, `/collections/{name}/analyze` | Liveness, readiness, Prometheus, collection ops |
 
 <details>
 <summary>All 37 REST endpoints</summary>
