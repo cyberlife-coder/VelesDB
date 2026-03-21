@@ -118,6 +118,8 @@ jobs:
           python-version: "3.11"
       - name: Static integration checks
         run: bash scripts/check-python.sh
+      - name: Install velesdb-common (local shared package)
+        run: pip install -e integrations/common
       - name: LangChain parity tests
         working-directory: integrations/langchain
         run: |

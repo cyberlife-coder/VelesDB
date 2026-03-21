@@ -228,6 +228,9 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Install velesdb-common (local shared package)
+        run: pip install -e integrations/common
+
       - name: Install & Test LlamaIndex integration
         run: |
           cd integrations/llamaindex
