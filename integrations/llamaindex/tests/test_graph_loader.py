@@ -59,7 +59,7 @@ class TestGraphLoader:
         mock_store = MagicMock()
 
         loader = GraphLoader(mock_store)
-        loader.add_edge(id=1, source=100, target=200, label="KNOWS")
+        loader.add_edge(edge_id=1, source=100, target=200, label="KNOWS")
 
         edges = loader.get_edges()
         assert len(edges) == 1
@@ -90,7 +90,7 @@ class TestGraphLoader:
 
         mock_store = MagicMock()
         loader = GraphLoader(mock_store)
-        loader.add_edge(id=1, source=100, target=200, label="KNOWS")
+        loader.add_edge(edge_id=1, source=100, target=200, label="KNOWS")
         edges = loader.get_edges(label="KNOWS")
 
         assert len(edges) == 1
@@ -102,8 +102,8 @@ class TestGraphLoader:
 
         mock_store = MagicMock()
         loader = GraphLoader(mock_store)
-        loader.add_edge(id=1, source=100, target=200, label="KNOWS")
-        loader.add_edge(id=2, source=200, target=300, label="FOLLOWS")
+        loader.add_edge(edge_id=1, source=100, target=200, label="KNOWS")
+        loader.add_edge(edge_id=2, source=200, target=300, label="FOLLOWS")
         edges = loader.get_edges()
 
         assert len(edges) == 2
@@ -213,7 +213,7 @@ class TestGraphLoader:
         mock_store._collection = None
 
         loader = GraphLoader(mock_store)
-        loader.add_edge(id=1, source=1, target=2, label="TEST")
+        loader.add_edge(edge_id=1, source=1, target=2, label="TEST")
         assert len(loader.get_edges()) == 1
 
 
@@ -239,7 +239,7 @@ class TestGraphLoaderIntegration:
         loader.add_node(node_id=200, label="PERSON", metadata={"name": "Bob"})
 
         # Add edge
-        loader.add_edge(id=1, source=100, target=200, label="KNOWS")
+        loader.add_edge(edge_id=1, source=100, target=200, label="KNOWS")
 
         # Query
         edges = loader.get_edges(label="KNOWS")
@@ -353,7 +353,7 @@ class TestGraphLoaderNativeGraph:
         # Confirm no native graph was injected.
         loader._native_graph = None
 
-        loader.add_edge(id=5, source=1, target=2, label="KNOWS")
+        loader.add_edge(edge_id=5, source=1, target=2, label="KNOWS")
         edges = loader.get_edges(label="KNOWS")
 
         assert len(edges) == 1

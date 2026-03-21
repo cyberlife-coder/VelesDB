@@ -13,7 +13,7 @@ Example:
     >>>
     >>> # Add nodes and edges
     >>> loader.add_node(node_id=1, label="PERSON", metadata={"name": "John"})
-    >>> loader.add_edge(id=1, source=1, target=2, label="KNOWS")
+    >>> loader.add_edge(edge_id=1, source=1, target=2, label="KNOWS")
     >>>
     >>> # Query edges
     >>> edges = loader.get_edges(label="KNOWS")
@@ -135,7 +135,7 @@ class GraphLoader:
     Example:
         >>> loader = GraphLoader(vector_store, graph_collection_name="kg")
         >>> loader.add_node(node_id=1, label="PERSON", metadata={"name": "John"})
-        >>> loader.add_edge(id=1, source=1, target=2, label="KNOWS")
+        >>> loader.add_edge(edge_id=1, source=1, target=2, label="KNOWS")
         >>> edges = loader.get_edges(label="KNOWS")
     """
 
@@ -204,7 +204,7 @@ class GraphLoader:
 
     def add_edge(
         self,
-        id: int,
+        edge_id: int,
         source: int,
         target: int,
         label: str,
@@ -213,7 +213,7 @@ class GraphLoader:
         """Add an edge to the graph.
 
         Args:
-            id: Unique edge ID.
+            edge_id: Unique edge ID.
             source: Source node ID.
             target: Target node ID.
             label: Edge label (relationship type, e.g., "KNOWS", "WORKS_AT").
@@ -221,7 +221,7 @@ class GraphLoader:
 
         Example:
             >>> loader.add_edge(
-            ...     id=1,
+            ...     edge_id=1,
             ...     source=100,
             ...     target=200,
             ...     label="KNOWS",
@@ -229,7 +229,7 @@ class GraphLoader:
             ... )
         """
         edge = {
-            "id": id,
+            "id": edge_id,
             "source": source,
             "target": target,
             "label": label,
@@ -242,7 +242,7 @@ class GraphLoader:
             try:
                 self._native_graph.add_edge(edge)
             except Exception as exc:
-                logger.warning("Failed to write edge %s to native graph: %s", id, exc)
+                logger.warning("Failed to write edge %s to native graph: %s", edge_id, exc)
         elif self._graph_store is not None:
             self._graph_store.add_edge(edge)
 
