@@ -28,7 +28,7 @@ class TestGraphLoader:
         mock_store._collection = mock_collection
 
         loader = GraphLoader(mock_store)
-        loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
+        loader.add_node(node_id=1, label="PERSON", metadata={"name": "John"})
 
         mock_collection.upsert_metadata.assert_called_once_with(
             [{"id": 1, "payload": {"label": "PERSON", "name": "John"}}]
@@ -44,7 +44,7 @@ class TestGraphLoader:
 
         loader = GraphLoader(mock_store)
         vector = [0.1, 0.2, 0.3]
-        loader.add_node(id=1, label="DOCUMENT", vector=vector)
+        loader.add_node(node_id=1, label="DOCUMENT", vector=vector)
 
         mock_collection.upsert.assert_called_once()
         call_args = mock_collection.upsert.call_args[0][0][0]
@@ -203,7 +203,7 @@ class TestGraphLoader:
         loader = GraphLoader(mock_store)
 
         with pytest.raises(ValueError, match="cannot initialize collection"):
-            loader.add_node(id=1, label="TEST")
+            loader.add_node(node_id=1, label="TEST")
 
     def test_add_edge_no_collection_raises(self):
         """Test that add_edge still works without collection initialization."""
@@ -235,8 +235,8 @@ class TestGraphLoaderIntegration:
         loader = GraphLoader(mock_store)
 
         # Add nodes
-        loader.add_node(id=100, label="PERSON", metadata={"name": "Alice"})
-        loader.add_node(id=200, label="PERSON", metadata={"name": "Bob"})
+        loader.add_node(node_id=100, label="PERSON", metadata={"name": "Alice"})
+        loader.add_node(node_id=200, label="PERSON", metadata={"name": "Bob"})
 
         # Add edge
         loader.add_edge(id=1, source=100, target=200, label="KNOWS")
@@ -258,7 +258,7 @@ class TestGraphLoaderIntegration:
         mock_store._get_collection = MagicMock(return_value=mock_collection)
 
         loader = GraphLoader(mock_store)
-        loader.add_node(id=1, label="PERSON", metadata={"name": "A"})
+        loader.add_node(node_id=1, label="PERSON", metadata={"name": "A"})
 
         mock_store._get_collection.assert_called_once()
 

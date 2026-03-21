@@ -12,7 +12,7 @@ Example:
     >>> loader = GraphLoader(vector_store, graph_collection_name="kg")
     >>>
     >>> # Add nodes and edges
-    >>> loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
+    >>> loader.add_node(node_id=1, label="PERSON", metadata={"name": "John"})
     >>> loader.add_edge(id=1, source=1, target=2, label="KNOWS")
     >>>
     >>> # Query edges
@@ -134,7 +134,7 @@ class GraphLoader:
 
     Example:
         >>> loader = GraphLoader(vector_store, graph_collection_name="kg")
-        >>> loader.add_node(id=1, label="PERSON", metadata={"name": "John"})
+        >>> loader.add_node(node_id=1, label="PERSON", metadata={"name": "John"})
         >>> loader.add_edge(id=1, source=1, target=2, label="KNOWS")
         >>> edges = loader.get_edges(label="KNOWS")
     """
@@ -166,7 +166,7 @@ class GraphLoader:
 
     def add_node(
         self,
-        id: int,
+        node_id: int,
         label: str,
         metadata: Optional[Dict[str, Any]] = None,
         vector: Optional[List[float]] = None,
@@ -174,14 +174,14 @@ class GraphLoader:
         """Add a node to the graph.
 
         Args:
-            id: Unique node ID.
+            node_id: Unique node ID.
             label: Node label (type, e.g., "PERSON", "DOCUMENT").
             metadata: Optional node properties.
             vector: Optional embedding vector for the node.
 
         Example:
             >>> loader.add_node(
-            ...     id=1,
+            ...     node_id=1,
             ...     label="PERSON",
             ...     metadata={"name": "John", "age": 30}
             ... )
@@ -192,13 +192,13 @@ class GraphLoader:
 
         if vector is not None:
             collection.upsert([{
-                "id": id,
+                "id": node_id,
                 "vector": vector,
                 "payload": payload,
             }])
         else:
             collection.upsert_metadata([{
-                "id": id,
+                "id": node_id,
                 "payload": payload,
             }])
 
@@ -317,7 +317,7 @@ class GraphLoader:
             metadata = _extract_graph_metadata(node)
 
             try:
-                self.add_node(id=node_id, label=node_label, metadata=metadata)
+                self.add_node(node_id=node_id, label=node_label, metadata=metadata)
                 nodes_added += 1
             except Exception as e:
                 logger.warning(f"Failed to add node {node.node_id}: {e}")

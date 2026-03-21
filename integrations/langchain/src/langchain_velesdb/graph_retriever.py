@@ -416,7 +416,7 @@ class GraphRetriever(BaseRetriever):
             if results:
                 return results[0]
         except Exception:
-            pass
+            logger.debug("Failed to fetch document by ID: %s", doc_id, exc_info=True)
         return None
 
 

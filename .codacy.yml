@@ -40,6 +40,21 @@ exclude_paths:
   # SDK test suites
   - "sdks/**/tests/**"
   - "sdks/**/__tests__/**"
+  # Integration test suites (Python) — assert is idiomatic in pytest,
+  # /tmp usage is for test fixtures, builtin shadowing is non-issue in tests
+  - "integrations/**/tests/**"
+  # Example applications (illustrative, not production) — random usage,
+  # LangChain imports, complexity are all acceptable in demo code
+  - "examples/**"
+  # Changelog files — Keep-a-Changelog format requires repeated headings
+  # (### Added, ### Fixed, etc.) per version section
+  - "CHANGELOG.md"
+  - "crates/**/CHANGELOG.md"
+  # CLI README (repeated section headings are normal for long docs)
+  - "crates/velesdb-cli/README.md"
+  # TypeScript SDK REST/streaming backends — fetch URL constructed from
+  # trusted application config (baseUrl), not user input. SSRF is FP.
+  - "sdks/typescript/src/backends/**"
   # Root-level benchmark scripts (Python, not criterion)
   - "benchmarks/**"
   # Non-project directories (dependencies, tooling, build output)
@@ -161,7 +176,6 @@ engines:
       - "crates/velesdb-cli/src/**"
 
       # --- Examples, benchmarks, fuzz targets ---
-      - "examples/**"
       - "crates/velesdb-core/examples/**"
       - "benchmarks/**"
       - "fuzz/**"
@@ -221,5 +235,23 @@ engines:
       - "crates/velesdb-core/src/collection/core/crud_helpers.rs"
       - "crates/velesdb-core/src/collection/core/statistics.rs"
 
-      # --- TypeScript SDK backends ---
-      - "sdks/typescript/src/backends/**"
+      # --- HNSW backend adapter (linear I/O serialization, CC from chained ?) ---
+      - "crates/velesdb-core/src/index/hnsw/native/backend_adapter.rs"
+      # --- TypeScript query builder (CC from nullish coalescing defaults, not real branches) ---
+      - "sdks/typescript/src/query-builder.ts"
+      # --- Configuration (validation match arms + serde data definitions) ---
+      - "crates/velesdb-core/src/config.rs"
+      # --- Query engine DML execution (chained ? in short 18-line function) ---
+      - "crates/velesdb-core/src/database/query_engine.rs"
+      # --- LlamaIndex graph retriever (many config params, LlamaIndex convention) ---
+      - "integrations/llamaindex/src/llamaindex_velesdb/graph_retriever.py"
+
+  opengrep:
+    exclude_paths:
+      # Integration memory modules — random.randint used for session-scoped
+      # in-process ID counters, not security/crypto material
+      - "integrations/langchain/src/langchain_velesdb/memory.py"
+      - "integrations/llamaindex/src/llamaindex_velesdb/memory.py"
+      # GitHub workflows — dtolnay/rust-toolchain downloads only official
+      # Rust binaries from static.rust-lang.org; pinning is handled per-file
+      - ".github/workflows/**"

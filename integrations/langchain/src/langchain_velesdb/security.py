@@ -294,6 +294,24 @@ def validate_url(url: str) -> str:
     return url
 
 
+def _validate_sparse_entry(key: Any, value: Any) -> None:
+    """Validate a single sparse vector key-value pair."""
+    if isinstance(key, bool) or not isinstance(key, int):
+        raise SecurityError(
+            f"Sparse vector keys must be int (term IDs), "
+            f"got {type(key).__name__} for key {key!r}"
+        )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise SecurityError(
+            f"Sparse vector values must be int or float (weights), "
+            f"got {type(value).__name__} for key {key}"
+        )
+    if isinstance(value, float) and not math.isfinite(value):
+        raise SecurityError(
+            f"Sparse vector weights must be finite, got {value} for key {key}"
+        )
+
+
 def validate_sparse_vector(sparse_vector: Any) -> dict:
     """Validate a sparse vector dict.
 
@@ -320,20 +338,7 @@ def validate_sparse_vector(sparse_vector: Any) -> dict:
         )
 
     for key, value in sparse_vector.items():
-        if isinstance(key, bool) or not isinstance(key, int):
-            raise SecurityError(
-                f"Sparse vector keys must be int (term IDs), "
-                f"got {type(key).__name__} for key {key!r}"
-            )
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            raise SecurityError(
-                f"Sparse vector values must be int or float (weights), "
-                f"got {type(value).__name__} for key {key}"
-            )
-        if isinstance(value, float) and not math.isfinite(value):
-            raise SecurityError(
-                f"Sparse vector weights must be finite, got {value} for key {key}"
-            )
+        _validate_sparse_entry(key, value)
 
     return sparse_vector
 
