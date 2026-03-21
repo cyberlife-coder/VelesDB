@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 
 from langchain_core.documents import Document
 
+from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.security import validate_query
 
 
@@ -47,15 +48,10 @@ class GraphOpsMixin:
             raise ValueError("Collection not initialized. Add documents first.")
 
         results = self._collection.query(query_str, params)
-
         documents: List[Document] = []
         for result in results:
-            payload = result.get("payload", {})
-            text = payload.get("text", "")
-            metadata = {k: v for k, v in payload.items() if k != "text"}
-            doc = Document(page_content=text, metadata=metadata)
-            documents.append(doc)
-
+            text, metadata = payload_to_doc_parts(result)
+            documents.append(Document(page_content=text, metadata=metadata))
         return documents
 
     def explain(

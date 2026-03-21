@@ -41,6 +41,7 @@ mod clustered_index;
 mod degree_router;
 mod edge;
 mod edge_concurrent;
+pub(crate) mod helpers;
 mod label_table;
 #[cfg(test)]
 mod label_table_tests;

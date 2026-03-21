@@ -12,12 +12,15 @@ exposes a lightweight, LlamaIndex-friendly API:
 
 from __future__ import annotations
 
+import json
 import logging
-import random
 import time
 from typing import Any, Dict, List, Optional
 
 import velesdb
+
+from llamaindex_velesdb._common import make_initial_id_counter
+from velesdb_common.memory import format_procedural_results
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +126,7 @@ class VelesDBEpisodicMemory:
         self._db = velesdb.Database(db_path)
         self._dimension = dimension
         self._memory = self._db.agent_memory(dimension=dimension)
-        self._event_counter = int(time.time() * 1000)
+        self._event_counter = make_initial_id_counter()
 
     def record_event(
         self,
@@ -150,8 +153,6 @@ class VelesDBEpisodicMemory:
             raise ValueError("event_type must not be empty")
         if not embedding:
             raise ValueError("embedding must not be empty")
-
-        import json
 
         self._event_counter += 1
         event_id = self._event_counter
@@ -195,7 +196,7 @@ class VelesDBEpisodicMemory:
         The underlying VelesDB collection is not deleted; only the
         in-process state is reset.
         """
-        self._event_counter = int(time.time() * 1000)
+        self._event_counter = make_initial_id_counter()
         self._memory = self._db.agent_memory(dimension=self._dimension)
 
 
@@ -225,7 +226,7 @@ class VelesDBProceduralMemory:
         self._dimension = dimension
         self._memory = self._db.agent_memory(dimension=dimension)
         self._name_to_id: Dict[str, int] = {}
-        self._id_counter = int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
+        self._id_counter = make_initial_id_counter()
 
     def learn(
         self,
@@ -293,15 +294,7 @@ class VelesDBProceduralMemory:
             top_k=top_k,
             min_confidence=min_confidence,
         )
-        return [
-            {
-                "name": r["name"],
-                "steps": r["steps"],
-                "confidence": r["confidence"],
-                "score": r["score"],
-            }
-            for r in results
-        ]
+        return format_procedural_results(results)
 
     def reinforce(self, name: str, success: bool = True) -> None:
         """Reinforce or weaken a stored procedure.
@@ -328,5 +321,5 @@ class VelesDBProceduralMemory:
         is not deleted.
         """
         self._name_to_id = {}
-        self._id_counter = int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
+        self._id_counter = make_initial_id_counter()
         self._memory = self._db.agent_memory(dimension=self._dimension)

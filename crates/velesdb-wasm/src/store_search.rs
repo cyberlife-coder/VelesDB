@@ -3,7 +3,17 @@
 //! Provides search functionality extracted from the main store.
 
 use crate::{fusion, text_search, vector_ops, DistanceMetric, StorageMode};
+use serde::Serialize;
 use wasm_bindgen::JsValue;
+
+/// Serializes a value to `JsValue` via `serde_wasm_bindgen`.
+///
+/// Consolidates the repeated `to_value(...).map_err(...)` pattern used
+/// throughout the WASM search module.
+#[inline]
+fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
+}
 
 /// Validates query dimension matches store dimension.
 #[inline]
@@ -47,7 +57,7 @@ pub fn search(
     vector_ops::sort_results(&mut results, metric.higher_is_better());
     results.truncate(k);
 
-    serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&results)
 }
 
 /// Text search in payloads.
@@ -83,7 +93,7 @@ pub fn text_search_impl(
         .take(k)
         .collect();
 
-    serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&results)
 }
 
 /// Hybrid vector + text search.
@@ -143,7 +153,7 @@ pub fn hybrid_search_impl(
         })
         .collect();
 
-    serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&output)
 }
 
 /// Multi-query search with fusion.
@@ -199,7 +209,7 @@ pub fn multi_query_search_impl(
     let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60));
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
-    serde_wasm_bindgen::to_value(&fused).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&fused)
 }
 
 /// Search with metadata filter.
@@ -257,7 +267,7 @@ where
         })
         .collect();
 
-    serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&output)
 }
 
 /// Similarity search with threshold filtering.
@@ -317,7 +327,7 @@ pub fn similarity_search_impl(
     vector_ops::sort_results(&mut results, higher_is_better);
     results.truncate(k);
 
-    serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&results)
 }
 
 /// Batch search for multiple vectors (Full storage mode only).
@@ -352,5 +362,5 @@ pub fn batch_search_impl(
         all_results.push(results);
     }
 
-    serde_wasm_bindgen::to_value(&all_results).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js(&all_results)
 }

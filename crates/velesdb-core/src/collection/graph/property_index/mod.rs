@@ -25,6 +25,7 @@ pub use composite::{CompositeGraphIndex, CompositeIndexManager, CompositeIndexTy
 #[allow(unused_imports)]
 pub use range::{CompositeRangeIndex, EdgePropertyIndex, IndexIntersection, OrderedValue};
 
+use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -72,16 +73,16 @@ impl PropertyIndex {
     ///
     /// This must be called before inserting values for this pair.
     pub fn create_index(&mut self, label: &str, property: &str) {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.entry(key).or_default();
+        self.indexes
+            .entry(make_label_prop_key(label, property))
+            .or_default();
     }
 
     /// Check if an index exists for this (label, property) pair.
     #[must_use]
     pub fn has_index(&self, label: &str, property: &str) -> bool {
         self.indexes
-            .keys()
-            .any(|(l, p)| l == label && p == property)
+            .contains_key(&make_label_prop_key(label, property))
     }
 
     /// Insert a node into the index.
@@ -90,12 +91,10 @@ impl PropertyIndex {
     ///
     /// # Note
     ///
-    /// Uses RoaringBitmap internally which only supports u32 IDs.
-    /// Returns `false` if node_id > u32::MAX to prevent data corruption.
+    /// Uses `RoaringBitmap` internally which only supports u32 IDs.
+    /// Returns `false` if `node_id > u32::MAX` to prevent data corruption.
     pub fn insert(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
-        // BUG FIX: Reject node_id > u32::MAX instead of silently truncating
-        // This prevents data corruption from ID collisions
-        let Some(safe_id) = u32::try_from(node_id).ok() else {
+        let Some(safe_id) = safe_bitmap_id(node_id) else {
             tracing::warn!(
                 node_id = node_id,
                 label = label,
@@ -107,7 +106,7 @@ impl PropertyIndex {
             return false;
         };
 
-        let key = (label.to_string(), property.to_string());
+        let key = make_label_prop_key(label, property);
         if let Some(value_map) = self.indexes.get_mut(&key) {
             let value_key = value.to_string();
             value_map.entry(value_key).or_default().insert(safe_id);
@@ -120,14 +119,13 @@ impl PropertyIndex {
     /// Remove a node from the index.
     ///
     /// Returns `true` if the node was removed.
-    /// Returns `false` if node_id > u32::MAX (cannot exist in index).
+    /// Returns `false` if `node_id > u32::MAX` (cannot exist in index).
     pub fn remove(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
-        // BUG FIX: node_id > u32::MAX cannot exist in index, return false
-        let Some(safe_id) = u32::try_from(node_id).ok() else {
+        let Some(safe_id) = safe_bitmap_id(node_id) else {
             return false;
         };
 
-        let key = (label.to_string(), property.to_string());
+        let key = make_label_prop_key(label, property);
         if let Some(value_map) = self.indexes.get_mut(&key) {
             let value_key = value.to_string();
             if let Some(bitmap) = value_map.get_mut(&value_key) {
@@ -147,13 +145,10 @@ impl PropertyIndex {
     /// Returns `Some(&RoaringBitmap)` with matching node IDs (empty if no matches).
     #[must_use]
     pub fn lookup(&self, label: &str, property: &str, value: &Value) -> Option<&RoaringBitmap> {
+        let key = make_label_prop_key(label, property);
         self.indexes
-            .iter()
-            .find(|((l, p), _)| l == label && p == property)
-            .and_then(|(_, value_map)| {
-                let value_key = value.to_string();
-                value_map.get(&value_key)
-            })
+            .get(&key)
+            .and_then(|value_map| value_map.get(&value.to_string()))
     }
 
     /// Get all indexed (label, property) pairs.
@@ -165,16 +160,15 @@ impl PropertyIndex {
     /// Get the number of unique values for a (label, property) pair.
     #[must_use]
     pub fn cardinality(&self, label: &str, property: &str) -> Option<usize> {
-        self.indexes
-            .iter()
-            .find(|((l, p), _)| l == label && p == property)
-            .map(|(_, value_map)| value_map.len())
+        let key = make_label_prop_key(label, property);
+        self.indexes.get(&key).map(HashMap::len)
     }
 
     /// Drop an index for a (label, property) pair.
     pub fn drop_index(&mut self, label: &str, property: &str) -> bool {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.remove(&key).is_some()
+        self.indexes
+            .remove(&make_label_prop_key(label, property))
+            .is_some()
     }
 
     /// Clear all indexes.
@@ -250,17 +244,20 @@ impl PropertyIndex {
     pub fn index_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
         self.on_add_node(label, node_id, properties);
     }
+}
 
-    // =========================================================================
-    // Persistence - serialize/deserialize index to/from bytes
-    // =========================================================================
+impl PostcardPersistence for PropertyIndex {}
 
+// Inherent persistence methods that delegate to `PostcardPersistence`.
+// Required so callers can use `PropertyIndex::load_from_file` without
+// importing the trait.
+impl PropertyIndex {
     /// Serialize the index to bytes using postcard.
     ///
     /// # Errors
     /// Returns an error if serialization fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, postcard::Error> {
-        postcard::to_allocvec(self)
+        <Self as PostcardPersistence>::to_bytes(self)
     }
 
     /// Deserialize an index from bytes.
@@ -268,7 +265,7 @@ impl PropertyIndex {
     /// # Errors
     /// Returns an error if deserialization fails (corrupted data).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {
-        postcard::from_bytes(bytes)
+        <Self as PostcardPersistence>::from_bytes(bytes)
     }
 
     /// Save the index to a file.
@@ -276,10 +273,7 @@ impl PropertyIndex {
     /// # Errors
     /// Returns an error if serialization or file I/O fails.
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let bytes = self
-            .to_bytes()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        std::fs::write(path, bytes)
+        <Self as PostcardPersistence>::save_to_file(self, path)
     }
 
     /// Load an index from a file.
@@ -287,8 +281,6 @@ impl PropertyIndex {
     /// # Errors
     /// Returns an error if file I/O or deserialization fails.
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        Self::from_bytes(&bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+        <Self as PostcardPersistence>::load_from_file(path)
     }
 }

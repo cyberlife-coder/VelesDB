@@ -153,28 +153,14 @@ unsafe fn scale_inplace_avx2(v: &mut [f32], factor: f32) {
 #[inline]
 #[must_use]
 pub fn batch_squared_l2_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    let mut results = Vec::with_capacity(candidates.len());
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        super::dot::batch_prefetch_candidate(candidates, i);
-        results.push(squared_l2_native(candidate, query));
-    }
-
-    results
+    super::batch_with_prefetch(candidates, query, squared_l2_native)
 }
 
 /// Batch euclidean distance with cross-platform multi-level prefetch hints.
 #[inline]
 #[must_use]
 pub fn batch_euclidean_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    let mut results = Vec::with_capacity(candidates.len());
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        super::dot::batch_prefetch_candidate(candidates, i);
-        results.push(euclidean_native(candidate, query));
-    }
-
-    results
+    super::batch_with_prefetch(candidates, query, euclidean_native)
 }
 
 pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {

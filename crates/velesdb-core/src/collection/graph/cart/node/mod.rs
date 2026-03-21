@@ -293,24 +293,10 @@ impl CARTNode {
                     return false;
                 }
                 let byte = key[0];
-                for i in 0..*num_children as usize {
-                    if keys[i] == byte {
-                        if let Some(child) = &mut children[i] {
-                            let removed = child.remove(&key[1..], value);
-                            if removed && child.is_empty() {
-                                children[i] = None;
-                                let n = *num_children as usize;
-                                for j in i..n.saturating_sub(1) {
-                                    keys[j] = keys[j + 1];
-                                    children[j] = children[j + 1].take();
-                                }
-                                *num_children -= 1;
-                            }
-                            return removed;
-                        }
-                    }
-                }
-                false
+                let n = *num_children as usize;
+                let idx = (0..n).find(|&i| keys[i] == byte);
+                let Some(idx) = idx else { return false };
+                Self::remove_from_child_compact(&key[1..], value, idx, num_children, keys, children)
             }
             Self::Node16 {
                 num_children,
@@ -322,22 +308,10 @@ impl CARTNode {
                 }
                 let byte = key[0];
                 let slice = &keys[..*num_children as usize];
-                if let Ok(idx) = slice.binary_search(&byte) {
-                    if let Some(child) = &mut children[idx] {
-                        let removed = child.remove(&key[1..], value);
-                        if removed && child.is_empty() {
-                            children[idx] = None;
-                            let n = *num_children as usize;
-                            for j in idx..n.saturating_sub(1) {
-                                keys[j] = keys[j + 1];
-                                children[j] = children[j + 1].take();
-                            }
-                            *num_children -= 1;
-                        }
-                        return removed;
-                    }
-                }
-                false
+                let Ok(idx) = slice.binary_search(&byte) else {
+                    return false;
+                };
+                Self::remove_from_child_compact(&key[1..], value, idx, num_children, keys, children)
             }
             Self::Node48 {
                 num_children,
@@ -383,6 +357,34 @@ impl CARTNode {
         }
     }
 
+    /// Shared remove + compact logic for Node4 and Node16.
+    ///
+    /// Recurses into `children[idx]`, and if the child becomes empty after
+    /// removal, shifts keys/children left to fill the gap.
+    fn remove_from_child_compact(
+        key_rest: &[u8],
+        value: u64,
+        idx: usize,
+        num_children: &mut u8,
+        keys: &mut [u8],
+        children: &mut [Option<Box<CARTNode>>],
+    ) -> bool {
+        let Some(child) = &mut children[idx] else {
+            return false;
+        };
+        let removed = child.remove(key_rest, value);
+        if removed && child.is_empty() {
+            children[idx] = None;
+            let n = *num_children as usize;
+            for j in idx..n.saturating_sub(1) {
+                keys[j] = keys[j + 1];
+                children[j] = children[j + 1].take();
+            }
+            *num_children -= 1;
+        }
+        removed
+    }
+
     /// Collects all values in sorted order.
     pub(crate) fn collect_all(&self, result: &mut Vec<u64>) {
         match self {
@@ -393,30 +395,29 @@ impl CARTNode {
                 num_children,
                 children,
                 ..
-            } => {
-                for child in children.iter().take(*num_children as usize).flatten() {
-                    child.collect_all(result);
-                }
-            }
+            } => Self::collect_children(children.iter(), *num_children as usize, result),
             Self::Node16 {
                 num_children,
                 children,
                 ..
-            } => {
-                for child in children.iter().take(*num_children as usize).flatten() {
-                    child.collect_all(result);
-                }
-            }
+            } => Self::collect_children(children.iter(), *num_children as usize, result),
             Self::Node48 { children, .. } => {
-                for child in children.iter().flatten() {
-                    child.collect_all(result);
-                }
+                Self::collect_children(children.iter(), children.len(), result);
             }
             Self::Node256 { children, .. } => {
-                for child in children.iter().flatten() {
-                    child.collect_all(result);
-                }
+                Self::collect_children(children.iter(), children.len(), result);
             }
+        }
+    }
+
+    /// Recursively collects values from up to `count` child slots.
+    fn collect_children<'a>(
+        children: impl Iterator<Item = &'a Option<Box<CARTNode>>>,
+        count: usize,
+        result: &mut Vec<u64>,
+    ) {
+        for child in children.take(count).flatten() {
+            child.collect_all(result);
         }
     }
 }

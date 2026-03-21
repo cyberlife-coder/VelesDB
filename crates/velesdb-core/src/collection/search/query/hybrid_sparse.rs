@@ -416,45 +416,21 @@ impl Collection {
     // Result resolution helpers
     // ------------------------------------------------------------------
 
-    /// Resolve `ScoredDoc` results to full `SearchResult` with Point data.
-    pub(crate) fn resolve_sparse_results(
+    /// Hydrate a sequence of `(id, score)` pairs into full `SearchResult`s.
+    ///
+    /// Shared by both sparse-only and fused search paths. Acquires
+    /// `vector_storage(2)` and `payload_storage(3)` read locks.
+    fn resolve_id_score_pairs(
         &self,
-        results: &[crate::index::sparse::ScoredDoc],
+        pairs: impl Iterator<Item = (u64, f32)>,
         limit: usize,
+        capacity_hint: usize,
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
 
-        let mut out = Vec::with_capacity(results.len().min(limit));
-        for sd in results.iter().take(limit) {
-            let vector = vector_storage
-                .retrieve(sd.doc_id)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let payload = payload_storage.retrieve(sd.doc_id).ok().flatten();
-            let point = Point {
-                id: sd.doc_id,
-                vector,
-                payload,
-                sparse_vectors: None,
-            };
-            out.push(SearchResult::new(point, sd.score));
-        }
-        out
-    }
-
-    /// Resolve fused `(id, score)` tuples to `SearchResult`.
-    pub(crate) fn resolve_fused_results(
-        &self,
-        fused: &[(u64, f32)],
-        limit: usize,
-    ) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
-
-        let mut out = Vec::with_capacity(fused.len().min(limit));
-        for &(id, score) in fused.iter().take(limit) {
+        let mut out = Vec::with_capacity(capacity_hint.min(limit));
+        for (id, score) in pairs.take(limit) {
             let vector = vector_storage
                 .retrieve(id)
                 .ok()
@@ -470,5 +446,27 @@ impl Collection {
             out.push(SearchResult::new(point, score));
         }
         out
+    }
+
+    /// Resolve `ScoredDoc` results to full `SearchResult` with Point data.
+    pub(crate) fn resolve_sparse_results(
+        &self,
+        results: &[crate::index::sparse::ScoredDoc],
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        self.resolve_id_score_pairs(
+            results.iter().map(|sd| (sd.doc_id, sd.score)),
+            limit,
+            results.len(),
+        )
+    }
+
+    /// Resolve fused `(id, score)` tuples to `SearchResult`.
+    pub(crate) fn resolve_fused_results(
+        &self,
+        fused: &[(u64, f32)],
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        self.resolve_id_score_pairs(fused.iter().copied(), limit, fused.len())
     }
 }

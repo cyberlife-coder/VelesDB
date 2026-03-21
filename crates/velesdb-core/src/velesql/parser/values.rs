@@ -1,5 +1,6 @@
 //! Value parsing (literals, parameters, WITH clause).
 
+use super::helpers::{parse_scalar_from_rule, parse_u64_clause};
 use super::Rule;
 use crate::velesql::ast::{
     Condition, CorrelatedColumn, IntervalUnit, IntervalValue, Subquery, TemporalExpr, Value,
@@ -8,6 +9,20 @@ use crate::velesql::ast::{
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
 
+/// Converts a parsed scalar [`Value`] into a [`WithValue`].
+///
+/// WITH clause values use a parallel enum (`WithValue`) because they
+/// support `Identifier` but not `Parameter`/`Temporal`/`Subquery`.
+fn with_value_from_scalar(value: Value) -> Result<WithValue, ParseError> {
+    match value {
+        Value::String(s) => Ok(WithValue::String(s)),
+        Value::Integer(v) => Ok(WithValue::Integer(v)),
+        Value::Float(v) => Ok(WithValue::Float(v)),
+        Value::Boolean(b) => Ok(WithValue::Boolean(b)),
+        _ => Err(ParseError::syntax(0, "", "Invalid WITH value type")),
+    }
+}
+
 impl Parser {
     pub(crate) fn parse_value(pair: pest::iterators::Pair<Rule>) -> Result<Value, ParseError> {
         let inner = pair
@@ -15,34 +30,9 @@ impl Parser {
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected value"))?;
 
+        // Temporal and subquery are value-level extensions not shared with
+        // other scalar-parsing call sites, so handle them before delegation.
         match inner.as_rule() {
-            Rule::integer => {
-                let v = inner
-                    .as_str()
-                    .parse::<i64>()
-                    .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid integer"))?;
-                Ok(Value::Integer(v))
-            }
-            Rule::float => {
-                let v = inner
-                    .as_str()
-                    .parse::<f64>()
-                    .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid float"))?;
-                Ok(Value::Float(v))
-            }
-            Rule::string => {
-                let s = inner.as_str().trim_matches('\'').to_string();
-                Ok(Value::String(s))
-            }
-            Rule::boolean => {
-                let b = inner.as_str().to_uppercase() == "TRUE";
-                Ok(Value::Boolean(b))
-            }
-            Rule::null_value => Ok(Value::Null),
-            Rule::parameter => {
-                let name = inner.as_str().trim_start_matches('$').to_string();
-                Ok(Value::Parameter(name))
-            }
             Rule::temporal_expr => {
                 let temporal = Self::parse_temporal_expr(inner)?;
                 Ok(Value::Temporal(temporal))
@@ -51,7 +41,7 @@ impl Parser {
                 let subquery = Self::parse_subquery_expr(inner)?;
                 Ok(Value::Subquery(Box::new(subquery)))
             }
-            _ => Err(ParseError::syntax(0, inner.as_str(), "Unknown value type")),
+            _ => parse_scalar_from_rule(&inner),
         }
     }
 
@@ -177,29 +167,13 @@ impl Parser {
     }
 
     pub(crate) fn parse_limit_clause(pair: pest::iterators::Pair<Rule>) -> Result<u64, ParseError> {
-        let int_pair = pair
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected integer for LIMIT"))?;
-
-        int_pair
-            .as_str()
-            .parse::<u64>()
-            .map_err(|_| ParseError::syntax(0, int_pair.as_str(), "Invalid LIMIT value"))
+        parse_u64_clause(pair, "LIMIT")
     }
 
     pub(crate) fn parse_offset_clause(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<u64, ParseError> {
-        let int_pair = pair
-            .into_inner()
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected integer for OFFSET"))?;
-
-        int_pair
-            .as_str()
-            .parse::<u64>()
-            .map_err(|_| ParseError::syntax(0, int_pair.as_str(), "Invalid OFFSET value"))
+        parse_u64_clause(pair, "OFFSET")
     }
 
     pub(crate) fn parse_with_clause(
@@ -248,39 +222,15 @@ impl Parser {
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected WITH value"))?;
 
-        match inner.as_rule() {
-            Rule::string => {
-                let s = inner.as_str().trim_matches('\'').to_string();
-                Ok(WithValue::String(s))
-            }
-            Rule::integer => {
-                let v = inner
-                    .as_str()
-                    .parse::<i64>()
-                    .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid integer"))?;
-                Ok(WithValue::Integer(v))
-            }
-            Rule::float => {
-                let v = inner
-                    .as_str()
-                    .parse::<f64>()
-                    .map_err(|_| ParseError::syntax(0, inner.as_str(), "Invalid float"))?;
-                Ok(WithValue::Float(v))
-            }
-            Rule::boolean => {
-                let b = inner.as_str().to_uppercase() == "TRUE";
-                Ok(WithValue::Boolean(b))
-            }
-            Rule::identifier => {
-                let s = super::extract_identifier(&inner);
-                Ok(WithValue::Identifier(s))
-            }
-            _ => Err(ParseError::syntax(
-                0,
-                inner.as_str(),
-                "Invalid WITH value type",
-            )),
+        // Identifier is WITH-specific -- handle before scalar delegation.
+        if inner.as_rule() == Rule::identifier {
+            let s = super::extract_identifier(&inner);
+            return Ok(WithValue::Identifier(s));
         }
+
+        // Reuse shared scalar parsing, then convert Value -> WithValue.
+        let value = parse_scalar_from_rule(&inner)?;
+        with_value_from_scalar(value)
     }
 
     /// Parses a scalar subquery expression (EPIC-039).

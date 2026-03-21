@@ -9,9 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::connectors::common::{
-    create_http_client, handle_http_error, json_type_name, validate_url,
+    create_http_client, detect_fields_from_sample, extract_payload_from_object, handle_http_error,
+    parse_vector_from_json, validate_url,
 };
-use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
+use crate::connectors::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
 /// Configuration for MongoDB Atlas Vector Search.
@@ -184,21 +185,7 @@ impl MongoDBConnector {
                 self.config.vector_field
             ))
         })?;
-
-        match vector_value {
-            serde_json::Value::Array(arr) => arr
-                .iter()
-                .map(|v| {
-                    v.as_f64().map(|f| f as f32).ok_or_else(|| {
-                        Error::Extraction("Vector element is not a number".to_string())
-                    })
-                })
-                .collect(),
-            _ => Err(Error::Extraction(format!(
-                "Vector field '{}' is not an array",
-                self.config.vector_field
-            ))),
-        }
+        parse_vector_from_json(vector_value, &self.config.vector_field)
     }
 
     /// Extracts ID from a MongoDB document.
@@ -220,25 +207,11 @@ impl MongoDBConnector {
 
     /// Extracts payload from a MongoDB document.
     fn extract_payload(&self, doc: &serde_json::Value) -> HashMap<String, serde_json::Value> {
-        let mut payload = HashMap::new();
-
-        if let serde_json::Value::Object(map) = doc {
-            for (key, val) in map {
-                // Skip _id and vector fields
-                if key == &self.config.id_field || key == &self.config.vector_field {
-                    continue;
-                }
-                // If payload_fields is specified, only include those
-                if !self.config.payload_fields.is_empty()
-                    && !self.config.payload_fields.contains(key)
-                {
-                    continue;
-                }
-                payload.insert(key.clone(), val.clone());
-            }
-        }
-
-        payload
+        extract_payload_from_object(
+            doc,
+            &[&self.config.id_field, &self.config.vector_field],
+            &self.config.payload_fields,
+        )
     }
 }
 
@@ -279,19 +252,8 @@ impl SourceConnector for MongoDBConnector {
         let total_count = self.get_count().await?;
 
         // Detect fields
-        let mut fields = Vec::new();
-        if let serde_json::Value::Object(map) = sample {
-            for (key, val) in map {
-                if key == &self.config.id_field || key == &self.config.vector_field {
-                    continue;
-                }
-                fields.push(FieldInfo {
-                    name: key.clone(),
-                    field_type: json_type_name(val),
-                    indexed: false,
-                });
-            }
-        }
+        let fields =
+            detect_fields_from_sample(sample, &[&self.config.id_field, &self.config.vector_field]);
 
         self.schema = Some(SourceSchema {
             source_type: "mongodb".to_string(),
@@ -307,9 +269,7 @@ impl SourceConnector for MongoDBConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        self.schema
-            .clone()
-            .ok_or_else(|| Error::SourceConnection("Not connected".to_string()))
+        crate::connectors::common::cached_schema(&self.schema)
     }
 
     async fn extract_batch(

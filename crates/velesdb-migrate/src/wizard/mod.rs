@@ -198,125 +198,17 @@ impl Wizard {
     }
 
     /// Builds source config from wizard config.
+    ///
+    /// Delegates to [`crate::source_config_builder::build_source_config`]
+    /// to avoid duplicating the per-source match block.
     fn build_source_config(&self, config: &WizardConfig) -> Result<SourceConfig> {
-        use crate::config::*;
-
-        let source = match config.source_type {
-            SourceType::Supabase => SourceConfig::Supabase(SupabaseConfig {
-                url: config.url.clone(),
-                api_key: config.api_key.clone().unwrap_or_default(),
-                table: config.collection.clone(),
-                vector_column: "embedding".to_string(),
-                id_column: "id".to_string(),
-                payload_columns: vec![],
-            }),
-            SourceType::Qdrant => SourceConfig::Qdrant(QdrantConfig {
-                url: config.url.clone(),
-                collection: config.collection.clone(),
-                api_key: config.api_key.clone(),
-                payload_fields: vec![],
-            }),
-            SourceType::Pinecone => SourceConfig::Pinecone(PineconeConfig {
-                api_key: config.api_key.clone().unwrap_or_default(),
-                environment: String::new(),
-                index: config.collection.clone(),
-                namespace: None,
-                base_url: None,
-            }),
-            SourceType::Weaviate => SourceConfig::Weaviate(WeaviateConfig {
-                url: config.url.clone(),
-                class_name: config.collection.clone(),
-                api_key: config.api_key.clone(),
-                properties: vec![],
-            }),
-            SourceType::Milvus => SourceConfig::Milvus(MilvusConfig {
-                url: config.url.clone(),
-                collection: config.collection.clone(),
-                username: None,
-                password: None,
-            }),
-            SourceType::ChromaDB => SourceConfig::ChromaDB(ChromaDBConfig {
-                url: config.url.clone(),
-                collection: config.collection.clone(),
-                tenant: None,
-                database: None,
-            }),
-            SourceType::PgVector => {
-                #[cfg(feature = "postgres")]
-                {
-                    SourceConfig::PgVector(PgVectorConfig {
-                        connection_string: config.url.clone(),
-                        table: config.collection.clone(),
-                        vector_column: "embedding".to_string(),
-                        id_column: "id".to_string(),
-                        payload_columns: vec![],
-                        filter: None,
-                    })
-                }
-                #[cfg(not(feature = "postgres"))]
-                {
-                    return Err(crate::error::Error::Config(
-                        "pgvector requires --features postgres".to_string(),
-                    ));
-                }
-            }
-            SourceType::JsonFile => {
-                SourceConfig::JsonFile(crate::connectors::json_file::JsonFileConfig {
-                    path: std::path::PathBuf::from(&config.url),
-                    array_path: String::new(),
-                    id_field: "id".to_string(),
-                    vector_field: "vector".to_string(),
-                    payload_fields: vec![],
-                })
-            }
-            SourceType::CsvFile => {
-                SourceConfig::CsvFile(crate::connectors::csv_file::CsvFileConfig {
-                    path: std::path::PathBuf::from(&config.url),
-                    id_column: "id".to_string(),
-                    vector_column: "vector".to_string(),
-                    vector_spread: false,
-                    dim_prefix: "dim_".to_string(),
-                    delimiter: ',',
-                    has_header: true,
-                })
-            }
-            SourceType::MongoDB => {
-                SourceConfig::MongoDB(crate::connectors::mongodb::MongoDBConfig {
-                    data_api_url: config.url.clone(),
-                    api_key: config.api_key.clone().unwrap_or_default(),
-                    database: "vectors".to_string(),
-                    collection: config.collection.clone(),
-                    vector_field: "embedding".to_string(),
-                    id_field: "_id".to_string(),
-                    payload_fields: vec![],
-                    filter: None,
-                })
-            }
-            SourceType::Elasticsearch => {
-                SourceConfig::Elasticsearch(crate::connectors::elasticsearch::ElasticsearchConfig {
-                    url: config.url.clone(),
-                    index: config.collection.clone(),
-                    vector_field: "embedding".to_string(),
-                    id_field: "_id".to_string(),
-                    payload_fields: vec![],
-                    username: None,
-                    password: None,
-                    api_key: config.api_key.clone(),
-                    query: None,
-                })
-            }
-            SourceType::Redis => SourceConfig::Redis(crate::connectors::redis::RedisConfig {
-                url: config.url.clone(),
-                password: config.api_key.clone(),
-                index: config.collection.clone(),
-                vector_field: "embedding".to_string(),
-                key_prefix: "doc:".to_string(),
-                payload_fields: vec![],
-                filter: None,
-            }),
+        let params = crate::source_config_builder::SourceParams {
+            source_type: config.source_type,
+            url: &config.url,
+            api_key: config.api_key.as_deref(),
+            collection: &config.collection,
         };
-
-        Ok(source)
+        crate::source_config_builder::build_source_config(&params)
     }
 
     /// Builds full migration config.

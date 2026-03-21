@@ -74,6 +74,88 @@ fn expand_dfs_neighbors(
     }
 }
 
+/// Shared traversal loop for both BFS and DFS.
+///
+/// The caller provides a mutable frontier (pre-seeded with the source node)
+/// and two function pointers:
+/// - `pop_fn`: extracts the next element (FIFO for BFS, LIFO for DFS)
+/// - `push_fn`: enqueues a new element
+///
+/// This eliminates the duplicated loop bodies in `traverse_bfs` and
+/// `traverse_dfs`.
+type TraversalEntry = (u64, u32, Vec<u64>);
+
+/// Bundled parameters for `traverse_with_frontier` (avoids too-many-arguments).
+struct TraversalParams<'a> {
+    store: &'a EdgeStore,
+    filter: &'a [&'a str],
+    limit: usize,
+    max_depth: u32,
+    source: u64,
+}
+
+fn traverse_with_frontier<F>(
+    params: &TraversalParams<'_>,
+    pop_fn: fn(&mut F) -> Option<TraversalEntry>,
+    push_fn: fn(&mut F, TraversalEntry),
+    frontier: &mut F,
+) -> Vec<TraversalResult> {
+    let mut visited = HashSet::new();
+    let mut results = Vec::new();
+    visited.insert(params.source);
+
+    while let Some((node, depth, path)) = (pop_fn)(frontier) {
+        if results.len() >= params.limit {
+            break;
+        }
+        if depth >= params.max_depth {
+            continue;
+        }
+
+        let neighbors = collect_neighbor_expansions(
+            params.store.get_outgoing(node).into_iter(),
+            depth,
+            &path,
+            params.filter,
+            &mut visited,
+        );
+
+        for (target, next_depth, new_path) in neighbors {
+            results.push(TraversalResult {
+                target_id: target,
+                depth: next_depth,
+                path: new_path.clone(),
+            });
+            if results.len() >= params.limit {
+                break;
+            }
+            (push_fn)(frontier, (target, next_depth, new_path));
+        }
+    }
+
+    results
+}
+
+/// BFS pop: removes from the front of the `VecDeque`.
+fn bfs_pop(q: &mut std::collections::VecDeque<TraversalEntry>) -> Option<TraversalEntry> {
+    q.pop_front()
+}
+
+/// BFS push: appends to the back of the `VecDeque`.
+fn bfs_push(q: &mut std::collections::VecDeque<TraversalEntry>, item: TraversalEntry) {
+    q.push_back(item);
+}
+
+/// DFS pop: removes from the end of the `Vec`.
+fn dfs_pop(s: &mut Vec<TraversalEntry>) -> Option<TraversalEntry> {
+    s.pop()
+}
+
+/// DFS push: appends to the end of the `Vec`.
+fn dfs_push(s: &mut Vec<TraversalEntry>, item: TraversalEntry) {
+    s.push(item);
+}
+
 impl Collection {
     /// Adds an edge to the collection's knowledge graph.
     ///
@@ -197,47 +279,24 @@ impl Collection {
         rel_types: Option<&[&str]>,
         limit: usize,
     ) -> Result<Vec<TraversalResult>> {
-        use std::collections::VecDeque;
-
         let store = self.edge_store.read();
         let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-        let mut results = Vec::new();
+        let params = TraversalParams {
+            store: &store,
+            filter,
+            limit,
+            max_depth,
+            source,
+        };
+        let mut frontier = std::collections::VecDeque::new();
+        frontier.push_back((source, 0u32, Vec::new()));
 
-        visited.insert(source);
-        queue.push_back((source, 0u32, Vec::new()));
-
-        while let Some((node, depth, path)) = queue.pop_front() {
-            if results.len() >= limit {
-                break;
-            }
-            if depth >= max_depth {
-                continue;
-            }
-
-            let neighbors = collect_neighbor_expansions(
-                store.get_outgoing(node).into_iter(),
-                depth,
-                &path,
-                filter,
-                &mut visited,
-            );
-
-            for (target, next_depth, new_path) in neighbors {
-                results.push(TraversalResult {
-                    target_id: target,
-                    depth: next_depth,
-                    path: new_path.clone(),
-                });
-                if results.len() >= limit {
-                    break;
-                }
-                queue.push_back((target, next_depth, new_path));
-            }
-        }
-
-        Ok(results)
+        Ok(traverse_with_frontier(
+            &params,
+            bfs_pop,
+            bfs_push,
+            &mut frontier,
+        ))
     }
 
     /// Traverses the graph using DFS from a source node.
@@ -265,43 +324,21 @@ impl Collection {
     ) -> Result<Vec<TraversalResult>> {
         let store = self.edge_store.read();
         let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let mut visited = HashSet::new();
-        let mut stack = Vec::new();
-        let mut results = Vec::new();
+        let params = TraversalParams {
+            store: &store,
+            filter,
+            limit,
+            max_depth,
+            source,
+        };
+        let mut frontier = vec![(source, 0u32, Vec::new())];
 
-        visited.insert(source);
-        stack.push((source, 0u32, Vec::new()));
-
-        while let Some((node, depth, path)) = stack.pop() {
-            if results.len() >= limit {
-                break;
-            }
-            if depth >= max_depth {
-                continue;
-            }
-
-            let neighbors = collect_neighbor_expansions(
-                store.get_outgoing(node).into_iter(),
-                depth,
-                &path,
-                filter,
-                &mut visited,
-            );
-
-            for (target, next_depth, new_path) in neighbors {
-                results.push(TraversalResult {
-                    target_id: target,
-                    depth: next_depth,
-                    path: new_path.clone(),
-                });
-                if results.len() >= limit {
-                    break;
-                }
-                stack.push((target, next_depth, new_path));
-            }
-        }
-
-        Ok(results)
+        Ok(traverse_with_frontier(
+            &params,
+            dfs_pop,
+            dfs_push,
+            &mut frontier,
+        ))
     }
 
     /// Gets the in-degree and out-degree of a node.

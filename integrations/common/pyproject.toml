@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "velesdb-common"
+version = "1.6.0"
+description = "Shared utilities for VelesDB Python integrations (internal use)"
+license = {text = "MIT"}
+authors = [
+    {name = "VelesDB Team", email = "contact@wiscale.fr"}
+]
+requires-python = ">=3.9"
+# No runtime dependencies beyond the stdlib — kept deliberately lean.
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

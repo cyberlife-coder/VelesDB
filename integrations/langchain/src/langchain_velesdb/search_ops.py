@@ -13,6 +13,7 @@ from langchain_core.documents import Document
 
 import velesdb
 
+from langchain_velesdb._common import payload_to_doc_parts, validate_queries_batch
 from langchain_velesdb.security import (
     validate_k,
     validate_text,
@@ -26,9 +27,7 @@ logger = logging.getLogger(__name__)
 
 def _payload_to_doc(result: dict) -> Document:
     """Convert a single search result dict to a LangChain Document."""
-    payload = result.get("payload", {})
-    text = payload.get("text", "")
-    metadata = {k: v for k, v in payload.items() if k != "text"}
+    text, metadata = payload_to_doc_parts(result)
     return Document(page_content=text, metadata=metadata)
 
 
@@ -387,10 +386,13 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-        validate_k(k)
-        validate_batch_size(len(queries))
-        for q in queries:
-            validate_text(q)
+        validate_queries_batch(
+            queries,
+            validate_k_fn=validate_k,
+            validate_batch_size_fn=validate_batch_size,
+            validate_text_fn=validate_text,
+            k=k,
+        )
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         collection = self._get_collection(len(query_embeddings[0]))
         searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
@@ -415,15 +417,55 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-        validate_k(k)
-        validate_batch_size(len(queries))
-        for q in queries:
-            validate_text(q)
+        validate_queries_batch(
+            queries,
+            validate_k_fn=validate_k,
+            validate_batch_size_fn=validate_batch_size,
+            validate_text_fn=validate_text,
+            k=k,
+        )
         query_embeddings = [self._embedding.embed_query(q) for q in queries]
         collection = self._get_collection(len(query_embeddings[0]))
         searches = [{"vector": emb, "top_k": k} for emb in query_embeddings]
         batch_results = collection.batch_search(searches)
         return [_results_to_docs_with_score(results) for results in batch_results]
+
+    def _run_multi_query(
+        self,
+        queries: List[str],
+        k: int,
+        fusion: str,
+        fusion_params: Optional[dict],
+        filter: Optional[dict],
+    ) -> List[dict]:
+        """Validate inputs and execute a multi-query search, returning raw results.
+
+        Args:
+            queries: Non-empty list of query strings.
+            k: Number of results to return after fusion.
+            fusion: Fusion strategy name.
+            fusion_params: Optional fusion strategy parameters.
+            filter: Optional metadata filter dict.
+
+        Returns:
+            Raw list of search result dicts from the collection.
+        """
+        validate_queries_batch(
+            queries,
+            validate_k_fn=validate_k,
+            validate_batch_size_fn=validate_batch_size,
+            validate_text_fn=validate_text,
+            k=k,
+        )
+        query_embeddings = [self._embedding.embed_query(q) for q in queries]
+        collection = self._get_collection(len(query_embeddings[0]))
+        fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
+        return collection.multi_query_search(
+            vectors=query_embeddings,
+            top_k=k,
+            fusion=fusion_strategy,
+            filter=filter,
+        )
 
     def multi_query_search(
         self,
@@ -459,22 +501,7 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-
-        validate_k(k)
-        validate_batch_size(len(queries))
-        for q in queries:
-            validate_text(q)
-
-        query_embeddings = [self._embedding.embed_query(q) for q in queries]
-        collection = self._get_collection(len(query_embeddings[0]))
-        fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
-
-        results = collection.multi_query_search(
-            vectors=query_embeddings,
-            top_k=k,
-            fusion=fusion_strategy,
-            filter=filter,
-        )
+        results = self._run_multi_query(queries, k, fusion, fusion_params, filter)
         return _results_to_docs(results)
 
     def multi_query_search_with_score(
@@ -501,22 +528,7 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-
-        validate_k(k)
-        validate_batch_size(len(queries))
-        for q in queries:
-            validate_text(q)
-
-        query_embeddings = [self._embedding.embed_query(q) for q in queries]
-        collection = self._get_collection(len(query_embeddings[0]))
-        fusion_strategy = self._build_fusion_strategy(fusion, fusion_params)
-
-        results = collection.multi_query_search(
-            vectors=query_embeddings,
-            top_k=k,
-            fusion=fusion_strategy,
-            filter=filter,
-        )
+        results = self._run_multi_query(queries, k, fusion, fusion_params, filter)
         return _results_to_docs_with_score(results)
 
     def _build_fusion_strategy(

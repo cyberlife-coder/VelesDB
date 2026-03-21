@@ -8,10 +8,9 @@
 // - Used for sharding only, actual storage uses u64 for persistence
 #![allow(clippy::cast_possible_truncation)]
 
-use super::{ParallelConfig, TraversalResult, TraversalStats};
+use super::{bfs_core, ParallelConfig, TraversalResult, TraversalStats};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
-use std::collections::VecDeque;
 
 /// Shard-parallel traversal for partitioned graphs.
 ///
@@ -202,6 +201,8 @@ impl ShardedTraverser {
     }
 
     /// Executes BFS within a single shard (for testing/debugging).
+    ///
+    /// Only follows edges whose target belongs to the same shard as `start`.
     pub fn bfs_single_shard<F>(
         &self,
         start: u64,
@@ -212,41 +213,7 @@ impl ShardedTraverser {
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
     {
         let target_shard = self.shard_for_node(start);
-        let mut results = Vec::new();
-        let mut visited = FxHashSet::default();
-        let mut queue: VecDeque<(u64, Vec<u64>, u32)> = VecDeque::new();
-
-        visited.insert(start);
-        // Include start node at depth 0
-        results.push(TraversalResult::new(start, start, Vec::new(), 0));
-        queue.push_back((start, Vec::new(), 0));
-
-        while let Some((node, path, depth)) = queue.pop_front() {
-            if depth >= self.config.max_depth || results.len() >= self.config.limit {
-                break;
-            }
-
-            let neighbors = adjacency(node);
-            stats.add_edges_traversed(neighbors.len());
-
-            // Adjacency returns (neighbor_id, edge_id)
-            for (neighbor, edge_id) in neighbors {
-                // Only follow edges within the same shard
-                if self.shard_for_node(neighbor) == target_shard && visited.insert(neighbor) {
-                    stats.add_nodes_visited(1);
-                    let mut new_path = path.clone();
-                    new_path.push(edge_id);
-                    results.push(TraversalResult::new(
-                        start,
-                        neighbor,
-                        new_path.clone(),
-                        depth + 1,
-                    ));
-                    queue.push_back((neighbor, new_path, depth + 1));
-                }
-            }
-        }
-
-        results
+        let shard_filter = |neighbor: u64| self.shard_for_node(neighbor) == target_shard;
+        bfs_core(start, adjacency, stats, &self.config, Some(&shard_filter))
     }
 }

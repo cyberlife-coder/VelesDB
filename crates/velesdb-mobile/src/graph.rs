@@ -137,14 +137,7 @@ impl MobileGraphStore {
     /// Acquires locks in consistent order: edges → outgoing
     /// to prevent ABBA deadlock with write operations.
     pub fn get_outgoing(&self, node_id: u64) -> Vec<MobileGraphEdge> {
-        // CRITICAL: Lock order must match write operations (edges → outgoing → incoming)
-        let edges = self.edges.read();
-        let outgoing = self.outgoing.read();
-
-        outgoing
-            .get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| edges.get(id).cloned()).collect())
-            .unwrap_or_default()
+        self.get_edges_from_index(node_id, &self.outgoing)
     }
 
     /// Gets incoming edges to a node.
@@ -154,14 +147,7 @@ impl MobileGraphStore {
     /// Acquires locks in consistent order: edges → incoming
     /// to prevent ABBA deadlock with write operations.
     pub fn get_incoming(&self, node_id: u64) -> Vec<MobileGraphEdge> {
-        // CRITICAL: Lock order must match write operations (edges → outgoing → incoming)
-        let edges = self.edges.read();
-        let incoming = self.incoming.read();
-
-        incoming
-            .get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| edges.get(id).cloned()).collect())
-            .unwrap_or_default()
+        self.get_edges_from_index(node_id, &self.incoming)
     }
 
     /// Gets outgoing edges filtered by label.
@@ -388,6 +374,27 @@ impl MobileGraphStore {
     }
 }
 
+/// Internal helpers (not exposed via UniFFI).
+impl MobileGraphStore {
+    /// Resolves edge IDs from an adjacency index to full edge objects.
+    ///
+    /// # Lock Order
+    ///
+    /// Acquires `edges` read-lock first, then the `index` read-lock, matching
+    /// the write-side lock order (edges -> outgoing -> incoming).
+    fn get_edges_from_index(
+        &self,
+        node_id: u64,
+        index: &RwLock<HashMap<u64, Vec<u64>>>,
+    ) -> Vec<MobileGraphEdge> {
+        let edges = self.edges.read();
+        let idx = index.read();
+        idx.get(&node_id)
+            .map(|ids| ids.iter().filter_map(|id| edges.get(id).cloned()).collect())
+            .unwrap_or_default()
+    }
+}
+
 impl Default for MobileGraphStore {
     fn default() -> Self {
         Self {
@@ -403,6 +410,36 @@ impl Default for MobileGraphStore {
 mod tests {
     use super::*;
 
+    /// Creates a test node with the given ID and "Person" label.
+    fn person_node(id: u64) -> MobileGraphNode {
+        MobileGraphNode {
+            id,
+            label: "Person".to_string(),
+            properties_json: None,
+            vector: None,
+        }
+    }
+
+    /// Creates a test edge with the given ID, source, and target ("KNOWS" label).
+    fn knows_edge(id: u64, source: u64, target: u64) -> MobileGraphEdge {
+        MobileGraphEdge {
+            id,
+            source,
+            target,
+            label: "KNOWS".to_string(),
+            properties_json: None,
+        }
+    }
+
+    /// Creates a store with nodes [1..=count] and returns it.
+    fn store_with_nodes(count: u64) -> Arc<MobileGraphStore> {
+        let store = MobileGraphStore::new();
+        for i in 1..=count {
+            store.add_node(person_node(i));
+        }
+        store
+    }
+
     #[test]
     fn test_mobile_graph_node_creation() {
         let node = MobileGraphNode {
@@ -417,13 +454,7 @@ mod tests {
 
     #[test]
     fn test_mobile_graph_edge_creation() {
-        let edge = MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        };
+        let edge = knows_edge(100, 1, 2);
         assert_eq!(edge.id, 100);
         assert_eq!(edge.source, 1);
         assert_eq!(edge.target, 2);
@@ -431,157 +462,42 @@ mod tests {
 
     #[test]
     fn test_mobile_graph_store_add_nodes() {
-        let store = MobileGraphStore::new();
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
+        let store = store_with_nodes(1);
         assert_eq!(store.node_count(), 1);
     }
 
     #[test]
     fn test_mobile_graph_store_add_edges() {
-        let store = MobileGraphStore::new();
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 2,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-
-        let result = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-
+        let store = store_with_nodes(2);
+        let result = store.add_edge(knows_edge(100, 1, 2));
         assert!(result.is_ok());
         assert_eq!(store.edge_count(), 1);
     }
 
     #[test]
     fn test_mobile_graph_store_duplicate_edge_error() {
-        let store = MobileGraphStore::new();
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 2,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-
-        // Try to add same edge ID again
-        let result = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-
+        let store = store_with_nodes(2);
+        let _ = store.add_edge(knows_edge(100, 1, 2));
+        let result = store.add_edge(knows_edge(100, 1, 2));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_mobile_graph_store_get_outgoing() {
-        let store = MobileGraphStore::new();
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 2,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 3,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 101,
-            source: 1,
-            target: 3,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-
-        let outgoing = store.get_outgoing(1);
-        assert_eq!(outgoing.len(), 2);
+        let store = store_with_nodes(3);
+        let _ = store.add_edge(knows_edge(100, 1, 2));
+        let _ = store.add_edge(knows_edge(101, 1, 3));
+        assert_eq!(store.get_outgoing(1).len(), 2);
     }
 
     #[test]
     fn test_mobile_graph_store_bfs_traverse() {
-        let store = MobileGraphStore::new();
-
-        // Create nodes
-        for i in 1..=4 {
-            store.add_node(MobileGraphNode {
-                id: i,
-                label: "Person".to_string(),
-                properties_json: None,
-                vector: None,
-            });
-        }
+        let store = store_with_nodes(4);
 
         // Create chain: 1 -> 2 -> 3 -> 4
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 101,
-            source: 2,
-            target: 3,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 102,
-            source: 3,
-            target: 4,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
+        let _ = store.add_edge(knows_edge(100, 1, 2));
+        let _ = store.add_edge(knows_edge(101, 2, 3));
+        let _ = store.add_edge(knows_edge(102, 3, 4));
 
         let results = store.bfs_traverse(1, 3, 100);
 
@@ -594,28 +510,8 @@ mod tests {
 
     #[test]
     fn test_mobile_graph_store_remove_node() {
-        let store = MobileGraphStore::new();
-
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 2,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
+        let store = store_with_nodes(2);
+        let _ = store.add_edge(knows_edge(100, 1, 2));
 
         assert_eq!(store.node_count(), 2);
         assert_eq!(store.edge_count(), 1);
@@ -628,28 +524,8 @@ mod tests {
 
     #[test]
     fn test_mobile_graph_store_remove_edge() {
-        let store = MobileGraphStore::new();
-
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 2,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
+        let store = store_with_nodes(2);
+        let _ = store.add_edge(knows_edge(100, 1, 2));
 
         assert_eq!(store.edge_count(), 1);
 
@@ -662,28 +538,8 @@ mod tests {
 
     #[test]
     fn test_mobile_graph_store_clear() {
-        let store = MobileGraphStore::new();
-
-        store.add_node(MobileGraphNode {
-            id: 1,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-        store.add_node(MobileGraphNode {
-            id: 2,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
-
-        let _ = store.add_edge(MobileGraphEdge {
-            id: 100,
-            source: 1,
-            target: 2,
-            label: "KNOWS".to_string(),
-            properties_json: None,
-        });
+        let store = store_with_nodes(2);
+        let _ = store.add_edge(knows_edge(100, 1, 2));
 
         store.clear();
 

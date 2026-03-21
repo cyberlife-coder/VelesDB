@@ -1,10 +1,11 @@
 //! WHERE clause and condition parsing.
 
+use super::helpers::compare_op_from_str;
 use super::{extract_identifier, Rule};
 use crate::metrics::global_guardrails_metrics;
 use crate::velesql::ast::{
-    BetweenCondition, CompareOp, Comparison, Condition, InCondition, IsNullCondition,
-    LikeCondition, MatchCondition, SimilarityCondition,
+    BetweenCondition, Comparison, Condition, InCondition, IsNullCondition, LikeCondition,
+    MatchCondition, SimilarityCondition,
 };
 use crate::velesql::error::ParseError;
 use crate::velesql::Parser;
@@ -61,21 +62,9 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
         depth: usize,
     ) -> Result<Condition, ParseError> {
-        Self::ensure_depth(depth, pair.as_str())?;
-        let mut inner = pair.into_inner().peekable();
-
-        let first = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected condition"))?;
-
-        let mut result = Self::parse_and_expr_with_depth(first, depth + 1)?;
-
-        for and_expr in inner {
-            let right = Self::parse_and_expr_with_depth(and_expr, depth + 1)?;
-            result = Condition::Or(Box::new(result), Box::new(right));
-        }
-
-        Ok(result)
+        Self::parse_binary_chain(pair, depth, Self::parse_and_expr_with_depth, |l, r| {
+            Condition::Or(Box::new(l), Box::new(r))
+        })
     }
 
     #[allow(dead_code)]
@@ -89,6 +78,19 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
         depth: usize,
     ) -> Result<Condition, ParseError> {
+        Self::parse_binary_chain(pair, depth, Self::parse_primary_expr_with_depth, |l, r| {
+            Condition::And(Box::new(l), Box::new(r))
+        })
+    }
+
+    /// Shared fold for OR/AND chains: depth-check, parse first child via
+    /// `parse_child`, then fold remaining children with `combine`.
+    fn parse_binary_chain(
+        pair: pest::iterators::Pair<Rule>,
+        depth: usize,
+        parse_child: fn(pest::iterators::Pair<Rule>, usize) -> Result<Condition, ParseError>,
+        combine: fn(Condition, Condition) -> Condition,
+    ) -> Result<Condition, ParseError> {
         Self::ensure_depth(depth, pair.as_str())?;
         let mut inner = pair.into_inner().peekable();
 
@@ -96,11 +98,11 @@ impl Parser {
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected condition"))?;
 
-        let mut result = Self::parse_primary_expr_with_depth(first, depth + 1)?;
+        let mut result = parse_child(first, depth + 1)?;
 
-        for primary in inner {
-            let right = Self::parse_primary_expr_with_depth(primary, depth + 1)?;
-            result = Condition::And(Box::new(result), Box::new(right));
+        for child in inner {
+            let right = parse_child(child, depth + 1)?;
+            result = combine(result, right);
         }
 
         Ok(result)
@@ -173,7 +175,7 @@ impl Parser {
                     vector = Some(Self::parse_vector_value(inner)?);
                 }
                 Rule::compare_op => {
-                    operator = Some(Self::parse_compare_op(inner.as_str())?);
+                    operator = Some(compare_op_from_str(inner.as_str())?);
                 }
                 Rule::numeric_threshold => {
                     // numeric_threshold = { float | integer }
@@ -204,15 +206,24 @@ impl Parser {
         }))
     }
 
+    /// Extracts the leading column name from a pair's inner iterator.
+    ///
+    /// Many condition parsers start by pulling the first child as a column
+    /// name. This helper removes the duplication.
+    fn extract_leading_column(
+        inner: &mut pest::iterators::Pairs<Rule>,
+    ) -> Result<String, ParseError> {
+        let column_pair = inner
+            .next()
+            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
+        Ok(Self::extract_column_name(&column_pair))
+    }
+
     pub(crate) fn parse_match_expr(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
-
-        let column_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = Self::extract_column_name(&column_pair);
+        let column = Self::extract_leading_column(&mut inner)?;
 
         let query = inner
             .next()
@@ -245,11 +256,7 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
-
-        let column_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = Self::extract_column_name(&column_pair);
+        let column = Self::extract_leading_column(&mut inner)?;
 
         let value_list = inner
             .next()
@@ -271,11 +278,7 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
-
-        let column_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = Self::extract_column_name(&column_pair);
+        let column = Self::extract_leading_column(&mut inner)?;
 
         let low = Self::next_value(&mut inner, "Expected low value")?;
         let high = Self::next_value(&mut inner, "Expected high value")?;
@@ -298,11 +301,7 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
-
-        let column_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = Self::extract_column_name(&column_pair);
+        let column = Self::extract_leading_column(&mut inner)?;
 
         // Parse LIKE or ILIKE operator
         let like_op = inner
@@ -358,16 +357,12 @@ impl Parser {
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Condition, ParseError> {
         let mut inner = pair.into_inner();
-
-        let column_pair = inner
-            .next()
-            .ok_or_else(|| ParseError::syntax(0, "", "Expected column name"))?;
-        let column = Self::extract_column_name(&column_pair);
+        let column = Self::extract_leading_column(&mut inner)?;
 
         let op_pair = inner
             .next()
             .ok_or_else(|| ParseError::syntax(0, "", "Expected operator"))?;
-        let operator = Self::parse_compare_op(op_pair.as_str())?;
+        let operator = compare_op_from_str(op_pair.as_str())?;
 
         let value = Self::parse_value(
             inner
@@ -380,18 +375,5 @@ impl Parser {
             operator,
             value,
         }))
-    }
-
-    /// Parses a comparison operator string into a `CompareOp`.
-    fn parse_compare_op(op: &str) -> Result<CompareOp, ParseError> {
-        match op {
-            "=" => Ok(CompareOp::Eq),
-            "!=" | "<>" => Ok(CompareOp::NotEq),
-            ">" => Ok(CompareOp::Gt),
-            ">=" => Ok(CompareOp::Gte),
-            "<" => Ok(CompareOp::Lt),
-            "<=" => Ok(CompareOp::Lte),
-            _ => Err(ParseError::syntax(0, op, "Invalid operator")),
-        }
     }
 }

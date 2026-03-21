@@ -7,6 +7,19 @@ use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 
+/// Controls whether the traversal uses BFS (FIFO) or DFS (LIFO) ordering.
+///
+/// BFS explores level-by-level (breadth-first), DFS explores depth-first.
+/// The `should_break` field controls whether we `break` (BFS) or `continue`
+/// (DFS) when hitting depth/limit bounds on a popped node.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TraversalOrder {
+    /// Breadth-first: pop from front, break on bounds.
+    Bfs,
+    /// Depth-first: pop from back, continue on bounds.
+    Dfs,
+}
+
 /// Parallel traversal engine using rayon for start-node parallelism.
 ///
 /// Each start node's traversal is independent, making it embarrassingly parallel.
@@ -49,83 +62,19 @@ impl ParallelTraverser {
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
     {
-        let stats = TraversalStats::new();
-
-        let results: Vec<Vec<TraversalResult>> =
-            if self.config.should_parallelize(start_nodes.len()) {
-                // Parallel: each start node gets its own BFS
-                start_nodes
-                    .par_iter()
-                    .map(|&start| self.bfs_single(start, &adjacency, &stats))
-                    .collect()
-            } else {
-                // Sequential for small inputs
-                start_nodes
-                    .iter()
-                    .map(|&start| self.bfs_single(start, &adjacency, &stats))
-                    .collect()
-            };
-
-        let all_results: Vec<TraversalResult> = results.into_iter().flatten().collect();
-        let raw_count = all_results.len();
-
-        let deduplicated = self.merge_and_deduplicate(all_results);
-
-        let mut final_stats = stats;
-        final_stats.start_nodes_count = start_nodes.len();
-        final_stats.raw_results = raw_count;
-        final_stats.deduplicated_results = deduplicated.len();
-
-        (deduplicated, final_stats)
+        self.run_parallel(start_nodes, &adjacency, TraversalOrder::Bfs)
     }
 
-    /// BFS from a single start node (includes start node at depth 0).
-    fn bfs_single<F>(
+    /// Executes DFS from multiple start nodes in parallel.
+    pub fn dfs_parallel<F>(
         &self,
-        start: u64,
-        adjacency: &F,
-        stats: &TraversalStats,
-    ) -> Vec<TraversalResult>
+        start_nodes: &[u64],
+        adjacency: F,
+    ) -> (Vec<TraversalResult>, TraversalStats)
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
     {
-        let mut results = Vec::new();
-        let mut visited = FxHashSet::default();
-        let mut queue: VecDeque<(u64, Vec<u64>, u32)> = VecDeque::new();
-
-        visited.insert(start);
-        stats.add_nodes_visited(1); // Count start node
-                                    // Include start node at depth 0
-        results.push(TraversalResult::new(start, start, Vec::new(), 0));
-        queue.push_back((start, Vec::new(), 0));
-
-        while let Some((node, path, depth)) = queue.pop_front() {
-            if depth >= self.config.max_depth || results.len() >= self.config.limit {
-                break;
-            }
-
-            let neighbors = adjacency(node);
-            stats.add_edges_traversed(neighbors.len());
-
-            // Adjacency returns (neighbor_id, edge_id)
-            for (neighbor, edge_id) in neighbors {
-                if visited.insert(neighbor) {
-                    stats.add_nodes_visited(1);
-                    let mut new_path = path.clone();
-                    new_path.push(edge_id);
-                    let new_depth = depth + 1;
-                    results.push(TraversalResult::new(
-                        start,
-                        neighbor,
-                        new_path.clone(),
-                        new_depth,
-                    ));
-                    queue.push_back((neighbor, new_path, new_depth));
-                }
-            }
-        }
-
-        results
+        self.run_parallel(start_nodes, &adjacency, TraversalOrder::Dfs)
     }
 
     /// Merge results from multiple traversals and deduplicate by path signature.
@@ -152,11 +101,12 @@ impl ParallelTraverser {
         unique
     }
 
-    /// Executes DFS from multiple start nodes in parallel.
-    pub fn dfs_parallel<F>(
+    /// Dispatches parallel or sequential traversal, then merges and deduplicates.
+    fn run_parallel<F>(
         &self,
         start_nodes: &[u64],
-        adjacency: F,
+        adjacency: &F,
+        order: TraversalOrder,
     ) -> (Vec<TraversalResult>, TraversalStats)
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
@@ -167,12 +117,12 @@ impl ParallelTraverser {
             if self.config.should_parallelize(start_nodes.len()) {
                 start_nodes
                     .par_iter()
-                    .map(|&start| self.dfs_single(start, &adjacency, &stats))
+                    .map(|&start| self.traverse_single(start, adjacency, &stats, order))
                     .collect()
             } else {
                 start_nodes
                     .iter()
-                    .map(|&start| self.dfs_single(start, &adjacency, &stats))
+                    .map(|&start| self.traverse_single(start, adjacency, &stats, order))
                     .collect()
             };
 
@@ -188,34 +138,40 @@ impl ParallelTraverser {
         (deduplicated, final_stats)
     }
 
-    /// DFS from a single start node (includes start node at depth 0).
-    fn dfs_single<F>(
+    /// Unified single-start traversal for both BFS and DFS.
+    ///
+    /// BFS uses `VecDeque::pop_front` (FIFO) and breaks on depth/limit.
+    /// DFS uses `VecDeque::pop_back` (LIFO) and continues on depth/limit.
+    fn traverse_single<F>(
         &self,
         start: u64,
         adjacency: &F,
         stats: &TraversalStats,
+        order: TraversalOrder,
     ) -> Vec<TraversalResult>
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
     {
         let mut results = Vec::new();
         let mut visited = FxHashSet::default();
-        let mut stack: Vec<(u64, Vec<u64>, u32)> = Vec::new();
+        let mut queue: VecDeque<(u64, Vec<u64>, u32)> = VecDeque::new();
 
         visited.insert(start);
-        // Include start node at depth 0
+        stats.add_nodes_visited(1);
         results.push(TraversalResult::new(start, start, Vec::new(), 0));
-        stack.push((start, Vec::new(), 0));
+        queue.push_back((start, Vec::new(), 0));
 
-        while let Some((node, path, depth)) = stack.pop() {
+        while let Some((node, path, depth)) = Self::pop_next(&mut queue, order) {
             if depth >= self.config.max_depth || results.len() >= self.config.limit {
-                continue;
+                match order {
+                    TraversalOrder::Bfs => break,
+                    TraversalOrder::Dfs => continue,
+                }
             }
 
             let neighbors = adjacency(node);
             stats.add_edges_traversed(neighbors.len());
 
-            // Adjacency returns (neighbor_id, edge_id)
             for (neighbor, edge_id) in neighbors {
                 if visited.insert(neighbor) {
                     stats.add_nodes_visited(1);
@@ -228,11 +184,22 @@ impl ParallelTraverser {
                         new_path.clone(),
                         new_depth,
                     ));
-                    stack.push((neighbor, new_path, new_depth));
+                    queue.push_back((neighbor, new_path, new_depth));
                 }
             }
         }
 
         results
+    }
+
+    /// Pops the next element according to traversal order.
+    fn pop_next(
+        queue: &mut VecDeque<(u64, Vec<u64>, u32)>,
+        order: TraversalOrder,
+    ) -> Option<(u64, Vec<u64>, u32)> {
+        match order {
+            TraversalOrder::Bfs => queue.pop_front(),
+            TraversalOrder::Dfs => queue.pop_back(),
+        }
     }
 }

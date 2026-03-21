@@ -37,6 +37,37 @@ import { AgentMemoryClient } from './agent-memory';
 // Re-export for backward compatibility
 export { AgentMemoryClient } from './agent-memory';
 
+// ---------------------------------------------------------------------------
+// Shared validation helpers (eliminates duplicated checks across methods)
+// ---------------------------------------------------------------------------
+
+/** Validate that a value is a non-empty string, throwing with the given label. */
+function requireNonEmptyString(value: unknown, label: string): void {
+  if (!value || typeof value !== 'string') {
+    throw new ValidationError(`${label} must be a non-empty string`);
+  }
+}
+
+/** Validate that a value is a vector (number[] or Float32Array). */
+function requireVector(value: unknown, label: string): void {
+  if (!value || (!Array.isArray(value) && !(value instanceof Float32Array))) {
+    throw new ValidationError(`${label} must be an array or Float32Array`);
+  }
+}
+
+/** Validate a docs array and each document within it. */
+function validateDocsBatch(
+  docs: VectorDocument[],
+  validateDoc: (doc: VectorDocument) => void
+): void {
+  if (!Array.isArray(docs)) {
+    throw new ValidationError('Documents must be an array');
+  }
+  for (const doc of docs) {
+    validateDoc(doc);
+  }
+}
+
 /**
  * VelesDB Client
  * 
@@ -129,11 +160,8 @@ export class VelesDB {
    */
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
     this.ensureInitialized();
-    
-    if (!name || typeof name !== 'string') {
-      throw new ValidationError('Collection name must be a non-empty string');
-    }
-    
+    requireNonEmptyString(name, 'Collection name');
+
     // Dimension is required for vector collections, not for metadata_only
     const isMetadataOnly = config.collectionType === 'metadata_only';
     if (!isMetadataOnly && (!config.dimension || config.dimension <= 0)) {
@@ -158,10 +186,7 @@ export class VelesDB {
    */
   async createMetadataCollection(name: string): Promise<void> {
     this.ensureInitialized();
-    
-    if (!name || typeof name !== 'string') {
-      throw new ValidationError('Collection name must be a non-empty string');
-    }
+    requireNonEmptyString(name, 'Collection name');
 
     await this.backend.createCollection(name, { collectionType: 'metadata_only' });
   }
@@ -217,14 +242,7 @@ export class VelesDB {
    */
   async insertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-    
-    if (!Array.isArray(docs)) {
-      throw new ValidationError('Documents must be an array');
-    }
-
-    for (const doc of docs) {
-      this.validateDocument(doc);
-    }
+    validateDocsBatch(docs, doc => this.validateDocument(doc));
 
     await this.backend.insertBatch(collection, docs);
   }
@@ -234,27 +252,9 @@ export class VelesDB {
       throw new ValidationError('Document ID is required');
     }
 
-    if (!doc.vector) {
-      throw new ValidationError('Document vector is required');
-    }
+    requireVector(doc.vector, 'Vector');
 
-    if (!Array.isArray(doc.vector) && !(doc.vector instanceof Float32Array)) {
-      throw new ValidationError('Vector must be an array or Float32Array');
-    }
-
-    if (
-      this.config.backend === 'rest' &&
-      (
-        typeof doc.id !== 'number' ||
-        !Number.isInteger(doc.id) ||
-        doc.id < 0 ||
-        doc.id > Number.MAX_SAFE_INTEGER
-      )
-    ) {
-      throw new ValidationError(
-        `REST backend requires numeric u64-compatible document IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER})`
-      );
-    }
+    this.validateRestPointId(doc.id);
   }
 
   private validateRestPointId(id: string | number): void {
@@ -287,10 +287,7 @@ export class VelesDB {
     options?: SearchOptions
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    if (!query || (!Array.isArray(query) && !(query instanceof Float32Array))) {
-      throw new ValidationError('Query must be an array or Float32Array');
-    }
+    requireVector(query, 'Query');
 
     return this.backend.search(collection, query, options);
   }
@@ -317,9 +314,7 @@ export class VelesDB {
     }
 
     for (const s of searches) {
-      if (!s.vector || (!Array.isArray(s.vector) && !(s.vector instanceof Float32Array))) {
-        throw new ValidationError('Each search must have a vector (array or Float32Array)');
-      }
+      requireVector(s.vector, 'Each search vector');
     }
 
     return this.backend.searchBatch(collection, searches);
@@ -365,10 +360,7 @@ export class VelesDB {
     options?: { k?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    if (!query || typeof query !== 'string') {
-      throw new ValidationError('Query must be a non-empty string');
-    }
+    requireNonEmptyString(query, 'Query');
 
     return this.backend.textSearch(collection, query, options);
   }
@@ -389,14 +381,8 @@ export class VelesDB {
     options?: { k?: number; vectorWeight?: number; filter?: Record<string, unknown> }
   ): Promise<SearchResult[]> {
     this.ensureInitialized();
-
-    if (!vector || (!Array.isArray(vector) && !(vector instanceof Float32Array))) {
-      throw new ValidationError('Vector must be an array or Float32Array');
-    }
-
-    if (!textQuery || typeof textQuery !== 'string') {
-      throw new ValidationError('Text query must be a non-empty string');
-    }
+    requireVector(vector, 'Vector');
+    requireNonEmptyString(textQuery, 'Text query');
 
     return this.backend.hybridSearch(collection, vector, textQuery, options);
   }
@@ -430,28 +416,43 @@ export class VelesDB {
     options?: QueryOptions
   ): Promise<QueryApiResponse> {
     this.ensureInitialized();
-
-    if (!collection || typeof collection !== 'string') {
-      throw new ValidationError('Collection name must be a non-empty string');
-    }
-
-    if (!queryString || typeof queryString !== 'string') {
-      throw new ValidationError('Query string must be a non-empty string');
-    }
+    requireNonEmptyString(collection, 'Collection name');
+    requireNonEmptyString(queryString, 'Query string');
 
     return this.backend.query(collection, queryString, params, options);
   }
 
   /**
+   * Explain the execution plan for a VelesQL query without running it
+   *
+   * @param queryString - VelesQL query string to explain
+   * @param params - Optional query parameters (vectors, scalars)
+   * @returns Explain response with the query execution plan
+   */
+  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(queryString, 'Query string');
+
+    return this.backend.queryExplain(queryString, params);
+  }
+
+  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection name');
+
+    return this.backend.collectionSanity(collection);
+  }
+
+  /**
    * Multi-query fusion search combining results from multiple query vectors
-   * 
+   *
    * Ideal for RAG pipelines using Multiple Query Generation (MQG).
-   * 
+   *
    * @param collection - Collection name
    * @param vectors - Array of query vectors
    * @param options - Search options (k, fusion strategy, fusionParams, filter)
    * @returns Fused search results
-   * 
+   *
    * @example
    * ```typescript
    * // RRF fusion (default)
@@ -460,7 +461,7 @@ export class VelesDB {
    *   fusion: 'rrf',
    *   fusionParams: { k: 60 }
    * });
-   * 
+   *
    * // Weighted fusion
    * const results = await db.multiQuerySearch('docs', [emb1, emb2], {
    *   k: 10,
@@ -469,27 +470,6 @@ export class VelesDB {
    * });
    * ```
    */
-
-  async queryExplain(queryString: string, params?: Record<string, unknown>): Promise<ExplainResponse> {
-    this.ensureInitialized();
-
-    if (!queryString || typeof queryString !== 'string') {
-      throw new ValidationError('Query string must be a non-empty string');
-    }
-
-    return this.backend.queryExplain(queryString, params);
-  }
-
-  async collectionSanity(collection: string): Promise<CollectionSanityResponse> {
-    this.ensureInitialized();
-
-    if (!collection || typeof collection !== 'string') {
-      throw new ValidationError('Collection name must be a non-empty string');
-    }
-
-    return this.backend.collectionSanity(collection);
-  }
-
   async multiQuerySearch(
     collection: string,
     vectors: Array<number[] | Float32Array>,
@@ -502,9 +482,7 @@ export class VelesDB {
     }
 
     for (const v of vectors) {
-      if (!Array.isArray(v) && !(v instanceof Float32Array)) {
-        throw new ValidationError('Each vector must be an array or Float32Array');
-      }
+      requireVector(v, 'Each vector');
     }
 
     return this.backend.multiQuerySearch(collection, vectors, options);
@@ -533,14 +511,7 @@ export class VelesDB {
    */
   async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-
-    if (!Array.isArray(docs)) {
-      throw new ValidationError('Documents must be an array');
-    }
-
-    for (const doc of docs) {
-      this.validateDocument(doc);
-    }
+    validateDocsBatch(docs, doc => this.validateDocument(doc));
 
     await this.backend.streamInsert(collection, docs);
   }
@@ -778,9 +749,7 @@ export class VelesDB {
    */
   async createGraphCollection(name: string, config?: GraphCollectionConfig): Promise<void> {
     this.ensureInitialized();
-    if (!name || typeof name !== 'string') {
-      throw new ValidationError('Collection name must be a non-empty string');
-    }
+    requireNonEmptyString(name, 'Collection name');
     await this.backend.createGraphCollection(name, config);
   }
 

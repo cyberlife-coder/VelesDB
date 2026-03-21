@@ -245,9 +245,7 @@ impl SourceConnector for CsvFileConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        self.schema
-            .clone()
-            .ok_or_else(|| Error::SourceConnection("Not connected".to_string()))
+        super::common::cached_schema(&self.schema)
     }
 
     async fn extract_batch(

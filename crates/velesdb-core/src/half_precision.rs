@@ -100,12 +100,16 @@ impl VectorData {
     }
 
     /// Creates a new `VectorData` from an f32 vec, taking ownership.
+    ///
+    /// For F32 precision, takes ownership with zero conversion overhead.
+    /// For F16/BF16, delegates to [`from_f32_slice`](Self::from_f32_slice).
     #[must_use]
     pub fn from_f32_vec(data: Vec<f32>, precision: VectorPrecision) -> Self {
-        match precision {
-            VectorPrecision::F32 => Self::F32(data),
-            VectorPrecision::F16 => Self::F16(data.iter().map(|&x| f16::from_f32(x)).collect()),
-            VectorPrecision::BF16 => Self::BF16(data.iter().map(|&x| bf16::from_f32(x)).collect()),
+        if precision == VectorPrecision::F32 {
+            Self::F32(data)
+        } else {
+            // RF-DEDUP: reuse from_f32_slice for the conversion path
+            Self::from_f32_slice(&data, precision)
         }
     }
 
@@ -240,14 +244,15 @@ pub fn euclidean_distance(a: &VectorData, b: &VectorData) -> f32 {
 }
 
 /// Computes squared L2 norm without allocation for F32, with conversion for half-precision.
+/// RF-DEDUP: F16 and BF16 share the same `to_f32_vec` -> SIMD norm path.
 fn norm_squared(v: &VectorData) -> f32 {
-    match v {
-        VectorData::F32(data) => {
-            let n = crate::simd_native::norm_native(data);
-            n * n
-        }
-        VectorData::F16(data) => data.iter().map(|x| x.to_f32().powi(2)).sum(),
-        VectorData::BF16(data) => data.iter().map(|x| x.to_f32().powi(2)).sum(),
+    if let VectorData::F32(data) = v {
+        let n = crate::simd_native::norm_native(data);
+        n * n
+    } else {
+        let f32_vec = v.to_f32_vec();
+        let n = crate::simd_native::norm_native(&f32_vec);
+        n * n
     }
 }
 

@@ -122,7 +122,62 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
     ip
 }
 
+/// Preprocessed query data for `RaBitQ` distance computation.
+///
+/// RF-DEDUP: Shared between `distance` and `batch_distance` to eliminate
+/// the repeated center-normalize-rotate-bitsign preprocessing pipeline.
+struct PreparedQuery {
+    /// Squared L2 norm of the centered query.
+    norm_sq: f32,
+    /// L2 norm of the centered query.
+    norm: f32,
+    /// Sign bits of the rotated normalized query.
+    bits: Vec<u64>,
+    /// Number of u64 words in the bit representation.
+    num_words: usize,
+}
+
 impl RaBitQIndex {
+    /// Centers, normalizes, rotates, and extracts sign bits from a vector.
+    ///
+    /// Returns `None` when the centered vector has near-zero norm.
+    fn prepare_query(&self, vector: &[f32]) -> Option<PreparedQuery> {
+        let centered: Vec<f32> = vector
+            .iter()
+            .zip(self.centroid.iter())
+            .map(|(&v, &c)| v - c)
+            .collect();
+
+        let norm_sq: f32 = centered.iter().map(|&x| x * x).sum();
+        let norm = norm_sq.sqrt();
+
+        if norm < f32::EPSILON {
+            return None;
+        }
+
+        let normalized: Vec<f32> = centered.iter().map(|&x| x / norm).collect();
+        let rotated = apply_rotation_flat(&self.rotation, &normalized, self.dimension);
+        let bits = signs_to_bits(&rotated, self.dimension);
+        let num_words = self.dimension.div_ceil(64);
+
+        Some(PreparedQuery {
+            norm_sq,
+            norm,
+            bits,
+            num_words,
+        })
+    }
+
+    /// Computes L2 distance from a prepared query to an encoded vector.
+    fn distance_from_prepared(&self, pq: &PreparedQuery, encoded: &RaBitQVector) -> f32 {
+        let ip_binary = xor_popcount_ip(&pq.bits, &encoded.bits, pq.num_words, self.dimension);
+
+        let v_norm = encoded.correction.vector_norm;
+        let estimated_ip = pq.norm * v_norm * ip_binary;
+        let l2_sq = v_norm.mul_add(v_norm, pq.norm_sq) - 2.0 * estimated_ip;
+        l2_sq.max(0.0).sqrt()
+    }
+
     /// Encode a vector into a [`RaBitQVector`].
     ///
     /// Steps:
@@ -145,19 +200,7 @@ impl RaBitQIndex {
             )));
         }
 
-        // Step 1: Center
-        let centered: Vec<f32> = vector
-            .iter()
-            .zip(self.centroid.iter())
-            .map(|(&v, &c)| v - c)
-            .collect();
-
-        // Step 2: Compute norm
-        let norm_sq: f32 = centered.iter().map(|&x| x * x).sum();
-        let norm = norm_sq.sqrt();
-
-        // Step 3: Handle zero-norm gracefully
-        if norm < f32::EPSILON {
+        let Some(pq) = self.prepare_query(vector) else {
             let num_words = self.dimension.div_ceil(64);
             return Ok(RaBitQVector {
                 bits: vec![0u64; num_words],
@@ -166,18 +209,20 @@ impl RaBitQIndex {
                     quantization_ip: 1.0,
                 },
             });
-        }
+        };
 
-        // Normalize
-        let normalized: Vec<f32> = centered.iter().map(|&x| x / norm).collect();
-
-        // Step 4: Apply rotation
+        // Recompute the rotated normalized vector for correction factor calculation.
+        // prepare_query already does this work but only returns bits. We need the
+        // full rotated values for the quantization inner product computation.
+        let centered: Vec<f32> = vector
+            .iter()
+            .zip(self.centroid.iter())
+            .map(|(&v, &c)| v - c)
+            .collect();
+        let normalized: Vec<f32> = centered.iter().map(|&x| x / pq.norm).collect();
         let rotated = apply_rotation_flat(&self.rotation, &normalized, self.dimension);
 
-        // Step 5: Extract sign bits
-        let bits = signs_to_bits(&rotated, self.dimension);
-
-        // Step 6: Compute correction factors
+        // Compute correction factors
         // The binary reconstruction maps each sign bit to +1/-1, scaled by 1/sqrt(D).
         // quantization_inner_product = <binary_reconstruction, rotated_normalized>
         #[allow(clippy::cast_precision_loss)]
@@ -186,7 +231,7 @@ impl RaBitQIndex {
         for (i, &rv) in rotated.iter().enumerate().take(self.dimension) {
             let word = i / 64;
             let bit = i % 64;
-            let sign = if (bits[word] >> bit) & 1 == 1 {
+            let sign = if (pq.bits[word] >> bit) & 1 == 1 {
                 1.0
             } else {
                 -1.0
@@ -195,9 +240,9 @@ impl RaBitQIndex {
         }
 
         Ok(RaBitQVector {
-            bits,
+            bits: pq.bits,
             correction: RaBitQCorrection {
-                vector_norm: norm,
+                vector_norm: pq.norm,
                 quantization_ip: qip,
             },
         })
@@ -209,44 +254,11 @@ impl RaBitQIndex {
     /// then applies affine correction with stored norms.
     #[must_use]
     pub fn distance(&self, query: &[f32], encoded: &RaBitQVector) -> f32 {
-        // Center query
-        let centered: Vec<f32> = query
-            .iter()
-            .zip(self.centroid.iter())
-            .map(|(&v, &c)| v - c)
-            .collect();
-
-        let q_norm_sq: f32 = centered.iter().map(|&x| x * x).sum();
-        let q_norm = q_norm_sq.sqrt();
-
-        if q_norm < f32::EPSILON {
+        let Some(pq) = self.prepare_query(query) else {
             // Query is at centroid; distance = norm of encoded vector
             return encoded.correction.vector_norm;
-        }
-
-        let q_normalized: Vec<f32> = centered.iter().map(|&x| x / q_norm).collect();
-
-        // Apply rotation
-        let q_rotated = apply_rotation_flat(&self.rotation, &q_normalized, self.dimension);
-
-        // Extract query sign bits
-        let q_bits = signs_to_bits(&q_rotated, self.dimension);
-
-        // XOR + popcount inner product estimate
-        let num_words = self.dimension.div_ceil(64);
-        let ip_binary = xor_popcount_ip(&q_bits, &encoded.bits, num_words, self.dimension);
-
-        // Affine correction with stored norms
-        let v_norm = encoded.correction.vector_norm;
-
-        // Estimated <q, v> = q_norm * v_norm * ip_binary
-        let estimated_ip = q_norm * v_norm * ip_binary;
-
-        // L2 distance: ||q - v||^2 = ||q||^2 + ||v||^2 - 2<q,v>
-        let l2_sq = v_norm.mul_add(v_norm, q_norm_sq) - 2.0 * estimated_ip;
-
-        // Clamp to non-negative (floating point can cause small negatives)
-        l2_sq.max(0.0).sqrt()
+        };
+        self.distance_from_prepared(&pq, encoded)
     }
 
     /// Batch distance: process query once, then iterate over encoded vectors.
@@ -254,35 +266,13 @@ impl RaBitQIndex {
     /// Amortizes query preprocessing (centering, normalization, rotation, sign extraction).
     #[must_use]
     pub fn batch_distance(&self, query: &[f32], encoded: &[RaBitQVector]) -> Vec<f32> {
-        // Preprocess query once
-        let centered: Vec<f32> = query
-            .iter()
-            .zip(self.centroid.iter())
-            .map(|(&v, &c)| v - c)
-            .collect();
-
-        let q_norm_sq: f32 = centered.iter().map(|&x| x * x).sum();
-        let q_norm = q_norm_sq.sqrt();
-
-        if q_norm < f32::EPSILON {
+        let Some(pq) = self.prepare_query(query) else {
             return encoded.iter().map(|e| e.correction.vector_norm).collect();
-        }
-
-        let q_normalized: Vec<f32> = centered.iter().map(|&x| x / q_norm).collect();
-        let q_rotated = apply_rotation_flat(&self.rotation, &q_normalized, self.dimension);
-        let q_bits = signs_to_bits(&q_rotated, self.dimension);
-        let num_words = self.dimension.div_ceil(64);
+        };
 
         encoded
             .iter()
-            .map(|ev| {
-                let ip_binary = xor_popcount_ip(&q_bits, &ev.bits, num_words, self.dimension);
-
-                let v_norm = ev.correction.vector_norm;
-                let estimated_ip = q_norm * v_norm * ip_binary;
-                let l2_sq = v_norm.mul_add(v_norm, q_norm_sq) - 2.0 * estimated_ip;
-                l2_sq.max(0.0).sqrt()
-            })
+            .map(|ev| self.distance_from_prepared(&pq, ev))
             .collect()
     }
 }

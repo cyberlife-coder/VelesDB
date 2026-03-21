@@ -189,36 +189,20 @@ impl Parser {
     }
 
     /// Parse a property value (EPIC-045 US-001).
-    #[allow(clippy::unnecessary_wraps)] // Consistent with other parse_* methods
+    ///
+    /// Delegates scalar literal parsing to the shared [`helpers::parse_scalar_from_rule`].
     fn parse_property_value(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<crate::velesql::Value, ParseError> {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
-                Rule::string => {
-                    let s = inner_pair.as_str();
-                    return Ok(crate::velesql::Value::String(s[1..s.len() - 1].to_string()));
-                }
-                Rule::integer => {
-                    return Ok(crate::velesql::Value::Integer(
-                        inner_pair.as_str().parse().unwrap_or(0),
-                    ));
-                }
-                Rule::float => {
-                    return Ok(crate::velesql::Value::Float(
-                        inner_pair.as_str().parse().unwrap_or(0.0),
-                    ));
-                }
-                Rule::boolean => {
-                    let val = inner_pair.as_str().to_uppercase() == "TRUE";
-                    return Ok(crate::velesql::Value::Boolean(val));
-                }
-                Rule::null_value => {
-                    return Ok(crate::velesql::Value::Null);
-                }
-                Rule::parameter => {
-                    let name = inner_pair.as_str().trim_start_matches('$').to_string();
-                    return Ok(crate::velesql::Value::Parameter(name));
+                Rule::string
+                | Rule::integer
+                | Rule::float
+                | Rule::boolean
+                | Rule::null_value
+                | Rule::parameter => {
+                    return super::helpers::parse_scalar_from_rule(&inner_pair);
                 }
                 _ => {}
             }

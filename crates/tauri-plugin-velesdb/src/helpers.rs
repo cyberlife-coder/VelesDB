@@ -23,7 +23,7 @@ pub fn parse_metric(metric: &str) -> Result<velesdb_core::distance::DistanceMetr
 
 /// Converts a `DistanceMetric` to its string representation.
 #[must_use]
-pub fn metric_to_string(metric: velesdb_core::distance::DistanceMetric) -> String {
+pub fn metric_to_string(metric: velesdb_core::distance::DistanceMetric) -> &'static str {
     use velesdb_core::distance::DistanceMetric;
     match metric {
         DistanceMetric::Cosine => "cosine",
@@ -34,7 +34,6 @@ pub fn metric_to_string(metric: velesdb_core::distance::DistanceMetric) -> Strin
         // Reason: DistanceMetric is #[non_exhaustive] — future variants default to "unknown".
         _ => "unknown",
     }
-    .to_string()
 }
 
 /// Parses a storage mode string into a `StorageMode`.
@@ -53,7 +52,7 @@ pub fn parse_storage_mode(mode: &str) -> Result<velesdb_core::StorageMode> {
 
 /// Converts a `StorageMode` to its string representation.
 #[must_use]
-pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> String {
+pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> &'static str {
     use velesdb_core::StorageMode;
     match mode {
         StorageMode::Full => "full",
@@ -63,11 +62,11 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> String {
         // Reason: StorageMode is #[non_exhaustive] — future variants default to "unknown".
         _ => "unknown",
     }
-    .to_string()
 }
 
 /// Parses fusion strategy from string and optional params.
 #[must_use]
+// Reason: JSON f64 → f32 for weights, u64 → u32 for k; values are small config numbers.
 #[allow(clippy::cast_possible_truncation)]
 pub fn parse_fusion_strategy(
     fusion: &str,
@@ -132,6 +131,50 @@ pub fn parse_sparse_vector<S: std::hash::BuildHasher>(
     Ok(velesdb_core::sparse_index::SparseVector::new(pairs))
 }
 
+/// Converts a core `SearchResult` into the Tauri `SearchResult` DTO.
+#[must_use]
+pub fn map_core_result(r: velesdb_core::SearchResult) -> crate::types::SearchResult {
+    crate::types::SearchResult {
+        id: r.point.id,
+        score: r.score,
+        payload: r.point.payload,
+    }
+}
+
+/// Converts a list of core search results into Tauri `SearchResult` DTOs.
+#[must_use]
+pub fn map_core_results(
+    results: Vec<velesdb_core::SearchResult>,
+) -> Vec<crate::types::SearchResult> {
+    results.into_iter().map(map_core_result).collect()
+}
+
+/// Parses an optional JSON filter value into a core `Filter`.
+///
+/// Returns `Ok(None)` when the filter is absent.
+pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb_core::Filter>> {
+    match filter {
+        Some(filter_json) => {
+            let f: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
+                .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
+            Ok(Some(f))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Wraps search results and a start instant into a `SearchResponse`.
+#[must_use]
+pub fn timed_search_response(
+    results: Vec<crate::types::SearchResult>,
+    start: std::time::Instant,
+) -> crate::types::SearchResponse {
+    crate::types::SearchResponse {
+        results,
+        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,7 +224,7 @@ mod tests {
             DistanceMetric::Jaccard,
         ] {
             let s = metric_to_string(metric);
-            assert_eq!(parse_metric(&s).unwrap(), metric);
+            assert_eq!(parse_metric(s).unwrap(), metric);
         }
     }
 
@@ -194,7 +237,7 @@ mod tests {
             StorageMode::ProductQuantization,
         ] {
             let s = storage_mode_to_string(mode);
-            assert_eq!(parse_storage_mode(&s).unwrap(), mode);
+            assert_eq!(parse_storage_mode(s).unwrap(), mode);
         }
     }
 }

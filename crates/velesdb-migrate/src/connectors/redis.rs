@@ -8,7 +8,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::connectors::common::{create_http_client, handle_http_error};
+use crate::connectors::common::{
+    create_http_client, extract_payload_from_object, handle_http_error, parse_vector_from_json,
+};
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
@@ -172,6 +174,10 @@ impl RedisConnector {
     }
 
     /// Parses a vector from Redis document.
+    ///
+    /// Redis stores vectors as JSON arrays or delimited strings.
+    /// The array case delegates to the shared `parse_vector_from_json` helper;
+    /// the string case is Redis-specific (comma/space-separated floats).
     pub fn parse_vector(&self, attrs: &HashMap<String, serde_json::Value>) -> Result<Vec<f32>> {
         let vector_value = attrs.get(&self.config.vector_field).ok_or_else(|| {
             Error::Extraction(format!(
@@ -180,27 +186,19 @@ impl RedisConnector {
             ))
         })?;
 
-        // Redis stores vectors as byte arrays or JSON arrays
         match vector_value {
-            serde_json::Value::Array(arr) => arr
-                .iter()
-                .map(|v| {
-                    v.as_f64().map(|f| f as f32).ok_or_else(|| {
-                        Error::Extraction("Vector element is not a number".to_string())
-                    })
+            serde_json::Value::Array(_) => {
+                parse_vector_from_json(vector_value, &self.config.vector_field)
+            }
+            serde_json::Value::String(s) => s
+                .split([',', ' '])
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.trim()
+                        .parse::<f32>()
+                        .map_err(|_| Error::Extraction("Invalid vector element".to_string()))
                 })
                 .collect(),
-            serde_json::Value::String(s) => {
-                // Parse comma-separated or space-separated values
-                s.split([',', ' '])
-                    .filter(|s| !s.is_empty())
-                    .map(|s| {
-                        s.trim()
-                            .parse::<f32>()
-                            .map_err(|_| Error::Extraction("Invalid vector element".to_string()))
-                    })
-                    .collect()
-            }
             _ => Err(Error::Extraction(format!(
                 "Vector field '{}' has unsupported format",
                 self.config.vector_field
@@ -221,21 +219,14 @@ impl RedisConnector {
         &self,
         attrs: &HashMap<String, serde_json::Value>,
     ) -> HashMap<String, serde_json::Value> {
-        let mut payload = HashMap::new();
-
-        for (key, val) in attrs {
-            // Skip vector field
-            if key == &self.config.vector_field {
-                continue;
-            }
-            // If payload_fields is specified, only include those
-            if !self.config.payload_fields.is_empty() && !self.config.payload_fields.contains(key) {
-                continue;
-            }
-            payload.insert(key.clone(), val.clone());
-        }
-
-        payload
+        // Redis attrs is a HashMap — wrap as JSON object to use the shared helper.
+        let obj =
+            serde_json::Value::Object(attrs.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        extract_payload_from_object(
+            &obj,
+            &[&self.config.vector_field],
+            &self.config.payload_fields,
+        )
     }
 }
 
@@ -293,9 +284,7 @@ impl SourceConnector for RedisConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        self.schema
-            .clone()
-            .ok_or_else(|| Error::SourceConnection("Not connected".to_string()))
+        crate::connectors::common::cached_schema(&self.schema)
     }
 
     async fn extract_batch(

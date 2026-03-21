@@ -3,6 +3,7 @@
 mod condition_vectors;
 mod conditions;
 mod dml;
+pub(crate) mod helpers;
 mod match_parser;
 mod select;
 mod train;

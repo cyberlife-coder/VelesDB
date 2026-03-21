@@ -2,6 +2,60 @@
 
 use crate::{StorageMode, VectorStore};
 
+/// Encodes a vector into the store's buffers based on storage mode.
+///
+/// This is the single encoding path for all insert operations. SQ8 and
+/// `ProductQuantization` share the same quantization logic.
+fn encode_vector(store: &mut VectorStore, vector: &[f32]) {
+    match store.storage_mode {
+        StorageMode::Full => {
+            store.data.extend_from_slice(vector);
+        }
+        StorageMode::SQ8 | StorageMode::ProductQuantization => {
+            encode_sq8(store, vector);
+        }
+        StorageMode::Binary => {
+            encode_binary(store, vector);
+        }
+    }
+}
+
+/// SQ8 scalar quantization: maps f32 range to 0-255.
+fn encode_sq8(store: &mut VectorStore, vector: &[f32]) {
+    let (min, max) = vector
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let scale = if (max - min).abs() < 1e-10 {
+        1.0
+    } else {
+        255.0 / (max - min)
+    };
+
+    store.sq8_mins.push(min);
+    store.sq8_scales.push(scale);
+
+    for &v in vector {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
+        store.data_sq8.push(quantized);
+    }
+}
+
+/// Binary quantization: packs each dimension into a single bit.
+fn encode_binary(store: &mut VectorStore, vector: &[f32]) {
+    let bytes_needed = store.dimension.div_ceil(8);
+    for byte_idx in 0..bytes_needed {
+        let mut byte = 0u8;
+        for bit in 0..8 {
+            let dim_idx = byte_idx * 8 + bit;
+            if dim_idx < store.dimension && vector[dim_idx] > 0.0 {
+                byte |= 1 << bit;
+            }
+        }
+        store.data_binary.push(byte);
+    }
+}
+
 /// Inserts a vector into the store based on storage mode.
 pub fn insert_vector(store: &mut VectorStore, id: u64, vector: &[f32]) {
     // Remove existing vector with same ID if present
@@ -11,62 +65,7 @@ pub fn insert_vector(store: &mut VectorStore, id: u64, vector: &[f32]) {
 
     store.ids.push(id);
     store.payloads.push(None);
-
-    match store.storage_mode {
-        StorageMode::Full => {
-            store.data.extend_from_slice(vector);
-        }
-        StorageMode::SQ8 => {
-            let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                (min.min(v), max.max(v))
-            });
-            let scale = if (max - min).abs() < 1e-10 {
-                1.0
-            } else {
-                255.0 / (max - min)
-            };
-
-            store.sq8_mins.push(min);
-            store.sq8_scales.push(scale);
-
-            for &v in vector {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
-                store.data_sq8.push(quantized);
-            }
-        }
-        StorageMode::Binary => {
-            let bytes_needed = store.dimension.div_ceil(8);
-            for byte_idx in 0..bytes_needed {
-                let mut byte = 0u8;
-                for bit in 0..8 {
-                    let dim_idx = byte_idx * 8 + bit;
-                    if dim_idx < store.dimension && vector[dim_idx] > 0.0 {
-                        byte |= 1 << bit;
-                    }
-                }
-                store.data_binary.push(byte);
-            }
-        }
-        // ProductQuantization falls back to SQ8 in WASM context
-        StorageMode::ProductQuantization => {
-            let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                (min.min(v), max.max(v))
-            });
-            let scale = if (max - min).abs() < 1e-10 {
-                1.0
-            } else {
-                255.0 / (max - min)
-            };
-            store.sq8_mins.push(min);
-            store.sq8_scales.push(scale);
-            for &v in vector {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
-                store.data_sq8.push(quantized);
-            }
-        }
-    }
+    encode_vector(store, vector);
 }
 
 /// Inserts a vector with payload.
@@ -83,62 +82,7 @@ pub fn insert_with_payload(
 
     store.ids.push(id);
     store.payloads.push(payload);
-
-    match store.storage_mode {
-        StorageMode::Full => {
-            store.data.extend_from_slice(vector);
-        }
-        StorageMode::SQ8 => {
-            let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                (min.min(v), max.max(v))
-            });
-            let scale = if (max - min).abs() < 1e-10 {
-                1.0
-            } else {
-                255.0 / (max - min)
-            };
-
-            store.sq8_mins.push(min);
-            store.sq8_scales.push(scale);
-
-            for &v in vector {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
-                store.data_sq8.push(quantized);
-            }
-        }
-        StorageMode::Binary => {
-            let bytes_needed = store.dimension.div_ceil(8);
-            for byte_idx in 0..bytes_needed {
-                let mut byte = 0u8;
-                for bit in 0..8 {
-                    let dim_idx = byte_idx * 8 + bit;
-                    if dim_idx < store.dimension && vector[dim_idx] > 0.0 {
-                        byte |= 1 << bit;
-                    }
-                }
-                store.data_binary.push(byte);
-            }
-        }
-        // ProductQuantization falls back to SQ8 in WASM context
-        StorageMode::ProductQuantization => {
-            let (min, max) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                (min.min(v), max.max(v))
-            });
-            let scale = if (max - min).abs() < 1e-10 {
-                1.0
-            } else {
-                255.0 / (max - min)
-            };
-            store.sq8_mins.push(min);
-            store.sq8_scales.push(scale);
-            for &v in vector {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let quantized = ((v - min) * scale).round().clamp(0.0, 255.0) as u8;
-                store.data_sq8.push(quantized);
-            }
-        }
-    }
+    encode_vector(store, vector);
 }
 
 /// Removes a vector at the given index.
@@ -152,7 +96,8 @@ pub fn remove_at_index(store: &mut VectorStore, idx: usize) {
             let end = start + store.dimension;
             store.data.drain(start..end);
         }
-        StorageMode::SQ8 => {
+        // ProductQuantization uses SQ8 path as fallback in WASM context
+        StorageMode::SQ8 | StorageMode::ProductQuantization => {
             store.sq8_mins.swap_remove(idx);
             store.sq8_scales.swap_remove(idx);
             let start = idx * store.dimension;
@@ -164,14 +109,6 @@ pub fn remove_at_index(store: &mut VectorStore, idx: usize) {
             let start = idx * bytes_per;
             let end = start + bytes_per;
             store.data_binary.drain(start..end);
-        }
-        // ProductQuantization falls back to SQ8 in WASM context
-        StorageMode::ProductQuantization => {
-            store.sq8_mins.swap_remove(idx);
-            store.sq8_scales.swap_remove(idx);
-            let start = idx * store.dimension;
-            let end = start + store.dimension;
-            store.data_sq8.drain(start..end);
         }
     }
 }

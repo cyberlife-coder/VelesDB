@@ -27,21 +27,11 @@ impl HnswIndex {
     pub fn search_brute_force(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
-        // If vector storage is disabled, return empty (can't do brute-force)
+        // If vector storage is disabled, fall back to HNSW graph search.
+        // RF-DEDUP: reuse search_hnsw_only instead of duplicating neighbour mapping.
         if !self.enable_vector_storage || self.vectors.is_empty() {
-            // Fallback to regular HNSW search with high ef
-            let inner = self.inner.read();
             let ef_search = SearchQuality::Accurate.ef_search(k);
-            let neighbours = inner.search(query, k, ef_search);
-
-            let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-            for n in &neighbours {
-                if let Some(id) = self.mappings.get_id(n.d_id) {
-                    let score = inner.transform_score(n.distance);
-                    results.push(ScoredResult::new(id, score));
-                }
-            }
-            return results;
+            return self.search_hnsw_only(query, k, ef_search);
         }
 
         // Compute distances to all vectors

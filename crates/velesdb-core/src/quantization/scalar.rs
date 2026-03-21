@@ -118,6 +118,34 @@ impl QuantizationCodec for QuantizedVector {
 }
 
 // =========================================================================
+// Dequantization parameters (RF-DEDUP)
+// =========================================================================
+
+/// Dequantization parameters extracted from a `QuantizedVector`.
+///
+/// RF-DEDUP: Eliminates repeated `range < EPSILON` / `scale = range / 255.0`
+/// boilerplate across all distance functions.
+struct DequantParams {
+    scale: f32,
+    offset: f32,
+}
+
+/// Extracts dequantization parameters from a quantized vector.
+///
+/// Returns `None` when the range is degenerate (all values identical),
+/// in which case callers should use the flat-value fallback path.
+fn dequant_params(quantized: &QuantizedVector) -> Option<DequantParams> {
+    let range = quantized.max - quantized.min;
+    if range < f32::EPSILON {
+        return None;
+    }
+    Some(DequantParams {
+        scale: range / 255.0,
+        offset: quantized.min,
+    })
+}
+
+// =========================================================================
 // Scalar distance functions
 // =========================================================================
 
@@ -132,21 +160,16 @@ pub fn dot_product_quantized(query: &[f32], quantized: &QuantizedVector) -> f32 
         "Dimension mismatch in dot_product_quantized"
     );
 
-    let range = quantized.max - quantized.min;
-    if range < f32::EPSILON {
+    let Some(params) = dequant_params(quantized) else {
         // All quantized values are the same
-        let value = quantized.min;
-        return query.iter().sum::<f32>() * value;
-    }
-
-    let scale = range / 255.0;
-    let offset = quantized.min;
+        return query.iter().sum::<f32>() * quantized.min;
+    };
 
     // Compute dot product with on-the-fly dequantization
     query
         .iter()
         .zip(quantized.data.iter())
-        .map(|(&q, &v)| q * (f32::from(v) * scale + offset))
+        .map(|(&q, &v)| q * (f32::from(v) * params.scale + params.offset))
         .sum()
 }
 
@@ -159,21 +182,16 @@ pub fn euclidean_squared_quantized(query: &[f32], quantized: &QuantizedVector) -
         "Dimension mismatch in euclidean_squared_quantized"
     );
 
-    let range = quantized.max - quantized.min;
-    if range < f32::EPSILON {
-        // All quantized values are the same
+    let Some(params) = dequant_params(quantized) else {
         let value = quantized.min;
         return query.iter().map(|&q| (q - value).powi(2)).sum();
-    }
-
-    let scale = range / 255.0;
-    let offset = quantized.min;
+    };
 
     query
         .iter()
         .zip(quantized.data.iter())
         .map(|(&q, &v)| {
-            let dequantized = f32::from(v) * scale + offset;
+            let dequantized = f32::from(v) * params.scale + params.offset;
             (q - dequantized).powi(2)
         })
         .sum()
@@ -188,9 +206,17 @@ pub fn euclidean_squared_quantized(query: &[f32], quantized: &QuantizedVector) -
 /// Note: For best accuracy, the query should be normalized.
 #[must_use]
 pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -> f32 {
+    cosine_from_dot(dot_product_quantized(query, quantized), query, quantized)
+}
+
+/// Shared cosine similarity computation from a precomputed dot product.
+///
+/// RF-DEDUP: Both `cosine_similarity_quantized` and `cosine_similarity_quantized_simd`
+/// share identical norm computation and zero-check logic. This helper eliminates
+/// that duplication.
+fn cosine_from_dot(dot: f32, query: &[f32], quantized: &QuantizedVector) -> f32 {
     use crate::simd_native;
 
-    let dot = dot_product_quantized(query, quantized);
     let query_norm = simd_native::norm_native(query);
 
     // F-10: Compute quantized norm without allocating a full f32 vector
@@ -209,15 +235,12 @@ pub fn cosine_similarity_quantized(query: &[f32], quantized: &QuantizedVector) -
 /// Uses on-the-fly dequantization with 4-wide unrolling.
 #[inline]
 fn quantized_vector_norm(quantized: &QuantizedVector) -> f32 {
-    let range = quantized.max - quantized.min;
-    if range < f32::EPSILON {
+    let Some(params) = dequant_params(quantized) else {
         let value = quantized.min;
         #[allow(clippy::cast_precision_loss)]
         return value.abs() * (quantized.data.len() as f32).sqrt();
-    }
+    };
 
-    let scale = range / 255.0;
-    let offset = quantized.min;
     let len = quantized.data.len();
     let chunks = len / 4;
     let remainder = len % 4;
@@ -229,10 +252,10 @@ fn quantized_vector_norm(quantized: &QuantizedVector) -> f32 {
 
     for i in 0..chunks {
         let base = i * 4;
-        let d0 = f32::from(quantized.data[base]) * scale + offset;
-        let d1 = f32::from(quantized.data[base + 1]) * scale + offset;
-        let d2 = f32::from(quantized.data[base + 2]) * scale + offset;
-        let d3 = f32::from(quantized.data[base + 3]) * scale + offset;
+        let d0 = f32::from(quantized.data[base]) * params.scale + params.offset;
+        let d1 = f32::from(quantized.data[base + 1]) * params.scale + params.offset;
+        let d2 = f32::from(quantized.data[base + 2]) * params.scale + params.offset;
+        let d3 = f32::from(quantized.data[base + 3]) * params.scale + params.offset;
         sum0 += d0 * d0;
         sum1 += d1 * d1;
         sum2 += d2 * d2;
@@ -241,7 +264,7 @@ fn quantized_vector_norm(quantized: &QuantizedVector) -> f32 {
 
     let base = chunks * 4;
     for i in 0..remainder {
-        let d = f32::from(quantized.data[base + i]) * scale + offset;
+        let d = f32::from(quantized.data[base + i]) * params.scale + params.offset;
         sum0 += d * d;
     }
 
@@ -267,16 +290,11 @@ pub fn dot_product_quantized_simd(query: &[f32], quantized: &QuantizedVector) ->
         "Dimension mismatch in dot_product_quantized_simd"
     );
 
-    let range = quantized.max - quantized.min;
-    if range < f32::EPSILON {
-        let value = quantized.min;
-        return query.iter().sum::<f32>() * value;
-    }
+    let Some(params) = dequant_params(quantized) else {
+        return query.iter().sum::<f32>() * quantized.min;
+    };
 
-    let scale = range / 255.0;
-    let offset = quantized.min;
-
-    dot_product_dequant_unrolled_8(query, &quantized.data, scale, offset)
+    dot_product_dequant_unrolled_8(query, &quantized.data, params.scale, params.offset)
 }
 
 /// F-11: Honest name — unrolled scalar dequantize+dot, not intrinsics.
@@ -314,14 +332,10 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
         "Dimension mismatch in euclidean_squared_quantized_simd"
     );
 
-    let range = quantized.max - quantized.min;
-    if range < f32::EPSILON {
+    let Some(params) = dequant_params(quantized) else {
         let value = quantized.min;
         return query.iter().map(|&q| (q - value).powi(2)).sum();
-    }
-
-    let scale = range / 255.0;
-    let offset = quantized.min;
+    };
 
     // Optimized loop with manual unrolling
     let len = query.len();
@@ -331,10 +345,10 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
 
     for i in 0..chunks {
         let base = i * 4;
-        let d0 = f32::from(quantized.data[base]) * scale + offset;
-        let d1 = f32::from(quantized.data[base + 1]) * scale + offset;
-        let d2 = f32::from(quantized.data[base + 2]) * scale + offset;
-        let d3 = f32::from(quantized.data[base + 3]) * scale + offset;
+        let d0 = f32::from(quantized.data[base]) * params.scale + params.offset;
+        let d1 = f32::from(quantized.data[base + 1]) * params.scale + params.offset;
+        let d2 = f32::from(quantized.data[base + 2]) * params.scale + params.offset;
+        let d3 = f32::from(quantized.data[base + 3]) * params.scale + params.offset;
 
         let diff0 = query[base] - d0;
         let diff1 = query[base + 1] - d1;
@@ -346,7 +360,7 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
 
     let base = chunks * 4;
     for i in 0..remainder {
-        let dequant = f32::from(quantized.data[base + i]) * scale + offset;
+        let dequant = f32::from(quantized.data[base + i]) * params.scale + params.offset;
         let diff = query[base + i] - dequant;
         sum += diff * diff;
     }
@@ -356,21 +370,13 @@ pub fn euclidean_squared_quantized_simd(query: &[f32], quantized: &QuantizedVect
 
 /// SIMD-optimized cosine similarity between f32 query and SQ8 vector.
 ///
-/// F-10: Uses `quantized_vector_norm` for allocation-free norm computation,
-/// consistent with the non-SIMD `cosine_similarity_quantized`.
+/// RF-DEDUP: Delegates to `cosine_from_dot`, sharing norm computation and
+/// zero-check logic with `cosine_similarity_quantized`.
 #[must_use]
 pub fn cosine_similarity_quantized_simd(query: &[f32], quantized: &QuantizedVector) -> f32 {
-    use crate::simd_native;
-
-    let dot = dot_product_quantized_simd(query, quantized);
-    let query_norm = simd_native::norm_native(query);
-
-    // F-10: Compute quantized norm without allocating a full f32 vector
-    let quantized_norm = quantized_vector_norm(quantized);
-
-    if query_norm < f32::EPSILON || quantized_norm < f32::EPSILON {
-        return 0.0;
-    }
-
-    dot / (query_norm * quantized_norm)
+    cosine_from_dot(
+        dot_product_quantized_simd(query, quantized),
+        query,
+        quantized,
+    )
 }

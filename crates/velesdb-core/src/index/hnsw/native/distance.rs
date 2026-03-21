@@ -185,35 +185,10 @@ impl DistanceEngine for NativeSimdDistance {
 
 /// SIMD distance computation with prefetch-based batching.
 ///
-/// Note: This engine is functionally identical to `SimdDistance` --- both
-/// `distance()` and `batch_distance()` produce the same results via the
-/// same code paths. Retained for backward compatibility.
-pub struct AdaptiveSimdDistance {
-    metric: DistanceMetric,
-}
-
-impl AdaptiveSimdDistance {
-    /// Creates a new adaptive SIMD distance engine.
-    #[must_use]
-    pub fn new(metric: DistanceMetric) -> Self {
-        Self { metric }
-    }
-}
-
-impl DistanceEngine for AdaptiveSimdDistance {
-    #[inline]
-    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
-        simd_distance_for_metric(self.metric, a, b)
-    }
-
-    fn batch_distance(&self, query: &[f32], candidates: &[&[f32]]) -> Vec<f32> {
-        batch_distance_with_prefetch(self, query, candidates)
-    }
-
-    fn metric(&self) -> DistanceMetric {
-        self.metric
-    }
-}
+/// RF-DEDUP: Functionally identical to `SimdDistance` --- both `distance()` and
+/// `batch_distance()` produce the same results via the same code paths.
+/// Retained as a type alias for backward API compatibility.
+pub type AdaptiveSimdDistance = SimdDistance;
 
 /// SIMD distance with fully cached kernel resolution for HNSW hot loops.
 ///

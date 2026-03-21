@@ -43,100 +43,66 @@ pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
 
     match cond_type {
         "eq" => {
-            let field = condition
-                .get("field")
-                .and_then(|f| f.as_str())
-                .unwrap_or("");
-            let value = condition.get("value");
-            let payload_value = get_nested_field(payload, field);
-            match (payload_value, value) {
-                (Some(pv), Some(v)) => pv == v,
-                _ => false,
-            }
+            let (pv, v) = match extract_field_pair(payload, condition) {
+                Some(pair) => pair,
+                None => return false,
+            };
+            pv == v
         }
-        "neq" => {
-            let field = condition
-                .get("field")
-                .and_then(|f| f.as_str())
-                .unwrap_or("");
-            let value = condition.get("value");
-            let payload_value = get_nested_field(payload, field);
-            match (payload_value, value) {
-                (Some(pv), Some(v)) => pv != v,
-                (None, _) => true,
-                _ => false,
+        "neq" => match extract_field_pair(payload, condition) {
+            Some((pv, v)) => pv != v,
+            None => {
+                // neq is true when the field is missing entirely
+                condition
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .is_some_and(|field| get_nested_field(payload, field).is_none())
             }
-        }
-        "gt" => {
-            let field = condition
-                .get("field")
-                .and_then(|f| f.as_str())
-                .unwrap_or("");
-            let value = condition.get("value").and_then(|v| v.as_f64());
-            let payload_value = get_nested_field(payload, field).and_then(|v| v.as_f64());
-            match (payload_value, value) {
-                (Some(pv), Some(v)) => pv > v,
-                _ => false,
-            }
-        }
-        "gte" => {
-            let field = condition
-                .get("field")
-                .and_then(|f| f.as_str())
-                .unwrap_or("");
-            let value = condition.get("value").and_then(|v| v.as_f64());
-            let payload_value = get_nested_field(payload, field).and_then(|v| v.as_f64());
-            match (payload_value, value) {
-                (Some(pv), Some(v)) => pv >= v,
-                _ => false,
-            }
-        }
-        "lt" => {
-            let field = condition
-                .get("field")
-                .and_then(|f| f.as_str())
-                .unwrap_or("");
-            let value = condition.get("value").and_then(|v| v.as_f64());
-            let payload_value = get_nested_field(payload, field).and_then(|v| v.as_f64());
-            match (payload_value, value) {
-                (Some(pv), Some(v)) => pv < v,
-                _ => false,
-            }
-        }
-        "lte" => {
-            let field = condition
-                .get("field")
-                .and_then(|f| f.as_str())
-                .unwrap_or("");
-            let value = condition.get("value").and_then(|v| v.as_f64());
-            let payload_value = get_nested_field(payload, field).and_then(|v| v.as_f64());
-            match (payload_value, value) {
-                (Some(pv), Some(v)) => pv <= v,
-                _ => false,
-            }
-        }
-        "and" => {
-            let conditions = condition.get("conditions").and_then(|c| c.as_array());
-            match conditions {
-                Some(conds) => conds.iter().all(|c| evaluate_condition(payload, c)),
-                None => true,
-            }
-        }
-        "or" => {
-            let conditions = condition.get("conditions").and_then(|c| c.as_array());
-            match conditions {
-                Some(conds) => conds.iter().any(|c| evaluate_condition(payload, c)),
-                None => true,
-            }
-        }
-        "not" => {
-            let inner = condition.get("condition");
-            match inner {
-                Some(c) => !evaluate_condition(payload, c),
-                None => true,
-            }
-        }
+        },
+        "gt" => compare_numeric(payload, condition, |pv, v| pv > v),
+        "gte" => compare_numeric(payload, condition, |pv, v| pv >= v),
+        "lt" => compare_numeric(payload, condition, |pv, v| pv < v),
+        "lte" => compare_numeric(payload, condition, |pv, v| pv <= v),
+        "and" => condition
+            .get("conditions")
+            .and_then(|c| c.as_array())
+            .is_none_or(|conds| conds.iter().all(|c| evaluate_condition(payload, c))),
+        "or" => condition
+            .get("conditions")
+            .and_then(|c| c.as_array())
+            .is_none_or(|conds| conds.iter().any(|c| evaluate_condition(payload, c))),
+        "not" => condition
+            .get("condition")
+            .is_none_or(|c| !evaluate_condition(payload, c)),
         _ => true,
+    }
+}
+
+/// Extracts the (payload_value, condition_value) pair from a condition with "field" and "value" keys.
+fn extract_field_pair<'a>(
+    payload: &'a Value,
+    condition: &'a Value,
+) -> Option<(&'a Value, &'a Value)> {
+    let field = condition
+        .get("field")
+        .and_then(|f| f.as_str())
+        .unwrap_or("");
+    let cond_value = condition.get("value")?;
+    let payload_value = get_nested_field(payload, field)?;
+    Some((payload_value, cond_value))
+}
+
+/// Evaluates a numeric comparison condition using the given comparator.
+fn compare_numeric(payload: &Value, condition: &Value, cmp: fn(f64, f64) -> bool) -> bool {
+    let field = condition
+        .get("field")
+        .and_then(|f| f.as_str())
+        .unwrap_or("");
+    let cond_val = condition.get("value").and_then(|v| v.as_f64());
+    let payload_val = get_nested_field(payload, field).and_then(|v| v.as_f64());
+    match (payload_val, cond_val) {
+        (Some(pv), Some(v)) => cmp(pv, v),
+        _ => false,
     }
 }
 

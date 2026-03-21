@@ -10,6 +10,7 @@
 //! while the operation is in progress. The final state is always consistent.
 //! For concurrent access, use `ConcurrentEdgeStore` instead.
 
+use super::helpers::PostcardPersistence;
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -179,34 +180,7 @@ impl EdgeStore {
     ///
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
     pub fn add_edge(&mut self, edge: GraphEdge) -> Result<()> {
-        let id = edge.id();
-        let source = edge.source();
-        let target = edge.target();
-        let label = edge.label().to_string();
-
-        // Check for duplicate ID
-        if self.edges.contains_key(&id) {
-            return Err(Error::EdgeExists(id));
-        }
-
-        // Add to outgoing index
-        self.outgoing.entry(source).or_default().push(id);
-
-        // Add to incoming index
-        self.incoming.entry(target).or_default().push(id);
-
-        // Add to label index (US-003)
-        self.by_label.entry(label.clone()).or_default().push(id);
-
-        // Add to composite (source, label) index (US-003)
-        self.outgoing_by_label
-            .entry((source, label))
-            .or_default()
-            .push(id);
-
-        // Store the edge
-        self.edges.insert(id, edge);
-        Ok(())
+        self.insert_edge(edge, true, true)
     }
 
     /// Adds an edge with only the outgoing index (for cross-shard storage).
@@ -218,55 +192,55 @@ impl EdgeStore {
     ///
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
     pub fn add_edge_outgoing_only(&mut self, edge: GraphEdge) -> Result<()> {
-        let id = edge.id();
-        let source = edge.source();
-        let label = edge.label().to_string();
-
-        // Check for duplicate ID
-        if self.edges.contains_key(&id) {
-            return Err(Error::EdgeExists(id));
-        }
-
-        // Add to outgoing index only
-        self.outgoing.entry(source).or_default().push(id);
-
-        // Add to label index (US-003)
-        self.by_label.entry(label.clone()).or_default().push(id);
-
-        // Add to composite (source, label) index (US-003)
-        self.outgoing_by_label
-            .entry((source, label))
-            .or_default()
-            .push(id);
-
-        // Store the edge
-        self.edges.insert(id, edge);
-        Ok(())
+        self.insert_edge(edge, true, false)
     }
 
     /// Adds an edge with only the incoming index (for cross-shard storage).
     ///
     /// Used by `ConcurrentEdgeStore` when source and target are in different shards.
     /// The edge is stored and indexed by target node only.
-    /// Note: Label indices are maintained by the source shard in ConcurrentEdgeStore.
+    /// Note: Label indices are maintained by the source shard in `ConcurrentEdgeStore`.
     ///
     /// # Errors
     ///
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
     pub fn add_edge_incoming_only(&mut self, edge: GraphEdge) -> Result<()> {
-        let id = edge.id();
-        let target = edge.target();
+        self.insert_edge(edge, false, true)
+    }
 
-        // Check for duplicate ID
+    /// Shared implementation for all `add_edge*` variants.
+    ///
+    /// Validates uniqueness, populates the requested directional indices,
+    /// and stores the edge. Label indices (`by_label`, `outgoing_by_label`)
+    /// are maintained only when `index_outgoing` is `true` (source shard
+    /// owns label indices in the concurrent model).
+    fn insert_edge(
+        &mut self,
+        edge: GraphEdge,
+        index_outgoing: bool,
+        index_incoming: bool,
+    ) -> Result<()> {
+        let id = edge.id();
         if self.edges.contains_key(&id) {
             return Err(Error::EdgeExists(id));
         }
 
-        // Add to incoming index only
-        self.incoming.entry(target).or_default().push(id);
+        if index_outgoing {
+            let source = edge.source();
+            let label = edge.label().to_string();
+            self.outgoing.entry(source).or_default().push(id);
+            // Label indices are owned by the source shard (US-003)
+            self.by_label.entry(label.clone()).or_default().push(id);
+            self.outgoing_by_label
+                .entry((source, label))
+                .or_default()
+                .push(id);
+        }
 
-        // Note: by_label and outgoing_by_label are maintained by source shard
-        // Store the edge
+        if index_incoming {
+            self.incoming.entry(edge.target()).or_default().push(id);
+        }
+
         self.edges.insert(id, edge);
         Ok(())
     }
@@ -292,19 +266,13 @@ impl EdgeStore {
     /// Gets all outgoing edges from a node.
     #[must_use]
     pub fn get_outgoing(&self, node_id: u64) -> Vec<&GraphEdge> {
-        self.outgoing
-            .get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
-            .unwrap_or_default()
+        self.resolve_edge_ids(self.outgoing.get(&node_id))
     }
 
     /// Gets all incoming edges to a node.
     #[must_use]
     pub fn get_incoming(&self, node_id: u64) -> Vec<&GraphEdge> {
-        self.incoming
-            .get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
-            .unwrap_or_default()
+        self.resolve_edge_ids(self.incoming.get(&node_id))
     }
 
     /// Gets outgoing edges filtered by label using composite index - O(k) where k = result count.
@@ -313,10 +281,7 @@ impl EdgeStore {
     /// iterating through all outgoing edges (EPIC-019 US-003).
     #[must_use]
     pub fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
-        self.outgoing_by_label
-            .get(&(node_id, label.to_string()))
-            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
-            .unwrap_or_default()
+        self.resolve_edge_ids(self.outgoing_by_label.get(&(node_id, label.to_string())))
     }
 
     /// Gets all edges with a specific label - O(k) where k = result count.
@@ -324,9 +289,16 @@ impl EdgeStore {
     /// Uses the `by_label` secondary index for fast lookup (EPIC-019 US-003).
     #[must_use]
     pub fn get_edges_by_label(&self, label: &str) -> Vec<&GraphEdge> {
-        self.by_label
-            .get(label)
-            .map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
+        self.resolve_edge_ids(self.by_label.get(label))
+    }
+
+    /// Resolves edge IDs from an index entry into edge references.
+    ///
+    /// Shared lookup pattern used by `get_outgoing`, `get_incoming`,
+    /// `get_outgoing_by_label`, and `get_edges_by_label`.
+    #[inline]
+    fn resolve_edge_ids(&self, ids: Option<&Vec<u64>>) -> Vec<&GraphEdge> {
+        ids.map(|ids| ids.iter().filter_map(|id| self.edges.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -369,24 +341,9 @@ impl EdgeStore {
     pub fn remove_edge(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
             let source = edge.source();
-            let label = edge.label().to_string();
-
-            // Remove from outgoing index
-            if let Some(ids) = self.outgoing.get_mut(&source) {
-                ids.retain(|&id| id != edge_id);
-            }
-            // Remove from incoming index
-            if let Some(ids) = self.incoming.get_mut(&edge.target()) {
-                ids.retain(|&id| id != edge_id);
-            }
-            // Remove from label index (US-003)
-            if let Some(ids) = self.by_label.get_mut(&label) {
-                ids.retain(|&id| id != edge_id);
-            }
-            // Remove from composite index (US-003)
-            if let Some(ids) = self.outgoing_by_label.get_mut(&(source, label)) {
-                ids.retain(|&id| id != edge_id);
-            }
+            self.purge_outgoing_index(edge_id, source);
+            self.purge_incoming_index(edge_id, edge.target());
+            self.purge_label_indices(edge_id, source, edge.label());
         }
     }
 
@@ -397,18 +354,8 @@ impl EdgeStore {
     pub fn remove_edge_outgoing_only(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
             let source = edge.source();
-            let label = edge.label().to_string();
-
-            if let Some(ids) = self.outgoing.get_mut(&source) {
-                ids.retain(|&id| id != edge_id);
-            }
-            // Clean label indices (US-003)
-            if let Some(ids) = self.by_label.get_mut(&label) {
-                ids.retain(|&id| id != edge_id);
-            }
-            if let Some(ids) = self.outgoing_by_label.get_mut(&(source, label)) {
-                ids.retain(|&id| id != edge_id);
-            }
+            self.purge_outgoing_index(edge_id, source);
+            self.purge_label_indices(edge_id, source, edge.label());
         }
     }
 
@@ -417,51 +364,8 @@ impl EdgeStore {
     /// Used by `ConcurrentEdgeStore` for cross-shard cleanup.
     pub fn remove_edge_incoming_only(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
-            if let Some(ids) = self.incoming.get_mut(&edge.target()) {
-                ids.retain(|&id| id != edge_id);
-            }
+            self.purge_incoming_index(edge_id, edge.target());
         }
-    }
-
-    // =========================================================================
-    // Persistence
-    // =========================================================================
-
-    /// Serializes the edge store to bytes using `postcard`.
-    ///
-    /// # Errors
-    /// Returns an error if serialization fails.
-    pub fn to_bytes(&self) -> std::result::Result<Vec<u8>, postcard::Error> {
-        postcard::to_allocvec(self)
-    }
-
-    /// Deserializes an edge store from bytes.
-    ///
-    /// # Errors
-    /// Returns an error if deserialization fails (e.g., corrupted data).
-    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, postcard::Error> {
-        postcard::from_bytes(bytes)
-    }
-
-    /// Saves the edge store to a file.
-    ///
-    /// # Errors
-    /// Returns an error if serialization or file I/O fails.
-    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let bytes = self
-            .to_bytes()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        std::fs::write(path, bytes)
-    }
-
-    /// Loads an edge store from a file.
-    ///
-    /// # Errors
-    /// Returns an error if file I/O or deserialization fails.
-    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        Self::from_bytes(&bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 
     /// Removes all edges connected to a node (cascade delete).
@@ -521,5 +425,44 @@ impl EdgeStore {
         {
             ids.retain(|&id| id != edge_id);
         }
+    }
+}
+
+impl PostcardPersistence for EdgeStore {}
+
+// Inherent persistence methods that delegate to `PostcardPersistence`.
+// Required so callers (e.g., `lifecycle.rs`) can use `EdgeStore::load_from_file`
+// without importing the trait.
+impl EdgeStore {
+    /// Serializes the edge store to bytes using `postcard`.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn to_bytes(&self) -> std::result::Result<Vec<u8>, postcard::Error> {
+        <Self as PostcardPersistence>::to_bytes(self)
+    }
+
+    /// Deserializes an edge store from bytes.
+    ///
+    /// # Errors
+    /// Returns an error if deserialization fails (e.g., corrupted data).
+    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, postcard::Error> {
+        <Self as PostcardPersistence>::from_bytes(bytes)
+    }
+
+    /// Saves the edge store to a file.
+    ///
+    /// # Errors
+    /// Returns an error if serialization or file I/O fails.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        <Self as PostcardPersistence>::save_to_file(self, path)
+    }
+
+    /// Loads an edge store from a file.
+    ///
+    /// # Errors
+    /// Returns an error if file I/O or deserialization fails.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        <Self as PostcardPersistence>::load_from_file(path)
     }
 }

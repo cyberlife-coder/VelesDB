@@ -17,45 +17,7 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::velesql::Condition;
 
-// ---------------------------------------------------------------------------
-// Condition tree helpers — generic recursive walks to avoid duplication
-// ---------------------------------------------------------------------------
-
-/// Returns `true` if the condition is a vector-type leaf (Similarity, VectorSearch, VectorFusedSearch).
-fn is_vector_leaf(condition: &Condition) -> bool {
-    matches!(
-        condition,
-        Condition::Similarity(_) | Condition::VectorSearch(_) | Condition::VectorFusedSearch(_)
-    )
-}
-
-/// Recursively counts leaves matching `predicate`.
-fn count_matching_leaves(condition: &Condition, predicate: fn(&Condition) -> bool) -> usize {
-    if predicate(condition) {
-        return 1;
-    }
-    match condition {
-        Condition::And(left, right) | Condition::Or(left, right) => {
-            count_matching_leaves(left, predicate) + count_matching_leaves(right, predicate)
-        }
-        Condition::Group(inner) | Condition::Not(inner) => count_matching_leaves(inner, predicate),
-        _ => 0,
-    }
-}
-
-/// Recursively checks whether any subtree satisfies `predicate`.
-fn any_subtree(condition: &Condition, predicate: &dyn Fn(&Condition) -> bool) -> bool {
-    if predicate(condition) {
-        return true;
-    }
-    match condition {
-        Condition::And(left, right) | Condition::Or(left, right) => {
-            any_subtree(left, predicate) || any_subtree(right, predicate)
-        }
-        Condition::Group(inner) | Condition::Not(inner) => any_subtree(inner, predicate),
-        _ => false,
-    }
-}
+use super::condition_tree::{any_subtree, count_matching_leaves, is_vector_leaf};
 
 impl Collection {
     /// Validate that similarity() queries don't use unsupported patterns.

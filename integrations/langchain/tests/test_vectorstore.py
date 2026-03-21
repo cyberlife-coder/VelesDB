@@ -14,7 +14,7 @@ try:
     from langchain_velesdb import VelesDBVectorStore
     from langchain_core.documents import Document
     from langchain_core.embeddings import Embeddings
-    from langchain_velesdb.vectorstore import _stable_hash_id
+    from velesdb_common.ids import stable_hash_id as _stable_hash_id
 except ImportError:
     pytest.skip("Dependencies not installed", allow_module_level=True)
 

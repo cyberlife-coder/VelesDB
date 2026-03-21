@@ -239,18 +239,20 @@ pub(crate) fn execute_search_request(
         .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
 
     // Hybrid: both dense and sparse
-    if has_dense && has_sparse {
-        let sparse_query = sparse_vec.expect("sparse_vec is Some when has_sparse is true");
-        return execute_hybrid_sparse(state, name, collection, req, &sparse_query, index_name);
+    if has_dense {
+        if let Some(sparse_query) = sparse_vec {
+            return execute_hybrid_sparse(state, name, collection, req, &sparse_query, index_name);
+        }
+        // Dense-only
+        return execute_dense_search(state, name, collection, req);
     }
 
     // Sparse-only
-    if has_sparse {
-        let sparse_query = sparse_vec.expect("sparse_vec is Some when has_sparse is true");
+    if let Some(sparse_query) = sparse_vec {
         return Ok(collection.sparse_search(&sparse_query, req.top_k, index_name));
     }
 
-    // Dense-only
+    // Dense-only (fallback — should not reach here given earlier validation)
     execute_dense_search(state, name, collection, req)
 }
 
@@ -293,6 +295,25 @@ fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant
         .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
 }
 
+/// Core search result handler: records metrics, delegates success to `on_ok`,
+/// returns actionable error response on failure.
+fn finish_search_core(
+    state: &AppState,
+    name: &str,
+    start: std::time::Instant,
+    error_status: StatusCode,
+    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
+    on_ok: impl FnOnce(Vec<velesdb_core::SearchResult>) -> axum::response::Response,
+) -> axum::response::Response {
+    match search_result {
+        Ok(results) => {
+            record_search_metrics(state, name, start, results.is_empty());
+            on_ok(results)
+        }
+        Err(e) => (error_status, Json(actionable_search_error(&e))).into_response(),
+    }
+}
+
 /// Shared result-handling for all search modes.
 pub(crate) fn finish_search(
     state: &AppState,
@@ -300,13 +321,14 @@ pub(crate) fn finish_search(
     start: std::time::Instant,
     search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
 ) -> axum::response::Response {
-    match search_result {
-        Ok(results) => {
-            record_search_metrics(state, name, start, results.is_empty());
-            Json(build_search_response(results)).into_response()
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
-    }
+    finish_search_core(
+        state,
+        name,
+        start,
+        StatusCode::BAD_REQUEST,
+        search_result,
+        |results| Json(build_search_response(results)).into_response(),
+    )
 }
 
 /// Maps search results to IDs+scores response with timing metrics.
@@ -316,9 +338,13 @@ pub(crate) fn finish_search_ids(
     start: std::time::Instant,
     search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
 ) -> axum::response::Response {
-    match search_result {
-        Ok(results) => {
-            record_search_metrics(state, name, start, results.is_empty());
+    finish_search_core(
+        state,
+        name,
+        start,
+        StatusCode::BAD_REQUEST,
+        search_result,
+        |results| {
             let response = SearchIdsResponse {
                 results: results
                     .into_iter()
@@ -329,9 +355,8 @@ pub(crate) fn finish_search_ids(
                     .collect(),
             };
             Json(response).into_response()
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response(),
-    }
+        },
+    )
 }
 
 /// Record circuit-breaker outcome (success/failure) based on a search result.
@@ -374,7 +399,7 @@ pub(crate) fn finish_search_ids_with_cb(
 
 /// Variant of [`finish_search_with_cb`] that uses a custom error status code
 /// instead of the default 400 used by [`finish_search`].
-pub(crate) fn finish_search_cb_status(
+pub(crate) fn finish_search_with_status(
     state: &AppState,
     name: &str,
     start: std::time::Instant,
@@ -383,11 +408,7 @@ pub(crate) fn finish_search_cb_status(
     search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
 ) -> axum::response::Response {
     record_circuit_breaker(collection, &search_result);
-    match search_result {
-        Ok(results) => {
-            record_search_metrics(state, name, start, results.is_empty());
-            Json(build_search_response(results)).into_response()
-        }
-        Err(e) => (error_status, Json(actionable_search_error(&e))).into_response(),
-    }
+    finish_search_core(state, name, start, error_status, search_result, |results| {
+        Json(build_search_response(results)).into_response()
+    })
 }

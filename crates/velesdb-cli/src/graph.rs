@@ -4,6 +4,8 @@
 //! All commands work offline without a running server.
 //!
 //! Display helpers shared with the REPL live in [`crate::graph_display`].
+//! JSON serialization uses [`crate::helpers::print_json`] to avoid
+//! duplicating `serde_json::to_string_pretty` + `println!` calls.
 
 use clap::{Subcommand, ValueEnum};
 use colored::Colorize;
@@ -12,6 +14,7 @@ use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::GraphEdge;
 
 use crate::graph_display;
+use crate::helpers;
 
 /// Traversal algorithm selection.
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -275,6 +278,12 @@ fn open_graph(path: &PathBuf, collection: &str) -> anyhow::Result<velesdb_core::
         .ok_or_else(|| anyhow::anyhow!("Graph collection '{}' not found", collection))
 }
 
+/// Converts a slice of edges to a JSON array value.
+fn edges_to_json_value(edges: &[GraphEdge]) -> serde_json::Value {
+    let data: Vec<_> = edges.iter().map(graph_display::edge_to_json).collect();
+    serde_json::Value::Array(data)
+}
+
 // ---------------------------------------------------------------------------
 // Command handlers
 // ---------------------------------------------------------------------------
@@ -314,8 +323,7 @@ fn handle_get_edges(
     let edges = col.get_edges(label);
 
     if format == "json" {
-        let data: Vec<_> = edges.iter().map(graph_display::edge_to_json).collect();
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        helpers::print_json(&edges_to_json_value(&edges))?;
     } else {
         let filter_msg = label.map_or_else(String::new, |l| format!(" (label={})", l.cyan()));
         println!("\n{}{}\n", "Edges".bold().underline(), filter_msg);
@@ -334,15 +342,12 @@ fn handle_degree(
     let (in_deg, out_deg) = col.node_degree(node_id);
 
     if format == "json" {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "node_id": node_id,
-                "in_degree": in_deg,
-                "out_degree": out_deg,
-                "total_degree": in_deg + out_deg
-            }))?
-        );
+        helpers::print_json(&serde_json::json!({
+            "node_id": node_id,
+            "in_degree": in_deg,
+            "out_degree": out_deg,
+            "total_degree": in_deg + out_deg
+        }))?;
     } else {
         graph_display::print_degree(node_id, in_deg, out_deg);
     }
@@ -394,7 +399,7 @@ fn handle_traverse(
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        helpers::print_json(&serde_json::Value::Array(data))?;
     } else {
         graph_display::print_traversal(&results, algo_label, source, max_depth);
     }
@@ -427,8 +432,7 @@ fn handle_neighbors(
     };
 
     if format == "json" {
-        let data: Vec<_> = edges.iter().map(graph_display::edge_to_json).collect();
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        helpers::print_json(&edges_to_json_value(&edges))?;
     } else {
         println!(
             "\n{} (node={}, direction={})\n",
@@ -496,10 +500,10 @@ fn handle_graph_nodes(
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        helpers::print_json(&serde_json::Value::Array(data))?;
     } else {
         println!(
-            "\n{} in '{}' — Page {}/{} ({} unique nodes from {} edges)\n",
+            "\n{} in '{}' -- Page {}/{} ({} unique nodes from {} edges)\n",
             "Nodes".bold().underline(),
             collection.green(),
             node_page.page,

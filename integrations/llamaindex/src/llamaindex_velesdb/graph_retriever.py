@@ -30,8 +30,14 @@ Example:
 """
 
 from typing import Any, List, Optional
-from dataclasses import dataclass, field
 import logging
+
+from velesdb_common.ids import stable_hash_id
+from llamaindex_velesdb._common import (
+    build_graph_rest_payload,
+    is_timeout_exception,
+    open_native_graph,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,45 +50,6 @@ except ImportError:
     from llama_index.schema import NodeWithScore, QueryBundle, TextNode
 
 
-@dataclass
-class TraversalResult:
-    """Result from graph traversal."""
-    target_id: int
-    depth: int
-    path: List[int] = field(default_factory=list)
-
-
-def _open_native_graph(db_path: str, collection_name: str) -> Any:
-    """Open a native graph collection from a VelesDB database.
-
-    Args:
-        db_path: Filesystem path to the VelesDB database directory.
-        collection_name: Name of the graph collection to open.
-
-    Returns:
-        PyGraphCollection instance.
-
-    Raises:
-        ImportError: If the velesdb package is not installed.
-        ValueError: If the graph collection cannot be found.
-    """
-    try:
-        import velesdb  # type: ignore[import]
-    except ImportError as exc:
-        raise ImportError(
-            "The 'velesdb' package is required for native mode. "
-            "Install it with: pip install velesdb"
-        ) from exc
-
-    db = velesdb.Database(db_path)
-    graph = db.get_graph_collection(collection_name)
-    if graph is None:
-        raise ValueError(
-            f"Graph collection '{collection_name}' not found in database at '{db_path}'"
-        )
-    return graph
-
-
 def _infer_db_path(index: Any) -> Optional[str]:
     """Try to infer the database path from an index's vector store."""
     try:
@@ -91,7 +58,7 @@ def _infer_db_path(index: Any) -> Optional[str]:
             path = getattr(vs, attr, None)
             if path is not None:
                 return str(path)
-    except Exception as exc:
+    except AttributeError as exc:
         logger.debug("Failed to infer db_path from index: %s", exc)
     return None
 
@@ -220,7 +187,7 @@ class GraphRetriever(BaseRetriever):
             raise ValueError(
                 "Native mode requires 'graph_collection_name'."
             )
-        return _open_native_graph(resolved_path, collection_name)
+        return open_native_graph(resolved_path, collection_name)
 
     def _infer_collection_name(self) -> str:
         """Try to infer collection name from the index's vector store."""
@@ -230,7 +197,7 @@ class GraphRetriever(BaseRetriever):
                 return vs._collection_name
             if hasattr(vs, "collection_name"):
                 return vs.collection_name
-        except Exception as exc:
+        except AttributeError as exc:
             logger.debug("Failed to infer collection name from vector store: %s", exc)
         return "default"
 
@@ -295,7 +262,7 @@ class GraphRetriever(BaseRetriever):
             neighbors = self._traverse_graph(node_id)
             for neighbor_id in neighbors:
                 expanded_ids.add(neighbor_id)
-        except Exception as exc:
+        except (ValueError, RuntimeError, OSError, TimeoutError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
                     "Graph traversal timeout for node %s, falling back to vector-only",
@@ -309,13 +276,7 @@ class GraphRetriever(BaseRetriever):
 
     def _is_timeout(self, exc: Exception) -> bool:
         """Return True if the exception represents a network/operation timeout."""
-        try:
-            import requests
-            if isinstance(exc, requests.exceptions.Timeout):
-                return True
-        except ImportError:
-            pass
-        return isinstance(exc, TimeoutError)
+        return is_timeout_exception(exc)
 
     def _assemble_results(
         self,
@@ -350,7 +311,7 @@ class GraphRetriever(BaseRetriever):
                     neighbor_node.metadata["graph_depth"] = 1
                     neighbor_node.metadata["retrieval_mode"] = "graph_expanded"
                     results.append(NodeWithScore(node=neighbor_node, score=0.5))
-            except Exception as exc:
+            except (ValueError, RuntimeError, OSError, KeyError) as exc:
                 logger.debug("Failed to fetch neighbour node %s: %s", neighbor_id, exc)
 
     def _extract_node_id(self, node: Any) -> Optional[int]:
@@ -365,8 +326,8 @@ class GraphRetriever(BaseRetriever):
                 try:
                     return int(node.node_id)
                 except (ValueError, TypeError):
-                    pass
-        except Exception as exc:
+                    return stable_hash_id(node.node_id)
+        except (AttributeError, KeyError) as exc:
             logger.debug("Failed to extract node id from node metadata: %s", exc)
         return None
 
@@ -415,14 +376,9 @@ class GraphRetriever(BaseRetriever):
         import requests
 
         url = f"{self._server_url}/collections/{self._collection_name}/graph/traverse"
-        payload = {
-            "source": source_id,
-            "strategy": "bfs",
-            "max_depth": self._max_depth,
-            "limit": self._expand_k * 2,
-            "rel_types": self._rel_types,
-        }
-
+        payload = build_graph_rest_payload(
+            source_id, self._max_depth, self._expand_k, self._rel_types
+        )
         timeout_sec = self._timeout_ms / 1000.0
         response = requests.post(url, json=payload, timeout=timeout_sec)
 
@@ -447,7 +403,7 @@ class GraphRetriever(BaseRetriever):
                 results = vs.get_nodes([str(node_id)])
                 if results:
                     return results[0]
-        except Exception as exc:
+        except (ValueError, RuntimeError, OSError, KeyError) as exc:
             logger.debug("Failed to fetch node %s from vector store: %s", node_id, exc)
         return None
 

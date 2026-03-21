@@ -66,14 +66,7 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn batch_dot_product_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    let mut results = Vec::with_capacity(candidates.len());
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        batch_prefetch_candidate(candidates, i);
-        results.push(dot_product_native(candidate, query));
-    }
-
-    results
+    super::batch_with_prefetch(candidates, query, dot_product_native)
 }
 
 /// Cross-platform multi-level prefetch for batch distance computations.

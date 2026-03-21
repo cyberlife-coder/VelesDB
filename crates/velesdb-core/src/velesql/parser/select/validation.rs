@@ -1,5 +1,6 @@
 //! Shared cross-cutting validation rules for SELECT parsing.
 
+use super::super::helpers::compare_op_from_str;
 use super::super::Rule;
 use crate::velesql::ast::{AggregateArg, AggregateType, CompareOp};
 use crate::velesql::error::ParseError;
@@ -38,16 +39,10 @@ pub(crate) fn validate_aggregate_wildcard(
 }
 
 /// Parse comparison operator token into `CompareOp`.
+///
+/// Delegates to the shared [`compare_op_from_str`] helper.
 pub(crate) fn parse_compare_op(
     pair: &pest::iterators::Pair<Rule>,
 ) -> Result<CompareOp, ParseError> {
-    match pair.as_str() {
-        "=" => Ok(CompareOp::Eq),
-        "!=" | "<>" => Ok(CompareOp::NotEq),
-        ">" => Ok(CompareOp::Gt),
-        ">=" => Ok(CompareOp::Gte),
-        "<" => Ok(CompareOp::Lt),
-        "<=" => Ok(CompareOp::Lte),
-        other => Err(ParseError::syntax(0, other, "Unknown comparison operator")),
-    }
+    compare_op_from_str(pair.as_str())
 }

@@ -1,5 +1,6 @@
 //! SELECT list, column, and aggregate parsing.
 
+use super::super::helpers::strip_identifier_quotes;
 use super::super::{extract_identifier, Rule};
 use super::validation;
 use crate::velesql::ast::{
@@ -81,7 +82,7 @@ impl SelectItemAccumulator {
                     .expect("checked len==1"),
             );
         }
-        // Multiple similarity scores or wildcards without other types → Mixed
+        // Multiple similarity scores or wildcards without other types -> Mixed
         SelectColumns::Mixed {
             columns: self.columns,
             aggregations: self.aggregations,
@@ -263,22 +264,11 @@ impl Parser {
     fn strip_quotes_from_column_name(raw: &str) -> String {
         if raw.contains('.') {
             raw.split('.')
-                .map(Self::strip_single_identifier_quotes)
+                .map(strip_identifier_quotes)
                 .collect::<Vec<_>>()
                 .join(".")
         } else {
-            Self::strip_single_identifier_quotes(raw)
-        }
-    }
-
-    fn strip_single_identifier_quotes(s: &str) -> String {
-        let s = s.trim();
-        if s.starts_with('`') && s.ends_with('`') && s.len() >= 2 {
-            s[1..s.len() - 1].to_string()
-        } else if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-            s[1..s.len() - 1].replace("\"\"\"", "\"")
-        } else {
-            s.to_string()
+            strip_identifier_quotes(raw)
         }
     }
 }

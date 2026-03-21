@@ -29,9 +29,14 @@ Example:
 """
 
 from typing import Any, List, Optional
-from dataclasses import dataclass, field
 import hashlib
 import logging
+
+from langchain_velesdb._common import (
+    build_graph_rest_payload,
+    is_timeout_exception,
+    open_native_graph,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,45 +49,6 @@ except ImportError:
     from langchain.schema.retriever import BaseRetriever
     from langchain.schema.document import Document
     from langchain.callbacks.manager import CallbackManagerForRetrieverRun
-
-
-@dataclass
-class TraversalResult:
-    """Result from graph traversal."""
-    target_id: int
-    depth: int
-    path: List[int] = field(default_factory=list)
-
-
-def _open_native_graph(db_path: str, collection_name: str) -> Any:
-    """Open a native graph collection from a VelesDB database.
-
-    Args:
-        db_path: Filesystem path to the VelesDB database directory.
-        collection_name: Name of the graph collection to open.
-
-    Returns:
-        PyGraphCollection instance.
-
-    Raises:
-        ImportError: If the velesdb package is not installed.
-        ValueError: If the graph collection cannot be found.
-    """
-    try:
-        import velesdb  # type: ignore[import]
-    except ImportError as exc:
-        raise ImportError(
-            "The 'velesdb' package is required for native mode. "
-            "Install it with: pip install velesdb"
-        ) from exc
-
-    db = velesdb.Database(db_path)
-    graph = db.get_graph_collection(collection_name)
-    if graph is None:
-        raise ValueError(
-            f"Graph collection '{collection_name}' not found in database at '{db_path}'"
-        )
-    return graph
 
 
 def _infer_db_path(vector_store: Any) -> Optional[str]:
@@ -205,7 +171,7 @@ class GraphRetriever(BaseRetriever):
             raise ValueError(
                 "Native mode requires 'graph_collection_name'."
             )
-        return _open_native_graph(resolved_path, self.graph_collection_name)
+        return open_native_graph(resolved_path, self.graph_collection_name)
 
     def _get_relevant_documents(
         self,
@@ -279,7 +245,7 @@ class GraphRetriever(BaseRetriever):
             neighbors = self._traverse_graph(doc_id)
             for neighbor_id in neighbors:
                 expanded_ids.add(neighbor_id)
-        except Exception as exc:
+        except (ValueError, RuntimeError, OSError, TimeoutError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
                     "Graph traversal timeout for node %s, falling back to vector-only",
@@ -293,13 +259,7 @@ class GraphRetriever(BaseRetriever):
 
     def _is_timeout(self, exc: Exception) -> bool:
         """Return True if the exception represents a network/operation timeout."""
-        try:
-            import requests
-            if isinstance(exc, requests.exceptions.Timeout):
-                return True
-        except ImportError:
-            pass
-        return isinstance(exc, TimeoutError)
+        return is_timeout_exception(exc)
 
     def _assemble_results(
         self,
@@ -335,7 +295,7 @@ class GraphRetriever(BaseRetriever):
                     neighbor_doc.metadata["graph_depth"] = 1
                     neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
                     result_docs.append(neighbor_doc)
-            except Exception as exc:
+            except (ValueError, RuntimeError, OSError, KeyError) as exc:
                 logger.debug("Failed to fetch neighbour document %s: %s", neighbor_id, exc)
 
     def _traverse_graph(self, source_id: int) -> List[int]:
@@ -384,15 +344,9 @@ class GraphRetriever(BaseRetriever):
 
         collection = self.vector_store._collection_name
         url = f"{self.server_url}/collections/{collection}/graph/traverse"
-
-        payload = {
-            "source": source_id,
-            "strategy": "bfs",
-            "max_depth": self.max_depth,
-            "limit": self.expand_k * 2,
-            "rel_types": self.rel_types or [],
-        }
-
+        payload = build_graph_rest_payload(
+            source_id, self.max_depth, self.expand_k, self.rel_types or []
+        )
         timeout_sec = self.timeout_ms / 1000.0
         response = requests.post(url, json=payload, timeout=timeout_sec)
 
@@ -415,7 +369,7 @@ class GraphRetriever(BaseRetriever):
             results = self.vector_store.get_by_ids([doc_id])
             if results:
                 return results[0]
-        except Exception:
+        except (ValueError, RuntimeError, OSError, KeyError):
             logger.debug("Failed to fetch document by ID: %s", doc_id, exc_info=True)
         return None
 

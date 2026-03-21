@@ -395,7 +395,7 @@ fn collect_metadata_fields(
         })
         .map(|(col_name, col_value)| FieldInfo {
             name: col_name.clone(),
-            field_type: json_type_name(col_value),
+            field_type: json_type_name(col_value).to_string(),
             indexed: false,
         })
         .collect()

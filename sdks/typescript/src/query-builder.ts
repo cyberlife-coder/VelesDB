@@ -18,11 +18,10 @@
  * @packageDocumentation
  */
 
+import type { FusionStrategy } from './types';
+
 /** Direction for relationship traversal */
 export type RelDirection = 'outgoing' | 'incoming' | 'both';
-
-/** Fusion strategy for hybrid queries */
-export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted';
 
 /** Options for relationship patterns */
 export interface RelOptions {

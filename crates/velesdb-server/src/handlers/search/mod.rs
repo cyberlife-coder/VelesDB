@@ -11,6 +11,7 @@ use axum::{
     Json,
 };
 use std::sync::Arc;
+use velesdb_core::collection::VectorCollection;
 
 use crate::types::{
     HybridSearchRequest, SearchIdsResponse, SearchRequest, SearchResponse, TextSearchRequest,
@@ -19,8 +20,8 @@ use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
-    execute_search_request, finish_search_cb_status, finish_search_ids_with_cb,
-    finish_search_with_cb, parse_filter_or_400, validate_query_dimension,
+    execute_search_request, finish_search_ids_with_cb, finish_search_with_cb,
+    finish_search_with_status, parse_filter_or_400, validate_query_dimension,
 };
 
 #[allow(unused_imports)]
@@ -29,6 +30,37 @@ pub use batch::batch_search;
 #[allow(unused_imports)]
 pub use multi::__path_multi_query_search;
 pub use multi::multi_query_search;
+
+/// Shared search preamble: record metric, resolve collection, check guard rails.
+///
+/// Returns `Ok(collection)` or `Err(response)` on failure.
+#[allow(clippy::result_large_err)]
+fn search_preamble(
+    state: &AppState,
+    name: &str,
+    headers: &axum::http::HeaderMap,
+) -> Result<VectorCollection, axum::response::Response> {
+    state.onboarding_metrics.record_search_request();
+    let collection = get_vector_collection_or_404(state, name)?;
+    let client_id = extract_client_id(headers);
+    apply_pre_check(collection.guard_rails(), &client_id)?;
+    Ok(collection)
+}
+
+/// Executes the full search pipeline and records circuit-breaker on failure.
+///
+/// Shared by `/search` and `/search/ids` (both accept `SearchRequest`).
+#[allow(clippy::result_large_err)]
+fn execute_with_cb(
+    state: &AppState,
+    name: &str,
+    collection: &VectorCollection,
+    req: &mut SearchRequest,
+) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
+    execute_search_request(state, name, collection, req).inspect_err(|_| {
+        collection.guard_rails().circuit_breaker.record_failure();
+    })
+}
 
 /// Search for similar vectors.
 ///
@@ -58,24 +90,15 @@ pub async fn search(
     Json(mut req): Json<SearchRequest>,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
-    state.onboarding_metrics.record_search_request();
 
-    let collection = match get_vector_collection_or_404(&state, &name) {
+    let collection = match search_preamble(&state, &name, &headers) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
 
-    let client_id = extract_client_id(&headers);
-    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
-        return resp;
-    }
-
-    let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
+    let search_result = match execute_with_cb(&state, &name, &collection, &mut req) {
         Ok(r) => r,
-        Err(resp) => {
-            collection.guard_rails().circuit_breaker.record_failure();
-            return resp;
-        }
+        Err(resp) => return resp,
     };
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)
@@ -102,17 +125,10 @@ pub async fn text_search(
     Path(name): Path<String>,
     Json(req): Json<TextSearchRequest>,
 ) -> impl IntoResponse {
-    state.onboarding_metrics.record_search_request();
-
-    let collection = match get_vector_collection_or_404(&state, &name) {
+    let collection = match search_preamble(&state, &name, &headers) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-
-    let client_id = extract_client_id(&headers);
-    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
-        return resp;
-    }
 
     let start = std::time::Instant::now();
 
@@ -126,7 +142,7 @@ pub async fn text_search(
         collection.text_search(&req.query, req.top_k)
     };
 
-    finish_search_cb_status(
+    finish_search_with_status(
         &state,
         &name,
         start,
@@ -158,17 +174,10 @@ pub async fn hybrid_search(
     Path(name): Path<String>,
     Json(req): Json<HybridSearchRequest>,
 ) -> impl IntoResponse {
-    state.onboarding_metrics.record_search_request();
-
-    let collection = match get_vector_collection_or_404(&state, &name) {
+    let collection = match search_preamble(&state, &name, &headers) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-
-    let client_id = extract_client_id(&headers);
-    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
-        return resp;
-    }
 
     let start = std::time::Instant::now();
 
@@ -223,24 +232,15 @@ pub async fn search_ids(
     Json(mut req): Json<SearchRequest>,
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
-    state.onboarding_metrics.record_search_request();
 
-    let collection = match get_vector_collection_or_404(&state, &name) {
+    let collection = match search_preamble(&state, &name, &headers) {
         Ok(c) => c,
         Err(resp) => return resp,
     };
 
-    let client_id = extract_client_id(&headers);
-    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
-        return resp;
-    }
-
-    let search_result = match execute_search_request(&state, &name, &collection, &mut req) {
+    let search_result = match execute_with_cb(&state, &name, &collection, &mut req) {
         Ok(r) => r,
-        Err(resp) => {
-            collection.guard_rails().circuit_breaker.record_failure();
-            return resp;
-        }
+        Err(resp) => return resp,
     };
 
     finish_search_ids_with_cb(&state, &name, start, &collection, search_result)

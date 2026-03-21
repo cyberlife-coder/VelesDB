@@ -176,19 +176,12 @@ pub fn wal_append_delete(wal_path: &Path, point_id: u64) -> Result<()> {
     // total_len = op(1) + point_id(8) = 9
     let total_len: u32 = 1 + 8;
 
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(wal_path)
-        .map_err(|e| Error::SparseIndexError(format!("WAL open failed: {e}")))?;
-    let mut w = BufWriter::new(file);
+    // RF-DEDUP: reuse open_wal_writer and wal_write helpers (same as wal_append_upsert)
+    let mut w = open_wal_writer(wal_path)?;
 
-    w.write_all(&total_len.to_le_bytes())
-        .map_err(|e| Error::SparseIndexError(format!("WAL write failed: {e}")))?;
-    w.write_all(&[WAL_OP_DELETE])
-        .map_err(|e| Error::SparseIndexError(format!("WAL write failed: {e}")))?;
-    w.write_all(&point_id.to_le_bytes())
-        .map_err(|e| Error::SparseIndexError(format!("WAL write failed: {e}")))?;
+    wal_write(&mut w, &total_len.to_le_bytes())?;
+    wal_write(&mut w, &[WAL_OP_DELETE])?;
+    wal_write(&mut w, &point_id.to_le_bytes())?;
 
     w.flush()
         .map_err(|e| Error::SparseIndexError(format!("WAL flush failed: {e}")))?;

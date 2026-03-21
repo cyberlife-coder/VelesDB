@@ -1,5 +1,6 @@
 //! FROM clause and JOIN parsing.
 
+use super::super::helpers::strip_identifier_quotes;
 use super::super::{extract_identifier, Rule};
 use crate::velesql::ast::{ColumnRef, JoinClause, JoinCondition};
 use crate::velesql::error::{ParseError, ParseErrorKind};
@@ -230,20 +231,8 @@ impl Parser {
         }
 
         Some((
-            Self::normalize_identifier(left),
-            Self::normalize_identifier(right),
+            strip_identifier_quotes(left),
+            strip_identifier_quotes(right),
         ))
-    }
-
-    fn normalize_identifier(identifier: &str) -> String {
-        if identifier.starts_with('`') && identifier.ends_with('`') && identifier.len() >= 2 {
-            return identifier[1..identifier.len() - 1].to_string();
-        }
-
-        if identifier.starts_with('"') && identifier.ends_with('"') && identifier.len() >= 2 {
-            return identifier[1..identifier.len() - 1].replace("\"\"", "\"");
-        }
-
-        identifier.to_string()
     }
 }

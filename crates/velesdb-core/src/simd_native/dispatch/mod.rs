@@ -114,6 +114,26 @@ pub fn has_avx512vnni() -> bool {
     false
 }
 
+/// Batch distance computation with multi-level prefetch hints.
+///
+/// Applies a single-pair distance function to each candidate against the query,
+/// using software prefetching to hide memory latency for upcoming candidates.
+/// This eliminates the identical batch loop pattern duplicated across all metrics.
+#[inline]
+#[must_use]
+pub(super) fn batch_with_prefetch(
+    candidates: &[&[f32]],
+    query: &[f32],
+    distance_fn: fn(&[f32], &[f32]) -> f32,
+) -> Vec<f32> {
+    let mut results = Vec::with_capacity(candidates.len());
+    for (i, candidate) in candidates.iter().enumerate() {
+        dot::batch_prefetch_candidate(candidates, i);
+        results.push(distance_fn(candidate, query));
+    }
+    results
+}
+
 #[inline]
 /// Warms up runtime SIMD dispatch cache and CPU caches for common dimensions.
 ///
@@ -174,18 +194,25 @@ impl DistanceEngine {
         }
     }
 
-    /// Computes dot product with the pre-resolved kernel.
+    /// Dispatches to a pre-resolved kernel with debug dimension checks.
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use]
-    pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn dispatch(&self, kernel: fn(&[f32], &[f32]) -> f32, a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
         debug_assert_eq!(
             a.len(),
             self.dimension,
             "Vector dimension mismatch with engine"
         );
-        (self.dot_product_fn)(a, b)
+        kernel(a, b)
+    }
+
+    /// Computes dot product with the pre-resolved kernel.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    #[must_use]
+    pub fn dot_product(&self, a: &[f32], b: &[f32]) -> f32 {
+        self.dispatch(self.dot_product_fn, a, b)
     }
 
     /// Computes squared L2 with the pre-resolved kernel.
@@ -193,13 +220,7 @@ impl DistanceEngine {
     #[inline(always)]
     #[must_use]
     pub fn squared_l2(&self, a: &[f32], b: &[f32]) -> f32 {
-        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-        debug_assert_eq!(
-            a.len(),
-            self.dimension,
-            "Vector dimension mismatch with engine"
-        );
-        (self.squared_l2_fn)(a, b)
+        self.dispatch(self.squared_l2_fn, a, b)
     }
 
     /// Computes Euclidean distance.
@@ -215,13 +236,7 @@ impl DistanceEngine {
     #[inline(always)]
     #[must_use]
     pub fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-        debug_assert_eq!(
-            a.len(),
-            self.dimension,
-            "Vector dimension mismatch with engine"
-        );
-        (self.cosine_fn)(a, b)
+        self.dispatch(self.cosine_fn, a, b)
     }
 
     /// Computes Hamming distance with the pre-resolved kernel.
@@ -229,13 +244,7 @@ impl DistanceEngine {
     #[inline(always)]
     #[must_use]
     pub fn hamming(&self, a: &[f32], b: &[f32]) -> f32 {
-        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-        debug_assert_eq!(
-            a.len(),
-            self.dimension,
-            "Vector dimension mismatch with engine"
-        );
-        (self.hamming_fn)(a, b)
+        self.dispatch(self.hamming_fn, a, b)
     }
 
     /// Computes Jaccard similarity with the pre-resolved kernel.
@@ -243,13 +252,7 @@ impl DistanceEngine {
     #[inline(always)]
     #[must_use]
     pub fn jaccard(&self, a: &[f32], b: &[f32]) -> f32 {
-        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-        debug_assert_eq!(
-            a.len(),
-            self.dimension,
-            "Vector dimension mismatch with engine"
-        );
-        (self.jaccard_fn)(a, b)
+        self.dispatch(self.jaccard_fn, a, b)
     }
 
     /// Returns the dimension this engine is specialized for.

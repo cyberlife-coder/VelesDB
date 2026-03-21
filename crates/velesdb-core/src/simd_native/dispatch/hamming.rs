@@ -244,14 +244,7 @@ pub fn hamming_binary_native(a: &[u64], b: &[u64]) -> u32 {
 #[inline]
 #[must_use]
 pub fn batch_hamming_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    let mut results = Vec::with_capacity(candidates.len());
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        super::dot::batch_prefetch_candidate(candidates, i);
-        results.push(hamming_distance_native(candidate, query));
-    }
-
-    results
+    super::batch_with_prefetch(candidates, query, hamming_distance_native)
 }
 
 /// Batch Jaccard similarity with cross-platform multi-level prefetch hints.
@@ -261,12 +254,5 @@ pub fn batch_hamming_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
 #[inline]
 #[must_use]
 pub fn batch_jaccard_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    let mut results = Vec::with_capacity(candidates.len());
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        super::dot::batch_prefetch_candidate(candidates, i);
-        results.push(jaccard_similarity_native(candidate, query));
-    }
-
-    results
+    super::batch_with_prefetch(candidates, query, jaccard_similarity_native)
 }

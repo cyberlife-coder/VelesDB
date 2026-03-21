@@ -68,6 +68,7 @@ pub mod connectors;
 pub mod error;
 pub mod pipeline;
 pub mod retry;
+pub mod source_config_builder;
 pub mod transform;
 pub mod wizard;
 

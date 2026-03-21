@@ -1,6 +1,9 @@
 //! Bulk import module for VelesDB CLI
 //!
 //! Supports importing vectors from CSV and JSON Lines files.
+//!
+//! The batch-accumulate-flush loop is shared between `import_jsonl` and
+//! `import_csv` via [`crate::helpers::BatchImporter`].
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -11,12 +14,13 @@
 )]
 
 use anyhow::{Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
+
+use crate::helpers::{self, BatchImporter};
 
 /// Import configuration
 pub struct ImportConfig {
@@ -94,31 +98,21 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
         config.storage_mode,
     )?;
 
-    let progress = create_progress_bar(total, config.show_progress);
-    if config.show_progress {
-        progress.set_message(format!(
-            "Importing {} vectors ({:.1} MB)",
-            total,
-            file_size as f64 / (1024.0 * 1024.0)
-        ));
-    }
+    let progress = helpers::create_progress_bar(total, config.show_progress);
+    helpers::set_import_message(&progress, total, file_size, config.show_progress);
 
-    let mut stats = ImportStats::default();
     let start = std::time::Instant::now();
-
-    // Perf: Pre-allocate batch buffer
-    let mut batch: Vec<Point> = Vec::with_capacity(config.batch_size);
+    let mut importer = BatchImporter::new(&collection, config.batch_size);
 
     // Process first record (already parsed)
     if first_record.vector.len() == dimension {
-        batch.push(Point::new(
+        importer.push(Point::new(
             first_record.id,
             first_record.vector,
             first_record.payload,
-        ));
-        stats.imported += 1;
+        ))?;
     } else {
-        stats.errors += 1;
+        importer.record_error();
     }
     progress.inc(1);
 
@@ -128,36 +122,28 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
         match serde_json::from_str::<JsonRecord>(&line) {
             Ok(record) => {
                 if record.vector.len() != dimension {
-                    stats.errors += 1;
+                    importer.record_error();
                 } else {
-                    batch.push(Point::new(record.id, record.vector, record.payload));
-                    stats.imported += 1;
-
-                    // Perf: Use upsert_bulk with parallel HNSW insert
-                    if batch.len() >= config.batch_size {
-                        collection.upsert_bulk(&batch)?;
-                        batch.clear();
-                    }
+                    importer.push(Point::new(record.id, record.vector, record.payload))?;
                 }
             }
             Err(_) => {
-                stats.errors += 1;
+                importer.record_error();
             }
         }
         line.clear(); // Reuse buffer
         progress.inc(1);
     }
 
-    // Flush remaining batch
-    if !batch.is_empty() {
-        collection.upsert_bulk(&batch)?;
-    }
-
+    let acc = importer.flush()?;
     progress.finish_with_message("Import complete");
-    stats.duration_ms = start.elapsed().as_millis() as u64;
-    stats.total = total;
 
-    Ok(stats)
+    Ok(ImportStats {
+        total,
+        imported: acc.imported,
+        errors: acc.errors,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
 }
 
 /// Import from CSV file
@@ -223,88 +209,97 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
     let buffered = BufReader::with_capacity(128 * 1024, file);
     let mut reader = csv::Reader::from_reader(buffered);
 
-    let progress = create_progress_bar(total, config.show_progress);
-    if config.show_progress {
-        progress.set_message(format!(
-            "Importing {} vectors ({:.1} MB)",
-            total,
-            file_size as f64 / (1024.0 * 1024.0)
-        ));
-    }
+    let progress = helpers::create_progress_bar(total, config.show_progress);
+    helpers::set_import_message(&progress, total, file_size, config.show_progress);
 
-    let mut stats = ImportStats::default();
     let start = std::time::Instant::now();
-
-    // Perf: Pre-allocate batch buffer
-    let mut batch: Vec<Point> = Vec::with_capacity(config.batch_size);
+    let mut importer = BatchImporter::new(&collection, config.batch_size);
 
     // Perf: Streaming parse - process record by record
     for result in reader.records() {
         match result {
             Ok(record) => {
-                let id: u64 = match record[id_idx].parse() {
-                    Ok(id) => id,
-                    Err(_) => {
-                        stats.errors += 1;
-                        progress.inc(1);
-                        continue;
-                    }
-                };
-
-                match parse_vector(&record[vector_idx]) {
-                    Ok(vector) => {
-                        if vector.len() != dimension {
-                            stats.errors += 1;
-                            progress.inc(1);
-                            continue;
-                        }
-                        // Build payload from other columns
-                        let mut payload = serde_json::Map::new();
-                        for (i, header) in headers.iter().enumerate() {
-                            if i != id_idx && i != vector_idx {
-                                payload.insert(
-                                    header.to_string(),
-                                    serde_json::Value::String(record[i].to_string()),
-                                );
-                            }
-                        }
-                        let payload_val = if payload.is_empty() {
-                            None
-                        } else {
-                            Some(serde_json::Value::Object(payload))
-                        };
-
-                        batch.push(Point::new(id, vector, payload_val));
-                        stats.imported += 1;
-
-                        // Perf: Use upsert_bulk with parallel HNSW insert
-                        if batch.len() >= config.batch_size {
-                            collection.upsert_bulk(&batch)?;
-                            batch.clear();
-                        }
-                    }
-                    Err(_) => {
-                        stats.errors += 1;
-                    }
-                }
+                process_csv_record(
+                    &record,
+                    &headers,
+                    id_idx,
+                    vector_idx,
+                    dimension,
+                    &mut importer,
+                )?;
             }
             Err(_) => {
-                stats.errors += 1;
+                importer.record_error();
             }
         }
         progress.inc(1);
     }
 
-    // Flush remaining batch
-    if !batch.is_empty() {
-        collection.upsert_bulk(&batch)?;
-    }
-
+    let acc = importer.flush()?;
     progress.finish_with_message("Import complete");
-    stats.duration_ms = start.elapsed().as_millis() as u64;
-    stats.total = total;
 
-    Ok(stats)
+    Ok(ImportStats {
+        total,
+        imported: acc.imported,
+        errors: acc.errors,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+/// Process a single CSV record and push it into the batch importer.
+fn process_csv_record(
+    record: &csv::StringRecord,
+    headers: &csv::StringRecord,
+    id_idx: usize,
+    vector_idx: usize,
+    dimension: usize,
+    importer: &mut BatchImporter<'_>,
+) -> Result<()> {
+    let id: u64 = match record[id_idx].parse() {
+        Ok(id) => id,
+        Err(_) => {
+            importer.record_error();
+            return Ok(());
+        }
+    };
+
+    match parse_vector(&record[vector_idx]) {
+        Ok(vector) => {
+            if vector.len() != dimension {
+                importer.record_error();
+                return Ok(());
+            }
+            let payload_val = build_csv_payload(headers, record, id_idx, vector_idx);
+            importer.push(Point::new(id, vector, payload_val))?;
+        }
+        Err(_) => {
+            importer.record_error();
+        }
+    }
+    Ok(())
+}
+
+/// Builds a JSON payload from non-id, non-vector CSV columns.
+fn build_csv_payload(
+    headers: &csv::StringRecord,
+    record: &csv::StringRecord,
+    id_idx: usize,
+    vector_idx: usize,
+) -> Option<serde_json::Value> {
+    let mut payload = serde_json::Map::new();
+    for (i, header) in headers.iter().enumerate() {
+        if i != id_idx && i != vector_idx {
+            payload.insert(
+                header.to_string(),
+                serde_json::Value::String(record[i].to_string()),
+            );
+        }
+    }
+    if payload.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(payload))
+    }
 }
 
 /// Parse vector from string (comma-separated or JSON array)
@@ -335,24 +330,6 @@ fn get_or_create_collection(
         db.create_vector_collection_with_options(name, dimension, metric, storage_mode)?;
         db.get_vector_collection(name)
             .context("Failed to get created collection")
-    }
-}
-
-/// Create progress bar
-fn create_progress_bar(total: usize, show: bool) -> ProgressBar {
-    if show {
-        let pb = ProgressBar::new(total as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-                )
-                .expect("hardcoded progress bar template is valid")
-                .progress_chars("#>-"),
-        );
-        pb
-    } else {
-        ProgressBar::hidden()
     }
 }
 

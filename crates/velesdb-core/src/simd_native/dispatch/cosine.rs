@@ -69,14 +69,7 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 #[must_use]
 pub fn batch_cosine_native(candidates: &[&[f32]], query: &[f32]) -> Vec<f32> {
-    let mut results = Vec::with_capacity(candidates.len());
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        super::dot::batch_prefetch_candidate(candidates, i);
-        results.push(cosine_similarity_native(candidate, query));
-    }
-
-    results
+    super::batch_with_prefetch(candidates, query, cosine_similarity_native)
 }
 
 pub(super) fn resolve_cosine(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]) -> f32 {

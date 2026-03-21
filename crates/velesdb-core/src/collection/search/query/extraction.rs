@@ -21,55 +21,18 @@ impl Collection {
     }
 
     /// Internal helper to extract vector search from WHERE clause.
+    ///
+    /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
+    /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     #[allow(clippy::self_only_used_in_recursion)]
     pub(crate) fn extract_vector_search(
         &self,
         condition: &mut Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<Vec<f32>>> {
-        use crate::velesql::VectorExpr;
-
         match condition {
             Condition::VectorSearch(vs) => {
-                let vec = match &vs.vector {
-                    VectorExpr::Literal(v) => v.clone(),
-                    VectorExpr::Parameter(name) => {
-                        let val = params.get(name).ok_or_else(|| {
-                            Error::Config(format!("Missing query parameter: ${name}"))
-                        })?;
-                        if let serde_json::Value::Array(arr) = val {
-                            arr.iter()
-                                .map(|v| {
-                                    v.as_f64()
-                                        .and_then(|f| {
-                                            // Validate f64 value is within f32 representable range
-                                            if f.is_finite()
-                                                && f >= f64::from(f32::MIN)
-                                                && f <= f64::from(f32::MAX)
-                                            {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
-                                            } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            }
-                                        })
-                                        .ok_or_else(|| {
-                                            Error::Config(format!(
-                                                "Invalid vector parameter ${name}: value out of f32 range or not a number"
-                                            ))
-                                        })
-                                })
-                                .collect::<Result<Vec<f32>>>()?
-                        } else {
-                            return Err(Error::Config(format!(
-                                "Invalid vector parameter ${name}: expected array"
-                            )));
-                        }
-                    }
-                };
+                let vec = Self::resolve_vector(&vs.vector, params)?;
                 Ok(Some(vec))
             }
             Condition::And(left, right) => {
@@ -85,6 +48,9 @@ impl Collection {
 
     /// Extract ALL similarity conditions from WHERE clause (EPIC-044 US-001).
     /// Returns Vec of (field, vector, operator, threshold) for cascade filtering.
+    ///
+    /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
+    /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     #[allow(clippy::type_complexity)]
     #[allow(clippy::only_used_in_recursion)]
     #[allow(clippy::self_only_used_in_recursion)]
@@ -93,48 +59,9 @@ impl Collection {
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)>> {
-        use crate::velesql::VectorExpr;
-
         match condition {
             Condition::Similarity(sim) => {
-                let vec = match &sim.vector {
-                    VectorExpr::Literal(v) => v.clone(),
-                    VectorExpr::Parameter(name) => {
-                        let val = params.get(name).ok_or_else(|| {
-                            Error::Config(format!("Missing query parameter: ${name}"))
-                        })?;
-                        if let serde_json::Value::Array(arr) = val {
-                            arr.iter()
-                                .map(|v| {
-                                    v.as_f64()
-                                        .and_then(|f| {
-                                            if f.is_finite()
-                                                && f >= f64::from(f32::MIN)
-                                                && f <= f64::from(f32::MAX)
-                                            {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            } else if f.is_finite() {
-                                                None
-                                            } else {
-                                                #[allow(clippy::cast_possible_truncation)]
-                                                Some(f as f32)
-                                            }
-                                        })
-                                        .ok_or_else(|| {
-                                            Error::Config(format!(
-                                                "Invalid vector parameter ${name}: value out of f32 range or not a number"
-                                            ))
-                                        })
-                                })
-                                .collect::<Result<Vec<f32>>>()?
-                        } else {
-                            return Err(Error::Config(format!(
-                                "Invalid vector parameter ${name}: expected array"
-                            )));
-                        }
-                    }
-                };
+                let vec = Self::resolve_vector(&sim.vector, params)?;
                 Ok(vec![(sim.field.clone(), vec, sim.operator, sim.threshold)])
             }
             // AND/OR: collect from both sides (AND=cascade, OR=validation only)
@@ -222,6 +149,10 @@ impl Collection {
     }
 
     /// Resolve a vector expression to actual vector values.
+    ///
+    /// This is the single source of truth for converting `VectorExpr`
+    /// parameters (JSON arrays) to `Vec<f32>`. Both `extract_vector_search`
+    /// and `extract_all_similarity_conditions` delegate here.
     ///
     /// # Errors
     ///

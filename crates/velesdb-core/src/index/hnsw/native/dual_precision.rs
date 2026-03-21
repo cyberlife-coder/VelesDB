@@ -232,12 +232,25 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
         }
 
         // Step 2: Re-rank using EXACT float32 distances
-        // This is the key to dual-precision: approximate traversal + exact rerank
+        let candidate_ids: Vec<NodeId> = candidates.iter().map(|&(id, _)| id).collect();
+        self.rerank_with_exact_f32(query, &candidate_ids, k)
+    }
+
+    /// Re-ranks candidate node IDs using exact f32 distances, sorts, and truncates to `k`.
+    ///
+    /// RF-DEDUP: Single source of truth for the rerank pipeline shared by
+    /// `search_dual_precision` (f32 traversal) and `search_int8_traversal` (int8 traversal).
+    fn rerank_with_exact_f32(
+        &self,
+        query: &[f32],
+        candidate_ids: &[NodeId],
+        k: usize,
+    ) -> Vec<(NodeId, f32)> {
         let vectors_guard = self.inner.vectors.read();
         let mut reranked: Vec<(NodeId, f32)> = if let Some(vectors) = vectors_guard.as_ref() {
-            candidates
+            candidate_ids
                 .iter()
-                .filter_map(|&(node_id, _approx_dist)| {
+                .filter_map(|&node_id| {
                     let vec = vectors.get(node_id)?;
                     let exact_dist = self.inner.compute_distance(query, vec);
                     Some((node_id, exact_dist))
@@ -247,10 +260,7 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             Vec::new()
         };
 
-        // Sort by exact distance
         reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        // Return top k
         reranked.truncate(k);
         reranked
     }
@@ -324,25 +334,9 @@ impl<D: DistanceEngine> DualPrecisionHnsw<D> {
             return Vec::new();
         }
 
-        // Phase 2: Re-rank with exact f32 distances
-        let vectors_guard = self.inner.vectors.read();
-        let mut reranked: Vec<(NodeId, f32)> = if let Some(vectors) = vectors_guard.as_ref() {
-            coarse_candidates
-                .into_iter()
-                .filter_map(|(node_id, _approx_dist)| {
-                    let vec = vectors.get(node_id)?;
-                    let exact_dist = self.inner.compute_distance(query, vec);
-                    Some((node_id, exact_dist))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Sort by exact distance and return top k
-        reranked.sort_by(|a, b| a.1.total_cmp(&b.1));
-        reranked.truncate(k);
-        reranked
+        // Phase 2: Re-rank with exact f32 distances (RF-DEDUP: shared helper)
+        let candidate_ids: Vec<NodeId> = coarse_candidates.into_iter().map(|(id, _)| id).collect();
+        self.rerank_with_exact_f32(query, &candidate_ids, k)
     }
 
     /// Search using int8 quantized distances for graph traversal.

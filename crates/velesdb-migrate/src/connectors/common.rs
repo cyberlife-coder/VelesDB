@@ -22,7 +22,13 @@ pub fn create_http_client() -> Client {
         .timeout(DEFAULT_TIMEOUT)
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .unwrap_or_else(|_| Client::new())
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                "Failed to build HTTP client with timeouts; falling back to default (unbounded timeout)"
+            );
+            Client::new()
+        })
 }
 
 /// Validates a URL for safety (anti-SSRF).
@@ -56,6 +62,8 @@ pub fn validate_url(url: &str) -> Result<()> {
 /// Parses a vector from a JSON value.
 ///
 /// Expects the value to be a JSON array of numbers.
+// Reason: JSON numbers parsed as f64; f32 truncation is expected for embeddings.
+#[allow(clippy::cast_possible_truncation)]
 pub fn parse_vector_from_json(value: &Value, field_name: &str) -> Result<Vec<f32>> {
     match value {
         Value::Array(arr) => arr
@@ -101,14 +109,15 @@ pub fn extract_payload_from_object(
 }
 
 /// Detects the JSON type as a string for schema detection.
-pub fn json_type_name(value: &Value) -> String {
+#[must_use]
+pub fn json_type_name(value: &Value) -> &'static str {
     match value {
-        Value::String(_) => "string".to_string(),
-        Value::Number(_) => "number".to_string(),
-        Value::Bool(_) => "boolean".to_string(),
-        Value::Array(_) => "array".to_string(),
-        Value::Object(_) => "object".to_string(),
-        Value::Null => "null".to_string(),
+        Value::String(_) => "string",
+        Value::Number(_) => "number",
+        Value::Bool(_) => "boolean",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+        Value::Null => "null",
     }
 }
 
@@ -150,6 +159,26 @@ pub fn extract_id_from_value(value: Option<Value>) -> String {
 /// Formats an optional count for display, returning "unknown" when absent.
 pub fn format_count(count: Option<u64>) -> String {
     count.map_or_else(|| "unknown".to_string(), |c| c.to_string())
+}
+
+/// Detects payload fields from a sample JSON document, excluding specified fields.
+///
+/// Each non-excluded key produces a `FieldInfo` with type inferred via [`json_type_name`].
+pub fn detect_fields_from_sample(
+    source: &Value,
+    excluded_fields: &[&str],
+) -> Vec<crate::connectors::FieldInfo> {
+    let Value::Object(map) = source else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter(|(key, _)| !excluded_fields.iter().any(|f| f == key))
+        .map(|(key, val)| crate::connectors::FieldInfo {
+            name: key.clone(),
+            field_type: json_type_name(val).to_string(),
+            indexed: false,
+        })
+        .collect()
 }
 
 #[cfg(test)]

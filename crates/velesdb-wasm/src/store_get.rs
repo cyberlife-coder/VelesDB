@@ -10,44 +10,42 @@ pub fn get_vector_at_index(store: &VectorStore, idx: usize) -> Vec<f32> {
             let start = idx * store.dimension;
             store.data[start..start + store.dimension].to_vec()
         }
-        StorageMode::SQ8 => {
-            let start = idx * store.dimension;
-            let min = store.sq8_mins[idx];
-            let scale = store.sq8_scales[idx];
-            store.data_sq8[start..start + store.dimension]
-                .iter()
-                .map(|&q| (f32::from(q) / scale) + min)
-                .collect()
-        }
-        StorageMode::Binary => {
-            let bytes_per_vec = store.dimension.div_ceil(8);
-            let start = idx * bytes_per_vec;
-            let mut vec = vec![0.0f32; store.dimension];
-            for (i, &byte) in store.data_binary[start..start + bytes_per_vec]
-                .iter()
-                .enumerate()
-            {
-                for bit in 0..8 {
-                    let dim_idx = i * 8 + bit;
-                    if dim_idx < store.dimension {
-                        vec[dim_idx] = if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
-                    }
-                }
-            }
-            vec
-        }
         // ProductQuantization uses SQ8 path as fallback in WASM context
         // (PQ codebooks are not available in the lightweight WASM store)
-        StorageMode::ProductQuantization => {
-            let start = idx * store.dimension;
-            let min = store.sq8_mins[idx];
-            let scale = store.sq8_scales[idx];
-            store.data_sq8[start..start + store.dimension]
-                .iter()
-                .map(|&q| (f32::from(q) / scale) + min)
-                .collect()
+        StorageMode::SQ8 | StorageMode::ProductQuantization => decode_sq8(
+            &store.data_sq8,
+            store.sq8_mins[idx],
+            store.sq8_scales[idx],
+            idx,
+            store.dimension,
+        ),
+        StorageMode::Binary => decode_binary(&store.data_binary, idx, store.dimension),
+    }
+}
+
+/// Decodes a single SQ8-quantized vector back to f32.
+fn decode_sq8(data_sq8: &[u8], min: f32, scale: f32, idx: usize, dimension: usize) -> Vec<f32> {
+    let start = idx * dimension;
+    data_sq8[start..start + dimension]
+        .iter()
+        .map(|&q| (f32::from(q) / scale) + min)
+        .collect()
+}
+
+/// Decodes a single binary-quantized vector back to f32 (0.0 / 1.0).
+fn decode_binary(data_binary: &[u8], idx: usize, dimension: usize) -> Vec<f32> {
+    let bytes_per_vec = dimension.div_ceil(8);
+    let start = idx * bytes_per_vec;
+    let mut vec = vec![0.0f32; dimension];
+    for (i, &byte) in data_binary[start..start + bytes_per_vec].iter().enumerate() {
+        for bit in 0..8 {
+            let dim_idx = i * 8 + bit;
+            if dim_idx < dimension {
+                vec[dim_idx] = if byte & (1 << bit) != 0 { 1.0 } else { 0.0 };
+            }
         }
     }
+    vec
 }
 
 /// Gets a vector by ID, returning JSON result.

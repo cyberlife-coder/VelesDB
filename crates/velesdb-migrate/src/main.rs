@@ -321,64 +321,26 @@ async fn auto_detect_and_generate(
 }
 
 /// Builds a `SourceConfig` from CLI arguments for the detect command.
+///
+/// Delegates to [`velesdb_migrate::source_config_builder`] to avoid
+/// duplicating the per-source match block.
 fn build_source_config(
     source_type: &str,
     url: &str,
     collection: &str,
     api_key: Option<&str>,
 ) -> anyhow::Result<velesdb_migrate::config::SourceConfig> {
-    use velesdb_migrate::config::*;
+    use velesdb_migrate::source_config_builder::{self, SourceParams};
 
-    match source_type.to_lowercase().as_str() {
-        "supabase" => {
-            let key = api_key.ok_or_else(|| anyhow::anyhow!("Supabase requires --api-key"))?;
-            Ok(SourceConfig::Supabase(SupabaseConfig {
-                url: url.to_string(),
-                api_key: key.to_string(),
-                table: collection.to_string(),
-                vector_column: "embedding".to_string(),
-                id_column: "id".to_string(),
-                payload_columns: vec![],
-            }))
-        }
-        "qdrant" => Ok(SourceConfig::Qdrant(QdrantConfig {
-            url: url.to_string(),
-            collection: collection.to_string(),
-            api_key: api_key.map(String::from),
-            payload_fields: vec![],
-        })),
-        "chromadb" => Ok(SourceConfig::ChromaDB(ChromaDBConfig {
-            url: url.to_string(),
-            collection: collection.to_string(),
-            tenant: None,
-            database: None,
-        })),
-        "pinecone" => {
-            let key = api_key.ok_or_else(|| anyhow::anyhow!("Pinecone requires --api-key"))?;
-            Ok(SourceConfig::Pinecone(PineconeConfig {
-                api_key: key.to_string(),
-                environment: String::new(),
-                index: collection.to_string(),
-                namespace: None,
-                base_url: None,
-            }))
-        }
-        "weaviate" => Ok(SourceConfig::Weaviate(WeaviateConfig {
-            url: url.to_string(),
-            class_name: collection.to_string(),
-            api_key: api_key.map(String::from),
-            properties: vec![],
-        })),
-        "milvus" => Ok(SourceConfig::Milvus(MilvusConfig {
-            url: url.to_string(),
-            collection: collection.to_string(),
-            username: None,
-            password: None,
-        })),
-        _ => {
-            eprintln!("❌ Unknown source type: {}", source_type);
-            eprintln!("   Supported: supabase, qdrant, chromadb, pinecone, weaviate, milvus");
-            std::process::exit(1);
-        }
-    }
+    let parsed_type = source_config_builder::parse_source_type(source_type)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let params = SourceParams {
+        source_type: parsed_type,
+        url,
+        api_key,
+        collection,
+    };
+
+    source_config_builder::build_source_config(&params).map_err(|e| anyhow::anyhow!("{e}"))
 }

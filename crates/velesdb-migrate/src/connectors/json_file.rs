@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
+use crate::connectors::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
 /// Configuration for JSON file import.
@@ -115,22 +115,14 @@ impl JsonFileConnector {
     }
 
     /// Extracts payload from a JSON object.
+    ///
+    /// Delegates to [`super::common::extract_payload_from_object`].
     fn extract_payload(&self, value: &serde_json::Value) -> HashMap<String, serde_json::Value> {
-        let mut payload = HashMap::new();
-        if let serde_json::Value::Object(map) = value {
-            for (key, val) in map {
-                if key == &self.config.id_field || key == &self.config.vector_field {
-                    continue;
-                }
-                if !self.config.payload_fields.is_empty()
-                    && !self.config.payload_fields.contains(key)
-                {
-                    continue;
-                }
-                payload.insert(key.clone(), val.clone());
-            }
-        }
-        payload
+        super::common::extract_payload_from_object(
+            value,
+            &[&self.config.id_field, &self.config.vector_field],
+            &self.config.payload_fields,
+        )
     }
 }
 
@@ -157,27 +149,11 @@ impl SourceConnector for JsonFileConnector {
 
         if let Some(first) = self.data.first() {
             let vector = self.parse_vector(first)?;
-            let mut fields = Vec::new();
-            if let serde_json::Value::Object(map) = first {
-                for (key, val) in map {
-                    if key == &self.config.id_field || key == &self.config.vector_field {
-                        continue;
-                    }
-                    fields.push(FieldInfo {
-                        name: key.clone(),
-                        field_type: match val {
-                            serde_json::Value::String(_) => "string",
-                            serde_json::Value::Number(_) => "number",
-                            serde_json::Value::Bool(_) => "boolean",
-                            serde_json::Value::Array(_) => "array",
-                            serde_json::Value::Object(_) => "object",
-                            serde_json::Value::Null => "null",
-                        }
-                        .to_string(),
-                        indexed: false,
-                    });
-                }
-            }
+            let excluded = [
+                self.config.id_field.as_str(),
+                self.config.vector_field.as_str(),
+            ];
+            let fields = super::common::detect_fields_from_sample(first, &excluded);
             self.schema = Some(SourceSchema {
                 source_type: "json_file".to_string(),
                 collection: self
@@ -198,9 +174,7 @@ impl SourceConnector for JsonFileConnector {
     }
 
     async fn get_schema(&self) -> Result<SourceSchema> {
-        self.schema
-            .clone()
-            .ok_or_else(|| Error::SourceConnection("Not connected".to_string()))
+        super::common::cached_schema(&self.schema)
     }
 
     async fn extract_batch(

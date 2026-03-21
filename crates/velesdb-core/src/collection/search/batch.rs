@@ -328,6 +328,11 @@ impl Collection {
     /// This is a faster variant of `multi_query_search` that skips fetching
     /// vector and payload data. Use when you only need document IDs.
     ///
+    /// Reuses [`validate_multi_query_inputs`](Self::validate_multi_query_inputs),
+    /// [`overfetch_factor`](Self::overfetch_factor), and
+    /// [`search_and_merge_delta`](Self::search_and_merge_delta) to eliminate
+    /// duplication with `multi_query_search`.
+    ///
     /// # Arguments
     ///
     /// * `vectors` - Slice of query vectors
@@ -348,54 +353,10 @@ impl Collection {
         top_k: usize,
         fusion: crate::fusion::FusionStrategy,
     ) -> Result<Vec<(u64, f32)>> {
-        const MAX_VECTORS: usize = 10;
+        let metric = self.validate_multi_query_inputs(vectors)?;
+        let overfetch_k = Self::overfetch_factor(top_k);
 
-        if vectors.is_empty() {
-            return Err(Error::Config(
-                "multi_query_search requires at least one vector".into(),
-            ));
-        }
-
-        if vectors.len() > MAX_VECTORS {
-            return Err(Error::Config(format!(
-                "multi_query_search supports at most {MAX_VECTORS} vectors, got {}",
-                vectors.len()
-            )));
-        }
-
-        let config = self.config.read();
-        let dimension = config.dimension;
-        drop(config);
-
-        for vector in vectors {
-            validate_dimension_match(dimension, vector.len())?;
-        }
-
-        let overfetch_k = match top_k {
-            0..=10 => top_k * 20,
-            11..=50 => top_k * 10,
-            51..=100 => top_k * 5,
-            _ => top_k * 2,
-        };
-
-        let metric = self.config.read().metric;
-
-        let batch_results =
-            self.index
-                .search_batch_parallel(vectors, overfetch_k, crate::SearchQuality::Balanced);
-
-        // Merge with delta buffer per query before fusion (C-2: was bypassed).
-        // Convert to tuples for fusion strategy compatibility.
-        let batch_results: Vec<Vec<(u64, f32)>> = batch_results
-            .into_iter()
-            .zip(vectors)
-            .map(|(query_results, query)| {
-                self.merge_delta(query_results, query, overfetch_k, metric)
-                    .into_iter()
-                    .map(Into::into)
-                    .collect()
-            })
-            .collect();
+        let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric);
 
         let fused = fusion
             .fuse(batch_results)

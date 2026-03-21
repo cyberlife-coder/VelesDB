@@ -165,19 +165,12 @@ export interface GraphEdge {
   properties?: Record<string, unknown>;
 }
 
-/** Request to add an edge to the graph */
-export interface AddEdgeRequest {
-  /** Unique edge ID */
-  id: number;
-  /** Source node ID */
-  source: number;
-  /** Target node ID */
-  target: number;
-  /** Edge label (relationship type) */
-  label: string;
-  /** Edge properties (optional) */
-  properties?: Record<string, unknown>;
-}
+/**
+ * Request to add an edge to the graph.
+ * Structurally identical to GraphEdge — kept as a named alias for
+ * semantic clarity (input vs stored model).
+ */
+export type AddEdgeRequest = GraphEdge;
 
 /** Response containing edges */
 export interface EdgesResponse {

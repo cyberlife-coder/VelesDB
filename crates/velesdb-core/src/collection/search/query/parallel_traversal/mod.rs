@@ -237,4 +237,58 @@ impl TraversalStats {
     }
 }
 
+/// Shared BFS core used by both `ParallelTraverser::bfs_single` (via
+/// `traverse_single`) and `ShardedTraverser::bfs_single_shard`.
+///
+/// Optionally accepts a neighbor filter (e.g. shard boundary check).
+/// When `neighbor_filter` is `None`, all neighbors are visited.
+pub(super) fn bfs_core<F, P>(
+    start: u64,
+    adjacency: &F,
+    stats: &TraversalStats,
+    config: &ParallelConfig,
+    neighbor_filter: Option<&P>,
+) -> Vec<TraversalResult>
+where
+    F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
+    P: Fn(u64) -> bool,
+{
+    let mut results = Vec::new();
+    let mut visited = rustc_hash::FxHashSet::default();
+    let mut queue = std::collections::VecDeque::new();
+
+    visited.insert(start);
+    stats.add_nodes_visited(1);
+    results.push(TraversalResult::new(start, start, Vec::new(), 0));
+    queue.push_back((start, Vec::<u64>::new(), 0u32));
+
+    while let Some((node, path, depth)) = queue.pop_front() {
+        if depth >= config.max_depth || results.len() >= config.limit {
+            break;
+        }
+
+        let neighbors = adjacency(node);
+        stats.add_edges_traversed(neighbors.len());
+
+        for (neighbor, edge_id) in neighbors {
+            let allowed = neighbor_filter.is_none_or(|f| f(neighbor));
+            if allowed && visited.insert(neighbor) {
+                stats.add_nodes_visited(1);
+                let mut new_path = path.clone();
+                new_path.push(edge_id);
+                let new_depth = depth + 1;
+                results.push(TraversalResult::new(
+                    start,
+                    neighbor,
+                    new_path.clone(),
+                    new_depth,
+                ));
+                queue.push_back((neighbor, new_path, new_depth));
+            }
+        }
+    }
+
+    results
+}
+
 // Tests moved to parallel_traversal_tests.rs per project rules

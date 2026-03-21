@@ -7,6 +7,7 @@
 // - Values represent property values, exact precision not required for comparisons
 #![allow(clippy::cast_precision_loss)]
 
+use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -138,22 +139,22 @@ impl RangeIndex {
 
     /// Create a range index for a (label, property) pair.
     pub fn create_index(&mut self, label: &str, property: &str) {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.entry(key).or_default();
+        self.indexes
+            .entry(make_label_prop_key(label, property))
+            .or_default();
     }
 
     /// Check if a range index exists for this (label, property) pair.
     #[must_use]
     pub fn has_index(&self, label: &str, property: &str) -> bool {
         self.indexes
-            .keys()
-            .any(|(l, p)| l == label && p == property)
+            .contains_key(&make_label_prop_key(label, property))
     }
 
     /// Insert a node into the range index.
     ///
     /// Returns `true` if the index exists and the value is comparable.
-    /// Returns `false` if node_id > u32::MAX to prevent data corruption.
+    /// Returns `false` if `node_id > u32::MAX` to prevent data corruption.
     pub fn insert(
         &mut self,
         label: &str,
@@ -161,12 +162,11 @@ impl RangeIndex {
         value: &serde_json::Value,
         node_id: u64,
     ) -> bool {
-        // BUG FIX: Reject node_id > u32::MAX instead of silently truncating
-        let Some(safe_id) = u32::try_from(node_id).ok() else {
+        let Some(safe_id) = safe_bitmap_id(node_id) else {
             return false;
         };
 
-        let key = (label.to_string(), property.to_string());
+        let key = make_label_prop_key(label, property);
         if let Some(btree) = self.indexes.get_mut(&key) {
             if let Some(ordered) = OrderedValue::from_json(value) {
                 btree.entry(ordered).or_default().insert(safe_id);
@@ -178,7 +178,7 @@ impl RangeIndex {
 
     /// Remove a node from the range index.
     ///
-    /// Returns `false` if node_id > u32::MAX (cannot exist in index).
+    /// Returns `false` if `node_id > u32::MAX` (cannot exist in index).
     pub fn remove(
         &mut self,
         label: &str,
@@ -186,12 +186,11 @@ impl RangeIndex {
         value: &serde_json::Value,
         node_id: u64,
     ) -> bool {
-        // BUG FIX: node_id > u32::MAX cannot exist in index
-        let Some(safe_id) = u32::try_from(node_id).ok() else {
+        let Some(safe_id) = safe_bitmap_id(node_id) else {
             return false;
         };
 
-        let key = (label.to_string(), property.to_string());
+        let key = make_label_prop_key(label, property);
         if let Some(btree) = self.indexes.get_mut(&key) {
             if let Some(ordered) = OrderedValue::from_json(value) {
                 if let Some(bitmap) = btree.get_mut(&ordered) {
@@ -287,7 +286,18 @@ impl RangeIndex {
         )
     }
 
-    /// Internal range query using BTreeMap::range()
+    /// Converts a `Bound<&serde_json::Value>` to `Bound<OrderedValue>`.
+    ///
+    /// Returns `None` when the JSON value is not convertible to an ordered type.
+    fn convert_bound(bound: Bound<&serde_json::Value>) -> Option<Bound<OrderedValue>> {
+        match bound {
+            Bound::Included(v) => OrderedValue::from_json(v).map(Bound::Included),
+            Bound::Excluded(v) => OrderedValue::from_json(v).map(Bound::Excluded),
+            Bound::Unbounded => Some(Bound::Unbounded),
+        }
+    }
+
+    /// Internal range query using `BTreeMap::range()`.
     fn range_query(
         &self,
         label: &str,
@@ -297,25 +307,14 @@ impl RangeIndex {
     ) -> RoaringBitmap {
         let mut result = RoaringBitmap::new();
 
-        let key = (label.to_string(), property.to_string());
+        let key = make_label_prop_key(label, property);
         let Some(btree) = self.indexes.get(&key) else {
             return result;
         };
 
-        // Convert bounds to OrderedValue
-        let start_bound = match start {
-            Bound::Included(v) => OrderedValue::from_json(v).map(Bound::Included),
-            Bound::Excluded(v) => OrderedValue::from_json(v).map(Bound::Excluded),
-            Bound::Unbounded => Some(Bound::Unbounded),
-        };
-
-        let end_bound = match end {
-            Bound::Included(v) => OrderedValue::from_json(v).map(Bound::Included),
-            Bound::Excluded(v) => OrderedValue::from_json(v).map(Bound::Excluded),
-            Bound::Unbounded => Some(Bound::Unbounded),
-        };
-
-        let (Some(start_ord), Some(end_ord)) = (start_bound, end_bound) else {
+        let (Some(start_ord), Some(end_ord)) =
+            (Self::convert_bound(start), Self::convert_bound(end))
+        else {
             return result;
         };
 
@@ -329,8 +328,9 @@ impl RangeIndex {
 
     /// Drop a range index.
     pub fn drop_index(&mut self, label: &str, property: &str) -> bool {
-        let key = (label.to_string(), property.to_string());
-        self.indexes.remove(&key).is_some()
+        self.indexes
+            .remove(&make_label_prop_key(label, property))
+            .is_some()
     }
 
     /// Clear all range indexes.
@@ -357,17 +357,20 @@ impl RangeIndex {
     pub fn indexed_properties(&self) -> Vec<(String, String)> {
         self.indexes.keys().cloned().collect()
     }
+}
 
-    // =========================================================================
-    // Persistence - serialize/deserialize index to/from bytes
-    // =========================================================================
+impl PostcardPersistence for RangeIndex {}
 
+// Inherent persistence methods that delegate to `PostcardPersistence`.
+// Required so callers can use `RangeIndex::load_from_file` without
+// importing the trait.
+impl RangeIndex {
     /// Serialize the index to bytes using postcard.
     ///
     /// # Errors
     /// Returns an error if serialization fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, postcard::Error> {
-        postcard::to_allocvec(self)
+        <Self as PostcardPersistence>::to_bytes(self)
     }
 
     /// Deserialize an index from bytes.
@@ -375,7 +378,7 @@ impl RangeIndex {
     /// # Errors
     /// Returns an error if deserialization fails (corrupted data).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {
-        postcard::from_bytes(bytes)
+        <Self as PostcardPersistence>::from_bytes(bytes)
     }
 
     /// Save the index to a file.
@@ -383,10 +386,7 @@ impl RangeIndex {
     /// # Errors
     /// Returns an error if serialization or file I/O fails.
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let bytes = self
-            .to_bytes()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        std::fs::write(path, bytes)
+        <Self as PostcardPersistence>::save_to_file(self, path)
     }
 
     /// Load an index from a file.
@@ -394,8 +394,6 @@ impl RangeIndex {
     /// # Errors
     /// Returns an error if file I/O or deserialization fails.
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        Self::from_bytes(&bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+        <Self as PostcardPersistence>::load_from_file(path)
     }
 }

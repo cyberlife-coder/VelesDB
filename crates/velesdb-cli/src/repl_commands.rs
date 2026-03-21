@@ -13,6 +13,7 @@ use velesdb_core::Database;
 
 use crate::collection_helpers;
 use crate::graph_display;
+use crate::helpers;
 use crate::repl::{OutputFormat, ReplConfig};
 
 /// Result of a REPL command execution.
@@ -271,95 +272,42 @@ fn cmd_sample(db: &Database, parts: &[&str]) -> CommandResult {
 
             let mut rows = Vec::new();
             for point in points.into_iter().flatten().take(count) {
-                let mut row = HashMap::new();
-                row.insert("id".to_string(), serde_json::json!(point.id));
-
-                // Show vector preview (first 5 dims)
-                let vec_preview: Vec<f32> = point.vector.iter().take(5).copied().collect();
-                let vec_str = if point.vector.len() > 5 {
-                    format!("{:?}... ({} dims)", vec_preview, point.vector.len())
-                } else {
-                    format!("{:?}", vec_preview)
-                };
-                row.insert("vector".to_string(), serde_json::json!(vec_str));
-
-                if let Some(serde_json::Value::Object(map)) = &point.payload {
-                    for (k, v) in map {
-                        row.insert(k.clone(), v.clone());
-                    }
-                }
+                let mut row = helpers::point_payload_to_row(point.id, &point.payload);
+                row.insert(
+                    "vector".to_string(),
+                    serde_json::json!(vector_preview(&point.vector)),
+                );
                 rows.push(row);
             }
 
-            if rows.is_empty() {
-                println!("No records found.\n");
-            } else {
-                println!("\n{} sample(s) from {}:\n", rows.len(), name.green());
-                crate::repl_output::print_table(&rows);
-                println!();
-            }
+            print_sample_rows(&rows, name, "");
         }
         Some(collection_helpers::TypedCollection::Graph(col)) => {
             let edges = col.get_edges(None);
-            let mut unique_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
-            for e in &edges {
-                unique_ids.insert(e.source());
-                unique_ids.insert(e.target());
-            }
+            let unique_ids = graph_display::unique_node_ids(&edges);
             let sample_ids: Vec<u64> = unique_ids.into_iter().take(count).collect();
 
             let mut rows = Vec::new();
             for node_id in &sample_ids {
-                let mut row = HashMap::new();
-                row.insert("id".to_string(), serde_json::json!(node_id));
-                if let Ok(Some(serde_json::Value::Object(map))) = col.get_node_payload(*node_id) {
-                    for (k, v) in map {
-                        row.insert(k, v);
-                    }
-                }
-                rows.push(row);
+                let payload = col.get_node_payload(*node_id).ok().flatten();
+                rows.push(helpers::point_payload_to_row(*node_id, &payload));
             }
 
-            if rows.is_empty() {
-                println!("No nodes found.\n");
-            } else {
-                println!(
-                    "\n{} sample(s) from {} (Graph):\n",
-                    rows.len(),
-                    name.green()
-                );
-                crate::repl_output::print_table(&rows);
-                println!();
-            }
+            print_sample_rows(&rows, name, " (Graph)");
         }
         Some(collection_helpers::TypedCollection::Metadata(col)) => {
             let all_ids = col.all_ids();
             let sample_ids: Vec<u64> = all_ids.into_iter().take(count).collect();
             let points = col.get(&sample_ids);
 
-            let mut rows = Vec::new();
-            for point in points.into_iter().flatten().take(count) {
-                let mut row = HashMap::new();
-                row.insert("id".to_string(), serde_json::json!(point.id));
-                if let Some(serde_json::Value::Object(map)) = &point.payload {
-                    for (k, v) in map {
-                        row.insert(k.clone(), v.clone());
-                    }
-                }
-                rows.push(row);
-            }
+            let rows: Vec<_> = points
+                .into_iter()
+                .flatten()
+                .take(count)
+                .map(|p| helpers::point_payload_to_row(p.id, &p.payload))
+                .collect();
 
-            if rows.is_empty() {
-                println!("No records found.\n");
-            } else {
-                println!(
-                    "\n{} sample(s) from {} (Metadata):\n",
-                    rows.len(),
-                    name.green()
-                );
-                crate::repl_output::print_table(&rows);
-                println!();
-            }
+            print_sample_rows(&rows, name, " (Metadata)");
         }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
@@ -392,45 +340,14 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
             let page_ids: Vec<u64> = all_ids.into_iter().skip(offset).take(page_size).collect();
             let points = col.get(&page_ids);
 
-            let mut rows = Vec::new();
-            for point in points.into_iter().flatten().take(page_size) {
-                let mut row = HashMap::new();
-                row.insert("id".to_string(), serde_json::json!(point.id));
+            let rows: Vec<_> = points
+                .into_iter()
+                .flatten()
+                .take(page_size)
+                .map(|p| helpers::point_payload_to_browse_row(p.id, &p.payload))
+                .collect();
 
-                if let Some(serde_json::Value::Object(map)) = &point.payload {
-                    for (k, v) in map {
-                        // Truncate long values at 47 chars
-                        let display_val = match v {
-                            serde_json::Value::String(s) if s.len() > 50 => {
-                                let truncated: String = s.chars().take(47).collect();
-                                serde_json::json!(format!("{truncated}..."))
-                            }
-                            other => other.clone(),
-                        };
-                        row.insert(k.clone(), display_val);
-                    }
-                }
-                rows.push(row);
-            }
-
-            println!(
-                "\n{} - Page {}/{} ({} total records)",
-                name.green(),
-                page,
-                total_pages.max(1),
-                total
-            );
-            println!();
-
-            if rows.is_empty() {
-                println!("No records on this page.\n");
-            } else {
-                crate::repl_output::print_table(&rows);
-                println!(
-                    "\nUse {} to see next page\n",
-                    format!(".browse {} {}", name, page + 1).yellow()
-                );
-            }
+            print_browse_page(name, "", page, total_pages, total, &rows);
         }
         Some(collection_helpers::TypedCollection::Graph(col)) => {
             let node_page = match graph_display::paginate_graph_nodes(&col, page, page_size) {
@@ -466,44 +383,14 @@ fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
             let page_ids: Vec<u64> = all_ids.into_iter().skip(offset).take(page_size).collect();
             let points = col.get(&page_ids);
 
-            let mut rows = Vec::new();
-            for point in points.into_iter().flatten().take(page_size) {
-                let mut row = HashMap::new();
-                row.insert("id".to_string(), serde_json::json!(point.id));
+            let rows: Vec<_> = points
+                .into_iter()
+                .flatten()
+                .take(page_size)
+                .map(|p| helpers::point_payload_to_browse_row(p.id, &p.payload))
+                .collect();
 
-                if let Some(serde_json::Value::Object(map)) = &point.payload {
-                    for (k, v) in map {
-                        let display_val = match v {
-                            serde_json::Value::String(s) if s.len() > 50 => {
-                                let truncated: String = s.chars().take(47).collect();
-                                serde_json::json!(format!("{truncated}..."))
-                            }
-                            other => other.clone(),
-                        };
-                        row.insert(k.clone(), display_val);
-                    }
-                }
-                rows.push(row);
-            }
-
-            println!(
-                "\n{} (Metadata) - Page {}/{} ({} total records)",
-                name.green(),
-                page,
-                total_pages.max(1),
-                total
-            );
-            println!();
-
-            if rows.is_empty() {
-                println!("No records on this page.\n");
-            } else {
-                crate::repl_output::print_table(&rows);
-                println!(
-                    "\nUse {} to see next page\n",
-                    format!(".browse {} {}", name, page + 1).yellow()
-                );
-            }
+            print_browse_page(name, " (Metadata)", page, total_pages, total, &rows);
         }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
@@ -683,41 +570,10 @@ fn cmd_export(db: &Database, parts: &[&str]) -> CommandResult {
             let total = all_ids.len();
             println!("Exporting {} records from {}...", total, name.green());
 
-            let mut records = Vec::new();
-            let batch_size = 1000;
-
-            for batch in all_ids.chunks(batch_size) {
-                let points = col.get(batch);
-
-                for point in points.into_iter().flatten() {
-                    let mut record = serde_json::Map::new();
-                    record.insert("id".to_string(), serde_json::json!(point.id));
-                    record.insert("vector".to_string(), serde_json::json!(point.vector));
-                    if let Some(payload) = &point.payload {
-                        record.insert("payload".to_string(), payload.clone());
-                    }
-                    records.push(serde_json::Value::Object(record));
-                }
-            }
-
-            let json_str = match serde_json::to_string_pretty(&records) {
-                Ok(s) => s,
-                Err(e) => {
-                    return CommandResult::Error(format!("Failed to serialize records: {e}"));
-                }
-            };
-            match std::fs::write(&filename, json_str) {
-                Ok(()) => {
-                    println!(
-                        "{} Exported {} records to {}\n",
-                        "\u{2713}".green(),
-                        records.len(),
-                        filename.green()
-                    );
-                }
-                Err(e) => {
-                    return CommandResult::Error(format!("Failed to write file: {e}"));
-                }
+            let records = export_points(&all_ids, |batch| col.get(batch), true);
+            match finish_export(&records, &filename) {
+                Ok(()) => {}
+                Err(msg) => return CommandResult::Error(msg),
             }
         }
         Some(collection_helpers::TypedCollection::Metadata(col)) => {
@@ -729,40 +585,10 @@ fn cmd_export(db: &Database, parts: &[&str]) -> CommandResult {
                 name.green()
             );
 
-            let mut records = Vec::new();
-            let batch_size = 1000;
-
-            for batch in all_ids.chunks(batch_size) {
-                let points = col.get(batch);
-
-                for point in points.into_iter().flatten() {
-                    let mut record = serde_json::Map::new();
-                    record.insert("id".to_string(), serde_json::json!(point.id));
-                    if let Some(payload) = &point.payload {
-                        record.insert("payload".to_string(), payload.clone());
-                    }
-                    records.push(serde_json::Value::Object(record));
-                }
-            }
-
-            let json_str = match serde_json::to_string_pretty(&records) {
-                Ok(s) => s,
-                Err(e) => {
-                    return CommandResult::Error(format!("Failed to serialize records: {e}"));
-                }
-            };
-            match std::fs::write(&filename, json_str) {
-                Ok(()) => {
-                    println!(
-                        "{} Exported {} records to {}\n",
-                        "\u{2713}".green(),
-                        records.len(),
-                        filename.green()
-                    );
-                }
-                Err(e) => {
-                    return CommandResult::Error(format!("Failed to write file: {e}"));
-                }
+            let records = export_points(&all_ids, |batch| col.get(batch), false);
+            match finish_export(&records, &filename) {
+                Ok(()) => {}
+                Err(msg) => return CommandResult::Error(msg),
             }
         }
         Some(collection_helpers::TypedCollection::Graph(_)) => {
@@ -1544,17 +1370,109 @@ fn node_entries_to_rows(
 ) -> Vec<HashMap<String, serde_json::Value>> {
     entries
         .iter()
-        .map(|(node_id, payload)| {
-            let mut row = HashMap::new();
-            row.insert("id".to_string(), serde_json::json!(node_id));
-            if let Some(serde_json::Value::Object(map)) = payload {
-                for (k, v) in map {
-                    row.insert(k.clone(), v.clone());
-                }
-            }
-            row
-        })
+        .map(|(node_id, payload)| helpers::point_payload_to_row(*node_id, payload))
         .collect()
+}
+
+// ============================================================================
+// Extracted display / export helpers
+// ============================================================================
+
+/// Formats a vector as a truncated preview string (first 5 dimensions).
+fn vector_preview(vector: &[f32]) -> String {
+    let preview: Vec<f32> = vector.iter().take(5).copied().collect();
+    if vector.len() > 5 {
+        format!("{preview:?}... ({} dims)", vector.len())
+    } else {
+        format!("{preview:?}")
+    }
+}
+
+/// Prints sample rows with a type suffix (empty for Vector, " (Graph)", etc.).
+fn print_sample_rows(rows: &[HashMap<String, serde_json::Value>], name: &str, type_suffix: &str) {
+    if rows.is_empty() {
+        println!("No records found.\n");
+    } else {
+        println!(
+            "\n{} sample(s) from {}{}:\n",
+            rows.len(),
+            name.green(),
+            type_suffix
+        );
+        crate::repl_output::print_table(rows);
+        println!();
+    }
+}
+
+/// Prints a browse page with a consistent header and navigation hint.
+fn print_browse_page(
+    name: &str,
+    type_suffix: &str,
+    page: usize,
+    total_pages: usize,
+    total: usize,
+    rows: &[HashMap<String, serde_json::Value>],
+) {
+    println!(
+        "\n{}{} - Page {}/{} ({} total records)",
+        name.green(),
+        type_suffix,
+        page,
+        total_pages.max(1),
+        total
+    );
+    println!();
+
+    if rows.is_empty() {
+        println!("No records on this page.\n");
+    } else {
+        crate::repl_output::print_table(rows);
+        println!(
+            "\nUse {} to see next page\n",
+            format!(".browse {} {}", name, page + 1).yellow()
+        );
+    }
+}
+
+/// Exports points in batches, building a JSON record for each.
+///
+/// `include_vector` controls whether the vector field is included (true for
+/// Vector collections, false for Metadata).
+fn export_points<F>(all_ids: &[u64], get_batch: F, include_vector: bool) -> Vec<serde_json::Value>
+where
+    F: Fn(&[u64]) -> Vec<Option<velesdb_core::Point>>,
+{
+    let batch_size = 1000;
+    let mut records = Vec::new();
+
+    for batch in all_ids.chunks(batch_size) {
+        let points = get_batch(batch);
+        for point in points.into_iter().flatten() {
+            let vector = if include_vector {
+                Some(point.vector.as_slice())
+            } else {
+                None
+            };
+            records.push(helpers::point_to_export_record(
+                point.id,
+                vector,
+                &point.payload,
+            ));
+        }
+    }
+    records
+}
+
+/// Serializes records and writes them, printing a success message.
+fn finish_export(records: &[serde_json::Value], filename: &str) -> Result<(), String> {
+    helpers::write_export_file(records, filename)?;
+    println!(
+        "{} Exported {} records to {}\n",
+        "\u{2713}".green(),
+        records.len(),
+        filename.green()
+    );
+    Ok(())
 }
 
 // ============================================================================

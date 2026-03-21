@@ -14,11 +14,12 @@ Example:
     >>> response = chain.predict(input="Hello!")
 """
 
+import json
 from typing import Any, Dict, List, Optional
 import time
-import json
-import random
-import uuid
+
+from langchain_velesdb._common import make_initial_id_counter, parse_event_entry
+from velesdb_common.memory import format_procedural_results
 
 try:
     from langchain.memory.chat_memory import BaseChatMemory
@@ -79,8 +80,7 @@ class VelesDBChatMemory(BaseChatMemory):
         self.dimension = dimension
         self._db = velesdb.Database(path)
         self._memory = self._db.agent_memory(dimension=dimension)
-        # Use timestamp + UUID suffix to avoid collisions between concurrent instances
-        self._message_counter = int(time.time() * 1000) + (uuid.uuid4().int % 1000000)
+        self._message_counter = make_initial_id_counter()
 
     @property
     def memory_variables(self) -> List[str]:
@@ -135,47 +135,33 @@ class VelesDBChatMemory(BaseChatMemory):
         )
 
     def clear(self) -> None:
-        """Clear conversation history.
+        """Reset the message counter for this session.
 
-        Note: This creates a new AgentMemory instance, effectively
-        clearing the episodic memory for new conversations.
+        Note: This only resets the in-process counter used for ID
+        generation.  Stored messages in the VelesDB episodic collection
+        are NOT deleted.  To start a fresh conversation without old
+        context, open a new database path or collection.
         """
-        # Reinitialize memory (collections will be reused but new session)
-        self._message_counter = int(time.time() * 1000) + (uuid.uuid4().int % 1000000)
+        self._message_counter = make_initial_id_counter()
 
     def _events_to_messages(self, events: List) -> List[BaseMessage]:
         """Convert episodic events to LangChain messages."""
         messages = []
         for _event_id, description, _timestamp in events:
-            try:
-                data = json.loads(description)
-                role = data.get("role", "human")
-                content = data.get("content", description)
-
-                if role == "human":
-                    messages.append(HumanMessage(content=content))
-                else:
-                    messages.append(AIMessage(content=content))
-            except json.JSONDecodeError:
-                # Fallback for non-JSON descriptions
-                messages.append(HumanMessage(content=description))
-
+            role, content = parse_event_entry(description)
+            if role == "human":
+                messages.append(HumanMessage(content=content))
+            else:
+                messages.append(AIMessage(content=content))
         return messages
 
     def _events_to_string(self, events: List) -> str:
         """Convert episodic events to formatted string."""
         lines = []
         for _event_id, description, _timestamp in events:
-            try:
-                data = json.loads(description)
-                role = data.get("role", "human")
-                content = data.get("content", description)
-
-                prefix = self.human_prefix if role == "human" else self.ai_prefix
-                lines.append(f"{prefix}: {content}")
-            except json.JSONDecodeError:
-                lines.append(f"{self.human_prefix}: {description}")
-
+            role, content = parse_event_entry(description)
+            prefix = self.human_prefix if role == "human" else self.ai_prefix
+            lines.append(f"{prefix}: {content}")
         return "\n".join(lines)
 
 
@@ -212,7 +198,7 @@ class VelesDBSemanticMemory:
         self.dimension = dimension
         self._db = velesdb.Database(path)
         self._memory = self._db.agent_memory(dimension=dimension)
-        self._fact_counter = int(time.time() * 1000)
+        self._fact_counter = make_initial_id_counter()
 
     def add_fact(self, fact: str, fact_id: Optional[int] = None) -> int:
         """Add a fact to semantic memory.
@@ -269,7 +255,7 @@ class VelesDBSemanticMemory:
 
     def clear(self) -> None:
         """Reset fact counter (facts persist in database)."""
-        self._fact_counter = int(time.time() * 1000)
+        self._fact_counter = make_initial_id_counter()
 
 
 class VelesDBProceduralMemory:
@@ -313,7 +299,7 @@ class VelesDBProceduralMemory:
         self._dimension = dimension
         # name → procedure_id mapping for reinforce() calls
         self._name_to_id: Dict[str, int] = {}
-        self._id_counter = int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
+        self._id_counter = make_initial_id_counter()
 
     def learn(
         self,
@@ -396,15 +382,7 @@ class VelesDBProceduralMemory:
             top_k=top_k,
             min_confidence=min_confidence,
         )
-        return [
-            {
-                "name": r["name"],
-                "steps": r["steps"],
-                "confidence": r["confidence"],
-                "score": r["score"],
-            }
-            for r in results
-        ]
+        return format_procedural_results(results)
 
     def reinforce(self, name: str, success: bool = True) -> None:
         """Reinforce or weaken a stored procedure.
@@ -432,6 +410,6 @@ class VelesDBProceduralMemory:
         is not deleted.
         """
         self._name_to_id = {}
-        self._id_counter = int(time.time() * 1000) + random.randint(1_000_000, 9_999_999)
+        self._id_counter = make_initial_id_counter()
         self._memory = self._db.agent_memory(dimension=self._dimension)
         self._procedural = self._memory.procedural

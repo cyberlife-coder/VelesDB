@@ -1,6 +1,7 @@
 //! MATCH clause parser for graph pattern matching.
 
-use crate::velesql::ast::{CompareOp, Comparison, Condition, Value};
+use super::helpers::{compare_op_from_str, parse_value_from_str};
+use crate::velesql::ast::{Comparison, Condition, Value};
 use crate::velesql::error::ParseError;
 use crate::velesql::graph_pattern::{
     Direction, GraphPattern, MatchClause, NodePattern, RelationshipPattern, ReturnClause,
@@ -244,7 +245,7 @@ fn parse_range(input: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// Splits `inner` at the first `{…}` block, returning `(text_before_brace, parsed_properties)`.
+/// Splits `inner` at the first `{...}` block, returning `(text_before_brace, parsed_properties)`.
 ///
 /// If no braces are present, returns `(inner, empty_map)`.
 /// `error_context` is used in brace-mismatch error messages (e.g. "node pattern").
@@ -302,25 +303,7 @@ fn parse_properties(input: &str) -> Result<HashMap<String, Value>, ParseError> {
 }
 
 fn parse_value(input: &str) -> Result<Value, ParseError> {
-    if input.len() >= 2 && input.starts_with('\'') && input.ends_with('\'') {
-        Ok(Value::String(input[1..input.len() - 1].to_string()))
-    } else if input.eq_ignore_ascii_case("true") {
-        Ok(Value::Boolean(true))
-    } else if input.eq_ignore_ascii_case("false") {
-        Ok(Value::Boolean(false))
-    } else if input.eq_ignore_ascii_case("null") {
-        Ok(Value::Null)
-    } else if let Ok(i) = input.parse::<i64>() {
-        Ok(Value::Integer(i))
-    } else if let Ok(f) = input.parse::<f64>() {
-        Ok(Value::Float(f))
-    } else {
-        Err(ParseError::syntax(
-            0,
-            input,
-            format!("Invalid value: {input}"),
-        ))
-    }
+    parse_value_from_str(input)
 }
 
 fn parse_pattern_list(input: &str) -> Result<Vec<GraphPattern>, ParseError> {
@@ -388,31 +371,38 @@ fn find_matching_paren(input: &str, start: usize) -> Result<usize, ParseError> {
     Err(ParseError::syntax(start, input, "Expected ')'"))
 }
 
+/// Operator tokens to scan for, ordered longest-first to avoid ambiguous matches.
+const WHERE_OPERATORS: &[(&str, usize)] = &[
+    ("!=", 2),
+    ("<>", 2),
+    (">=", 2),
+    ("<=", 2),
+    (">", 1),
+    ("<", 1),
+    ("=", 1),
+];
+
 fn parse_where_condition(input: &str) -> Result<Condition, ParseError> {
-    // Order matters: check multi-char operators before single-char ones
-    // Use string-literal-aware search to avoid matching operators inside quotes
-    let (col, op, vs) = if let Some(p) = find_operator(input, "!=") {
-        (&input[..p], CompareOp::NotEq, input[p + 2..].trim())
-    } else if let Some(p) = find_operator(input, "<>") {
-        (&input[..p], CompareOp::NotEq, input[p + 2..].trim())
-    } else if let Some(p) = find_operator(input, ">=") {
-        (&input[..p], CompareOp::Gte, input[p + 2..].trim())
-    } else if let Some(p) = find_operator(input, "<=") {
-        (&input[..p], CompareOp::Lte, input[p + 2..].trim())
-    } else if let Some(p) = find_operator(input, ">") {
-        (&input[..p], CompareOp::Gt, input[p + 1..].trim())
-    } else if let Some(p) = find_operator(input, "<") {
-        (&input[..p], CompareOp::Lt, input[p + 1..].trim())
-    } else if let Some(p) = find_operator(input, "=") {
-        (&input[..p], CompareOp::Eq, input[p + 1..].trim())
-    } else {
-        return Err(ParseError::syntax(0, input, "Invalid WHERE"));
-    };
+    // Order matters: check multi-char operators before single-char ones.
+    // Use string-literal-aware search to avoid matching operators inside quotes.
+    let (col, op, vs) = find_where_operator(input)?;
+    let operator = compare_op_from_str(op)?;
     Ok(Condition::Comparison(Comparison {
         column: col.trim().to_string(),
-        operator: op,
+        operator,
         value: parse_value(vs)?,
     }))
+}
+
+/// Finds the first comparison operator outside string literals and splits the
+/// input into `(column, operator_str, value_str)`.
+fn find_where_operator(input: &str) -> Result<(&str, &str, &str), ParseError> {
+    for &(op_str, op_len) in WHERE_OPERATORS {
+        if let Some(p) = find_operator(input, op_str) {
+            return Ok((&input[..p], op_str, input[p + op_len..].trim()));
+        }
+    }
+    Err(ParseError::syntax(0, input, "Invalid WHERE"))
 }
 
 /// Finds an operator in the input string, respecting string literal boundaries.

@@ -48,22 +48,22 @@ impl GraphPersistence {
         Ok(())
     }
 
+    /// Returns a reference to the open database, or an error if not initialized.
+    fn require_db(&self) -> Result<&IdbDatabase, JsValue> {
+        self.db
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("Database not initialized"))
+    }
+
     /// Saves a graph to `IndexedDB` with the given name.
     #[wasm_bindgen]
     pub async fn save(&self, graph_name: &str, store: &GraphStore) -> Result<(), JsValue> {
-        let db = self
-            .db
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Database not initialized"))?;
+        let db = self.require_db()?;
 
-        // Create read-write transaction
-        let store_names = js_sys::Array::new();
-        store_names.push(&JsValue::from_str(NODES_STORE));
-        store_names.push(&JsValue::from_str(EDGES_STORE));
-        store_names.push(&JsValue::from_str(META_STORE));
-
-        let transaction =
-            db.transaction_with_str_sequence_and_mode(&store_names, IdbTransactionMode::Readwrite)?;
+        let transaction = db.transaction_with_str_sequence_and_mode(
+            &all_store_names(),
+            IdbTransactionMode::Readwrite,
+        )?;
 
         let nodes_store = transaction.object_store(NODES_STORE)?;
         let edges_store = transaction.object_store(EDGES_STORE)?;
@@ -109,10 +109,7 @@ impl GraphPersistence {
     /// BUG-6 FIX: Only loads nodes/edges with keys prefixed by `{graph_name}:`
     #[wasm_bindgen]
     pub async fn load(&self, graph_name: &str) -> Result<GraphStore, JsValue> {
-        let db = self
-            .db
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Database not initialized"))?;
+        let db = self.require_db()?;
 
         let store_names = js_sys::Array::new();
         store_names.push(&JsValue::from_str(NODES_STORE));
@@ -123,13 +120,9 @@ impl GraphPersistence {
         let edges_store = transaction.object_store(EDGES_STORE)?;
 
         let mut graph = GraphStore::new();
-        let prefix = format!("{graph_name}:");
 
         // BUG-6 FIX: Use key range to only load keys with our graph prefix
-        // IDBKeyRange.bound(prefix, prefix + '\uffff') matches all keys starting with prefix
-        let lower = JsValue::from_str(&prefix);
-        let upper = JsValue::from_str(&format!("{graph_name}:\u{ffff}"));
-        let key_range = web_sys::IdbKeyRange::bound(&lower, &upper)?;
+        let key_range = graph_key_range(graph_name)?;
 
         // Load nodes with prefix filter
         let nodes_request = nodes_store.get_all_with_key(&key_range)?;
@@ -163,10 +156,7 @@ impl GraphPersistence {
     /// Lists all saved graph names.
     #[wasm_bindgen]
     pub async fn list_graphs(&self) -> Result<js_sys::Array, JsValue> {
-        let db = self
-            .db
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Database not initialized"))?;
+        let db = self.require_db()?;
 
         let transaction = db.transaction_with_str(META_STORE)?;
         let store = transaction.object_store(META_STORE)?;
@@ -182,23 +172,15 @@ impl GraphPersistence {
     /// BUG-7 FIX: Also deletes all nodes and edges with the graph prefix.
     #[wasm_bindgen]
     pub async fn delete_graph(&self, graph_name: &str) -> Result<(), JsValue> {
-        let db = self
-            .db
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Database not initialized"))?;
+        let db = self.require_db()?;
 
-        let store_names = js_sys::Array::new();
-        store_names.push(&JsValue::from_str(NODES_STORE));
-        store_names.push(&JsValue::from_str(EDGES_STORE));
-        store_names.push(&JsValue::from_str(META_STORE));
-
-        let transaction =
-            db.transaction_with_str_sequence_and_mode(&store_names, IdbTransactionMode::Readwrite)?;
+        let transaction = db.transaction_with_str_sequence_and_mode(
+            &all_store_names(),
+            IdbTransactionMode::Readwrite,
+        )?;
 
         // BUG-7 FIX: Delete all nodes and edges with the graph prefix
-        let lower = JsValue::from_str(&format!("{graph_name}:"));
-        let upper = JsValue::from_str(&format!("{graph_name}:\u{ffff}"));
-        let key_range = web_sys::IdbKeyRange::bound(&lower, &upper)?;
+        let key_range = graph_key_range(graph_name)?;
 
         // Delete nodes with prefix
         let nodes_store = transaction.object_store(NODES_STORE)?;
@@ -221,10 +203,7 @@ impl GraphPersistence {
     /// Gets metadata for a saved graph.
     #[wasm_bindgen]
     pub async fn get_metadata(&self, graph_name: &str) -> Result<JsValue, JsValue> {
-        let db = self
-            .db
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Database not initialized"))?;
+        let db = self.require_db()?;
 
         let transaction = db.transaction_with_str(META_STORE)?;
         let store = transaction.object_store(META_STORE)?;
@@ -285,10 +264,27 @@ async fn open_graph_db() -> Result<IdbDatabase, JsValue> {
         }
     });
     request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
+    // Standard WASM pattern: Closure::forget leaks into JS GC (unavoidable without wasm_bindgen_futures)
     onupgradeneeded.forget();
 
     let result = wait_for_request(&request).await?;
     Ok(result.unchecked_into())
+}
+
+/// Builds a JS array of all three object store names (nodes, edges, metadata).
+fn all_store_names() -> js_sys::Array {
+    let arr = js_sys::Array::new();
+    arr.push(&JsValue::from_str(NODES_STORE));
+    arr.push(&JsValue::from_str(EDGES_STORE));
+    arr.push(&JsValue::from_str(META_STORE));
+    arr
+}
+
+/// Builds an `IDBKeyRange` matching all keys with the given graph prefix.
+fn graph_key_range(graph_name: &str) -> Result<web_sys::IdbKeyRange, JsValue> {
+    let lower = JsValue::from_str(&format!("{graph_name}:"));
+    let upper = JsValue::from_str(&format!("{graph_name}:\u{ffff}"));
+    web_sys::IdbKeyRange::bound(&lower, &upper)
 }
 
 /// Checks if a store name exists in the list.
@@ -311,12 +307,14 @@ async fn wait_for_request(request: &IdbRequest) -> Result<JsValue, JsValue> {
             let _ = resolve_clone.call0(&JsValue::UNDEFINED);
         });
         request.set_onsuccess(Some(onsuccess.as_ref().unchecked_ref()));
+        // Standard WASM pattern: Closure::forget leaks into JS GC (unavoidable without wasm_bindgen_futures)
         onsuccess.forget();
 
         let onerror = Closure::once(move |_event: Event| {
             let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("Request failed"));
         });
         request.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+        // Standard WASM pattern: Closure::forget leaks into JS GC (unavoidable without wasm_bindgen_futures)
         onerror.forget();
     });
 

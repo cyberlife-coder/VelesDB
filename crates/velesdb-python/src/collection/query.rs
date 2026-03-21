@@ -8,6 +8,24 @@ use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 
 use super::Collection;
 
+/// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
+fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::ParsedQuery> {
+    velesdb_core::velesql::Parser::parse(query_str)
+        .map_err(|e| PyValueError::new_err(format!("VelesQL parse error: {}", e.message)))
+}
+
+/// Converts Python params dict to Rust `HashMap<String, serde_json::Value>`.
+fn convert_params(
+    py: Python<'_>,
+    params: Option<HashMap<String, PyObject>>,
+) -> HashMap<String, serde_json::Value> {
+    params
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
+        .collect()
+}
+
 #[pymethods]
 impl Collection {
     /// Execute a VelesQL query (EPIC-031 US-008).
@@ -32,15 +50,8 @@ impl Collection {
         params: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
-                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
-            })?;
-
-            let rust_params: HashMap<String, serde_json::Value> = params
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
-                .collect();
+            let parsed = parse_velesql(query_str)?;
+            let rust_params = convert_params(py, params);
 
             let results = self
                 .inner
@@ -70,19 +81,13 @@ impl Collection {
         threshold: f32,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
-                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
-            })?;
+            let parsed = parse_velesql(query_str)?;
             let match_clause = parsed
                 .match_clause
                 .as_ref()
                 .ok_or_else(|| PyValueError::new_err("Query is not a MATCH query"))?;
 
-            let rust_params: HashMap<String, serde_json::Value> = params
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
-                .collect();
+            let rust_params = convert_params(py, params);
 
             let results = if let Some(vector_obj) = vector {
                 let query_vector = extract_vector(py, &vector_obj)?;
@@ -126,9 +131,7 @@ impl Collection {
     #[pyo3(signature = (query_str))]
     fn explain(&self, query_str: &str) -> PyResult<HashMap<String, PyObject>> {
         Python::with_gil(|py| {
-            let parsed = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
-                PyValueError::new_err(format!("VelesQL parse error: {}", e.message))
-            })?;
+            let parsed = parse_velesql(query_str)?;
 
             let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
                 let stats = velesdb_core::collection::search::query::match_planner::CollectionStats::default();
@@ -175,18 +178,8 @@ impl Collection {
         params: Option<HashMap<String, PyObject>>,
     ) -> PyResult<Vec<HashMap<String, PyObject>>> {
         Python::with_gil(|py| {
-            let parsed_query = velesdb_core::velesql::Parser::parse(velesql).map_err(|e| {
-                PyRuntimeError::new_err(format!(
-                    "VelesQL syntax error at position {}: {}",
-                    e.position, e.message
-                ))
-            })?;
-
-            let json_params: HashMap<String, serde_json::Value> = params
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|(k, v)| python_to_json(py, &v).map(|json_val| (k, json_val)))
-                .collect();
+            let parsed_query = parse_velesql(velesql)?;
+            let json_params = convert_params(py, params);
 
             let results = self
                 .inner

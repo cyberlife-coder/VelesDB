@@ -50,17 +50,13 @@ impl Database {
     }
 
     /// Resolves the collection referenced by a TRAIN statement.
-    #[allow(deprecated)]
+    ///
+    /// RF-DEDUP: Delegates to `resolve_collection` (defined in `query_engine.rs`).
     fn resolve_train_collection(
         &self,
         stmt: &crate::velesql::TrainStatement,
     ) -> Result<crate::Collection> {
-        self.get_collection(&stmt.collection)
-            .or_else(|| {
-                self.get_vector_collection(&stmt.collection)
-                    .map(|vc| vc.inner)
-            })
-            .ok_or_else(|| Error::CollectionNotFound(stmt.collection.clone()))
+        self.resolve_collection(&stmt.collection)
     }
 
     /// Checks if a quantizer is already trained, returning an error unless `force` is set.

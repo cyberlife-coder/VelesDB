@@ -71,14 +71,7 @@ impl Database {
         let query_hash = hasher.finish();
 
         let schema_version = self.schema_version();
-
-        // Gather referenced collection names (base + join targets), sort them.
-        let mut collection_names = vec![query.select.from.clone()];
-        for join in &query.select.joins {
-            collection_names.push(join.table.clone());
-        }
-        collection_names.sort();
-        collection_names.dedup();
+        let collection_names = Self::referenced_collection_names(query);
 
         // Build generations vector in sorted collection order.
         let collection_generations: smallvec::SmallVec<[u64; 4]> = collection_names
@@ -234,13 +227,30 @@ impl Database {
         Ok(left_results)
     }
 
+    /// Collects sorted, deduplicated collection names referenced by a query.
+    ///
+    /// RF-DEDUP: Shared by `build_plan_key` and `populate_plan_cache`, which
+    /// both need the same sorted collection-name list from the query AST.
+    fn referenced_collection_names(query: &crate::velesql::Query) -> Vec<String> {
+        let mut names = vec![query.select.from.clone()];
+        for join in &query.select.joins {
+            names.push(join.table.clone());
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Resolves a collection by name from all registries (legacy, vector, metadata).
     ///
     /// Priority: legacy collections registry first (contains live instances for both
     /// `create_collection` and `create_vector_collection` via shared inner `Arc<>`).
     /// Falls back to vector collections, then metadata collections.
+    ///
+    /// RF-DEDUP: Shared by `execute_insert`, `execute_update`, `execute_single_select`,
+    /// and `training::resolve_train_collection`.
     #[allow(deprecated)]
-    fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
+    pub(super) fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
         self.get_collection(name)
             .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
             .or_else(|| self.get_metadata_collection(name).map(|mc| mc.inner))
@@ -284,16 +294,9 @@ impl Database {
 
     /// Inserts a compiled plan into the cache after a cache miss (CACHE-02).
     fn populate_plan_cache(&self, query: &crate::velesql::Query) {
-        let mut collection_names = vec![query.select.from.clone()];
-        for join in &query.select.joins {
-            collection_names.push(join.table.clone());
-        }
-        collection_names.sort();
-        collection_names.dedup();
-
         let compiled = std::sync::Arc::new(crate::cache::CompiledPlan {
             plan: crate::velesql::QueryPlan::from_select(&query.select),
-            referenced_collections: collection_names,
+            referenced_collections: Self::referenced_collection_names(query),
             compiled_at: std::time::Instant::now(),
             reuse_count: std::sync::atomic::AtomicU64::new(0),
         });
@@ -321,10 +324,7 @@ impl Database {
         stmt: &crate::velesql::InsertStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let collection = self
-            .get_collection(&stmt.table)
-            .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
-            .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
+        let collection = self.resolve_collection(&stmt.table)?;
 
         let (id, vector, payload) = Self::resolve_insert_fields(stmt, params)?;
         let point_id =
@@ -402,10 +402,7 @@ impl Database {
         stmt: &crate::velesql::UpdateStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let collection = self
-            .get_collection(&stmt.table)
-            .or_else(|| self.get_vector_collection(&stmt.table).map(|vc| vc.inner))
-            .ok_or_else(|| Error::CollectionNotFound(stmt.table.clone()))?;
+        let collection = self.resolve_collection(&stmt.table)?;
 
         let assignments = Self::resolve_update_assignments(stmt, params)?;
         let filter = Self::build_update_filter(stmt.where_clause.as_ref())?;

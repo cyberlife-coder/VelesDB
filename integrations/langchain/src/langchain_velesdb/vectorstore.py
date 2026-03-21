@@ -10,7 +10,6 @@ Search and query operations are implemented in focused mixin modules:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import uuid
 import time
@@ -31,31 +30,12 @@ from langchain_velesdb.security import (
     validate_collection_name,
     validate_sparse_vector,
 )
+from velesdb_common.ids import stable_hash_id as _stable_hash_id
+from langchain_velesdb._common import payload_to_doc_parts
 from langchain_velesdb.search_ops import SearchOpsMixin
 from langchain_velesdb.graph_ops import GraphOpsMixin
 
 logger = logging.getLogger(__name__)
-
-
-def _stable_hash_id(value: str) -> int:
-    """Generate a stable numeric ID from a string using SHA256.
-
-    Python's hash() is non-deterministic across processes, so we use
-    SHA256 for consistent IDs across runs.
-
-    Uses 63 bits from SHA256 for a very low collision probability in
-    real-world dataset sizes while keeping a positive integer compatible
-    with VelesDB point IDs.
-
-    Args:
-        value: String to hash.
-
-    Returns:
-        Positive 63-bit integer ID compatible with VelesDB Core.
-    """
-    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 8 bytes (64 bits) and clear sign bit to stay in positive i64 range.
-    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 def _flush_stream_batches(collection: Any, points: list, batch_size: int) -> None:
@@ -239,9 +219,7 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
 
     def _to_document(self, result: dict) -> Document:
         """Convert a VelesDB search result into a LangChain Document."""
-        payload = result.get("payload", {})
-        text = payload.get("text", "")
-        metadata = {k: v for k, v in payload.items() if k != "text"}
+        text, metadata = payload_to_doc_parts(result)
         return Document(page_content=text, metadata=metadata)
 
     def add_texts(
@@ -383,35 +361,11 @@ class VelesDBVectorStore(SearchOpsMixin, GraphOpsMixin, VectorStore):
         if not texts_list:
             return []
 
+        self._validate_texts_and_sparse(texts_list)
         embeddings = self._embedding.embed_documents(texts_list)
-        dimension = len(embeddings[0])
-
-        collection = self._get_collection(dimension)
-
-        result_ids: List[str] = []
-        points = []
-
-        for i, (text, embedding) in enumerate(zip(texts_list, embeddings)):
-            if ids and i < len(ids):
-                doc_id = ids[i]
-                int_id = self._to_point_id(doc_id)
-            else:
-                doc_id, int_id = self._generate_auto_id()
-
-            result_ids.append(doc_id)
-
-            payload = {"text": text}
-            if metadatas and i < len(metadatas):
-                payload.update(metadatas[i])
-
-            points.append({
-                "id": int_id,
-                "vector": embedding,
-                "payload": payload,
-            })
-
+        collection = self._get_collection(len(embeddings[0]))
+        result_ids, points = self._texts_to_points(texts_list, embeddings, metadatas, ids)
         collection.upsert_bulk(points)
-
         return result_ids
 
     def get_by_ids(self, ids: List[str], **kwargs: Any) -> List[Document]:
@@ -596,5 +550,4 @@ __all__ = [
     "VelesDBVectorStore",
     "SearchOpsMixin",
     "GraphOpsMixin",
-    "_stable_hash_id",
 ]

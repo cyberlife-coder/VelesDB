@@ -6,7 +6,6 @@ as the underlying vector database for storing and retrieving embeddings.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any, List, Optional
 
@@ -27,6 +26,7 @@ from llamaindex_velesdb.security import (
     validate_collection_name,
     validate_sparse_vector,
 )
+from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.search_ops import SearchOpsMixin
 from llamaindex_velesdb.graph_ops import GraphOpsMixin
@@ -40,27 +40,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-
-def _stable_hash_id(value: str) -> int:
-    """Generate a stable numeric ID from a string using SHA256.
-
-    Python's hash() is non-deterministic across processes, so we use
-    SHA256 for consistent IDs across runs.
-
-    Uses 63 bits from SHA256 for a very low collision probability in
-    real-world dataset sizes while keeping a positive integer compatible
-    with VelesDB point IDs.
-
-    Args:
-        value: String to hash.
-
-    Returns:
-        Positive 63-bit integer ID compatible with VelesDB Core.
-    """
-    hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
-    # Use 8 bytes (64 bits) and clear sign bit to stay in positive i64 range.
-    return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
 
 
 def _validate_all_embeddings(nodes: List[BaseNode]) -> None:

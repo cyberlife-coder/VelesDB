@@ -227,6 +227,17 @@ impl AgentMemory {
         Ok(evicted)
     }
 
+    /// Returns the snapshot manager, or an error if not configured.
+    ///
+    /// RF-DEDUP: Eliminates the repeated `ok_or_else(|| SnapshotError(...))` pattern
+    /// across `snapshot`, `load_latest_snapshot`, `load_snapshot_version`, and
+    /// `list_snapshot_versions`.
+    fn require_snapshot_manager(&self) -> Result<&SnapshotManager, AgentMemoryError> {
+        self.snapshot_manager.as_ref().ok_or_else(|| {
+            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
+        })
+    }
+
     /// Creates a snapshot of the current memory state.
     ///
     /// # Returns
@@ -237,9 +248,7 @@ impl AgentMemory {
     ///
     /// Returns an error when snapshot manager is not configured or snapshot persistence fails.
     pub fn snapshot(&self) -> Result<u64, AgentMemoryError> {
-        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
-            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
-        })?;
+        let manager = self.require_snapshot_manager()?;
 
         let state = MemoryState {
             semantic: self.semantic.serialize()?,
@@ -262,9 +271,7 @@ impl AgentMemory {
     /// Returns an error when snapshot manager is not configured, loading fails,
     /// or state restoration fails.
     pub fn load_latest_snapshot(&self) -> Result<u64, AgentMemoryError> {
-        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
-            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
-        })?;
+        let manager = self.require_snapshot_manager()?;
 
         let (version, state) = manager.load_latest()?;
         self.restore_state(&state)?;
@@ -278,9 +285,7 @@ impl AgentMemory {
     /// Returns an error when snapshot manager is not configured, loading fails,
     /// or state restoration fails.
     pub fn load_snapshot_version(&self, version: u64) -> Result<(), AgentMemoryError> {
-        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
-            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
-        })?;
+        let manager = self.require_snapshot_manager()?;
 
         let state = manager.load_version(version)?;
         self.restore_state(&state)?;
@@ -293,10 +298,7 @@ impl AgentMemory {
     ///
     /// Returns an error when snapshot manager is not configured or listing fails.
     pub fn list_snapshot_versions(&self) -> Result<Vec<u64>, AgentMemoryError> {
-        let manager = self.snapshot_manager.as_ref().ok_or_else(|| {
-            AgentMemoryError::SnapshotError("Snapshot manager not configured".to_string())
-        })?;
-
+        let manager = self.require_snapshot_manager()?;
         Ok(manager.list_versions()?)
     }
 

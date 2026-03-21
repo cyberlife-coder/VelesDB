@@ -4,8 +4,8 @@
 use crate::error::{CommandError, Error};
 use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
 use crate::helpers::{
-    metric_to_string, parse_fusion_strategy, parse_metric, parse_sparse_vector, parse_storage_mode,
-    storage_mode_to_string,
+    map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
+    parse_sparse_vector, parse_storage_mode, storage_mode_to_string, timed_search_response,
 };
 use crate::state::VelesDbState;
 #[cfg(feature = "persistence")]
@@ -17,8 +17,8 @@ use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
     DeletePointsRequest, GetPointsRequest, HybridResult, HybridSearchRequest,
     HybridSparseSearchRequest, MultiQuerySearchRequest, PointOutput, QueryRequest, QueryResponse,
-    SearchRequest, SearchResponse, SearchResult, SparseSearchRequest, SparseUpsertRequest,
-    TextSearchRequest, TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
+    SearchRequest, SearchResponse, SparseSearchRequest, SparseUpsertRequest, TextSearchRequest,
+    TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -44,9 +44,9 @@ pub async fn create_collection<R: Runtime>(
             Ok(CollectionInfo {
                 name: request.name.clone(),
                 dimension: request.dimension,
-                metric: metric_to_string(metric),
+                metric: metric_to_string(metric).to_string(),
                 count: 0,
-                storage_mode: storage_mode_to_string(storage_mode),
+                storage_mode: storage_mode_to_string(storage_mode).to_string(),
             })
         })
         .map_err(CommandError::from)?;
@@ -114,9 +114,9 @@ pub async fn list_collections<R: Runtime>(
                     collections.push(CollectionInfo {
                         name,
                         dimension: config.dimension,
-                        metric: metric_to_string(config.metric),
+                        metric: metric_to_string(config.metric).to_string(),
                         count: coll.len(),
-                        storage_mode: storage_mode_to_string(config.storage_mode),
+                        storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
                     });
                 }
             }
@@ -141,9 +141,9 @@ pub async fn get_collection<R: Runtime>(
             Ok(CollectionInfo {
                 name,
                 dimension: config.dimension,
-                metric: metric_to_string(config.metric),
+                metric: metric_to_string(config.metric).to_string(),
                 count: coll.len(),
-                storage_mode: storage_mode_to_string(config.storage_mode),
+                storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
             })
         })
         .map_err(CommandError::from)
@@ -264,8 +264,7 @@ pub async fn search<R: Runtime>(
     request: SearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
-
-    let filter = request.filter.clone();
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     let results = state
         .with_db(|db| {
@@ -273,28 +272,16 @@ pub async fn search<R: Runtime>(
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let search_results = if let Some(ref filter_json) = filter {
-                let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
-                    .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
-                coll.search_with_filter(&request.vector, request.top_k, &filter)?
+            let search_results = if let Some(ref f) = parsed_filter {
+                coll.search_with_filter(&request.vector, request.top_k, f)?
             } else {
                 coll.search(&request.vector, request.top_k)?
             };
-            Ok(search_results
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect::<Vec<_>>())
+            Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(timed_search_response(results, start))
 }
 
 /// Batch search for multiple query vectors in parallel.
@@ -339,11 +326,7 @@ pub async fn batch_search<R: Runtime>(
                     search_results
                         .into_iter()
                         .take(k)
-                        .map(|r| SearchResult {
-                            id: r.point.id,
-                            score: r.score,
-                            payload: r.point.payload,
-                        })
+                        .map(crate::helpers::map_core_result)
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>())
@@ -365,8 +348,7 @@ pub async fn text_search<R: Runtime>(
     request: TextSearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
-
-    let filter = request.filter.clone();
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     let results = state
         .with_db(|db| {
@@ -374,28 +356,16 @@ pub async fn text_search<R: Runtime>(
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let search_results = if let Some(ref filter_json) = filter {
-                let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
-                    .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
-                coll.text_search_with_filter(&request.query, request.top_k, &filter)?
+            let search_results = if let Some(ref f) = parsed_filter {
+                coll.text_search_with_filter(&request.query, request.top_k, f)?
             } else {
                 coll.text_search(&request.query, request.top_k)?
             };
-            Ok(search_results
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect::<Vec<_>>())
+            Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(timed_search_response(results, start))
 }
 
 /// Hybrid search combining vector similarity and BM25.
@@ -406,8 +376,7 @@ pub async fn hybrid_search<R: Runtime>(
     request: HybridSearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
-
-    let filter = request.filter.clone();
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     let results = state
         .with_db(|db| {
@@ -415,15 +384,13 @@ pub async fn hybrid_search<R: Runtime>(
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            let search_results = if let Some(ref filter_json) = filter {
-                let filter: velesdb_core::Filter = serde_json::from_value(filter_json.clone())
-                    .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?;
+            let search_results = if let Some(ref f) = parsed_filter {
                 coll.hybrid_search_with_filter(
                     &request.vector,
                     &request.query,
                     request.top_k,
                     Some(request.vector_weight),
-                    &filter,
+                    f,
                 )?
             } else {
                 coll.hybrid_search(
@@ -433,21 +400,11 @@ pub async fn hybrid_search<R: Runtime>(
                     Some(request.vector_weight),
                 )?
             };
-            Ok(search_results
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect::<Vec<_>>())
+            Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(timed_search_response(results, start))
 }
 
 /// Executes a `VelesQL` query (EPIC-031 US-012).
@@ -548,7 +505,7 @@ pub async fn multi_query_search<R: Runtime>(
 ) -> std::result::Result<SearchResponse, CommandError> {
     let start = std::time::Instant::now();
     let fusion_strategy = parse_fusion_strategy(&request.fusion, request.fusion_params.as_ref());
-    let filter = request.filter.clone();
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     let results = state
         .with_db(|db| {
@@ -556,18 +513,7 @@ pub async fn multi_query_search<R: Runtime>(
                 .get_collection(&request.collection)
                 .ok_or_else(|| Error::CollectionNotFound(request.collection.clone()))?;
 
-            // Convert vectors to slices
             let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
-
-            let parsed_filter: Option<velesdb_core::Filter> = if let Some(ref filter_json) = filter
-            {
-                Some(
-                    serde_json::from_value(filter_json.clone())
-                        .map_err(|e| Error::InvalidConfig(format!("Invalid filter: {e}")))?,
-                )
-            } else {
-                None
-            };
 
             let search_results = coll.multi_query_search(
                 &vector_refs,
@@ -576,21 +522,11 @@ pub async fn multi_query_search<R: Runtime>(
                 parsed_filter.as_ref(),
             )?;
 
-            Ok(search_results
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect::<Vec<_>>())
+            Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(timed_search_response(results, start))
 }
 
 // ============================================================================
@@ -616,22 +552,11 @@ pub async fn sparse_search<R: Runtime>(
             let idx_name = request.index_name.unwrap_or_default();
 
             let search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
-
-            Ok(search_results
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect::<Vec<_>>())
+            Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(timed_search_response(results, start))
 }
 
 /// Performs hybrid dense+sparse search with RRF fusion.
@@ -654,22 +579,11 @@ pub async fn hybrid_sparse_search<R: Runtime>(
 
             let search_results =
                 coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
-
-            Ok(search_results
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.point.id,
-                    score: r.score,
-                    payload: r.point.payload,
-                })
-                .collect::<Vec<_>>())
+            Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
-    Ok(SearchResponse {
-        results,
-        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
-    })
+    Ok(timed_search_response(results, start))
 }
 
 /// Upserts points with optional sparse vectors.
@@ -802,6 +716,14 @@ pub async fn stream_insert<R: Runtime>(
 use crate::types::{SemanticQueryRequest, SemanticQueryResult, SemanticStoreRequest};
 use velesdb_core::agent::SemanticMemory;
 
+/// Creates a `SemanticMemory` instance, converting agent errors to plugin errors.
+fn open_semantic_memory(
+    db: std::sync::Arc<velesdb_core::Database>,
+    dimension: usize,
+) -> std::result::Result<SemanticMemory, Error> {
+    SemanticMemory::new_from_db(db, dimension).map_err(|e| Error::InvalidConfig(e.to_string()))
+}
+
 /// Stores a knowledge fact in semantic memory.
 #[command]
 pub async fn semantic_store<R: Runtime>(
@@ -811,8 +733,7 @@ pub async fn semantic_store<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .with_db(|db| {
-            let memory = SemanticMemory::new_from_db(db, request.embedding.len())
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            let memory = open_semantic_memory(db, request.embedding.len())?;
             memory
                 .store(request.id, &request.content, &request.embedding)
                 .map_err(|e| Error::InvalidConfig(e.to_string()))?;
@@ -830,8 +751,7 @@ pub async fn semantic_query<R: Runtime>(
 ) -> std::result::Result<Vec<SemanticQueryResult>, CommandError> {
     state
         .with_db(|db| {
-            let memory = SemanticMemory::new_from_db(db, request.embedding.len())
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            let memory = open_semantic_memory(db, request.embedding.len())?;
             let results = memory
                 .query(&request.embedding, request.top_k)
                 .map_err(|e| Error::InvalidConfig(e.to_string()))?;
