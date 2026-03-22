@@ -328,8 +328,8 @@ impl HnswIndex {
 
     /// Reranks candidates with SIMD, sorts, truncates, and updates latency EMA.
     ///
-    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`,
-    /// `search_with_rerank_quality`, and `search_batch_with_rerank`.
+    /// RF-2: Shared rerank pipeline used by `search_with_rerank_with_ef`
+    /// and `search_with_rerank_quality`.
     pub(super) fn rerank_sort_and_truncate(
         &self,
         query: &[f32],
@@ -448,6 +448,12 @@ impl HnswIndex {
                 }
                 let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
                 let flat = vectors.gather_flat(&indices);
+                // Early validation: gather_flat may skip invalidated indices,
+                // producing fewer elements. Detect before paying GPU round-trip.
+                let expected_len = indices.len() * self.dimension;
+                if flat.len() != expected_len {
+                    return None;
+                }
                 Some((entries, flat))
             })
         }?;

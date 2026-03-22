@@ -56,7 +56,7 @@ impl GpuAccelerator {
     ///
     /// Returns `None` if no compatible GPU is found.
     #[must_use]
-    pub fn new() -> Option<Self> {
+    pub(crate) fn new() -> Option<Self> {
         let (device, queue) = Self::init_device()?;
 
         let cosine_pipeline = Self::compile_pipeline(
@@ -446,7 +446,7 @@ impl GpuAccelerator {
     /// 100K vectors at dim=3 or 170 vectors at dim=1536.
     #[must_use]
     pub fn should_rerank_gpu(rerank_k: usize, dimension: usize) -> bool {
-        rerank_k * dimension > 262_144
+        rerank_k.saturating_mul(dimension) > 262_144
     }
 
     /// Computes batch distances using the appropriate GPU pipeline for the given metric.

@@ -55,14 +55,14 @@ if let Some(gpu) = GpuAccelerator::global() {
     ];
     let dimension = 3;
 
-    // Batch cosine similarity
-    let similarities = gpu.batch_cosine_similarity(&vectors, &query, dimension);
-    
-    // Batch Euclidean distance
-    let distances = gpu.batch_euclidean_distance(&vectors, &query, dimension);
-    
-    // Batch dot product
-    let dots = gpu.batch_dot_product(&vectors, &query, dimension);
+    // Batch cosine similarity (returns Result)
+    let similarities = gpu.batch_cosine_similarity(&vectors, &query, dimension)?;
+
+    // Batch Euclidean distance (returns Result)
+    let distances = gpu.batch_euclidean_distance(&vectors, &query, dimension)?;
+
+    // Batch dot product (returns Result)
+    let dots = gpu.batch_dot_product(&vectors, &query, dimension)?;
 }
 ```
 

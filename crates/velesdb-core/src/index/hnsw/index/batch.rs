@@ -254,7 +254,10 @@ impl HnswIndex {
         let n = timed_results.len() as u64;
         if n > 0 {
             let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
-            self.update_rerank_latency_ema(total_us / n);
+            let mean_us = total_us / n;
+            if mean_us > 0 {
+                self.update_rerank_latency_ema(mean_us);
+            }
         }
 
         timed_results.into_iter().map(|(r, _)| r).collect()

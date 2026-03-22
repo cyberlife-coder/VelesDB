@@ -184,20 +184,33 @@ fn test_gpu_rerank_fallback_below_threshold() {
     );
 }
 
-/// Verifies the threshold is monotonic: small payloads → false, large → true.
+/// Verifies threshold boundary and monotonicity.
+///
+/// `should_rerank_gpu` returns true when `rerank_k * dimension > 262_144`
+/// (strictly greater). Tests the exact boundary and extreme values.
 #[test]
 #[cfg(feature = "gpu")]
-fn test_gpu_rerank_threshold_monotonicity() {
+fn test_gpu_rerank_threshold_boundary_and_monotonicity() {
     use crate::gpu::GpuAccelerator;
     // Pure arithmetic — no GPU instance needed
+
+    // Trivial: always false
+    assert!(!GpuAccelerator::should_rerank_gpu(1, 1));
+
+    // Exactly at boundary: 2048 * 128 = 262_144, NOT strictly greater
     assert!(
-        !GpuAccelerator::should_rerank_gpu(1, 1),
-        "Trivial payload must not trigger GPU"
+        !GpuAccelerator::should_rerank_gpu(2048, 128),
+        "Exactly at threshold (262_144) should NOT trigger GPU"
     );
+
+    // One above: 2049 * 128 = 262_272 > 262_144
     assert!(
-        GpuAccelerator::should_rerank_gpu(100_000, 1536),
-        "Huge payload must trigger GPU"
+        GpuAccelerator::should_rerank_gpu(2049, 128),
+        "Above threshold should trigger GPU"
     );
+
+    // Large payload: always true
+    assert!(GpuAccelerator::should_rerank_gpu(100_000, 1536));
 }
 
 // =========================================================================
