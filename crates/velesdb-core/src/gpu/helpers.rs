@@ -57,11 +57,21 @@ const fn uniform_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 ///
 /// Returns `None` if the map-async operation fails.
 ///
+/// # Threading
+///
+/// `device.poll(Maintain::Wait)` blocks the calling thread until **all**
+/// submitted GPU work completes (not just this submission). When multiple
+/// rayon threads call this concurrently, each thread blocks independently.
+/// This is correct (each reads its own staging buffer) but means GPU
+/// submissions from different threads serialize on the poll rather than
+/// being batched into a single dispatch. For large batch workloads,
+/// consider a single merged GPU dispatch instead of per-thread submissions.
+///
 /// # Arguments
 ///
 /// * `device` — wgpu device used to poll for completion
 /// * `staging_buffer` — buffer with `MAP_READ | COPY_DST` usage
-/// * `size` — number of bytes to read
+/// * `count` — number of elements of type `T` to read
 pub(super) fn readback_buffer<T: bytemuck::Pod>(
     device: &wgpu::Device,
     staging_buffer: &wgpu::Buffer,

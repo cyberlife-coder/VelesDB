@@ -27,8 +27,8 @@ static GPU_INSTANCE: OnceLock<Option<Arc<GpuAccelerator>>> = OnceLock::new();
 /// ```ignore
 /// use velesdb_core::gpu::GpuAccelerator;
 ///
-/// if let Some(gpu) = GpuAccelerator::new() {
-///     let results = gpu.batch_cosine_similarity(&vectors, &query);
+/// if let Some(gpu) = GpuAccelerator::global() {
+///     let results = gpu.batch_cosine_similarity(&vectors, &query, dimension)?;
 /// }
 /// ```
 pub struct GpuAccelerator {
@@ -139,7 +139,14 @@ impl GpuAccelerator {
 
     /// Compiles a WGSL compute shader into a [`wgpu::ComputePipeline`].
     ///
-    /// Uses the shared quad bind-group layout from [`super::helpers`].
+    /// Uses the shared quad bind-group layout from [`super::helpers`]:
+    /// binding 0 = storage(read), binding 1 = storage(read),
+    /// binding 2 = storage(read_write), binding 3 = uniform.
+    ///
+    /// All four shaders (cosine, euclidean, dot_product, kmeans) share this
+    /// structural layout. The uniform buffer's internal data layout (e.g.,
+    /// 2-field params for distance vs 4-field for kmeans) is interpreted
+    /// by the shader code, not constrained by the bind group layout.
     fn compile_pipeline(
         device: &wgpu::Device,
         shader_source: &str,
@@ -374,6 +381,8 @@ impl GpuAccelerator {
     }
 
     /// Encodes the compute pass and submits it to the GPU queue.
+    // Reason: GPU encode needs device, queue, pipeline, bind_group, and 3 buffer
+    // refs — bundling into a struct would add lifetime complexity for a private fn.
     #[allow(clippy::too_many_arguments)]
     fn encode_and_submit(
         device: &wgpu::Device,
@@ -451,7 +460,12 @@ impl GpuAccelerator {
 
     /// Computes batch distances using the appropriate GPU pipeline for the given metric.
     ///
-    /// Returns `None` for metrics without GPU support (Hamming, Jaccard).
+    /// Returns `Option<Result<Vec<f32>>>` to communicate two distinct failure modes:
+    /// - `None` — the metric has no GPU shader (Hamming, Jaccard). Caller should
+    ///   fall back to CPU.
+    /// - `Some(Err(...))` — the GPU dispatch failed (buffer overflow, map-async
+    ///   error). Caller should fall back to CPU.
+    /// - `Some(Ok(scores))` — successful GPU computation.
     ///
     /// # Errors
     ///

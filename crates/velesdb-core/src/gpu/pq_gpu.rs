@@ -49,13 +49,15 @@ impl PqGpuContext {
 
 /// Check if GPU dispatch is worthwhile based on FLOP threshold.
 ///
-/// GPU dispatch overhead (device init, buffer copies, kernel launch) is only
-/// amortized when the computation exceeds ~10 M FLOPs. This threshold is
-/// calibrated for discrete GPUs; integrated GPUs may require a higher value
-/// due to shared memory bandwidth constraints.
+/// Returns `false` if no GPU is available (checked via the singleton)
+/// or if the workload is below ~10 M FLOPs. Uses `saturating_mul`
+/// to prevent overflow on 32-bit targets.
+///
+/// The 10 M FLOP threshold is calibrated for discrete GPUs; integrated
+/// GPUs may require a higher value due to shared memory bandwidth.
 #[must_use]
 pub fn should_use_gpu(n: usize, k: usize, subspace_dim: usize) -> bool {
-    n * k * subspace_dim > 10_000_000
+    n.saturating_mul(k).saturating_mul(subspace_dim) > 10_000_000
 }
 
 /// Compute k-means assignments on GPU for one subspace.

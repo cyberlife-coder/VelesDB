@@ -199,8 +199,13 @@ impl ContiguousVectors {
     /// Returns a new `Vec<f32>` containing the selected vectors packed sequentially.
     /// Useful for GPU upload when only a subset of vectors is needed (e.g., reranking).
     ///
-    /// Out-of-bounds indices are silently skipped (the corresponding vector is omitted
-    /// from the result).
+    /// # Important
+    ///
+    /// Out-of-bounds indices are silently skipped — the result may contain fewer
+    /// vectors than `indices.len()`. Callers **must** validate
+    /// `result.len() == indices.len() * dimension` before using the result in
+    /// positional operations (e.g., `zip` with an ID map), otherwise scores
+    /// will be misattributed to wrong IDs.
     #[must_use]
     pub fn gather_flat(&self, indices: &[usize]) -> Vec<f32> {
         let mut result = Vec::with_capacity(indices.len() * self.dimension);
