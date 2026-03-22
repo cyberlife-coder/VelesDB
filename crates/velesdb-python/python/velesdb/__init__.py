@@ -47,32 +47,47 @@ def _compile_like_pattern(pattern: str, case_insensitive: bool) -> Any:
     return re.compile(regex, flags)
 
 
-def _matches_filter(payload: Any, filter_dict: Optional[Dict[str, Any]]) -> bool:
-    if not filter_dict:
-        return True
+def _extract_filter_condition(
+    filter_dict: Dict[str, Any],
+) -> Optional[tuple[str, str, str]]:
+    """Return (cond_type, field, pattern) from a filter dict, or None if invalid."""
     condition = filter_dict.get("condition")
     if not isinstance(condition, dict):
-        return True
-
+        return None
     cond_type = str(condition.get("type", "")).lower()
     field = condition.get("field")
     if not isinstance(field, str):
-        return True
+        return None
     pattern = condition.get("pattern")
     if not isinstance(pattern, str):
-        return True
+        return None
+    return cond_type, field, pattern
 
-    if not isinstance(payload, dict):
-        return False
-    value = payload.get(field)
-    if not isinstance(value, str):
-        return False
 
+def _apply_string_condition(
+    value: str, cond_type: str, pattern: str
+) -> bool:
+    """Evaluate a LIKE/ILIKE condition against a string value."""
     if cond_type == "like":
         return bool(_compile_like_pattern(pattern, False).match(value))
     if cond_type == "ilike":
         return bool(_compile_like_pattern(pattern, True).match(value))
     return True
+
+
+def _matches_filter(payload: Any, filter_dict: Optional[Dict[str, Any]]) -> bool:
+    if not filter_dict:
+        return True
+    condition_parts = _extract_filter_condition(filter_dict)
+    if condition_parts is None:
+        return True
+    cond_type, field, pattern = condition_parts
+    if not isinstance(payload, dict):
+        return False
+    value = payload.get(field)
+    if not isinstance(value, str):
+        return False
+    return _apply_string_condition(value, cond_type, pattern)
 
 
 class GraphStore:

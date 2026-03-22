@@ -35,69 +35,86 @@ class RAGEngine:
         # Load existing documents from VelesDB
         await self._load_existing_documents()
 
+    @staticmethod
+    def _init_doc_entries(
+        results: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Build the initial per-document registry entries from search results."""
+        documents_found: dict[str, dict[str, Any]] = {}
+        for result in results:
+            payload = result.get("payload", {})
+            doc_name = payload.get("document_name")
+            if doc_name and doc_name not in documents_found:
+                documents_found[doc_name] = {
+                    "name": doc_name,
+                    "pages": 1,  # Will be updated below
+                    "chunks": 0,
+                    "chunk_ids": [],  # Track IDs for deletion
+                    "uploaded_at": "existing",  # Existing document
+                }
+        return documents_found
+
+    @staticmethod
+    def _accumulate_chunk_stats(
+        results: list[dict[str, Any]],
+        documents_found: dict[str, dict[str, Any]],
+    ) -> None:
+        """Count chunks, collect chunk IDs, and track page numbers per document."""
+        for result in results:
+            payload = result.get("payload", {})
+            doc_name = payload.get("document_name")
+            point_id = result.get("id")
+            if doc_name not in documents_found:
+                continue
+            entry = documents_found[doc_name]
+            entry["chunks"] += 1
+            if point_id is not None:
+                entry["chunk_ids"].append(point_id)
+            page_num = payload.get("page_number", 0)
+            pages_set: set[int] = entry.setdefault("pages_set", set())
+            pages_set.add(page_num)
+
+    @staticmethod
+    def _finalise_page_counts(
+        documents_found: dict[str, dict[str, Any]],
+    ) -> None:
+        """Replace the temporary pages_set with the final page count."""
+        for doc_info in documents_found.values():
+            pages_set = doc_info.pop("pages_set", None)
+            if pages_set is not None:
+                doc_info["pages"] = len(pages_set)
+
+    async def _fetch_total_points(self) -> int:
+        """Return the point count for the RAG collection, or 0 on failure."""
+        try:
+            collection_info = await self.velesdb.get_collection_info(
+                self.settings.collection_name
+            )
+            return int(collection_info.get("point_count", 0))
+        except Exception:
+            return 0
+
     async def _load_existing_documents(self) -> None:
         """Load document metadata from existing points in VelesDB."""
         try:
-            # Use a dummy vector to search for all points with payload
-            dummy_vector = [0.0] * self.embedding_service.dimension
-            
-            # Get collection info to know total points
-            try:
-                collection_info = await self.velesdb.get_collection_info(
-                    self.settings.collection_name
-                )
-                total_points = collection_info.get("point_count", 0)
-            except Exception:
-                total_points = 0
-            
+            total_points = await self._fetch_total_points()
             if total_points == 0:
                 return  # No points to load
-            
-            # Search for ALL points to extract document names (no arbitrary limit)
-            results = await self.velesdb.search(
+
+            # Use a dummy vector to retrieve all points with their payloads
+            dummy_vector = [0.0] * self.embedding_service.dimension
+            raw = await self.velesdb.search(
                 collection=self.settings.collection_name,
                 query_vector=dummy_vector,
-                top_k=total_points  # Get ALL chunks
+                top_k=total_points,  # Get ALL chunks
             )
-            
-            # Extract unique document names from payloads
-            documents_found = {}
-            for result in results.get("results", []):
-                payload = result.get("payload", {})
-                doc_name = payload.get("document_name")
-                if doc_name and doc_name not in documents_found:
-                    documents_found[doc_name] = {
-                        "name": doc_name,
-                        "pages": 1,  # Will be updated below
-                        "chunks": 0,
-                        "chunk_ids": [],  # Track IDs for deletion
-                        "uploaded_at": "existing"  # Existing document
-                    }
-            
-            # Count chunks per document and collect chunk IDs
-            for result in results.get("results", []):
-                payload = result.get("payload", {})
-                doc_name = payload.get("document_name")
-                point_id = result.get("id")
-                if doc_name in documents_found:
-                    documents_found[doc_name]["chunks"] += 1
-                    if point_id is not None:
-                        documents_found[doc_name]["chunk_ids"].append(point_id)
-                    # Track page numbers
-                    page_num = payload.get("page_number", 0)
-                    if "pages_set" not in documents_found[doc_name]:
-                        documents_found[doc_name]["pages_set"] = set()
-                    documents_found[doc_name]["pages_set"].add(page_num)
-            
-            # Update page counts
-            for doc_name, doc_info in documents_found.items():
-                if "pages_set" in doc_info:
-                    doc_info["pages"] = len(doc_info["pages_set"])
-                    del doc_info["pages_set"]  # Clean up temporary data
-            
-            # Update the documents registry
+            results: list[dict[str, Any]] = raw.get("results", [])
+
+            documents_found = self._init_doc_entries(results)
+            self._accumulate_chunk_stats(results, documents_found)
+            self._finalise_page_counts(documents_found)
+
             self._documents.update(documents_found)
-            
         except Exception as e:
             print(f"Warning: Could not load existing documents: {e}")
             # Continue with empty documents list
