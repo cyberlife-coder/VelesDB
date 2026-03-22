@@ -156,11 +156,11 @@ fn test_gpu_rerank_fallback_below_threshold() {
         use crate::gpu::GpuAccelerator;
         if let Some(gpu) = GpuAccelerator::global() {
             assert!(
-                !gpu.should_rerank_gpu(5, 4),
+                !GpuAccelerator::should_rerank_gpu(5, 4),
                 "5 * 4 = 20, should NOT use GPU"
             );
             assert!(
-                !gpu.should_rerank_gpu(100, 64),
+                !GpuAccelerator::should_rerank_gpu(100, 64),
                 "100 * 64 = 6400, should NOT use GPU"
             );
         }
@@ -196,11 +196,11 @@ fn test_gpu_rerank_threshold_monotonicity() {
 
     if let Some(gpu) = GpuAccelerator::global() {
         assert!(
-            !gpu.should_rerank_gpu(1, 1),
+            !GpuAccelerator::should_rerank_gpu(1, 1),
             "Trivial payload must not trigger GPU"
         );
         assert!(
-            gpu.should_rerank_gpu(100_000, 1536),
+            GpuAccelerator::should_rerank_gpu(100_000, 1536),
             "Huge payload must trigger GPU"
         );
     }
