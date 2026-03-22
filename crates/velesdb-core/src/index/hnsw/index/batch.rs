@@ -240,19 +240,19 @@ impl HnswIndex {
             .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
             .collect();
 
-        // Phase 2: Rerank each query's candidates and truncate to k (rayon parallel)
-        // rerank_sort_and_truncate takes &self (read-only) — safe for concurrent calls.
+        // Phase 2: Rerank each query's candidates and truncate to k
         queries
-            .par_iter()
-            .zip(all_candidates.par_iter())
+            .iter()
+            .zip(all_candidates.iter())
             .map(|(query, candidates)| self.rerank_sort_and_truncate(query, candidates, k))
             .collect()
     }
 
     /// Performs exact brute-force search in parallel using rayon.
     ///
-    /// For large datasets (>100K vectors), automatically attempts GPU-accelerated
-    /// search via `search_brute_force_gpu_inner` before falling back to rayon.
+    /// For large datasets, automatically attempts GPU-accelerated search via
+    /// `search_brute_force_gpu_inner` when the auto-calibrated crossover
+    /// threshold is exceeded. Falls back to rayon SIMD otherwise.
     ///
     /// # Arguments
     ///
@@ -267,7 +267,7 @@ impl HnswIndex {
     ///
     /// - **Recall**: 100% (exact)
     /// - **Latency**: O(n/cores) on CPU, O(n/GPU-threads) on GPU
-    /// - **GPU threshold**: 100K vectors (below this, rayon is faster)
+    /// - **GPU threshold**: auto-calibrated at startup (~262K floats default)
     ///
     /// # Panics
     ///
@@ -276,11 +276,16 @@ impl HnswIndex {
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         self.validate_dimension(query, "Query");
 
-        // Try GPU path for large datasets where GPU upload overhead is amortized
+        // Try GPU path when auto-calibrated crossover is exceeded
         #[cfg(feature = "gpu")]
-        if self.len() > Self::GPU_BRUTE_FORCE_THRESHOLD {
-            if let Some(results) = self.search_brute_force_gpu_inner(query, k) {
-                return results;
+        {
+            use crate::gpu::GpuAccelerator;
+            if let Some(gpu) = GpuAccelerator::global() {
+                if gpu.should_brute_force_gpu(self.len(), self.dimension) {
+                    if let Some(results) = self.search_brute_force_gpu_inner(query, k) {
+                        return results;
+                    }
+                }
             }
         }
 
@@ -290,8 +295,8 @@ impl HnswIndex {
     /// GPU brute-force dispatch accessible from tests.
     ///
     /// RF-DEDUP: delegates to `search_brute_force_gpu_inner` in `brute_force.rs`
-    /// without the 100K threshold gate, so tests can exercise the GPU path
-    /// with smaller datasets.
+    /// without the auto-calibrated threshold gate, so tests can exercise the
+    /// GPU path with smaller datasets.
     ///
     /// Returns `None` if GPU is unavailable.
     #[cfg(all(test, feature = "gpu"))]
@@ -328,12 +333,4 @@ impl HnswIndex {
         results.truncate(k);
         results
     }
-
-    /// Minimum dataset size for GPU brute-force dispatch.
-    ///
-    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch.
-    /// Below 100K vectors, rayon parallel SIMD is faster due to zero
-    /// GPU buffer upload overhead.
-    #[cfg(feature = "gpu")]
-    const GPU_BRUTE_FORCE_THRESHOLD: usize = 100_000;
 }

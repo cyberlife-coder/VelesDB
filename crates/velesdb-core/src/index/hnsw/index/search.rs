@@ -355,16 +355,18 @@ impl HnswIndex {
 
     /// Re-ranks candidates using the best available compute path.
     ///
-    /// Tries GPU dispatch first when the workload exceeds the GPU threshold
-    /// (rerank_k * dimension > 262,144 floats, ~1 MB) and a GPU is available.
-    /// Falls back to SIMD for small workloads, unsupported metrics, or GPU errors.
+    /// Tries GPU dispatch first when the workload exceeds the auto-calibrated
+    /// GPU/SIMD crossover threshold and a GPU is available. Falls back to SIMD
+    /// for small workloads, unsupported metrics, or GPU errors.
     fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
         #[cfg(feature = "gpu")]
         {
             use crate::gpu::GpuAccelerator;
-            if GpuAccelerator::should_rerank_gpu(candidates.len(), self.dimension) {
-                if let Some(results) = self.rerank_candidates_gpu(query, candidates) {
-                    return results;
+            if let Some(gpu) = GpuAccelerator::global() {
+                if gpu.should_rerank_gpu(candidates.len(), self.dimension) {
+                    if let Some(results) = self.rerank_candidates_gpu(query, candidates) {
+                        return results;
+                    }
                 }
             }
         }
@@ -432,13 +434,6 @@ impl HnswIndex {
                 }
                 let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
                 let flat = vectors.gather_flat(&indices);
-                // Concurrent deletion can make gather_flat skip invalidated indices,
-                // producing fewer elements than expected. Detect the desync and fall
-                // back to SIMD reranking (caller treats None as "GPU unavailable").
-                let expected_len = indices.len() * vectors.dimension();
-                if flat.len() != expected_len {
-                    return None;
-                }
                 Some((entries, flat))
             })
         }?;

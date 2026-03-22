@@ -151,28 +151,21 @@ fn test_gpu_rerank_end_to_end_balanced_vs_fast() {
 /// The SIMD path should handle reranking, and results should still be correct.
 #[test]
 fn test_gpu_rerank_fallback_below_threshold() {
-    // Verify the threshold decision directly
+    // Verify the threshold decision directly using calibrated crossover
     #[cfg(feature = "gpu")]
     {
         use crate::gpu::GpuAccelerator;
-        assert!(
-            !GpuAccelerator::should_rerank_gpu(5, 4),
-            "5 * 4 = 20 < 262_144, should NOT use GPU"
-        );
-        assert!(
-            !GpuAccelerator::should_rerank_gpu(100, 64),
-            "100 * 64 = 6400 < 262_144, should NOT use GPU"
-        );
-        // 1000 * 128 = 128_000, below the new 262_144 threshold
-        assert!(
-            !GpuAccelerator::should_rerank_gpu(1000, 128),
-            "1000 * 128 = 128_000 < 262_144, should NOT use GPU"
-        );
-        // 400 * 1536 = 614_400, above the threshold
-        assert!(
-            GpuAccelerator::should_rerank_gpu(400, 1536),
-            "400 * 1536 = 614_400 > 262_144, should use GPU"
-        );
+        if let Some(gpu) = GpuAccelerator::global() {
+            // Small workloads should always be below the crossover
+            assert!(
+                !gpu.should_rerank_gpu(5, 4),
+                "5 * 4 = 20 should NOT use GPU"
+            );
+            assert!(
+                !gpu.should_rerank_gpu(100, 64),
+                "100 * 64 = 6400 should NOT use GPU"
+            );
+        }
     }
 
     // Verify that search still works correctly with tiny dimensions (SIMD path)
@@ -197,25 +190,33 @@ fn test_gpu_rerank_fallback_below_threshold() {
     );
 }
 
-/// Verifies the threshold boundary precisely: rerank_k * dimension must
-/// EXCEED 262,144 (strictly greater) for GPU dispatch.
+/// Verifies the threshold boundary precisely: `rerank_k * dimension` must
+/// EXCEED the calibrated crossover (strictly greater) for GPU dispatch.
 #[test]
 #[cfg(feature = "gpu")]
 fn test_gpu_rerank_threshold_boundary() {
     use crate::gpu::GpuAccelerator;
 
-    // Exactly at boundary: 2048 * 128 = 262_144, and `262_144 > 262_144` is false
-    let at_boundary = GpuAccelerator::should_rerank_gpu(2048, 128);
-    assert!(
-        !at_boundary,
-        "Exactly at threshold (262_144) should NOT trigger GPU"
-    );
+    if let Some(gpu) = GpuAccelerator::global() {
+        let crossover = gpu.calibration().crossover_floats();
 
-    // One above: 2049 * 128 = 262_272 > 262_144
-    assert!(
-        GpuAccelerator::should_rerank_gpu(2049, 128),
-        "Above threshold should trigger GPU"
-    );
+        // Exactly at boundary: crossover > crossover is false
+        if crossover > 0 && crossover < usize::MAX {
+            let at_boundary = gpu.should_rerank_gpu(crossover, 1);
+            assert!(
+                !at_boundary,
+                "Exactly at threshold ({crossover}) should NOT trigger GPU"
+            );
+        }
+
+        // One above: crossover + 1 > crossover is true
+        if crossover < usize::MAX {
+            assert!(
+                gpu.should_rerank_gpu(crossover + 1, 1),
+                "Above threshold ({crossover}) should trigger GPU"
+            );
+        }
+    }
 }
 
 // =========================================================================
