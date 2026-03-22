@@ -240,10 +240,11 @@ impl HnswIndex {
             .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
             .collect();
 
-        // Phase 2: Rerank each query's candidates and truncate to k
+        // Phase 2: Rerank each query's candidates and truncate to k (rayon parallel)
+        // rerank_sort_and_truncate takes &self (read-only) — safe for concurrent calls.
         queries
-            .iter()
-            .zip(all_candidates.iter())
+            .par_iter()
+            .zip(all_candidates.par_iter())
             .map(|(query, candidates)| self.rerank_sort_and_truncate(query, candidates, k))
             .collect()
     }

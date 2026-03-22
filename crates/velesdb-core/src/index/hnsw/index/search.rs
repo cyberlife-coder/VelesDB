@@ -432,6 +432,13 @@ impl HnswIndex {
                 }
                 let indices: Vec<usize> = entries.iter().map(|&(_, idx)| idx).collect();
                 let flat = vectors.gather_flat(&indices);
+                // Concurrent deletion can make gather_flat skip invalidated indices,
+                // producing fewer elements than expected. Detect the desync and fall
+                // back to SIMD reranking (caller treats None as "GPU unavailable").
+                let expected_len = indices.len() * vectors.dimension();
+                if flat.len() != expected_len {
+                    return None;
+                }
                 Some((entries, flat))
             })
         }?;

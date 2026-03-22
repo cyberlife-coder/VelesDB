@@ -374,6 +374,9 @@ impl GpuAccelerator {
     }
 
     /// Encodes the compute pass and submits it to the GPU queue.
+    // Reason: GPU encode requires device, queue, pipeline, bind_group, and buffer
+    // references — bundling into a struct would add lifetime complexity for a
+    // crate-private helper.
     #[allow(clippy::too_many_arguments)]
     fn encode_and_submit(
         device: &wgpu::Device,
