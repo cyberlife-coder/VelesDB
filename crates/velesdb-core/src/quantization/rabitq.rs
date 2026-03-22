@@ -135,6 +135,8 @@ struct PreparedQuery {
     bits: Vec<u64>,
     /// Number of u64 words in the bit representation.
     num_words: usize,
+    /// Rotated normalized vector (used by encode for correction factors).
+    rotated: Vec<f32>,
 }
 
 impl RaBitQIndex {
@@ -165,6 +167,7 @@ impl RaBitQIndex {
             norm,
             bits,
             num_words,
+            rotated,
         })
     }
 
@@ -211,24 +214,13 @@ impl RaBitQIndex {
             });
         };
 
-        // Recompute the rotated normalized vector for correction factor calculation.
-        // prepare_query already does this work but only returns bits. We need the
-        // full rotated values for the quantization inner product computation.
-        let centered: Vec<f32> = vector
-            .iter()
-            .zip(self.centroid.iter())
-            .map(|(&v, &c)| v - c)
-            .collect();
-        let normalized: Vec<f32> = centered.iter().map(|&x| x / pq.norm).collect();
-        let rotated = apply_rotation_flat(&self.rotation, &normalized, self.dimension);
-
         // Compute correction factors
         // The binary reconstruction maps each sign bit to +1/-1, scaled by 1/sqrt(D).
         // quantization_inner_product = <binary_reconstruction, rotated_normalized>
         #[allow(clippy::cast_precision_loss)]
         let scale = 1.0 / (self.dimension as f32).sqrt();
         let mut qip: f32 = 0.0;
-        for (i, &rv) in rotated.iter().enumerate().take(self.dimension) {
+        for (i, &rv) in pq.rotated.iter().enumerate().take(self.dimension) {
             let word = i / 64;
             let bit = i % 64;
             let sign = if (pq.bits[word] >> bit) & 1 == 1 {

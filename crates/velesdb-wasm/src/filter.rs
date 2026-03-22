@@ -52,11 +52,13 @@ pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
         "neq" => match extract_field_pair(payload, condition) {
             Some((pv, v)) => pv != v,
             None => {
-                // neq is true when the field is missing entirely
-                condition
-                    .get("field")
-                    .and_then(|f| f.as_str())
-                    .is_some_and(|field| get_nested_field(payload, field).is_none())
+                // No condition value → neq always true (backward compat).
+                // Condition value present but field missing → also true.
+                condition.get("value").is_none()
+                    || condition
+                        .get("field")
+                        .and_then(|f| f.as_str())
+                        .is_some_and(|field| get_nested_field(payload, field).is_none())
             }
         },
         "gt" => compare_numeric(payload, condition, |pv, v| pv > v),

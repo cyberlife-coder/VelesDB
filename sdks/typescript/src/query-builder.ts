@@ -20,6 +20,9 @@
 
 import type { FusionStrategy } from './types';
 
+/** Re-export FusionStrategy for backwards compatibility */
+export type { FusionStrategy } from './types';
+
 /** Direction for relationship traversal */
 export type RelDirection = 'outgoing' | 'incoming' | 'both';
 

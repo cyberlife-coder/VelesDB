@@ -39,7 +39,7 @@ pub(crate) fn compare_op_from_str(op: &str) -> Result<CompareOp, ParseError> {
 /// Returns [`ParseError`] if the input cannot be recognized as any value type.
 pub(crate) fn parse_value_from_str(input: &str) -> Result<Value, ParseError> {
     if input.len() >= 2 && input.starts_with('\'') && input.ends_with('\'') {
-        return Ok(Value::String(input.trim_matches('\'').to_string()));
+        return Ok(Value::String(input[1..input.len() - 1].to_string()));
     }
     if input.eq_ignore_ascii_case("true") {
         return Ok(Value::Boolean(true));
