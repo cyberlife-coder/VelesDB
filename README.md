@@ -160,13 +160,13 @@ curl http://localhost:8080/health
 ```bash
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
-  -d '{"name": "docs", "dimension": 768, "metric": "cosine"}'
+  -d '{"name": "docs", "dimension": 4, "metric": "cosine"}'
 
 curl -X POST http://localhost:8080/collections/docs/points \
   -H "Content-Type: application/json" \
   -d '{
     "points": [
-      {"id": 1, "vector": [0.1, 0.2, ...], "payload": {"title": "My first doc"}}
+      {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"title": "My first doc"}}
     ]
   }'
 ```
@@ -176,7 +176,7 @@ curl -X POST http://localhost:8080/collections/docs/points \
 ```bash
 curl -X POST http://localhost:8080/collections/docs/search \
   -H "Content-Type: application/json" \
-  -d '{"vector": [0.1, 0.2, ...], "top_k": 5}'
+  -d '{"vector": [0.9, 0.1, 0.0, 0.0], "top_k": 5}'
 ```
 
 ### Or use VelesQL
