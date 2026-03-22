@@ -9,6 +9,8 @@
 # =============================================================================
 cognitive-complexity-threshold = 8
 too-many-arguments-threshold = 7
+# Target is 50 NLOC (enforced by Codacy). Clippy threshold set to 80
+# as secondary backstop — CLI -D clippy::pedantic overrides workspace allows.
 too-many-lines-threshold = 80
 
 # =============================================================================

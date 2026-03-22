@@ -139,6 +139,10 @@ missing_panics_doc = "allow"
 # Struct field naming (no bug risk)
 struct_field_names = "allow"
 
+# Function length — target is 50 NLOC (.clippy.toml), enforced by Codacy.
+# Clippy set to allow since Codacy is the hard gate for this metric.
+too_many_lines = "allow"
+
 # Code style preferences (no bug risk)
 ptr_as_ptr = "allow"
 significant_drop_tightening = "allow"
