@@ -1,0 +1,25 @@
+# VelesDB Python Complexity Gate
+# Enforces cyclomatic complexity <= 8 (aligned with Codacy threshold)
+#
+# Usage: flake8 integrations/ scripts/ benchmarks/ --select=C901
+# Install: pip install flake8 mccabe
+
+[flake8]
+max-complexity = 8
+select = C901
+exclude =
+    .venv,
+    __pycache__,
+    .git,
+    *.egg-info,
+    demos/rag-pdf-demo/.venv,
+    node_modules
+per-file-ignores =
+    # Test files are allowed higher complexity
+    tests/*:C901
+    test_*:C901
+    *_test.py:C901
+    # Benchmark scripts have complex orchestration by nature
+    benchmarks/*:C901
+    # CI/validation scripts are internal tooling, not production code
+    scripts/*:C901

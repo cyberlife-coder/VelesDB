@@ -317,19 +317,34 @@ class GraphRetriever(BaseRetriever):
     def _extract_node_id(self, node: Any) -> Optional[int]:
         """Extract numeric node ID from a LlamaIndex node."""
         try:
-            if hasattr(node, "metadata"):
-                for key in ["id", "doc_id", "node_id"]:
-                    if key in node.metadata:
-                        val = node.metadata[key]
-                        return int(val) if isinstance(val, (int, str)) else None
-            if hasattr(node, "node_id"):
-                try:
-                    return int(node.node_id)
-                except (ValueError, TypeError):
-                    return stable_hash_id(node.node_id)
+            from_meta = self._id_from_metadata(node)
+            if from_meta is not None:
+                return from_meta
+            return self._id_from_node_id(node)
         except (AttributeError, KeyError) as exc:
             logger.debug("Failed to extract node id from node metadata: %s", exc)
         return None
+
+    @staticmethod
+    def _id_from_metadata(node: Any) -> Optional[int]:
+        """Try to extract an integer ID from node.metadata."""
+        if not hasattr(node, "metadata"):
+            return None
+        for key in ["id", "doc_id", "node_id"]:
+            if key in node.metadata:
+                val = node.metadata[key]
+                return int(val) if isinstance(val, (int, str)) else None
+        return None
+
+    @staticmethod
+    def _id_from_node_id(node: Any) -> Optional[int]:
+        """Try to extract an integer ID from node.node_id, falling back to hash."""
+        if not hasattr(node, "node_id"):
+            return None
+        try:
+            return int(node.node_id)
+        except (ValueError, TypeError):
+            return stable_hash_id(node.node_id)
 
     def _traverse_graph(self, source_id: int) -> List[int]:
         """Traverse graph from source node, dispatching to native or REST.

@@ -159,6 +159,54 @@ try {
     $errors += "CodacyCLI"
 }
 
+# ============================================================================
+# Check: Rust cyclomatic complexity (cargo-complexity, CC <= 8)
+# ============================================================================
+Write-Step "Check: Rust cyclomatic complexity (CC <= 8)"
+try {
+    $complexityCheck = cargo complexity --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $complexityOutput = cargo complexity --max-complexity 8 --format json crates/velesdb-core/src/ 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Functions exceeding CC > 8 detected!"
+            Write-Output $complexityOutput
+            $errors += "RustComplexity"
+        } else {
+            Write-Success "Rust cyclomatic complexity OK (all functions CC <= 8)"
+        }
+    } else {
+        Write-Warn "cargo-complexity not installed - skipping"
+        Write-Output "   Install with: cargo install cargo-complexity"
+    }
+} catch {
+    Write-Warn "cargo-complexity check skipped (not installed)"
+    Write-Output "   Install with: cargo install cargo-complexity"
+}
+
+# ============================================================================
+# Check: Python cyclomatic complexity (flake8 + mccabe, CC <= 8)
+# ============================================================================
+Write-Step "Check: Python cyclomatic complexity (CC <= 8)"
+try {
+    $flake8Check = python -m flake8 --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $flake8Output = python -m flake8 integrations/ scripts/ --select=C901 --max-complexity=8 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Python functions exceeding CC > 8:"
+            Write-Output $flake8Output
+            $errors += "PythonComplexity"
+        } else {
+            Write-Success "Python cyclomatic complexity OK (all functions CC <= 8)"
+        }
+    } else {
+        Write-Warn "flake8 not installed - skipping Python complexity check"
+        Write-Output "   Install with: pip install flake8 mccabe"
+    }
+} catch {
+    Write-Warn "Python complexity check skipped (flake8 not installed)"
+    Write-Output "   Install with: pip install flake8 mccabe"
+}
+
 if ($Quick) {
     Write-Warn "Quick mode - skipping tests and security audit"
 } else {

@@ -89,7 +89,26 @@ else
 fi
 
 # =============================================================================
-# Check 4: Import verification
+# Check 4: Cyclomatic complexity (flake8 + mccabe, CC <= 8)
+# =============================================================================
+echo -e "\n${YELLOW}4️⃣  Checking cyclomatic complexity (CC <= 8)...${NC}"
+
+if command -v flake8 &> /dev/null; then
+    COMPLEXITY_ISSUES=$(flake8 $PYTHON_DIRS integrations/common --select=C901 --max-complexity=8 2>/dev/null || true)
+    if [ -n "$COMPLEXITY_ISSUES" ]; then
+        echo -e "${RED}❌ Functions exceeding complexity threshold (CC > 8):${NC}"
+        echo "$COMPLEXITY_ISSUES"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo -e "${GREEN}✅ All functions within complexity limit (CC <= 8)${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  flake8 not installed, skipping complexity check${NC}"
+    echo -e "   Install with: pip install flake8 mccabe"
+fi
+
+# =============================================================================
+# Check 5: Import verification
 # =============================================================================
 echo -e "\n${YELLOW}4️⃣  Verifying imports...${NC}"
 

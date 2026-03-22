@@ -97,82 +97,63 @@ class GraphLoader:
         """
         entity_map: Dict[str, int] = {}
         nodes_added = 0
-        edges_added = 0
 
         for entity in entities:
             entity_id = _generate_id(entity.name, entity.entity_type)
             entity_map[entity.name] = entity_id
-
-            metadata = {
-                "name": entity.name,
-                "type": entity.entity_type,
-                **entity.properties,
-            }
-
-            vector = None
-            if generate_embeddings and self.embedding_fn:
-                text = f"{entity.entity_type}: {entity.name}"
-                vector = self.embedding_fn(text)
-
-            try:
-                collection = self._get_or_create_collection(
-                    len(vector) if vector is not None else None
-                )
-                if vector is not None and not self._metadata_only:
-                    collection.upsert([{
-                        "id": entity_id,
-                        "vector": vector,
-                        "payload": {
-                            "label": entity.entity_type,
-                            **metadata,
-                        },
-                    }])
-                else:
-                    collection.upsert_metadata([{
-                        "id": entity_id,
-                        "payload": {
-                            "label": entity.entity_type,
-                            **metadata,
-                        },
-                    }])
+            if self._load_entity(entity, entity_id, generate_embeddings):
                 nodes_added += 1
-            except Exception as exc:
-                logger.warning("Failed to load entity '%s' into graph collection: %s", entity.name, exc)
 
+        edges_added = self._load_edges(relations, entity_map)
+        return {"nodes": nodes_added, "edges": edges_added}
+
+    def _load_entity(
+        self, entity: Entity, entity_id: int, generate_embeddings: bool
+    ) -> bool:
+        """Load a single entity into the collection. Returns True on success."""
+        metadata = {"name": entity.name, "type": entity.entity_type, **entity.properties}
+
+        vector = None
+        if generate_embeddings and self.embedding_fn:
+            vector = self.embedding_fn(f"{entity.entity_type}: {entity.name}")
+
+        try:
+            collection = self._get_or_create_collection(
+                len(vector) if vector is not None else None
+            )
+            payload = {"label": entity.entity_type, **metadata}
+            if vector is not None and not self._metadata_only:
+                collection.upsert([{"id": entity_id, "vector": vector, "payload": payload}])
+            else:
+                collection.upsert_metadata([{"id": entity_id, "payload": payload}])
+            return True
+        except Exception as exc:
+            logger.warning("Failed to load entity '%s' into graph collection: %s", entity.name, exc)
+            return False
+
+    def _load_edges(
+        self, relations: List[Relation], entity_map: Dict[str, int]
+    ) -> int:
+        """Load relations as edges into the graph store. Returns count added."""
+        edges_added = 0
         for relation in relations:
             source_id = entity_map.get(relation.source)
             target_id = entity_map.get(relation.target)
-
-            if source_id is None or target_id is None:
+            if source_id is None or target_id is None or self._graph_store is None:
                 continue
-
-            edge_id = _generate_id(
-                f"{relation.source}->{relation.target}",
-                relation.relation_type,
-            )
-
-            if self._graph_store is None:
-                continue
-
+            edge_id = _generate_id(f"{relation.source}->{relation.target}", relation.relation_type)
             try:
                 self._graph_store.add_edge({
-                    "id": edge_id,
-                    "source": source_id,
-                    "target": target_id,
-                    "label": relation.relation_type,
-                    "properties": relation.properties,
+                    "id": edge_id, "source": source_id, "target": target_id,
+                    "label": relation.relation_type, "properties": relation.properties,
                 })
                 edges_added += 1
             except Exception as exc:
                 logger.warning(
                     "Failed to add relation '%s' -> '%s' (%s): %s",
-                    relation.source,
-                    relation.target,
-                    relation.relation_type,
-                    exc,
+                    relation.source, relation.target, relation.relation_type, exc,
                 )
-
-        return {"nodes": nodes_added, "edges": edges_added}
+        return edges_added
 
     def load_from_result(
         self,
