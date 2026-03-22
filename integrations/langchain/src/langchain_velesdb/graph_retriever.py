@@ -245,7 +245,7 @@ class GraphRetriever(BaseRetriever):
             neighbors = self._traverse_graph(doc_id)
             for neighbor_id in neighbors:
                 expanded_ids.add(neighbor_id)
-        except (ValueError, RuntimeError, OSError, TimeoutError) as exc:
+        except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
                     "Graph traversal timeout for node %s, falling back to vector-only",
@@ -295,7 +295,7 @@ class GraphRetriever(BaseRetriever):
                     neighbor_doc.metadata["graph_depth"] = 1
                     neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
                     result_docs.append(neighbor_doc)
-            except (ValueError, RuntimeError, OSError, KeyError) as exc:
+            except (ValueError, RuntimeError, OSError, KeyError, ConnectionError) as exc:
                 logger.debug("Failed to fetch neighbour document %s: %s", neighbor_id, exc)
 
     def _traverse_graph(self, source_id: int) -> List[int]:
@@ -369,7 +369,7 @@ class GraphRetriever(BaseRetriever):
             results = self.vector_store.get_by_ids([doc_id])
             if results:
                 return results[0]
-        except (ValueError, RuntimeError, OSError, KeyError):
+        except (ValueError, RuntimeError, OSError, KeyError, ConnectionError):
             logger.debug("Failed to fetch document by ID: %s", doc_id, exc_info=True)
         return None
 

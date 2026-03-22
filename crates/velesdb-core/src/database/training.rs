@@ -51,12 +51,14 @@ impl Database {
 
     /// Resolves the collection referenced by a TRAIN statement.
     ///
-    /// RF-DEDUP: Delegates to `resolve_collection` (defined in `query_engine.rs`).
+    /// Uses `resolve_writable_collection` (not `resolve_collection`) because
+    /// training a quantizer on a metadata-only collection is nonsensical —
+    /// metadata collections have no vectors to train on.
     fn resolve_train_collection(
         &self,
         stmt: &crate::velesql::TrainStatement,
     ) -> Result<crate::Collection> {
-        self.resolve_collection(&stmt.collection)
+        self.resolve_writable_collection(&stmt.collection)
     }
 
     /// Checks if a quantizer is already trained, returning an error unless `force` is set.

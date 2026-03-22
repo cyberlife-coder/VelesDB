@@ -247,13 +247,28 @@ impl Database {
     /// `create_collection` and `create_vector_collection` via shared inner `Arc<>`).
     /// Falls back to vector collections, then metadata collections.
     ///
-    /// RF-DEDUP: Shared by `execute_insert`, `execute_update`, `execute_single_select`,
-    /// and `training::resolve_train_collection`.
+    /// RF-DEDUP: Shared by `execute_single_select` (reads are valid on all collection
+    /// types, including metadata).
     #[allow(deprecated)]
     pub(super) fn resolve_collection(&self, name: &str) -> Result<crate::collection::Collection> {
         self.get_collection(name)
             .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
             .or_else(|| self.get_metadata_collection(name).map(|mc| mc.inner))
+            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+    }
+
+    /// Resolves a collection that supports write operations (INSERT/UPDATE/TRAIN).
+    ///
+    /// Only checks legacy and vector collections — metadata-only collections do not
+    /// support INSERT with vectors, UPDATE with vectors, or TRAIN QUANTIZER, so
+    /// resolving them here would produce misleading errors deeper in the pipeline.
+    #[allow(deprecated)]
+    pub(super) fn resolve_writable_collection(
+        &self,
+        name: &str,
+    ) -> Result<crate::collection::Collection> {
+        self.get_collection(name)
+            .or_else(|| self.get_vector_collection(name).map(|vc| vc.inner))
             .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
     }
 
@@ -324,7 +339,7 @@ impl Database {
         stmt: &crate::velesql::InsertStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let collection = self.resolve_collection(&stmt.table)?;
+        let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let (id, vector, payload) = Self::resolve_insert_fields(stmt, params)?;
         let point_id =
@@ -402,7 +417,7 @@ impl Database {
         stmt: &crate::velesql::UpdateStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let collection = self.resolve_collection(&stmt.table)?;
+        let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let assignments = Self::resolve_update_assignments(stmt, params)?;
         let filter = Self::build_update_filter(stmt.where_clause.as_ref())?;

@@ -10,8 +10,12 @@ use super::Collection;
 
 /// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
 fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
-    velesdb_core::velesql::Parser::parse(query_str)
-        .map_err(|e| PyValueError::new_err(format!("VelesQL parse error: {}", e.message)))
+    velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
+        PyValueError::new_err(format!(
+            "VelesQL parse error at position {}: {}",
+            e.position, e.message
+        ))
+    })
 }
 
 /// Converts Python params dict to Rust `HashMap<String, serde_json::Value>`.

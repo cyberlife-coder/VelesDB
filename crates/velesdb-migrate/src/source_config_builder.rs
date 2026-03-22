@@ -34,34 +34,50 @@ pub struct SourceParams<'a> {
 ///
 /// # Errors
 ///
-/// Returns `Error::Config` if the source type requires a feature flag
-/// that is not enabled (e.g., pgvector requires `--features postgres`).
+/// Returns `Error::Config` if:
+/// - The source type requires a feature flag that is not enabled (e.g.,
+///   pgvector requires `--features postgres`).
+/// - A required API key is missing or empty (Supabase, Pinecone, MongoDB).
 pub fn build_source_config(params: &SourceParams<'_>) -> Result<SourceConfig> {
     match params.source_type {
-        SourceType::Supabase => Ok(build_supabase(params)),
+        SourceType::Supabase => build_supabase(params),
         SourceType::Qdrant => Ok(build_qdrant(params)),
-        SourceType::Pinecone => Ok(build_pinecone(params)),
+        SourceType::Pinecone => build_pinecone(params),
         SourceType::Weaviate => Ok(build_weaviate(params)),
         SourceType::Milvus => Ok(build_milvus(params)),
         SourceType::ChromaDB => Ok(build_chromadb(params)),
         SourceType::PgVector => build_pgvector(params),
         SourceType::JsonFile => Ok(build_json_file(params)),
         SourceType::CsvFile => Ok(build_csv_file(params)),
-        SourceType::MongoDB => Ok(build_mongodb(params)),
+        SourceType::MongoDB => build_mongodb(params),
         SourceType::Elasticsearch => Ok(build_elasticsearch(params)),
         SourceType::Redis => Ok(build_redis(params)),
     }
 }
 
-fn build_supabase(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Supabase(crate::config::SupabaseConfig {
+/// Extracts and validates a required API key from source parameters.
+///
+/// # Errors
+///
+/// Returns `Error::Config` if the API key is `None` or empty.
+fn require_api_key(params: &SourceParams<'_>, source_name: &str) -> Result<String> {
+    params
+        .api_key
+        .filter(|k| !k.is_empty())
+        .map(String::from)
+        .ok_or_else(|| Error::Config(format!("{source_name} requires an API key (--api-key)")))
+}
+
+fn build_supabase(params: &SourceParams<'_>) -> Result<SourceConfig> {
+    let api_key = require_api_key(params, "Supabase")?;
+    Ok(SourceConfig::Supabase(crate::config::SupabaseConfig {
         url: params.url.to_string(),
-        api_key: params.api_key.unwrap_or_default().to_string(),
+        api_key,
         table: params.collection.to_string(),
         vector_column: "embedding".to_string(),
         id_column: "id".to_string(),
         payload_columns: vec![],
-    })
+    }))
 }
 
 fn build_qdrant(params: &SourceParams<'_>) -> SourceConfig {
@@ -73,14 +89,15 @@ fn build_qdrant(params: &SourceParams<'_>) -> SourceConfig {
     })
 }
 
-fn build_pinecone(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::Pinecone(crate::config::PineconeConfig {
-        api_key: params.api_key.unwrap_or_default().to_string(),
+fn build_pinecone(params: &SourceParams<'_>) -> Result<SourceConfig> {
+    let api_key = require_api_key(params, "Pinecone")?;
+    Ok(SourceConfig::Pinecone(crate::config::PineconeConfig {
+        api_key,
         environment: String::new(),
         index: params.collection.to_string(),
         namespace: None,
         base_url: None,
-    })
+    }))
 }
 
 fn build_weaviate(params: &SourceParams<'_>) -> SourceConfig {
@@ -153,17 +170,20 @@ fn build_csv_file(params: &SourceParams<'_>) -> SourceConfig {
     })
 }
 
-fn build_mongodb(params: &SourceParams<'_>) -> SourceConfig {
-    SourceConfig::MongoDB(crate::connectors::mongodb::MongoDBConfig {
-        data_api_url: params.url.to_string(),
-        api_key: params.api_key.unwrap_or_default().to_string(),
-        database: "vectors".to_string(),
-        collection: params.collection.to_string(),
-        vector_field: "embedding".to_string(),
-        id_field: "_id".to_string(),
-        payload_fields: vec![],
-        filter: None,
-    })
+fn build_mongodb(params: &SourceParams<'_>) -> Result<SourceConfig> {
+    let api_key = require_api_key(params, "MongoDB")?;
+    Ok(SourceConfig::MongoDB(
+        crate::connectors::mongodb::MongoDBConfig {
+            data_api_url: params.url.to_string(),
+            api_key,
+            database: "vectors".to_string(),
+            collection: params.collection.to_string(),
+            vector_field: "embedding".to_string(),
+            id_field: "_id".to_string(),
+            payload_fields: vec![],
+            filter: None,
+        },
+    ))
 }
 
 fn build_elasticsearch(params: &SourceParams<'_>) -> SourceConfig {
@@ -511,21 +531,48 @@ mod tests {
     }
 
     #[test]
-    fn test_build_source_config_api_key_none_uses_default() {
+    fn test_build_source_config_missing_api_key_rejected() {
+        // Supabase requires an API key — None must be rejected.
         let params = SourceParams {
             source_type: SourceType::Supabase,
             url: "https://xyz.supabase.co",
             api_key: None,
             collection: "docs",
         };
+        assert!(build_source_config(&params).is_err());
+    }
 
-        let result = build_source_config(&params);
-        assert!(result.is_ok());
-        match result.unwrap() {
-            SourceConfig::Supabase(cfg) => {
-                assert_eq!(cfg.api_key, "");
-            }
-            _ => panic!("Expected Supabase config"),
-        }
+    #[test]
+    fn test_build_source_config_empty_api_key_rejected() {
+        // An empty string is not a valid API key.
+        let params = SourceParams {
+            source_type: SourceType::Supabase,
+            url: "https://xyz.supabase.co",
+            api_key: Some(""),
+            collection: "docs",
+        };
+        assert!(build_source_config(&params).is_err());
+    }
+
+    #[test]
+    fn test_pinecone_missing_api_key_rejected() {
+        let params = SourceParams {
+            source_type: SourceType::Pinecone,
+            url: "https://index.pinecone.io",
+            api_key: None,
+            collection: "my-index",
+        };
+        assert!(build_source_config(&params).is_err());
+    }
+
+    #[test]
+    fn test_mongodb_missing_api_key_rejected() {
+        let params = SourceParams {
+            source_type: SourceType::MongoDB,
+            url: "https://data.mongodb-api.com/v1",
+            api_key: None,
+            collection: "embeddings",
+        };
+        assert!(build_source_config(&params).is_err());
     }
 }
