@@ -552,33 +552,21 @@ fn test_gpu_global_thread_safe() {
 // =========================================================================
 
 #[test]
-#[serial(gpu)]
 fn test_should_rerank_gpu_threshold() {
-    if let Some(gpu) = GpuAccelerator::global() {
-        let crossover = gpu.calibration().crossover_floats();
+    // Below threshold: 100 * 128 = 12_800 < 262_144
+    assert!(!GpuAccelerator::should_rerank_gpu(100, 128));
 
-        // Well below crossover -> false
-        assert!(
-            !gpu.should_rerank_gpu(1, 1),
-            "1 float is always below crossover ({crossover})"
-        );
+    // Below threshold (was above old 65K): 200 * 768 = 153_600 < 262_144
+    assert!(!GpuAccelerator::should_rerank_gpu(200, 768));
 
-        // Exactly at crossover -> false (strictly greater required)
-        if crossover > 0 && crossover < usize::MAX {
-            assert!(
-                !gpu.should_rerank_gpu(crossover, 1),
-                "Exactly at crossover ({crossover}) should NOT trigger GPU"
-            );
-        }
+    // Above threshold: 400 * 1536 = 614_400 > 262_144
+    assert!(GpuAccelerator::should_rerank_gpu(400, 1536));
 
-        // Just above crossover -> true
-        if crossover < usize::MAX {
-            assert!(
-                gpu.should_rerank_gpu(crossover + 1, 1),
-                "Above crossover ({crossover}) should trigger GPU"
-            );
-        }
-    }
+    // Exactly at threshold: 2048 * 128 = 262_144 (not strictly greater)
+    assert!(!GpuAccelerator::should_rerank_gpu(2048, 128));
+
+    // Just above threshold: 2049 * 128 = 262_272 > 262_144
+    assert!(GpuAccelerator::should_rerank_gpu(2049, 128));
 }
 
 #[test]
@@ -598,132 +586,5 @@ fn test_gpu_global_returns_same_arc() {
             // No GPU available — both must be None
         }
         _ => panic!("global() returned inconsistent results (one Some, one None)"),
-    }
-}
-
-// =========================================================================
-// GPU auto-calibration tests (Phase C)
-// =========================================================================
-
-#[test]
-#[serial(gpu)]
-fn test_gpu_calibration_produces_valid_values() {
-    if let Some(gpu) = GpuAccelerator::global() {
-        let cal = gpu.calibration();
-        // Overhead must be > 0 (there is always a fixed cost)
-        assert!(cal.overhead_ns() > 0, "GPU overhead should be > 0");
-        // Crossover must be > 0 (at minimum a few floats)
-        assert!(cal.crossover_floats() > 0, "crossover should be > 0");
-    }
-}
-
-// =========================================================================
-// GPU brute-force calibrated threshold tests (Phase C — Step C.6)
-// =========================================================================
-
-#[test]
-#[serial(gpu)]
-fn test_should_brute_force_gpu_uses_calibration() {
-    if let Some(gpu) = GpuAccelerator::global() {
-        let crossover = gpu.calibration().crossover_floats();
-
-        // Below crossover -> false (use dim=128 as a realistic dimension)
-        if crossover > 128 {
-            assert!(
-                !gpu.should_brute_force_gpu(1, 128),
-                "1 * 128 = 128 floats should be below crossover ({crossover})"
-            );
-        }
-
-        // Above crossover -> true
-        if crossover < usize::MAX / 2 {
-            let n = crossover / 128 + 1;
-            assert!(
-                gpu.should_brute_force_gpu(n, 128),
-                "{n} * 128 floats should be above crossover ({crossover})"
-            );
-        }
-    }
-}
-
-// =========================================================================
-// GPU PQ calibrated threshold tests (Phase C — Step C.8)
-// =========================================================================
-
-#[test]
-#[serial(gpu)]
-fn test_should_use_gpu_pq_uses_calibration() {
-    if let Some(gpu) = GpuAccelerator::global() {
-        let crossover = gpu.calibration().crossover_floats();
-
-        // Tiny workload -> false (n * k * sd = 1)
-        if crossover > 100 {
-            assert!(
-                !gpu.should_use_gpu_pq(1, 1, 1),
-                "1 * 1 * 1 = 1 float should be below crossover ({crossover})"
-            );
-        }
-
-        // Large workload -> true
-        if crossover < usize::MAX / 3 {
-            assert!(
-                gpu.should_use_gpu_pq(crossover + 1, 1, 1),
-                "crossover + 1 should exceed crossover ({crossover})"
-            );
-        }
-    }
-}
-
-// =========================================================================
-// GPU auto-calibration fallback tests (Phase C — Steps C.11 & C.12)
-// =========================================================================
-
-#[test]
-fn test_gpu_calibration_default_has_conservative_values() {
-    let cal = GpuCalibration::default();
-    // Default values must match the old hardcoded thresholds (conservative).
-    assert_eq!(
-        cal.overhead_ns(),
-        900_000,
-        "Default overhead should be 900us"
-    );
-    assert_eq!(
-        cal.crossover_floats(),
-        262_144,
-        "Default crossover should match old rerank threshold"
-    );
-}
-
-#[test]
-fn test_gpu_calibration_default_is_safe_fallback() {
-    let cal = GpuCalibration::default();
-    // With default values, all should_* methods must be callable without crash.
-    // The crossover 262_144 means GPU is activated for > 262K floats (conservative).
-    assert!(cal.crossover_floats() > 0, "crossover must be positive");
-    assert!(
-        cal.crossover_floats() < usize::MAX,
-        "GPU must not be totally disabled by default"
-    );
-}
-
-#[test]
-#[serial(gpu)]
-fn test_should_rerank_gpu_uses_calibrated_crossover() {
-    if let Some(gpu) = GpuAccelerator::global() {
-        let crossover = gpu.calibration().crossover_floats();
-        // Below the crossover -> false
-        if crossover > 100 {
-            assert!(
-                !gpu.should_rerank_gpu(1, crossover - 1),
-                "Below crossover ({crossover}) should NOT trigger GPU"
-            );
-        }
-        // Above the crossover -> true (unless crossover == usize::MAX)
-        if crossover < usize::MAX / 2 {
-            assert!(
-                gpu.should_rerank_gpu(crossover + 1, 1),
-                "Above crossover ({crossover}) should trigger GPU"
-            );
-        }
     }
 }

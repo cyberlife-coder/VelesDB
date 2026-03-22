@@ -45,8 +45,8 @@ if GpuAccelerator::is_available() {
 ```rust
 use velesdb_core::gpu::GpuAccelerator;
 
-// Create accelerator (returns None if no GPU)
-if let Some(gpu) = GpuAccelerator::new() {
+// Obtain the singleton accelerator (returns None if no GPU)
+if let Some(gpu) = GpuAccelerator::global() {
     let query = vec![1.0, 0.0, 0.0];
     let vectors = vec![
         1.0, 0.0, 0.0,  // Vector 1
@@ -149,7 +149,7 @@ match backend {
 
 | Method | Description |
 |--------|-------------|
-| `new()` | Create accelerator (None if unavailable) |
+| `global()` | Obtain singleton accelerator (None if unavailable) |
 | `is_available()` | Check GPU availability (cached) |
 | `batch_cosine_similarity()` | Batch cosine similarities |
 | `batch_euclidean_distance()` | Batch Euclidean distances |

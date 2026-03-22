@@ -145,25 +145,23 @@ fn test_gpu_rerank_end_to_end_balanced_vs_fast() {
 // =========================================================================
 
 /// Verifies that GPU reranking is NOT used when the workload is below the
-/// threshold (rerank_k * dimension <= 262,144).
+/// auto-calibrated crossover threshold.
 ///
-/// With dim=4 and 5 candidates, the product is 20 which is far below 262,144.
-/// The SIMD path should handle reranking, and results should still be correct.
+/// With dim=4 and 5 candidates, the product is 20 which is far below any
+/// reasonable crossover. The SIMD path should handle reranking.
 #[test]
 fn test_gpu_rerank_fallback_below_threshold() {
-    // Verify the threshold decision directly using calibrated crossover
     #[cfg(feature = "gpu")]
     {
         use crate::gpu::GpuAccelerator;
         if let Some(gpu) = GpuAccelerator::global() {
-            // Small workloads should always be below the crossover
             assert!(
                 !gpu.should_rerank_gpu(5, 4),
-                "5 * 4 = 20 should NOT use GPU"
+                "5 * 4 = 20, should NOT use GPU"
             );
             assert!(
                 !gpu.should_rerank_gpu(100, 64),
-                "100 * 64 = 6400 should NOT use GPU"
+                "100 * 64 = 6400, should NOT use GPU"
             );
         }
     }
@@ -190,32 +188,21 @@ fn test_gpu_rerank_fallback_below_threshold() {
     );
 }
 
-/// Verifies the threshold boundary precisely: `rerank_k * dimension` must
-/// EXCEED the calibrated crossover (strictly greater) for GPU dispatch.
+/// Verifies the auto-calibrated threshold produces monotonic decisions.
 #[test]
 #[cfg(feature = "gpu")]
-fn test_gpu_rerank_threshold_boundary() {
+fn test_gpu_rerank_threshold_monotonicity() {
     use crate::gpu::GpuAccelerator;
 
     if let Some(gpu) = GpuAccelerator::global() {
-        let crossover = gpu.calibration().crossover_floats();
-
-        // Exactly at boundary: crossover > crossover is false
-        if crossover > 0 && crossover < usize::MAX {
-            let at_boundary = gpu.should_rerank_gpu(crossover, 1);
-            assert!(
-                !at_boundary,
-                "Exactly at threshold ({crossover}) should NOT trigger GPU"
-            );
-        }
-
-        // One above: crossover + 1 > crossover is true
-        if crossover < usize::MAX {
-            assert!(
-                gpu.should_rerank_gpu(crossover + 1, 1),
-                "Above threshold ({crossover}) should trigger GPU"
-            );
-        }
+        assert!(
+            !gpu.should_rerank_gpu(1, 1),
+            "Trivial payload must not trigger GPU"
+        );
+        assert!(
+            gpu.should_rerank_gpu(100_000, 1536),
+            "Huge payload must trigger GPU"
+        );
     }
 }
 

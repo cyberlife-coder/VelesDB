@@ -2,78 +2,12 @@
 //!
 //! Provides batch distance calculations on GPU for large datasets.
 //! WGSL shader sources are in `shaders.rs`.
-//!
-//! # Auto-calibration
-//!
-//! On first initialization ([`GpuAccelerator::new()`]), a micro-benchmark
-//! measures the fixed GPU dispatch overhead and marginal per-float cost,
-//! then computes the crossover point above which GPU is faster than CPU
-//! SIMD. The result is stored in [`GpuCalibration`] and exposed via
-//! [`GpuAccelerator::calibration()`]. If calibration fails (e.g. the
-//! adapter does not support timing, or a dispatch errors out), the
-//! conservative defaults from [`GpuCalibration::default()`] are used.
 
 mod shaders;
 
 use std::sync::{Arc, OnceLock};
 
 use wgpu::util::DeviceExt;
-
-/// Auto-calibrated GPU/SIMD crossover parameters.
-///
-/// Populated by a micro-benchmark during [`GpuAccelerator::new()`].
-/// If calibration fails, defaults to conservative thresholds.
-#[derive(Debug, Clone)]
-pub struct GpuCalibration {
-    /// Fixed GPU dispatch overhead in nanoseconds.
-    overhead_ns: u64,
-    /// Marginal GPU cost per float in nanoseconds.
-    gpu_ns_per_float: f64,
-    /// Marginal SIMD cost per float in nanoseconds.
-    simd_ns_per_float: f64,
-    /// Number of floats above which GPU is faster than SIMD.
-    crossover_floats: usize,
-}
-
-/// Default calibration: conservative values that prefer SIMD unless the payload
-/// is large (~1 MB of f32 data). These are used when GPU micro-benchmarking
-/// fails (e.g. adapter does not support timing, or dispatch errors out).
-impl Default for GpuCalibration {
-    fn default() -> Self {
-        Self {
-            overhead_ns: 900_000,
-            gpu_ns_per_float: 0.0,
-            simd_ns_per_float: 0.0,
-            crossover_floats: 262_144,
-        }
-    }
-}
-
-impl GpuCalibration {
-    /// Returns the fixed GPU dispatch overhead in nanoseconds.
-    #[must_use]
-    pub fn overhead_ns(&self) -> u64 {
-        self.overhead_ns
-    }
-
-    /// Returns the marginal GPU cost per float in nanoseconds.
-    #[must_use]
-    pub fn gpu_ns_per_float(&self) -> f64 {
-        self.gpu_ns_per_float
-    }
-
-    /// Returns the marginal SIMD cost per float in nanoseconds.
-    #[must_use]
-    pub fn simd_ns_per_float(&self) -> f64 {
-        self.simd_ns_per_float
-    }
-
-    /// Returns the crossover point in floats above which GPU is faster.
-    #[must_use]
-    pub fn crossover_floats(&self) -> usize {
-        self.crossover_floats
-    }
-}
 
 /// Lazily-initialized singleton GPU accelerator.
 ///
@@ -104,7 +38,6 @@ pub struct GpuAccelerator {
     euclidean_pipeline: wgpu::ComputePipeline,
     dot_product_pipeline: wgpu::ComputePipeline,
     kmeans_pipeline: wgpu::ComputePipeline,
-    calibration: GpuCalibration,
 }
 
 impl GpuAccelerator {
@@ -151,17 +84,14 @@ impl GpuAccelerator {
             "PQ K-means Assignment",
         );
 
-        let mut accel = Self {
+        Some(Self {
             device: Arc::new(device),
             queue: Arc::new(queue),
             cosine_pipeline,
             euclidean_pipeline,
             dot_product_pipeline,
             kmeans_pipeline,
-            calibration: GpuCalibration::default(),
-        };
-        accel.calibration = accel.calibrate();
-        Some(accel)
+        })
     }
 
     /// Probes the system for a compatible GPU and returns a `(Device, Queue)` pair.
@@ -281,153 +211,6 @@ impl GpuAccelerator {
     #[must_use]
     pub fn kmeans_pipeline(&self) -> &wgpu::ComputePipeline {
         &self.kmeans_pipeline
-    }
-
-    /// Returns the auto-calibrated GPU/SIMD crossover parameters.
-    #[must_use]
-    pub fn calibration(&self) -> &GpuCalibration {
-        &self.calibration
-    }
-
-    // =====================================================================
-    // Calibration helpers
-    // =====================================================================
-
-    /// Runs a micro-benchmark to measure GPU dispatch overhead and per-float
-    /// marginal cost, then computes the crossover point vs SIMD.
-    ///
-    /// Falls back to [`GpuCalibration::default()`] if any dispatch errors out.
-    fn calibrate(&self) -> GpuCalibration {
-        const DIM: usize = 128;
-        const WARMUP_DISPATCHES: usize = 2;
-        const LARGE_BATCH: usize = 1000;
-
-        // Warmup: prime GPU caches / driver JIT
-        for _ in 0..WARMUP_DISPATCHES {
-            if self.measure_gpu_dispatch_ns(1, DIM).is_none() {
-                tracing::info!("GPU calibration failed during warmup, using conservative defaults");
-                return GpuCalibration::default();
-            }
-        }
-
-        let overhead = self.measure_overhead_ns(DIM);
-        let gpu_large = self.measure_gpu_large_ns(LARGE_BATCH, DIM);
-        let simd_large = Self::measure_simd_baseline_ns(LARGE_BATCH, DIM);
-
-        let cal = Self::compute_crossover(overhead, gpu_large, simd_large);
-        tracing::info!(
-            overhead_us = cal.overhead_ns / 1000,
-            crossover_floats = cal.crossover_floats,
-            "GPU auto-calibration complete"
-        );
-        cal
-    }
-
-    /// Measures the fixed GPU dispatch overhead by dispatching a single vector
-    /// three times and taking the median.
-    fn measure_overhead_ns(&self, dim: usize) -> Option<u64> {
-        let mut samples = [0u64; 3];
-        for s in &mut samples {
-            *s = self.measure_gpu_dispatch_ns(1, dim)?;
-        }
-        Some(median_of_three(samples[0], samples[1], samples[2]))
-    }
-
-    /// Measures the total GPU time for a large batch and returns the median
-    /// of three runs.
-    fn measure_gpu_large_ns(&self, num_vectors: usize, dim: usize) -> Option<u64> {
-        let mut samples = [0u64; 3];
-        for s in &mut samples {
-            *s = self.measure_gpu_dispatch_ns(num_vectors, dim)?;
-        }
-        Some(median_of_three(samples[0], samples[1], samples[2]))
-    }
-
-    /// Times a single `dispatch_batch_distance` call in nanoseconds.
-    fn measure_gpu_dispatch_ns(&self, num_vectors: usize, dimension: usize) -> Option<u64> {
-        let query = vec![0.01_f32; dimension];
-        let vectors = vec![0.01_f32; num_vectors.saturating_mul(dimension)];
-
-        let start = std::time::Instant::now();
-        self.dispatch_batch_distance(&self.cosine_pipeline, &vectors, &query, dimension)
-            .ok()?;
-        Some(elapsed_nanos_u64(&start))
-    }
-
-    /// Measures the total SIMD time for `num_vectors` cosine similarity calls
-    /// and returns the median of three runs.
-    fn measure_simd_baseline_ns(num_vectors: usize, dimension: usize) -> u64 {
-        let query = vec![0.01_f32; dimension];
-        let vector = vec![0.01_f32; dimension];
-
-        let mut samples = [0u64; 3];
-        for s in &mut samples {
-            let start = std::time::Instant::now();
-            for _ in 0..num_vectors {
-                std::hint::black_box(crate::simd_native::cosine_similarity_native(
-                    &query, &vector,
-                ));
-            }
-            *s = elapsed_nanos_u64(&start);
-        }
-        median_of_three(samples[0], samples[1], samples[2])
-    }
-
-    /// Computes the crossover calibration from raw measurements.
-    ///
-    /// Returns default calibration if measurements are missing or the GPU
-    /// marginal cost exceeds SIMD marginal cost (GPU is always slower).
-    /// Computes the float counts used in the large-batch calibration probe.
-    const CALIBRATE_LARGE_BATCH: usize = 1000;
-    /// Dimension used for calibration probes.
-    const CALIBRATE_DIM: usize = 128;
-
-    fn compute_crossover(
-        overhead: Option<u64>,
-        gpu_large: Option<u64>,
-        simd_large: u64,
-    ) -> GpuCalibration {
-        let (Some(overhead_ns), Some(gpu_total)) = (overhead, gpu_large) else {
-            return GpuCalibration::default();
-        };
-
-        let total_floats = Self::CALIBRATE_LARGE_BATCH.saturating_mul(Self::CALIBRATE_DIM);
-
-        // Reason: total_floats (128_000) always fits comfortably in f64.
-        #[allow(clippy::cast_precision_loss)]
-        let total_floats_f64 = total_floats as f64;
-        // Reason: gpu_total and overhead_ns are sub-second nanosecond counts; f64 is exact.
-        #[allow(clippy::cast_precision_loss)]
-        let gpu_ns_per_float = gpu_total.saturating_sub(overhead_ns) as f64 / total_floats_f64;
-        // Reason: simd_large is a sub-second nanosecond count; f64 is exact.
-        #[allow(clippy::cast_precision_loss)]
-        let simd_ns_per_float = simd_large as f64 / total_floats_f64;
-
-        // If GPU marginal cost >= SIMD marginal cost, GPU is never worth it.
-        if gpu_ns_per_float >= simd_ns_per_float {
-            return GpuCalibration {
-                overhead_ns,
-                gpu_ns_per_float,
-                simd_ns_per_float,
-                crossover_floats: usize::MAX,
-            };
-        }
-
-        // crossover = overhead / (simd_per_float - gpu_per_float)
-        let delta = simd_ns_per_float - gpu_ns_per_float;
-
-        // Reason: overhead_ns is a sub-second nanosecond count; f64 is exact.
-        #[allow(clippy::cast_precision_loss)]
-        let crossover_f64 = overhead_ns as f64 / delta;
-
-        let crossover = crossover_f64_to_usize(crossover_f64);
-
-        GpuCalibration {
-            overhead_ns,
-            gpu_ns_per_float,
-            simd_ns_per_float,
-            crossover_floats: crossover.max(1),
-        }
     }
 
     /// Computes batch cosine similarities between a query and multiple vectors.
@@ -591,8 +374,6 @@ impl GpuAccelerator {
     }
 
     /// Encodes the compute pass and submits it to the GPU queue.
-    // Reason: wgpu encode+submit needs device, queue, pipeline, bind_group,
-    // two buffers, results_size, and num_vectors — all distinct concerns.
     #[allow(clippy::too_many_arguments)]
     fn encode_and_submit(
         device: &wgpu::Device,
@@ -658,30 +439,14 @@ impl GpuAccelerator {
 
     /// Returns `true` if GPU reranking is likely faster than sequential SIMD.
     ///
-    /// The crossover threshold is auto-calibrated during [`GpuAccelerator::new()`]
-    /// by micro-benchmarking actual GPU dispatch overhead vs SIMD throughput.
-    /// Defaults to 262,144 floats (~1 MB) if calibration fails.
+    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch (buffer
+    /// upload + compute pass + poll + readback). SIMD with prefetch remains
+    /// faster until the payload exceeds ~1 MB of float data (262,144 f32s).
+    /// The threshold `rerank_k * dimension > 262_144` corresponds to roughly
+    /// 100K vectors at dim=3 or 170 vectors at dim=1536.
     #[must_use]
-    pub fn should_rerank_gpu(&self, rerank_k: usize, dimension: usize) -> bool {
-        rerank_k.saturating_mul(dimension) > self.calibration.crossover_floats
-    }
-
-    /// Returns `true` if GPU brute-force search is likely faster than rayon SIMD.
-    ///
-    /// Uses the same auto-calibrated crossover as [`Self::should_rerank_gpu`]:
-    /// `num_vectors * dimension` must exceed the calibrated float threshold.
-    #[must_use]
-    pub fn should_brute_force_gpu(&self, num_vectors: usize, dimension: usize) -> bool {
-        num_vectors.saturating_mul(dimension) > self.calibration.crossover_floats
-    }
-
-    /// Returns `true` if GPU PQ k-means assignment is likely faster than CPU.
-    ///
-    /// The workload size is `n * k * subspace_dim` floats. Uses the same
-    /// auto-calibrated crossover threshold as the other GPU decision methods.
-    #[must_use]
-    pub fn should_use_gpu_pq(&self, n: usize, k: usize, subspace_dim: usize) -> bool {
-        n.saturating_mul(k).saturating_mul(subspace_dim) > self.calibration.crossover_floats
+    pub fn should_rerank_gpu(rerank_k: usize, dimension: usize) -> bool {
+        rerank_k * dimension > 262_144
     }
 
     /// Computes batch distances using the appropriate GPU pipeline for the given metric.
@@ -713,40 +478,5 @@ impl GpuAccelerator {
             // Hamming and Jaccard have no GPU shader pipeline.
             _ => None,
         }
-    }
-}
-
-/// Returns the median of three `u64` values.
-fn median_of_three(a: u64, b: u64, c: u64) -> u64 {
-    let mut arr = [a, b, c];
-    arr.sort_unstable();
-    arr[1]
-}
-
-/// Converts elapsed time to nanoseconds clamped to `u64` range.
-///
-/// `Instant::elapsed().as_nanos()` returns `u128`; this helper clamps it to
-/// `u64::MAX` (584 years of nanoseconds) so callers never overflow.
-fn elapsed_nanos_u64(start: &std::time::Instant) -> u64 {
-    // Reason: value is clamped to u64::MAX before the cast, so truncation
-    // cannot occur in practice.
-    #[allow(clippy::cast_possible_truncation)]
-    let ns = start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-    ns
-}
-
-/// Converts a positive `f64` crossover value to `usize`, clamping at `usize::MAX`.
-fn crossover_f64_to_usize(value: f64) -> usize {
-    // Reason: value is always non-negative (overhead / positive delta);
-    // clamped to usize::MAX before cast.
-    #[allow(clippy::cast_precision_loss)]
-    let max_f64 = usize::MAX as f64;
-
-    // Reason: value is clamped before casting; sign_loss impossible (always >= 0).
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    if value >= max_f64 {
-        usize::MAX
-    } else {
-        value as usize
     }
 }

@@ -6,12 +6,10 @@
 //! # When to use GPU
 //!
 //! - **Batch operations** (100+ queries at once)
-//! - **Large datasets** (auto-calibrated crossover, typically 500K+ vectors)
+//! - **Large datasets** (500K+ vectors)
 //! - **Index construction** (HNSW graph building)
 //!
-//! The GPU/SIMD crossover point is auto-calibrated at startup via
-//! micro-benchmarking. For small workloads below the crossover, CPU SIMD
-//! remains faster.
+//! For single queries on datasets ≤100K, CPU SIMD remains faster.
 //!
 //! # Platform Support
 //!
@@ -39,7 +37,7 @@ mod gpu_backend_tests;
 pub mod pq_gpu;
 
 #[cfg(feature = "gpu")]
-pub use gpu_backend::{GpuAccelerator, GpuCalibration};
+pub use gpu_backend::GpuAccelerator;
 #[cfg(feature = "gpu")]
 pub use pq_gpu::{gpu_kmeans_assign, should_use_gpu, PqGpuContext};
 

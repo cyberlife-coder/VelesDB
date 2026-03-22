@@ -37,9 +37,9 @@ impl PqGpuContext {
     ///
     /// # Notes
     ///
-    /// The crossover threshold in [`should_use_gpu`] is auto-calibrated
-    /// during GPU init. Integrated GPUs typically produce a higher crossover
-    /// than discrete GPUs due to shared memory bandwidth constraints.
+    /// The 10 M FLOP threshold in [`should_use_gpu`] is tuned for discrete GPUs.
+    /// Integrated GPUs may benefit from a higher threshold (e.g. 50 M FLOPs)
+    /// due to shared memory bandwidth constraints.
     #[must_use]
     pub fn new() -> Option<Self> {
         let gpu = GpuAccelerator::global()?;
@@ -47,14 +47,15 @@ impl PqGpuContext {
     }
 }
 
-/// Check if GPU dispatch is worthwhile for PQ k-means assignment.
+/// Check if GPU dispatch is worthwhile based on FLOP threshold.
 ///
-/// Delegates to [`GpuAccelerator::should_use_gpu_pq`] which uses the
-/// auto-calibrated crossover threshold. Returns `false` if no GPU is
-/// available.
+/// GPU dispatch overhead (device init, buffer copies, kernel launch) is only
+/// amortized when the computation exceeds ~10 M FLOPs. This threshold is
+/// calibrated for discrete GPUs; integrated GPUs may require a higher value
+/// due to shared memory bandwidth constraints.
 #[must_use]
 pub fn should_use_gpu(n: usize, k: usize, subspace_dim: usize) -> bool {
-    GpuAccelerator::global().is_some_and(|gpu| gpu.should_use_gpu_pq(n, k, subspace_dim))
+    n * k * subspace_dim > 10_000_000
 }
 
 /// Compute k-means assignments on GPU for one subspace.
@@ -264,16 +265,14 @@ mod tests {
 
     #[test]
     fn test_should_use_gpu_threshold() {
-        // When GPU is unavailable, should_use_gpu always returns false.
-        // When GPU is available, it delegates to the calibrated crossover.
-        if GpuAccelerator::global().is_none() {
-            // No GPU -- every call returns false regardless of workload size
-            assert!(!should_use_gpu(100, 16, 8));
-            assert!(!should_use_gpu(10_000, 256, 8));
-        } else {
-            // GPU available -- tiny workload below any realistic crossover
-            assert!(!should_use_gpu(1, 1, 1));
-        }
+        // Below threshold: 100 * 16 * 8 = 12800 < 10M
+        assert!(!should_use_gpu(100, 16, 8));
+
+        // Above threshold: 10000 * 256 * 8 = 20_480_000 > 10M
+        assert!(should_use_gpu(10000, 256, 8));
+
+        // Exactly at threshold: should not trigger (strictly greater)
+        assert!(!should_use_gpu(10_000_000 / (256 * 8), 256, 8));
     }
 
     #[test]

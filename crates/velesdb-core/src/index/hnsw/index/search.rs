@@ -154,7 +154,7 @@ impl HnswIndex {
     /// This is acceptable because the EMA is a best-effort heuristic for latency
     /// adaptation -- occasional lost samples do not affect search correctness and
     /// the overhead of a CAS retry loop is not justified for an advisory metric.
-    fn update_rerank_latency_ema(&self, sample_us: u64) {
+    pub(super) fn update_rerank_latency_ema(&self, sample_us: u64) {
         let current = self.rerank_latency_ema_us.load(Ordering::Relaxed);
         if current == 0 {
             self.rerank_latency_ema_us
@@ -336,8 +336,25 @@ impl HnswIndex {
         candidates: &[ScoredResult],
         k: usize,
     ) -> Vec<ScoredResult> {
+        let (results, elapsed) = self.rerank_sort_and_truncate_timed(query, candidates, k);
+        if elapsed > 0 {
+            self.update_rerank_latency_ema(elapsed);
+        }
+        results
+    }
+
+    /// Reranks, sorts, and truncates without updating the EMA.
+    ///
+    /// Returns `(results, elapsed_us)` so the caller can aggregate latencies
+    /// from a parallel batch and update the EMA once (avoiding lost samples).
+    pub(super) fn rerank_sort_and_truncate_timed(
+        &self,
+        query: &[f32],
+        candidates: &[ScoredResult],
+        k: usize,
+    ) -> (Vec<ScoredResult>, u64) {
         if candidates.is_empty() {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
 
         let rerank_start = Instant::now();
@@ -349,24 +366,21 @@ impl HnswIndex {
 
         let elapsed_micros = rerank_start.elapsed().as_micros();
         let elapsed = u64::try_from(elapsed_micros).unwrap_or(u64::MAX);
-        self.update_rerank_latency_ema(elapsed);
-        reranked
+        (reranked, elapsed)
     }
 
     /// Re-ranks candidates using the best available compute path.
     ///
-    /// Tries GPU dispatch first when the workload exceeds the auto-calibrated
-    /// GPU/SIMD crossover threshold and a GPU is available. Falls back to SIMD
-    /// for small workloads, unsupported metrics, or GPU errors.
+    /// Tries GPU dispatch first when the workload exceeds the GPU threshold
+    /// (rerank_k * dimension > 262,144 floats, ~1 MB) and a GPU is available.
+    /// Falls back to SIMD for small workloads, unsupported metrics, or GPU errors.
     fn rerank_candidates(&self, query: &[f32], candidates: &[ScoredResult]) -> Vec<ScoredResult> {
         #[cfg(feature = "gpu")]
         {
             use crate::gpu::GpuAccelerator;
-            if let Some(gpu) = GpuAccelerator::global() {
-                if gpu.should_rerank_gpu(candidates.len(), self.dimension) {
-                    if let Some(results) = self.rerank_candidates_gpu(query, candidates) {
-                        return results;
-                    }
+            if GpuAccelerator::should_rerank_gpu(candidates.len(), self.dimension) {
+                if let Some(results) = self.rerank_candidates_gpu(query, candidates) {
+                    return results;
                 }
             }
         }
