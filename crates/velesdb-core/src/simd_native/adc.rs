@@ -49,6 +49,7 @@ pub(crate) fn adc_distances_batch(lut: &[f32], codes: &[&[u16]], m: usize) -> Ve
                     if i + 1 < codes.len() {
                         super::prefetch::prefetch_vector_from_u16(codes[i + 1]);
                     }
+                    // SAFETY: AVX2 ADC gather kernel — `simd_level()` confirmed Avx2/Avx512 above.
                     unsafe { adc_single_avx2(lut, c, m, k) }
                 })
                 .collect()

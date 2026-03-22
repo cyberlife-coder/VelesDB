@@ -283,6 +283,7 @@ fn test_get_unchecked_valid_index() {
     // - Condition 1: Two vectors were pushed above, so indices 0 and 1 are valid.
     // Reason: Verify that `get_unchecked` returns correct data for in-bounds access.
     let v0 = unsafe { cv.get_unchecked(0) };
+    // SAFETY: index 1 is valid — two vectors were pushed above.
     let v1 = unsafe { cv.get_unchecked(1) };
 
     // Assert

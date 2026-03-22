@@ -76,6 +76,7 @@ fn get_memory_usage() -> usize {
         fn GetCurrentProcess() -> isize;
     }
 
+    // SAFETY: FFI call to Windows GetProcessMemoryInfo — struct is zeroed and cb is set correctly.
     unsafe {
         let mut pmc = MaybeUninit::<ProcessMemoryCounters>::zeroed().assume_init();
         pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
