@@ -317,8 +317,8 @@ class GraphRetriever(BaseRetriever):
     def _extract_node_id(self, node: Any) -> Optional[int]:
         """Extract numeric node ID from a LlamaIndex node."""
         try:
-            from_meta = self._id_from_metadata(node)
-            if from_meta is not None:
+            found, from_meta = self._id_from_metadata(node)
+            if found:
                 return from_meta
             return self._id_from_node_id(node)
         except (AttributeError, KeyError) as exc:
@@ -326,15 +326,26 @@ class GraphRetriever(BaseRetriever):
         return None
 
     @staticmethod
-    def _id_from_metadata(node: Any) -> Optional[int]:
-        """Try to extract an integer ID from node.metadata."""
+    def _id_from_metadata(node: Any) -> tuple:
+        """Try to extract an integer ID from node.metadata.
+
+        Returns (found: bool, value: Optional[int]) so callers can
+        distinguish 'no key matched' from 'key matched but unusable'.
+        """
         if not hasattr(node, "metadata"):
-            return None
+            return False, None
         for key in ["id", "doc_id", "node_id"]:
             if key in node.metadata:
                 val = node.metadata[key]
-                return int(val) if isinstance(val, (int, str)) else None
-        return None
+                if isinstance(val, int):
+                    return True, val
+                if isinstance(val, str):
+                    try:
+                        return True, int(val)
+                    except ValueError:
+                        return True, None
+                return True, None
+        return False, None
 
     @staticmethod
     def _id_from_node_id(node: Any) -> Optional[int]:

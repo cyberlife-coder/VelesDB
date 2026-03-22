@@ -110,7 +110,7 @@ fi
 # =============================================================================
 # Check 5: Import verification
 # =============================================================================
-echo -e "\n${YELLOW}4️⃣  Verifying imports...${NC}"
+echo -e "\n${YELLOW}5️⃣  Verifying imports...${NC}"
 
 # Check that hashlib is imported where needed
 for dir in $PYTHON_DIRS; do
