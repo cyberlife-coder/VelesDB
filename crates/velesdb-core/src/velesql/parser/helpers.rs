@@ -50,6 +50,11 @@ pub(crate) fn parse_value_from_str(input: &str) -> Result<Value, ParseError> {
     if input.eq_ignore_ascii_case("null") {
         return Ok(Value::Null);
     }
+    parse_numeric_value(input)
+}
+
+/// Attempts to parse a string as an integer or float value.
+fn parse_numeric_value(input: &str) -> Result<Value, ParseError> {
     if let Ok(i) = input.parse::<i64>() {
         return Ok(Value::Integer(i));
     }

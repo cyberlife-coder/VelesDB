@@ -436,7 +436,7 @@ class SearchOpsMixin:
         k: int,
         fusion: str,
         fusion_params: Optional[dict],
-        filter: Optional[dict],
+        query_filter: Optional[dict],
     ) -> List[dict]:
         """Validate inputs and execute a multi-query search, returning raw results.
 
@@ -445,7 +445,7 @@ class SearchOpsMixin:
             k: Number of results to return after fusion.
             fusion: Fusion strategy name.
             fusion_params: Optional fusion strategy parameters.
-            filter: Optional metadata filter dict.
+            query_filter: Optional metadata filter dict.
 
         Returns:
             Raw list of search result dicts from the collection.
@@ -464,7 +464,7 @@ class SearchOpsMixin:
             vectors=query_embeddings,
             top_k=k,
             fusion=fusion_strategy,
-            filter=filter,
+            filter=query_filter,
         )
 
     def multi_query_search(
@@ -501,7 +501,7 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-        results = self._run_multi_query(queries, k, fusion, fusion_params, filter)
+        results = self._run_multi_query(queries, k, fusion, fusion_params, query_filter=filter)
         return _results_to_docs(results)
 
     def multi_query_search_with_score(
@@ -528,7 +528,7 @@ class SearchOpsMixin:
         """
         if not queries:
             return []
-        results = self._run_multi_query(queries, k, fusion, fusion_params, filter)
+        results = self._run_multi_query(queries, k, fusion, fusion_params, query_filter=filter)
         return _results_to_docs_with_score(results)
 
     def _build_fusion_strategy(

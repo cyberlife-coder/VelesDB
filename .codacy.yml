@@ -252,6 +252,9 @@ engines:
       # in-process ID counters, not security/crypto material
       - "integrations/langchain/src/langchain_velesdb/memory.py"
       - "integrations/llamaindex/src/llamaindex_velesdb/memory.py"
+      # Shared IDs module — random.randint for session-scoped counter seeds,
+      # not security/crypto material (collision avoidance, not secret generation)
+      - "integrations/common/src/velesdb_common/ids.py"
       # GitHub workflows — dtolnay/rust-toolchain downloads only official
       # Rust binaries from static.rust-lang.org; pinning is handled per-file
       - ".github/workflows/**"
