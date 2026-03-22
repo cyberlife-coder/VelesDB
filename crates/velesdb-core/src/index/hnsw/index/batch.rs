@@ -250,11 +250,13 @@ impl HnswIndex {
             })
             .collect();
 
-        // Update EMA once with mean latency from the entire batch
-        let n = timed_results.len() as u64;
-        if n > 0 {
-            let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
-            self.update_rerank_latency_ema(total_us / n);
+        // Update EMA once with mean latency from non-empty reranks only.
+        // Skip elapsed == 0 entries (empty candidates) to avoid diluting the
+        // EMA toward zero, consistent with the single-query guard.
+        let non_zero: Vec<u64> = timed_results.iter().map(|(_, e)| *e).filter(|&e| e > 0).collect();
+        if !non_zero.is_empty() {
+            let mean = non_zero.iter().copied().sum::<u64>() / non_zero.len() as u64;
+            self.update_rerank_latency_ema(mean);
         }
 
         timed_results.into_iter().map(|(r, _)| r).collect()
