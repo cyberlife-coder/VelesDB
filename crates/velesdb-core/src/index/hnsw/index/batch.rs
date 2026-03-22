@@ -188,13 +188,20 @@ impl HnswIndex {
     ) -> Vec<Vec<ScoredResult>> {
         self.validate_batch_dimensions(queries);
 
+        // Perfect mode or very small collections: delegate to search_with_quality
+        // per-query for brute-force 100% recall (matches single-query behavior).
+        if matches!(quality, SearchQuality::Perfect)
+            || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
+        {
+            return queries
+                .par_iter()
+                .map(|query| self.search_with_quality(query, k, quality))
+                .collect();
+        }
+
         let ef_search = quality.ef_search(k);
 
         // Two-stage GPU/SIMD reranking for Balanced/Accurate/Custom qualities.
-        // Note: Perfect and Adaptive are not reranked here — Perfect uses high
-        // ef_search (≥4096) which already yields near-exact recall, and Adaptive
-        // escalation is per-query (not batch-compatible). Both fall through to
-        // the HNSW-only path below, matching pre-existing single-query behavior.
         if let Some(rerank_k) = self.should_two_stage_rerank(quality, k, ef_search) {
             return self.search_batch_with_rerank(queries, k, rerank_k, ef_search);
         }

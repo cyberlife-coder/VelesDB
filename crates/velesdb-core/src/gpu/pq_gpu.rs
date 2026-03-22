@@ -49,9 +49,11 @@ impl PqGpuContext {
 
 /// Check if GPU dispatch is worthwhile based on FLOP threshold.
 ///
-/// Returns `false` if no GPU is available (checked via the singleton)
-/// or if the workload is below ~10 M FLOPs. Uses `saturating_mul`
-/// to prevent overflow on 32-bit targets.
+/// Returns `true` when `n * k * subspace_dim > 10_000_000` (~10 M FLOPs).
+/// This is a pure arithmetic check — it does **not** verify GPU availability.
+/// Callers must separately check that a GPU context exists before dispatching.
+///
+/// Uses `saturating_mul` to prevent overflow on 32-bit targets.
 ///
 /// The 10 M FLOP threshold is calibrated for discrete GPUs; integrated
 /// GPUs may require a higher value due to shared memory bandwidth.
