@@ -240,12 +240,24 @@ impl HnswIndex {
             .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
             .collect();
 
-        // Phase 2: Rerank each query's candidates and truncate to k
-        queries
-            .iter()
-            .zip(all_candidates.iter())
-            .map(|(query, candidates)| self.rerank_sort_and_truncate(query, candidates, k))
-            .collect()
+        // Phase 2: Rerank in parallel, collecting per-query latencies to avoid
+        // EMA race (concurrent Relaxed store would lose ~N-1 samples).
+        let timed_results: Vec<(Vec<ScoredResult>, u64)> = queries
+            .par_iter()
+            .zip(all_candidates.par_iter())
+            .map(|(query, candidates)| {
+                self.rerank_sort_and_truncate_timed(query, candidates, k)
+            })
+            .collect();
+
+        // Update EMA once with mean latency from the entire batch
+        let n = timed_results.len() as u64;
+        if n > 0 {
+            let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
+            self.update_rerank_latency_ema(total_us / n);
+        }
+
+        timed_results.into_iter().map(|(r, _)| r).collect()
     }
 
     /// Performs exact brute-force search in parallel using rayon.
