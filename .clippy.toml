@@ -9,8 +9,9 @@
 # =============================================================================
 cognitive-complexity-threshold = 8
 too-many-arguments-threshold = 7
-# Target is 50 NLOC (enforced by Codacy). Clippy threshold set to 80
-# as secondary backstop — CLI -D clippy::pedantic overrides workspace allows.
+# Target is 50 NLOC (enforced by Codacy). Clippy threshold set to 80 as backstop.
+# NOTE: In local dev, Cargo.toml `too_many_lines = "allow"` silences this lint.
+# In CI, `-D clippy::pedantic` overrides the allow, so the 80-line limit applies.
 too-many-lines-threshold = 80
 
 # =============================================================================
